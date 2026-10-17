@@ -279,8 +279,8 @@ and `-Look original`.
 | `contrast` | number | Contrast. |
 | `saturation` | number | Saturation. |
 | `vignette` | number | Vignette. |
-| `motion_blur` | number | Motion blur. |
-| `clearcoat` | number | Clear coat of the car body paint (`fm4-paint.hlsli`). |
+| `motion_blur` | number | Motion blur, in all four motion blur shaders. Photo mode's blur, which the player sets, changes only when this is set. |
+| `clearcoat` | number | Clear coat of the car body paint (`fm4-paint.hlsli`) in every car shader set: races, 16-car races, split screen, garage and showroom. In the showroom it adds only the reflection of the studio cube. |
 | `clearcoat_roughness` | number, default 0.3 | Roughness of the clear coat. |
 | `clearcoat_glint` | number, default 4 | Glint of the clear coat. |
 | `flakes` | number | Flakes in the car paint. |
@@ -298,8 +298,9 @@ The pass costs about 0.2 ms of GPU time per race frame at 1x, and 0.7 to 0.8 ms 
 (2560x1440). Races stay at 60 fps. At 240 Hz, races at 2x drop from about 174 fps to
 about 162 fps. Replays and photo mode have occlusion too. The cockpit interior, the
 garage and the showroom get none. The first run of a look compiles the mod shaders with
-FXC, which takes 0.15 to 1.4 s each and 2.5 to 3.0 s for the paint (about 5.4 s at the
-start). Later runs load them from `BuildRoot\cache\shader-overrides` in milliseconds.
+FXC when they are first drawn. For the six measured, this took 0.15 to 1.4 s each and
+2.5 to 3.0 s for the paint (about 5.4 s at the start). Later runs load them from
+`BuildRoot\cache\shader-overrides` in milliseconds.
 
 ### Shader mod development
 

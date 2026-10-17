@@ -267,6 +267,7 @@ All scripts live in [`outputs/FM4-build/e2e/`](../../outputs/FM4-build/e2e/).
 | `pm4_writers.py <generated dir> <xenos.h> out.json` | static scan of the PM4 packet writers for `FM4_D3D_TRACE` |
 | `override_fxc.py <override file or dir> <dump_shaders dir> [--mods ... --define ...]` | compile shader overrides like the runtime (see [experiments.md](experiments.md)) |
 | `override_ab.py <run> --period-ms N [--diff out.png]` | list captures of a shader A/B run with their phase |
+| `look_coverage.py --build-root <BuildRoot> [--dump <dir> ...] [--json out.json]` | offline list of the final combine, motion blur and car paint hashes per source and render scenario, with the look mods that cover them (see [look mod coverage](../analysis/look-mod-coverage.md)) |
 | `ocr-server.ps1` | the Windows OCR process that reads each capture |
 | `jev.py` | the Jev (TypeSafe System One) client for goal mode |
 

@@ -69,7 +69,7 @@ The clearcoat mod for `B85E` is in [work/fm4-rex/look](../../work/fm4-rex/look/)
 
 - `248CBDF02EEBD66F` (10% of draws, `TrackGeoShadow*`, from `shaders_16car`) and `A4A965C189287B99` (no source, point/rect).
 - The names of the car effect techniques (body, chrome, glass, window, carbon_fiber, cockpit_*, ...) are in the `.fxobj` files, but the mapping from technique to container has not been read (the effect format is not yet parsed).
-- The draw inventory comes from an old ROV run (a previous BuildRoot). The dumps are from the photo scenario. Other tracks use the same templates, but their ucode may differ.
+- The draw inventory comes from an old ROV run (a previous BuildRoot). The dumps are from the photo scenario. Track archives hold no final combine, motion blur or car paint shader, but other modes use other car shader sets with their own paint hashes: see [look mod coverage](look-mod-coverage.md).
 
 ## Related
 

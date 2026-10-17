@@ -188,6 +188,19 @@ float3 fm4_tonemap_lut_coord(float3 coord, float4 ab, float4 cdef, float scale, 
   return saturate(t) * scale + offset;
 }
 
+// The final combine without post effects writes F(x) / F(white) linear, with
+// no LUT: the tone curve replaces F at its output, as at a LUT with scale 1 and
+// offset 0. Its input only gives F at white (interpolator 1 Z).
+void fm4_tonemap_input(inout XePixel p) {
+  fm4_white_filmic = p.r[1].z;
+}
+
+void fm4_tonemap_output(inout XePixel p, float4 filmic_ab, float4 filmic_cdef) {
+  if (FM4_LOOK_TONEMAP != 0.0) {
+    p.color[0].rgb = fm4_tonemap_lut_coord(p.color[0].rgb, filmic_ab, filmic_cdef, 1.0, 0.0);
+  }
+}
+
 // Fetches of the final combine shaders: 0 the scene, 2 the bloom, 7 the color
 // grading LUT (its coordinate is the tone curve's output). filmic_ab, filmic_cdef,
 // lut_scale and lut_offset are the shader's constants for fm4_tonemap_lut_coord.

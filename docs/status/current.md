@@ -76,6 +76,15 @@ The race phase of `photo` is 30 seconds of racing after 10 seconds of driving, w
     All six runs passed, with no clear-gray frames. `compare` on the medians: WARN on capture statistics only. The race median is 203.2 against 189.2 fps (p99 7.70 against 8.78 ms, GPU 3.01 against 3.08 ms). The fps follows the number of cars in view: a run behind other cars draws 2,700 to 2,900 draws per frame and runs at 166 to 188 fps on either build. The command processor time per draw is 1.81 to 2.02 µs with the change and 1.99 to 2.05 µs without it.
   - The first cell compiled the seven look shaders and stored them. In the next two cells they loaded from the cache, and translating the shader storage at the start took 16 to 19 ms instead of 5,421 to 5,471 ms.
   - Without live knobs, the DXBC of every look mod is byte-identical to the previous build (`fm4_shader_mod_tests` fingerprints).
+- **Look mods for every car shader set** (the 16 mods of [look mod coverage](../analysis/look-mod-coverage.md) on top of the shader mod iteration, with the decode of encoded environment cubes; BuildRoot `I:\FM4-build-iter`). Smoke gate at 240 Hz with the `pc` look against the shader mod iteration gate above:
+
+  | Scenario | Result | `compare` |
+  |---|---|---|
+  | `photo` | race 200.7 fps, p99 8.8 ms; photo mode 29.97 fps | WARN on capture statistics |
+  | `photo_view` | 56.95 fps | WARN on capture statistics (another photo is loaded) |
+  | `career` | race 170.9 fps, p99 11.5 ms; replay 30.0 fps | PASS |
+
+  3 of 3 cells passed, with no new error keys. A gate run before the decode fix had one `photo` FAIL on overall p99 (43.0 ms): the pre-race intro ran at 23 to 24 fps for 16 seconds with late vblanks while its GPU time stayed at 4.2 ms. A repeat of that cell passed, so it is counted as a pacing flake. The in-game checks of the mods themselves are in [look mod coverage](../analysis/look-mod-coverage.md#in-game-checks-17-october-2026).
 - **Hot reload and live knobs** (one `e2e.py --shader-dev` photo run at 60 Hz, files of a copy of the look saved during the race): a live saturation change showed in the next capture without a compile. A tint in `fm4-look.hlsli` recompiled 5 shaders and recreated 8 pipelines in 1.7 s, and showed in the next capture. A syntax error kept the previous shader and logged the FXC error, and the fixed and restored files reloaded. The run reached its goal (the photo saved), with no clear-gray frames.
 - **Clearcoat** (smoke, 240 Hz, compared with a `qhigh` baseline): 3 of 3 runs. Race fps 214 in the `photo` race phase and 213 in `career`. Race-phase GPU 2.72-2.79 ms (2.83-2.88 ms for the baseline). Replay and photo mode 30 fps. No clear-gray frames. `compare` reports WARN on capture statistics only.
 - **Ambient occlusion** (smoke 1x, 240 Hz, compared with a `look pc` baseline without AO): 3 of 3 runs. `photo_view` and `career` PASS, `photo` WARN on capture statistics. Replay and photo mode 30 fps. No clear-gray frames.
@@ -227,6 +236,7 @@ Everything still open, grouped by area.
 
 - The RTV sun glare is not calibrated (see [Open issues](#open-issues)).
 - AO is not in the cockpit interior, garage or showroom. See the "Later" section of [GTAO design](../analysis/gtao-design.md).
+- Look mod coverage is partly verified in the game (17 October 2026, [look mod coverage](../analysis/look-mod-coverage.md#in-game-checks-17-october-2026)): false-color runs show the body paint mods of races, replays, the cockpit, car menus, HomeSpace, Autovista (the showroom) and the 16-car and split-screen car shader sets on screen. The 16-car and split-screen sets were loaded in a Quick Race through `FM4_RACE_SETTINGS`; a real split-screen race and a 16-car race at `-Quality xbox` were not run. The second body paint technique of each set, the four watermark final combines, the no-post-effects final combine and three motion blur variants never showed in any run, so their mods are checked by compilation only. `E5B1A71249D0CA9A`, first thought to be the environment cube render, draws the car lights and trim, so it needs no clear coat.
 - Parity with the original Xbox (shadows, color, reflections, noise and object edges) has not been compared. The combinations of MSAA and render scale are not all verified.
 - Not done: modern anti-aliasing on top of MSAA (SMAA or FXAA), HDR10 output, track lighting, materials other than car paint, and car flake paint. Flake cells in UV space are too small for race cameras and need an LOD model.
 - Widescreen and ultrawide need a FOV and projection hook, culling and HUD changes. The image is always 16:9, with bars on other screens.

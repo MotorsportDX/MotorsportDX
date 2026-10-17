@@ -53,6 +53,39 @@ float3 fm4_env_cube_coord(float4 cube, float offset) {
   return float3(cube.y * scale + offset, cube.x * scale + offset, cube.w);
 }
 
+// An environment cube texel f stored as encoded HDR, decoded the way the
+// garage, car menu, HomeSpace and showroom paint shaders do it (when bool 138
+// is set for the dynamic cube, bool 141 for the static one): the exponent
+// e = 2^((f.z * k.y + f.w - k.x) * k.z), then the rows of a matrix applied to
+// (e / f.y, e * f.x / f.y, e), at least k.w. k and the rows are the shader's
+// literals. Read raw, such a texel is not a color (it shows green).
+float3 fm4_decode_env(float4 f, float4 k, float3 row0, float3 row1, float3 row2) {
+  float e = exp2((f.z * k.y + f.w - k.x) * k.z);
+  float3 t = float3(e / f.y, e * f.x / f.y, e);
+  return max(float3(dot(t, row0), dot(t, row1), dot(t, row2)), k.w);
+}
+
+// An environment cube texel as linear color: decoded where the mod defines
+// FM4_PAINT_ENV_DECODE(f) and the shader's decode bool is set, otherwise
+// squared (the cube is stored in gamma 2).
+float3 fm4_env_texel(float4 f, bool decode) {
+#ifdef FM4_PAINT_ENV_DECODE
+  if (decode) {
+    return FM4_PAINT_ENV_DECODE(f);
+  }
+#endif
+  return f.rgb * f.rgb;
+}
+
+// The track's lightmap shadow (fetch 10 at the lightmap UV, mapped through the
+// range in X and Y of the lightmap parameters): 1 lit, 0 shadowed.
+#ifdef XE_TEXTURE10_2D_U
+float fm4_lightmap_shadow(float2 lightmap_uv, float4 lightmap_params) {
+  float lightmap = XE_TFETCH2D(10, lightmap_uv).x;
+  return saturate((lightmap - lightmap_params.x) / (lightmap_params.y - lightmap_params.x));
+}
+#endif
+
 // The car's own variance shadow map (3x3 taps around the shadow coordinate,
 // Chebyshev bound with the minimum variance and darkening exponent the game
 // uses) and the track's lightmap shadow, as their minimum: 1 lit, 0 shadowed.
@@ -75,9 +108,7 @@ float fm4_paint_shadow(float3 shadow, float2 lightmap_uv, float4 lightmap_params
     float p = pow(saturate(variance / (variance + d * d)), darkening);
     lit = d > 0.0 ? p : 1.0;
   }
-  float lightmap = XE_TFETCH2D(10, lightmap_uv).x;
-  float track = saturate((lightmap - lightmap_params.x) / (lightmap_params.y - lightmap_params.x));
-  return min(lit, track);
+  return min(lit, fm4_lightmap_shadow(lightmap_uv, lightmap_params));
 }
 #endif
 
@@ -160,4 +191,75 @@ void fm4_clearcoat(inout XePixel p, float3 normal, float3 position, float3 eye,
   float3 linear_color = color * color;
   linear_color += (highlight + reflection) * (1.0 - fog);
   p.color[0].rgb = sqrt(max(linear_color, 0.0));
+}
+
+// Body paint shaders of the car shader sets (docs/analysis/look-mod-coverage.md).
+// Their interpolators come from the same car vertex shaders: 0 XY the paint
+// texture UV, 1 the world normal, 2 the world position, 3 the shadow map
+// coordinate, 4 the track lightmap UV. Shared constants: c42 the sun color, c43
+// the direction to the sun, c47 the fog color and amount, c59 the eye position,
+// c60 the lightmap shadow range. The paint color and the cube and shadow
+// literals move between the sets, so they are parameters.
+
+bool fm4_paint_enabled() {
+  return FM4_LOOK_CLEARCOAT > 0.0 || FM4_LOOK_FLAKES > 0.0;
+}
+
+// The environment in the reflection direction of the pixel (linear): fetch 5
+// the dynamic cube, fetch 6 the static one (bool 130), none when fetch 4 holds a
+// background map instead (bool 133). cube_offset: the shader's cube coordinate
+// offset (1.5). Encoded cubes are decoded (fm4_env_texel).
+#if defined(XE_TEXTURE5_CUBE_U) && defined(XE_TEXTURE6_CUBE_U)
+float3 fm4_paint_env_cube(float3 r, float cube_offset) {
+  float3 env = 0.0;
+  if (!xe_bool_constant(133u)) {
+    float3 coord = fm4_env_cube_coord(xe_cube(r.zzxy), cube_offset);
+    bool use_static = xe_bool_constant(130u);
+    env = fm4_env_texel(use_static ? XE_TFETCHCUBE(6, coord) : XE_TFETCHCUBE(5, coord),
+                        xe_bool_constant(use_static ? 141u : 138u));
+  }
+  return env;
+}
+#endif
+
+// Body paint with the dynamic and static environment cubes, the variance
+// shadow map (fetch 13) and the track lightmap (fetch 10): shaders_v16 (race,
+// replay, photo) and shaders_ui_v16 (garage, car menus, HomeSpace). c80 the
+// shadow darkening, c83 the paint color; min_variance and cube_offset are the
+// shader's literals; self_shadow: bool 128 where the shader has it.
+#if defined(XE_TEXTURE5_CUBE_U) && defined(XE_TEXTURE6_CUBE_U) && \
+    defined(XE_TEXTURE13_2D_U) && defined(XE_TEXTURE10_2D_U)
+void fm4_body_paint_env_cube(inout XePixel p, XePixel input, float min_variance,
+                             float cube_offset, bool self_shadow) {
+  if (!fm4_paint_enabled()) {
+    return;
+  }
+  float3 n = normalize(input.r[1].xyz);
+  float3 v = normalize(XE_C(59).xyz - input.r[2].xyz);
+  float3 env = fm4_paint_env_cube(reflect(-v, n), cube_offset);
+  float lit = fm4_paint_shadow(input.r[3].xyz, input.r[4].xy, XE_C(60), min_variance, XE_C(80).x,
+                               self_shadow);
+  fm4_clearcoat(p, n, input.r[2].xyz, XE_C(59).xyz, XE_C(43).xyz, XE_C(42).xyz, env, lit,
+                saturate(XE_C(47).w), input.r[0].xy, XE_C(83).xyz);
+}
+#endif
+
+// Body paint with only the static environment cube and the track lightmap, no
+// shadow map: shaders_16car_v16 and shaders_splitscreen_v16. env: the static
+// cube in the reflection direction (linear; the mod fetches it, the fetch
+// constant differs); c82 the paint color.
+#ifdef XE_TEXTURE10_2D_U
+void fm4_body_paint_static_cube(inout XePixel p, XePixel input, float3 env) {
+  float3 n = normalize(input.r[1].xyz);
+  float lit = fm4_lightmap_shadow(input.r[4].xy, XE_C(60));
+  fm4_clearcoat(p, n, input.r[2].xyz, XE_C(59).xyz, XE_C(43).xyz, XE_C(42).xyz, env, lit,
+                saturate(XE_C(47).w), input.r[0].xy, XE_C(82).xyz);
+}
+#endif
+
+// The reflection direction of the pixel for the mods that fetch their own cube.
+float3 fm4_paint_reflection(XePixel input) {
+  float3 n = normalize(input.r[1].xyz);
+  float3 v = normalize(XE_C(59).xyz - input.r[2].xyz);
+  return reflect(-v, n);
 }

@@ -5,7 +5,8 @@
 // is synthetic here, a pixel shader with every fetch constant bound as 2D, 3D
 // and cube, and every float constant. Each mod is compiled after the library
 // and before a synthetic override that fetches and reads constants through the
-// hooks, like a generated one.
+// hooks, like a generated one. Each mod is compiled at its default knobs and
+// with every look knob away from the original look.
 //
 // The library's code under #ifdef XE_POST_AO_VIEW is only compiled when the
 // contract defines it, so both contracts are compiled, and the disassembly must
@@ -365,6 +366,14 @@ int main(int argc, char** argv) {
   // Every look mod, at its default knobs and with each knob that reads the
   // occlusion.
   const char* const kAoKnobs[] = {"FM4_LOOK_AO", "FM4_LOOK_AO_DEBUG"};
+  // Every other knob away from the original look, so the code each mod skips at
+  // its defaults is compiled too.
+  const std::vector<std::pair<std::string, std::string>> kLookKnobs = {
+      {"FM4_LOOK_SHARPEN", "0.5"},     {"FM4_LOOK_BLOOM", "0.7"},
+      {"FM4_LOOK_EXPOSURE", "0.5"},    {"FM4_LOOK_CONTRAST", "0.3"},
+      {"FM4_LOOK_SATURATION", "1.1"},  {"FM4_LOOK_VIGNETTE", "0.5"},
+      {"FM4_LOOK_MOTION_BLUR", "0.5"}, {"FM4_LOOK_TONEMAP", "2.0"},
+      {"FM4_LOOK_CLEARCOAT", "1.0"},   {"FM4_LOOK_FLAKES", "1.0"}};
   std::vector<std::filesystem::path> mods;
   for (const auto& entry : std::filesystem::directory_iterator(look)) {
     std::string name = entry.path().filename().string();
@@ -383,6 +392,8 @@ int main(int argc, char** argv) {
       Report(plain, name + ", default knobs, " + contract);
       Check(plain.compiled && !plain.reads_post_ao,
             name + ", default knobs, " + contract + ": no occlusion read");
+      Report(Compile(library, look, name, post_ao, kOverride, kLookKnobs),
+             name + ", look knobs set, " + contract);
       for (size_t k = 0; k < std::size(kAoKnobs); ++k) {
         std::string knob = std::string(kAoKnobs[k]) + "=1";
         Result result = Compile(library, look, name, post_ao, kOverride, {{kAoKnobs[k], "1.0"}});

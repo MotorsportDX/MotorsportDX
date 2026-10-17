@@ -89,6 +89,10 @@
       "provenance": "Project documentation; summary of the material atlas (names and registers of the game constant tables, no game code)"
     },
     {
+      "path": "docs/analysis/look-mod-coverage.md",
+      "provenance": "Project documentation; look mod coverage per track and mode (shader hashes, technique and constant names, no game code)"
+    },
+    {
       "path": "docs/analysis/dlc-structure.md",
       "provenance": "Project documentation; research note on the FM4 content package layout (file, table and column names and short identifiers, no game content)"
     },
@@ -139,6 +143,10 @@
     {
       "path": "outputs/FM4-build/e2e/material_atlas.py",
       "provenance": "Original test tooling for this project; no game content or original game function bodies"
+    },
+    {
+      "path": "outputs/FM4-build/e2e/look_coverage.py",
+      "provenance": "Original test tooling for this project; XXH3 reimplemented from the public algorithm, secret read from the BuildRoot at run time; no game content"
     },
     {
       "path": "outputs/FM4-build/e2e/ocr-server.ps1",
@@ -254,6 +262,70 @@
     },
     {
       "path": "work/fm4-rex/look/shader_E97AA211B556A9B3.mod.hlsli",
+      "provenance": "Original shader mods of this project (HLSL hooks on generated overrides); no game shader code or original game function bodies"
+    },
+    {
+      "path": "work/fm4-rex/look/shader_134B2725B75271DC.mod.hlsli",
+      "provenance": "Original shader mods of this project (HLSL hooks on generated overrides); no game shader code or original game function bodies"
+    },
+    {
+      "path": "work/fm4-rex/look/shader_190CE76994929E32.mod.hlsli",
+      "provenance": "Original shader mods of this project (HLSL hooks on generated overrides); no game shader code or original game function bodies"
+    },
+    {
+      "path": "work/fm4-rex/look/shader_1CA7A58B97F95E21.mod.hlsli",
+      "provenance": "Original shader mods of this project (HLSL hooks on generated overrides); no game shader code or original game function bodies"
+    },
+    {
+      "path": "work/fm4-rex/look/shader_26C973629F724A97.mod.hlsli",
+      "provenance": "Original shader mods of this project (HLSL hooks on generated overrides); no game shader code or original game function bodies"
+    },
+    {
+      "path": "work/fm4-rex/look/shader_2F1766979C52704E.mod.hlsli",
+      "provenance": "Original shader mods of this project (HLSL hooks on generated overrides); no game shader code or original game function bodies"
+    },
+    {
+      "path": "work/fm4-rex/look/shader_38F5DB57752FC2D9.mod.hlsli",
+      "provenance": "Original shader mods of this project (HLSL hooks on generated overrides); no game shader code or original game function bodies"
+    },
+    {
+      "path": "work/fm4-rex/look/shader_4A15688ECE9E3657.mod.hlsli",
+      "provenance": "Original shader mods of this project (HLSL hooks on generated overrides); no game shader code or original game function bodies"
+    },
+    {
+      "path": "work/fm4-rex/look/shader_560F69951C6D73D1.mod.hlsli",
+      "provenance": "Original shader mods of this project (HLSL hooks on generated overrides); no game shader code or original game function bodies"
+    },
+    {
+      "path": "work/fm4-rex/look/shader_5AFF2866B278F96D.mod.hlsli",
+      "provenance": "Original shader mods of this project (HLSL hooks on generated overrides); no game shader code or original game function bodies"
+    },
+    {
+      "path": "work/fm4-rex/look/shader_6DE1FEEA7DA50AC2.mod.hlsli",
+      "provenance": "Original shader mods of this project (HLSL hooks on generated overrides); no game shader code or original game function bodies"
+    },
+    {
+      "path": "work/fm4-rex/look/shader_892947FF214FF4E8.mod.hlsli",
+      "provenance": "Original shader mods of this project (HLSL hooks on generated overrides); no game shader code or original game function bodies"
+    },
+    {
+      "path": "work/fm4-rex/look/shader_8B1A70675335075E.mod.hlsli",
+      "provenance": "Original shader mods of this project (HLSL hooks on generated overrides); no game shader code or original game function bodies"
+    },
+    {
+      "path": "work/fm4-rex/look/shader_9186E11FABCF0163.mod.hlsli",
+      "provenance": "Original shader mods of this project (HLSL hooks on generated overrides); no game shader code or original game function bodies"
+    },
+    {
+      "path": "work/fm4-rex/look/shader_9ED0E8D2A0AC30E0.mod.hlsli",
+      "provenance": "Original shader mods of this project (HLSL hooks on generated overrides); no game shader code or original game function bodies"
+    },
+    {
+      "path": "work/fm4-rex/look/shader_B606D6FA7A74981C.mod.hlsli",
+      "provenance": "Original shader mods of this project (HLSL hooks on generated overrides); no game shader code or original game function bodies"
+    },
+    {
+      "path": "work/fm4-rex/look/shader_E22EA1B051DFFD0C.mod.hlsli",
       "provenance": "Original shader mods of this project (HLSL hooks on generated overrides); no game shader code or original game function bodies"
     },
     {
