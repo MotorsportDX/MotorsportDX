@@ -6,7 +6,9 @@
 // and cube, and every float constant. Each mod is compiled after the library
 // and before a synthetic override that fetches and reads constants through the
 // hooks, like a generated one. Each mod is compiled at its default knobs and
-// with every look knob away from the original look.
+// with every look knob away from the original look, which must change its
+// DXBC. The real contracts of a run define only the fetches and constants their
+// shader reads: override_fxc.py --stub compiles the mods against those.
 //
 // The library's code under #ifdef XE_POST_AO_VIEW is only compiled when the
 // contract defines it, so both contracts are compiled, and the disassembly must
@@ -373,7 +375,9 @@ int main(int argc, char** argv) {
       {"FM4_LOOK_EXPOSURE", "0.5"},    {"FM4_LOOK_CONTRAST", "0.3"},
       {"FM4_LOOK_SATURATION", "1.1"},  {"FM4_LOOK_VIGNETTE", "0.5"},
       {"FM4_LOOK_MOTION_BLUR", "0.5"}, {"FM4_LOOK_TONEMAP", "2.0"},
-      {"FM4_LOOK_CLEARCOAT", "1.0"},   {"FM4_LOOK_FLAKES", "1.0"}};
+      {"FM4_LOOK_CLEARCOAT", "1.0"},   {"FM4_LOOK_FLAKES", "1.0"},
+      {"FM4_LOOK_GLASS", "1.0"},       {"FM4_LOOK_CHROME", "1.0"},
+      {"FM4_LOOK_RIMS", "1.0"}};
   std::vector<std::filesystem::path> mods;
   for (const auto& entry : std::filesystem::directory_iterator(look)) {
     std::string name = entry.path().filename().string();
@@ -392,8 +396,12 @@ int main(int argc, char** argv) {
       Report(plain, name + ", default knobs, " + contract);
       Check(plain.compiled && !plain.reads_post_ao,
             name + ", default knobs, " + contract + ": no occlusion read");
-      Report(Compile(library, look, name, post_ao, kOverride, kLookKnobs),
-             name + ", look knobs set, " + contract);
+      Result knobs = Compile(library, look, name, post_ao, kOverride, kLookKnobs);
+      Report(knobs, name + ", look knobs set, " + contract);
+      // A mod whose code its own knobs do not reach (a wrong #if, a hook left
+      // undefined) compiles to the shader without the mod.
+      Check(knobs.compiled && plain.compiled && knobs.fingerprint != plain.fingerprint,
+            name + ", look knobs set, " + contract + ": the mod changes the shader");
       for (size_t k = 0; k < std::size(kAoKnobs); ++k) {
         std::string knob = std::string(kAoKnobs[k]) + "=1";
         Result result = Compile(library, look, name, post_ao, kOverride, {{kAoKnobs[k], "1.0"}});

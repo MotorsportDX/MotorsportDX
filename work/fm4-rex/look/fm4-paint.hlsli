@@ -6,6 +6,8 @@
 //   FM4_LOOK_CLEARCOAT_GLINT      > 0    soft limit of the sun highlight, in units of the
 //                                        sun's diffuse light: a GGX highlight at grazing
 //                                        angles reaches 20-40x and blooms into a blob
+//                                        (also the limit of the glass, chrome and rim
+//                                        highlights of fm4-car.hlsli)
 //   FM4_LOOK_FLAKES               0...1  metallic flakes under the clear coat (0: none)
 //   FM4_LOOK_FLAKE_SCALE          > 0    flake cells per unit of the paint's texture UV
 //
@@ -86,27 +88,34 @@ float fm4_lightmap_shadow(float2 lightmap_uv, float4 lightmap_params) {
 }
 #endif
 
-// The car's own variance shadow map (3x3 taps around the shadow coordinate,
-// Chebyshev bound with the minimum variance and darkening exponent the game
-// uses) and the track's lightmap shadow, as their minimum: 1 lit, 0 shadowed.
-// shadow: x, y shadow map coordinate, z depth; lightmap_uv: track lightmap.
+// The car's own variance shadow map (fetch 13; 3x3 taps around the shadow
+// coordinate, Chebyshev bound with the minimum variance and darkening exponent
+// the game uses): 1 lit, 0 shadowed. shadow: x, y shadow map coordinate, z depth.
+#ifdef XE_TEXTURE13_2D_U
+float fm4_variance_shadow(float3 shadow, float min_variance, float darkening) {
+  float2 texel = 1.0 / xe_texture_size_2d(13u);
+  float2 moments = 0.0;
+  [unroll] for (int y = -1; y <= 1; ++y) {
+    [unroll] for (int x = -1; x <= 1; ++x) {
+      moments += XE_TFETCH2D(13, shadow.xy + float2(x, y) * texel).xy;
+    }
+  }
+  moments *= 1.0 / 9.0;
+  float d = shadow.z - moments.x;
+  float variance = moments.y - moments.x * moments.x + min_variance;
+  float p = pow(saturate(variance / (variance + d * d)), darkening);
+  return d > 0.0 ? p : 1.0;
+}
+#endif
+
+// The variance shadow (where self_shadow is set) and the track's lightmap
+// shadow, as their minimum: 1 lit, 0 shadowed. lightmap_uv: track lightmap.
 #if defined(XE_TEXTURE13_2D_U) && defined(XE_TEXTURE10_2D_U)
 float fm4_paint_shadow(float3 shadow, float2 lightmap_uv, float4 lightmap_params,
                        float min_variance, float darkening, bool self_shadow) {
   float lit = 1.0;
   if (self_shadow) {
-    float2 texel = 1.0 / xe_texture_size_2d(13u);
-    float2 moments = 0.0;
-    [unroll] for (int y = -1; y <= 1; ++y) {
-      [unroll] for (int x = -1; x <= 1; ++x) {
-        moments += XE_TFETCH2D(13, shadow.xy + float2(x, y) * texel).xy;
-      }
-    }
-    moments *= 1.0 / 9.0;
-    float d = shadow.z - moments.x;
-    float variance = moments.y - moments.x * moments.x + min_variance;
-    float p = pow(saturate(variance / (variance + d * d)), darkening);
-    lit = d > 0.0 ? p : 1.0;
+    lit = fm4_variance_shadow(shadow, min_variance, darkening);
   }
   return min(lit, fm4_lightmap_shadow(lightmap_uv, lightmap_params));
 }
@@ -193,6 +202,10 @@ void fm4_clearcoat(inout XePixel p, float3 normal, float3 position, float3 eye,
   p.color[0].rgb = sqrt(max(linear_color, 0.0));
 }
 
+// The other car materials (fm4-car.hlsli) include only the helpers above: the
+// functions below read constants that their shaders do not have.
+#ifndef FM4_PAINT_HELPERS_ONLY
+
 // Body paint shaders of the car shader sets (docs/analysis/look-mod-coverage.md).
 // Their interpolators come from the same car vertex shaders: 0 XY the paint
 // texture UV, 1 the world normal, 2 the world position, 3 the shadow map
@@ -263,3 +276,5 @@ float3 fm4_paint_reflection(XePixel input) {
   float3 v = normalize(XE_C(59).xyz - input.r[2].xyz);
   return reflect(-v, n);
 }
+
+#endif  // FM4_PAINT_HELPERS_ONLY

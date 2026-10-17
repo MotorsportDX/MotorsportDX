@@ -427,6 +427,11 @@ LOOK_KNOBS={'sharpen':'FM4_LOOK_SHARPEN','bloom':'FM4_LOOK_BLOOM','exposure':'FM
             'clearcoat':'FM4_LOOK_CLEARCOAT','clearcoat_roughness':'FM4_LOOK_CLEARCOAT_ROUGHNESS',
             'clearcoat_glint':'FM4_LOOK_CLEARCOAT_GLINT','flakes':'FM4_LOOK_FLAKES',
             'flake_scale':'FM4_LOOK_FLAKE_SCALE',
+            # Car glass, chrome and rims (work/fm4-rex/look/fm4-car.hlsli); clearcoat_glint
+            # limits their highlights too.
+            'glass':'FM4_LOOK_GLASS','glass_roughness':'FM4_LOOK_GLASS_ROUGHNESS',
+            'chrome':'FM4_LOOK_CHROME','chrome_roughness':'FM4_LOOK_CHROME_ROUGHNESS',
+            'rims':'FM4_LOOK_RIMS','rims_roughness':'FM4_LOOK_RIMS_ROUGHNESS',
             # Ambient occlusion of the runtime's GTAO pass on the scene; above 0 it also
             # turns the pass on (ao_cvars).
             'ao':'FM4_LOOK_AO'}
@@ -442,7 +447,9 @@ SUN_LIMIT=1200
 LOOK_NAMES={'tonemap':{'filmic':0,'gt':1,'aces':2,'neutral':3}}
 # Named looks; a -Look value may mix them with knobs ('pc,sharpen=0.6': later items win).
 # Every look but original has the car paint clear coat and ambient occlusion; original runs
-# without any shader mod.
+# without any shader mod. No preset has glass, chrome or rims yet: the A/B at 2x of 18 October
+# 2026 has not covered their sun highlights or the split-screen set
+# (docs/analysis/look-mod-coverage.md).
 LOOK_PRESETS={'pc':'tonemap=aces,saturation=1.1,bloom=0.7,sharpen=0.4,clearcoat=1,ao=0.6,sun=2',
               'aces':'tonemap=aces,clearcoat=1,ao=0.6,sun=2','gt':'tonemap=gt,clearcoat=1,ao=0.6,sun=2',
               'neutral':'tonemap=neutral,clearcoat=1,ao=0.6,sun=2','original':''}

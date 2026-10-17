@@ -49,6 +49,14 @@ The project is an experimental build. On the latest binary, the e2e harness chec
 
 The race phase of `photo` is 30 seconds of racing after 10 seconds of driving, with 12 cars. `career` is a World Tour race with quit, replay and continue.
 
+### Glass, chrome and rim look mods, 18 October 2026
+
+Details in [look mod coverage](../analysis/look-mod-coverage.md#glass-chrome-and-rims-18-october-2026). BuildRoot `I:\FM4-build-iter`.
+
+- Offline: `fm4_shader_mod_tests` passes 1,021 checks for the 53 look mods, including a new check that every mod's DXBC changes when its knobs move; the 22 mods that existed before keep their DXBC fingerprints with the `pc` defines. `override_fxc.py --stub` compiles 55 real contracts of 37 modded hashes with every mod, with and without the knobs. `test_pipeline.py` passes.
+- In the game: the runtime compiles 27 of the 31 new mods without error. False color in a Quick Race and in HomeSpace shows which car parts each hash draws. An A/B at 2x (five frozen race cameras, HomeSpace, the 16-car set) shows stronger reflections on glass at grazing angles (clearly on the HomeSpace windshield), brighter chrome exhaust tips, small highlights on lamp lenses, almost no change on rims, no change on the cockpit gauge glass, and no artifacts.
+- Smoke gate `gcr` (`pc` plus `glass`, `chrome` and `rims` at 1) against `gcrbase` (`pc`), run one after the other at 240 Hz and 1x: 3 of 3 cells passed, no FAIL. Race GPU per frame 3.09 to 3.19 ms (`photo`) and 3.24 to 3.24 ms (`career`); replay 4.42 to 4.73 ms; photo mode 3.82 to 4.49 ms. The race fps moved both ways with the draws per frame (185.3 to 170.7 at 2,575 to 3,021 draws; 169.7 to 182.7 at 2,767 to 2,482 draws).
+
 ### Automated gates, 17 October 2026
 
 - **Default launcher** (`look pc` with clearcoat and ambient occlusion, commit `48ed669`): smoke gate passed.
@@ -172,6 +180,7 @@ These are the defaults of `Build.ps1 -Action run`. The shared cvars are in [outp
 | Look | `pc` preset: `tonemap=aces`, `saturation=1.1`, `bloom=0.7`, `sharpen=0.4`, clearcoat 1, `ao=0.6`, `sun=2` (sun glare per pixel, soft limit 1,200) | `-Look <preset or knobs>`; `original` turns off all mods |
 | Clearcoat | Setting A: `clearcoat=1`, `clearcoat_roughness` 0.3, `clearcoat_glint` 4. Chosen from three race A/B runs on 17 October 2026. Flakes are not used by any preset. | `-Look clearcoat=..,clearcoat_roughness=..,clearcoat_glint=..` |
 | Ambient occlusion | GTAO on, strength 0.6, radius 0.75 m (presets `pc`, `aces`, `gt`, `neutral`) | `-Look ao=<strength>` |
+| Glass, chrome and rims | Off in every preset (A/B at 2x on 18 October 2026; the sun highlights are not yet checked) | `-Look glass=..,chrome=..,rims=..` (and `glass_roughness`, `chrome_roughness`, `rims_roughness`) |
 | Render target path | RTV: `render_target_path_d3d12=rtv`, `edram_single_rt_no_wrap=true` | `-Rov` (ROV, with `rov_occlusion_async=all`) |
 | Occlusion query | `rov_occlusion_async=previous`; no sample correction (`rov_occlusion_awaited_report_divisor` at its default 1 since 18 October 2026) | `-Rov` |
 | Vblank pacing | Variable (`vblank_vrr=true`) | `-FixedVblank` (fixed 60 Hz grid) |
@@ -238,8 +247,9 @@ Everything still open, grouped by area.
 - The `sun` knob keeps the sun glare the same at every MSAA level, checked with fixed counts only (see [Open issues](#open-issues)). `-Look original` and `-Rov` keep the glare that changes with the MSAA level.
 - AO is not in the cockpit interior, garage or showroom. See the "Later" section of [GTAO design](../analysis/gtao-design.md).
 - Look mod coverage is partly verified in the game (17 October 2026, [look mod coverage](../analysis/look-mod-coverage.md#in-game-checks-17-october-2026)): false-color runs show the body paint mods of races, replays, the cockpit, car menus, HomeSpace, Autovista (the showroom) and the 16-car and split-screen car shader sets on screen. The 16-car and split-screen sets were loaded in a Quick Race through `FM4_RACE_SETTINGS`. On 18 October 2026 the title's 16-car render scenarios were reproduced at `-Quality xbox` on a 12-car grid (Quick Race has no 16-car grid), and photos at shutter speed 0 and 100 (also one from a replay) were saved; `REX_GPU_INVENTORY` showed no new hash. A real split-screen race and a real 16-car grid were not run. The second body paint technique of each set, the four watermark final combines, the no-post-effects final combine and the three photo motion blur variants never showed in any run, so their mods are checked by compilation only. `E5B1A71249D0CA9A`, first thought to be the environment cube render, draws the car lights and trim, so it needs no clear coat.
+- The glass, chrome and rim mods (`-Look glass`, `chrome`, `rims`; 31 hashes of the race, 16-car, split-screen and garage car shader sets) are in no preset. The in-game A/B at 2x covered one track and time of day: a sun highlight on glass or chrome, the split-screen set and the chrome rims on screen were not seen. The spinning-wheel blur shaders, the chrome with a normal map, the showroom set and the material shaders that load in the UI only have none. See [look mod coverage](../analysis/look-mod-coverage.md#glass-chrome-and-rims-18-october-2026).
 - Parity with the original Xbox (shadows, color, reflections, noise and object edges) has not been compared. The combinations of MSAA and render scale are not all verified.
-- Not done: modern anti-aliasing on top of MSAA (SMAA or FXAA), HDR10 output, track lighting, materials other than car paint, and car flake paint. Flake cells in UV space are too small for race cameras and need an LOD model.
+- Not done: modern anti-aliasing on top of MSAA (SMAA or FXAA), HDR10 output, track lighting, car materials other than paint, glass, chrome and rims (the cockpit interior, tires, brakes and lamp lenses), track surfaces, and car flake paint. Flake cells in UV space are too small for race cameras and need an LOD model.
 - Widescreen and ultrawide need a FOV and projection hook, culling and HUD changes. The image is always 16:9, with bars on other screens.
 
 ### Performance
@@ -277,8 +287,9 @@ The proposed order is:
 2. **Run the clean setup on a second Windows computer.** Run `setup`, `generate`, `build` and `run` from a clean clone.
 3. **Extend e2e coverage.** Add photo overwrite, photo with an empty shader cache, Autovista, a Disc 2 car, cars of the other DLC packs, and direct launch. Re-test photo overwrite and the empty shader cache on the latest build, because neither has been repeated since the 16 October changes.
 4. **Inventory the stubs.** List every XAM and kernel stub called in `runtime.log` across all scenarios.
-5. **Re-run the gate tiers after each change.** Use `smoke` for quick checks, `perf` for performance, `full` before committing a stage, and `career` for the rewards path. See the [e2e overview](../e2e/README.md) for the commands and gates.
-6. **Decide the default tiling scenario.** The `-SingleTile` quality versus fps trade-off is for the project owner.
+5. **Finish the glass, chrome and rim check.** A sun-facing scene (a replay camera or another track) for the highlights, and the split-screen set; then decide whether `pc` gets them. See [look mod coverage](../analysis/look-mod-coverage.md#in-game-checks-18-october-2026).
+6. **Re-run the gate tiers after each change.** Use `smoke` for quick checks, `perf` for performance, `full` before committing a stage, and `career` for the rewards path. See the [e2e overview](../e2e/README.md) for the commands and gates.
+7. **Decide the default tiling scenario.** The `-SingleTile` quality versus fps trade-off is for the project owner.
 
 This page documents the status. It does not report that all further tests have been run, and it is not an instruction to run them automatically.
 
