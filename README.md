@@ -91,7 +91,7 @@ The end-to-end harness, [`e2e.py`](outputs/FM4-build/e2e/e2e.py), runs the game 
 ## Known limitations
 
 - **Limited compatibility:** only Windows x64 and the Japan/Asia revision whose hashes are checked. Other regions and title updates are not supported.
-- **Graphics not fully accurate:** the empirical sun occlusion query correction (factor 2) applies only to the ROV path (`-Rov`). On the default RTV path, sun glare is not calibrated yet. Noise, reflections, object edges, and combinations of MSAA and resolution scale need wider testing.
+- **Graphics not fully accurate:** the sun glare strength changes with the MSAA level on both render target paths (parity with the Xbox glare is not a goal). The empirical sun occlusion correction (factor 2) of the ROV path (`-Rov`) was removed on 18 October 2026, so `-Rov` stays an uncorrected reference. Noise, reflections, object edges, and combinations of MSAA and resolution scale need wider testing.
 - **Synchronous shaders:** shader sync is on by default to avoid skipped draws that once caused black photos. An empty shader cache only adds load hitches, not race fps loss, but photos taken with an empty cache have not been retested.
 - **Runtime incomplete:** some Xbox services are still stubs. The instruction tests do not prove that the kernel, audio, timing, or synchronization is correct.
 - **Gameplay coverage incomplete:** not every car, track, and mode, long sessions, audio, Kinect, multiplayer, online, and most cars of downloadable content have been validated. One DLC car on a DLC track is covered by the `dlc` e2e scenario. Save migration between builds or computers, other GPUs, and performance are not guaranteed. "Not verified" does not mean "broken".

@@ -430,14 +430,22 @@ LOOK_KNOBS={'sharpen':'FM4_LOOK_SHARPEN','bloom':'FM4_LOOK_BLOOM','exposure':'FM
             # Ambient occlusion of the runtime's GTAO pass on the scene; above 0 it also
             # turns the pass on (ao_cvars).
             'ao':'FM4_LOOK_AO'}
+# Knobs that set runtime cvars instead of shader defines. sun: the strength of the sun glare
+# on the RTV path. The title reads its sun visibility from an awaited occlusion query, which
+# the host query counts in samples, so the same sun is 1x, 2x and 4x as bright at 1x, 2x and
+# 4x MSAA. With the knob the runtime reports guest pixels times the strength, through a soft
+# limit (SUN_LIMIT pixels) that keeps the glare from washing out the screen. Without it
+# (look original) the counted samples are reported. -Rov always reports its counted samples.
+LOOK_RUNTIME_KNOBS=('sun',)
+SUN_LIMIT=1200
 # Knobs that take a name instead of a number.
 LOOK_NAMES={'tonemap':{'filmic':0,'gt':1,'aces':2,'neutral':3}}
 # Named looks; a -Look value may mix them with knobs ('pc,sharpen=0.6': later items win).
 # Every look but original has the car paint clear coat and ambient occlusion; original runs
 # without any shader mod.
-LOOK_PRESETS={'pc':'tonemap=aces,saturation=1.1,bloom=0.7,sharpen=0.4,clearcoat=1,ao=0.6',
-              'aces':'tonemap=aces,clearcoat=1,ao=0.6','gt':'tonemap=gt,clearcoat=1,ao=0.6',
-              'neutral':'tonemap=neutral,clearcoat=1,ao=0.6','original':''}
+LOOK_PRESETS={'pc':'tonemap=aces,saturation=1.1,bloom=0.7,sharpen=0.4,clearcoat=1,ao=0.6,sun=2',
+              'aces':'tonemap=aces,clearcoat=1,ao=0.6,sun=2','gt':'tonemap=gt,clearcoat=1,ao=0.6,sun=2',
+              'neutral':'tonemap=neutral,clearcoat=1,ao=0.6,sun=2','original':''}
 DEFAULT_LOOK='pc'
 
 # Render quality of races (FM4_RACE_SETTINGS, fm4-render-overrides.cpp: controls of the race
@@ -493,8 +501,10 @@ def look_defines(knobs):
     """The shader_mod_defines of look knobs: NAME=VALUE with the hlsli names and numbers."""
     defines=[]
     for name,value in knobs.items():
+        if name in LOOK_RUNTIME_KNOBS:
+            continue
         if name not in LOOK_KNOBS:
-            raise RuntimeError(f'Unknown look knob {name!r}; use {", ".join(LOOK_KNOBS)}.')
+            raise RuntimeError(f'Unknown look knob {name!r}; use {", ".join((*LOOK_KNOBS,*LOOK_RUNTIME_KNOBS))}.')
         names=LOOK_NAMES.get(name,{})
         if value in names:
             value=names[value]
@@ -511,8 +521,9 @@ def look_cvars(root,look,shader_dev=False):
     itself and hot reload when a file there changes, and every knob of the files is a live knob
     (the ones left out at their defaults), which shader_mod_set changes in the console (`)."""
     knobs=look_knobs(look)
-    if not knobs and not shader_dev:
-        return {}
+    cvars=sun_cvars(knobs.get('sun'))
+    if not any(name not in LOOK_RUNTIME_KNOBS for name in knobs) and not shader_dev:
+        return cvars
     defines=look_defines(knobs)
     if shader_dev:
         directory=LOOK_DIRECTORY
@@ -526,12 +537,22 @@ def look_cvars(root,look,shader_dev=False):
         directory.mkdir()
         for path in LOOK_DIRECTORY.glob('*.hlsli'):
             shutil.copyfile(path,directory/path.name)
-    cvars={'shader_mod_path':directory,'shader_mod_defines':';'.join(defines)}
+    cvars.update({'shader_mod_path':directory,'shader_mod_defines':';'.join(defines)})
     if shader_dev:
         cvars.update(shader_mod_hot_reload='true',shader_mod_live_knobs='true')
     # The ao knob needs the runtime's GTAO pass.
     cvars.update(ao_cvars(float(knobs.get('ao','0'))>0))
     return cvars
+
+def sun_cvars(strength):
+    """Cvars of the sun knob (LOOK_RUNTIME_KNOBS): the guest pixels of the sun query times the
+    strength (0 turns the glare off), through the soft limit. None without the knob."""
+    if strength is None:
+        return {}
+    value=float(strength)
+    if value<0:
+        raise RuntimeError(f'The sun strength must be 0 or more, not {strength!r}.')
+    return {'rtv_occlusion_awaited_scale':f'{value:g}','rtv_occlusion_awaited_limit':str(SUN_LIMIT)}
 
 # Screens of -Display (16:9, as FM4's 1280x720); native is the primary monitor.
 DISPLAYS={'720p':(1280,720),'1080p':(1920,1080),'1440p':(2560,1440),'4k':(3840,2160)}
@@ -620,6 +641,10 @@ def info_overlay(cvars,env,look,quality,display=None):
         quality={'0':'low','1':'medium','2':'high','3':'ultra'}.get(cvars.get('post_ao_quality','2'),'high')
         lines.append(f"Ambient occlusion: GTAO, {applied}, radius {cvars.get('post_ao_radius','1')} m, "
                      f'{quality}')
+    if 'rtv_occlusion_awaited_scale' in cvars:
+        strength=float(cvars['rtv_occlusion_awaited_scale'])
+        lines.append(f'Sun glare: {strength:g}x per pixel, soft limit {cvars["rtv_occlusion_awaited_limit"]}'
+                     ' pixels'+(' (RTV only)' if path=='ROV' else ''))
     if cvars.get('shader_override_ab_ms','0') not in ('','0'):
         lines.append(f'Shader A/B: game shaders every other {cvars["shader_override_ab_ms"]} ms')
     return '|'.join(lines)
@@ -728,7 +753,7 @@ def launch_cvars(root,disc1,log_file):
             # The compiled look mods (DXBC), reused while their source, defines and includes
             # stay the same, so a run with a look seen before skips FXC.
             'shader_override_cache_path':root/'cache/shader-overrides',
-            'rov_occlusion_awaited_report_divisor':'2','rov_occlusion_async':'previous','vblank_vrr':'true',
+            'rov_occlusion_async':'previous','vblank_vrr':'true',
             # 16x anisotropic filtering for every mipmapped linear texture: the title asks for
             # none on most and 2x-16x on a few, and the runtime default forces 4x.
             'anisotropic_override':'5',

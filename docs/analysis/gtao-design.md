@@ -63,7 +63,7 @@ flowchart LR
   - Car body VS `8D05A46C3584CA9E` (pair B85E): matWVP c0-c3 and matWV c4-c7, row-vector convention (oPos = x*c0 + y*c1 + z*c2 + c3, view position with c4-c7), so P = inverse(WV) * WVP.
   - Road VS `C81F8D92FF6529EB`: wvp c128-c131 (dp4, column vectors), world c140-c142, viewInv c243-c245 (the W column is the eye position).
   - P changes only with FOV and near/far.
-- **Override shader (AO consumer)**: active only in the RTV path, not with `-Rov` (`ShaderOverrides::Create`, [shader_override.cpp](../../work/runtime/src/graphics/d3d12/shader_override.cpp)).
+- **Override shader (AO consumer)**: active only in the RTV path, not with `-Rov` (`ShaderOverrides::Create`, [shader_override.cpp](../../work/runtime/src/graphics/d3d12/shader_override.cpp)). This is by design: ROV stays the reference without mods or AO, and AO is not planned for it (see the render target path rules in [AGENTS.md](../../AGENTS.md)).
 
 ## 3. Design decisions (as implemented in M0)
 

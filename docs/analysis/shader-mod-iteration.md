@@ -21,6 +21,8 @@ All of it is off by default in the runtime.
 | `<shader_mod_path>\shader_mod_defines.txt` | (no file) | With hot reload: `NAME=VALUE` lines (`#` starts a comment) applied over `shader_mod_defines` at the start and whenever the file is saved, like `shader_mod_set`. |
 | `Build.ps1 -ShaderDev`, `pipeline.py --shader-dev`, `e2e.py --shader-dev` | off | The look mods load from `work/fm4-rex/look` itself, with hot reload and every knob of the look files live (knobs not given keep their defaults). |
 
+Shader overrides need bindless resources and host render targets, so they run on the RTV path only. With `-Rov` they are off by design (ROV is the reference without mods; see [AGENTS.md](../../AGENTS.md)).
+
 The code is in [`shader_override.cpp`](../../work/runtime/src/graphics/d3d12/shader_override.cpp), [`pipeline_cache.cpp`](../../work/runtime/src/graphics/d3d12/pipeline_cache.cpp) (`ReloadShaderOverrides`) and [`command_processor.cpp`](../../work/runtime/src/graphics/d3d12/command_processor.cpp) (the knob upload).
 
 ## DXBC cache

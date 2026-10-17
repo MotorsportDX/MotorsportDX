@@ -20,6 +20,7 @@ timeline
     15 October : Streaming fix (sGPU fallback) for missing road, RTV default again
     16 October : Photo, career and matrix e2e scenarios, gate tiers, look pc and quality high defaults
     17 October : Clearcoat, display options and settings overlay, Alt+Enter, GTAO ambient occlusion, generic content import (DLC), shader mod cache and hot reload
+    18 October : ROV occlusion divisor removed, sun query samples measured per MSAA level
 ```
 
 | Date | Milestone |
@@ -29,6 +30,7 @@ timeline
 | 15 October 2026 | The streaming fix (sGPU fallback) resolves the missing road segments, and RTV is the launcher default again. Command processor work: EDRAM transfers, upload removal, event-based wait and readback fixes. |
 | 16 October 2026 | Photo, photo_view and career e2e scenarios, the regression and 240 Hz matrices, the dynamic vblank rate, the rebuilt developer AI driver and career race to rewards, the shader override and look knobs, the shadow workaround no longer default, and 16x anisotropic filtering. |
 | 17 October 2026 | Clearcoat on the car paint, display and render scale options, the settings overlay, Alt+Enter, and GTAO ambient occlusion. The default launcher (look `pc` with clearcoat and AO) passes the smoke gate. The generic content installer (`-Content`) imports and mounts Disc 2 and eight DLC packages. The compiled look mods are cached, and shader mods hot reload with live knobs (`-ShaderDev`). |
+| 18 October 2026 | The launcher no longer passes the ROV occlusion divisor of 2, so `-Rov` reports the counted samples. On ROV the sun query counts guest samples in proportion to the MSAA sample count, which explains the factor 2 of 13 October. Look mods and AO are RTV only by design. |
 
 ## 1. Clean-build verification (13-14 October 2026)
 
@@ -91,7 +93,7 @@ On the RTV render target path, certain road pieces were sometimes not drawn. Mos
 - Validation with RTV and a fixed vblank, the condition under which the bug was most frequent: 20 of 20 runs had no lost-road frames. Five runs used the fallback, and all of them succeeded (section 0x1C15A4 bytes). Frame rate was 59.7-60.0 fps, with no crash. Before the fix, about 15-25% of runs were affected.
 - Consequence: RTV became the launcher and e2e default again on 15 October (section 5).
 
-## 4. E2E gameplay results (16-17 October 2026)
+## 4. E2E gameplay results (16-18 October 2026)
 
 ### 16 October 2026: verified automatically on the latest binary
 
@@ -266,6 +268,16 @@ Shader mod iteration (17 October; design and results in [shader-mod-iteration.md
 - `-ShaderDev` reloads the look mods when a file is saved, and makes every knob live (`shader_mod_set` in the console, or `shader_mod_defines.txt`).
 - Smoke gate against the build before the change, in a separate BuildRoot: 3/3 cells passed. `photo` FAIL on fps from a different race (sixth place, 55% more draws per frame), `career` race within 2% at the same GPU time. The `perf` tier (three `photo` runs per build) passed 6 of 6 runs, `compare` WARN on capture statistics only, race median 203.2 against 189.2 fps. Details in [current status](current.md#automated-gates-17-october-2026).
 
+### 18 October 2026: sun occlusion query and MSAA
+
+- Superseded open issue (as of 17 October): the sun query returned 0 samples along the Quick Race route and on the grid, on both ROV and RTV; the four vertices of the sun sprite measured so far sat at one position; the one sighting on ROV (lap time 00:31, looking right) gave 225-253 samples per frame after the divisor of 2 and could not be repeated.
+- The launcher no longer passes `rov_occlusion_awaited_report_divisor=2`; the runtime default 1 keeps the counted samples.
+- Quick Race with the camera cycle, `--quality xbox`, ROV, `REX_OCCLUSION_SEGMENT_TRACE`, three runs with `FM4_TILING_SCENARIO` 2, 1 and 0: the sun shows for about 3 seconds at about 82 to 86 s of each run. The sun sprite's samples (passed plus depth-failed) reach at most 338 at 1x MSAA, 675 at 2x and 1,355 at 4x; passed samples at most 6, 21 and 26 (the AI driver does not repeat the exact frames). The ROV counter adds the popcount of the covered sample mask, so it counts samples.
+- The same race on RTV at 2x: the host query passes 2 to 10 samples in 15 frames at about 82.8 to 83.0 s.
+- Fixed counts on RTV (`rtv_occlusion_debug=fake`, `query_occlusion_fake_sample_count` 0, 85, 170, 340, 680, 1,360 and 4,000 at 1x MSAA; 0, 85, 340, 1,360 and 4,000 at 4x), captures 84 to 87 (lap time about 37 to 41 s, chase and cockpit cameras): at 1x the glare starts at 340 (a small star) and washes out the screen at 4,000; at 4x the same count gives a weaker glare (none at 340, a star at 1,360), but not four times weaker. Captures of different runs differ by up to 0.3 s. With a fixed count the glare shows through the cockpit roof, where the real query sees the sun as depth-failed.
+
+- The `sun` look knob (`sun=2` in the presets): RTV awaited reports as guest pixels times the strength, soft limit 1,200 pixels. Fixed counts with `sun=2`: 340 at 1x and 1,360 at 4x report 607 pixels each and give the same medium star (without the knob a small star and a large one); 4,000 at 4x report 933; 8,000 at 1x report 1,161, a large star with haze and no washed-out screen. The first build read the MSAA from the surface at the report and reported 170 at 1x; the MSAA now comes from the draws of the query interval.
+
 ## 5. Superseded settings and decisions
 
 Each row gives the date of the change, the setting that was replaced, and what happened later. The current values are in [running](../running.md) and [current status](current.md).
@@ -273,7 +285,7 @@ Each row gives the date of the change, the setting that was replaced, and what h
 | Date | Decision or setting | Replaced | Later change |
 |---|---|---|---|
 | 13 Oct 2026 | Launcher combination `rov_occlusion_async=all` with `readback_resolve=fast`, adopted by the project owner before the full gate | `readback_resolve=full` (synchronous readback) and the earlier occlusion default | 14 Oct: RTV as default (short-lived). 15 Oct: RTV as default again |
-| 13 Oct 2026 | `--rov_occlusion_awaited_report_divisor=2` for the awaited sun occlusion report | No divisor: the sun glare was too bright | Still set, and effective on the ROV path only; RTV not calibrated |
+| 13 Oct 2026 | `--rov_occlusion_awaited_report_divisor=2` for the awaited sun occlusion report | No divisor: the sun glare was too bright | Effective on the ROV path only. Removed from the launcher on 18 October 2026, so `-Rov` reports the counted samples again |
 | 14 Oct 2026 | RTV path as the launcher default (commit `c6420dc`) | ROV with `rov_occlusion_async=all` | Reverted the same day because of missing road segments. RTV default again on 15 Oct |
 | 14 Oct 2026 | `vblank_vrr=true` as the launcher default (`Build.ps1 -FixedVblank` restores the fixed 60 Hz grid) | Fixed 60 Hz vblank grid | 16 Oct: VRR is held to the fixed grid in scenarios below 60 fps (`FM4_VRR_HALF_RATE=1` restores VRR there) |
 | 14 Oct 2026 | Predicated tiling 1 (2 tiles, 2x MSAA) stays the race default. `FM4_TILING_SCENARIO=2` (one tile, no MSAA, FXAA) was tested, not made default | Not applicable | 16 Oct: races at `-Quality high` use TilingScenario 0 (4x MSAA, three tiles) |
@@ -298,6 +310,8 @@ Each row gives the date of the change, the setting that was replaced, and what h
 | 17 Oct 2026 | Presenter area downscale (`guest_output_area.ps.hlsl`, `present_area_downscale`, on by default) | One bilinear tap per screen pixel | None recorded |
 | 17 Oct 2026 | Clearcoat setting A in presets pc, aces, gt and neutral. Flakes are not used in any preset | No clearcoat (the original look) | The `flakes` knob remains, unused |
 | 17 Oct 2026 | GTAO `ao=0.6` (radius 0.75 m) in presets pc, aces, gt and neutral | No AO | The original look keeps no AO |
+| 18 Oct 2026 | Launcher without `rov_occlusion_awaited_report_divisor` (runtime default 1) | Divisor 2 on the ROV path since 13 October | None recorded |
+| 18 Oct 2026 | Look knob `sun=2` in presets pc, aces, gt and neutral (RTV sun glare per pixel, soft limit 1,200) | Counted host samples (glare grows with the MSAA level) | None recorded |
 
 ## 6. Corrections and qualifications of earlier entries
 
@@ -306,3 +320,4 @@ Each row gives the date of the change, the setting that was replaced, and what h
 - 16 October: the hypothesis that the menu hides faster because a timer counts frames was not proven. The timer is real-time: about 9 seconds at 60 Hz, at 240 Hz dynamic and at 240 Hz fixed.
 - 16 October: the first definition of the photo scenario (20 seconds of racing) was replaced in the gate by a race phase of 30 seconds after 10 seconds of driving.
 - 13 October: the sun glare judgment applies to the ROV path only. On 14 October the RTV sun query still gave 0 samples on the quick race route.
+- 18 October: the factor 2 of 13 October equalled the 2x MSAA sample count of the race tiling of that day (the ROV counter counts samples). With the sun in view (the camera cycle at about 82 s) the RTV sun query does return samples.

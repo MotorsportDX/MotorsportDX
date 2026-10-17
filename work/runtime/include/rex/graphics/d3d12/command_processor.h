@@ -836,6 +836,9 @@ class D3D12CommandProcessor : public CommandProcessor {
     bool host_queries;
     uint32_t first_query;
     uint32_t query_count;
+    // RTV path: host samples per guest pixel of the render target at the
+    // snapshot (MSAA, 2x drawn as 4x without host 2x MSAA).
+    uint32_t host_samples_per_pixel;
     uint32_t draws[3];  // perf_trace::segment_draws at the snapshot.
   };
   std::deque<ROVOcclusionPending> rov_occlusion_pending_;
@@ -859,6 +862,9 @@ class D3D12CommandProcessor : public CommandProcessor {
   uint32_t rtv_occlusion_open_query_ = UINT32_MAX;
   uint32_t rtv_occlusion_segment_first_ = 0;
   uint32_t rtv_occlusion_segment_count_ = 0;
+  // Highest guest MSAA of the draws counted by the open segment, plus 1 (0
+  // without draws): the surface at the snapshot may already be another one.
+  uint32_t rtv_occlusion_segment_msaa_ = 0;
   void PublishROVOcclusionReport(xenos::xe_gpu_depth_sample_counts* counts) const;
   bool FlushROVOcclusionSnapshots();
   uint32_t occlusion_query_cursor_ = 0;

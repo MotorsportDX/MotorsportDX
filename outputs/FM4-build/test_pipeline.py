@@ -106,6 +106,16 @@ class PipelineTests(unittest.TestCase):
             self.assertEqual(defines['FM4_LOOK_TONEMAP'],'2.0')
             self.assertNotIn('FM4_LOOK_VIGNETTE',defines)
             self.assertNotIn('shader_mod_hot_reload',cvars)
+            # The sun knob sets runtime cvars, not a define; alone it loads no shader mods.
+            self.assertNotIn('sun',''.join(defines).lower())
+            self.assertEqual(cvars['rtv_occlusion_awaited_scale'],'2')
+            self.assertEqual(cvars['rtv_occlusion_awaited_limit'],str(pipeline.SUN_LIMIT))
+            self.assertEqual(pipeline.look_cvars(root,'original,sun=1.5'),
+                             {'rtv_occlusion_awaited_scale':'1.5',
+                              'rtv_occlusion_awaited_limit':str(pipeline.SUN_LIMIT)})
+            self.assertEqual(pipeline.look_cvars(root,'pc,sun=0')['rtv_occlusion_awaited_scale'],'0')
+            with self.assertRaises(RuntimeError):
+                pipeline.look_cvars(root,'pc,sun=-1')
             # Development: the repository files, every knob, hot reload and live knobs.
             for look in ('pc,sharpen=0.6','original'):
                 cvars=pipeline.look_cvars(root,look,shader_dev=True)

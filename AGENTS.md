@@ -24,6 +24,11 @@ These rules apply to every AI agent working in this repository.
 - Write dates in full (`16 October 2026`). Write decimals with a point (`0.6`) and thousands with a comma (`50,233`).
 - Keep docs factual and in the present tense unless they describe history.
 
+## Render target paths
+
+- Shader mods (`work/fm4-rex/look`, the shader override path) and the GTAO ambient occlusion target the host render target path (RTV) with bindless resources only. Do not port them to the ROV path (`-Rov`, `render_target_path_d3d12=rov`), and do not add title-specific corrections to it (such as the removed occlusion sample divisor).
+- ROV is the uncorrected reference for the EDRAM emulation: it renders the title's own output. That `-Rov` runs without mods and AO is by design, not an implementation gap. Compare RTV against `-Rov` with `-Look original`.
+
 ## Repository rules
 
 - `.gitignore` denies everything by default. A new source or doc file is ignored until it is whitelisted in `.gitignore`. Source files also need a review entry in `outputs/FM4-source-control/tracked-files.json`.

@@ -62,8 +62,8 @@ REXCVAR_DEFINE_BOOL(d3d12_submit_on_primary_buffer_end, true, "GPU/D3D12",
 
 REXCVAR_DEFINE_INT32(rov_occlusion_awaited_report_divisor, 1, "GPU/D3D12",
                      "Divide the ROV occlusion samples counted between an awaited END "
-                     "report and the report before it. Title-specific tuning: FM4 uses 2 "
-                     "for its sun visibility query; 1 keeps the counted samples")
+                     "report and the report before it. Experiment: 2 turns FM4's sun "
+                     "visibility samples at 2x MSAA into pixels; 1 keeps the counted samples")
     .range(1, 16)
     .lifecycle(rex::cvar::Lifecycle::kHotReload);
 
@@ -87,6 +87,18 @@ REXCVAR_DEFINE_STRING(rtv_occlusion_debug, "", "GPU/D3D12",
                       "Diagnostics for RTV snapshots: noqueries (report 0 samples without host "
                       "queries), fake (host queries, but report N samples for awaited intervals; "
                       "N from query_occlusion_fake_sample_count)");
+REXCVAR_DEFINE_DOUBLE(rtv_occlusion_awaited_scale, -1.0, "GPU/D3D12",
+                      "RTV path: 0 or more reports the samples of awaited intervals (FM4 "
+                      "measures its sun visibility this way) as guest pixels, the same at every "
+                      "MSAA level, times this scale. Below 0 keeps the counted host samples")
+    .range(-1.0, 16.0)
+    .lifecycle(rex::cvar::Lifecycle::kHotReload);
+REXCVAR_DEFINE_DOUBLE(rtv_occlusion_awaited_limit, 0.0, "GPU/D3D12",
+                      "RTV path, with rtv_occlusion_awaited_scale: soft limit of the scaled "
+                      "awaited pixels. Up to a third of it they pass unchanged, above that they "
+                      "approach it without reaching it. 0: no limit")
+    .range(0.0, 1000000.0)
+    .lifecycle(rex::cvar::Lifecycle::kHotReload);
 
 REXCVAR_DEFINE_BOOL(rtv_uniform_draws, true, "GPU/D3D12",
                     "RTV path: for screen-space rectangles writing the same values to every "
@@ -3375,6 +3387,11 @@ bool D3D12CommandProcessor::IssueDraw(xenos::PrimitiveType primitive_type, uint3
   }
 
   bool surface_pitch_is_zero = regs.Get<reg::RB_SURFACE_INFO>().surface_pitch == 0;
+  if (rtv_occlusion_open_query_ != UINT32_MAX) {
+    rtv_occlusion_segment_msaa_ =
+        std::max(rtv_occlusion_segment_msaa_,
+                 uint32_t(regs.Get<reg::RB_SURFACE_INFO>().msaa_samples) + 1);
+  }
 
   // Vertex shader analysis.
   auto vertex_shader = static_cast<D3D12Shader*>(active_vertex_shader());
@@ -6372,6 +6389,7 @@ bool D3D12CommandProcessor::InitializeOcclusionQueryResources() {
   active_occlusion_query_ = {};
   rtv_occlusion_open_query_ = UINT32_MAX;
   rtv_occlusion_segment_count_ = 0;
+  rtv_occlusion_segment_msaa_ = 0;
   occlusion_query_cursor_ = 0;
   occlusion_query_resources_available_ = false;
   occlusion_query_heap_.Reset();
@@ -6589,15 +6607,39 @@ void D3D12CommandProcessor::RetireROVOcclusionSnapshots() {
     // D3D pre-fills an END report with 0xFFFFFEED and the guest spins on it,
     // so this segment is the bracketed query interval rather than one of the
     // free-running intervals between QueryBatch-style snapshots. FM4 measures
-    // its sun visibility this way and reads about twice the samples it
-    // expects, while its frame-wide reports (auto exposure) must stay as they
-    // are; scale only these segments when the title asks for it.
+    // its sun visibility this way. The counter counts guest samples, so the
+    // sun sprite reports 1x, 2x and 4x its pixel area at 1x, 2x and 4x MSAA;
+    // a divisor can scale only these segments for experiments, while the
+    // frame-wide reports (auto exposure) stay as they are.
     if (pending.awaited && divisor > 1 && !pending.host_queries) {
       for (uint64_t& samples : segment) samples = (samples + (divisor >> 1)) / divisor;
     }
     if (pending.awaited && pending.host_queries && REXCVAR_GET(rtv_occlusion_debug) == "fake") {
       segment[uint32_t(DxbcShaderTranslator::ROVOcclusionCounter::kZPass)] =
           uint64_t(std::max(REXCVAR_GET(query_occlusion_fake_sample_count), 0));
+    }
+    const double awaited_scale = REXCVAR_GET(rtv_occlusion_awaited_scale);
+    if (pending.awaited && pending.host_queries && awaited_scale >= 0.0) {
+      // Host queries count every sample, so the same sun reports 1x, 2x and
+      // 4x its pixels at 1x, 2x and 4x MSAA. Count guest pixels instead (the
+      // resolution scale is removed when the report is published), scale them
+      // and pass them through the soft limit.
+      const double resolution_scale =
+          double(texture_cache_ ? texture_cache_->draw_resolution_scale_x() *
+                                      texture_cache_->draw_resolution_scale_y()
+                                : 1);
+      const double limit = REXCVAR_GET(rtv_occlusion_awaited_limit);
+      for (uint64_t& samples : segment) {
+        double pixels = double(samples) / (std::max(pending.host_samples_per_pixel, 1u) *
+                                           resolution_scale) * awaited_scale;
+        const double knee = limit / 3.0;
+        if (limit > 0.0 && pixels > knee) {
+          // Linear up to the knee, then approaching the limit.
+          const double over = pixels - knee;
+          pixels = knee + over / (1.0 + over / (limit - knee));
+        }
+        samples = uint64_t(pixels * resolution_scale + 0.5);
+      }
     }
     TraceOcclusionSegment(pending.interval, pending.awaited, pending.host_queries,
                           pending.guest_address, segment.data(), kROVOcclusionCounters,
@@ -6825,7 +6867,17 @@ bool D3D12CommandProcessor::WriteRTVOcclusionSnapshot(xenos::xe_gpu_depth_sample
   pending.host_queries = true;
   pending.first_query = rtv_occlusion_segment_first_;
   pending.query_count = rtv_occlusion_segment_count_;
+  // The MSAA of the segment's draws; the current surface only without draws.
+  const xenos::MsaaSamples msaa =
+      rtv_occlusion_segment_msaa_
+          ? xenos::MsaaSamples(rtv_occlusion_segment_msaa_ - 1)
+          : register_file_->Get<reg::RB_SURFACE_INFO>().msaa_samples;
+  pending.host_samples_per_pixel =
+      msaa == xenos::MsaaSamples::k2X && !render_target_cache_->msaa_2x_supported()
+          ? 4u
+          : 1u << uint32_t(msaa);
   rtv_occlusion_segment_count_ = 0;
+  rtv_occlusion_segment_msaa_ = 0;
   OpenRTVOcclusionQuery();
   return QueueOcclusionSnapshot(pending, counts, awaited);
 }

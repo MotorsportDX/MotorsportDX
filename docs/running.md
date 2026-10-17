@@ -85,10 +85,9 @@ The launcher uses these runtime settings (set in `launch_cvars` in
 - The road sections that this path used to leave undrawn came from the title's track
   streaming. They are fixed for every render path.
 
-Known limits of this path: the sun glare has not been calibrated on it, because the
-sun occlusion query correction (`rov_occlusion_awaited_report_divisor=2`) applies
-only to `-Rov`. Interactive Autovista has not been tested on it. If rendering
-misbehaves, compare with `-Rov`. Which scenarios have passed on this path is recorded
+Known limits of this path: the sun glare has not been calibrated on it (see
+[status/current.md](status/current.md#open-issues)). Interactive Autovista has not
+been tested on it. If rendering misbehaves, compare with `-Rov`. Which scenarios have passed on this path is recorded
 in [status/current.md](status/current.md).
 
 ## Options
@@ -205,9 +204,15 @@ F2 toggles it in any run.
 Uses the earlier pixel shader interlock render target path
 (`render_target_path_d3d12=rov`, `rov_occlusion_async=all`) for comparisons. Measured
 with Quick Race: 60.0 fps, with about 7.1 ms of GPU time per frame (2.5 ms on the
-default path). Only this path uses the sun occlusion query correction
-(`rov_occlusion_awaited_report_divisor=2`). Use it to compare when rendering misbehaves
-on the default path.
+default path). Its occlusion reports are the counted guest samples, without a title
+correction (since 18 October 2026 the launcher no longer passes
+`rov_occlusion_awaited_report_divisor=2`). Use it as the reference when rendering
+misbehaves on the default path.
+
+Shader mods and ambient occlusion are RTV only, by design: with `-Rov` the runtime
+turns off the shader overrides ("Shader overrides need bindless resources and host
+render targets" in the log), so every look mod and the AO are gone and the picture is
+the title's own. Compare the default path against `-Rov` with `-Look original`.
 
 #### -SingleTile
 
@@ -261,10 +266,10 @@ preset, knobs, or both. A preset sets only its own knobs. Later items win, so
 
 | Preset | Settings |
 | --- | --- |
-| `pc` (default) | `tonemap=aces`, `saturation=1.1`, `bloom=0.7`, `sharpen=0.4`, `clearcoat=1`, `ao=0.6` |
-| `aces` | `tonemap=aces`, `clearcoat=1`, `ao=0.6` |
-| `gt` | `tonemap=gt`, `clearcoat=1`, `ao=0.6` |
-| `neutral` | `tonemap=neutral`, `clearcoat=1`, `ao=0.6` |
+| `pc` (default) | `tonemap=aces`, `saturation=1.1`, `bloom=0.7`, `sharpen=0.4`, `clearcoat=1`, `ao=0.6`, `sun=2` |
+| `aces` | `tonemap=aces`, `clearcoat=1`, `ao=0.6`, `sun=2` |
+| `gt` | `tonemap=gt`, `clearcoat=1`, `ao=0.6`, `sun=2` |
+| `neutral` | `tonemap=neutral`, `clearcoat=1`, `ao=0.6`, `sun=2` |
 | `original` | No mods: the game's own look. Clears the knobs given before it in the same value. |
 
 Knobs that are not set keep the original look. Examples: `-Look "aces,clearcoat=0,ao=0"`
@@ -286,6 +291,19 @@ and `-Look original`.
 | `flakes` | number | Flakes in the car paint. |
 | `flake_scale` | number, default 1200 | Scale of the paint flakes. |
 | `ao` | number, `0` turns it off | Strength of the screen-space ambient occlusion. |
+| `sun` | number, `0` turns the glare off | Strength of the sun glare on the RTV path, the same at every MSAA level. Without it (`original`) the glare follows the counted samples. See [Sun glare](#sun-glare). |
+
+### Sun glare
+
+The title draws the sun glare from an occlusion query of the sun sprite. The host query
+counts samples, so without a correction the same sun gives twice the glare at 2x MSAA
+(`-Quality xbox` races) and four times at 4x (`high` races, replays, photo mode) as at 1x.
+The `sun` knob makes the runtime report guest pixels instead, times the strength
+(`rtv_occlusion_awaited_scale`), through a soft limit of 1,200 pixels
+(`rtv_occlusion_awaited_limit`, `SUN_LIMIT` in `pipeline.py`): up to 400 pixels pass
+unchanged, above that they approach the limit, so the glare cannot wash out the screen. A
+fully visible sun is about 338 pixels at 720p. The knob is a launcher setting, not a
+shader mod, so it also works with `-Look original,sun=1`. `-Rov` does not use it.
 
 ### Ambient occlusion
 
