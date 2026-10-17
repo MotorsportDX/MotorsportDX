@@ -263,7 +263,7 @@ FM4-build/
 ├── project/          # Integration source and private generated/
 ├── game-build/       # Executable, modules, runtime, GPU plugins
 ├── user-data/        # Profiles, saves, imported Disc 2 and DLC content
-├── cache/            # Game and shader cache
+├── cache/            # Game and shader cache (shader-overrides/: compiled look mods)
 ├── logs/             # Logs for setup, generate, build and startup
 ├── e2e/              # e2e run output (captures, logs, summary.json)
 ├── snapshots/        # game-build copies used by the matrix.py gates

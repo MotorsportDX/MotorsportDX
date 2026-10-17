@@ -19,7 +19,7 @@ timeline
     14 October : Project-owned runtime in work/runtime, RTV default then reverted, vblank_vrr default
     15 October : Streaming fix (sGPU fallback) for missing road, RTV default again
     16 October : Photo, career and matrix e2e scenarios, gate tiers, look pc and quality high defaults
-    17 October : Clearcoat, display options and settings overlay, Alt+Enter, GTAO ambient occlusion, generic content import (DLC)
+    17 October : Clearcoat, display options and settings overlay, Alt+Enter, GTAO ambient occlusion, generic content import (DLC), shader mod cache and hot reload
 ```
 
 | Date | Milestone |
@@ -28,7 +28,7 @@ timeline
 | 14 October 2026 | The project-owned runtime (`work/runtime`) replaces `sdk.patch` and `sdk-extra`. RTV is the launcher default for a short time, then reverted to ROV. The missing road segments on RTV are investigated. `vblank_vrr` becomes the default. |
 | 15 October 2026 | The streaming fix (sGPU fallback) resolves the missing road segments, and RTV is the launcher default again. Command processor work: EDRAM transfers, upload removal, event-based wait and readback fixes. |
 | 16 October 2026 | Photo, photo_view and career e2e scenarios, the regression and 240 Hz matrices, the dynamic vblank rate, the rebuilt developer AI driver and career race to rewards, the shader override and look knobs, the shadow workaround no longer default, and 16x anisotropic filtering. |
-| 17 October 2026 | Clearcoat on the car paint, display and render scale options, the settings overlay, Alt+Enter, and GTAO ambient occlusion. The default launcher (look `pc` with clearcoat and AO) passes the smoke gate. The generic content installer (`-Content`) imports and mounts Disc 2 and eight DLC packages. |
+| 17 October 2026 | Clearcoat on the car paint, display and render scale options, the settings overlay, Alt+Enter, and GTAO ambient occlusion. The default launcher (look `pc` with clearcoat and AO) passes the smoke gate. The generic content installer (`-Content`) imports and mounts Disc 2 and eight DLC packages. The compiled look mods are cached, and shader mods hot reload with live knobs (`-ShaderDev`). |
 
 ## 1. Clean-build verification (13-14 October 2026)
 
@@ -259,6 +259,12 @@ GTAO ambient occlusion (17 October; design and results in [GTAO design](../analy
 - Performance, 3 runs of the race phase: at 1x, GPU 2.82 to 3.01 ms and 196 to 200 fps (limited by the command processor). At 2x, GPU 5.32 to 6.09 ms and 174 to 162 fps (limited by the GPU). A 2x 60 Hz run with the launcher gave 60.0 fps.
 - AO is visible at contacts and under the car, in the lamp recesses, the bumper creases and the wall bases. Open asphalt and sky are unchanged, and AO also applies in replay and photo mode.
 - Not yet: the cockpit interior (its depth range is compressed by the implementation itself), and the garage and showroom (no camera vertex shader).
+
+Shader mod iteration (17 October; design and results in [shader-mod-iteration.md](../analysis/shader-mod-iteration.md)):
+
+- The compiled DXBC of the overrides and mods is cached in `BuildRoot\cache\shader-overrides` (the launcher turns it on). Translating the shader storage at the start drops from about 5.4 s to 16 to 19 ms with the `pc` look.
+- `-ShaderDev` reloads the look mods when a file is saved, and makes every knob live (`shader_mod_set` in the console, or `shader_mod_defines.txt`).
+- Smoke gate against the build before the change, in a separate BuildRoot: 3/3 cells passed. `photo` FAIL on fps from a different race (sixth place, 55% more draws per frame), `career` race within 2% at the same GPU time. The `perf` tier (three `photo` runs per build) passed 6 of 6 runs, `compare` WARN on capture statistics only, race median 203.2 against 189.2 fps. Details in [current status](current.md#automated-gates-17-october-2026).
 
 ## 5. Superseded settings and decisions
 

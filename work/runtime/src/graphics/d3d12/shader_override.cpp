@@ -7,6 +7,7 @@
 
 #include <algorithm>
 #include <cctype>
+#include <charconv>
 #include <chrono>
 #include <cstddef>
 #include <cstdlib>
@@ -15,6 +16,7 @@
 #include <iterator>
 #include <list>
 #include <sstream>
+#include <thread>
 
 #include <fmt/format.h>
 
@@ -61,6 +63,33 @@ REXCVAR_DEFINE_INT32(shader_override_ab_ms, 0, "GPU/D3D12",
                      "overrides), to compare both in one scene")
     .range(0, 3600000);
 
+REXCVAR_DEFINE_STRING(shader_override_cache_path, "", "GPU/D3D12",
+                      "Directory keeping the compiled DXBC of shader overrides and mods, keyed on "
+                      "the source, the defines and the content of every included file, so later "
+                      "runs skip FXC (empty: off)")
+    .lifecycle(rex::cvar::Lifecycle::kRequiresRestart);
+
+REXCVAR_DEFINE_BOOL(shader_mod_hot_reload, false, "GPU/D3D12",
+                    "Development: watch shader_mod_path, shader_override_path and the files the "
+                    "overrides include while running, recompile the overrides whose files "
+                    "changed and rebuild only their pipelines")
+    .lifecycle(rex::cvar::Lifecycle::kRequiresRestart);
+
+REXCVAR_DEFINE_BOOL(shader_mod_live_knobs, false, "GPU/D3D12",
+                    "Development: compile the numeric shader_mod_defines as constants read at "
+                    "run time (xe_mod_knob), so shader_mod_set changes them without a recompile")
+    .lifecycle(rex::cvar::Lifecycle::kRequiresRestart);
+
+namespace rex::graphics::d3d12 {
+void ShaderModSetCommand(std::string_view args);
+}  // namespace rex::graphics::d3d12
+
+REXCVAR_DEFINE_COMMAND_ARGS(shader_mod_set, rex::graphics::d3d12::ShaderModSetCommand,
+                            "GPU/D3D12",
+                            "NAME=VALUE pairs over shader_mod_defines while running: live knobs "
+                            "at once (shader_mod_live_knobs), other defines with a recompile "
+                            "(shader_mod_hot_reload); no arguments: list them");
+
 namespace rex::graphics::d3d12 {
 
 namespace {
@@ -69,9 +98,83 @@ using SystemConstants = DxbcShaderTranslator::SystemConstants;
 using Modification = DxbcShaderTranslator::Modification;
 
 constexpr char kHlsliName[] = "xenos_override.hlsli";
+constexpr char kTarget[] = "ps_5_1";
+constexpr UINT kCompileFlags = D3DCOMPILE_ENABLE_UNBOUNDED_DESCRIPTOR_TABLES |
+                               D3DCOMPILE_IEEE_STRICTNESS | D3DCOMPILE_OPTIMIZATION_LEVEL3;
+
+// shader_override_cache_path files: magic, version, key, the included files
+// (name length, name, content XXH3), the DXBC (size, bytes).
+constexpr uint32_t kCacheMagic = 0x4F435846;  // 'FXCO'
+constexpr uint32_t kCacheVersion = 1;
+
+// The instance shader_mod_set talks to.
+std::mutex g_instance_mutex;
+ShaderOverrides* g_instance = nullptr;
+
+uint64_t HashBytes(const void* data, size_t size) { return XXH3_64bits(data, size); }
+
+bool ReadFile(const std::filesystem::path& path, std::string& out) {
+  std::ifstream file(path, std::ios::binary);
+  if (!file) {
+    return false;
+  }
+  out.assign(std::istreambuf_iterator<char>(file), std::istreambuf_iterator<char>());
+  return true;
+}
+
+// The whole of text as a float.
+bool ParseFloat(const std::string& text, float& value_out) {
+  const char* end = text.data() + text.size();
+  auto result = std::from_chars(text.data(), end, value_out);
+  return !text.empty() && result.ec == std::errc() && result.ptr == end;
+}
+
+// NAME=VALUE (NAME alone: 1), separated by any of separators.
+std::vector<std::pair<std::string, std::string>> ParseDefines(std::string_view text,
+                                                              std::string_view separators) {
+  std::vector<std::pair<std::string, std::string>> defines;
+  size_t start = 0;
+  while (start <= text.size()) {
+    size_t end = text.find_first_of(separators, start);
+    if (end == std::string_view::npos) {
+      end = text.size();
+    }
+    std::string_view define = text.substr(start, end - start);
+    if (!define.empty()) {
+      size_t equals = define.find('=');
+      defines.emplace_back(std::string(define.substr(0, equals)),
+                           equals == std::string_view::npos ? std::string("1")
+                                                            : std::string(define.substr(equals + 1)));
+    }
+    start = end + 1;
+  }
+  return defines;
+}
+
+// Without '#' to the end of each line.
+std::string StripComments(const std::string& text) {
+  std::string out;
+  std::istringstream lines(text);
+  for (std::string line; std::getline(lines, line);) {
+    out += line.substr(0, line.find('#'));
+    out += '\n';
+  }
+  return out;
+}
+
+void SetDefine(std::vector<std::pair<std::string, std::string>>& defines, const std::string& name,
+               const std::string& value) {
+  for (auto& define : defines) {
+    if (define.first == name) {
+      define.second = value;
+      return;
+    }
+  }
+  defines.emplace_back(name, value);
+}
 
 // Serves the embedded library, and other includes from the mod and override
-// directories.
+// directories, recording the files it read.
 class OverrideInclude final : public ID3DInclude {
  public:
   explicit OverrideInclude(std::vector<std::filesystem::path> directories)
@@ -88,14 +191,14 @@ class OverrideInclude final : public ID3DInclude {
       if (directory.empty()) {
         continue;
       }
-      std::ifstream file(directory / file_name, std::ios::binary);
-      if (!file) {
+      std::string text;
+      if (!ReadFile(directory / file_name, text)) {
         continue;
       }
-      std::string& text = files_.emplace_back(std::istreambuf_iterator<char>(file),
-                                              std::istreambuf_iterator<char>());
-      *data_out = text.data();
-      *bytes_out = UINT(text.size());
+      read_.push_back({file_name, directory / file_name, HashBytes(text.data(), text.size())});
+      std::string& stored = files_.emplace_back(std::move(text));
+      *data_out = stored.data();
+      *bytes_out = UINT(stored.size());
       return S_OK;
     }
     return E_FAIL;
@@ -106,9 +209,18 @@ class OverrideInclude final : public ID3DInclude {
     return S_OK;
   }
 
+  struct Read {
+    std::string name;
+    std::filesystem::path path;
+    uint64_t hash;
+  };
+  // Every file opened.
+  const std::vector<Read>& read() const { return read_; }
+
  private:
   std::vector<std::filesystem::path> directories_;
   std::list<std::string> files_;
+  std::vector<Read> read_;
 };
 
 // shader_<16 hex digits>[...]<suffix> in a directory.
@@ -238,6 +350,15 @@ std::string CompareSignatures(const std::vector<uint8_t>& translated,
 
 }  // namespace
 
+void ShaderModSetCommand(std::string_view args) {
+  std::lock_guard<std::mutex> lock(g_instance_mutex);
+  if (!g_instance) {
+    REXGPU_WARN("shader_mod_set: no shader overrides or mods are loaded");
+    return;
+  }
+  g_instance->SetDefines(args);
+}
+
 std::unique_ptr<ShaderOverrides> ShaderOverrides::Create(const HostConfig& config) {
   std::string path = REXCVAR_GET(shader_override_path);
   std::string generate_path = REXCVAR_GET(shader_override_generate_path);
@@ -260,19 +381,46 @@ std::unique_ptr<ShaderOverrides> ShaderOverrides::Create(const HostConfig& confi
   overrides->mod_directory_ = mod_path;
   ScanShaderFiles(overrides->mod_directory_, ".mod.hlsli", overrides->mod_shaders_);
   // NAME=VALUE;NAME=VALUE
-  std::istringstream defines(REXCVAR_GET(shader_mod_defines));
-  for (std::string define; std::getline(defines, define, ';');) {
-    size_t equals = define.find('=');
-    if (!define.empty()) {
-      overrides->mod_defines_.emplace_back(define.substr(0, equals),
-                                           equals == std::string::npos ? std::string("1")
-                                                                       : define.substr(equals + 1));
+  overrides->mod_defines_ = ParseDefines(REXCVAR_GET(shader_mod_defines), ";");
+  overrides->live_knobs_ = REXCVAR_GET(shader_mod_live_knobs);
+  overrides->hot_reload_ = REXCVAR_GET(shader_mod_hot_reload);
+  if (overrides->hot_reload_ && !overrides->mod_directory_.empty()) {
+    std::string text;
+    if (RefreshFileState(overrides->mod_directory_ / kDefinesFile, overrides->defines_file_,
+                         &text)) {
+      for (const auto& define : ParseDefines(StripComments(text), "; \t\r\n")) {
+        SetDefine(overrides->mod_defines_, define.first, define.second);
+      }
+      REXGPU_INFO("Shader overrides: defines from {}", kDefinesFile);
     }
   }
-  REXGPU_INFO("Shader overrides: {} pixel shaders in '{}', {} mods in '{}'{}{}",
+  {
+    std::lock_guard<std::mutex> lock(overrides->knob_mutex_);
+    overrides->RebuildCompileDefines();
+  }
+  const std::string& cache_path = REXCVAR_GET(shader_override_cache_path);
+  if (!cache_path.empty()) {
+    std::error_code error;
+    std::filesystem::create_directories(cache_path, error);
+    if (error) {
+      REXGPU_WARN("Shader override cache: cannot create '{}': {}", cache_path, error.message());
+    } else {
+      overrides->cache_directory_ = cache_path;
+    }
+  }
+  overrides->last_poll_ = std::chrono::steady_clock::now();
+  REXGPU_INFO("Shader overrides: {} pixel shaders in '{}', {} mods in '{}'{}{}{}{}{}",
               overrides->pixel_shaders_.size(), path, overrides->mod_shaders_.size(), mod_path,
               use_generated ? ", generated HLSL for the others" : "",
-              generate_path.empty() ? "" : ", writing generated HLSL to " + generate_path);
+              generate_path.empty() ? "" : ", writing generated HLSL to " + generate_path,
+              overrides->cache_directory_.empty()
+                  ? ""
+                  : ", cache in " + overrides->cache_directory_.generic_string(),
+              overrides->hot_reload_ ? ", hot reload" : "",
+              overrides->live_knobs_ ? fmt::format(", {} live knobs", overrides->knob_slots_.size())
+                                     : "");
+  std::lock_guard<std::mutex> lock(g_instance_mutex);
+  g_instance = overrides.get();
   return overrides;
 }
 
@@ -282,12 +430,29 @@ ShaderOverrides::ShaderOverrides(const HostConfig& config, std::filesystem::path
   d3dcompiler_ = library;
   if (library) {
     d3d_compile_ = reinterpret_cast<void*>(GetProcAddress(library, "D3DCompile"));
+    // The compiler's identity for the cache key: the size and time of its DLL.
+    wchar_t module_path[MAX_PATH];
+    DWORD length = GetModuleFileNameW(library, module_path, MAX_PATH);
+    if (length && length < MAX_PATH) {
+      std::error_code error;
+      uint64_t identity[2] = {
+          uint64_t(std::filesystem::file_size(module_path, error)),
+          uint64_t(std::filesystem::last_write_time(module_path, error).time_since_epoch().count())};
+      compiler_id_ = HashBytes(identity, sizeof(identity));
+    }
   }
+  library_hash_ = HashBytes(kShaderOverrideHlsli, sizeof(kShaderOverrideHlsli));
   // shader_<16 hex digits>[_<16 hex digits>].ps.hlsl
   ScanShaderFiles(directory_, ".ps.hlsl", pixel_shaders_);
 }
 
 ShaderOverrides::~ShaderOverrides() {
+  {
+    std::lock_guard<std::mutex> lock(g_instance_mutex);
+    if (g_instance == this) {
+      g_instance = nullptr;
+    }
+  }
   if (d3dcompiler_) {
     FreeLibrary(HMODULE(d3dcompiler_));
   }
@@ -304,6 +469,82 @@ bool ShaderOverrides::IsAbOffPhase() {
   return ((milliseconds / period) & 1) != 0;
 }
 
+void ShaderOverrides::RebuildCompileDefines() {
+  compile_defines_.clear();
+  for (const auto& define : mod_defines_) {
+    float value;
+    if (live_knobs_ && ParseFloat(define.second, value)) {
+      auto slot = knob_slots_.find(define.first);
+      if (slot == knob_slots_.end() && knob_slots_.size() < kKnobCount) {
+        slot = knob_slots_.emplace(define.first, uint32_t(knob_slots_.size())).first;
+        knob_values_[slot->second] = value;
+      }
+      if (slot != knob_slots_.end()) {
+        compile_defines_.emplace_back(define.first, fmt::format("xe_mod_knob({}u)", slot->second));
+        continue;
+      }
+      REXGPU_WARN("Shader mods: more than {} live knobs, {} stays a define", kKnobCount,
+                  define.first);
+    }
+    compile_defines_.push_back(define);
+  }
+  knob_generation_.fetch_add(1, std::memory_order_release);
+}
+
+bool ShaderOverrides::UpdateKnobs(float* values_out, uint64_t& generation) const {
+  if (knob_generation_.load(std::memory_order_acquire) == generation) {
+    return false;
+  }
+  std::lock_guard<std::mutex> lock(knob_mutex_);
+  std::memcpy(values_out, knob_values_, sizeof(knob_values_));
+  generation = knob_generation_.load(std::memory_order_relaxed);
+  return true;
+}
+
+void ShaderOverrides::SetDefines(std::string_view text) {
+  auto defines = ParseDefines(text, "; \t\r\n");
+  std::lock_guard<std::mutex> lock(knob_mutex_);
+  if (defines.empty()) {
+    for (const auto& define : mod_defines_) {
+      auto slot = knob_slots_.find(define.first);
+      if (slot != knob_slots_.end()) {
+        REXGPU_INFO("shader_mod_set: {}={} (live knob {})", define.first,
+                    knob_values_[slot->second], slot->second);
+      } else {
+        REXGPU_INFO("shader_mod_set: {}={}", define.first, define.second);
+      }
+    }
+    return;
+  }
+  for (const auto& define : defines) {
+    auto same = [&define](const auto& current) {
+      return current.first == define.first && current.second == define.second;
+    };
+    if (std::find_if(mod_defines_.begin(), mod_defines_.end(), same) != mod_defines_.end()) {
+      // Back to the value it has: nothing to recompile for it.
+      std::erase_if(pending_defines_,
+                    [&define](const auto& pending) { return pending.first == define.first; });
+      continue;
+    }
+    float value;
+    auto slot = knob_slots_.find(define.first);
+    if (slot != knob_slots_.end() && ParseFloat(define.second, value)) {
+      knob_values_[slot->second] = value;
+      SetDefine(mod_defines_, define.first, define.second);
+      knob_generation_.fetch_add(1, std::memory_order_release);
+      REXGPU_INFO("shader_mod_set: {}={} (live)", define.first, value);
+    } else if (hot_reload_) {
+      SetDefine(pending_defines_, define.first, define.second);
+      REXGPU_INFO("shader_mod_set: {}={} (recompiling the mods)", define.first, define.second);
+    } else {
+      REXGPU_WARN(
+          "shader_mod_set: {} is not a live knob; it needs a restart, shader_mod_live_knobs or "
+          "shader_mod_hot_reload",
+          define.first);
+    }
+  }
+}
+
 std::string ShaderOverrides::BuildContract(
     const D3D12Shader::D3D12Translation& translation) const {
   const auto& shader = static_cast<const D3D12Shader&>(translation.shader());
@@ -318,8 +559,14 @@ std::string ShaderOverrides::BuildContract(
        shader.ucode_data_hash(), translation.modification());
   line("#define XE_PIXEL_SHADER 1");
 
-  // System constants (DxbcShaderTranslator::SystemConstants).
-  line("#define XE_SYSTEM_CONSTANT_VECTORS {}", (sizeof(SystemConstants) + 15) / 16);
+  // System constants (DxbcShaderTranslator::SystemConstants), and the live
+  // knobs after them.
+  if (live_knobs_) {
+    line("#define XE_SYSTEM_CONSTANT_VECTORS {}", (kKnobsOffset + kKnobsSize + 15) / 16);
+    line("#define XE_SYS_MOD_KNOBS {}u", kKnobsOffset);
+  } else {
+    line("#define XE_SYSTEM_CONSTANT_VECTORS {}", (sizeof(SystemConstants) + 15) / 16);
+  }
   line("#define XE_SYS_FLAGS {}u", offsetof(SystemConstants, flags));
   line("#define XE_SYS_TEXTURE_SWIZZLED_SIGNS {}u",
        offsetof(SystemConstants, texture_swizzled_signs));
@@ -467,10 +714,143 @@ std::string ShaderOverrides::BuildContract(
   return out;
 }
 
+uint64_t ShaderOverrides::CacheKey(
+    const std::string& source,
+    const std::vector<std::pair<std::string, std::string>>& defines) const {
+  XXH3_state_t state;
+  XXH3_64bits_reset(&state);
+  uint64_t header[] = {kCacheVersion, compiler_id_, library_hash_, kCompileFlags};
+  XXH3_64bits_update(&state, header, sizeof(header));
+  XXH3_64bits_update(&state, kTarget, sizeof(kTarget));
+  uint64_t source_size = source.size();
+  XXH3_64bits_update(&state, &source_size, sizeof(source_size));
+  XXH3_64bits_update(&state, source.data(), source.size());
+  for (const auto& define : defines) {
+    // NUL-terminated, so names and values can't run into each other.
+    XXH3_64bits_update(&state, define.first.c_str(), define.first.size() + 1);
+    XXH3_64bits_update(&state, define.second.c_str(), define.second.size() + 1);
+  }
+  return XXH3_64bits_digest(&state);
+}
+
+std::filesystem::path ShaderOverrides::CachePath(
+    const D3D12Shader::D3D12Translation& translation, uint64_t key) const {
+  return cache_directory_ / fmt::format("shader_{:016X}_{:016X}_{:016X}.dxbc",
+                                        translation.shader().ucode_data_hash(),
+                                        translation.modification(), key);
+}
+
+std::filesystem::path ShaderOverrides::ResolveInclude(const std::string& name) const {
+  for (const std::filesystem::path& directory : {mod_directory_, directory_}) {
+    if (directory.empty()) {
+      continue;
+    }
+    std::ifstream file(directory / name, std::ios::binary);
+    if (file) {
+      return directory / name;
+    }
+  }
+  return std::filesystem::path();
+}
+
+bool ShaderOverrides::LoadCached(const std::filesystem::path& path, uint64_t key,
+                                 std::vector<uint8_t>& binary_out,
+                                 std::vector<Dependency>& files_out) const {
+  std::string data;
+  if (!ReadFile(path, data)) {
+    return false;
+  }
+  size_t offset = 0;
+  auto read = [&data, &offset](void* out, size_t size) {
+    if (data.size() - offset < size) {
+      return false;
+    }
+    std::memcpy(out, data.data() + offset, size);
+    offset += size;
+    return true;
+  };
+  uint32_t magic, version, count;
+  uint64_t stored_key;
+  if (!read(&magic, 4) || magic != kCacheMagic || !read(&version, 4) ||
+      version != kCacheVersion || !read(&stored_key, 8) || stored_key != key ||
+      !read(&count, 4)) {
+    return false;
+  }
+  std::vector<Dependency> files;
+  for (uint32_t i = 0; i < count; ++i) {
+    uint32_t length;
+    if (!read(&length, 4) || data.size() - offset < length) {
+      return false;
+    }
+    Dependency& file = files.emplace_back();
+    file.name.assign(data.data() + offset, length);
+    offset += length;
+    if (!read(&file.hash, 8)) {
+      return false;
+    }
+    // Still the content it was compiled with, where the include finds it now.
+    file.path = ResolveInclude(file.name);
+    std::string text;
+    if (file.path.empty() || !ReadFile(file.path, text) ||
+        HashBytes(text.data(), text.size()) != file.hash) {
+      return false;
+    }
+  }
+  uint32_t size;
+  if (!read(&size, 4) || data.size() - offset != size) {
+    return false;
+  }
+  binary_out.assign(data.begin() + offset, data.end());
+  files_out = std::move(files);
+  return true;
+}
+
+void ShaderOverrides::StoreCached(const std::filesystem::path& path, uint64_t key,
+                                  const std::vector<Dependency>& files,
+                                  const std::vector<uint8_t>& binary) const {
+  std::string data;
+  auto write = [&data](const void* in, size_t size) {
+    data.append(static_cast<const char*>(in), size);
+  };
+  uint32_t header[] = {kCacheMagic, kCacheVersion};
+  write(header, sizeof(header));
+  write(&key, sizeof(key));
+  uint32_t count = uint32_t(files.size());
+  write(&count, sizeof(count));
+  for (const Dependency& file : files) {
+    uint32_t length = uint32_t(file.name.size());
+    write(&length, sizeof(length));
+    write(file.name.data(), length);
+    write(&file.hash, sizeof(file.hash));
+  }
+  uint32_t size = uint32_t(binary.size());
+  write(&size, sizeof(size));
+  write(binary.data(), binary.size());
+  // Written aside and renamed, so a reader never sees half a file.
+  std::filesystem::path temporary = path;
+  temporary += fmt::format(".{}.tmp", std::hash<std::thread::id>{}(std::this_thread::get_id()));
+  {
+    std::ofstream file(temporary, std::ios::binary | std::ios::trunc);
+    file.write(data.data(), std::streamsize(data.size()));
+    if (!file) {
+      REXGPU_WARN("Shader override cache: cannot write {}", temporary.generic_string());
+      return;
+    }
+  }
+  std::error_code error;
+  std::filesystem::rename(temporary, path, error);
+  if (error) {
+    REXGPU_WARN("Shader override cache: cannot write {}: {}", path.generic_string(),
+                error.message());
+    std::filesystem::remove(temporary, error);
+  }
+}
+
 bool ShaderOverrides::Compile(const D3D12Shader::D3D12Translation& translation,
-                              const std::string& contract, const std::string& text,
-                              const std::string& name, const std::string& mod,
-                              std::vector<uint8_t>& binary_out) const {
+                              const std::vector<uint8_t>& dxbc, const std::string& contract,
+                              const std::string& text, const std::string& name,
+                              const std::string& mod, std::vector<uint8_t>& binary_out,
+                              std::vector<Dependency>& files_out) const {
   // Contract, library (with the default hooks), mod (redefining hooks), the
   // shader, main.
   std::string source = contract;
@@ -482,8 +862,30 @@ bool ShaderOverrides::Compile(const D3D12Shader::D3D12Translation& translation,
   source += text;
   source += fmt::format("\n#define XE_OVERRIDE_MAIN\n#include \"{}\"\n", kHlsliName);
 
+  std::vector<std::pair<std::string, std::string>> define_values;
+  {
+    std::lock_guard<std::mutex> lock(knob_mutex_);
+    define_values = compile_defines_;
+  }
+
+  uint64_t key = 0;
+  std::filesystem::path cache_path;
+  if (!cache_directory_.empty()) {
+    key = CacheKey(source, define_values);
+    cache_path = CachePath(translation, key);
+    if (LoadCached(cache_path, key, binary_out, files_out)) {
+      std::string mismatch = CompareSignatures(dxbc, binary_out);
+      if (mismatch.empty()) {
+        REXGPU_INFO("Shader override {}{}{} loaded from the cache for modification {:016X}",
+                    name, mod.empty() ? "" : " with ", mod, translation.modification());
+        return true;
+      }
+    }
+    files_out.clear();
+  }
+
   std::vector<D3D_SHADER_MACRO> defines;
-  for (const auto& define : mod_defines_) {
+  for (const auto& define : define_values) {
     defines.push_back({define.first.c_str(), define.second.c_str()});
   }
   defines.push_back({nullptr, nullptr});
@@ -492,13 +894,18 @@ bool ShaderOverrides::Compile(const D3D12Shader::D3D12Translation& translation,
   ID3DBlob* code = nullptr;
   ID3DBlob* messages = nullptr;
   auto start = std::chrono::steady_clock::now();
-  HRESULT result = pD3DCompile(d3d_compile_)(
-      source.data(), source.size(), name.c_str(), defines.data(), &include, "main", "ps_5_1",
-      D3DCOMPILE_ENABLE_UNBOUNDED_DESCRIPTOR_TABLES | D3DCOMPILE_IEEE_STRICTNESS |
-          D3DCOMPILE_OPTIMIZATION_LEVEL3,
-      0, &code, &messages);
+  HRESULT result = pD3DCompile(d3d_compile_)(source.data(), source.size(), name.c_str(),
+                                             defines.data(), &include, "main", kTarget,
+                                             kCompileFlags, 0, &code, &messages);
   double milliseconds =
       std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - start).count();
+  // Every file read once, also of a failed compile (hot reload watches them).
+  for (const auto& read : include.read()) {
+    auto same = [&read](const Dependency& file) { return file.path == read.path; };
+    if (std::find_if(files_out.begin(), files_out.end(), same) == files_out.end()) {
+      files_out.push_back({read.name, read.path, read.hash});
+    }
+  }
   std::string message_text;
   if (messages) {
     message_text.assign(static_cast<const char*>(messages->GetBufferPointer()),
@@ -519,21 +926,24 @@ bool ShaderOverrides::Compile(const D3D12Shader::D3D12Translation& translation,
   if (!message_text.empty()) {
     REXGPU_WARN("Shader override {}: FXC warnings:\n{}", name, message_text);
   }
-  std::string mismatch = CompareSignatures(translation.translated_binary(), binary_out);
+  std::string mismatch = CompareSignatures(dxbc, binary_out);
   if (!mismatch.empty()) {
     REXGPU_ERROR("Shader override {}: {}", name, mismatch);
     return false;
   }
   REXGPU_INFO("Shader override {}{}{} compiled for modification {:016X} in {:.1f} ms", name,
               mod.empty() ? "" : " with ", mod, translation.modification(), milliseconds);
+  if (!cache_path.empty()) {
+    StoreCached(cache_path, key, files_out, binary_out);
+  }
   return true;
 }
 
-void ShaderOverrides::Apply(D3D12Shader::D3D12Translation& translation) {
+ShaderOverrides::Outcome ShaderOverrides::Build(const D3D12Shader::D3D12Translation& translation,
+                                                const std::vector<uint8_t>& dxbc,
+                                                std::vector<uint8_t>& binary_out,
+                                                std::vector<Dependency>& files_out) {
   Shader& shader = translation.shader();
-  if (shader.type() != xenos::ShaderType::kPixel || !translation.is_valid()) {
-    return;
-  }
   uint64_t hash = shader.ucode_data_hash();
   Modification modification(translation.modification());
   bool disabled = modification.pixel.hlsl_override_disabled;
@@ -559,7 +969,7 @@ void ShaderOverrides::Apply(D3D12Shader::D3D12Translation& translation) {
   bool use_generated = use_generated_ || !mod.empty();
   bool generate = path.empty() && !disabled && (use_generated || !generate_path_.empty());
   if (path.empty() && !generate && dump_path.empty()) {
-    return;
+    return Outcome::kNone;
   }
 
   std::string contract = BuildContract(translation);
@@ -577,7 +987,7 @@ void ShaderOverrides::Apply(D3D12Shader::D3D12Translation& translation) {
     }
   }
   if (disabled || (path.empty() && !generate)) {
-    return;
+    return Outcome::kNone;
   }
   if (modification.pixel.depth_stencil_mode ==
           Modification::DepthStencilMode::kFloat24Truncating ||
@@ -587,17 +997,15 @@ void ShaderOverrides::Apply(D3D12Shader::D3D12Translation& translation) {
         "Shader override {:016X}: modification {:016X} uses float24 depth conversion or "
         "memexport, which overrides don't support; keeping the translation",
         hash, modification.value);
-    return;
+    return Outcome::kNone;
   }
 
   std::string text, name;
   if (!path.empty()) {
-    std::ifstream file(path, std::ios::binary);
-    if (!file) {
+    if (!ReadFile(path, text)) {
       REXGPU_ERROR("Shader override {}: cannot read the file", path.string());
-      return;
+      return Outcome::kNone;
     }
-    text.assign(std::istreambuf_iterator<char>(file), std::istreambuf_iterator<char>());
     name = path.generic_string();
   } else {
     // HLSL doing the operations of the DXBC translation.
@@ -606,7 +1014,7 @@ void ShaderOverrides::Apply(D3D12Shader::D3D12Translation& translation) {
     if (!translator.TranslateAnalyzedShader(generated)) {
       REXGPU_WARN("Shader override {:016X}: no HLSL generated for modification {:016X}", hash,
                   modification.value);
-      return;
+      return Outcome::kNone;
     }
     text = generated.GetTranslatedBinaryString();
     std::string file_name = fmt::format("shader_{:016X}_{:016X}.ps.hlsl", hash, modification.value);
@@ -620,13 +1028,225 @@ void ShaderOverrides::Apply(D3D12Shader::D3D12Translation& translation) {
       name = "generated/" + file_name;
     }
     if (!use_generated) {
-      return;
+      return Outcome::kNone;
+    }
+  }
+  files_out.clear();
+  bool compiled = Compile(translation, dxbc, contract, text, name, mod, binary_out, files_out);
+  if (!path.empty()) {
+    files_out.push_back({path.filename().string(), path, HashBytes(text.data(), text.size())});
+  }
+  return compiled ? Outcome::kCompiled : Outcome::kFailed;
+}
+
+void ShaderOverrides::Record(const D3D12Shader::D3D12Translation& translation,
+                             std::vector<uint8_t> dxbc, const std::vector<Dependency>& files,
+                             bool overridden) {
+  Entry& entry = entries_[&translation];
+  entry.dxbc = std::move(dxbc);
+  entry.overridden = overridden;
+  entry.files.clear();
+  for (const Dependency& file : files) {
+    entry.files.push_back(file.path);
+    auto [state, inserted] = files_.try_emplace(file.path);
+    if (inserted) {
+      // As read for the compile: a change since then shows at the next poll.
+      std::error_code error;
+      state->second.exists = true;
+      state->second.time = std::filesystem::last_write_time(file.path, error);
+      state->second.size = std::filesystem::file_size(file.path, error);
+      state->second.hash = file.hash;
+    }
+  }
+}
+
+void ShaderOverrides::Apply(D3D12Shader::D3D12Translation& translation) {
+  if (translation.shader().type() != xenos::ShaderType::kPixel || !translation.is_valid()) {
+    return;
+  }
+  std::vector<uint8_t> binary;
+  std::vector<Dependency> files;
+  Outcome outcome = Build(translation, translation.translated_binary(), binary, files);
+  if (hot_reload_ && outcome != Outcome::kNone) {
+    std::lock_guard<std::mutex> lock(entries_mutex_);
+    Record(translation, translation.translated_binary(), files, outcome == Outcome::kCompiled);
+  }
+  if (outcome == Outcome::kCompiled) {
+    translation.ReplaceTranslatedBinary(std::move(binary));
+  }
+}
+
+bool ShaderOverrides::RefreshFileState(const std::filesystem::path& path, FileState& state,
+                                       std::string* text_out) {
+  std::error_code error;
+  FileState current;
+  current.time = std::filesystem::last_write_time(path, error);
+  current.exists = !error;
+  current.size = current.exists ? std::filesystem::file_size(path, error) : 0;
+  if (current.exists == state.exists && current.time == state.time &&
+      current.size == state.size) {
+    return false;
+  }
+  std::string text;
+  if (current.exists && ReadFile(path, text)) {
+    current.hash = HashBytes(text.data(), text.size());
+  } else {
+    current.exists = false;
+  }
+  // Saved again with the same content: no change.
+  bool changed = current.exists != state.exists || current.hash != state.hash;
+  state = current;
+  if (changed && current.exists && text_out) {
+    *text_out = std::move(text);
+  }
+  return changed;
+}
+
+bool ShaderOverrides::PollChanges() {
+  if (!hot_reload_) {
+    return false;
+  }
+  auto now = std::chrono::steady_clock::now();
+  if (now - last_poll_ < kPollInterval) {
+    return false;
+  }
+  last_poll_ = now;
+  changed_shaders_.clear();
+  changed_files_.clear();
+  defines_changed_ = false;
+
+  // Defines saved in kDefinesFile, as with shader_mod_set (removed lines keep
+  // their values).
+  if (!mod_directory_.empty()) {
+    std::string text;
+    if (RefreshFileState(mod_directory_ / kDefinesFile, defines_file_, &text)) {
+      text = StripComments(text);
+      if (!ParseDefines(text, "; \t\r\n").empty()) {
+        REXGPU_INFO("Shader hot reload: {} changed", kDefinesFile);
+        SetDefines(text);
+      }
+    }
+  }
+
+  // Defines from shader_mod_set that need a recompile.
+  {
+    std::lock_guard<std::mutex> lock(knob_mutex_);
+    if (!pending_defines_.empty()) {
+      for (const auto& define : pending_defines_) {
+        SetDefine(mod_defines_, define.first, define.second);
+      }
+      pending_defines_.clear();
+      RebuildCompileDefines();
+      defines_changed_ = true;
+    }
+  }
+
+  // Override and mod files that appeared or disappeared.
+  std::unordered_set<uint64_t, rex::IdentityHasher<uint64_t>> pixel_shaders, mod_shaders;
+  ScanShaderFiles(directory_, ".ps.hlsl", pixel_shaders);
+  ScanShaderFiles(mod_directory_, ".mod.hlsli", mod_shaders);
+  auto difference = [this](const auto& from, const auto& to) {
+    for (uint64_t hash : from) {
+      if (to.find(hash) == to.end()) {
+        changed_shaders_.insert(hash);
+      }
+    }
+  };
+  difference(pixel_shaders, pixel_shaders_);
+  difference(pixel_shaders_, pixel_shaders);
+  difference(mod_shaders, mod_shaders_);
+  difference(mod_shaders_, mod_shaders);
+  pixel_shaders_ = std::move(pixel_shaders);
+  mod_shaders_ = std::move(mod_shaders);
+
+  // The files the overrides were compiled from.
+  {
+    std::lock_guard<std::mutex> lock(entries_mutex_);
+    for (auto& [path, state] : files_) {
+      if (RefreshFileState(path, state)) {
+        changed_files_.insert(path);
+      }
+    }
+  }
+  if (!defines_changed_ && changed_shaders_.empty() && changed_files_.empty()) {
+    return false;
+  }
+  REXGPU_INFO("Shader hot reload: {} files changed, {} shaders gained or lost an override{}",
+              changed_files_.size(), changed_shaders_.size(),
+              defines_changed_ ? ", defines changed" : "");
+  return true;
+}
+
+bool ShaderOverrides::NeedsReload(const D3D12Shader::D3D12Translation& translation) const {
+  if (Modification(translation.modification()).pixel.hlsl_override_disabled) {
+    return false;
+  }
+  uint64_t hash = translation.shader().ucode_data_hash();
+  if (changed_shaders_.find(hash) != changed_shaders_.end()) {
+    return true;
+  }
+  std::lock_guard<std::mutex> lock(entries_mutex_);
+  auto entry = entries_.find(&translation);
+  if (entry == entries_.end()) {
+    return false;
+  }
+  if (defines_changed_) {
+    return true;
+  }
+  for (const std::filesystem::path& path : entry->second.files) {
+    if (changed_files_.find(path) != changed_files_.end()) {
+      return true;
+    }
+  }
+  return false;
+}
+
+bool ShaderOverrides::Reload(D3D12Shader::D3D12Translation& translation) {
+  if (translation.shader().type() != xenos::ShaderType::kPixel || !translation.is_valid()) {
+    return false;
+  }
+  std::vector<uint8_t> dxbc;
+  bool overridden = false;
+  {
+    std::lock_guard<std::mutex> lock(entries_mutex_);
+    auto entry = entries_.find(&translation);
+    if (entry != entries_.end()) {
+      dxbc = entry->second.dxbc;
+      overridden = entry->second.overridden;
+    } else {
+      dxbc = translation.translated_binary();
     }
   }
   std::vector<uint8_t> binary;
-  if (Compile(translation, contract, text, name, mod, binary)) {
-    translation.ReplaceTranslatedBinary(std::move(binary));
+  std::vector<Dependency> files;
+  Outcome outcome = Build(translation, dxbc, binary, files);
+  std::lock_guard<std::mutex> lock(entries_mutex_);
+  switch (outcome) {
+    case Outcome::kCompiled: {
+      bool changed = binary != translation.translated_binary();
+      Record(translation, std::move(dxbc), files, true);
+      translation.ReplaceTranslatedBinary(std::move(binary));
+      return changed;
+    }
+    case Outcome::kFailed:
+      // The last binary that worked stays until the files are fixed.
+      Record(translation, std::move(dxbc), files, overridden);
+      return false;
+    case Outcome::kNone:
+    default:
+      entries_.erase(&translation);
+      if (overridden) {
+        translation.ReplaceTranslatedBinary(std::move(dxbc));
+        return true;
+      }
+      return false;
   }
+}
+
+void ShaderOverrides::EndReload() {
+  changed_shaders_.clear();
+  changed_files_.clear();
+  defines_changed_ = false;
 }
 
 }  // namespace rex::graphics::d3d12

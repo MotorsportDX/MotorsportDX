@@ -114,6 +114,7 @@ The next validation priorities are a second computer, Disc 2 car races on the la
 | [docs/e2e/experiments.md](docs/e2e/experiments.md) | A/B overrides and shader override diagnostics |
 | [docs/analysis/gtao-design.md](docs/analysis/gtao-design.md) | Design of the GTAO (post_ao) ambient occlusion pass, from frame graph observations |
 | [docs/analysis/b4-shader-research.md](docs/analysis/b4-shader-research.md) | Research on the editable shader path (HLSL through FXC, with overrides per hash) |
+| [docs/analysis/shader-mod-iteration.md](docs/analysis/shader-mod-iteration.md) | Iterating on shader mods: the DXBC cache, hot reload and live look knobs |
 | [docs/analysis/visual-style.md](docs/analysis/visual-style.md) | Research on the origin of FM4's visual style |
 | [docs/analysis/dlc-structure.md](docs/analysis/dlc-structure.md) | How FM4 content packages are laid out, mounted and licensed, and what a new mod package would need |
 | [docs/analysis/material-atlas.md](docs/analysis/material-atlas.md) | Summary of the material atlas: names and registers of the game's constant tables |

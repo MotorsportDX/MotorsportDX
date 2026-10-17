@@ -909,6 +909,12 @@ class D3D12CommandProcessor : public CommandProcessor {
 
   // System shader constants.
   DxbcShaderTranslator::SystemConstants system_constants_;
+  // shader_mod_live_knobs: the knob values written after the system constants
+  // (ShaderOverrides::kKnobsOffset), and where they come from (nullptr without
+  // live knobs).
+  const ShaderOverrides* shader_mod_knobs_source_ = nullptr;
+  uint64_t shader_mod_knobs_generation_ = 0;
+  float shader_mod_knobs_[ShaderOverrides::kKnobCount] = {};
 
   // Float constant usage masks of the last draw call.
   uint64_t current_float_constant_map_vertex_[4];

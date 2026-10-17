@@ -374,7 +374,8 @@ def post_ao_tests(root,jobs):
     run([build/'fm4_post_ao_shader_tests.exe',root/'runtime-source/src/graphics/d3d12/post_ao.hlsl'],
         cwd=build,log=root/'logs/post-ao-shader-tests.log')
     run([build/'fm4_shader_mod_tests.exe',root/'runtime-source/src/graphics/d3d12/shader_override.hlsli',
-         REPO/'work/fm4-rex/look'],cwd=build,log=root/'logs/shader-mod-tests.log')
+         LOOK_DIRECTORY,';'.join(look_defines(look_knobs(DEFAULT_LOOK)))],cwd=build,
+        log=root/'logs/shader-mod-tests.log')
 
 def build_profiling(root,fxc,jobs):
     """game-build-prof: game-build with a runtime that has line tables and PDBs, for the
@@ -460,10 +461,21 @@ def race_settings(quality,single_tile=False):
     return ';'.join(s for s in QUALITY_PRESETS[quality]
                     if not (single_tile and s.startswith('TilingScenario=')))
 
-def look_cvars(root,look):
-    """Cvars of the look mods (work/fm4-rex/look/fm4-look.hlsli): copies them to BuildRoot/look
-    and passes the knobs of 'pc', 'sharpen=0.5,bloom=0.8,tonemap=aces' or both (knobs left out
-    keep the original look). None of them ('original'): no mods at all."""
+LOOK_DIRECTORY=REPO/'work/fm4-rex/look'
+
+def look_knob_defaults():
+    """Every knob of the look mods and its default: the #ifndef NAME / #define NAME value pairs
+    of work/fm4-rex/look (the first file that has one wins)."""
+    defaults={}
+    for path in sorted(LOOK_DIRECTORY.glob('*.hlsli')):
+        for name,value in re.findall(r'^#ifndef (FM4_LOOK_\w+)[ \t]*\r?\n#define \1[ \t]+(\S+)',
+                                     path.read_text(encoding='utf-8'),re.M):
+            defaults.setdefault(name,value)
+    return defaults
+
+def look_knobs(look):
+    """The knobs of a -Look value: 'pc', 'sharpen=0.5,bloom=0.8,tonemap=aces' or both (later
+    items win), launcher names (LOOK_KNOBS) to their values."""
     knobs={}
     for item in filter(None,(part.strip() for part in look.split(','))):
         if '=' not in item:
@@ -475,8 +487,10 @@ def look_cvars(root,look):
             continue
         name,_,value=item.partition('=')
         knobs[name]=value
-    if not knobs:
-        return {}
+    return knobs
+
+def look_defines(knobs):
+    """The shader_mod_defines of look knobs: NAME=VALUE with the hlsli names and numbers."""
     defines=[]
     for name,value in knobs.items():
         if name not in LOOK_KNOBS:
@@ -487,13 +501,34 @@ def look_cvars(root,look):
         elif names:
             raise RuntimeError(f'Unknown {name} {value!r}; use {", ".join(names)}.')
         defines.append(f'{LOOK_KNOBS[name]}={float(value)!r}')
-    directory=root/'look'
-    if directory.is_dir():
-        shutil.rmtree(directory)
-    directory.mkdir()
-    for path in (REPO/'work/fm4-rex/look').glob('*.hlsli'):
-        shutil.copyfile(path,directory/path.name)
+    return defines
+
+def look_cvars(root,look,shader_dev=False):
+    """Cvars of the look mods (work/fm4-rex/look/fm4-look.hlsli): copies them to BuildRoot/look
+    and passes the knobs of the look (look_knobs; knobs left out keep the original look). None
+    of them ('original'): no mods at all.
+    shader_dev (docs/analysis/shader-mod-iteration.md): the mods load from work/fm4-rex/look
+    itself and hot reload when a file there changes, and every knob of the files is a live knob
+    (the ones left out at their defaults), which shader_mod_set changes in the console (`)."""
+    knobs=look_knobs(look)
+    if not knobs and not shader_dev:
+        return {}
+    defines=look_defines(knobs)
+    if shader_dev:
+        directory=LOOK_DIRECTORY
+        given={define.split('=',1)[0] for define in defines}
+        defines+=[f'{name}={float(value)!r}' for name,value in look_knob_defaults().items()
+                  if name not in given]
+    else:
+        directory=root/'look'
+        if directory.is_dir():
+            shutil.rmtree(directory)
+        directory.mkdir()
+        for path in LOOK_DIRECTORY.glob('*.hlsli'):
+            shutil.copyfile(path,directory/path.name)
     cvars={'shader_mod_path':directory,'shader_mod_defines':';'.join(defines)}
+    if shader_dev:
+        cvars.update(shader_mod_hot_reload='true',shader_mod_live_knobs='true')
     # The ao knob needs the runtime's GTAO pass.
     cvars.update(ao_cvars(float(knobs.get('ao','0'))>0))
     return cvars
@@ -566,6 +601,10 @@ def info_overlay(cvars,env,look,quality,display=None):
         lines.append(f'Look: {look}'+(f' ({settings})' if settings else ''))
     else:
         lines.append(f'Shader mods: {cvars["shader_mod_path"]}'+(f' ({settings})' if settings else ''))
+    if cvars.get('shader_mod_hot_reload')=='true':
+        lines.append(f'Shader dev: hot reload of {cvars["shader_mod_path"]}'+
+                     (', live knobs (shader_mod_set in the console)'
+                      if cvars.get('shader_mod_live_knobs')=='true' else ''))
     shadows=('cockpit only (workaround)' if env.get('FM4_SHADOW_WORKAROUND')=='1'
              else 'shadow map on every camera')
     anisotropy={'5':'16x','4':'8x','3':'4x','2':'2x'}.get(cvars.get('anisotropic_override',''),'game')
@@ -607,7 +646,7 @@ def save_content(root,content):
 def launch(root,single_tile=False,fixed_vblank=False,frame_rate=None,rov=False,
            resolution_scale=None,full_rate_mirror=False,look=None,shadow_workaround=False,
            quality=None,display=DEFAULT_DISPLAY,fullscreen=False,supersample=False,info=False,
-           ao=False):
+           ao=False,shader_dev=False):
     state = json.loads((root/'local.json').read_text())
     disc1,disc2 = validate_discs(state['disc1'],state['disc2'])
     report=json.loads((root/'build-result.json').read_text())
@@ -652,7 +691,7 @@ def launch(root,single_tile=False,fixed_vblank=False,frame_rate=None,rov=False,
     # Shader mods on the game's post-processing (tone curve, sharpening, bloom, exposure,
     # contrast, saturation, vignette, motion blur): the pc look unless -Look says otherwise.
     look=DEFAULT_LOOK if look is None else look
-    cvars.update(look_cvars(root,look))
+    cvars.update(look_cvars(root,look,shader_dev))
     cvars.update(ao_cvars(ao))
     # Disc 2 and the -Content packages: imported into user-data once, then kept there.
     packages=validate_content(disc2,state.get('content'))
@@ -686,6 +725,9 @@ def launch_cvars(root,disc1,log_file):
             'allow_game_relative_writes':'false','headless':'false','fullscreen':'false',
             'render_target_path_d3d12':'rtv','edram_single_rt_no_wrap':'true','readback_resolve':'fast',
             'gpu_allow_invalid_fetch_constants':'true','async_shader_compilation':'false',
+            # The compiled look mods (DXBC), reused while their source, defines and includes
+            # stay the same, so a run with a look seen before skips FXC.
+            'shader_override_cache_path':root/'cache/shader-overrides',
             'rov_occlusion_awaited_report_divisor':'2','rov_occlusion_async':'previous','vblank_vrr':'true',
             # 16x anisotropic filtering for every mipmapped linear texture: the title asks for
             # none on most and 2x-16x on a few, and the runtime default forces 4x.
@@ -753,6 +795,10 @@ def main():
                         help="run: the runtime's screen-space ambient occlusion pass (post_ao, GTAO) "
                              'even without the ao look knob, which also applies it (on in every '
                              'look but original)')
+    parser.add_argument('--shader-dev',action='store_true',
+                        help='run: shader mod development: the look mods load from work/fm4-rex/look '
+                             'and hot reload when a file there is saved, and every look knob is a '
+                             'live knob that shader_mod_set changes in the console (`)')
     parser.add_argument('--flavor',default='',help='opt-in compiler experiment for build: comma list of '+','.join(FLAVORS))
     args=parser.parse_args()
     root=args.build_root.resolve()
@@ -781,7 +827,8 @@ def main():
     if args.action=='run': launch(root,args.single_tile,args.fixed_vblank,args.frame_rate,args.rov,
                                      args.resolution_scale,args.full_rate_mirror,args.look,
                                      args.shadow_workaround,args.quality,args.display,
-                                     args.fullscreen,args.supersample,args.info,args.ao)
+                                     args.fullscreen,args.supersample,args.info,args.ao,
+                                     args.shader_dev)
     if args.action=='warmcache': warm_cache(root)
     if args.action=='profbuild': build_profiling(root,fxc,args.jobs)
 

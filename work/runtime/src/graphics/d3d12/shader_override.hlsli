@@ -48,6 +48,17 @@ uint xe_system_uint(uint offset) {
 float xe_system_float(uint offset) { return asfloat(xe_system_uint(offset)); }
 uint xe_flags() { return xe_system_uint(XE_SYS_FLAGS); }
 
+#ifdef XE_SYS_MOD_KNOBS
+// Live knob <index> of the shader mods (shader_mod_live_knobs): the runtime
+// writes the numeric shader_mod_defines after the system constants and defines
+// each as xe_mod_knob(<slot>), so shader_mod_set changes them without a
+// recompile. Use knobs as values, never in #if.
+float xe_mod_knob(uint index) { return xe_system_float(XE_SYS_MOD_KNOBS + 4u * index); }
+// With knobs as constants, "if (knob) return" in a mod is a branch at run time,
+// which FXC reports as a potentially uninitialized return value.
+#pragma warning(disable : 4000)
+#endif
+
 // Guest float constant c<n> as read by this translation (XE_C(5) for c5). FXC
 // doesn't expand a pasted name that begins with the macro's own name.
 #define XE_C(n) XE_FLOAT_CONSTANT_##n

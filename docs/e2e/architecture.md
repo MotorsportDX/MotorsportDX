@@ -216,7 +216,7 @@ The launcher cvars include settings that only the D3D12 backend defines. Another
 | `rov_occlusion_awaited_report_divisor`, `rov_occlusion_async` | `src/graphics/d3d12/command_processor.cpp` |
 | `d3d12_submit_thread`, `d3d12_readback_publish_thread` | `src/graphics/d3d12/command_processor.cpp` |
 | `post_ao` and its settings (`--ao`, the `ao` look knob) | `src/graphics/d3d12/post_ao.cpp` |
-| `shader_mod_path`, `shader_mod_defines` (every look except `original`) | `src/graphics/d3d12/shader_override.cpp` |
+| `shader_mod_path`, `shader_mod_defines` (every look except `original`), `shader_override_cache_path`, and with `--shader-dev` `shader_mod_hot_reload` and `shader_mod_live_knobs` | `src/graphics/d3d12/shader_override.cpp` |
 
 These launcher cvars are backend-neutral: `edram_single_rt_no_wrap`, `readback_resolve`, `gpu_allow_invalid_fetch_constants`, `async_shader_compilation`, `vblank_vrr`, `anisotropic_override`, `clear_memory_page_state`, `draw_resolution_scale_x` and `_y`, `video_mode_refresh_rate`, `input_backend`, `headless`.
 

@@ -90,6 +90,32 @@ class PipelineTests(unittest.TestCase):
             manifest=pipeline.write_content_manifest(root,[dlc])
             self.assertEqual(manifest.read_text(encoding='utf-8'),f'{dlc}\n')
 
+    def test_look_cvars(self):
+        with tempfile.TemporaryDirectory(prefix='fm4 look test ') as directory:
+            root=Path(directory)
+            defaults=pipeline.look_knob_defaults()
+            # Every knob of the launcher is in the files, and so is the debug view.
+            for name in [*pipeline.LOOK_KNOBS.values(),'FM4_LOOK_AO_DEBUG']:
+                self.assertIn(name,defaults)
+                float(defaults[name])
+            self.assertEqual(pipeline.look_cvars(root,'original'),{})
+            cvars=pipeline.look_cvars(root,'pc,sharpen=0.6')
+            self.assertEqual(Path(cvars['shader_mod_path']),root/'look')
+            defines=dict(define.split('=',1) for define in cvars['shader_mod_defines'].split(';'))
+            self.assertEqual(defines['FM4_LOOK_SHARPEN'],'0.6')
+            self.assertEqual(defines['FM4_LOOK_TONEMAP'],'2.0')
+            self.assertNotIn('FM4_LOOK_VIGNETTE',defines)
+            self.assertNotIn('shader_mod_hot_reload',cvars)
+            # Development: the repository files, every knob, hot reload and live knobs.
+            for look in ('pc,sharpen=0.6','original'):
+                cvars=pipeline.look_cvars(root,look,shader_dev=True)
+                self.assertEqual(Path(cvars['shader_mod_path']),pipeline.LOOK_DIRECTORY)
+                defines=dict(define.split('=',1) for define in cvars['shader_mod_defines'].split(';'))
+                self.assertEqual(set(defines),set(defaults))
+                self.assertEqual(cvars['shader_mod_hot_reload'],'true')
+                self.assertEqual(cvars['shader_mod_live_knobs'],'true')
+            self.assertEqual(defines['FM4_LOOK_SHARPEN'],repr(float(defaults['FM4_LOOK_SHARPEN'])))
+
     def test_new_clone_has_all_source_inputs(self):
         for name in ('rexglue.cmake','guard-generated.py','dump-image.cpp','switch-recipes.json'):
             self.assertTrue((pipeline.HERE/name).is_file(),name)

@@ -105,6 +105,7 @@ takes a value.
 | `-ResolutionScale 1-4` | from `-Display` | Render at this multiple of 1280x720. Overrides the render scale of `-Display`. |
 | `-Quality xbox\|high\|ultra` | `high` | Render quality of races. |
 | `-Look <preset/knobs>` | `pc` | Post-processing look and car paint. See [Look](#look). |
+| `-ShaderDev` | off | Shader mod development: the look mods reload when a file in `work/fm4-rex/look` is saved, and the knobs change live. See [Shader mod development](#shader-mod-development). |
 | `-Info` | off | Show the settings overlay at start. F2 toggles it in any run. |
 | `-Rov` | off | Use the earlier pixel shader interlock render target path, for comparisons. |
 | `-SingleTile` | off | Render races as one 720p tile without MSAA, with FXAA on the swap. |
@@ -296,8 +297,29 @@ shaders darken the scene by the occlusion, less on bright pixels. `pipeline.py -
 The pass costs about 0.2 ms of GPU time per race frame at 1x, and 0.7 to 0.8 ms at 2x
 (2560x1440). Races stay at 60 fps. At 240 Hz, races at 2x drop from about 174 fps to
 about 162 fps. Replays and photo mode have occlusion too. The cockpit interior, the
-garage and the showroom get none. The six mod shaders are compiled with FXC when they
-are first drawn, which takes 80 to 940 ms each, and 2.4 s for the paint.
+garage and the showroom get none. The first run of a look compiles the mod shaders with
+FXC, which takes 0.15 to 1.4 s each and 2.5 to 3.0 s for the paint (about 5.4 s at the
+start). Later runs load them from `BuildRoot\cache\shader-overrides` in milliseconds.
+
+### Shader mod development
+
+`-ShaderDev` is for working on the look mods; see
+[shader-mod-iteration.md](analysis/shader-mod-iteration.md).
+
+- The mods load from `work/fm4-rex/look` itself instead of a copy. Saving a file there
+  recompiles the shaders that use it, without a restart. FXC errors go to
+  `BuildRoot\logs\runtime.log`, and the last shader that compiled stays on screen.
+- Every knob of the look files is live. Open the console with the backtick key and type
+  `shader_mod_set FM4_LOOK_SHARPEN=0.6 FM4_LOOK_BLOOM=0.8`: the image changes in the next
+  frame. `shader_mod_set` alone lists the values. The names are the `FM4_LOOK_*` defines
+  of `fm4-look.hlsli` and `fm4-paint.hlsli`; `FM4_LOOK_TONEMAP` takes 0 to 3 (`filmic`,
+  `gt`, `aces`, `neutral`).
+- `NAME=VALUE` lines in `work/fm4-rex/look/shader_mod_defines.txt` (not tracked by Git)
+  apply in the same way whenever the file is saved.
+- The GTAO pass only runs when `ao` is above 0 in `-Look` (or with `pipeline.py --ao`), so
+  start with it on to change `FM4_LOOK_AO` live.
+- Live knobs make the mods larger and slower. Put the values you found into `-Look` for
+  normal runs, for example `-Look "pc,sharpen=0.6,bloom=0.8"`.
 
 ## Controls
 
@@ -321,7 +343,9 @@ press Start.
 
 `-Action warmcache` runs the e2e Quick Race timeline once, without a network connection,
 so that the shader and pipeline cache under `BuildRoot\cache` is filled before you play.
-Later runs then skip those compilations. The run details are written to
+Later runs then skip those compilations. The compiled look mods are kept in
+`BuildRoot\cache\shader-overrides`, one entry per shader, look and render scale; the
+directory can be deleted at any time. The run details are written to
 `BuildRoot\e2e\warmcache`, and the log to `BuildRoot\logs\warmcache.log`.
 
 ```powershell

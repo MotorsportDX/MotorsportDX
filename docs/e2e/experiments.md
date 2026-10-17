@@ -106,6 +106,17 @@ Shader mods change a generated override without copying it. With `--arg shader_m
 
 The look mods (`work/fm4-rex/look`, see below) are shader mods of this kind.
 
+### Iterating on overrides and mods
+
+These switches make shader work faster. They are described in [shader-mod-iteration.md](../analysis/shader-mod-iteration.md), and all of them are off by default in the runtime.
+
+- `--arg shader_override_cache_path=<dir>` keeps the compiled DXBC of every override and mod. An entry is used while the source FXC gets, the defines and the content of every included file stay the same. The launcher and `e2e.py` set `<BuildRoot>\cache\shader-overrides`; `runtime.log` says `loaded from the cache` for each hit.
+- `--arg shader_mod_hot_reload=true` recompiles an override or mod when a file it was compiled from is saved, or when a `shader_<hash>` file appears or disappears in the two directories. Only the pipelines of the changed shaders are recreated. A failed compile keeps the last binary that worked.
+- `--arg shader_mod_live_knobs=true` compiles the numeric defines as constants after the system constants (`xe_mod_knob`). The console command `shader_mod_set NAME=VALUE ...` (backtick opens the console) then changes them in the next frame. With hot reload, `<shader_mod_path>\shader_mod_defines.txt` does the same whenever it is saved.
+- `e2e.py --shader-dev` (like `Build.ps1 -ShaderDev`) turns on both, with every knob of the look files live. Add `--arg shader_mod_path=<dir>` to edit a copy of the look instead of `work/fm4-rex/look`.
+
+With live knobs the mods are larger and branch at run time, so measure performance without them.
+
 ## Shader A/B (same scene, two shaders)
 
 `--arg shader_override_ab_ms=<N>` draws with the DXBC translations instead of the overrides in every other period of N ms of the steady clock, so one static scene shows both. [`override_ab.py`](../../outputs/FM4-build/e2e/override_ab.py) lists consecutive captures of a `--keep-ppm` run with their phase. In a static scene, same-phase pairs are identical, and on/off pairs are identical if the override renders exactly like the translation.

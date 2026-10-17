@@ -13,12 +13,14 @@
 
 #include <algorithm>
 #include <atomic>
+#include <chrono>
 #include <cinttypes>
 #include <cmath>
 #include <cstring>
 #include <deque>
 #include <mutex>
 #include <set>
+#include <unordered_set>
 #include <utility>
 #include <vector>
 
@@ -194,6 +196,7 @@ void PipelineCache::Shutdown() {
   ShutdownShaderStorage();
 
   // Destroy all pipelines.
+  ReleaseRetiredPipelineStates(true);
   current_pipeline_ = nullptr;
   for (auto it : pipelines_) {
     ID3D12PipelineState* state = it.second->state.load(std::memory_order_acquire);
@@ -788,6 +791,113 @@ void PipelineCache::EndSubmission() {
       rex::thread::Wait(creation_completion_event_.get(), false);
     }
   }
+  ReleaseRetiredPipelineStates(false);
+  // No pipeline is being created now, and no shader translated.
+  if (shader_overrides_ && shader_overrides_->hot_reload()) {
+    ReloadShaderOverrides();
+  }
+}
+
+void PipelineCache::ReleaseRetiredPipelineStates(bool force) {
+  uint64_t completed = command_processor_.GetCompletedSubmission();
+  while (!retired_pipeline_states_.empty() &&
+         (force || retired_pipeline_states_.front().first <= completed)) {
+    retired_pipeline_states_.front().second->Release();
+    retired_pipeline_states_.pop_front();
+  }
+}
+
+void PipelineCache::ReloadShaderOverrides() {
+  if (!shader_overrides_->PollChanges()) {
+    return;
+  }
+  auto start = std::chrono::steady_clock::now();
+  // FXC and pipeline creation on several threads: nothing else translates or
+  // creates pipelines now, and each item is a different translation or pipeline.
+  auto parallel_for = [](size_t count, const std::function<void(size_t)>& function) {
+    std::atomic<size_t> next{0};
+    auto worker = [&]() {
+      for (size_t i; (i = next.fetch_add(1, std::memory_order_relaxed)) < count;) {
+        function(i);
+      }
+    };
+    size_t thread_count =
+        std::min(count, size_t(std::max(rex::thread::logical_processor_count(), uint32_t(2)) - 1));
+    std::vector<std::thread> threads;
+    for (size_t i = 1; i < thread_count; ++i) {
+      threads.emplace_back(worker);
+    }
+    worker();
+    for (std::thread& thread : threads) {
+      thread.join();
+    }
+  };
+
+  std::vector<D3D12Shader::D3D12Translation*> translations;
+  for (const auto& shader_entry : shaders_) {
+    D3D12Shader* shader = shader_entry.second;
+    if (shader->type() != xenos::ShaderType::kPixel) {
+      continue;
+    }
+    for (const auto& translation_entry : shader->translations()) {
+      auto* translation = static_cast<D3D12Shader::D3D12Translation*>(translation_entry.second);
+      if (translation->is_translated() && translation->is_valid() &&
+          shader_overrides_->NeedsReload(*translation)) {
+        translations.push_back(translation);
+      }
+    }
+  }
+  std::vector<uint8_t> changed(translations.size());
+  parallel_for(translations.size(), [&](size_t i) {
+    changed[i] = shader_overrides_->Reload(*translations[i]) ? 1 : 0;
+  });
+  shader_overrides_->EndReload();
+  std::unordered_set<const D3D12Shader::D3D12Translation*> reloaded;
+  for (size_t i = 0; i < translations.size(); ++i) {
+    if (changed[i]) {
+      reloaded.insert(translations[i]);
+    }
+  }
+
+  // Only the pipelines of the translations whose binary changed. Draws already
+  // recorded in this submission take the new state too (the deferred command
+  // list resolves the handle when it executes); earlier submissions may still
+  // use the old one.
+  std::vector<Pipeline*> pipelines;
+  for (const auto& pipeline_entry : pipelines_) {
+    Pipeline* pipeline = pipeline_entry.second;
+    if (pipeline->description.pixel_shader &&
+        reloaded.find(pipeline->description.pixel_shader) != reloaded.end()) {
+      pipelines.push_back(pipeline);
+    }
+  }
+  std::vector<ID3D12PipelineState*> states(pipelines.size());
+  parallel_for(pipelines.size(), [&](size_t i) {
+    PipelineRuntimeDescription runtime_description;
+    std::memcpy(&runtime_description, &pipelines[i]->description, sizeof(runtime_description));
+    runtime_description.root_signature =
+        pipelines[i]->root_signature.load(std::memory_order_acquire);
+    states[i] = CreateD3D12Pipeline(runtime_description);
+  });
+  size_t failed = 0;
+  uint64_t submission = command_processor_.GetCurrentSubmission();
+  for (size_t i = 0; i < pipelines.size(); ++i) {
+    if (!states[i]) {
+      // The previous state stays.
+      ++failed;
+      continue;
+    }
+    ID3D12PipelineState* previous = pipelines[i]->state.exchange(states[i], std::memory_order_acq_rel);
+    if (previous) {
+      retired_pipeline_states_.emplace_back(submission, previous);
+    }
+  }
+  REXGPU_INFO(
+      "Shader hot reload: {} translations rebuilt, {} changed, {} pipelines recreated{} in "
+      "{:.1f} ms",
+      translations.size(), reloaded.size(), pipelines.size() - failed,
+      failed ? fmt::format(", {} failed", failed) : std::string(),
+      std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - start).count());
 }
 
 bool PipelineCache::IsCreatingPipelines() {

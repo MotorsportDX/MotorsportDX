@@ -98,6 +98,10 @@ class PipelineCache {
     return reinterpret_cast<const Pipeline*>(handle)->state.load(std::memory_order_acquire);
   }
 
+  // HLSL replacing translations (shader_override_path, shader_mod_path), or
+  // nullptr.
+  const ShaderOverrides* shader_overrides() const { return shader_overrides_.get(); }
+
  private:
   REXPACKEDSTRUCT(ShaderStoredHeader, {
     uint64_t ucode_data_hash;
@@ -295,6 +299,14 @@ class PipelineCache {
   bool PrepareRuntimeDescriptionForQueuedCreation(Pipeline* pipeline,
                                                   PipelineRuntimeDescription& runtime_description);
 
+  // shader_mod_hot_reload, in EndSubmission while no pipeline is being created:
+  // recompiles the overrides whose files changed and recreates the pipelines
+  // of those translations.
+  void ReloadShaderOverrides();
+  // Releases the pipeline states replaced by ReloadShaderOverrides once the
+  // GPU is done with them (all of them with force).
+  void ReleaseRetiredPipelineStates(bool force);
+
   D3D12CommandProcessor& command_processor_;
   const RegisterFile& register_file_;
   const D3D12RenderTargetCache& render_target_cache_;
@@ -307,6 +319,9 @@ class PipelineCache {
   std::mutex translation_request_lock_;
   // HLSL replacing translations (shader_override_path), or nullptr.
   std::unique_ptr<ShaderOverrides> shader_overrides_;
+  // Pipeline states replaced by hot reload, and the submission after which the
+  // GPU no longer uses them.
+  std::deque<std::pair<uint64_t, ID3D12PipelineState*>> retired_pipeline_states_;
 
   // Command processor thread DXIL conversion/disassembly interfaces, if DXIL
   // disassembly is enabled.

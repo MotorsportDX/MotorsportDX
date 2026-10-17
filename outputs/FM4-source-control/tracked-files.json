@@ -69,6 +69,10 @@
       "provenance": "Project documentation; design and research note on the GTAO pass (summarized observations, no game content)"
     },
     {
+      "path": "docs/analysis/shader-mod-iteration.md",
+      "provenance": "Project documentation; design note on the shader override cache, hot reload and live look knobs (no game content)"
+    },
+    {
       "path": "docs/analysis/b4-shader-research.md",
       "provenance": "Project documentation; research notes on the B4 shader path (summarized observations, no game content)"
     },

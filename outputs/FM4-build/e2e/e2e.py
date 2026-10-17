@@ -708,7 +708,7 @@ def run_once(options, out):
         source = root / 'user-data' if options.profile == 'copy' else Path(options.profile)
         args['user_data_root'] = str(prepare_profile(source, root, out))
     look = pipeline.DEFAULT_LOOK if options.look is None else options.look
-    args.update({k: str(v) for k, v in pipeline.look_cvars(root, look).items()})
+    args.update({k: str(v) for k, v in pipeline.look_cvars(root, look, options.shader_dev).items()})
     args.update(pipeline.ao_cvars(options.ao))
     for item in options.arg:
         key, value = item.lstrip('-').split('=', 1)
@@ -934,6 +934,9 @@ def main():
     parser.add_argument('--ao', action='store_true',
                         help="the runtime's ambient occlusion pass (post_ao) like pipeline.py --ao, "
                              'also without the ao look knob (which turns it on and applies it)')
+    parser.add_argument('--shader-dev', action='store_true',
+                        help='shader mod development like pipeline.py --shader-dev: hot reload and '
+                             'every look knob live (--arg shader_mod_path=<dir> for another directory)')
     parser.add_argument('--tail', type=float, default=10, help='seconds to keep running after the last step')
     parser.add_argument('--keep-ppm', action='store_true', help='keep full-resolution captures')
     parser.add_argument('--measure', type=int, default=0, help='summarize only the last N perf seconds')

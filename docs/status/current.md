@@ -28,6 +28,7 @@ The project is an experimental build. On the latest binary, the e2e harness chec
 | Autovista | Worked on an earlier development build | Not covered by e2e |
 | BMW M1 1981 (Disc 2) | Finished and continued on an earlier development build | Not covered by e2e |
 | Look presets, clearcoat, ambient occlusion, display options | Checked with smoke gates | 17 October 2026 |
+| Shader mod cache, hot reload, live knobs | Checked with a smoke gate and one hot reload run | [Shader mod iteration](#automated-gates-17-october-2026), 17 October 2026 |
 | Downloadable content: import and mount | Verified on the latest binary (8 DLC packages) | [Content import](#content-import-17-october-2026), 17 October 2026 |
 | Split screen, Rivals, Hot Lap, Kinect, multiplayer/online, audio, DLC cars and tracks in game | Not validated | See [Current gaps](#current-gaps) |
 | All cars and tracks, a full career season | Not validated | Status not verified; this does not mean they are broken |
@@ -51,6 +52,31 @@ The race phase of `photo` is 30 seconds of racing after 10 seconds of driving, w
 ### Automated gates, 17 October 2026
 
 - **Default launcher** (`look pc` with clearcoat and ambient occlusion, commit `48ed669`): smoke gate passed.
+- **Shader mod iteration** ([shader-mod-iteration.md](../analysis/shader-mod-iteration.md): DXBC cache on in the launcher, hot reload and live knobs off). Smoke gate at 240 Hz with the `pc` look, against a baseline smoke gate of the build before the change, run just before it in the same BuildRoot and profile:
+
+  | Scenario | Baseline | With the change | `compare` |
+  |---|---|---|---|
+  | `photo` | race 212.7 fps, p99 7.2 ms, GPU 2.92 ms; photo mode 29.95 fps | race 152.4 fps, p99 9.7 ms, GPU 3.29 ms; photo mode 29.94 fps | FAIL on fps |
+  | `photo_view` | 56.8 fps | 57.0 fps | WARN on capture statistics |
+  | `career` | race 169.5 fps, p99 9.8 ms, GPU 3.17 ms; replay 30.0 fps | race 172.3 fps, p99 9.7 ms, GPU 3.17 ms; replay 30.0 fps | WARN on guest idle wait |
+
+  - 3 of 3 cells passed in both gates, with no clear-gray frames.
+  - The `photo` FAIL comes from the race, not the runtime. The AI driver led alone in the baseline run and ran sixth among the cars in the new run. The scene had 3,204 draws per frame instead of 2,071, and the race was limited by the command processor. The `career` race, the same event in both runs, shows the same GPU time and fps within 2%. The `perf` tier below confirms it.
+  - **`perf` tier** (`photo` at 240 Hz, three runs per build, the baseline first). The place is the player's in the pause menu after the race phase, or on the race HUD where OCR did not read the menu:
+
+    | Run | Place | Race fps | Race p99 | Race GPU | Draws per frame | Photo mode |
+    |---|---|---|---|---|---|---|
+    | Baseline 1 | 5th (HUD) | 166.0 | 9.06 ms | 3.21 ms | 2,897 | 29.95 fps, GPU 4.98 ms |
+    | Baseline 2 | 1st | 189.4 | 8.78 ms | 3.06 ms | 2,475 | 29.97 fps, GPU 4.39 ms |
+    | Baseline 3 | 2nd | 189.2 | 8.26 ms | 3.08 ms | 2,418 | 29.95 fps, GPU 4.45 ms |
+    | Change 1 | 1st | 203.2 | 7.70 ms | 3.01 ms | 2,133 | 29.95 fps, GPU 4.03 ms |
+    | Change 2 | 4th (HUD) | 187.8 | 7.74 ms | 3.11 ms | 2,721 | 29.95 fps, GPU 4.46 ms |
+    | Change 3 | 1st | 219.8 | 6.62 ms | 2.93 ms | 2,070 | 29.97 fps, GPU 4.19 ms |
+
+    All six runs passed, with no clear-gray frames. `compare` on the medians: WARN on capture statistics only. The race median is 203.2 against 189.2 fps (p99 7.70 against 8.78 ms, GPU 3.01 against 3.08 ms). The fps follows the number of cars in view: a run behind other cars draws 2,700 to 2,900 draws per frame and runs at 166 to 188 fps on either build. The command processor time per draw is 1.81 to 2.02 µs with the change and 1.99 to 2.05 µs without it.
+  - The first cell compiled the seven look shaders and stored them. In the next two cells they loaded from the cache, and translating the shader storage at the start took 16 to 19 ms instead of 5,421 to 5,471 ms.
+  - Without live knobs, the DXBC of every look mod is byte-identical to the previous build (`fm4_shader_mod_tests` fingerprints).
+- **Hot reload and live knobs** (one `e2e.py --shader-dev` photo run at 60 Hz, files of a copy of the look saved during the race): a live saturation change showed in the next capture without a compile. A tint in `fm4-look.hlsli` recompiled 5 shaders and recreated 8 pipelines in 1.7 s, and showed in the next capture. A syntax error kept the previous shader and logged the FXC error, and the fixed and restored files reloaded. The run reached its goal (the photo saved), with no clear-gray frames.
 - **Clearcoat** (smoke, 240 Hz, compared with a `qhigh` baseline): 3 of 3 runs. Race fps 214 in the `photo` race phase and 213 in `career`. Race-phase GPU 2.72-2.79 ms (2.83-2.88 ms for the baseline). Replay and photo mode 30 fps. No clear-gray frames. `compare` reports WARN on capture statistics only.
 - **Ambient occlusion** (smoke 1x, 240 Hz, compared with a `look pc` baseline without AO): 3 of 3 runs. `photo_view` and `career` PASS, `photo` WARN on capture statistics. Replay and photo mode 30 fps. No clear-gray frames.
 - **Ambient occlusion performance** (`perf`, race phase, three runs):

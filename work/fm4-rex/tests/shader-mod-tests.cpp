@@ -14,7 +14,17 @@
 // without it, never in a mod at its default knobs, and in at least one mod
 // with FM4_LOOK_AO=1 and with FM4_LOOK_AO_DEBUG=1.
 //
-// usage: fm4_shader_mod_tests <shader_override.hlsli> <look directory>
+// With live knobs (shader_mod_live_knobs) the runtime puts the knobs after the
+// system constants and defines each as xe_mod_knob(<slot>): every mod must also
+// compile that way, with every knob of the look files live, and read the knobs
+// from the constant buffer.
+//
+// With the defines of a look (pipeline.py passes the launcher's default one),
+// every mod is also compiled with them. The compiles with knobs print an FNV-1a
+// fingerprint of their DXBC, so two versions of the library or the mods can be
+// compared for the output they give without live knobs.
+//
+// usage: fm4_shader_mod_tests <shader_override.hlsli> <look directory> [NAME=VALUE;...]
 
 #include <windows.h>
 
@@ -22,11 +32,16 @@
 #include <wrl/client.h>
 
 #include <algorithm>
+#include <cctype>
+#include <cstdint>
 #include <cstdio>
+#include <cstdlib>
+#include <cstring>
 #include <filesystem>
 #include <fstream>
 #include <iterator>
 #include <list>
+#include <set>
 #include <string>
 #include <vector>
 
@@ -52,14 +67,24 @@ constexpr uint32_t kFetchConstants = 32;
 constexpr uint32_t kInterpolators = 16;
 // Any index past the system views: only compiled, never bound.
 constexpr uint32_t kPostAoView = 3;
+// The synthetic system constants are 16 vectors; the live knobs follow them
+// (ShaderOverrides::kKnobCount).
+constexpr uint32_t kSystemConstantVectors = 16;
+constexpr uint32_t kKnobCount = 32;
 
 // What ShaderOverrides::BuildContract writes for a pixel shader with color
 // target 0, all interpolators, every fetch constant bound as 2D, 3D and cube
 // (unsigned and signed) with its default sampler, and every float constant.
-std::string Contract(bool post_ao) {
+std::string Contract(bool post_ao, bool live_knobs) {
   std::string out = "// Synthetic contract (fm4_shader_mod_tests).\n#define XE_PIXEL_SHADER 1\n";
   auto line = [&out](const std::string& text) { out += text + "\n"; };
-  line("#define XE_SYSTEM_CONSTANT_VECTORS 16");
+  if (live_knobs) {
+    line("#define XE_SYSTEM_CONSTANT_VECTORS " +
+         std::to_string(kSystemConstantVectors + kKnobCount / 4));
+    line("#define XE_SYS_MOD_KNOBS " + std::to_string(kSystemConstantVectors * 16) + "u");
+  } else {
+    line("#define XE_SYSTEM_CONSTANT_VECTORS " + std::to_string(kSystemConstantVectors));
+  }
   line("#define XE_SYS_FLAGS 0u");
   line("#define XE_SYS_TEXTURE_SWIZZLED_SIGNS 16u");
   line("#define XE_SYS_TEXTURES_RESOLUTION_SCALED 48u");
@@ -215,14 +240,37 @@ class Include final : public ID3DInclude {
 struct Result {
   bool compiled = false;
   bool reads_post_ao = false;
+  // Reads a live knob: cb0 past the system constants.
+  bool reads_knobs = false;
+  // FNV-1a of the DXBC.
+  uint64_t fingerprint = 0;
+  // FXC's "Approximately N instruction slots used".
+  int instructions = -1;
   std::string messages;
 };
+
+// Every knob of the look files: the names after #ifndef FM4_LOOK_.
+std::vector<std::string> Knobs(const std::filesystem::path& look) {
+  std::set<std::string> knobs;
+  const std::string marker = "#ifndef FM4_LOOK_";
+  for (const auto& entry : std::filesystem::directory_iterator(look)) {
+    std::string text;
+    if (entry.path().extension() != ".hlsli" || !ReadFile(entry.path(), text)) continue;
+    for (size_t at = text.find(marker); at != std::string::npos; at = text.find(marker, at + 1)) {
+      size_t start = at + std::strlen("#ifndef "), end = start;
+      while (end < text.size() && (std::isalnum(uint8_t(text[end])) || text[end] == '_')) ++end;
+      knobs.insert(text.substr(start, end - start));
+    }
+  }
+  return std::vector<std::string>(knobs.begin(), knobs.end());
+}
 
 // ShaderOverrides::Compile: contract, library, mod, override, main.
 Result Compile(const std::string& library, const std::filesystem::path& mods,
                const std::string& mod, bool post_ao, const char* override_text,
-               const std::vector<std::pair<std::string, std::string>>& defines) {
-  std::string source = Contract(post_ao) + "#include \"xenos_override.hlsli\"\n";
+               const std::vector<std::pair<std::string, std::string>>& defines,
+               bool live_knobs = false) {
+  std::string source = Contract(post_ao, live_knobs) + "#include \"xenos_override.hlsli\"\n";
   if (!mod.empty()) {
     source += "#include \"" + mod + "\"\n";
   }
@@ -250,6 +298,11 @@ Result Compile(const std::string& library, const std::filesystem::path& mods,
     return result;
   }
   result.compiled = true;
+  result.fingerprint = 0xCBF29CE484222325ull;
+  const uint8_t* bytes = static_cast<const uint8_t*>(code->GetBufferPointer());
+  for (size_t i = 0; i < code->GetBufferSize(); ++i) {
+    result.fingerprint = (result.fingerprint ^ bytes[i]) * 0x100000001B3ull;
+  }
   ComPtr<ID3DBlob> disassembly;
   if (SUCCEEDED(D3DDisassemble(code->GetBufferPointer(), code->GetBufferSize(), 0, nullptr,
                                &disassembly))) {
@@ -257,6 +310,17 @@ Result Compile(const std::string& library, const std::filesystem::path& mods,
                      disassembly->GetBufferSize());
     // xe_post_ao is the library's only GetDimensions.
     result.reads_post_ao = text.find("resinfo") != std::string::npos;
+    const std::string slots = "// Approximately ";
+    size_t at = text.find(slots);
+    if (at != std::string::npos) {
+      result.instructions = std::atoi(text.c_str() + at + slots.size());
+    }
+    // Shader Model 5.1 operands: CB<id>[<register>][<vector>].
+    for (uint32_t vector = kSystemConstantVectors; vector < kSystemConstantVectors + kKnobCount / 4;
+         ++vector) {
+      result.reads_knobs |=
+          text.find("CB0[0][" + std::to_string(vector) + "]") != std::string::npos;
+    }
   }
   return result;
 }
@@ -272,7 +336,9 @@ void Report(const Result& result, const std::string& what) {
 
 int main(int argc, char** argv) {
   if (argc < 3) {
-    std::printf("usage: fm4_shader_mod_tests <shader_override.hlsli> <look directory>\n");
+    std::printf(
+        "usage: fm4_shader_mod_tests <shader_override.hlsli> <look directory> "
+        "[NAME=VALUE;...]\n");
     return 2;
   }
   std::string library;
@@ -322,8 +388,9 @@ int main(int argc, char** argv) {
         Result result = Compile(library, look, name, post_ao, kOverride, {{kAoKnobs[k], "1.0"}});
         Report(result, name + ", " + knob + ", " + contract);
         if (post_ao) {
-          std::printf("     %s, %s: %s\n", name.c_str(), knob.c_str(),
-                      result.reads_post_ao ? "reads the occlusion" : "no occlusion read");
+          std::printf("     %s, %s: %s, DXBC %016llX\n", name.c_str(), knob.c_str(),
+                      result.reads_post_ao ? "reads the occlusion" : "no occlusion read",
+                      static_cast<unsigned long long>(result.fingerprint));
           readers[k] += result.reads_post_ao ? 1 : 0;
         } else {
           Check(!result.reads_post_ao, name + ", " + knob + ", " + contract + ": no occlusion read");
@@ -334,6 +401,58 @@ int main(int argc, char** argv) {
   for (size_t k = 0; k < std::size(kAoKnobs); ++k) {
     Check(readers[k] > 0, std::string("a look mod reads the occlusion with ") + kAoKnobs[k] +
                               "=1 (" + std::to_string(readers[k]) + ")");
+  }
+
+  // The defines of a look (the launcher's default one from pipeline.py).
+  if (argc > 3) {
+    std::vector<std::pair<std::string, std::string>> defines;
+    std::string text = argv[3];
+    for (size_t start = 0; start < text.size();) {
+      size_t end = std::min(text.find(';', start), text.size());
+      std::string define = text.substr(start, end - start);
+      size_t equals = define.find('=');
+      if (!define.empty()) {
+        defines.emplace_back(define.substr(0, equals),
+                             equals == std::string::npos ? "1" : define.substr(equals + 1));
+      }
+      start = end + 1;
+    }
+    for (const auto& path : mods) {
+      std::string name = path.filename().string();
+      Result result = Compile(library, look, name, true, kOverride, defines);
+      Report(result, name + ", " + text);
+      std::printf("     %s, %s: DXBC %016llX, %d instruction slots\n", name.c_str(), text.c_str(),
+                  static_cast<unsigned long long>(result.fingerprint), result.instructions);
+    }
+  }
+
+  // Live knobs: every knob of the files as xe_mod_knob(<slot>), as the runtime
+  // defines them with shader_mod_live_knobs.
+  std::vector<std::string> knobs = Knobs(look);
+  Check(!knobs.empty() && knobs.size() <= kKnobCount,
+        "the look knobs fit the live knob slots (" + std::to_string(knobs.size()) + " of " +
+            std::to_string(kKnobCount) + ")");
+  std::vector<std::pair<std::string, std::string>> live;
+  for (size_t i = 0; i < knobs.size(); ++i) {
+    live.emplace_back(knobs[i], "xe_mod_knob(" + std::to_string(i) + "u)");
+  }
+  Result library_live = Compile(library, {}, {}, true, kOverride, {}, true);
+  Report(library_live, "library with live knobs, override with hooks");
+  Check(library_live.compiled && !library_live.reads_knobs,
+        "library with live knobs, override with hooks: no knob read without a mod");
+  for (const auto& path : mods) {
+    std::string name = path.filename().string();
+    for (bool post_ao : {true, false}) {
+      std::string what = name + ", live knobs, " +
+                         (post_ao ? "with XE_POST_AO_VIEW" : "without XE_POST_AO_VIEW");
+      Result result = Compile(library, look, name, post_ao, kOverride, live, true);
+      Report(result, what);
+      Check(result.compiled && result.reads_knobs, what + ": reads the knobs at run time");
+      if (post_ao) {
+        std::printf("     %s, live knobs: %d instruction slots\n", name.c_str(),
+                    result.instructions);
+      }
+    }
   }
 
   std::printf("%s (%d failures)\n", failures ? "FAILED" : "PASSED", failures);

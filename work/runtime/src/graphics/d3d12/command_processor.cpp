@@ -2178,6 +2178,10 @@ bool D3D12CommandProcessor::SetupContext() {
     REXGPU_ERROR("Failed to initialize the graphics pipeline cache");
     return false;
   }
+  const ShaderOverrides* shader_overrides = pipeline_cache_->shader_overrides();
+  shader_mod_knobs_source_ =
+      (shader_overrides && shader_overrides->live_knobs()) ? shader_overrides : nullptr;
+  shader_mod_knobs_generation_ = 0;
 
   D3D12_HEAP_FLAGS heap_flag_create_not_zeroed = provider.GetHeapFlagCreateNotZeroed();
 
@@ -2707,6 +2711,7 @@ void D3D12CommandProcessor::ShutdownContext() {
 
   texture_cache_.reset();
 
+  shader_mod_knobs_source_ = nullptr;
   pipeline_cache_.reset();
 
   primitive_processor_.reset();
@@ -5535,6 +5540,12 @@ void D3D12CommandProcessor::UpdateSystemConstantValues(
     system_constants_.edram_blend_constant[3] = regs.Get<float>(XE_GPU_REG_RB_BLEND_ALPHA);
   }
 
+  // Live knobs of the shader mods, changed by shader_mod_set.
+  if (shader_mod_knobs_source_ &&
+      shader_mod_knobs_source_->UpdateKnobs(shader_mod_knobs_, shader_mod_knobs_generation_)) {
+    dirty = true;
+  }
+
   cbuffer_binding_system_.up_to_date &= !dirty;
 }
 
@@ -5626,13 +5637,24 @@ bool D3D12CommandProcessor::UpdateBindings(const D3D12Shader* vertex_shader,
 
   // Write the constant buffer data.
   if (!cbuffer_binding_system_.up_to_date) {
+    // With live knobs, they follow the system constants, where the translations
+    // don't read.
+    size_t system_constants_size =
+        shader_mod_knobs_source_ ? ShaderOverrides::kKnobsOffset + ShaderOverrides::kKnobsSize
+                                 : sizeof(system_constants_);
     uint8_t* system_constants = constant_buffer_pool_->Request(
-        frame_current_, sizeof(system_constants_), D3D12_CONSTANT_BUFFER_DATA_PLACEMENT_ALIGNMENT,
+        frame_current_, system_constants_size, D3D12_CONSTANT_BUFFER_DATA_PLACEMENT_ALIGNMENT,
         nullptr, nullptr, &cbuffer_binding_system_.address);
     if (system_constants == nullptr) {
       return false;
     }
     std::memcpy(system_constants, &system_constants_, sizeof(system_constants_));
+    if (shader_mod_knobs_source_) {
+      std::memset(system_constants + sizeof(system_constants_), 0,
+                  ShaderOverrides::kKnobsOffset - sizeof(system_constants_));
+      std::memcpy(system_constants + ShaderOverrides::kKnobsOffset, shader_mod_knobs_,
+                  ShaderOverrides::kKnobsSize);
+    }
     cbuffer_binding_system_.up_to_date = true;
     current_graphics_root_up_to_date_ &= ~(1u << root_parameter_system_constants);
   }
