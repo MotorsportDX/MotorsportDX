@@ -25,6 +25,10 @@
       "provenance": "Project documentation; imports AGENTS.md for Claude Code"
     },
     {
+      "path": ".claude/skills/fm4-e2e-gate/SKILL.md",
+      "provenance": "Project documentation; Claude Code skill for picking, running and reading e2e gates"
+    },
+    {
       "path": "docs/setup.md",
       "provenance": "Project documentation; setup, generate and build guide, prerequisites and troubleshooting"
     },
