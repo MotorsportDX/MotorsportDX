@@ -156,9 +156,6 @@ The stages can also run separately:
 - compiles the licensed Xenia/ReXGlue resolve shaders with the Windows SDK FXC;
 - builds and installs the Release runtime locally.
 
-The individual SDK patches in `outputs/FM4-analysis` are historical. They do not
-need to be applied.
-
 ### 2. Generate
 
 `generate` validates the input executables and creates the private project:

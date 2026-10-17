@@ -19,6 +19,19 @@ The repository does not include the game, original assets, recompiled code, or a
 
 Full details are in the [setup guide](docs/setup.md).
 
+## How the pieces fit together
+
+```mermaid
+flowchart LR
+    discs["Your game discs<br/>Disc 1 (required), Disc 2 (optional)"] --> setup
+    runtime["work/runtime<br/>ReXGlue SDK fork (D3D12)"] --> setup
+    setup["setup<br/>copy runtime, fetch libraries, build runtime"] --> generate
+    integration["work/fm4-rex<br/>FM4 integration code"] --> generate
+    generate["generate<br/>check executables, translate to C++"] --> build
+    build["build<br/>compile game executable and DLLs"] --> run
+    run["run<br/>launcher: look, quality, display"]
+```
+
 ## Quick start
 
 Prerequisites (Windows x64, Git, Python 3.11+ x64, the Visual Studio 2022 C++ tools, and LLVM 20.x) are listed in [docs/setup.md](docs/setup.md). The scripts check them but do not install them.

@@ -184,7 +184,7 @@ These numbers are baselines, not targets.
 
 ## Current gaps
 
-Everything still open, grouped by area. The long-term plan is the project plan (kept outside the repo).
+Everything still open, grouped by area.
 
 ### Display
 
@@ -192,12 +192,12 @@ Everything still open, grouped by area. The long-term plan is the project plan (
 - AO is not in the cockpit interior, garage or showroom. See the "Later" section of [GTAO design](../analysis/gtao-design.md).
 - Parity with the original Xbox (shadows, color, reflections, noise and object edges) has not been compared. The combinations of MSAA and render scale are not all verified.
 - Not done: modern anti-aliasing on top of MSAA (SMAA or FXAA), HDR10 output, track lighting, materials other than car paint, and car flake paint. Flake cells in UV space are too small for race cameras and need an LOD model.
-- Widescreen and ultrawide (the project plan (kept outside the repo), phase 4.1) need a FOV and projection hook, culling and HUD changes. The image is always 16:9, with bars on other screens.
+- Widescreen and ultrawide need a FOV and projection hook, culling and HUD changes. The image is always 16:9, with bars on other screens.
 
 ### Performance
 
 - At 240 Hz, the race is limited by the command processor (pacing, swap synchronization with the submit thread, and cost per draw). At 2x with AO, it is limited by the GPU (about 162 fps).
-- The race clock does not run faster above 60 Hz (ratio 1.001). But lap time and handling are not yet compared between 60 and 240 fps (the project plan (kept outside the repo), phase 4.2).
+- The race clock does not run faster above 60 Hz (ratio 1.001). But lap time and handling are not yet compared between 60 and 240 fps.
 
 ### Gameplay coverage
 
@@ -206,7 +206,7 @@ Everything still open, grouped by area. The long-term plan is the project plan (
 
 ### Settings and input
 
-- The in-game PC settings overlay (saved to TOML), key rebinding and full controller support (rumble, triggers and wheel) are not done or verified (the project plan (kept outside the repo), phase 4.4).
+- The in-game PC settings overlay (saved to TOML), key rebinding and full controller support (rumble, triggers and wheel) are not done or verified.
 
 ### Stability and runtime
 
@@ -218,7 +218,7 @@ Everything still open, grouped by area. The long-term plan is the project plan (
 
 - The clone and the full workflow have not been run on a second Windows computer.
 - AMD and Intel GPUs and lower-end CPUs have not been tested.
-- Only the three Japan/Asia XEX files are supported. US and EU releases and title updates are not (the project plan (kept outside the repo), phase 5.5).
+- Only the three Japan/Asia XEX files are supported. US and EU releases and title updates are not.
 - There is no CI, no setup wizard, and no license and provenance review for a release. This includes the pending `XenonRecomp-FM4-fixes.patch`. See [sources and licensing](../sources-and-licensing.md).
 
 ## Next validation steps
@@ -226,7 +226,7 @@ Everything still open, grouped by area. The long-term plan is the project plan (
 The proposed order is:
 
 1. **Calibrate the RTV sun glare.** Use a repeatable scene with the sun in view (for example a frame frozen with rewind, `Y`). Trace where the sun sprite's correct corner positions come from, then compare the RTV and ROV query results.
-2. **Run the 2-hour soak test and the 60 vs 240 fps handling test.** The soak test watches memory, handles and VRAM. The handling test compares lap times and handling at both rates (the project plan (kept outside the repo), phase 4.2).
+2. **Run the 2-hour soak test and the 60 vs 240 fps handling test.** The soak test watches memory, handles and VRAM. The handling test compares lap times and handling at both rates.
 3. **Run the clean setup on a second Windows computer.** Run `setup`, `generate`, `build` and `run` from a clean clone.
 4. **Extend e2e coverage.** Add photo overwrite, photo with an empty shader cache, Autovista, a Disc 2 car, and direct launch. Re-test photo overwrite and the empty shader cache on the latest build, because neither has been repeated since the 16 October changes.
 5. **Inventory the stubs.** List every XAM and kernel stub called in `runtime.log` across all scenarios.

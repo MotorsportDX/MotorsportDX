@@ -10,8 +10,8 @@ This repository is source-only. It records reviewed integration code, diagnostic
 - `work/fm4-rex/tests`: synthetic arithmetic vectors and SDK texture-format tests. `vector-vectors.h` is generated from a mathematical oracle, not from a game dump.
 - CMake files and two local diagnostic helper scripts: `work/fm4-rex/observe-frame.py` and `work/fm4-rex/send-input.py`.
 - `work/runtime`: the ReXGlue SDK fork (BSD-3-Clause, with Xenia-derived portions; notices kept). Third-party libraries are not stored. Setup fetches them from the pinned upstream SDK revision. The inventory category is `runtime-fork`. Files may be up to 512 KiB. The recompiler emitter, `work/runtime/src/codegen/function_graph.cpp`, is marked in the inventory so that the translated-function pattern check skips it.
-- `outputs/FM4-build`: the setup, generate, build, and run pipeline (`Build.ps1`, `pipeline.py`, and the loader), reviewed integration metadata (function bounds and switch recipes), the e2e harness and gates (`e2e/`), the `docs/` folder, and `verification.json`.
-- `outputs/FM4-analysis`: seven selected SDK source patches, which are historical and already contained in `work/runtime`, and research notes (`VISUAL-STYLE.txt` and `B4-SHADER-RESEARCH.txt`).
+- `outputs/FM4-build`: the setup, generate, build, and run pipeline (`Build.ps1`, `pipeline.py`, and the loader), reviewed integration metadata (function bounds and switch recipes), the e2e harness and gates (`e2e/`), and `verification.json`.
+- `docs/`: project documentation, including the research notes in `docs/analysis/`.
 - The ReXGlue/Xenia copyright and BSD license notice in `outputs/FM4-source-control/third-party-notices`.
 
 ### Excluded

@@ -17,7 +17,7 @@ Technique names and shader constants found in the XEX image:
 - `BlitOneTexDegammaToTonemapLinear`, `BlitOneTexDegammaTosRGB`, `BlitOneTexDegammaToTV`, `gamma709`, `GaussianBlur7TapDegamma`: gamma conversion to TV/sRGB, and the bloom blur.
 - Constants: `filmicParams1`, `filmicParams2`, `filmicParamsE`, `tonemapAdaptiveExposure`, `vignetteColor`, `vignetteScaleOffsetPower`, `saturatorSaturation`.
 
-These match the race frame graph in the project plan (kept outside the repo), phase B1: an HDR scene in 7e3, a bloom/downsample chain in 2_10_10_10 down to 32x32, a 32_FLOAT 32x32 luminance target for auto-exposure, the composite, and then the HUD. About 15 post-processing passes.
+These match the race frame graph: an HDR scene in 7e3, a bloom/downsample chain in 2_10_10_10 down to 32x32, a 32_FLOAT 32x32 luminance target for auto-exposure, the composite, and then the HUD. About 15 post-processing passes.
 
 ## Assets: TrackSettings.xml per Track
 
@@ -60,7 +60,7 @@ These are not a source of the FM4 style, but they can make the picture differ fr
 ## Direction of Change
 
 - Without changing code: override `TrackSettings.xml` (`DesaturateAmount`, `filmicTone`, `bloomScale`, fog and shadow colors) through the same mechanism as [fm4-render-overrides.cpp](../../work/fm4-rex/src/fm4-render-overrides.cpp). Not implemented yet.
-- Changing the effect formulas (tone mapping, AA, new effects) needs modifiable shaders: phase B4 in the project plan.
+- Changing the effect formulas (tone mapping, AA, new effects) needs modifiable shaders (see [B4 shader research](b4-shader-research.md)).
 - Racing scenarios use leaner settings than replays and photo mode. Racing uses `TilingScenario 1` (2xMSAA, two tiles). Replay, photo mode, menus and the 1-car race 0 use `TilingScenario 0` (4xMSAA, three tiles). Racing has no `SoftParticles` or `CollidableShadows`, `CarMinWheelLOD 1` (photo mode 0), and `CarLODTransDist` near 15 / far 25 / veryfar 50. 16-car races also use `shaders_16car`, have no damage, `EnvMapFrequencyScale 0` and `HalfRateBloom`.
 - Tiling scenario names in the image: `FPS_30`, `FPS_60`, `4xMSAA`, `2xMSAA`, `NonTiling`, `Small2xMSAA`, `SplitScreen_NonTiling2xMSAA`.
 - `-Quality high` (the default since 16 October 2026) makes races match replays. `ultra` adds `CarKeepLOD0` and full mirrors (`FM4_RACE_SETTINGS` in [fm4-render-overrides.cpp](../../work/fm4-rex/src/fm4-render-overrides.cpp)).

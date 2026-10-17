@@ -15,6 +15,18 @@ Sources: `REX_FRAME_GRAPH` traces of the race in BuildRoot (see [setup.md](../se
 - **Default**: off in the runtime (`post_ao*` cvars). The launcher turns it on through the look knob `-Look ao=<strength>`. The presets pc, aces, gt and neutral use `ao=0.6` with a radius of 0.75 m (M4). `original` and `ao=0` run without the pass. See [running.md](../running.md).
 - **v1 limits**: bloom and auto-exposure do not see AO. Menus without AO (no scene depth), the garage and the showroom do not get it either (they do not draw the camera VS, M1), and neither does the cockpit interior (depth range compressed, M3-M4). Races, replays and photo mode get AO. Only the RTV path can use it (the override shader acts as a consumer and needs host render targets).
 
+## Where the pass runs
+
+```mermaid
+flowchart LR
+    tiles["Race frame: scene tiles<br/>draw, depth resolve, color resolve"] --> depth
+    depth["Last depth tile resolved<br/>(IssueCopy)"] --> gtao
+    gtao["post_ao passes<br/>depth prefilter, GTAO, denoise"] --> occ
+    occ["R8 occlusion texture<br/>cleared on swap"] --> combine
+    combine["FinalCombine mod<br/>reads xe_post_ao(uv), darkens before tonemap"] --> rest
+    rest["Remaining post chain<br/>bloom and exposure do not see AO in v1"]
+```
+
 ## 1. Goals and constraints
 
 - **Visual goal**: contacts and gaps, for example tires against asphalt, wheel arches, the grille and vents, barrier legs and stands, buildings and trees.
@@ -46,7 +58,7 @@ Sources: `REX_FRAME_GRAPH` traces of the race in BuildRoot (see [setup.md](../se
   6. bloom downsample from the scene, 32x32 luminance, bloom chain;
   7. FinalCombine (scene, luminance, bloom, LUT);
   8. HUD and side mirrors to the front buffer.
-- **Scene format**: 7e3 (2_10_10_10_FLOAT; host R16G16B16A16_FLOAT in EDRAM), stored in gamma 2. FinalCombine squares it ([B4-SHADER-RESEARCH.txt](b4-shader-research.md)).
+- **Scene format**: 7e3 (2_10_10_10_FLOAT; host R16G16B16A16_FLOAT in EDRAM), stored in gamma 2. FinalCombine squares it ([B4 shader research](b4-shader-research.md)).
 - **No post-process pixel shader carries the projection.** The projection is in the vertex shader constants of the scene:
   - Car body VS `8D05A46C3584CA9E` (pair B85E): matWVP c0-c3 and matWV c4-c7, row-vector convention (oPos = x*c0 + y*c1 + z*c2 + c3, view position with c4-c7), so P = inverse(WV) * WVP.
   - Road VS `C81F8D92FF6529EB`: wvp c128-c131 (dp4, column vectors), world c140-c142, viewInv c243-c245 (the W column is the eye position).
@@ -128,7 +140,7 @@ h. **v1 limits**:
 - **`post_ao_quality` presets** (full resolution, slices x steps per side): 0 = 2x2, 1 = 2x4 (denoise once), 2 = 3x6 (default), 3 = 4x8 (denoise twice).
 - **Cvar defaults**: radius 1 m, falloff 0.6, power 1.5, denoise center weight 2. Launcher (M4): radius 0.75 m, look strength 0.6.
 - **Shader size** (FXC `/O3`): prefilter 193 instructions; GTAO 457 / 614 / 1094 / 1725 per preset (loops unrolled); denoise 74 and 88 (final); clear 6.
-- **Estimated cost** at 2x (2560x1440, 3.7 million pixels), high preset: about 55 texture reads per pixel, roughly 0.3-0.8 ms on an RTX 5070 Ti. Measured in M3 through the frame graph (section 6). The race GPU frame is about 2.5 ms at 1x (the project plan, kept outside the repo, phase B3), so there is room. At 240 Hz the limit is the CP, not the GPU.
+- **Estimated cost** at 2x (2560x1440, 3.7 million pixels), high preset: about 55 texture reads per pixel, roughly 0.3-0.8 ms on an RTX 5070 Ti. Measured in M3 through the frame graph (section 6). The race GPU frame is about 2.5 ms at 1x, so there is room. At 240 Hz the limit is the CP, not the GPU.
 - **World units** are assumed to be meters. Confirmed in M1: for example, the car length in view space is about 4.5 m.
 
 ## 6. Stages and verification

@@ -107,7 +107,7 @@ All of these write text files. The sampling variables select frames; the default
 python outputs\FM4-build\e2e\inventory.py --build-root <BuildRoot> a.json b.json
 ```
 
-This is the "Stage 3.1 inventory" of the project plan (kept outside the repo), used to plan a native renderer.
+The inventory is used to plan a native renderer.
 
 ## PM4 writers (FM4_D3D_TRACE)
 

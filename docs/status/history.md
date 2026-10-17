@@ -12,6 +12,16 @@ How to read the dates:
 
 ## Timeline
 
+```mermaid
+timeline
+    title Recent milestones (October 2026)
+    13 October : Clean-build verification at d1fa29a
+    14 October : Project-owned runtime in work/runtime, RTV default then reverted, vblank_vrr default
+    15 October : Streaming fix (sGPU fallback) for missing road, RTV default again
+    16 October : Photo, career and matrix e2e scenarios, gate tiers, look pc and quality high defaults
+    17 October : Clearcoat, display options and settings overlay, Alt+Enter, GTAO ambient occlusion
+```
+
 | Date | Milestone |
 |---|---|
 | 13 October 2026 | Clean-build verification at `d1fa29a`. Sun and glare judged reasonable on the ROV path after `--rov_occlusion_awaited_report_divisor=2`. First Quick Race A/B results on the occlusion and readback settings. |

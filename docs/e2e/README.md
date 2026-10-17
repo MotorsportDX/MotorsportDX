@@ -127,6 +127,18 @@ Code owns the workflow; Jev supplies judgments:
 
 ## Gates and tiers
 
+```mermaid
+flowchart TD
+    snap["Copy of the build<br/>BuildRoot\snapshots\#lt;name#gt;"] --> smoke
+    snap --> perf
+    snap --> full
+    snap --> career
+    smoke["smoke<br/>one run per scenario at 240 Hz<br/>about 10 minutes"]
+    perf["perf<br/>three runs of photo at 240 Hz"]
+    full["full<br/>three runs of every scenario at 60 and 240 Hz<br/>about 1 hour"]
+    career["career<br/>career_finish and career_progress"]
+```
+
 `matrix.py` runs a set of cells on a snapshot of the game build (`<BuildRoot>\snapshots\<name>`, checked against `build-result.json`), so `Build.ps1 -Action build` can rebuild `game-build` while a gate runs. Cells still run one at a time, because performance numbers need the machine to themselves. Pick the tier by what a change can break:
 
 | Tier | Cells | Runs per cell | Use |

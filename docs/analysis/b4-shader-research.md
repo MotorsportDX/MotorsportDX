@@ -7,7 +7,7 @@ Summary of the research session "Check the XenosRecomp license and the feasibili
 - The translator is our own, not XenosRecomp, and not dxilconv as the main path.
 - The target is HLSL, compiled with FXC (d3dcompiler_47.dll, System32) to DXBC SM5.1, not DXC/DXIL SM6. This pairs with the existing geometry shaders and bindless root signature, with no new dependencies.
 - The value of B4 for FM4 is in roughly 49 post-process shaders (tonemap, bloom, AA, new effects). Parity for the 383 scene shaders is not needed. Free resolution already exists through `draw_resolution_scale`; most precision questions belong to the render target cache (the 7e3 chain is already float16).
-- B4 is not a performance project. The GPU frame time of a race is about 2.5 ms, and overrides use the same translator binding contract, so the CPU cost per draw (`UpdateBindings`, `RequestTextures`, `LoadShader`) does not change. Chasing 240 fps is a separate track (the project plan, kept outside the repo).
+- B4 is not a performance project. The GPU frame time of a race is about 2.5 ms, and overrides use the same translator binding contract, so the CPU cost per draw (`UpdateBindings`, `RequestTextures`, `LoadShader`) does not change. Chasing 240 fps is a separate track.
 
 ## Tests on This Machine
 

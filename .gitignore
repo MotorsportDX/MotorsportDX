@@ -2,7 +2,6 @@
 *
 !/outputs/
 !/work/
-!/outputs/FM4-analysis/
 !/outputs/FM4-build/
 !/outputs/FM4-source-control/
 !/work/fm4-rex/
@@ -22,13 +21,6 @@
 !/CLAUDE.md
 !/docs/
 !/docs/**
-!/outputs/FM4-analysis/gpu-integer-formats.patch
-!/outputs/FM4-analysis/gpu-resolve-diagnostics.patch
-!/outputs/FM4-analysis/gpu-rov-full-counters.patch
-!/outputs/FM4-analysis/gpu-rov-occlusion.patch
-!/outputs/FM4-analysis/input-packet-merge.patch
-!/outputs/FM4-analysis/runtime-delete-on-close.patch
-!/outputs/FM4-analysis/runtime-module-lifecycle.patch
 !/outputs/FM4-build/Build.ps1
 !/outputs/FM4-build/dump-image.cpp
 !/outputs/FM4-build/e2e/compare.py

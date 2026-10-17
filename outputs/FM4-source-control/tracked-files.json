@@ -81,34 +81,6 @@
       "provenance": "Project documentation; summary of the material atlas (names and registers of the game constant tables, no game code)"
     },
     {
-      "path": "outputs/FM4-analysis/gpu-integer-formats.patch",
-      "provenance": "ReXGlue/Xenia SDK source patch; BSD notice included"
-    },
-    {
-      "path": "outputs/FM4-analysis/gpu-resolve-diagnostics.patch",
-      "provenance": "ReXGlue/Xenia SDK source patch; BSD notice included"
-    },
-    {
-      "path": "outputs/FM4-analysis/gpu-rov-full-counters.patch",
-      "provenance": "ReXGlue/Xenia SDK source patch; BSD notice included"
-    },
-    {
-      "path": "outputs/FM4-analysis/gpu-rov-occlusion.patch",
-      "provenance": "ReXGlue/Xenia SDK source patch; BSD notice included"
-    },
-    {
-      "path": "outputs/FM4-analysis/input-packet-merge.patch",
-      "provenance": "ReXGlue/Xenia SDK source patch; BSD notice included"
-    },
-    {
-      "path": "outputs/FM4-analysis/runtime-delete-on-close.patch",
-      "provenance": "ReXGlue/Xenia SDK source patch; BSD notice included"
-    },
-    {
-      "path": "outputs/FM4-analysis/runtime-module-lifecycle.patch",
-      "provenance": "ReXGlue/Xenia SDK source patch; BSD notice included"
-    },
-    {
       "path": "outputs/FM4-build/Build.ps1",
       "provenance": "Reviewed bootstrap tooling or documentation; no original game function bodies"
     },
