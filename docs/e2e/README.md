@@ -266,8 +266,9 @@ All scripts live in [`outputs/FM4-build/e2e/`](../../outputs/FM4-build/e2e/).
 | `frame_graph.py --build-root <BuildRoot> trace.jsonl [--frame N \| --list]` | print one frame of a `REX_FRAME_GRAPH` trace |
 | `pm4_writers.py <generated dir> <xenos.h> out.json` | static scan of the PM4 packet writers for `FM4_D3D_TRACE` |
 | `override_fxc.py <override file or dir> <dump_shaders dir> [--mods ... --define ...]` | compile shader overrides like the runtime (see [experiments.md](experiments.md)) |
+| `override_fxc.py --stub <dump_shaders dir> --mods <dir> [--define ...]` | compile the look mods against the real contracts of a run, without override files (see [experiments.md](experiments.md)) |
 | `override_ab.py <run> --period-ms N [--diff out.png]` | list captures of a shader A/B run with their phase |
-| `look_coverage.py --build-root <BuildRoot> [--dump <dir> ...] [--json out.json]` | offline list of the final combine, motion blur and car paint hashes per source and render scenario, with the look mods that cover them (see [look mod coverage](../analysis/look-mod-coverage.md)) |
+| `look_coverage.py --build-root <BuildRoot> [--dump <dir> ...] [--json out.json]` | offline list of the final combine, motion blur, car paint, glass, chrome and rim hashes per source and render scenario, with the look mods that cover them (see [look mod coverage](../analysis/look-mod-coverage.md)) |
 | `ocr-server.ps1` | the Windows OCR process that reads each capture |
 | `jev.py` | the Jev (TypeSafe System One) client for goal mode |
 
@@ -279,6 +280,7 @@ python outputs\FM4-build\e2e\inventory.py --build-root <BuildRoot> a.json b.json
 python outputs\FM4-build\e2e\pm4_writers.py <BuildRoot>\project\generated\default <BuildRoot>\runtime-source\include\rex\graphics\xenos.h out.json
 python outputs\FM4-build\e2e\frame_graph.py --build-root <BuildRoot> trace.jsonl [--frame N | --list]
 python outputs\FM4-build\e2e\override_fxc.py <override file or dir> <dump_shaders dir> [--mods work\fm4-rex\look --define FM4_LOOK_SHARPEN=0.5]
+python outputs\FM4-build\e2e\override_fxc.py --stub <dump_shaders dir> --mods work\fm4-rex\look --define FM4_LOOK_GLASS=1.0
 ```
 
 ## Developer options

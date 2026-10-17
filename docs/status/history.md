@@ -20,6 +20,7 @@ timeline
     15 October : Streaming fix (sGPU fallback) for missing road, RTV default again
     16 October : Photo, career and matrix e2e scenarios, gate tiers, look pc and quality high defaults
     17 October : Clearcoat, display options and settings overlay, Alt+Enter, GTAO ambient occlusion, generic content import (DLC), shader mod cache and hot reload
+    18 October : Glass, chrome and rim look mods (false color, A/B at 2x, smoke gate), look mods compiled against real contracts
 ```
 
 | Date | Milestone |
@@ -29,6 +30,7 @@ timeline
 | 15 October 2026 | The streaming fix (sGPU fallback) resolves the missing road segments, and RTV is the launcher default again. Command processor work: EDRAM transfers, upload removal, event-based wait and readback fixes. |
 | 16 October 2026 | Photo, photo_view and career e2e scenarios, the regression and 240 Hz matrices, the dynamic vblank rate, the rebuilt developer AI driver and career race to rewards, the shader override and look knobs, the shadow workaround no longer default, and 16x anisotropic filtering. |
 | 17 October 2026 | Clearcoat on the car paint, display and render scale options, the settings overlay, Alt+Enter, and GTAO ambient occlusion. The default launcher (look `pc` with clearcoat and AO) passes the smoke gate. The generic content installer (`-Content`) imports and mounts Disc 2 and eight DLC packages. The compiled look mods are cached, and shader mods hot reload with live knobs (`-ShaderDev`). |
+| 18 October 2026 | Look mods for the car glass, chrome and rims of the race, 16-car, split-screen and garage car shader sets (`-Look glass`, `chrome`, `rims`; in no preset): `fm4_shader_mod_tests`, `override_fxc.py --stub` (the look mods against the real contracts of earlier runs), false color and an A/B at 2x in the game, and a smoke gate. See [look mod coverage](../analysis/look-mod-coverage.md#glass-chrome-and-rims-18-october-2026). |
 
 ## 1. Clean-build verification (13-14 October 2026)
 

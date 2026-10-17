@@ -254,8 +254,8 @@ every race camera on this runtime show none.
 ## Look
 
 The look mods are original shader code hooked into the HLSL that the runtime
-generates from the game's post-processing shaders and car body paint shaders
-(`work/fm4-rex/look`; see [Shader overrides](e2e/experiments.md)). `-Look` takes a
+generates from the game's post-processing shaders and car shaders (body paint,
+glass, chrome and rims; `work/fm4-rex/look`; see [Shader overrides](e2e/experiments.md)). `-Look` takes a
 preset, knobs, or both. A preset sets only its own knobs. Later items win, so
 `-Look "pc,sharpen=0.6"` uses the `pc` preset with sharpening at 0.6.
 
@@ -282,9 +282,18 @@ and `-Look original`.
 | `motion_blur` | number | Motion blur, in all four motion blur shaders. Photo mode's blur, which the player sets, changes only when this is set. |
 | `clearcoat` | number | Clear coat of the car body paint (`fm4-paint.hlsli`) in every car shader set: races, 16-car races, split screen, garage and showroom. In the showroom it adds only the reflection of the studio cube. |
 | `clearcoat_roughness` | number, default 0.3 | Roughness of the clear coat. |
-| `clearcoat_glint` | number, default 4 | Glint of the clear coat. |
+| `clearcoat_glint` | number, default 4 | Glint of the clear coat; also the limit of the glass, chrome and rim highlights. |
 | `flakes` | number | Flakes in the car paint. |
 | `flake_scale` | number, default 1200 | Scale of the paint flakes. |
+| `glass` | number | Windows and lamp covers (`fm4-car.hlsli`) in races, 16-car races, split screen and the garage: the environment's reflection at grazing angles and a sharp sun highlight, with the game's transparency kept. |
+| `glass_roughness` | number, default 0.08 | Roughness of the glass highlight. |
+| `chrome` | number | Chrome trim and chrome rims, in the same car shader sets: a sun highlight and the rise of the reflection at grazing angles. |
+| `chrome_roughness` | number, default 0.1 | Roughness of the chrome highlight. |
+| `rims` | number | Painted and alloy rims, in the same car shader sets: a clear lacquer over the game's metal. |
+| `rims_roughness` | number, default 0.25 | Roughness of the rim lacquer. |
+
+No preset sets `glass`, `chrome` or `rims` yet: an A/B at 2x showed them right, but their sun
+highlights are not yet checked (see [look mod coverage](analysis/look-mod-coverage.md#in-game-checks-18-october-2026)).
 | `ao` | number, `0` turns it off | Strength of the screen-space ambient occlusion. |
 
 ### Ambient occlusion
@@ -313,7 +322,7 @@ FXC when they are first drawn. For the six measured, this took 0.15 to 1.4 s eac
 - Every knob of the look files is live. Open the console with the backtick key and type
   `shader_mod_set FM4_LOOK_SHARPEN=0.6 FM4_LOOK_BLOOM=0.8`: the image changes in the next
   frame. `shader_mod_set` alone lists the values. The names are the `FM4_LOOK_*` defines
-  of `fm4-look.hlsli` and `fm4-paint.hlsli`; `FM4_LOOK_TONEMAP` takes 0 to 3 (`filmic`,
+  of `fm4-look.hlsli`, `fm4-paint.hlsli` and `fm4-car.hlsli`; `FM4_LOOK_TONEMAP` takes 0 to 3 (`filmic`,
   `gt`, `aces`, `neutral`).
 - `NAME=VALUE` lines in `work/fm4-rex/look/shader_mod_defines.txt` (not tracked by Git)
   apply in the same way whenever the file is saved.

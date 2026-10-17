@@ -11,6 +11,13 @@ Roles, from the names in the constant table:
   motion blur     invCurrentVPThenPrevVP
   paint family    PaintColor, StripeColor and TwoToneColor (body paint and the other paint
                   techniques of a car shader set); plus the custom paint techniques
+  chrome          a Chrome* constant and no Cockpit* one (variant: trim, or rim with
+                  blurRimGeomTexBlend; spinning blur with blurRimSampler1)
+  glass           GlassColor or DamageGlassSampler (variant: lamp cover with LightsSampler, else
+                  window); the lamp lenses have GlassMaxOpacity without GlassColor
+  rim             TintColor and blurRimGeomTexBlend (variant: geometry, or spinning blur)
+The car material roles (paint family, chrome, glass, rim) are listed for the five car shader
+sets only; the material shaders of CustomCarShaders.xml load in the UI only.
 The car shader set of each render scenario comes from Media\\RenderScenarios (CarShader;
 shaders_v16 when absent). With --dump, hashes seen in dump_shaders runs are marked.
 
@@ -145,6 +152,14 @@ def role(names, source_names):
         return 'motion blur', 'sample loop' if 'numTexSamples' in names else 'fixed taps'
     if {'PaintColor', 'StripeColor', 'TwoToneColor'} <= names:
         return 'paint family', 'env cube' if 'envSampler' in names else 'static cube' if 'envStaticSampler' in names else 'no cube'
+    blur = 'blurRimSampler1' in names
+    cockpit = any('Cockpit' in name for name in names)
+    if any(name.startswith('Chrome') for name in names) and not cockpit:
+        return 'chrome', ('rim' if 'blurRimGeomTexBlend' in names else 'trim') + (', spinning blur' if blur else '')
+    if names & {'GlassColor', 'DamageGlassSampler'}:
+        return 'glass', 'lamp cover' if 'LightsSampler' in names else 'window'
+    if {'TintColor', 'blurRimGeomTexBlend'} <= names:
+        return 'rim', 'spinning blur' if blur else 'geometry'
     custom = [s for s in source_names if Path(s).stem.lower() in CUSTOM_PAINTS]
     if custom:
         return 'custom paint', Path(custom[0]).stem
@@ -217,8 +232,9 @@ def main():
                                                   'track_role_shaders': dict(track_roles)}, indent=1))
     print(f'{len(shaders)} pixel shaders; mods for {len(mods)} hashes in {options.look}')
     for row in rows:
-        if row['role'] == 'paint family' and not any(s in ('shaders', 'shaders_16car', 'shaders_splitscreen',
-                                                         'shaders_ui', 'shaders_slod') for s in row['car_sets']):
+        if row['role'] in ('paint family', 'chrome', 'glass', 'rim') and not any(
+                s in ('shaders', 'shaders_16car', 'shaders_splitscreen', 'shaders_ui', 'shaders_slod')
+                for s in row['car_sets']):
             continue
         where = ','.join(row['car_sets']) or ','.join(sorted({s.split('/')[0] for s in row['sources']}))
         seen_text = '' if row['seen'] is None else (' seen' if row['seen'] else ' not-seen')

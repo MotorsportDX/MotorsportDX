@@ -91,6 +91,14 @@ python outputs\FM4-build\e2e\override_fxc.py <override file or dir> <dump_shader
 
 Options: `--asm <dir>` writes the FXC disassembly of each override there, `--mods` gives a `shader_mod_path` directory, `--define NAME=VALUE` (repeatable) sets the defines of the mods, and `--workers` (default 8) sets the parallel compiles.
 
+`--stub` compiles the mods themselves against the contracts, without override files: every `shader_<hash>.mod.hlsli` of `--mods` on every contract of its hash, around a stub override that only writes interpolator 0:
+
+```
+python outputs\FM4-build\e2e\override_fxc.py --stub <dump_shaders dir> --mods work\fm4-rex\look --define FM4_LOOK_GLASS=1.0 ...
+```
+
+A contract defines only the fetches and float constants its shader reads, so this finds a mod that reads a constant its shader does not (`error X3004: undeclared identifier 'XE_FLOAT_CONSTANT_42'`), which the synthetic contract of `fm4_shader_mod_tests` cannot. With `--define`, each contract is also compiled without the defines, and a mod whose DXBC the defines leave unchanged counts as a failure: its code never reached that translation (for example an `#if` on a fetch the shader does not bind). Give defines that move every knob, or the mods of the knobs left at their defaults fail this check. It lists the mods without a contract in the directory.
+
 The runtime compiles with FXC `ps_5_1`, IEEE strictness and unbounded descriptor tables.
 
 ### Shader mods
