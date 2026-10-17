@@ -128,6 +128,32 @@ SCENARIOS.update({
         [10, 'wait', 0, 'LVL2|LVL 2'], [5, 'wait', 0, '!8,610 CR'],
     ],
 })
+SCENARIOS.update({
+    # Downloadable content: Quick Race with a car of the Porsche Expansion Pack (Porsche is not in
+    # the base game; its first car is the 1970 914/6) on the Speedway of Test Track Benchmark (the
+    # Launch Track Pack's PhysicsTrack environment), then 20 s of racing. Needs both packs
+    # imported into the BuildRoot profile (Build.ps1 -Content); use --profile copy. The
+    # manufacturer and environment carousels are alphabetical and do not wrap. RB moves about
+    # four entries, so it stops on one of the names just before the target and Right or Left
+    # finishes; retries leave a capture (2 s) between presses.
+    'dlc': _TO_MAIN_MENU + [
+        [4, 'right', 0.12], [1.2, 'right', 0.12], [1.2, 'right', 0.12], [2, 'a', 0.12],
+        [10, 'a', 0.12, 'AVAILABLE', 6],
+        [60, 'rb', 0.12, '=Pagani|=Peugeot|=Plymouth|=Pontiac|=Porsche', 3],
+        [15, '?right', 0.12, '=Porsche', 2.5],
+        # Car select (its footer has TOGGLE), then the paint and the assists screens.
+        [15, 'a', 0.12, 'TOGGLE', 4], [5, 'wait', 0, 'Porsche'], [15, 'a', 0.12, '!TOGGLE', 4],
+        [6, 'wait', 0], [20, 'a', 0.12, 'GAME DIFFICULTY', 6], [3, 'wait', 0],
+        [20, 'a', 0.12, '!GAME DIFFICULTY', 6], [20, 'wait', 0, 'TRACKS'],
+        [50, 'rb', 0.12, '=Test Track Benchmark|=TopGear|=Tsukuba Circuit|=Twin Ring Motegi', 3],
+        [15, '?left', 0.12, '=Test Track Benchmark', 2.5],
+        # Track select (LAPS, the first layout is Speedway), then the race loads.
+        [15, 'a', 0.12, 'LAPS', 4], [5, 'wait', 0, 'Speedway'], [3, 'wait', 0],
+        [20, 'a', 0.12, 'STAGE|CLASS', 8],
+        [150, 'a', 0.12, 'STARTING GRID|LAPS', 15], [40, '?down,up,a', 0.12, 'LAPS', 10],
+        [1, 'rt=255', 0], [1, 'phase:race', 0], [20, 'wait', 0], [1, 'phase:end', 0],
+    ],
+})
 RETRY_S = 5
 
 # Steps after a goal (--steps <name>): hold the throttle and press Back every 6 s, cycling
