@@ -28,7 +28,8 @@ The project is an experimental build. On the latest binary, the e2e harness chec
 | Autovista | Worked on an earlier development build | Not covered by e2e |
 | BMW M1 1981 (Disc 2) | Finished and continued on an earlier development build | Not covered by e2e |
 | Look presets, clearcoat, ambient occlusion, display options | Checked with smoke gates | 17 October 2026 |
-| Split screen, Rivals, Hot Lap, Kinect, multiplayer/online, audio, DLC beyond Disc 2 | Not validated | See [Current gaps](#current-gaps) |
+| Downloadable content: import and mount | Verified on the latest binary (8 DLC packages) | [Content import](#content-import-17-october-2026), 17 October 2026 |
+| Split screen, Rivals, Hot Lap, Kinect, multiplayer/online, audio, DLC cars and tracks in game | Not validated | See [Current gaps](#current-gaps) |
 | All cars and tracks, a full career season | Not validated | Status not verified; this does not mean they are broken |
 
 ## Verified on the latest build
@@ -74,6 +75,15 @@ The race phase of `photo` is 30 seconds of racing after 10 seconds of driving, w
   - Alt+Enter, tested with real key presses in Quick Race at a 1920x1080 window with 2x render: 1920x1080 to 2560x1600 to 1920x1080. OCR afterwards saw only the race HUD (timer running, no pause menu).
   - Presenter downscale: a 1920x1080 window capture of a frozen rewind scene at 2x matched the area-averaging simulation (mean difference 0.12-0.13 of 255), not bilinear (0.71-4.02). Bridge railings stay continuous.
   - The settings overlay is drawn by the presenter, so it is not in e2e captures.
+
+### Content import, 17 October 2026
+
+The generic content installer (`-Content`, [setup](../setup.md#downloadable-content)) on the latest build, with a separate test profile under `BuildRoot`:
+
+- **Header check:** the four Disc 2 packages (`PIRS`) and eight DLC packages (`LIVE`: Launch Track Pack, Limited Collector's Edition Pack, March Pirelli, May TopGear, Meguiar's, November Speed, Porsche Expansion and September Pennzoil) pass. In the Disc 2 root, the `$SystemUpdate` packages and `nxeart` are skipped.
+- **Import:** all 12 packages imported in 7.2 seconds. A second run skipped all 12 through their markers (2.2 seconds).
+- **Game:** with the 12 packages installed, the title mounts `DLCRoot0` to `DLCRoot11`; with Disc 2 only it mounts `DLCRoot0` to `DLCRoot3`. `quickrace` (one run, launcher default frame rate) passed with the same error keys as the Disc 2 only baseline: fps mean 41.3 against 41.4, p99 34.2 ms against 33.9 ms.
+- **Not covered:** DLC cars and tracks in menus, races on them, and the license state the title reads for each package.
 
 ### Full matrix, 16 October 2026
 
@@ -202,7 +212,7 @@ Everything still open, grouped by area.
 ### Gameplay coverage
 
 - Not covered by e2e: photo overwrite, photo with an empty shader cache, Autovista, a Disc 2 car, and direct launch into a race.
-- Not validated: all cars and tracks, one full career season, Rivals, Hot Lap, split screen, audio (XMA, 5.1 output, intro sync), Kinect, multiplayer and online play, and DLC beyond Disc 2.
+- Not validated: all cars and tracks, one full career season, Rivals, Hot Lap, split screen, audio (XMA, 5.1 output, intro sync), Kinect, multiplayer and online play, and the cars and tracks of downloadable content (imported and mounted, not yet driven).
 
 ### Settings and input
 
@@ -228,7 +238,7 @@ The proposed order is:
 1. **Calibrate the RTV sun glare.** Use a repeatable scene with the sun in view (for example a frame frozen with rewind, `Y`). Trace where the sun sprite's correct corner positions come from, then compare the RTV and ROV query results.
 2. **Run the 2-hour soak test and the 60 vs 240 fps handling test.** The soak test watches memory, handles and VRAM. The handling test compares lap times and handling at both rates.
 3. **Run the clean setup on a second Windows computer.** Run `setup`, `generate`, `build` and `run` from a clean clone.
-4. **Extend e2e coverage.** Add photo overwrite, photo with an empty shader cache, Autovista, a Disc 2 car, and direct launch. Re-test photo overwrite and the empty shader cache on the latest build, because neither has been repeated since the 16 October changes.
+4. **Extend e2e coverage.** Add photo overwrite, photo with an empty shader cache, Autovista, a Disc 2 car, a DLC car and track, and direct launch. Re-test photo overwrite and the empty shader cache on the latest build, because neither has been repeated since the 16 October changes.
 5. **Inventory the stubs.** List every XAM and kernel stub called in `runtime.log` across all scenarios.
 6. **Re-run the gate tiers after each change.** Use `smoke` for quick checks, `perf` for performance, `full` before committing a stage, and `career` for the rewards path. See the [e2e overview](../e2e/README.md) for the commands and gates.
 7. **Decide the default tiling scenario.** The `-SingleTile` quality versus fps trade-off is for the project owner.

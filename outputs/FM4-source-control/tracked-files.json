@@ -81,6 +81,10 @@
       "provenance": "Project documentation; summary of the material atlas (names and registers of the game constant tables, no game code)"
     },
     {
+      "path": "docs/analysis/dlc-structure.md",
+      "provenance": "Project documentation; research note on the FM4 content package layout (file, table and column names and short identifiers, no game content)"
+    },
+    {
       "path": "outputs/FM4-build/Build.ps1",
       "provenance": "Reviewed bootstrap tooling or documentation; no original game function bodies"
     },

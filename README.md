@@ -15,6 +15,7 @@ The repository does not include the game, original assets, recompiled code, or a
 - **Forza Motorsport 4 Japan/Asia**, Play Disc with media ID `633772A0`. The three executables are checked by SHA-256 in [`pipeline.py`](outputs/FM4-build/pipeline.py). Other regions, other revisions, modified executables, and title updates that do not match are rejected.
 - **Disc 1 is required**, extracted, and it must contain all game assets.
 - **Disc 2 is optional.** It is not needed for basic startup, but it is required to import its additional car content.
+- **Downloadable content is optional.** FM4 car and track packs you own are imported from their content packages with `-Content`.
 - You extract the discs yourself. The scripts do not download game data.
 
 Full details are in the [setup guide](docs/setup.md).
@@ -71,7 +72,7 @@ $discs = @{
 .\outputs\FM4-build\Build.ps1 -Action all @common @discs
 ```
 
-Remove the `Disc2` entry if you want to use only the Disc 1 content. The `all` action runs three stages: setup (copies the runtime, fetches third-party libraries, and builds the runtime), generate (checks your executables and generates the C++ source from your discs), and build (compiles the executable, modules, and DLLs). Each stage can also be run on its own with `-Action setup`, `-Action generate`, or `-Action build`. Use the same `BuildRoot` for every stage. `all` does not start the game.
+Remove the `Disc2` entry if you want to use only the Disc 1 content. Add `Content = 'D:\Games\FM4\DLC'` to import downloadable content packages from a folder; see [Downloadable content](docs/setup.md#downloadable-content). The `all` action runs three stages: setup (copies the runtime, fetches third-party libraries, and builds the runtime), generate (checks your executables and generates the C++ source from your discs), and build (compiles the executable, modules, and DLLs). Each stage can also be run on its own with `-Action setup`, `-Action generate`, or `-Action build`. Use the same `BuildRoot` for every stage. `all` does not start the game.
 
 Generated source, binaries, and logs stay in `BuildRoot`. Do not commit or upload that directory.
 
@@ -93,7 +94,7 @@ The end-to-end harness, [`e2e.py`](outputs/FM4-build/e2e/e2e.py), runs the game 
 - **Graphics not fully accurate:** the empirical sun occlusion query correction (factor 2) applies only to the ROV path (`-Rov`). On the default RTV path, sun glare is not calibrated yet. Noise, reflections, object edges, and combinations of MSAA and resolution scale need wider testing.
 - **Synchronous shaders:** shader sync is on by default to avoid skipped draws that once caused black photos. An empty shader cache only adds load hitches, not race fps loss, but photos taken with an empty cache have not been retested.
 - **Runtime incomplete:** some Xbox services are still stubs. The instruction tests do not prove that the kernel, audio, timing, or synchronization is correct.
-- **Gameplay coverage incomplete:** not every car, track, and mode, long sessions, audio, Kinect, multiplayer, online, and DLC beyond Disc 2 have been validated. Save migration between builds or computers, other GPUs, and performance are not guaranteed. "Not verified" does not mean "broken".
+- **Gameplay coverage incomplete:** not every car, track, and mode, long sessions, audio, Kinect, multiplayer, online, and the cars and tracks of downloadable content have been validated. Downloadable content is imported and mounted, but its cars and tracks have not been driven. Save migration between builds or computers, other GPUs, and performance are not guaranteed. "Not verified" does not mean "broken".
 - **Test driver:** the harness drives cars with FM4's own AI, through the rebuilt `engageaionstart` developer option. This is a test tool, not a player feature. Some FM4 menus ignore the first press, so the scenarios press until the expected screen is read.
 
 The next validation priorities are a second computer, Disc 2 car races on the latest build, photo overwrite and photos with an empty shader cache, and Autovista. The full list is in [current status](docs/status/current.md).
@@ -114,6 +115,7 @@ The next validation priorities are a second computer, Disc 2 car races on the la
 | [docs/analysis/gtao-design.md](docs/analysis/gtao-design.md) | Design of the GTAO (post_ao) ambient occlusion pass, from frame graph observations |
 | [docs/analysis/b4-shader-research.md](docs/analysis/b4-shader-research.md) | Research on the editable shader path (HLSL through FXC, with overrides per hash) |
 | [docs/analysis/visual-style.md](docs/analysis/visual-style.md) | Research on the origin of FM4's visual style |
+| [docs/analysis/dlc-structure.md](docs/analysis/dlc-structure.md) | How FM4 content packages are laid out, mounted and licensed, and what a new mod package would need |
 | [docs/analysis/material-atlas.md](docs/analysis/material-atlas.md) | Summary of the material atlas: names and registers of the game's constant tables |
 | [docs/sources-and-licensing.md](docs/sources-and-licensing.md) | Repository contents, attribution, licenses, and the pre-commit check |
 

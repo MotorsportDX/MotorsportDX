@@ -16,18 +16,22 @@ and [status/history.md](status/history.md).
 ```
 
 If you open a new PowerShell session, define `$common` again as shown in
-[setup.md](setup.md#commands). `run` uses the Disc locations saved by `generate`;
-it does not read `-Disc1` or `-Disc2`.
+[setup.md](setup.md#commands). `run` uses the Disc and content locations saved by
+`generate`; it does not read `-Disc1` or `-Disc2`. `-Content` on `run` replaces the
+saved content locations (see [Downloadable content](setup.md#downloadable-content)).
 
 The launcher then:
 
 1. Checks the build artifacts and the game revision. It compares the artifact
-   hashes with `build-result.json`, validates the Disc paths in `local.json` and
-   checks the three executables.
+   hashes with `build-result.json`, validates the Disc and content paths in
+   `local.json` and checks the three executables.
 2. Starts with a new local profile in `BuildRoot\user-data` (see
    [Data directories](#data-directories)).
-3. Mounts Disc 1 and, if Disc 2 was given, imports its four content packages. The
-   first import takes time and extra disk space.
+3. Mounts Disc 1 and imports the content packages: Disc 2's four, if Disc 2 was
+   given, and those found in the `-Content` paths. It lists them in
+   `BuildRoot\content-packages.txt`. A package is imported once, into
+   `BuildRoot\user-data`; later runs skip it while its size is unchanged. The first
+   import needs extra disk space, about the size of the packages.
 4. Prints the display and render scale that it chose and starts the game.
 
 The game window runs fullscreen on the primary monitor by default. Use Alt+Enter to
@@ -331,8 +335,11 @@ Everything the launcher writes is under `BuildRoot`. The full layout is in
 
 - **Profile:** each run uses a new local profile in `BuildRoot\user-data`. Saves from
   earlier builds are not copied into it automatically.
-- **Disc 2 content:** the packages imported from Disc 2 are stored in the profile
-  under `BuildRoot\user-data`.
+- **Disc 2 and downloadable content:** imported packages are stored in the profile
+  under `BuildRoot\user-data\0000000000000000\4D530910\00000002`, one directory per
+  package, with a `<package>.import-complete` marker in `BuildRoot\user-data`. They
+  stay installed when a later run no longer lists them. To remove one, delete its
+  directory, its marker and its `.header` file in `4D530910\Headers\00000002`.
 - **Discs:** the discs are read in place. Writes relative to the game directory are
   disabled (`allow_game_relative_writes=false`).
 - **Cache:** game and shader cache files are in `BuildRoot\cache`.

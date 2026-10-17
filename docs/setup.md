@@ -27,6 +27,9 @@ compatibility.
 - **Disc 2 is optional** for a base-game launch. It is required to import its
   additional cars. Supply its extracted root, which must contain the four content
   packages listed below.
+- **Downloadable content is optional.** Car and track packs are imported from the
+  content packages you supply with `-Content`. See
+  [Downloadable content](#downloadable-content).
 - ISO extraction is outside this workflow. Extract the discs yourself. No game
   data is downloaded by any step.
 
@@ -50,6 +53,33 @@ D:\Games\FM4\
 ```
 
 Input discs are read in place; see [running.md](running.md#data-directories).
+
+### Downloadable content
+
+`-Content` takes a content package file or a directory, and it can be repeated.
+A directory is searched recursively. Each package must be an STFS package (`CON`,
+`LIVE` or `PIRS`) whose header names FM4 (title ID `4D530910`) and marketplace
+content (content type `00000002`). Inside a directory, other files and the packages
+of other titles or content types, such as system updates and title updates, are
+skipped with a message. A file named directly that fails the check is rejected,
+and so is a directory that contains no FM4 package. Package file names must be
+unique, because each package is installed under its file name. Disc 2's four
+packages count towards this check.
+
+Example layout, the console's `Content` folder layout:
+
+```text
+D:\Games\FM4\DLC\
+└── Car Pack\
+    └── 4D530910\
+        └── 00000002\
+            └── <package file>
+```
+
+The paths are saved in `local.json` by `generate` and `all`. `run -Content` replaces
+the saved list without generating again. The launcher imports a package into
+`BuildRoot\user-data` on the first run that lists it, and keeps it there; see
+[running.md](running.md#data-directories).
 
 ## Prerequisites
 
@@ -94,14 +124,15 @@ $common = @{
 .\outputs\FM4-build\Build.ps1 -Action doctor @common
 
 $discs = @{
-    Disc1 = 'D:\Games\FM4\Disc 1'
-    Disc2 = 'D:\Games\FM4\Disc 2'
+    Disc1   = 'D:\Games\FM4\Disc 1'
+    Disc2   = 'D:\Games\FM4\Disc 2'
+    Content = 'D:\Games\FM4\DLC'
 }
 
 .\outputs\FM4-build\Build.ps1 -Action all @common @discs
 ```
 
-Remove the `Disc2` entry if you only want to use the Disc 1 content. If PowerShell
+Remove the `Disc2` or `Content` entry if you do not use that content. If PowerShell
 blocks a script you have reviewed, launch it with a process-only policy:
 
 ```powershell
@@ -114,7 +145,7 @@ powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\outputs\FM4-build\Buil
 | --- | --- |
 | `doctor` | Checks the prerequisites. Makes no changes. |
 | `setup` | Stage 1: builds and installs the runtime. |
-| `generate` | Stage 2: generates the project from the discs. Requires `-Disc1`, optionally `-Disc2`. |
+| `generate` | Stage 2: generates the project from the discs. Requires `-Disc1`, optionally `-Disc2` and `-Content`. |
 | `build` | Stage 3: builds the game executables, modules and runtime. |
 | `all` | `setup`, then `generate`, then `build`. Does not launch the game. |
 | `run` | Launches the game. See [running.md](running.md). |
@@ -139,6 +170,7 @@ The stages can also run separately:
 | `-Jobs` | Number of parallel jobs, 1 to 64. Default: 4. |
 | `-Disc1` | Extracted Disc 1 root. Required by `generate` and `all`. |
 | `-Disc2` | Extracted Disc 2 root. Optional. |
+| `-Content` | Content package files or directories (DLC). Optional, one or more, read by `generate`, `all` and `run`. See [Downloadable content](#downloadable-content). |
 | `-Flavor` | Compiler experiment for `build`, for example `thinlto,v3`. See [Build flavors](#build-flavors). |
 
 ## Stages
@@ -230,13 +262,14 @@ FM4-build/
 ├── runtime-install/  # Locally installed runtime
 ├── project/          # Integration source and private generated/
 ├── game-build/       # Executable, modules, runtime, GPU plugins
-├── user-data/        # Profiles, saves, imported Disc 2 content
+├── user-data/        # Profiles, saves, imported Disc 2 and DLC content
 ├── cache/            # Game and shader cache
 ├── logs/             # Logs for setup, generate, build and startup
 ├── e2e/              # e2e run output (captures, logs, summary.json)
 ├── snapshots/        # game-build copies used by the matrix.py gates
 ├── loaded-image.bin  # Private image of your executable
-├── local.json        # Local Disc paths
+├── local.json        # Local Disc and content paths
+├── content-packages.txt # Packages the last run imports, written by the launcher
 └── build-result.json # Artifact hashes and build result
 ```
 
@@ -289,6 +322,12 @@ repository.
 - **Disc 2 package is missing** (`Missing Disc 2 content package`): check that the
   four packages are present under the `content` path shown in
   [Supported game version](#supported-game-version).
+- **A content package is rejected** (`Content package is for title ...`, `... is not
+  FM4 marketplace content`, `No FM4 content packages found`): `-Content` points to a
+  package of another game, a title update, or a directory without FM4 packages. See
+  [Downloadable content](#downloadable-content).
+- **`Two content packages share the name`:** the same package file name appears in two
+  places. Remove the duplicate copy or pass only one of the directories.
 - **`Run setup first.` or `Run generate first.`:** the later stage needs the output
   of the earlier one in the same `BuildRoot`. Run `setup`, then `generate`, then
   `build`, or use `all`.

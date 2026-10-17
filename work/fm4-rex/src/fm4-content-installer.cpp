@@ -1,4 +1,5 @@
 #include <rex/runtime.h>
+#include <rex/filesystem.h>
 #include <rex/system/kernel_state.h>
 #include <rex/system/xam/content_manager.h>
 #include <rex/filesystem/devices/stfs_container_device.h>
@@ -26,58 +27,64 @@ void FM4MountCache(rex::Runtime* runtime) {
   std::fprintf(stderr, "FM4 cache: mounted %s\n", directory.string().c_str());
 }
 
-// Explicit developer import from the user's extracted Disc 2. The runtime's
-// installer preserves the package metadata and extracts into user_data_root.
-void FM4InstallDisc2(rex::Runtime* runtime) {
-  const char* source = std::getenv("FM4_DISC2_ROOT");
-  if (!source || !*source) return;
+// Import of the user's content packages: Disc 2 and downloadable content. The launcher
+// validates them and lists one UTF-8 path a line in FM4_CONTENT_MANIFEST
+// (pipeline.py write_content_manifest). The runtime's installer preserves the package
+// metadata and extracts each package into user_data_root under its file name; a marker
+// next to it records the package size, so an unchanged package is imported once.
+void FM4InstallContent(rex::Runtime* runtime) {
+  const char* manifest_path = std::getenv("FM4_CONTENT_MANIFEST");
+  if (!manifest_path || !*manifest_path) return;
   auto* kernel = runtime->kernel_state();
   if (kernel->title_id() != 0x4D530910)
-    throw std::runtime_error("Disc 2 import requires FM4's loaded title ID");
-  const auto packages = std::filesystem::path(source) / "content" /
-      "0000000000000000" / "4d530910" / "00000002";
+    throw std::runtime_error("Content import requires FM4's loaded title ID");
+  std::ifstream manifest(rex::to_path(std::string_view(manifest_path)));
+  if (!manifest) throw std::runtime_error(std::string("Unable to read ") + manifest_path);
   auto* content = kernel->content_manager();
-  for (unsigned index = 1; index <= 4; ++index) {
-    char name[32];
-    std::snprintf(name, sizeof(name), "4d5309100000000%u", index);
-    const auto package = packages / name;
+  size_t count = 0;
+  for (std::string line; std::getline(manifest, line);) {
+    if (!line.empty() && line.back() == '\r') line.pop_back();
+    if (line.empty()) continue;
+    ++count;
+    const auto package = rex::to_path(std::string_view(line));
+    const auto name = rex::path_to_utf8(package.filename());
     const auto header = rex::filesystem::StfsContainerDevice::ReadPackageHeader(package);
     if (!header || uint32_t(header->metadata.execution_info.title_id) != 0x4D530910 ||
         header->metadata.content_type != rex::filesystem::XContentType::kMarketplaceContent)
-      throw std::runtime_error("Invalid FM4 Disc 2 package metadata: " + package.string());
-    const auto marker = runtime->user_data_root() / (std::string(name) + ".import-complete");
+      throw std::runtime_error("Invalid FM4 content package metadata: " + line);
+    const auto marker = runtime->user_data_root() / (package.filename().native() + L".import-complete");
     const auto size = std::filesystem::file_size(package);
     uintmax_t previous_size = 0;
     { std::ifstream previous(marker); previous >> previous_size; }
     const auto destination = runtime->user_data_root() / "0000000000000000" /
-        "4D530910" / "00000002" / name;
+        "4D530910" / "00000002" / package.filename();
     if (previous_size == size && std::filesystem::is_directory(destination)) {
-      std::fprintf(stderr, "FM4 Disc 2: %s already imported\n", name);
+      std::fprintf(stderr, "FM4 content: %s already imported\n", name.c_str());
       continue;
     }
-    std::fprintf(stderr, "FM4 Disc 2: importing %s (%llu bytes)\n", name,
+    std::fprintf(stderr, "FM4 content: importing %s (%llu bytes)\n", name.c_str(),
                  static_cast<unsigned long long>(size));
     std::fflush(stderr);
     const auto result = content->InstallContent(package);
     if (result != 0)
-      throw std::runtime_error("Disc 2 import failed: " + std::to_string(result));
+      throw std::runtime_error("Content import of " + name + " failed: " + std::to_string(result));
     size_t files = 0;
     uintmax_t bytes = 0;
     for (const auto& entry : std::filesystem::recursive_directory_iterator(destination)) {
       if (entry.is_regular_file()) { ++files; bytes += entry.file_size(); }
     }
-    if (!files || !bytes) throw std::runtime_error("Disc 2 import produced no files");
+    if (!files || !bytes) throw std::runtime_error("Content import of " + name + " produced no files");
     std::ofstream record(marker);
     record << size << '\n' << files << '\n' << bytes << '\n';
     record.flush();
-    if (!record) throw std::runtime_error("Unable to record Disc 2 import completion");
-    std::fprintf(stderr, "FM4 Disc 2: imported %s files=%zu bytes=%llu\n", name, files,
+    if (!record) throw std::runtime_error("Unable to record the import of " + name);
+    std::fprintf(stderr, "FM4 content: imported %s files=%zu bytes=%llu\n", name.c_str(), files,
                  static_cast<unsigned long long>(bytes));
     std::fflush(stderr);
   }
   // Developer import mode stops before the guest entry point is launched.
-  if (std::getenv("FM4_DISC2_INSTALL_ONLY")) {
-    std::fprintf(stderr, "FM4 Disc 2: all four content packages installed\n");
+  if (std::getenv("FM4_CONTENT_INSTALL_ONLY")) {
+    std::fprintf(stderr, "FM4 content: %zu content packages installed\n", count);
     std::fflush(stderr);
     std::exit(0);
   }

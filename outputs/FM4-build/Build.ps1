@@ -2,6 +2,7 @@ param(
     [ValidateSet('doctor','setup','generate','build','all','run','warmcache','profbuild')][string]$Action = 'doctor',
     [string]$Disc1,
     [string]$Disc2,
+    [string[]]$Content,
     [string]$BuildRoot,
     [string]$LLVMRoot,
     [string]$Python = 'python',
@@ -33,6 +34,7 @@ if ($LLVMRoot) { $env:PATH = "$(Join-Path $LLVMRoot 'bin');$env:PATH" }
 $arguments = @((Join-Path $PSScriptRoot 'pipeline.py'), $Action, '--jobs', "$Jobs")
 if ($Disc1) { $arguments += @('--disc1', $Disc1) }
 if ($Disc2) { $arguments += @('--disc2', $Disc2) }
+foreach ($path in $Content) { $arguments += @('--content', $path) }
 if ($BuildRoot) { $arguments += @('--build-root', $BuildRoot) }
 if ($Flavor) { $arguments += @('--flavor', $Flavor) }
 if ($SingleTile) { $arguments += @('--single-tile') }

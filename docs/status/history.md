@@ -19,7 +19,7 @@ timeline
     14 October : Project-owned runtime in work/runtime, RTV default then reverted, vblank_vrr default
     15 October : Streaming fix (sGPU fallback) for missing road, RTV default again
     16 October : Photo, career and matrix e2e scenarios, gate tiers, look pc and quality high defaults
-    17 October : Clearcoat, display options and settings overlay, Alt+Enter, GTAO ambient occlusion
+    17 October : Clearcoat, display options and settings overlay, Alt+Enter, GTAO ambient occlusion, generic content import (DLC)
 ```
 
 | Date | Milestone |
@@ -28,7 +28,7 @@ timeline
 | 14 October 2026 | The project-owned runtime (`work/runtime`) replaces `sdk.patch` and `sdk-extra`. RTV is the launcher default for a short time, then reverted to ROV. The missing road segments on RTV are investigated. `vblank_vrr` becomes the default. |
 | 15 October 2026 | The streaming fix (sGPU fallback) resolves the missing road segments, and RTV is the launcher default again. Command processor work: EDRAM transfers, upload removal, event-based wait and readback fixes. |
 | 16 October 2026 | Photo, photo_view and career e2e scenarios, the regression and 240 Hz matrices, the dynamic vblank rate, the rebuilt developer AI driver and career race to rewards, the shader override and look knobs, the shadow workaround no longer default, and 16x anisotropic filtering. |
-| 17 October 2026 | Clearcoat on the car paint, display and render scale options, the settings overlay, Alt+Enter, and GTAO ambient occlusion. The default launcher (look `pc` with clearcoat and AO) passes the smoke gate. |
+| 17 October 2026 | Clearcoat on the car paint, display and render scale options, the settings overlay, Alt+Enter, and GTAO ambient occlusion. The default launcher (look `pc` with clearcoat and AO) passes the smoke gate. The generic content installer (`-Content`) imports and mounts Disc 2 and eight DLC packages. |
 
 ## 1. Clean-build verification (13-14 October 2026)
 

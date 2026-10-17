@@ -88,11 +88,90 @@ def validate_discs(disc1, disc2):
         raise ValueError('Disc1 must contain the extracted game assets (Media and Database.xmplr), not just the three XEX files.')
     if disc2:
         disc2 = Path(disc2).resolve()
-        for index in range(1,5):
-            package = disc2/'content/0000000000000000/4d530910/00000002'/f'4d5309100000000{index}'
+        for package in disc2_packages(disc2):
             if not package.is_file():
                 raise ValueError(f'Missing Disc 2 content package: {package}')
     return disc1, disc2
+
+# FM4 content packages (Disc 2 and downloadable content) are STFS containers. The header
+# fields are big-endian, at the offsets of the Xbox 360 XContent header.
+TITLE_ID = 0x4D530910
+STFS_MAGICS = (b'CON ', b'LIVE', b'PIRS')
+MARKETPLACE_CONTENT = 0x00000002
+CONTENT_TYPE_OFFSET, TITLE_ID_OFFSET = 0x344, 0x360
+
+def disc2_packages(disc2):
+    packages = Path(disc2)/'content/0000000000000000/4d530910/00000002'
+    return [packages/f'4d5309100000000{index}' for index in range(1,5)]
+
+def package_header(path):
+    """(magic, content type, title ID) of an STFS package, or None for any other file."""
+    with Path(path).open('rb') as stream:
+        header = stream.read(TITLE_ID_OFFSET+4)
+    if len(header) < TITLE_ID_OFFSET+4 or header[:4] not in STFS_MAGICS:
+        return None
+    return (header[:4].decode().strip(), int.from_bytes(header[CONTENT_TYPE_OFFSET:CONTENT_TYPE_OFFSET+4],'big'),
+            int.from_bytes(header[TITLE_ID_OFFSET:TITLE_ID_OFFSET+4],'big'))
+
+def content_error(package):
+    """Why a file is not an FM4 marketplace content package, or None if it is one."""
+    header = package_header(package)
+    if not header:
+        return f'Not an STFS content package: {package}'
+    _, content_type, title_id = header
+    if title_id != TITLE_ID:
+        return f'Content package is for title {title_id:08X}, not FM4 ({TITLE_ID:08X}): {package}'
+    if content_type != MARKETPLACE_CONTENT:
+        return (f'Content package type {content_type:08X} is not FM4 marketplace content '
+                f'({MARKETPLACE_CONTENT:08X}): {package}')
+    return None
+
+def validate_content(disc2, content):
+    """The packages to import: Disc 2's four, then those found in each -Content path.
+
+    A -Content path is one package file or a directory searched recursively. A named file must
+    be an FM4 marketplace content package. Inside a directory, other files and the packages of
+    other titles or content types (a system update, a title update) are skipped. File names
+    must be unique: the import installs each package under its name."""
+    packages = disc2_packages(disc2) if disc2 else []
+    for package in packages:
+        error = content_error(package)
+        if error:
+            raise ValueError(error)
+    for source in content or ():
+        source = Path(source).resolve()
+        if source.is_file():
+            error = content_error(source)
+            if error:
+                raise ValueError(error)
+            packages.append(source)
+        elif source.is_dir():
+            found = 0
+            for path in sorted(source.rglob('*')):
+                if not path.is_file() or not package_header(path):
+                    continue
+                error = content_error(path)
+                if error:
+                    print(f'Skipped: {error}')
+                else:
+                    packages.append(path)
+                    found += 1
+            if not found:
+                raise ValueError(f'No FM4 content packages found in {source}')
+        else:
+            raise ValueError(f'Content path not found: {source}')
+    names = {}
+    for package in packages:
+        previous = names.setdefault(package.name.lower(), package)
+        if previous != package:
+            raise ValueError(f'Two content packages share the name {package.name}: {previous} and {package}')
+    return list(names.values())
+
+def write_content_manifest(root, packages):
+    """The package list the game imports at start (fm4-content-installer.cpp), one UTF-8 path a line."""
+    manifest = root/'content-packages.txt'
+    manifest.write_text(''.join(f'{package}\n' for package in packages),encoding='utf-8')
+    return manifest
 
 def check_layout(root):
     if (root/'sdk-source').exists() and not (root/'runtime-source').exists():
@@ -179,7 +258,7 @@ def setup(root, fxc, jobs):
     build_runtime(root, fxc, jobs)
     (root/'setup-complete.json').write_text(json.dumps({'thirdparty_revision':SDK_REV,'runtime':'work/runtime'}))
 
-def generate(root, disc1, disc2, jobs):
+def generate(root, disc1, disc2, content, jobs):
     install, project = root/'runtime-install', root/'project'
     cli = install/'bin/rexglue.exe'
     if not cli.is_file() or not (root/'setup-complete.json').is_file():
@@ -219,7 +298,8 @@ def generate(root, disc1, disc2, jobs):
     for directory in ('default','xmedia','speech'):
         args = [sys.executable,project/'guard-generated.py',project/f'generated/{directory}',root/'loaded-image.bin']
         run(args + ([] if directory=='default' else ['--module']),log=root/f'logs/guard-{directory}.log')
-    state = {'disc1':str(disc1),'disc2':str(disc2) if disc2 else None,'executables':XEX_HASHES}
+    state = {'disc1':str(disc1),'disc2':str(disc2) if disc2 else None,
+             'content':[str(Path(path).resolve()) for path in content or ()],'executables':XEX_HASHES}
     (root/'local.json').write_text(json.dumps(state,indent=2),encoding='utf-8')
 
 FLAVORS = ('thinlto','v3','pgo-gen','pgo-use')
@@ -517,6 +597,13 @@ def ao_cvars(enabled):
     return ({'post_ao':'true','post_ao_camera':POST_AO_CAMERA,'post_ao_radius':POST_AO_RADIUS}
             if enabled else {})
 
+def save_content(root,content):
+    """run -Content: replaces the saved content paths without generating again."""
+    state=json.loads((root/'local.json').read_text())
+    validate_content(state['disc2'],content)
+    state['content']=[str(Path(path).resolve()) for path in content]
+    (root/'local.json').write_text(json.dumps(state,indent=2),encoding='utf-8')
+
 def launch(root,single_tile=False,fixed_vblank=False,frame_rate=None,rov=False,
            resolution_scale=None,full_rate_mirror=False,look=None,shadow_workaround=False,
            quality=None,display=DEFAULT_DISPLAY,fullscreen=False,supersample=False,info=False,
@@ -567,8 +654,11 @@ def launch(root,single_tile=False,fixed_vblank=False,frame_rate=None,rov=False,
     look=DEFAULT_LOOK if look is None else look
     cvars.update(look_cvars(root,look))
     cvars.update(ao_cvars(ao))
-    if disc2:
-        env['FM4_DISC2_ROOT']=str(disc2)
+    # Disc 2 and the -Content packages: imported into user-data once, then kept there.
+    packages=validate_content(disc2,state.get('content'))
+    if packages:
+        env['FM4_CONTENT_MANIFEST']=str(write_content_manifest(root,packages))
+        print(f'Content packages: {len(packages)}')
     # The settings overlay: F2 in game, shown at start with -Info.
     env['FM4_INFO']=info_overlay(cvars,env,look,DEFAULT_QUALITY if quality is None else quality,
                                  description)
@@ -621,6 +711,9 @@ def main():
     parser.add_argument('--build-root',type=Path,default=REPO/'work/portable-fm4')
     parser.add_argument('--disc1',type=Path)
     parser.add_argument('--disc2',type=Path)
+    parser.add_argument('--content',type=Path,action='append',
+                        help='generate, all, run: an FM4 content package (DLC) or a directory searched '
+                             'for them; repeatable. Saved in local.json and imported at the next run')
     parser.add_argument('--jobs',type=int,default=4)
     parser.add_argument('--single-tile',action='store_true',
                         help='run: races without MSAA and predicated tiling, with FXAA (faster)')
@@ -674,12 +767,16 @@ def main():
     fxc=doctor()
     if args.action=='doctor': return
     discs=None
+    if args.content and args.action not in ('generate','all','run'):
+        raise ValueError('--content is read by generate, all and run only.')
     if args.action in ('generate','all'):
         discs=validate_discs(args.disc1,args.disc2)
+        validate_content(discs[1],args.content)
     root.mkdir(parents=True,exist_ok=True)
     check_layout(root)
     if args.action in ('setup','all'): setup(root,fxc,args.jobs)
-    if args.action in ('generate','all'): generate(root,*discs,args.jobs)
+    if args.action in ('generate','all'): generate(root,*discs,args.content,args.jobs)
+    if args.action=='run' and args.content: save_content(root,args.content)
     if args.action in ('build','all'): build_game(root,fxc,args.jobs,flavor)
     if args.action=='run': launch(root,args.single_tile,args.fixed_vblank,args.frame_rate,args.rov,
                                      args.resolution_scale,args.full_rate_mirror,args.look,

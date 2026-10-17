@@ -55,6 +55,41 @@ class PipelineTests(unittest.TestCase):
                 executable.write_text('wrong revision')
                 with self.assertRaises(ValueError): pipeline.validate_discs(root,None)
 
+    def package(self, path, title_id=0x4D530910, content_type=2, magic=b'LIVE'):
+        # A synthetic STFS header: magic, content type and title ID, the rest zero.
+        header=bytearray(0x400)
+        header[:4]=magic
+        struct.pack_into('>I',header,pipeline.CONTENT_TYPE_OFFSET,content_type)
+        struct.pack_into('>I',header,pipeline.TITLE_ID_OFFSET,title_id)
+        path.parent.mkdir(parents=True,exist_ok=True)
+        path.write_bytes(header)
+        return path.resolve()
+
+    def test_content_packages(self):
+        with tempfile.TemporaryDirectory(prefix='fm4 content test ') as directory:
+            root=Path(directory)
+            disc2=[self.package(path) for path in pipeline.disc2_packages(root/'Disc 2')]
+            dlc=self.package(root/'DLC/pack one/4D53091000000010',magic=b'CON ')
+            (root/'DLC/readme.txt').write_text('not a package')
+            self.assertEqual(pipeline.validate_content(root/'Disc 2',None),disc2)
+            self.assertEqual(pipeline.validate_content(root/'Disc 2',[root/'DLC']),disc2+[dlc])
+            self.assertEqual(pipeline.validate_content(None,[dlc,root/'DLC']),[dlc])
+            with self.assertRaises(ValueError): pipeline.validate_content(None,[root/'missing'])
+            with self.assertRaises(ValueError): pipeline.validate_content(None,[root/'DLC/readme.txt'])
+            (root/'empty').mkdir()
+            with self.assertRaises(ValueError): pipeline.validate_content(None,[root/'empty'])
+            other=self.package(root/'DLC/other/4D53091000000011',title_id=0x4D5307E6)
+            update=self.package(root/'DLC/update/tu',content_type=0xB0000)
+            # Inside a directory, packages of other titles and types are skipped; named, or
+            # alone in a directory, they are rejected.
+            self.assertEqual(pipeline.validate_content(None,[root/'DLC']),[dlc])
+            for path in (other,update,root/'DLC/other',root/'DLC/update'):
+                with self.assertRaises(ValueError): pipeline.validate_content(None,[path])
+            self.package(root/'copy/4d53091000000001')
+            with self.assertRaises(ValueError): pipeline.validate_content(root/'Disc 2',[root/'copy'])
+            manifest=pipeline.write_content_manifest(root,[dlc])
+            self.assertEqual(manifest.read_text(encoding='utf-8'),f'{dlc}\n')
+
     def test_new_clone_has_all_source_inputs(self):
         for name in ('rexglue.cmake','guard-generated.py','dump-image.cpp','switch-recipes.json'):
             self.assertTrue((pipeline.HERE/name).is_file(),name)
