@@ -56,7 +56,7 @@ def cell_args(root, name, hz, scenario, repeat, build, extra):
         args += [f'--arg=--video_mode_refresh_rate={hz}', '--env', f'FM4_FRAME_RATE={hz}']
     if scenario == 'quickrace':
         args += ['--tail', '40', '--measure', '30']
-    if scenario in ('photo', 'career', 'career_finish'):
+    if scenario in ('photo', 'career', 'career_finish', 'dlc'):
         args += ['--profile', 'copy']
     if scenario in PROFILE_FROM:
         # The profile saved by the earlier cell of the same gate (its photo, its race result).
