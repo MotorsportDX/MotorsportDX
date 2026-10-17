@@ -21,6 +21,10 @@
 !/CLAUDE.md
 !/docs/
 !/docs/**
+# Claude Code skills only; settings and worktrees under .claude stay ignored.
+!/.claude/
+!/.claude/skills/
+!/.claude/skills/**
 !/outputs/FM4-build/Build.ps1
 !/outputs/FM4-build/dump-image.cpp
 !/outputs/FM4-build/e2e/compare.py
