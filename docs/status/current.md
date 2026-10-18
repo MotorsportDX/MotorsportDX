@@ -70,6 +70,16 @@ Details in [post pass framework](../analysis/post-pass-framework.md#verification
   3 of 3 cells passed in both, with the same error keys and no clear-gray frames.
 - **New points, history and hot reload** (test manifests, not in the repository, 2x): the history is valid from the second scene frame on; reprojected through the depth, the previous frame's color matches the world where the plain difference shows every moving edge. Passes drawn into the final color show under the HUD. Two bugs found by these runs were fixed before the gates above (the pixel passes and the sun occlusion query; the views of the framework's own descriptor heaps).
 
+### USA against Japan/Asia performance, 18 October 2026
+
+One binary for both releases: the `I:\FM4-build-usa` game build, with the launcher defaults (look `pc`, quality `high`, 1x), the `perf` tier (`photo` at 240 Hz, three runs a gate) and the Disc 1 chosen with `--arg game_data_root=...`. The gates ran in the order USA, Japan/Asia, Japan/Asia, USA (`relusa1`, `reljp1`, `reljp2`, `relusa2`) on copies of the same profile.
+
+- 12 of 12 runs passed. Race phase: USA 214.2 fps (standard deviation 14.2), p99 6.46 ms; Japan/Asia 202.1 fps (13.1), p99 7.04 ms. Photo mode ran at 29.9 fps in every run.
+- The race fps of a run follows its draws per frame (correlation -0.98 over the 12 runs), because the AI races differ from run to run: the USA runs averaged 2,189 draws per frame and the Japan/Asia runs 2,494. With that workload taken out, the difference is -0.2 fps (permutation test, p = 0.92). The raw difference (+6.0%, p = 0.16) came from lighter races, not from the release.
+- This agrees with the code: the images are identical, and the game's two `XamGetExecutionId` calls read only the title ID, which both releases share.
+- The USA BuildRoot is the development base, and Japan/Asia is checked on it through `game_data_root`. After a rebuild at commit `8c7d3e1` (build and CPU tests passed), the smoke gate `jpsmoke` on the Japan/Asia disc passed 3 of 3 cells against the USA gate `usa`. Its `photo` race ran at 146.5 fps (FAIL), but that race drew 3,516 draws per frame, more than any earlier run; the rerun `jpsmoke2` ran at 179.6 fps at 2,843 draws per frame (WARN on capture statistics only), in line with the workload curve above. `career`: 202.7 fps, PASS.
+
+### USA release, 18 October 2026
 
 BuildRoot `I:\FM4-build-usa`, a new BuildRoot set up from the USA Disc 1 and Disc 2 and the eight DLC packages. The two releases differ only in the executable headers; see the [release comparison](../analysis/releases.md).
 
@@ -304,7 +314,7 @@ Everything still open, grouped by area.
   - Smoke gates at 240 Hz passed 3 of 3 cells with the knobs off (`rsoff`, which covers the runtime's file link lookup in every file open) and with `road_gloss=0.5` and `sky=0.8` (`rson`). `rson` against `rsoff`: `career` PASS; `photo` and `photo_view` WARN on capture statistics only. The error keys are the same, and there are no clear-gray frames.
   - The new `pc` preset (`sky=0.7`, gate `pcsky07`) against `pc` with the game's sky (`pcsky1`, the same binary, run just before it) at 240 Hz: 3 of 3 cells passed. `career` PASS (race 192.0 fps, p99 8.5 ms; replay 30.0 fps). `photo` WARN on capture statistics only (race 204.6 fps; photo mode 29.94 fps). `photo_view` WARN on capture statistics only (56.98 fps). There are no new error keys and no clear-gray frames, and only the `pcsky07` cells mounted the copies.
 - Parity with the original Xbox (shadows, color, reflections, noise and object edges) has not been compared. The combinations of MSAA and render scale are not all verified.
-- The post pass framework has GTAO only: rain screen effects, screen-space reflections, TAA and temporal upscalers are not written yet, and there are no motion vectors (camera motion only, through the depth). See [post pass framework](../analysis/post-pass-framework.md#the-final-point-and-upscalers).
+- The post pass framework (18 October 2026) gives screen passes, the previous frame's scene color and depth and camera reprojection, but has GTAO only: rain screen effects, screen-space reflections, TAA and temporal upscalers are not written yet (see [post pass framework](../analysis/post-pass-framework.md#the-final-point-and-upscalers)). Moving objects have no motion vectors yet: the research and the recommended source, host-built vectors from the game's resolved depth, its stencil object IDs and the car and camera matrices of the vertex shader constants, are in [motion vectors](../analysis/motion-vectors.md) (18 October 2026, offline only). That race frames give each car its own stencil ID is not yet verified in the game.
 - Not done: modern anti-aliasing on top of MSAA (SMAA or FXAA), HDR10 output, new lighting for tracks (beyond the `TrackSettings` knobs), car materials other than paint, glass, chrome and rims (the cockpit interior, tires, brakes and lamp lenses), track surfaces, and car flake paint. Flake cells in UV space are too small for race cameras and need an LOD model.
 - Widescreen and ultrawide need a FOV and projection hook, culling and HUD changes. The image is always 16:9, with bars on other screens.
 
@@ -346,6 +356,7 @@ The proposed order is:
 5. **Finish the glass, chrome and rim check.** A sun-facing scene (a replay camera or another track) for the highlights, and the split-screen set; then decide whether `pc` gets them. See [look mod coverage](../analysis/look-mod-coverage.md#in-game-checks-18-october-2026).
 6. **Re-run the gate tiers after each change.** Use `smoke` for quick checks, `perf` for performance, `full` before committing a stage, and `career` for the rewards path. See the [e2e overview](../e2e/README.md) for the commands and gates.
 7. **Decide the default tiling scenario.** The `-SingleTile` quality versus fps trade-off is for the project owner.
+8. **Verify the motion vector sources.** One traced run for the stencil reference of each car and track draw, the game's motion blur matrices in the start sequence, the two switches that might turn the game's motion blur on in races, and the depth resolve with `-SingleTile`. See [motion vectors](../analysis/motion-vectors.md#7-validation-steps).
 
 This page documents the status. It does not report that all further tests have been run, and it is not an instruction to run them automatically.
 
@@ -354,7 +365,7 @@ This page documents the status. It does not report that all further tests have b
 - [history](history.md): dated chronology and past results
 - [setup](../setup.md), [running](../running.md)
 - [e2e overview](../e2e/README.md), [traces](../e2e/traces.md), [experiments](../e2e/experiments.md)
-- Analysis: [post pass framework](../analysis/post-pass-framework.md), [GTAO design](../analysis/gtao-design.md), [B4 shader research](../analysis/b4-shader-research.md), [visual style](../analysis/visual-style.md), [material atlas](../analysis/material-atlas.md)
+- Analysis: [post pass framework](../analysis/post-pass-framework.md), [GTAO design](../analysis/gtao-design.md), [motion vectors](../analysis/motion-vectors.md), [B4 shader research](../analysis/b4-shader-research.md), [visual style](../analysis/visual-style.md), [material atlas](../analysis/material-atlas.md)
 - [sources and licensing](../sources-and-licensing.md)
 - [Build script](../../outputs/FM4-build/Build.ps1), [verification record](../../outputs/FM4-build/verification.json), [e2e harness](../../outputs/FM4-build/e2e/e2e.py), [matrix](../../outputs/FM4-build/e2e/matrix.py)
 - [Project overview](../../README.md), [agent guide](../../AGENTS.md)

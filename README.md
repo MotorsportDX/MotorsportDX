@@ -114,12 +114,14 @@ The next validation priorities are a second computer, Disc 2 car races on the la
 | [docs/e2e/experiments.md](docs/e2e/experiments.md) | A/B overrides and shader override diagnostics |
 | [docs/analysis/post-pass-framework.md](docs/analysis/post-pass-framework.md) | The runtime's post pass framework: screen passes from HLSL files and a manifest, injection points, history |
 | [docs/analysis/gtao-design.md](docs/analysis/gtao-design.md) | Design of the GTAO ambient occlusion pass, from frame graph observations |
+| [docs/analysis/motion-vectors.md](docs/analysis/motion-vectors.md) | Where per-pixel motion vectors for TAA and upscalers can come from: the game's motion blur reprojection, its stencil object IDs, and a host-built pass |
 | [docs/analysis/b4-shader-research.md](docs/analysis/b4-shader-research.md) | Research on the editable shader path (HLSL through FXC, with overrides per hash) |
 | [docs/analysis/shader-mod-iteration.md](docs/analysis/shader-mod-iteration.md) | Iterating on shader mods: the DXBC cache, hot reload and live look knobs |
 | [docs/analysis/visual-style.md](docs/analysis/visual-style.md) | Research on the origin of FM4's visual style |
 | [docs/analysis/releases.md](docs/analysis/releases.md) | How the Japan/Asia and USA releases differ, and why one build serves both |
 | [docs/analysis/title-updates.md](docs/analysis/title-updates.md) | What the title updates contain and change, the runtime's patch support, and what supporting one would take |
 | [docs/analysis/dlc-structure.md](docs/analysis/dlc-structure.md) | How FM4 content packages are laid out, mounted and licensed, and what a new mod package would need |
+| [docs/analysis/rain-feasibility.md](docs/analysis/rain-feasibility.md) | Whether the physics still has a wet grip modifier (it does not read one), and how a hook or a surface file overlay could lower grip for a wet race |
 | [docs/analysis/material-atlas.md](docs/analysis/material-atlas.md) | Summary of the material atlas: names and registers of the game's constant tables |
 | [docs/analysis/look-mod-coverage.md](docs/analysis/look-mod-coverage.md) | Which final combine, motion blur and car paint hashes each track and mode uses, and which have no look mod |
 | [docs/sources-and-licensing.md](docs/sources-and-licensing.md) | Repository contents, attribution, licenses, and the pre-commit check |

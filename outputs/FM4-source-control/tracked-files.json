@@ -77,6 +77,10 @@
       "provenance": "Project documentation; design note on the runtime post pass framework (manifest, injection points, history, verification; no game content)"
     },
     {
+      "path": "docs/analysis/motion-vectors.md",
+      "provenance": "Project documentation; research and design note on motion vector sources (summarized observations: hashes, registers, constant and element names, no game content)"
+    },
+    {
       "path": "docs/analysis/shader-mod-iteration.md",
       "provenance": "Project documentation; design note on the shader override cache, hot reload and live look knobs (no game content)"
     },
@@ -107,6 +111,10 @@
     {
       "path": "docs/analysis/title-updates.md",
       "provenance": "Project documentation; research note on the FM4 title update packages (file names, sizes, header fields, counts and short identifiers, no game content)"
+    },
+    {
+      "path": "docs/analysis/rain-feasibility.md",
+      "provenance": "Project documentation; research note on the wet grip fields of the tire and surface data (function addresses, struct offsets, field names and a few data values, no game code)"
     },
     {
       "path": "outputs/FM4-build/Build.ps1",

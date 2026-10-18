@@ -46,7 +46,7 @@ flowchart LR
     - The last tile ends at base + 1280 x 736 x 4 bytes.
   - The destination format is recorded as `8_8_8_8` (a D3D9 quirk, `xenos.h`). Its content is 24-bit float depth plus stencil.
 - **Users of that depth**:
-  - Motion blur `4746CAD32EF168CF`, only in some frames (q-high 4800-6000; in those frames the depth is resolved twice per tile). Slot s2 holds the depth. Its constants are `QAndNegNearQAndScale` c69, viewport c68, and `invCurrentVPThenPrevVP` c0[68]: 17 matrices selected per pixel through a0, probably per object.
+  - Motion blur `4746CAD32EF168CF`, only in some frames (q-high 4800-6000; in those frames the depth is resolved twice per tile). Slot s2 holds the depth. Its constants are `QAndNegNearQAndScale` c69, viewport c68, and `invCurrentVPThenPrevVP` c0[68]: 17 matrices selected per pixel through a0, from the scene stencil (one per object; see [motion vectors](motion-vectors.md)).
   - FinalCombine DOF `30B67D8B86C37587` and `AE3B2E36FCA4958D`: tf1 holds the depth, and its linear depth is `c1.y / (c1.x - (1 - d))`. This is the usual D3D projection form, z = Q*n / (Q - ndc_z), with `combineQVals` = (Q, Q*n) and stored depth d = 1 - ndc_z. So Z is inverted through the viewport (zscale -1, zoffset 1), not through the matrix, and post_ao reads that viewport. Confirmed in M1.
 - **Frames without a depth resolve**: frames with a 3D scene before the race (84 to 2,898 scene draws per frame at q-high 1080-4080: menus, showroom, loading screens). The exact scenes have not yet been mapped to e2e steps.
 - **Race frame order** (q-high, frame 9600):
@@ -83,7 +83,7 @@ b. **Option B, fallback** for menus, showroom and photo mode if needed: when eac
 c. **Camera**:
    - On draws with a VS hash in `post_ao_camera`, the runtime reads that VS's matrix constants from the register file, plus `PA_CL_VPORT_*` (with `PA_CL_VTE_CNTL`) and the pixel center (`PA_SU_VTX_CNTL`).
    - Only draws whose depth buffer equals the base of the last scene depth EDRAM are taken (not the side mirrors or the env map), and only once per frame.
-   - From P and the viewport ([post_ao_camera.h](../../work/runtime/include/rex/graphics/d3d12/post_ao_camera.h)) the following are derived: W from the stored depth (the constants are folded in double, because in float `1 - d - Q` loses precision far from the camera), the view position from the pixel position, the far-plane W for the sky, and the focal length in pixels for the radius.
+   - From P and the viewport ([post_pass_camera.h](../../work/runtime/include/rex/graphics/d3d12/post_pass_camera.h), formerly `post_ao_camera.h`) the following are derived: W from the stored depth (the constants are folded in double, because in float `1 - d - Q` loses precision far from the camera), the view position from the pixel position, the far-plane W for the sky, and the focal length in pixels for the radius.
 
 d. **Injection point**:
    - Depth resolves (`copy_src_select >= 4`, destination pitch >= `post_ao_min_width`) are merged per frame into one group of contiguous tiles. Re-resolves of the same tile (the motion blur frame) stay in that group.

@@ -163,6 +163,7 @@ Cells go to `<BuildRoot>\e2e\<name>-<hz>-<scenario>`, and `<BuildRoot>\e2e\<name
 - For a tier at 2x, pass `--arg draw_resolution_scale_x=2 --arg draw_resolution_scale_y=2`. `ocr-server.ps1` averages captures above 720p down to 1280x720 first, so the menu highlight checks keep their 720p pixel distances.
 - Unlike the look and the race quality, `e2e.py` does not follow the launcher's `-Display`: it renders at 1x in a 1280x720 window unless `--arg` says otherwise, so the gates keep comparing with their baselines. The launcher's native resolution is 2x on 1080p, 1440p and 2560x1600 monitors and 3x on 4K ones.
 - The photo race phase replaces the `quickrace` scenario in the gates; `quickrace` stays for comparisons with older results.
+- The Japan/Asia and USA releases share one game build (see [release comparison](../analysis/releases.md)), so a BuildRoot made from one release checks the other with `--arg "game_data_root=<other Disc 1>"`, on the same binary and profile. The two releases perform the same; compare a cell with a baseline of the same release anyway, because the races differ from run to run.
 
 ## Frame rate and launcher settings
 
