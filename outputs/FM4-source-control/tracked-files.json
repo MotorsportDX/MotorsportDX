@@ -73,6 +73,10 @@
       "provenance": "Project documentation; design and research note on the GTAO pass (summarized observations, no game content)"
     },
     {
+      "path": "docs/analysis/motion-vectors.md",
+      "provenance": "Project documentation; research and design note on motion vector sources (summarized observations: hashes, registers, constant and element names, no game content)"
+    },
+    {
       "path": "docs/analysis/shader-mod-iteration.md",
       "provenance": "Project documentation; design note on the shader override cache, hot reload and live look knobs (no game content)"
     },
