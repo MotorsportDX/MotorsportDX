@@ -268,11 +268,27 @@ std::ofstream* OcclusionDrawTrace() {
 // every REX_DRAW_LIST_EVERY-th frame (default 10). Lines, hexadecimal:
 //   F <frame> <steady clock ms, decimal>
 //   <vs> <ps> <indices> <index base> <vertex base> <color 0 info> <depth info>
-//   <window offset> <edram mode> <outcome>
+//   <window offset> <edram mode> <depth control> <stencil ref mask> <outcome>
+// REX_DRAW_LIST_CONSTANTS="<shader hash>:<first>[-<last>];..." (64-bit ucode
+// hash of a vertex or pixel shader, decimal constant numbers of that shader)
+// adds after each matching draw the line
+//   C <first of the 512 float constants> <the constants as dwords>
+// (the pixel shader's follow the 256 of the vertex shader), and
+// REX_DRAW_LIST_AFTER_PS=<pixel shader hash> also lists each frame that follows
+// a frame in which that pixel shader drew, for pairs of consecutive frames.
 struct DrawListTrace {
+  struct Constants {
+    uint64_t shader_hash;
+    uint32_t first;
+    uint32_t count;
+  };
   std::ofstream output;
   uint32_t every = 10;
   uint32_t frame = 0;
+  std::vector<Constants> constants;
+  uint64_t after_pixel_shader = 0;
+  bool after_drawn = false;  // the pixel shader drew in this frame
+  bool after_frame = false;  // the pixel shader drew in the previous frame
 };
 DrawListTrace* GetDrawListTrace() {
   static DrawListTrace* trace = [] {
@@ -283,24 +299,48 @@ DrawListTrace* GetDrawListTrace() {
     if (const char* every = std::getenv("REX_DRAW_LIST_EVERY")) {
       result->every = std::max(1, std::atoi(every));
     }
+    if (const char* constants = std::getenv("REX_DRAW_LIST_CONSTANTS")) {
+      std::istringstream list(constants);
+      for (std::string entry; std::getline(list, entry, ';');) {
+        const size_t colon = entry.find(':');
+        if (colon == std::string::npos) continue;
+        char* end = nullptr;
+        const uint32_t first = uint32_t(std::strtoul(entry.c_str() + colon + 1, &end, 10));
+        const uint32_t last = *end == '-' ? uint32_t(std::strtoul(end + 1, nullptr, 10)) : first;
+        if (first <= last && last < 256) {
+          result->constants.push_back(
+              {std::strtoull(entry.c_str(), nullptr, 16), first, last - first + 1});
+        }
+      }
+    }
+    if (const char* after = std::getenv("REX_DRAW_LIST_AFTER_PS")) {
+      result->after_pixel_shader = std::strtoull(after, nullptr, 16);
+    }
     return result;
   }();
   return trace;
 }
 DrawListTrace* GetSampledDrawListTrace() {
   DrawListTrace* trace = GetDrawListTrace();
-  return trace && trace->frame % trace->every == 0 ? trace : nullptr;
+  return trace && (trace->frame % trace->every == 0 || trace->after_frame) ? trace : nullptr;
 }
 // Writes the draw when it goes out of scope; outcome is set at the exits.
 struct DrawListEntry {
   DrawListTrace* trace = nullptr;
-  uint32_t values[9] = {};
+  uint32_t values[11] = {};
+  // Per REX_DRAW_LIST_CONSTANTS match: first constant, dword count, dwords.
+  std::vector<uint32_t> constants;
   const char* outcome = "fail";
   ~DrawListEntry() {
     if (!trace) return;
     trace->output << std::hex;
     for (uint32_t value : values) trace->output << value << ' ';
     trace->output << std::dec << outcome << '\n';
+    for (size_t i = 0; i + 1 < constants.size(); i += 2 + constants[i + 1]) {
+      trace->output << std::hex << "C " << constants[i];
+      for (uint32_t k = 0; k < constants[i + 1]; ++k) trace->output << ' ' << constants[i + 2 + k];
+      trace->output << std::dec << '\n';
+    }
   }
 };
 
@@ -2971,7 +3011,9 @@ void D3D12CommandProcessor::IssueSwap(uint32_t frontbuffer_ptr, uint32_t frontbu
     }
   }
   if (DrawListTrace* draw_list = GetDrawListTrace()) {
-    if (++draw_list->frame % draw_list->every == 0) {
+    draw_list->after_frame = draw_list->after_drawn;
+    draw_list->after_drawn = false;
+    if (++draw_list->frame % draw_list->every == 0 || draw_list->after_frame) {
       draw_list->output << "F " << draw_list->frame << ' '
                         << std::chrono::duration_cast<std::chrono::milliseconds>(
                                std::chrono::steady_clock::now().time_since_epoch())
@@ -3381,6 +3423,8 @@ bool D3D12CommandProcessor::IssueDraw(xenos::PrimitiveType primitive_type, uint3
     values[6] = regs.values[XE_GPU_REG_RB_DEPTH_INFO];
     values[7] = regs.values[XE_GPU_REG_PA_SC_WINDOW_OFFSET];
     values[8] = uint32_t(edram_mode);
+    values[9] = regs.values[XE_GPU_REG_RB_DEPTHCONTROL];
+    values[10] = regs.values[XE_GPU_REG_RB_STENCILREFMASK];
   }
   if (edram_mode == xenos::EdramMode::kCopy) {
     // Special copy handling.
@@ -3406,13 +3450,36 @@ bool D3D12CommandProcessor::IssueDraw(xenos::PrimitiveType primitive_type, uint3
     post_passes_->OnDraw(regs, vertex_shader->ucode_data_hash(),
                          active_pixel_shader() ? active_pixel_shader()->ucode_data_hash() : 0);
   }
-  if (draw_list_entry.trace) {
-    uint32_t* values = draw_list_entry.values;
-    values[0] = uint32_t(vertex_shader->ucode_data_hash());
-    values[1] = active_pixel_shader() ? uint32_t(active_pixel_shader()->ucode_data_hash()) : 0;
-    if (!vertex_shader->vertex_bindings().empty()) {
-      values[4] =
-          regs.GetVertexFetch(vertex_shader->vertex_bindings()[0].fetch_constant).address << 2;
+  if (DrawListTrace* draw_list = GetDrawListTrace()) {
+    const uint64_t vertex_shader_hash = vertex_shader->ucode_data_hash();
+    const uint64_t pixel_shader_hash =
+        active_pixel_shader() ? active_pixel_shader()->ucode_data_hash() : 0;
+    if (pixel_shader_hash && pixel_shader_hash == draw_list->after_pixel_shader) {
+      draw_list->after_drawn = true;
+    }
+    if (draw_list_entry.trace) {
+      uint32_t* values = draw_list_entry.values;
+      values[0] = uint32_t(vertex_shader_hash);
+      values[1] = uint32_t(pixel_shader_hash);
+      if (!vertex_shader->vertex_bindings().empty()) {
+        values[4] =
+            regs.GetVertexFetch(vertex_shader->vertex_bindings()[0].fetch_constant).address << 2;
+      }
+      std::vector<uint32_t>& constants = draw_list_entry.constants;
+      for (const DrawListTrace::Constants& range : draw_list->constants) {
+        uint32_t first;
+        if (range.shader_hash == vertex_shader_hash) {
+          first = range.first;
+        } else if (range.shader_hash == pixel_shader_hash) {
+          first = 256 + range.first;
+        } else {
+          continue;
+        }
+        const uint32_t* source = &regs.values[XE_GPU_REG_SHADER_CONSTANT_000_X + first * 4];
+        constants.push_back(first);
+        constants.push_back(range.count * 4);
+        constants.insert(constants.end(), source, source + range.count * 4);
+      }
     }
   }
   bool memexport_used_vertex = vertex_shader->memexport_eM_written() != 0;
