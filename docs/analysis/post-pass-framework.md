@@ -190,7 +190,7 @@ What a temporal upscaler or TAA needs there, and what the framework gives:
 - Hot reload (`shader_mod_hot_reload`, a copy of `work/fm4-rex/passes` edited during a race at 1x): `GTAO_SCALE=0.5` in `shader_mod_defines.txt` reached the passes in the next frame without a compile; `GTAO_QUALITY=3` recompiled them ("reloaded (defines changed)"); a comment added to `gtao.hlsl` reloaded them in 375 ms; a syntax error logged the FXC errors and kept the previous passes; the fix reloaded them. The race went on through every step.
 - The first test run found two bugs, both fixed: the pixel passes were skipped because the guest's sun occlusion query is always open there (now closed and reopened around the pass), and the render target views and the clear view were taken from the bindless heap instead of the framework's own heaps (a crash with the pixel passes; the GTAO clear now uses the correct non-shader-visible view).
 
-**Motion vectors** (18 October 2026, the same BuildRoot): the CPU and WARP tests of [motion vectors](motion-vectors.md#tests) pass in the build; the in-game checks are still open.
+**Motion vectors** (18 and 19 October 2026, the same BuildRoot): the CPU and WARP tests of [motion vectors](motion-vectors.md#tests) pass in the build. In the game the host's camera and car matrices match the game's motion blur matrices within one pixel, the debug views are right in the chase, hood, bumper and cockpit cameras except for the rear-view mirror panel, and the passes cost 0.02 ms at 1x and 0.1 ms at 2x ([in the game](motion-vectors.md#in-the-game-18-and-19-october-2026)).
 
 ## Code
 

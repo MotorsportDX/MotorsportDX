@@ -21,6 +21,7 @@ timeline
     16 October : Photo, career and matrix e2e scenarios, gate tiers, look pc and quality high defaults
     17 October : Clearcoat, display options and settings overlay, Alt+Enter, GTAO ambient occlusion, generic content import (DLC), shader mod cache and hot reload
     18 October : ROV occlusion divisor removed, sun query samples measured per MSAA level : Glass, chrome and rim look mods (false color, A/B at 2x, smoke gate), look mods compiled against real contracts : Track lighting knobs road_gloss and sky (TrackSettings copies, 2x sweep) : USA release support (clean build, smoke gate with dlc) : Post pass framework, GTAO on it with identical output : Motion vector sources checked in the game (per-car stencil IDs, the game's blur matrices) : Per-car motion vectors on the post pass framework (CPU and WARP tests)
+    19 October : Motion vectors checked in the game (the game's blur matrices, debug views at 2x, GPU time, smoke gate)
 ```
 
 | Date | Milestone |
@@ -299,7 +300,8 @@ Shader mod iteration (17 October; design and results in [shader-mod-iteration.md
 ### 18 October 2026: motion vectors
 
 - The per-car route was built on the post pass framework ([motion vectors](../analysis/motion-vectors.md#8-implementation-18-october-2026)), on `I:\FM4-build-pass`. Superseded state of the current status page: "the motion vectors themselves are not written" and "the capture and the pass are not written", with the next validation step "Check the host motion vectors once they are built".
-- The build and its CPU tests passed (camera math, the passes on WARP, the shader mods); the in-game runs were deferred. The results are in [current status](current.md#motion-vectors-18-october-2026).
+- The build and its CPU tests passed (camera math, the passes on WARP, the shader mods); the in-game runs were deferred. Superseded state of the current status page: "Not run in the game: the in-game runs were deferred on 18 October 2026. The check against the game's motion blur matrices, the debug views at 2x, the GPU time and a smoke gate are open", with the next validation step "Check the motion vectors in the game".
+- On 18 and 19 October 2026 the branch was merged into main `1fb4560`, built again into `I:\FM4-build-pass`, and checked in the game (runs `mvchk1x`, `mvdbg2x`, `mvcost1x`, `mvcost2x`, `mvoffsmoke`, `mvsmoke`). The results are in [current status](current.md#motion-vectors-18-and-19-october-2026).
 
 ## 5. Superseded settings and decisions
 
