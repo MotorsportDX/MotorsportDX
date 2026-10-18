@@ -296,11 +296,13 @@ and `-Look original`.
 | `chrome_roughness` | number, default 0.1 | Roughness of the chrome highlight. |
 | `rims` | number | Painted and alloy rims, in the same car shader sets: a clear lacquer over the game's metal. |
 | `rims_roughness` | number, default 0.25 | Roughness of the rim lacquer. |
+| `ao` | number, `0` turns it off | Strength of the screen-space ambient occlusion. |
+| `sun` | number, `0` turns the glare off | Strength of the sun glare on the RTV path, the same at every MSAA level. Without it (`original`) the glare follows the counted samples. See [Sun glare](#sun-glare). |
+| `road_gloss` | multiplier, default 1 | Specular of the road surface. See [Track lighting](#track-lighting). |
+| `sky` | multiplier, default 1 | Brightness of the sky. See [Track lighting](#track-lighting). |
 
 No preset sets `glass`, `chrome` or `rims` yet: an A/B at 2x showed them right, but their sun
 highlights are not yet checked (see [look mod coverage](analysis/look-mod-coverage.md#in-game-checks-18-october-2026)).
-| `ao` | number, `0` turns it off | Strength of the screen-space ambient occlusion. |
-| `sun` | number, `0` turns the glare off | Strength of the sun glare on the RTV path, the same at every MSAA level. Without it (`original`) the glare follows the counted samples. See [Sun glare](#sun-glare). |
 
 ### Sun glare
 
@@ -313,6 +315,29 @@ The `sun` knob makes the runtime report guest pixels instead, times the strength
 unchanged, above that they approach the limit, so the glare cannot wash out the screen. A
 fully visible sun is about 338 pixels at 720p. The knob is a launcher setting, not a
 shader mod, so it also works with `-Look original,sun=1`. `-Rov` does not use it.
+
+### Track lighting
+
+`road_gloss` and `sky` do not change shaders. They edit the title's per-track lighting
+files, `Media\tracks\<Track>\TrackSettings.xml` and `TrackSettings1.xml`, as multipliers of
+each track's own values, so every track keeps its own character:
+
+- `road_gloss` scales `RoadSpecular` and `RoadSpecular2` of the `RoadSpecular` element, the
+  specular of the road surface. The glossiness (highlight size) is left as it is.
+- `sky` scales `skyScale`, the brightness constant of the sky shaders.
+
+The launcher passes them as `FM4_TRACK_SETTINGS` (`fm4-track-settings.h`). At start the game
+copies those files of every race location on Disc 1 from your own data, edits the values,
+writes the copies to `BuildRoot\cache\fm4-track-settings`, and opens the copies instead
+of the disc files. The garage, showroom and car thumbnail scenes (`HomeSpace*`,
+`UIThumb*`) and the tracks of downloadable content keep their files. No preset sets these
+knobs yet. Example: `-Look "pc,sky=0.7"`.
+
+In 2x captures of 18 October 2026 on the Bernese Alps, `sky=0.7` gives a bluer, less washed
+out sky that keeps the snow and clouds bright. Lowering `road_gloss` only removes the
+sparkle of the asphalt aggregate. The bright sheet on sunlit asphalt toward the sun does not
+come from these two values, so `road_gloss` does not remove it. See
+[current status](status/current.md#display).
 
 ### Ambient occlusion
 

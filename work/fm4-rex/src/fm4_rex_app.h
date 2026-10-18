@@ -17,6 +17,7 @@ void FM4InstallCrashDiagnostics();
 void FM4InstallContent(rex::Runtime*);
 void FM4MountCache(rex::Runtime*);
 void FM4MountRenderOverrides(rex::Runtime*);
+void FM4MountTrackSettings(rex::Runtime*);
 void FM4InstallVblankRate(rex::Runtime*);
 void FM4InstallCommandLine();
 
@@ -57,6 +58,7 @@ class Fm4RexApp : public rex::ReXApp {
     FM4InstallCrashDiagnostics();
     FM4MountCache(runtime());
     FM4MountRenderOverrides(runtime());
+    FM4MountTrackSettings(runtime());
     FM4InstallVblankRate(runtime());
     FM4InstallCommandLine();
     FM4InstallContent(runtime());

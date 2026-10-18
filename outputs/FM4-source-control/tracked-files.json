@@ -529,6 +529,10 @@
       "provenance": "Reviewed integration/helper source; SDK-derived portions retain upstream notice"
     },
     {
+      "path": "work/fm4-rex/src/fm4-track-settings.h",
+      "provenance": "Original integration source; edits values in the user's own track files, contains no game data"
+    },
+    {
       "path": "work/fm4-rex/src/fm4-ui-diagnostics.cpp",
       "provenance": "Reviewed integration/helper source; SDK-derived portions retain upstream notice"
     },
@@ -3887,6 +3891,10 @@
     },
     {
       "path": "work/fm4-rex/tests/shader-mod-tests.cpp",
+      "provenance": "Synthetic tests/oracle; no game input data"
+    },
+    {
+      "path": "work/fm4-rex/tests/track-settings-tests.cpp",
       "provenance": "Synthetic tests/oracle; no game input data"
     }
   ]

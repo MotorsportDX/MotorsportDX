@@ -46,7 +46,7 @@ Environment:
 1. The parent environment without the `FM4_*` and `REX_*` variables.
 2. `pipeline.launch_env()` (`FM4_HALF_RATE_MIRROR=1`).
 3. `FM4_CAPTURE_DIR=<out>\capture`, `FM4_TEST_INPUT_FILE=<out>\input.txt`, `REX_PERF_TRACE_FILE=<out>\perf.jsonl`.
-4. `FM4_RACE_SETTINGS` of the quality preset (`pipeline.race_settings`).
+4. `FM4_RACE_SETTINGS` of the quality preset (`pipeline.race_settings`), and `FM4_TRACK_SETTINGS` of the look's track lighting knobs (`pipeline.look_track_settings`).
 5. The `--env` items.
 6. `FM4_INFO` (the settings overlay text, `pipeline.info_overlay`) and `FM4_INFO_SHOW=1` unless `--env` sets it.
 
@@ -65,6 +65,7 @@ All hooks are opt-in. Without their variable they do nothing, and a normal launc
 | `FM4_INFO`, `FM4_INFO_SHOW` | [`fm4-info-overlay.h`](../../work/fm4-rex/src/fm4-info-overlay.h) | settings overlay drawn by the presenter over the guest output, so never in the captures |
 | `FM4_GAME_CMDLINE` | [`fm4-command-line.cpp`](../../work/fm4-rex/src/fm4-command-line.cpp) | the title's developer options, for example `engageaionstart` |
 | `FM4_RACE_SETTINGS`, `FM4_HALF_RATE_MIRROR`, `FM4_FRAME_RATE` | `fm4-render-overrides.cpp`, `fm4-vblank-rate.cpp` | race render quality, mirror rate and race frame rate |
+| `FM4_TRACK_SETTINGS` | `fm4-render-overrides.cpp`, `fm4-track-settings.h` | edited copies of the track lighting files (look knobs `road_gloss`, `sky`) |
 
 ### Diagnostic controller (FM4_TEST_INPUT_FILE)
 

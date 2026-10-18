@@ -20,7 +20,7 @@ timeline
     15 October : Streaming fix (sGPU fallback) for missing road, RTV default again
     16 October : Photo, career and matrix e2e scenarios, gate tiers, look pc and quality high defaults
     17 October : Clearcoat, display options and settings overlay, Alt+Enter, GTAO ambient occlusion, generic content import (DLC), shader mod cache and hot reload
-    18 October : ROV occlusion divisor removed, sun query samples measured per MSAA level : Glass, chrome and rim look mods (false color, A/B at 2x, smoke gate), look mods compiled against real contracts
+    18 October : ROV occlusion divisor removed, sun query samples measured per MSAA level : Glass, chrome and rim look mods (false color, A/B at 2x, smoke gate), look mods compiled against real contracts : Track lighting knobs road_gloss and sky (TrackSettings copies, 2x sweep)
 ```
 
 | Date | Milestone |
@@ -30,7 +30,7 @@ timeline
 | 15 October 2026 | The streaming fix (sGPU fallback) resolves the missing road segments, and RTV is the launcher default again. Command processor work: EDRAM transfers, upload removal, event-based wait and readback fixes. |
 | 16 October 2026 | Photo, photo_view and career e2e scenarios, the regression and 240 Hz matrices, the dynamic vblank rate, the rebuilt developer AI driver and career race to rewards, the shader override and look knobs, the shadow workaround no longer default, and 16x anisotropic filtering. |
 | 17 October 2026 | Clearcoat on the car paint, display and render scale options, the settings overlay, Alt+Enter, and GTAO ambient occlusion. The default launcher (look `pc` with clearcoat and AO) passes the smoke gate. The generic content installer (`-Content`) imports and mounts Disc 2 and eight DLC packages. The compiled look mods are cached, and shader mods hot reload with live knobs (`-ShaderDev`). |
-| 18 October 2026 | The launcher no longer passes the ROV occlusion divisor of 2, so `-Rov` reports the counted samples. On ROV the sun query counts guest samples in proportion to the MSAA sample count, which explains the factor 2 of 13 October. Look mods and AO are RTV only by design. Look mods for the car glass, chrome and rims of the race, 16-car, split-screen and garage car shader sets (`-Look glass`, `chrome`, `rims`; in no preset): `fm4_shader_mod_tests`, `override_fxc.py --stub` (the look mods against the real contracts of earlier runs), false color and an A/B at 2x in the game, and a smoke gate. See [look mod coverage](../analysis/look-mod-coverage.md#glass-chrome-and-rims-18-october-2026). |
+| 18 October 2026 | The launcher no longer passes the ROV occlusion divisor of 2, so `-Rov` reports the counted samples. On ROV the sun query counts guest samples in proportion to the MSAA sample count, which explains the factor 2 of 13 October. Look mods and AO are RTV only by design. Look mods for the car glass, chrome and rims of the race, 16-car, split-screen and garage car shader sets (`-Look glass`, `chrome`, `rims`; in no preset): `fm4_shader_mod_tests`, `override_fxc.py --stub` (the look mods against the real contracts of earlier runs), false color and an A/B at 2x in the game, and a smoke gate. See [look mod coverage](../analysis/look-mod-coverage.md#glass-chrome-and-rims-18-october-2026). The look knobs `road_gloss` and `sky` edit copies of the track lighting files; a 2x sweep on the Bernese Alps makes `sky=0.7` the candidate for `pc` and keeps `road_gloss` at 1. |
 
 ## 1. Clean-build verification (13-14 October 2026)
 
@@ -277,6 +277,12 @@ Shader mod iteration (17 October; design and results in [shader-mod-iteration.md
 - Fixed counts on RTV (`rtv_occlusion_debug=fake`, `query_occlusion_fake_sample_count` 0, 85, 170, 340, 680, 1,360 and 4,000 at 1x MSAA; 0, 85, 340, 1,360 and 4,000 at 4x), captures 84 to 87 (lap time about 37 to 41 s, chase and cockpit cameras): at 1x the glare starts at 340 (a small star) and washes out the screen at 4,000; at 4x the same count gives a weaker glare (none at 340, a star at 1,360), but not four times weaker. Captures of different runs differ by up to 0.3 s. With a fixed count the glare shows through the cockpit roof, where the real query sees the sun as depth-failed.
 
 - The `sun` look knob (`sun=2` in the presets): RTV awaited reports as guest pixels times the strength, soft limit 1,200 pixels. Fixed counts with `sun=2`: 340 at 1x and 1,360 at 4x report 607 pixels each and give the same medium star (without the knob a small star and a large one); 4,000 at 4x report 933; 8,000 at 1x report 1,161, a large star with haze and no washed-out screen. The first build read the MSAA from the surface at the report and reported 170 at 1x; the MSAA now comes from the draws of the query interval.
+
+### 18 October 2026: track lighting knobs
+
+- `road_gloss` and `sky` (`FM4_TRACK_SETTINGS`) edit copies of the track lighting files, which the runtime opens through file-level symbolic links (`VirtualFileSystem::ResolveFileLink`).
+- Superseded first look (BuildRoot `I:\FM4-build2`, frozen frames at 2x on the Bernese Alps start straight, five cameras, the game's look against `pc` with `shader_override_ab_ms`): neither an overly glossy road nor a blown-out sky with either look. Views into the sun were not in those frames. The later grid captures found the bright sheet on sunlit asphalt toward the sun (see [current status](current.md#display)).
+- A run with `road_gloss=0` and `sky=0.5` mounted the copies and darkened the sky visibly. The road could not be compared, because two rewind freezes never show the same frame.
 
 ## 5. Superseded settings and decisions
 

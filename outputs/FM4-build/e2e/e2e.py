@@ -749,6 +749,10 @@ def run_once(options, out):
                                       any(item.startswith('FM4_TILING_SCENARIO=') for item in options.env))
     if settings:
         env['FM4_RACE_SETTINGS'] = settings
+    # The look's track lighting knobs (road_gloss, sky).
+    track_settings = pipeline.look_track_settings(pipeline.look_knobs(look))
+    if track_settings:
+        env['FM4_TRACK_SETTINGS'] = track_settings
     # Diagnostic variables, e.g. REX_RESOLVE_PUBLICATION_TRACE=<path>.
     env.update(item.split('=', 1) for item in options.env)
     # The settings overlay at start (the presenter draws it: never in the captures); --env

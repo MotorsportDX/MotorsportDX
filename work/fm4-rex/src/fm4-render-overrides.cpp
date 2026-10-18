@@ -2,6 +2,9 @@
 #include <rex/filesystem/devices/host_path_device.h>
 #include <rex/filesystem/vfs.h>
 #include <rex/filesystem/entry.h>
+#include <rex/filesystem/file.h>
+#include <rex/system/xtypes.h>
+#include "fm4-track-settings.h"
 #include <cstdio>
 #include <cstdlib>
 #include <filesystem>
@@ -9,6 +12,8 @@
 #include <iterator>
 #include <stdexcept>
 #include <string>
+#include <utility>
+#include <vector>
 
 // Optional visual workaround documented by xenia-canary/game-patches#398
 // (FM4_SHADOW_WORKAROUND=1, Build.ps1 -ShadowWorkaround; off by default).
@@ -194,4 +199,86 @@ void FM4MountRenderOverrides(rex::Runtime* runtime) {
                frame_rate_override ? frame_rate : "-", mirror_override ? half_rate_mirror : "-",
                race_settings.empty() ? "-" : race_settings.c_str(), changed,
                source_device_path.c_str());
+}
+
+// FM4_TRACK_SETTINGS (fm4-track-settings.h) edits the per-track lighting files
+// of the disc's race locations. The edited copies are written to the cache and replace
+// those two files alone through file-level symbolic links, so the track
+// folders, with their large archives, stay on the disc. Tracks of downloadable
+// content are not edited.
+void FM4MountTrackSettings(rex::Runtime* runtime) {
+  const char* spec_env = std::getenv("FM4_TRACK_SETTINGS");
+  const std::string spec = spec_env ? spec_env : "";
+  const auto edits = fm4::ParseTrackSettings(spec);
+  if (edits.empty()) return;
+  const auto source = runtime->game_data_root() / "media" / "tracks";
+  const auto destination = runtime->cache_root() / "fm4-track-settings";
+  // Copies of an earlier run may hold other edits.
+  std::filesystem::remove_all(destination);
+  auto* vfs = runtime->file_system();
+  std::string device_path;
+  if (!vfs->FindSymbolicLink("game:", device_path))
+    throw std::runtime_error("Unable to resolve track settings device path");
+  if (!device_path.ends_with('\\')) device_path += '\\';
+  constexpr char kTarget[] = "\\Device\\FM4TrackSettings";
+  std::vector<std::pair<std::string, std::string>> links;
+  std::vector<std::string> tracks;
+  unsigned changed = 0;
+  for (const auto& track : std::filesystem::directory_iterator(source)) {
+    if (!track.is_directory()) continue;
+    const auto track_name = track.path().filename().string();
+    // Race locations only: the garage and showroom scenes (HomeSpace) and the
+    // car thumbnail scenes (UIThumb) have files of the same kind.
+    const auto prefix = [&](std::string_view start) {
+      return track_name.size() >= start.size() &&
+             fm4::TrackSettingsEqualCase(std::string_view(track_name).substr(0, start.size()), start);
+    };
+    if (prefix("HomeSpace") || prefix("UIThumb")) continue;
+    for (const auto& entry : std::filesystem::directory_iterator(track.path())) {
+      const auto name = entry.path().filename().string();
+      if (!entry.is_regular_file() || (!fm4::TrackSettingsEqualCase(name, "TrackSettings.xml") &&
+                                       !fm4::TrackSettingsEqualCase(name, "TrackSettings1.xml")))
+        continue;
+      std::ifstream input(entry.path(), std::ios::binary);
+      std::string xml{std::istreambuf_iterator<char>(input), {}};
+      if (!input || xml.empty()) throw std::runtime_error("Unable to read track settings");
+      changed += fm4::ApplyTrackSettings(xml, track_name, edits);
+      std::filesystem::create_directories(destination / track_name);
+      std::ofstream output(destination / track_name / name, std::ios::binary | std::ios::trunc);
+      output.write(xml.data(), xml.size());
+      output.close();
+      if (!output) throw std::runtime_error("Unable to write track settings override");
+      links.emplace_back(device_path + "media\\tracks\\" + track_name + "\\" + name,
+                         std::string(kTarget) + "\\" + track_name + "\\" + name);
+    }
+    tracks.push_back(track_name);
+  }
+  for (const auto& edit : edits) {
+    bool found = edit.track.empty();
+    for (const auto& track : tracks) found = found || fm4::TrackSettingsEqualCase(edit.track, track);
+    if (!found)
+      std::fprintf(stderr, "FM4 track settings: no disc track named %s\n", edit.track.c_str());
+  }
+  if (links.empty()) throw std::runtime_error("No track settings found under media\\tracks");
+  auto device = std::make_unique<rex::filesystem::HostPathDevice>(kTarget, destination, true);
+  if (!device->Initialize() || !vfs->RegisterDevice(std::move(device)))
+    throw std::runtime_error("Unable to mount track settings overrides");
+  for (const auto& [path, target] : links) {
+    if (!vfs->RegisterSymbolicLink(path, target))
+      throw std::runtime_error("Unable to link track settings overrides");
+  }
+  // The title opens files through OpenFile, which resolves a file link only
+  // with the runtime's file-level symbolic links: check that path.
+  const auto& [first_path, first_target] = links.front();
+  const auto relative = first_path.substr(device_path.size());
+  rex::filesystem::File* file = nullptr;
+  rex::filesystem::FileAction action;
+  const auto status = vfs->OpenFile(nullptr, "game:\\" + relative, rex::filesystem::FileDisposition::kOpen,
+                                    rex::filesystem::FileAccess::kFileReadData, false, true, &file,
+                                    &action);
+  const bool linked = XSUCCEEDED(status) && file && file->entry()->device()->mount_path() == kTarget;
+  if (file) file->Destroy();
+  if (!linked) throw std::runtime_error("Track settings override path validation failed");
+  std::fprintf(stderr, "FM4 track settings overrides (%s): %zu files in %zu track folders, %u changes\n",
+               spec.c_str(), links.size(), tracks.size(), changed);
 }

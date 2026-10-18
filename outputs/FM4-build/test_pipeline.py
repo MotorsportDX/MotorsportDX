@@ -126,6 +126,24 @@ class PipelineTests(unittest.TestCase):
                 self.assertEqual(cvars['shader_mod_live_knobs'],'true')
             self.assertEqual(defines['FM4_LOOK_SHARPEN'],repr(float(defaults['FM4_LOOK_SHARPEN'])))
 
+    def test_look_track_settings(self):
+        with tempfile.TemporaryDirectory(prefix='fm4 look test ') as directory:
+            root=Path(directory)
+            knobs=pipeline.look_knobs('pc,road_gloss=0.5,sky=0.8')
+            self.assertEqual(pipeline.look_track_settings(knobs),
+                             'RoadSpecular.RoadSpecular*=0.5;RoadSpecular.RoadSpecular2*=0.5;'
+                             'skyScale.value*=0.8')
+            self.assertEqual(pipeline.look_track_settings(pipeline.look_knobs('pc')),'')
+            # Track knobs are not shader defines, and alone they need no shader mods.
+            cvars=pipeline.look_cvars(root,'pc,road_gloss=0.5')
+            self.assertNotIn('road_gloss',cvars['shader_mod_defines'])
+            self.assertEqual(pipeline.look_cvars(root,'original,sky=0.8'),{})
+            with self.assertRaises(RuntimeError):
+                pipeline.look_track_settings({'sky':'-1'})
+            overlay=pipeline.info_overlay({},{'FM4_TRACK_SETTINGS':pipeline.look_track_settings(knobs)},
+                                          'pc,road_gloss=0.5,sky=0.8','high')
+            self.assertIn('Track lighting: road gloss x0.5, sky x0.8',overlay)
+
     def test_new_clone_has_all_source_inputs(self):
         for name in ('rexglue.cmake','guard-generated.py','dump-image.cpp','switch-recipes.json'):
             self.assertTrue((pipeline.HERE/name).is_file(),name)

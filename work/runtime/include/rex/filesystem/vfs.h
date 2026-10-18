@@ -54,6 +54,9 @@ class VirtualFileSystem {
   std::unordered_map<std::string, std::string> symlinks_;
 
   bool ResolveSymbolicLink(const std::string_view path, std::string& result);
+  // The entry of a path whose symbolic link names the file itself rather than
+  // a directory above it, or nullptr.
+  Entry* ResolveFileLink(Entry* root_entry, const std::string_view path);
 };
 
 }  // namespace rex::filesystem

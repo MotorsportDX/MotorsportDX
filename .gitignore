@@ -130,6 +130,7 @@
 !/work/fm4-rex/src/fm4-jpeg-diagnostics.cpp
 !/work/fm4-rex/src/fm4-render-overrides.cpp
 !/work/fm4-rex/src/fm4-test-input.h
+!/work/fm4-rex/src/fm4-track-settings.h
 !/work/fm4-rex/src/fm4-ui-diagnostics.cpp
 !/work/fm4-rex/src/fm4-d3d-trace.cpp
 !/work/fm4-rex/src/fm4-stream-trace.cpp
@@ -146,4 +147,5 @@
 !/work/fm4-rex/tests/post-ao-shader-tests.cpp
 !/work/fm4-rex/tests/shader-mod-tests.cpp
 !/work/fm4-rex/tests/texture-integer.cpp
+!/work/fm4-rex/tests/track-settings-tests.cpp
 !/work/fm4-rex/tests/vector-vectors.h

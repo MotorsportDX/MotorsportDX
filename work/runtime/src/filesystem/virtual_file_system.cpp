@@ -102,6 +102,29 @@ bool VirtualFileSystem::ResolveSymbolicLink(const std::string_view path, std::st
   return was_resolved;
 }
 
+Entry* VirtualFileSystem::ResolveFileLink(Entry* root_entry, const std::string_view path) {
+  // A link for one file (an integration replacing a single game file) leaves
+  // its directory on the original device, so the file resolves elsewhere than
+  // in its resolved parent.
+  auto full_path = rex::string::utf8_canonicalize_guest_path(
+      root_entry ? rex::string::utf8_join_guest_paths(root_entry->absolute_path(), path)
+                 : std::string(path));
+  auto base_path = rex::string::utf8_find_base_guest_path(full_path);
+  if (base_path.empty()) {
+    return nullptr;
+  }
+  std::string resolved_path, resolved_base;
+  if (!ResolveSymbolicLink(full_path, resolved_path)) {
+    return nullptr;
+  }
+  ResolveSymbolicLink(base_path, resolved_base);
+  if (rex::string::utf8_equal_case(rex::string::utf8_find_base_guest_path(resolved_path),
+                                   resolved_base)) {
+    return nullptr;
+  }
+  return ResolvePath(full_path);
+}
+
 Entry* VirtualFileSystem::ResolvePath(const std::string_view path) {
   auto global_lock = global_critical_region_.Acquire();
 
@@ -217,7 +240,10 @@ X_STATUS VirtualFileSystem::OpenFile(Entry* root_entry, const std::string_view p
   Entry* entry = nullptr;
 
   auto base_path = rex::string::utf8_find_base_guest_path(path);
-  if (!base_path.empty()) {
+  if (Entry* linked = ResolveFileLink(root_entry, path)) {
+    entry = linked;
+    parent_entry = linked->parent();
+  } else if (!base_path.empty()) {
     parent_entry = !root_entry ? ResolvePath(base_path) : root_entry->ResolvePath(base_path);
     if (!parent_entry) {
       *out_action = FileAction::kDoesNotExist;

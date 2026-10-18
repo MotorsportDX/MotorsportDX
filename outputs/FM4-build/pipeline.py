@@ -356,7 +356,8 @@ def post_ao_tests(root,jobs):
     """CPU tests of the runtime's post_ao pass (docs/analysis/gtao-design.md) and of the shader mods, no GPU:
     the camera math, the compute shaders on WARP (Direct3D 12 on the CPU), and FXC compiles of
     the override library and the look mods with and without XE_POST_AO_VIEW (the library's
-    post_ao code is only compiled with it). work/fm4-rex/tests, synced here like the runtime,
+    post_ao code is only compiled with it), and the track lighting file edits of the look's
+    track knobs (fm4-track-settings.h). work/fm4-rex/tests, synced here like the runtime,
     built against the installed runtime headers."""
     source,build=root/'project/tests',root/'tests-build'
     inventory=json.loads((REPO/'outputs/FM4-source-control/tracked-files.json').read_text())
@@ -369,7 +370,9 @@ def post_ao_tests(root,jobs):
          '-DCMAKE_CXX_COMPILER=clang++',f'-DREX_HEADER_ROOT={root/"runtime-install/include"}'],
         log=root/'logs/tests-configure.log')
     run(['cmake','--build',build,'--parallel',jobs,'--target','fm4_post_ao_camera_tests',
-         'fm4_post_ao_shader_tests','fm4_shader_mod_tests'],log=root/'logs/tests-build.log')
+         'fm4_post_ao_shader_tests','fm4_shader_mod_tests','fm4_track_settings_tests'],
+        log=root/'logs/tests-build.log')
+    run([build/'fm4_track_settings_tests.exe'],cwd=build,log=root/'logs/track-settings-tests.log')
     run([build/'fm4_post_ao_camera_tests.exe'],cwd=build,log=root/'logs/post-ao-camera-tests.log')
     run([build/'fm4_post_ao_shader_tests.exe',root/'runtime-source/src/graphics/d3d12/post_ao.hlsl'],
         cwd=build,log=root/'logs/post-ao-shader-tests.log')
@@ -445,6 +448,12 @@ LOOK_RUNTIME_KNOBS=('sun',)
 SUN_LIMIT=1200
 # Knobs that take a name instead of a number.
 LOOK_NAMES={'tonemap':{'filmic':0,'gt':1,'aces':2,'neutral':3}}
+# Knobs that edit the title's per-track lighting files instead of shaders (FM4_TRACK_SETTINGS,
+# work/fm4-rex/src/fm4-track-settings.h): multipliers of each track's own values, 1 the
+# original. road_gloss scales the specular of the road (RoadSpecular and RoadSpecular2 of
+# RoadSpecular); sky scales skyScale, the brightness constant of the sky shaders (SkyScale).
+LOOK_TRACK_KNOBS={'road_gloss':('RoadSpecular.RoadSpecular','RoadSpecular.RoadSpecular2'),
+                  'sky':('skyScale.value',)}
 # Named looks; a -Look value may mix them with knobs ('pc,sharpen=0.6': later items win).
 # Every look but original has the car paint clear coat and ambient occlusion; original runs
 # without any shader mod. No preset has glass, chrome or rims yet: the A/B at 2x of 18 October
@@ -508,10 +517,11 @@ def look_defines(knobs):
     """The shader_mod_defines of look knobs: NAME=VALUE with the hlsli names and numbers."""
     defines=[]
     for name,value in knobs.items():
-        if name in LOOK_RUNTIME_KNOBS:
+        if name in LOOK_RUNTIME_KNOBS or name in LOOK_TRACK_KNOBS:
             continue
         if name not in LOOK_KNOBS:
-            raise RuntimeError(f'Unknown look knob {name!r}; use {", ".join((*LOOK_KNOBS,*LOOK_RUNTIME_KNOBS))}.')
+            raise RuntimeError(f'Unknown look knob {name!r}; use '
+                               f'{", ".join((*LOOK_KNOBS,*LOOK_RUNTIME_KNOBS,*LOOK_TRACK_KNOBS))}.')
         names=LOOK_NAMES.get(name,{})
         if value in names:
             value=names[value]
@@ -520,6 +530,17 @@ def look_defines(knobs):
         defines.append(f'{LOOK_KNOBS[name]}={float(value)!r}')
     return defines
 
+def look_track_settings(knobs):
+    """FM4_TRACK_SETTINGS of the look knobs that edit the track lighting files ('' for none)."""
+    items=[]
+    for name,attributes in LOOK_TRACK_KNOBS.items():
+        if name in knobs:
+            value=float(knobs[name])
+            if value<0:
+                raise RuntimeError(f'{name} is a multiplier, 0 or more, not {knobs[name]!r}.')
+            items+=[f'{attribute}*={value!r}' for attribute in attributes]
+    return ';'.join(items)
+
 def look_cvars(root,look,shader_dev=False):
     """Cvars of the look mods (work/fm4-rex/look/fm4-look.hlsli): copies them to BuildRoot/look
     and passes the knobs of the look (look_knobs; knobs left out keep the original look). None
@@ -527,7 +548,8 @@ def look_cvars(root,look,shader_dev=False):
     shader_dev (docs/analysis/shader-mod-iteration.md): the mods load from work/fm4-rex/look
     itself and hot reload when a file there changes, and every knob of the files is a live knob
     (the ones left out at their defaults), which shader_mod_set changes in the console (`)."""
-    knobs=look_knobs(look)
+    # The track lighting knobs are not shader knobs (look_track_settings).
+    knobs={name:value for name,value in look_knobs(look).items() if name not in LOOK_TRACK_KNOBS}
     cvars=sun_cvars(knobs.get('sun'))
     if not any(name not in LOOK_RUNTIME_KNOBS for name in knobs) and not shader_dev:
         return cvars
@@ -633,6 +655,11 @@ def info_overlay(cvars,env,look,quality,display=None):
         lines.append(f'Shader dev: hot reload of {cvars["shader_mod_path"]}'+
                      (', live knobs (shader_mod_set in the console)'
                       if cvars.get('shader_mod_live_knobs')=='true' else ''))
+    if env.get('FM4_TRACK_SETTINGS'):
+        track={name:value for name,value in look_knobs(look).items() if name in LOOK_TRACK_KNOBS}
+        lines.append('Track lighting: '+(', '.join(f'{name.replace("_"," ")} x{float(value):g}'
+                                                   for name,value in track.items())
+                                         or env['FM4_TRACK_SETTINGS']))
     shadows=('cockpit only (workaround)' if env.get('FM4_SHADOW_WORKAROUND')=='1'
              else 'shadow map on every camera')
     anisotropy={'5':'16x','4':'8x','3':'4x','2':'2x'}.get(cvars.get('anisotropic_override',''),'game')
@@ -724,6 +751,9 @@ def launch(root,single_tile=False,fixed_vblank=False,frame_rate=None,rov=False,
     # contrast, saturation, vignette, motion blur): the pc look unless -Look says otherwise.
     look=DEFAULT_LOOK if look is None else look
     cvars.update(look_cvars(root,look,shader_dev))
+    track_settings=look_track_settings(look_knobs(look))
+    if track_settings:
+        env['FM4_TRACK_SETTINGS']=track_settings
     cvars.update(ao_cvars(ao))
     # Disc 2 and the -Content packages: imported into user-data once, then kept there.
     packages=validate_content(disc2,state.get('content'))
