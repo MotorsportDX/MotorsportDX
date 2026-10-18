@@ -303,7 +303,7 @@ Everything still open, grouped by area.
 
 - The clone and the full workflow have not been run on a second Windows computer.
 - AMD and Intel GPUs and lower-end CPUs have not been tested.
-- Only the Japan/Asia and USA releases are supported. The European release and title updates are not. The European discs have not been compared with the other two.
+- Only the Japan/Asia and USA releases are supported. The European release and title updates are not. The European discs have not been compared with the other two. A title update relinks the executable, so supporting one needs a second integration profile and a runtime fix for the USA v4 module patches ([title updates](../analysis/title-updates.md)).
 - There is no CI, no setup wizard, and no license and provenance review for a release. This includes the pending `XenonRecomp-FM4-fixes.patch`. See [sources and licensing](../sources-and-licensing.md).
 
 ## Next validation steps

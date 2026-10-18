@@ -35,7 +35,7 @@ The same fields differ in all three executables:
 
 The other fields are identical: title ID `4D530910`, disc 1 of 2, entry point, image base, image size, the encrypted file key, the section digest, import libraries (with their versions and digests), checksum timestamp, original PE name, static libraries, TLS, stack size, system flags, title workspace size, the Xbox 360 logo, the alternate title IDs and the base file format (normal encryption, basic compression).
 
-The title update file names follow the execution info: `633772A0\tu0000000b_00000000` for Japan/Asia and `26FF1101\tu00000008_00000000` for USA. Title updates are not supported for either release.
+The title update file names follow the execution info: `633772A0\tu0000000b_00000000` for Japan/Asia and `26FF1101\tu00000008_00000000` for USA. Title updates are not supported for either release; see [title updates](title-updates.md).
 
 ## What the runtime sees
 
