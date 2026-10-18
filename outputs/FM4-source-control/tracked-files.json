@@ -105,6 +105,10 @@
       "provenance": "Project documentation; research note on the FM4 title update packages (file names, sizes, header fields, counts and short identifiers, no game content)"
     },
     {
+      "path": "docs/analysis/rain-feasibility.md",
+      "provenance": "Project documentation; research note on the wet grip fields of the tire and surface data (function addresses, struct offsets, field names and a few data values, no game code)"
+    },
+    {
       "path": "outputs/FM4-build/Build.ps1",
       "provenance": "Reviewed bootstrap tooling or documentation; no original game function bodies"
     },
