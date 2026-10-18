@@ -105,7 +105,7 @@ Uploads go through a committed upload buffer per replacement, freed once its sub
 
 A probe on 19 October 2026 found the sky in the track archive, so textures can be collected without driving every track:
 
-- `Media	racks\Alpsin.zip` has 4,387 entries (4,376 LZX, 11 stored); all decompress with the runtime's `lzx_decompress` and match their CRC.
+- `Media\tracks\Alps\bin.zip` has 4,387 entries (4,376 LZX, 11 stored); all decompress with the runtime's `lzx_decompress` and match their CRC.
 - 368 distinctive blocks of the dumped sky are all in `_0x00000005.bin` at file offset 672 plus their tiled offset, swapped 8-in-16: the file holds the texture exactly as guest memory does. `_0x00000006.bin`, the same size, shares 184 of them (a second sky with the same lower half, not checked further).
 - These files are `CAFF` containers (`CAFF21.11.05.0034`, sections `.data` and `.gpu`). A `texture` record (`04.05.05.0032`) holds what looks like the Xbox 360 `D3DFORMAT` (`0x1A207F52` here, `0x1A200152` and `0x1A200154` in other files; `0x52` and `0x54` match DXT1 and DXT5) and the width and height as big-endian 16-bit values; the `.gpu` data (8 MB for the sky) starts after the header.
 - Only 60 of the 4,387 entries are such single-texture files. Where the other track textures are stored (the `.bix` files, the ribbon files) is not known yet.

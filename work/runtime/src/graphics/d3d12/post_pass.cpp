@@ -66,6 +66,13 @@ REXCVAR_DEFINE_STRING(post_pass_log_constants, "", "GPU/D3D12",
                       "scene camera against the game's own depth linearization")
     .lifecycle(rex::cvar::Lifecycle::kRequiresRestart);
 
+REXCVAR_DEFINE_STRING(post_pass_motion_check, "", "GPU/D3D12",
+                      "Log a guest pixel shader's own reprojection matrices next to the host's "
+                      "motion matrices of each object slot, once per frame it draws: <ucode "
+                      "hash>:<first constant>:<slots> separated by ';', 4 constants per matrix, "
+                      "rows 0, 1 and 3 logged")
+    .lifecycle(rex::cvar::Lifecycle::kRequiresRestart);
+
 namespace rex::graphics::d3d12 {
 
 namespace {
@@ -214,6 +221,18 @@ bool PostPasses::Initialize() {
                                uint32_t(std::strtoul(entry.c_str() + colon + 1, nullptr, 10)), 0};
     if (constant.constant < 256) logged_constants_.push_back(constant);
   }
+  // <hash>:<constant>:<slots>;...
+  std::istringstream checks(REXCVAR_GET(post_pass_motion_check));
+  for (std::string entry; std::getline(checks, entry, ';');) {
+    size_t colon = entry.find(':'), second = entry.find(':', colon + 1);
+    if (colon == std::string::npos || second == std::string::npos) continue;
+    MotionCheck check = {std::strtoull(entry.substr(0, colon).c_str(), nullptr, 16),
+                         uint32_t(std::strtoul(entry.c_str() + colon + 1, nullptr, 10)),
+                         uint32_t(std::strtoul(entry.c_str() + second + 1, nullptr, 10)), 0};
+    check.slots = std::min(check.slots, post_pass::kMotionSlots);
+    if (check.constant + check.slots * 4 <= 256) motion_checks_.push_back(check);
+  }
+  motion_first_worlds_.resize(post_pass::kMotionSlots);
 
   const ui::d3d12::D3D12Provider& provider = command_processor_.GetD3D12Provider();
   ID3D12Device* device = provider.GetDevice();
@@ -401,6 +420,50 @@ bool PostPasses::LoadManifest(Manifest& manifest) {
     if (NodeNumber((*history)["cut_angle"].node(), value)) manifest.cut_angle = float(value);
     if (NodeNumber((*history)["cut_focal"].node(), value)) manifest.cut_focal = float(value);
   }
+  // [motion]
+  if (const toml::table* motion = root["motion"].as_table()) {
+    if (const toml::array* objects = (*motion)["objects"].as_array()) {
+      for (const toml::node& node : *objects) {
+        // <hash>:rows:<world> or <hash>:columns:<world>.
+        std::string text = node.value_or(std::string());
+        std::vector<std::string> fields;
+        std::istringstream parts(text);
+        for (std::string field; std::getline(parts, field, ':');) fields.push_back(field);
+        MotionSource source = {};
+        bool valid = fields.size() == 3 && (fields[1] == "rows" || fields[1] == "columns");
+        if (valid) {
+          source.vertex_shader_hash = std::strtoull(fields[0].c_str(), nullptr, 16);
+          source.layout = fields[1] == "rows" ? post_pass::WorldLayout::kRows
+                                              : post_pass::WorldLayout::kColumns;
+          source.constant = uint32_t(std::strtoul(fields[2].c_str(), nullptr, 10));
+          valid = source.constant + (fields[1] == "rows" ? 4 : 3) <= 256;
+        }
+        if (!valid) {
+          return fail(fmt::format("invalid motion object '{}'", text));
+        }
+        manifest.motion_sources.push_back(source);
+      }
+    }
+    if (manifest.motion_sources.size() > kMaxMotionSources) {
+      return fail(fmt::format("more than {} motion objects", kMaxMotionSources));
+    }
+    double step = 1.0, limit = 256.0;
+    NodeNumber((*motion)["stencil_step"].node(), step);
+    NodeNumber((*motion)["stencil_limit"].node(), limit);
+    if (!(step >= 1.0 && step <= 255.0 && limit >= 1.0 && limit <= 256.0)) {
+      return fail("motion: stencil_step is 1 to 255, stencil_limit 1 to 256");
+    }
+    manifest.motion_stencil_step = uint32_t(step);
+    manifest.motion_stencil_limit = uint32_t(limit);
+    // The slot of the highest stencil value below the limit.
+    uint32_t last = (2 * (manifest.motion_stencil_limit - 1) + manifest.motion_stencil_step) /
+                    (2 * manifest.motion_stencil_step);
+    if (last >= post_pass::kMotionSlots) {
+      return fail(fmt::format("motion: stencil values below {} give slots above {}",
+                              manifest.motion_stencil_limit, post_pass::kMotionSlots - 1));
+    }
+    manifest.motion_slot_count = last + 1;
+  }
   // [defines]
   if (const toml::table* defines = root["defines"].as_table()) {
     for (auto&& [key, node] : *defines) {
@@ -518,9 +581,9 @@ bool PostPasses::LoadManifest(Manifest& manifest) {
       binding.mip = int32_t(std::strtol(text.c_str() + colon + 1, nullptr, 10));
     }
     static const std::pair<const char*, Builtin> kBuiltins[] = {
-        {"scene_depth", Builtin::kSceneDepth},       {"scene_color", Builtin::kSceneColor},
-        {"previous_color", Builtin::kPreviousColor}, {"previous_depth", Builtin::kPreviousDepth},
-        {"final_color", Builtin::kFinalColor}};
+        {"scene_depth", Builtin::kSceneDepth},       {"scene_stencil", Builtin::kSceneStencil},
+        {"scene_color", Builtin::kSceneColor},       {"previous_color", Builtin::kPreviousColor},
+        {"previous_depth", Builtin::kPreviousDepth}, {"final_color", Builtin::kFinalColor}};
     for (const auto& [builtin_name, builtin] : kBuiltins) {
       if (name == builtin_name) {
         binding.builtin = builtin;
@@ -640,6 +703,9 @@ bool PostPasses::LoadManifest(Manifest& manifest) {
             break;
           case Builtin::kPreviousDepth:
             manifest.uses_previous_depth = true;
+            break;
+          case Builtin::kSceneStencil:
+            manifest.uses_scene_stencil = true;
             break;
           default:
             break;
@@ -817,11 +883,13 @@ bool PostPasses::CompileManifest(Manifest& manifest) {
   }
   REXGPU_INFO(
       "Post passes: {} passes, {} textures, {} params from {} in {:.1f} ms; {} scene camera "
-      "vertex shader{}{}{}",
+      "vertex shader{}, {} motion object vertex shader{} ({} slots){}{}",
       manifest.passes.size(), manifest.textures.size(), manifest.params.size(),
       directory_.generic_string(),
       std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - start).count(),
       manifest.camera_sources.size(), manifest.camera_sources.size() == 1 ? "" : "s",
+      manifest.motion_sources.size(), manifest.motion_sources.size() == 1 ? "" : "s",
+      manifest.motion_slot_count,
       manifest.uses_previous_color || manifest.uses_previous_depth ? ", history" : "",
       manifest.uses_point[size_t(Point::kFinal)] ? ", final point" : "");
   if (manifest.camera_sources.empty()) {
@@ -868,6 +936,11 @@ void PostPasses::Reload(const char* reason) {
     ReleaseHistory(history_depth_[1]);
   }
   previous_valid_ = false;
+  previous_scene_ = false;
+  // The slots may have changed.
+  motion_objects_.fill(MotionObject());
+  previous_motion_objects_.fill(MotionObject());
+  motion_ = {};
   params_valid_ = false;
   watched_.clear();
   for (const auto& file : files) {
@@ -908,8 +981,20 @@ void PostPasses::OnDraw(const RegisterFile& regs, uint64_t vertex_shader_hash,
       break;
     }
   }
+  const std::vector<MotionSource>& motion_sources = manifest_->motion_sources;
+  for (uint32_t i = 0; i < uint32_t(motion_sources.size()); ++i) {
+    if (motion_sources[i].vertex_shader_hash == vertex_shader_hash) {
+      CaptureObject(regs, i);
+      break;
+    }
+  }
   if (!logged_constants_.empty()) {
     LogConstants(regs, pixel_shader_hash);
+  }
+  for (MotionCheck& check : motion_checks_) {
+    if (check.pixel_shader_hash == pixel_shader_hash) {
+      LogMotionCheck(regs, check);
+    }
   }
   if (!manifest_->uses_point[size_t(Point::kFinal)]) {
     return;
@@ -938,15 +1023,21 @@ void PostPasses::OnBeforeResolve() {
   }
 }
 
-void PostPasses::CaptureCamera(const RegisterFile& regs, const CameraSource& source) {
+bool PostPasses::IsSceneDepthBuffer(const RegisterFile& regs,
+                                    uint32_t& depth_edram_base_out) const {
   const auto depth_info = regs.Get<reg::RB_DEPTH_INFO>();
-  uint32_t depth_edram_base = depth_info.depth_base | depth_info.depth_base_bit_11 << 11;
-  uint64_t frame = command_processor_.GetCurrentFrame();
-  // Only the scene's depth buffer (the one resolved as the scene depth last),
-  // or any until the first scene depth is known.
-  if (depth_group_.frame != UINT64_MAX && depth_edram_base != depth_group_.edram_base) {
+  depth_edram_base_out = depth_info.depth_base | depth_info.depth_base_bit_11 << 11;
+  // The one resolved as the scene depth last, or any until the first scene
+  // depth is known.
+  return depth_group_.frame == UINT64_MAX || depth_edram_base_out == depth_group_.edram_base;
+}
+
+void PostPasses::CaptureCamera(const RegisterFile& regs, const CameraSource& source) {
+  uint32_t depth_edram_base;
+  if (!IsSceneDepthBuffer(regs, depth_edram_base)) {
     return;
   }
+  uint64_t frame = command_processor_.GetCurrentFrame();
   bool projection_needed = !(camera_.valid && camera_.frame == frame &&
                              camera_.depth_edram_base == depth_edram_base);
   bool view_needed = source.layout == post_pass::CameraLayout::kWvpWorldViewInverse &&
@@ -1006,9 +1097,72 @@ void PostPasses::CaptureCamera(const RegisterFile& regs, const CameraSource& sou
   camera_.unpack = unpack;
   camera_.q = projection.m[2][2] / projection.m[3][2];
   camera_.q_near = -projection.m[2][3] / projection.m[3][2];
+  camera_.projection = projection;
   // Pixel centers at integers in the Direct3D 9 convention.
   camera_.guest_origin =
       regs.Get<reg::PA_SU_VTX_CNTL>().pix_center == xenos::PixelCenter::kD3DZero ? -0.5f : 0.0f;
+}
+
+uint32_t PostPasses::MotionSlot(uint32_t stencil) const {
+  const Manifest& manifest = *manifest_;
+  if (stencil >= manifest.motion_stencil_limit) {
+    return 0;
+  }
+  // round(stencil / step), as floor(stencil / step + 0.5) in xe_motion_slot.
+  uint32_t slot =
+      (2 * stencil + manifest.motion_stencil_step) / (2 * manifest.motion_stencil_step);
+  return slot < manifest.motion_slot_count ? slot : 0;
+}
+
+void PostPasses::CaptureObject(const RegisterFile& regs, uint32_t source_index) {
+  uint32_t depth_edram_base;
+  if (!IsSceneDepthBuffer(regs, depth_edram_base)) {
+    return;
+  }
+  // Only draws that write their stencil reference, the object's ID, wherever
+  // they pass the depth test.
+  const auto depth_control = regs.Get<reg::RB_DEPTHCONTROL>();
+  const auto ref_mask = regs.Get<reg::RB_STENCILREFMASK>();
+  if (!depth_control.stencil_enable || depth_control.stencilzpass != xenos::StencilOp::kReplace ||
+      ref_mask.stencilwritemask != 0xFF) {
+    return;
+  }
+  uint32_t slot = MotionSlot(ref_mask.stencilref);
+  if (!slot) {
+    return;
+  }
+  uint64_t frame = command_processor_.GetCurrentFrame();
+  MotionObject& object = motion_objects_[slot];
+  if (object.frame != frame) {
+    object = MotionObject();
+    object.frame = frame;
+  }
+  // The first draw of each source in the frame, and the highest priority wins.
+  uint32_t source_bit = 1u << source_index;
+  bool first_of_source = !(object.sources_drawn & source_bit);
+  bool chosen = source_index < object.source;
+  if (!first_of_source && !chosen) {
+    return;
+  }
+  const MotionSource& source = manifest_->motion_sources[source_index];
+  uint32_t rows = source.layout == post_pass::WorldLayout::kRows ? 4 : 3;
+  float constants[4][4] = {};
+  for (uint32_t row = 0; row < rows; ++row) {
+    for (uint32_t k = 0; k < 4; ++k) {
+      constants[row][k] =
+          regs.Get<float>(XE_GPU_REG_SHADER_CONSTANT_000_X + (source.constant + row) * 4 + k);
+    }
+  }
+  post_pass::MatrixD world = post_pass::WorldMatrix(source.layout, constants);
+  if (first_of_source) {
+    object.sources_drawn |= source_bit;
+    motion_first_worlds_[slot][source_index] = post_pass::ToFloat(world);
+  }
+  if (chosen) {
+    object.source = source_index;
+    object.reference = ref_mask.stencilref;
+    object.world = world;
+  }
 }
 
 void PostPasses::LogConstants(const RegisterFile& regs, uint64_t pixel_shader_hash) {
@@ -1088,7 +1242,7 @@ void PostPasses::OnResolve(const RegisterFile& regs, uint32_t address, uint32_t 
       }
       return;
     }
-    if (!RequestExternal(depth_group_, true, scene_depth_)) {
+    if (!RequestExternal(depth_group_, ExternalKind::kDepth, scene_depth_)) {
       return;
     }
     scene_frame_ = frame;
@@ -1133,28 +1287,49 @@ void PostPasses::OnSceneColor() {
   }
   scene_color_ = {};
   if (manifest_->uses_scene_color || manifest_->uses_previous_color) {
-    RequestExternal(color_group_, false, scene_color_);
+    RequestExternal(color_group_, ExternalKind::kColor, scene_color_);
   }
-  RequestExternal(depth_group_, true, scene_depth_);
+  RequestExternal(depth_group_, ExternalKind::kDepth, scene_depth_);
   RunPoint(Point::kSceneColor);
   CopyHistory();
 }
 
-bool PostPasses::RequestExternal(const ResolveGroup& group, bool depth, External& out) {
+bool PostPasses::RequestExternal(const ResolveGroup& group, ExternalKind kind, External& out) {
   out = {};
   xenos::TextureFormat format;
-  if (depth) {
-    format = xenos::DepthRenderTargetFormat(group.format) == xenos::DepthRenderTargetFormat::kD24FS8
-                 ? xenos::TextureFormat::k_24_8_FLOAT
-                 : xenos::TextureFormat::k_24_8;
-  } else {
-    format = xenos::TextureFormat(group.format);
+  switch (kind) {
+    case ExternalKind::kDepth:
+      format =
+          xenos::DepthRenderTargetFormat(group.format) == xenos::DepthRenderTargetFormat::kD24FS8
+              ? xenos::TextureFormat::k_24_8_FLOAT
+              : xenos::TextureFormat::k_24_8;
+      break;
+    case ExternalKind::kStencil:
+      // The depth texture formats keep only the depth: the same words as
+      // 8_8_8_8 have the stencil (bits 0-7) in R, as FM4's motion blur reads it.
+      format = xenos::TextureFormat::k_8_8_8_8;
+      break;
+    default:
+      format = xenos::TextureFormat(group.format);
+      break;
   }
   D3D12TextureCache& texture_cache = *command_processor_.texture_cache_;
   out.resource = texture_cache.RequestResolvedTexture(
       group.base, group.pitch, group.pitch, group.height, format,
       xenos::Endian(std::min(uint32_t(group.endianness), uint32_t(xenos::Endian::k16in32))),
       out.srv_desc, out.width, out.height);
+  if (out.resource && kind == ExternalKind::kStencil) {
+    // An integer view of the typeless host texture.
+    if (out.resource->GetDesc().Format != DXGI_FORMAT_R8G8B8A8_TYPELESS) {
+      if (!warned_stencil_) {
+        warned_stencil_ = true;
+        REXGPU_WARN("Post passes: the scene stencil's host texture is not R8G8B8A8_TYPELESS");
+      }
+      out = {};
+      return false;
+    }
+    out.srv_desc.Format = DXGI_FORMAT_R8G8B8A8_UINT;
+  }
   ui::d3d12::util::DescriptorCpuGpuHandlePair descriptor;
   if (!out.resource || !command_processor_.RequestOneUseSingleViewDescriptors(1, &descriptor)) {
     out = {};
@@ -1168,8 +1343,8 @@ bool PostPasses::RequestExternal(const ResolveGroup& group, bool depth, External
 
 bool PostPasses::IsCameraCut() const {
   uint64_t frame = command_processor_.GetCurrentFrame();
-  if (!camera_.valid || camera_.view_frame != frame || !previous_camera_.valid ||
-      !previous_camera_.view_known) {
+  if (!camera_.valid || camera_.view_frame != frame || !previous_scene_ ||
+      !previous_camera_.valid || !previous_camera_.view_known) {
     return true;
   }
   const post_pass::Matrix& now = camera_.view_to_world;
@@ -1191,6 +1366,148 @@ bool PostPasses::IsCameraCut() const {
   return distance_squared > double(manifest.cut_distance) * manifest.cut_distance ||
          cos_angle < std::cos(double(manifest.cut_angle) * 3.14159265358979 / 180.0) ||
          focal_change > manifest.cut_focal;
+}
+
+// ---------------------------------------------------------------------------
+// Motion.
+
+bool PostPasses::ObjectReprojection(uint32_t slot, const post_pass::MatrixD& view_to_world,
+                                    const post_pass::MatrixD& previous_view_to_world,
+                                    post_pass::MatrixD& out) const {
+  const MotionObject& object = motion_objects_[slot];
+  const MotionObject& previous = previous_motion_objects_[slot];
+  if (object.frame != command_processor_.GetCurrentFrame() || previous.frame == UINT64_MAX ||
+      object.reference != previous.reference) {
+    return false;
+  }
+  // A move beyond a camera cut (a car put back onto the track) is no motion.
+  double distance_squared = 0.0;
+  for (int i = 0; i < 3; ++i) {
+    double moved = object.world.m[i][3] - previous.world.m[i][3];
+    distance_squared += moved * moved;
+  }
+  double cut = manifest_->cut_distance;
+  return distance_squared <= cut * cut &&
+         post_pass::ViewToPreviousView(view_to_world, previous_view_to_world, &object.world,
+                                       &previous.world, out);
+}
+
+void PostPasses::UpdateMotion() {
+  uint64_t frame = command_processor_.GetCurrentFrame();
+  // Once per frame, from the scene point on (the objects are all drawn then).
+  if (motion_.frame == frame || scene_frame_ != frame || !camera_.valid) {
+    return;
+  }
+  motion_ = {};
+  motion_.frame = frame;
+  for (uint32_t slot = 1; slot < post_pass::kMotionSlots; ++slot) {
+    if (motion_objects_[slot].frame == frame) motion_.slots_drawn |= 1u << slot;
+  }
+  for (auto& rows : motion_.view_to_previous_view) {
+    for (int i = 0; i < 3; ++i) rows[i][i] = 1.0f;
+  }
+  if (!previous_scene_ || IsCameraCut()) {
+    return;
+  }
+  post_pass::MatrixD view_to_world = post_pass::ToDouble(camera_.view_to_world);
+  post_pass::MatrixD previous_view_to_world = post_pass::ToDouble(previous_camera_.view_to_world);
+  post_pass::MatrixD world_reprojection;
+  if (!post_pass::ViewToPreviousView(view_to_world, previous_view_to_world, nullptr, nullptr,
+                                     world_reprojection)) {
+    return;
+  }
+  motion_.valid = true;
+  motion_.slots_own = 1;
+  for (uint32_t slot = 0; slot < post_pass::kMotionSlots; ++slot) {
+    post_pass::MatrixD reprojection = world_reprojection;
+    if (slot && slot < manifest_->motion_slot_count &&
+        ObjectReprojection(slot, view_to_world, previous_view_to_world, reprojection)) {
+      motion_.slots_own |= 1u << slot;
+    }
+    for (int i = 0; i < 3; ++i) {
+      for (int j = 0; j < 4; ++j) {
+        motion_.view_to_previous_view[slot][i][j] = float(reprojection.m[i][j]);
+      }
+    }
+  }
+}
+
+void PostPasses::LogMotionCheck(const RegisterFile& regs, MotionCheck& check) {
+  uint64_t frame = command_processor_.GetCurrentFrame();
+  if (frame < check.next_frame) {
+    return;
+  }
+  // Once per frame.
+  check.next_frame = frame + 1;
+  UpdateMotion();
+  if (motion_.frame != frame || !motion_.valid) {
+    REXGPU_INFO("Post passes motion check frame {}: pixel shader {:016X}, no host motion ({})",
+                frame, check.pixel_shader_hash,
+                scene_frame_ != frame ? "no scene" : (previous_scene_ ? "cut" : "no previous"));
+    return;
+  }
+  // The host's clip to previous clip matrix of each slot, as the game keeps its
+  // own: previous projection * view_to_previous_view * inverse(projection).
+  post_pass::MatrixD projection = post_pass::ToDouble(camera_.projection);
+  post_pass::MatrixD previous_projection = post_pass::ToDouble(previous_camera_.projection);
+  auto row_text = [](const double* row) {
+    return fmt::format("({:.7g}, {:.7g}, {:.7g}, {:.7g})", row[0], row[1], row[2], row[3]);
+  };
+  for (uint32_t slot = 0; slot < check.slots; ++slot) {
+    post_pass::MatrixD reprojection = post_pass::IdentityD(), host;
+    for (int i = 0; i < 3; ++i) {
+      for (int j = 0; j < 4; ++j) reprojection.m[i][j] = motion_.view_to_previous_view[slot][i][j];
+    }
+    if (!post_pass::ClipToPreviousClip(reprojection, projection, previous_projection, host)) {
+      continue;
+    }
+    double game[4][4];
+    for (uint32_t row = 0; row < 4; ++row) {
+      for (uint32_t k = 0; k < 4; ++k) {
+        game[row][k] = regs.Get<float>(XE_GPU_REG_SHADER_CONSTANT_000_X +
+                                       (256 + check.constant + slot * 4 + row) * 4 + k);
+      }
+    }
+    const MotionObject& object = motion_objects_[slot];
+    REXGPU_INFO(
+        "Post passes motion check frame {} slot {} ref {} own {}: game {} {} {} host {} {} {}",
+        frame, slot, slot && object.frame == frame ? int32_t(object.reference) : -1,
+        (motion_.slots_own >> slot) & 1, row_text(game[0]), row_text(game[1]),
+        row_text(game[3]), row_text(host.m[0]), row_text(host.m[1]), row_text(host.m[3]));
+  }
+}
+
+std::string PostPasses::MotionSummary() const {
+  uint64_t frame = command_processor_.GetCurrentFrame();
+  if (manifest_->motion_sources.empty()) {
+    return "none";
+  }
+  if (motion_.frame != frame) {
+    return "not computed";
+  }
+  std::string text = fmt::format("{}, own 0x{:X}", motion_.valid ? "valid" : "invalid",
+                                 motion_.slots_own);
+  for (uint32_t slot = 1; slot < post_pass::kMotionSlots; ++slot) {
+    const MotionObject& object = motion_objects_[slot];
+    if (object.frame != frame) continue;
+    // The sources whose first matrix of the frame differs from the chosen one.
+    uint32_t differ = 0;
+    for (uint32_t source = 0; source < uint32_t(manifest_->motion_sources.size()); ++source) {
+      if (!(object.sources_drawn & (1u << source))) continue;
+      const post_pass::Matrix& first = motion_first_worlds_[slot][source];
+      double largest = 0.0, error = 0.0;
+      for (int i = 0; i < 4; ++i) {
+        for (int j = 0; j < 4; ++j) {
+          largest = std::max(largest, std::fabs(object.world.m[i][j]));
+          error = std::max(error, std::fabs(first.m[i][j] - object.world.m[i][j]));
+        }
+      }
+      if (error > 1.0e-3 * std::max(largest, 1.0)) differ |= 1u << source;
+    }
+    text += fmt::format("; slot {} ref {} source {} drawn 0x{:X} differ 0x{:X}", slot,
+                        object.reference, object.source, object.sources_drawn, differ);
+  }
+  return text;
 }
 
 // ---------------------------------------------------------------------------
@@ -1296,15 +1613,15 @@ void PostPasses::FillSceneConstants(post_pass::SceneConstants& constants) const 
       constants.flags |= post_pass::kSceneFlagViewKnown;
       std::memcpy(constants.view_to_world, camera_.view_to_world.m, sizeof(float) * 12);
     }
-    if (previous_valid_ && previous_width_ == scene_width_ && previous_height_ == scene_height_ &&
-        !IsCameraCut()) {
-      constants.flags |= post_pass::kSceneFlagHistoryValid;
-      post_pass::Matrix world_to_previous_view, view_to_previous_view;
-      if (post_pass::Invert(previous_camera_.view_to_world, world_to_previous_view)) {
-        view_to_previous_view =
-            post_pass::Multiply(world_to_previous_view, camera_.view_to_world);
-        std::memcpy(constants.view_to_previous_view, view_to_previous_view.m, sizeof(float) * 12);
+    // UpdateMotion ran at this frame's first point.
+    if (motion_.frame == frame && motion_.valid) {
+      constants.flags |= post_pass::kSceneFlagMotionValid;
+      if (previous_valid_ && previous_width_ == scene_width_ &&
+          previous_height_ == scene_height_) {
+        constants.flags |= post_pass::kSceneFlagHistoryValid;
       }
+      std::memcpy(constants.view_to_previous_view, motion_.view_to_previous_view[0],
+                  sizeof(constants.view_to_previous_view));
       const post_pass::Unpack& previous = previous_camera_.unpack;
       constants.previous_xy_mul_add[0] = previous.x_mul;
       constants.previous_xy_mul_add[1] = previous.x_add;
@@ -1316,6 +1633,19 @@ void PostPasses::FillSceneConstants(post_pass::SceneConstants& constants) const 
       constants.previous_z_from_w = previous.z_from_w;
     }
   }
+  const Manifest& manifest = *manifest_;
+  constants.motion_stencil_scale = 1.0f / float(manifest.motion_stencil_step);
+  constants.motion_stencil_limit = manifest.motion_stencil_limit;
+  constants.motion_slot_count = manifest.motion_slot_count;
+  if (motion_.frame == frame) {
+    constants.motion_slots_own = motion_.slots_own;
+    std::memcpy(constants.motion_view_to_previous_view, motion_.view_to_previous_view,
+                sizeof(constants.motion_view_to_previous_view));
+  } else {
+    for (auto& rows : constants.motion_view_to_previous_view) {
+      for (int i = 0; i < 3; ++i) rows[i][i] = 1.0f;
+    }
+  }
   if (final_color_.resource) {
     constants.final_size[0] = final_width_;
     constants.final_size[1] = final_height_;
@@ -1323,6 +1653,48 @@ void PostPasses::FillSceneConstants(post_pass::SceneConstants& constants) const 
     constants.final_uv_scale[0] = float(final_width_) / float(desc.Width);
     constants.final_uv_scale[1] = float(final_height_) / float(desc.Height);
   }
+}
+
+bool PostPasses::PassEnabled(const PassDesc& pass) const {
+  const Manifest& manifest = *manifest_;
+  bool enabled = true;
+  for (const Condition& condition : pass.conditions) {
+    double value = 0.0;
+    for (size_t i = 0; i < manifest.params.size(); ++i) {
+      if (manifest.params[i].name != condition.name) continue;
+      if (manifest.params[i].is_uint) {
+        value = double(param_values_[i]);
+      } else {
+        float float_value;
+        std::memcpy(&float_value, &param_values_[i], sizeof(float_value));
+        value = float_value;
+      }
+    }
+    for (const auto& define : manifest.compiled_defines) {
+      if (define.first == condition.name) ParseNumber(define.second, value);
+    }
+    switch (condition.op) {
+      case Condition::Op::kEqual:
+        enabled &= value == condition.value;
+        break;
+      case Condition::Op::kNotEqual:
+        enabled &= value != condition.value;
+        break;
+      case Condition::Op::kLess:
+        enabled &= value < condition.value;
+        break;
+      case Condition::Op::kLessEqual:
+        enabled &= value <= condition.value;
+        break;
+      case Condition::Op::kGreater:
+        enabled &= value > condition.value;
+        break;
+      case Condition::Op::kGreaterEqual:
+        enabled &= value >= condition.value;
+        break;
+    }
+  }
+  return enabled;
 }
 
 void PostPasses::RunPoint(Point point) {
@@ -1338,7 +1710,34 @@ void PostPasses::RunPoint(Point point) {
     return;
   }
   uint64_t frame = command_processor_.GetCurrentFrame();
+  UpdateParams(variant_index);
+  // Params that are view lengths in host pixels, for this frame's camera: as
+  // the GTAO pass computed its radius in pixels before the framework.
+  const Manifest& manifest = *manifest_;
+  float guest_per_host_x =
+      scene_width_ ? float(depth_group_.pitch) / float(scene_width_) : 1.0f;
+  for (size_t i = 0; i < manifest.params.size(); ++i) {
+    uint32_t source = manifest.params[i].focal_length_of;
+    if (source == UINT32_MAX) continue;
+    float length;
+    std::memcpy(&length, &param_values_[source], sizeof(length));
+    float pixels = scene_frame_ == frame
+                       ? length * camera_.unpack.pixels_per_unit_x / guest_per_host_x
+                       : 0.0f;
+    std::memcpy(&param_values_[i], &pixels, sizeof(pixels));
+  }
+  // A point whose passes are all switched off costs nothing (a debug view's
+  // final pass, for instance).
+  bool any_enabled = false;
+  for (const PassDesc& pass : manifest.passes) {
+    any_enabled |= pass.point == point && PassEnabled(pass);
+  }
+  if (!any_enabled) {
+    return;
+  }
   final_color_ = {};
+  scene_stencil_ = {};
+  scene_stencil_requested_ = false;
   if (point == Point::kFinal) {
     D3D12RenderTargetCache::LastColorRenderTarget target;
     if (!command_processor_.render_target_cache_->TransitionLastColorRenderTarget(
@@ -1376,28 +1775,14 @@ void PostPasses::RunPoint(Point point) {
     scene_depth_ = {};
     scene_color_ = {};
     if (scene_frame_ == frame) {
-      RequestExternal(depth_group_, true, scene_depth_);
+      RequestExternal(depth_group_, ExternalKind::kDepth, scene_depth_);
       if (scene_color_frame_ == frame && manifest_->uses_scene_color) {
-        RequestExternal(color_group_, false, scene_color_);
+        RequestExternal(color_group_, ExternalKind::kColor, scene_color_);
       }
     }
   }
-  UpdateParams(variant_index);
-  // Params that are view lengths in host pixels, for this frame's camera: as
-  // the GTAO pass computed its radius in pixels before the framework.
-  const Manifest& manifest = *manifest_;
-  float guest_per_host_x =
-      scene_width_ ? float(depth_group_.pitch) / float(scene_width_) : 1.0f;
-  for (size_t i = 0; i < manifest.params.size(); ++i) {
-    uint32_t source = manifest.params[i].focal_length_of;
-    if (source == UINT32_MAX) continue;
-    float length;
-    std::memcpy(&length, &param_values_[source], sizeof(length));
-    float pixels = scene_frame_ == frame
-                       ? length * camera_.unpack.pixels_per_unit_x / guest_per_host_x
-                       : 0.0f;
-    std::memcpy(&param_values_[i], &pixels, sizeof(pixels));
-  }
+  // The objects of the frame are drawn once its scene depth is resolved.
+  UpdateMotion();
 
   post_pass::SceneConstants constants;
   FillSceneConstants(constants);
@@ -1411,45 +1796,7 @@ void PostPasses::RunPoint(Point point) {
   std::memcpy(mapping, &constants, sizeof(constants));
 
   for (PassDesc& pass : manifest_->passes) {
-    if (pass.point != point) continue;
-    bool enabled = true;
-    for (const Condition& condition : pass.conditions) {
-      double value = 0.0;
-      for (size_t i = 0; i < manifest.params.size(); ++i) {
-        if (manifest.params[i].name != condition.name) continue;
-        if (manifest.params[i].is_uint) {
-          value = double(param_values_[i]);
-        } else {
-          float float_value;
-          std::memcpy(&float_value, &param_values_[i], sizeof(float_value));
-          value = float_value;
-        }
-      }
-      for (const auto& define : manifest.compiled_defines) {
-        if (define.first == condition.name) ParseNumber(define.second, value);
-      }
-      switch (condition.op) {
-        case Condition::Op::kEqual:
-          enabled &= value == condition.value;
-          break;
-        case Condition::Op::kNotEqual:
-          enabled &= value != condition.value;
-          break;
-        case Condition::Op::kLess:
-          enabled &= value < condition.value;
-          break;
-        case Condition::Op::kLessEqual:
-          enabled &= value <= condition.value;
-          break;
-        case Condition::Op::kGreater:
-          enabled &= value > condition.value;
-          break;
-        case Condition::Op::kGreaterEqual:
-          enabled &= value >= condition.value;
-          break;
-      }
-    }
-    if (enabled) {
+    if (pass.point == point && PassEnabled(pass)) {
       RunPass(pass, constants_address);
     }
   }
@@ -1512,6 +1859,18 @@ void PostPasses::RunPass(PassDesc& pass, D3D12_GPU_VIRTUAL_ADDRESS scene_constan
       case Builtin::kSceneDepth:
         if (!scene_depth_.resource) return;
         srvs[i] = scene_depth_.srv;
+        break;
+      case Builtin::kSceneStencil:
+        // Loaded by the texture cache only for the passes that read it, once
+        // per point run (before this pass sets its pipeline).
+        if (!scene_stencil_requested_) {
+          scene_stencil_requested_ = true;
+          if (scene_frame_ == command_processor_.GetCurrentFrame()) {
+            RequestExternal(depth_group_, ExternalKind::kStencil, scene_stencil_);
+          }
+        }
+        if (!scene_stencil_.resource) return;
+        srvs[i] = scene_stencil_.srv;
         break;
       case Builtin::kSceneColor:
         if (!scene_color_.resource) return;
@@ -1757,7 +2116,7 @@ void PostPasses::LogRun(int32_t variant_index) {
       "0x{:08X}-0x{:08X} {}x{} (EDRAM {}), host {}x{}; camera Q {:.7g} Q*near {:.6g} (near "
       "{:.4g}), W(d=0) {:.4g} W(d=1) {:.4g}, far W {:.4g}, depth mul {:.6g} add {:.6g}, x {:.6g} "
       "{:.6g}, y {:.6g} {:.6g}, z/W {:.3g}, focal {:.1f} px (FOV x {:.1f} deg over {} px), origin "
-      "{}; history {}; variant {}:{}",
+      "{}; history {}; motion {}; variant {}:{}",
       runs_ - 1, depth_group_.frame, SteadyMilliseconds(), camera_.frame,
       camera_.view_frame == command_processor_.GetCurrentFrame() ? "known" : "unknown",
       depth_group_.base, depth_group_.end, depth_group_.pitch, depth_group_.height,
@@ -1766,7 +2125,8 @@ void PostPasses::LogRun(int32_t variant_index) {
       unpack.w_depth_mul, unpack.w_depth_add, unpack.x_mul, unpack.x_add, unpack.y_mul,
       unpack.y_add, unpack.z_from_w, unpack.pixels_per_unit_x, fov_x, depth_group_.pitch,
       camera_.guest_origin,
-      previous_valid_ ? (IsCameraCut() ? "cut" : "valid") : "none", variant_index, params);
+      previous_valid_ ? (IsCameraCut() ? "cut" : "valid") : "none", MotionSummary(),
+      variant_index, params);
 }
 
 void PostPasses::OnSwap() {
@@ -1798,10 +2158,21 @@ void PostPasses::OnSwap() {
     previous_valid_ = true;
     previous_width_ = scene_width_;
     previous_height_ = scene_height_;
-    previous_camera_ = camera_;
-    previous_camera_.view_known = camera_.view_frame == frame;
   } else {
     previous_valid_ = false;
+  }
+  // The camera and the motion objects of every frame with a scene, also
+  // without history textures.
+  previous_scene_ = manifest_ && scene_frame_ == frame && camera_.valid;
+  if (previous_scene_) {
+    previous_camera_ = camera_;
+    previous_camera_.view_known = camera_.view_frame == frame;
+    for (uint32_t slot = 0; slot < post_pass::kMotionSlots; ++slot) {
+      previous_motion_objects_[slot] =
+          motion_objects_[slot].frame == frame ? motion_objects_[slot] : MotionObject();
+    }
+  } else {
+    previous_motion_objects_.fill(MotionObject());
   }
 
   uint64_t completed = command_processor_.GetCompletedSubmission();

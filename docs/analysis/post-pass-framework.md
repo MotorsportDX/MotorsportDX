@@ -1,18 +1,19 @@
 # Post pass framework
 
-The runtime's post pass framework runs screen passes inside the guest frame. A pass is an entry point of an HLSL file plus a few lines in a manifest, instead of bespoke C++ in the command processor. The framework gives the passes the scene depth and color, the previous frame's scene color and depth, the scene camera, and the outputs of earlier passes, and it exposes chosen outputs to the shader mods. GTAO runs on it (see [gtao-design.md](gtao-design.md)).
+The runtime's post pass framework runs screen passes inside the guest frame. A pass is an entry point of an HLSL file plus a few lines in a manifest, instead of bespoke C++ in the command processor. The framework gives the passes the scene depth, its stencil and the scene color, the previous frame's scene color and depth, the scene camera, the reprojection of each moving object into the previous frame, and the outputs of earlier passes, and it exposes chosen outputs to the shader mods. GTAO and the motion vectors run on it (see [gtao-design.md](gtao-design.md) and [motion-vectors.md](motion-vectors.md)).
 
-It is the common base for the planned rain screen effects, screen-space reflections, TAA and temporal upscalers: they all need new screen passes, and TAA and upscalers also need history. Motion vectors are not part of it (a separate study looks for the game's own reprojection data).
+It is the common base for the planned rain screen effects, screen-space reflections, TAA and temporal upscalers: they all need new screen passes, and TAA and upscalers also need history and motion vectors. The motion of an object comes from the world matrices of the draws that write its ID into the stencil (`[motion]`), the way FM4's own motion blur reprojects each car.
 
 For the current state see [status/current.md](../status/current.md).
 
 ## Summary
 
 - **Switch**: `post_pass_path=<directory>` holds `passes.toml` and the HLSL files it names. Empty: off, and the runtime does none of this. The launcher sets it to a copy of [work/fm4-rex/passes](../../work/fm4-rex/passes) whenever the look's `ao` knob is above 0 (every look but `original`), or with `--ao`.
-- **Injection points**: `scene_depth` (the guest has resolved the last tile of its scene depth), `scene_color` (the last tile of its scene color), and `final` (after the final combine draws, before the HUD).
-- **Inputs**: `scene_depth`, `scene_color`, `previous_color`, `previous_depth`, `final_color`, and the textures of earlier passes. **Outputs**: textures of the manifest, at the scene's size or a scale of it, any of 18 formats; `final_color` can be drawn into.
+- **Injection points**: `scene_depth` (the guest has resolved the last tile of its scene depth), `scene_color` (the last tile of its scene color), and `final` (after the final combine draws, before the HUD). A point whose passes are all switched off by their `if` does nothing.
+- **Inputs**: `scene_depth`, `scene_stencil`, `scene_color`, `previous_color`, `previous_depth`, `final_color`, and the textures of earlier passes. **Outputs**: textures of the manifest, at the scene's size or a scale of it, any of 18 formats; `final_color` can be drawn into.
+- **Motion**: `[motion]` names the vertex shaders of the objects and where their world matrix is; per object slot (from the stencil reference of their draws) the passes get the reprojection into the previous frame's view (`xe_motion_*`). FM4's `motion_vectors` pass writes the per-pixel motion from it.
 - **Passes**: compute (`cs_5_1`) or pixel (`ps_5_1`, a triangle over the render targets), compiled with FXC at the start against the embedded library [post_pass.hlsli](../../work/runtime/src/graphics/d3d12/post_pass.hlsli).
-- **Mods**: a texture with `slot = N` is bound for the shader mods at bindless view `kPostPassViewsStart + N`; mods read it with `xe_post_texture(N, uv)`. Slot 0 is the occlusion, which `xe_post_ao(uv)` reads.
+- **Mods**: a texture with `slot = N` is bound for the shader mods at bindless view `kPostPassViewsStart + N`; mods read it with `xe_post_texture(N, uv)`. In FM4's manifest slot 0 is the occlusion, which `xe_post_ao(uv)` reads, and slot 1 the motion vectors.
 - **Reuse**: the shader overrides' FXC loader, DXBC cache (`shader_override_cache_path`), defines (`shader_mod_defines`, `shader_mod_set`, `shader_mod_defines.txt`) and hot reload (`shader_mod_hot_reload`).
 - **Path**: RTV with bindless resources only. The ROV path has neither shader mods nor post passes, by design.
 
@@ -53,7 +54,16 @@ This is the point temporal upscalers and TAA need (pre-HUD color at render resol
 
 ### [history]
 
-`cut_distance` (view units), `cut_angle` (degrees) and `cut_focal` (relative change of the focal length) per frame: beyond any of them the camera has cut and the history is not valid for that frame. FM4: 5 m, 30 degrees, 0.1.
+`cut_distance` (view units), `cut_angle` (degrees) and `cut_focal` (relative change of the focal length) per frame: beyond any of them the camera has cut and the history is not valid for that frame. FM4: 5 m, 30 degrees, 0.1. An object that moves more than `cut_distance` in a frame has no motion of its own in that frame.
+
+### [motion]
+
+| Key | Meaning |
+| --- | --- |
+| `objects` | Vertex shaders of the objects: `<ucode hash>:rows:<first constant>` (the world matrix as row vectors in 4 constants) or `<ucode hash>:columns:<first constant>` (column vectors, 3 constants), at most 32. A draw counts when it is on the scene's depth buffer and replaces the stencil with its reference (stencil on, `REPLACE` on depth pass, write mask `FF`). The list order is a priority: per slot and frame, the first draw of the highest priority source gives the object's matrix. |
+| `stencil_step`, `stencil_limit` | The slot of a stencil value s is round(s / `stencil_step`) below `stencil_limit`, else 0, the static world (at most slot 31). FM4: 7 and 126, its motion blur's rule. |
+
+The table of the objects and the camera of the previous frame are kept at every swap of a frame with a scene. A slot holds its object's reprojection when the object drew in both frames with the same reference and did not jump (`cut_distance`), otherwise the static world's.
 
 ### [defines] and [params]
 
@@ -82,7 +92,7 @@ Textures are created when a pass first writes them, zeroed, and recreated when t
 | `type` | `compute` (default) or `pixel`. |
 | `shader`, `entry` | The HLSL file in the directory and its entry point (`main` by default). |
 | `defines` | An inline table of defines for this pass, over those of the manifest. |
-| `srv` | Inputs, bound to t0, t1, ... (at most 8): a texture (`name` for all mips, `name:N` for one), or `scene_depth`, `scene_color`, `previous_color`, `previous_depth`, `final_color`. |
+| `srv` | Inputs, bound to t0, t1, ... (at most 8): a texture (`name` for all mips, `name:N` for one), or `scene_depth`, `scene_stencil`, `scene_color`, `previous_color`, `previous_depth`, `final_color`. `scene_stencil` is the stencil byte of the scene depth resolve: the same memory read as `k_8_8_8_8` through the texture cache, an `R8G8B8A8_UINT` view with the stencil in R (`Texture2D<uint>`), loaded only when a pass that reads it runs. |
 | `uav` | Compute outputs, bound to u0, u1, ... (at most 8): `name` or `name:N` (one mip). |
 | `rtv` | Pixel outputs, render targets 0-3: textures, or `final_color` (final point only). |
 | `group` | Pixels per thread group, `[x, y]` (default `[8, 8]`): the dispatch is the size divided by it, rounded up. |
@@ -104,7 +114,7 @@ The manifest is checked when it is loaded: unknown textures and inputs, a textur
 
 with FXC `/O3` and the defines. The layouts are those of [post_pass_layout.h](../../work/runtime/include/rex/graphics/d3d12/post_pass_layout.h), which the WARP test includes too.
 
-- **b0, the scene** (`xe_scene_*`, `xe_previous_*`, `xe_final_*`): the camera's depth unpack (`xe_scene_w(d)`, `xe_scene_view_position(pixel, w)`, `xe_scene_is_sky(w)`), the scene size, guest pixels per host pixel and pixel origin, the focal length in host pixels, the frame and time, `xe_scene_view_to_world`, `xe_view_to_previous_view` and the previous frame's camera unpack (`xe_previous_host_position(view, w)` reprojects), the flags (`xe_history_valid()`, `XE_SCENE_VIEW_KNOWN`), and at the final point the final color's size and its UV scale within its render target. A root CBV, written once per point.
+- **b0, the scene** (`xe_scene_*`, `xe_previous_*`, `xe_final_*`, `xe_motion_*`): the camera's depth unpack (`xe_scene_w(d)`, `xe_scene_view_position(pixel, w)`, `xe_scene_is_sky(w)`), the scene size, guest pixels per host pixel and pixel origin, the focal length in host pixels, the frame and time, `xe_scene_view_to_world`, `xe_view_to_previous_view` and the previous frame's camera unpack (`xe_previous_host_position(view, w)` reprojects the static world, `xe_previous_view_host_position` any previous view position), the flags (`xe_history_valid()`, `xe_motion_valid()`, `XE_SCENE_VIEW_KNOWN`), at the final point the final color's size and its UV scale within its render target, and the motion: `xe_motion_slot(stencil)`, `xe_motion_slot_own(slot)`, and per slot `xe_motion_view_to_previous_view[slot]` (`xe_motion_previous_host_position(slot, view, w)`). A root CBV of 1,776 bytes, written once per point.
 - **b1, the pass**: `xe_pass_size`, `xe_pass_inverse_size`, then the params. Root constants.
 - **Samplers**: `xe_linear_clamp` (bilinear within one mip), `xe_point_clamp`, `xe_trilinear_clamp`.
 - **Pixel passes**: `xe_post_pass_vs` draws one triangle; the pixel shader gets `XePostPassVertex` (`SV_Position` and `uv` 0-1 over the render targets).
@@ -114,8 +124,9 @@ with FXC `/O3` and the defines. The layouts are those of [post_pass_layout.h](..
 Only when a pass reads `previous_color` or `previous_depth`, so GTAO alone costs nothing here.
 
 - At the scene_color point, the scene color and the scene depth textures (as the texture cache loaded them) are copied (`CopyResource`) into one of two history textures each, of the same description.
-- At the swap, a frame that copied its history makes it the previous frame's, with its size and camera. A frame without a complete scene (menus, loading) drops the history.
-- `xe_history_valid()` is true in a frame when the previous frame had a history, the scene size is the same, both frames know the camera's view, and the camera did not cut (`[history]`).
+- At the swap, a frame that copied its history makes it the previous frame's, with its size. A frame without a complete scene (menus, loading) drops the history.
+- The previous frame's camera and motion objects are kept at the swap of every frame with a scene, whether or not a pass reads the history textures.
+- `xe_motion_valid()` is true in a frame when the previous frame had a scene, both frames know the camera's view, and the camera did not cut (`[history]`): `xe_view_to_previous_view`, the previous camera and the motion matrices hold. `xe_history_valid()` adds that the previous frame copied its history at the same scene size.
 - `xe_view_to_previous_view = inverse(previous view to world) * view to world`, so a view position of this frame maps to the previous frame's view position of the same world point; `post-pass-camera-tests.cpp` checks this.
 
 ## Iteration and diagnostics
@@ -124,7 +135,8 @@ Only when a pass reads `previous_color` or `previous_depth`, so GTAO alone costs
 - **Hot reload**: with `shader_mod_hot_reload`, the manifest and every file compiled into a pass are checked every 250 ms at the swap. A change reloads the whole manifest; if it does not load or compile, the previous passes stay and the errors are logged. Replaced pipelines are released after the GPU has passed them, textures are recreated.
 - `post_pass_ab_ms=<N>`: no passes in every other period of N ms of the steady clock (the outputs stay cleared), to compare on and off in one scene.
 - `post_pass_variants="NAME=VALUE,NAME=VALUE;...;off"` with `post_pass_variant_ms=<N>`: param values cycled by the steady clock, to compare settings in one frozen frame.
-- `post_pass_log_every=<N>`: the scene depth, the camera, the history state and the params of every N-th scene (0: the first only). `post_pass_log_constants=<ps hash>:<constant>;...` logs pixel shader constants, to check the camera against the game's own depth linearization.
+- `post_pass_log_every=<N>`: the scene depth, the camera, the history state, the motion objects (per slot the reference, the chosen source, the sources that drew and those whose matrix differs) and the params of every N-th scene (0: the first only). `post_pass_log_constants=<ps hash>:<constant>;...` logs pixel shader constants, to check the camera against the game's own depth linearization.
+- `post_pass_motion_check=<ps hash>:<first constant>:<slots>;...`: at every draw of that pixel shader (once per frame), its 4-constant matrices (rows 0, 1 and 3) next to the host's clip space reprojection of the same slots, previous projection * `xe_motion_view_to_previous_view[slot]` * inverse(projection). FM4: `4746CAD32EF168CF:0:17`, the motion blur ([motion vectors](motion-vectors.md#8-implementation-18-october-2026)).
 
 ## The final point and upscalers
 
@@ -135,7 +147,7 @@ What a temporal upscaler or TAA needs there, and what the framework gives:
 - **Pre-HUD color at render resolution**: `final_color`, read as a texture or drawn into.
 - **Depth**: `scene_depth` of the frame (complete; the final combine's own depth of field reads it too).
 - **History**: `previous_color` and `previous_depth` are the pre-post-chain scene. A TAA in the final point keeps its own output across frames in a texture of the manifest (textures persist unless `clear` is set), and uses `xe_history_valid()` and the reprojection constants.
-- **Motion vectors**: not available. Camera motion can be reprojected from depth (`xe_previous_host_position`); object motion needs the separate motion vector study.
+- **Motion vectors**: FM4's `motion_vectors` texture (slot 1), written at scene_depth: previous minus current position in host pixels of the scene textures, in their layout, zero without `xe_motion_valid()`. A pass can also reproject a position itself (`xe_motion_previous_host_position`).
 - **Output**: a pixel pass with `rtv = ["final_color"]` writes the result back before the HUD. A pass cannot read and write `final_color` at once: copy it into a texture first.
 - **Resolution**: the framework works at the render scale. An upscaler that renders below the output size needs the guest's render targets at a lower scale than the HUD, which the runtime does not support; within one scale, the point suits TAA and temporal supersampling.
 
@@ -143,7 +155,8 @@ What a temporal upscaler or TAA needs there, and what the framework gives:
 
 - The scene textures are in the guest's resolved layout: FM4 draws its scene rotated 180 degrees within the tiles, so `scene_depth`, `scene_color` and the history are upside down and mirrored against the screen (the final combine samples them so). `final_color` is in screen orientation.
 - `scene_color` is the `k_2_10_10_10` resolve of the 7e3 scene: 10-bit unorm in gamma 2.
-- The cockpit interior is drawn with a compressed depth range (see [gtao-design.md](gtao-design.md)), so its W, and anything reprojected through it, is wrong. The car body on the bumper and hood cameras, the side mirrors and the HUD move with the camera, so reprojection through depth does not hold for them either: that needs motion vectors.
+- The cockpit interior is drawn with a compressed depth range (see [gtao-design.md](gtao-design.md)), so its W, and anything reprojected through it, is wrong. The car body on the bumper and hood cameras moves with the camera, so the static world's reprojection does not hold for it: its own motion slot does (`xe_motion_*`). The side mirrors and the HUD are drawn after the scene, over `final_color`.
+- The scene stencil holds an object ID: 0 for the static scene, 7n for every draw of car n, 128 and 129 under shadows (see [motion vectors](motion-vectors.md#who-writes-the-stencil)).
 - The garage and the showroom have a scene depth but no camera from the manifest's vertex shaders, so their scene points do not run (one warning).
 
 ## Limits
@@ -177,11 +190,13 @@ What a temporal upscaler or TAA needs there, and what the framework gives:
 - Hot reload (`shader_mod_hot_reload`, a copy of `work/fm4-rex/passes` edited during a race at 1x): `GTAO_SCALE=0.5` in `shader_mod_defines.txt` reached the passes in the next frame without a compile; `GTAO_QUALITY=3` recompiled them ("reloaded (defines changed)"); a comment added to `gtao.hlsl` reloaded them in 375 ms; a syntax error logged the FXC errors and kept the previous passes; the fix reloaded them. The race went on through every step.
 - The first test run found two bugs, both fixed: the pixel passes were skipped because the guest's sun occlusion query is always open there (now closed and reopened around the pass), and the render target views and the clear view were taken from the bindless heap instead of the framework's own heaps (a crash with the pixel passes; the GTAO clear now uses the correct non-shader-visible view).
 
+**Motion vectors** (18 and 19 October 2026, the same BuildRoot): the CPU and WARP tests of [motion vectors](motion-vectors.md#tests) pass in the build. In the game the host's camera and car matrices match the game's motion blur matrices within one pixel, the debug views are right in the chase, hood, bumper and cockpit cameras except for the rear-view mirror panel, and the passes cost 0.02 ms at 1x and 0.1 ms at 2x ([in the game](motion-vectors.md#in-the-game-18-and-19-october-2026)).
+
 ## Code
 
 - [post_pass.h](../../work/runtime/include/rex/graphics/d3d12/post_pass.h), [post_pass.cpp](../../work/runtime/src/graphics/d3d12/post_pass.cpp): class `PostPasses`, created by the command processor when `post_pass_path` is set; hooks in `IssueDraw` (camera, final point), `IssueCopy` (before and after the resolve) and `IssueSwap`.
-- [post_pass_camera.h](../../work/runtime/include/rex/graphics/d3d12/post_pass_camera.h): the camera math (projection from the constants, depth unpack, view to world), header only.
+- [post_pass_camera.h](../../work/runtime/include/rex/graphics/d3d12/post_pass_camera.h): the camera math (projection from the constants, depth unpack, view to world, the world matrix of an object and the reprojection of the static world and of objects into the previous view, in double), header only.
 - [post_pass_layout.h](../../work/runtime/include/rex/graphics/d3d12/post_pass_layout.h), [post_pass.hlsli](../../work/runtime/src/graphics/d3d12/post_pass.hlsli): root signature and constant layouts, and the library.
 - [shader_override.cpp](../../work/runtime/src/graphics/d3d12/shader_override.cpp): `CompileProgram`, `GetDefine`, `SetPassNames`, the contract's `XE_POST_VIEWS`, and `xe_post_texture` in the override library.
 - [render_target_cache.cpp](../../work/runtime/src/graphics/d3d12/render_target_cache.cpp): `TransitionLastColorRenderTarget` for the final point.
-- Tests: `fm4_post_pass_camera_tests` ([post-pass-camera-tests.cpp](../../work/fm4-rex/tests/post-pass-camera-tests.cpp)), and `fm4_post_pass_shader_tests` ([post-pass-shader-tests.cpp](../../work/fm4-rex/tests/post-pass-shader-tests.cpp)), which runs the scene_depth passes of a manifest on WARP as the framework runs them.
+- Tests: `fm4_post_pass_camera_tests` ([post-pass-camera-tests.cpp](../../work/fm4-rex/tests/post-pass-camera-tests.cpp)), and `fm4_post_pass_shader_tests` ([post-pass-shader-tests.cpp](../../work/fm4-rex/tests/post-pass-shader-tests.cpp)), which runs the scene_depth passes of a manifest on WARP as the framework runs them (GTAO, and the motion vectors against a CPU reprojection with a stencil of object IDs) and compiles the passes of the other points.

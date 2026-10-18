@@ -159,6 +159,7 @@
 !/work/fm4-rex/look/shader_FDB6220AC64BFAA7.mod.hlsli
 !/work/fm4-rex/look/shader_FF6CFFF501187440.mod.hlsli
 !/work/fm4-rex/passes/gtao.hlsl
+!/work/fm4-rex/passes/motion.hlsl
 !/work/fm4-rex/passes/passes.toml
 !/work/fm4-rex/observe-frame.py
 !/work/fm4-rex/send-input.py
