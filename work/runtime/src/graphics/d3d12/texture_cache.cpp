@@ -14,15 +14,18 @@
 #include <cfloat>
 #include <cstddef>
 #include <cstring>
+#include <filesystem>
 #include <memory>
 #include <utility>
 
 #include <rex/assert.h>
+#include <rex/cvar.h>
 #include <rex/dbg.h>
 #include <rex/graphics/d3d12/command_processor.h>
 #include <rex/graphics/d3d12/shared_memory.h>
 #include <rex/graphics/d3d12/texture_cache.h>
 #include <rex/graphics/flags.h>
+#include <rex/graphics/pipeline/texture/content_hash.h>
 #include <rex/graphics/pipeline/texture/info.h>
 #include <rex/graphics/pipeline/texture/util.h>
 #include <rex/graphics/xenos.h>
@@ -32,7 +35,25 @@
 #include <rex/ui/d3d12/d3d12_upload_buffer_pool.h>
 #include <rex/ui/d3d12/d3d12_util.h>
 
+REXCVAR_DEFINE_STRING(texture_dump_path, "", "GPU/D3D12",
+                      "Write each new guest texture once here as <content hash>.dds, with a line "
+                      "about it in textures.txt (empty: off)")
+    .lifecycle(rex::cvar::Lifecycle::kRequiresRestart);
+
+REXCVAR_DEFINE_STRING(texture_replace_path, "", "GPU/D3D12",
+                      "Directory of replacement textures, <content hash>.dds in it or any "
+                      "subdirectory; format and size may differ from the original (empty: off)")
+    .lifecycle(rex::cvar::Lifecycle::kRequiresRestart);
+
 namespace rex::graphics::d3d12 {
+
+namespace {
+
+// A texture hashed in this many consecutive frames is updated every frame: it
+// is not hashed (nor dumped or replaced) until it stays unchanged for a frame.
+constexpr uint32_t kContentHashMaxStreak = 8;
+
+}  // namespace
 
 // Generated with `xb buildshaders`.
 namespace shaders {
@@ -642,11 +663,18 @@ bool D3D12TextureCache::Initialize() {
       provider.OffsetViewDescriptor(null_srv_descriptor_heap_start_,
                                     uint32_t(NullSRVDescriptorIndex::kCube)));
 
+  replacement_store_.Initialize(std::filesystem::path(REXCVAR_GET(texture_replace_path)));
+  replacement_dumper_.Initialize(std::filesystem::path(REXCVAR_GET(texture_dump_path)));
+  content_hash_enabled_ = replacement_store_.IsEnabled() || replacement_dumper_.IsEnabled();
+
   return true;
 }
 
 void D3D12TextureCache::ClearCache() {
   TextureCache::ClearCache();
+
+  // The textures referencing the replacements are destroyed now.
+  replacement_resources_.clear();
 
   // Clear texture descriptor cache.
   srv_descriptor_cache_free_.clear();
@@ -673,6 +701,13 @@ void D3D12TextureCache::BeginSubmission(uint64_t new_submission_index) {
 
 void D3D12TextureCache::BeginFrame() {
   TextureCache::BeginFrame();
+
+  ++content_hash_frame_;
+  if (!replacement_uploads_.empty()) {
+    uint64_t completed_submission = command_processor_.GetCompletedSubmission();
+    std::erase_if(replacement_uploads_,
+                  [&](const auto& upload) { return upload.first <= completed_submission; });
+  }
 
   std::memset(unsupported_format_features_used_, 0, sizeof(unsupported_format_features_used_));
 }
@@ -779,7 +814,8 @@ bool D3D12TextureCache::AreActiveTextureSRVKeysUpToDate(
       continue;
     }
     if (key.key != binding->key || key.host_swizzle != binding->host_swizzle ||
-        key.swizzled_signs != binding->swizzled_signs) {
+        key.swizzled_signs != binding->swizzled_signs ||
+        key.replacement_ids != GetBindingReplacementIds(*binding)) {
       return false;
     }
   }
@@ -796,11 +832,13 @@ void D3D12TextureCache::WriteActiveTextureSRVKeys(
       key.key.MakeInvalid();
       key.host_swizzle = xenos::XE_GPU_TEXTURE_SWIZZLE_0000;
       key.swizzled_signs = kSwizzledSignsUnsigned;
+      key.replacement_ids = 0;
       continue;
     }
     key.key = binding->key;
     key.host_swizzle = binding->host_swizzle;
     key.swizzled_signs = binding->swizzled_signs;
+    key.replacement_ids = GetBindingReplacementIds(*binding);
   }
 }
 
@@ -1615,6 +1653,10 @@ bool D3D12TextureCache::LoadTextureDataFromResidentMemoryImpl(Texture& texture, 
   D3D12Texture& d3d12_texture = static_cast<D3D12Texture&>(texture);
   TextureKey texture_key = d3d12_texture.key();
 
+  if (content_hash_enabled_ && LoadTextureReplacement(d3d12_texture, load_base, load_mips)) {
+    return true;
+  }
+
   DeferredCommandList& command_list = command_processor_.GetDeferredCommandList();
   ID3D12Device* device = command_processor_.GetD3D12Provider().GetDevice();
 
@@ -1988,6 +2030,175 @@ bool D3D12TextureCache::LoadTextureDataFromResidentMemoryImpl(Texture& texture, 
   return true;
 }
 
+bool D3D12TextureCache::LoadTextureReplacement(D3D12Texture& texture, bool load_base,
+                                               bool& load_mips) {
+  if (!load_base) {
+    // Only the guest mips changed: a replacement has its own.
+    return texture.replacement() != nullptr;
+  }
+  TextureKey key = texture.key();
+  bool was_replaced = texture.replacement() != nullptr;
+  const ReplacementResource* replacement = nullptr;
+  // Render targets (resolved memory, which the CPU copy of guest memory does
+  // not have) and arrays, cube maps and 3D textures are not hashed.
+  if (!key.scaled_resolve &&
+      (key.dimension == xenos::DataDimension::k1D ||
+       key.dimension == xenos::DataDimension::k2DOrStacked) &&
+      key.GetDepthOrArraySize() == 1 &&
+      !IsRangeEverResolved(key.base_page << 12, texture.GetGuestBaseSize())) {
+    uint64_t last_frame = texture.content_hash_frame;
+    texture.content_hash_frame = content_hash_frame_;
+    texture.content_hash_streak =
+        last_frame && content_hash_frame_ - last_frame <= 1 ? texture.content_hash_streak + 1 : 0;
+    texture_replacement::GuestLevel level;
+    if (texture.content_hash_streak < kContentHashMaxStreak &&
+        texture_replacement::ReadGuestBaseLevel(
+            shared_memory().memory().TranslatePhysical<const uint8_t*>(key.base_page << 12),
+            key.format, key.GetWidth(), key.GetHeight(), key.tiled != 0, key.endianness,
+            texture.guest_layout(), level)) {
+      uint64_t hash =
+          texture_replacement::HashGuestLevel(key.format, key.GetWidth(), key.GetHeight(), level);
+      if (replacement_dumper_.IsEnabled() && !replacement_dumper_.IsDumped(hash)) {
+        replacement_dumper_.Dump(hash, key.format, key.GetWidth(), key.GetHeight(),
+                                 key.mip_max_level + 1, key.base_page << 12, level);
+      }
+      if (replacement_store_.Has(hash)) {
+        replacement = GetOrCreateReplacementResource(hash);
+      }
+    }
+  }
+  if (replacement) {
+    texture.SetReplacement(replacement);
+    texture.MarkAsUsed();
+    return true;
+  }
+  if (was_replaced) {
+    // The texture's own mips were skipped while it was replaced.
+    texture.SetReplacement(nullptr);
+    load_mips = key.mip_max_level != 0;
+  }
+  return false;
+}
+
+const D3D12TextureCache::ReplacementResource* D3D12TextureCache::GetOrCreateReplacementResource(
+    uint64_t hash) {
+  auto existing = replacement_resources_.find(hash);
+  if (existing != replacement_resources_.end()) {
+    return existing->second.get();
+  }
+  // Failures stay nullptr and are not retried.
+  std::unique_ptr<ReplacementResource>& entry = replacement_resources_[hash];
+  std::string name = texture_content_hash::HashName(hash);
+  const texture_dds::Image* image = replacement_store_.Get(hash);
+  if (!image) {
+    return nullptr;
+  }
+  if (replacement_next_id_ > 0xFFFF) {
+    REXGPU_WARN("Texture replacement {} not used: too many replacements", name);
+    return nullptr;
+  }
+  texture_dds::FormatLayout layout;
+  texture_dds::GetFormatLayout(image->format, layout);
+  if (layout.block_size > 1 && ((image->width | image->height) & (layout.block_size - 1))) {
+    REXGPU_WARN(
+        "Texture replacement {} not used: block-compressed, but {}x{} is not a multiple of 4",
+        name, image->width, image->height);
+    return nullptr;
+  }
+
+  const ui::d3d12::D3D12Provider& provider = command_processor_.GetD3D12Provider();
+  ID3D12Device* device = provider.GetDevice();
+  uint32_t level_count = uint32_t(image->levels.size());
+  D3D12_RESOURCE_DESC desc = {};
+  desc.Dimension = D3D12_RESOURCE_DIMENSION_TEXTURE2D;
+  desc.Width = image->width;
+  desc.Height = image->height;
+  desc.DepthOrArraySize = 1;
+  desc.MipLevels = UINT16(level_count);
+  desc.Format = DXGI_FORMAT(image->format);
+  desc.SampleDesc.Count = 1;
+  desc.Layout = D3D12_TEXTURE_LAYOUT_UNKNOWN;
+  desc.Flags = D3D12_RESOURCE_FLAG_NONE;
+  auto replacement = std::make_unique<ReplacementResource>();
+  if (FAILED(device->CreateCommittedResource(
+          &ui::d3d12::util::kHeapPropertiesDefault, provider.GetHeapFlagCreateNotZeroed(), &desc,
+          D3D12_RESOURCE_STATE_COPY_DEST, nullptr, IID_PPV_ARGS(&replacement->resource)))) {
+    REXGPU_WARN(
+        "Texture replacement {} not used: could not create a {}x{} texture of DXGI format {}",
+        name, image->width, image->height, image->format);
+    return nullptr;
+  }
+
+  std::vector<D3D12_PLACED_SUBRESOURCE_FOOTPRINT> footprints(level_count);
+  std::vector<UINT> row_counts(level_count);
+  std::vector<UINT64> row_sizes(level_count);
+  UINT64 upload_size = 0;
+  device->GetCopyableFootprints(&desc, 0, level_count, 0, footprints.data(), row_counts.data(),
+                                row_sizes.data(), &upload_size);
+  D3D12_RESOURCE_DESC upload_desc;
+  ui::d3d12::util::FillBufferResourceDesc(upload_desc, upload_size, D3D12_RESOURCE_FLAG_NONE);
+  Microsoft::WRL::ComPtr<ID3D12Resource> upload;
+  uint8_t* mapping = nullptr;
+  D3D12_RANGE read_range = {};
+  if (FAILED(device->CreateCommittedResource(&ui::d3d12::util::kHeapPropertiesUpload,
+                                             provider.GetHeapFlagCreateNotZeroed(), &upload_desc,
+                                             D3D12_RESOURCE_STATE_GENERIC_READ, nullptr,
+                                             IID_PPV_ARGS(&upload))) ||
+      FAILED(upload->Map(0, &read_range, reinterpret_cast<void**>(&mapping)))) {
+    REXGPU_WARN("Texture replacement {} not used: could not create a {} byte upload buffer", name,
+                upload_size);
+    return nullptr;
+  }
+  for (uint32_t i = 0; i < level_count; ++i) {
+    const texture_dds::Level& level = image->levels[i];
+    uint32_t rows = std::min(uint32_t(row_counts[i]), level.row_count);
+    size_t row_size = std::min(size_t(row_sizes[i]), size_t(level.row_pitch));
+    for (uint32_t row = 0; row < rows; ++row) {
+      std::memcpy(mapping + footprints[i].Offset + size_t(row) * footprints[i].Footprint.RowPitch,
+                  image->data.data() + level.offset + size_t(row) * level.row_pitch, row_size);
+    }
+  }
+  upload->Unmap(0, nullptr);
+
+  DeferredCommandList& command_list = command_processor_.GetDeferredCommandList();
+  D3D12_TEXTURE_COPY_LOCATION location_source, location_dest;
+  location_source.pResource = upload.Get();
+  location_source.Type = D3D12_TEXTURE_COPY_TYPE_PLACED_FOOTPRINT;
+  location_dest.pResource = replacement->resource.Get();
+  location_dest.Type = D3D12_TEXTURE_COPY_TYPE_SUBRESOURCE_INDEX;
+  command_processor_.SubmitBarriers();
+  for (uint32_t i = 0; i < level_count; ++i) {
+    location_source.PlacedFootprint = footprints[i];
+    location_dest.SubresourceIndex = i;
+    command_list.D3DCopyTextureRegion(&location_dest, 0, 0, 0, &location_source, nullptr);
+  }
+  command_processor_.PushTransitionBarrier(
+      replacement->resource.Get(), D3D12_RESOURCE_STATE_COPY_DEST,
+      D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE | D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE);
+  replacement_uploads_.emplace_back(command_processor_.GetCurrentSubmission(), std::move(upload));
+
+  replacement->format = desc.Format;
+  replacement->mip_levels = level_count;
+  replacement->id = replacement_next_id_++;
+  REXGPU_INFO("Texture {} replaced: {}x{}, DXGI format {}, {} levels", name, image->width,
+              image->height, image->format, level_count);
+  // The host texture has it now.
+  replacement_store_.Evict(hash);
+  entry = std::move(replacement);
+  return entry.get();
+}
+
+uint32_t D3D12TextureCache::GetBindingReplacementIds(const TextureBinding& binding) const {
+  uint32_t ids = 0;
+  if (binding.texture) {
+    ids |= static_cast<const D3D12Texture*>(binding.texture)->replacement_id();
+  }
+  if (binding.texture_signed) {
+    ids |= static_cast<const D3D12Texture*>(binding.texture_signed)->replacement_id() << 16;
+  }
+  return ids;
+}
+
 void D3D12TextureCache::UpdateTextureBindingsImpl(uint32_t fetch_constant_mask) {
   uint32_t bindings_remaining = fetch_constant_mask;
   uint32_t binding_index;
@@ -2096,6 +2307,8 @@ uint32_t D3D12TextureCache::FindOrCreateTextureDescriptor(D3D12Texture& texture,
   descriptor_key.dimension = uint32_t(dimension);
 
   // Try to find an existing descriptor.
+  const ReplacementResource* replacement = texture.replacement();
+  descriptor_key.replacement_id = replacement ? replacement->id : 0;
   uint32_t existing_descriptor_index = texture.GetSRVDescriptorIndex(descriptor_key);
   if (existing_descriptor_index != UINT32_MAX) {
     PROFILE_TEXTURE_CACHE_HIT();
@@ -2129,47 +2342,60 @@ uint32_t D3D12TextureCache::FindOrCreateTextureDescriptor(D3D12Texture& texture,
 
   uint32_t mip_levels = texture_key.mip_max_level + 1;
   ID3D12Resource* resource_for_view = texture.resource();
-  switch (dimension) {
-    case xenos::DataDimension::k3D:
-      desc.ViewDimension = D3D12_SRV_DIMENSION_TEXTURE3D;
-      desc.Texture3D.MostDetailedMip = 0;
-      desc.Texture3D.MipLevels = mip_levels;
-      desc.Texture3D.ResourceMinLODClamp = 0.0f;
-      break;
-    case xenos::DataDimension::kCube:
-      desc.ViewDimension = D3D12_SRV_DIMENSION_TEXTURECUBE;
-      desc.TextureCube.MostDetailedMip = 0;
-      desc.TextureCube.MipLevels = mip_levels;
-      desc.TextureCube.ResourceMinLODClamp = 0.0f;
-      break;
-    case xenos::DataDimension::k1D:
-    case xenos::DataDimension::k2DOrStacked:
-      desc.ViewDimension = D3D12_SRV_DIMENSION_TEXTURE2DARRAY;
-      if (texture_key.dimension == xenos::DataDimension::k3D) {
-        resource_for_view =
-            texture.GetOrCreate3DAs2DResource(D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE |
-                                              D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE);
-        if (!resource_for_view) {
-          return UINT32_MAX;
+  if (replacement) {
+    // Only 1D and 2D textures with one array slice are replaced. Signed
+    // fetches read the replacement's format as it is.
+    desc.Format = replacement->format;
+    desc.ViewDimension = D3D12_SRV_DIMENSION_TEXTURE2DARRAY;
+    desc.Texture2DArray.MostDetailedMip = 0;
+    desc.Texture2DArray.MipLevels = replacement->mip_levels;
+    desc.Texture2DArray.FirstArraySlice = 0;
+    desc.Texture2DArray.ArraySize = 1;
+    desc.Texture2DArray.PlaneSlice = 0;
+    desc.Texture2DArray.ResourceMinLODClamp = 0.0f;
+  } else {
+    switch (dimension) {
+      case xenos::DataDimension::k3D:
+        desc.ViewDimension = D3D12_SRV_DIMENSION_TEXTURE3D;
+        desc.Texture3D.MostDetailedMip = 0;
+        desc.Texture3D.MipLevels = mip_levels;
+        desc.Texture3D.ResourceMinLODClamp = 0.0f;
+        break;
+      case xenos::DataDimension::kCube:
+        desc.ViewDimension = D3D12_SRV_DIMENSION_TEXTURECUBE;
+        desc.TextureCube.MostDetailedMip = 0;
+        desc.TextureCube.MipLevels = mip_levels;
+        desc.TextureCube.ResourceMinLODClamp = 0.0f;
+        break;
+      case xenos::DataDimension::k1D:
+      case xenos::DataDimension::k2DOrStacked:
+        desc.ViewDimension = D3D12_SRV_DIMENSION_TEXTURE2DARRAY;
+        if (texture_key.dimension == xenos::DataDimension::k3D) {
+          resource_for_view =
+              texture.GetOrCreate3DAs2DResource(D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE |
+                                                D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE);
+          if (!resource_for_view) {
+            return UINT32_MAX;
+          }
+          desc.Texture2DArray.MostDetailedMip = 0;
+          desc.Texture2DArray.MipLevels = 1;
+          desc.Texture2DArray.FirstArraySlice = 0;
+          desc.Texture2DArray.ArraySize = 1;
+          desc.Texture2DArray.PlaneSlice = 0;
+          desc.Texture2DArray.ResourceMinLODClamp = 0.0f;
+        } else {
+          desc.Texture2DArray.MostDetailedMip = 0;
+          desc.Texture2DArray.MipLevels = mip_levels;
+          desc.Texture2DArray.FirstArraySlice = 0;
+          desc.Texture2DArray.ArraySize = texture_key.GetDepthOrArraySize();
+          desc.Texture2DArray.PlaneSlice = 0;
+          desc.Texture2DArray.ResourceMinLODClamp = 0.0f;
         }
-        desc.Texture2DArray.MostDetailedMip = 0;
-        desc.Texture2DArray.MipLevels = 1;
-        desc.Texture2DArray.FirstArraySlice = 0;
-        desc.Texture2DArray.ArraySize = 1;
-        desc.Texture2DArray.PlaneSlice = 0;
-        desc.Texture2DArray.ResourceMinLODClamp = 0.0f;
-      } else {
-        desc.Texture2DArray.MostDetailedMip = 0;
-        desc.Texture2DArray.MipLevels = mip_levels;
-        desc.Texture2DArray.FirstArraySlice = 0;
-        desc.Texture2DArray.ArraySize = texture_key.GetDepthOrArraySize();
-        desc.Texture2DArray.PlaneSlice = 0;
-        desc.Texture2DArray.ResourceMinLODClamp = 0.0f;
-      }
-      break;
-    default:
-      assert_unhandled_case(dimension);
-      return UINT32_MAX;
+        break;
+      default:
+        assert_unhandled_case(dimension);
+        return UINT32_MAX;
+    }
   }
 
   desc.Shader4ComponentMapping =

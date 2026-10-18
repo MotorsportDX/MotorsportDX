@@ -325,6 +325,11 @@ void TextureCache::MarkRangeAsResolved(uint32_t start_unscaled, uint32_t length_
   start_unscaled &= 0x1FFFFFFF;
   length_unscaled = std::min(length_unscaled, 0x20000000 - start_unscaled);
 
+  for (uint32_t page = start_unscaled >> 12, page_last = (start_unscaled + length_unscaled - 1) >> 12;
+       page <= page_last; ++page) {
+    ever_resolved_pages_[page >> 6] |= UINT64_C(1) << (page & 63);
+  }
+
   if (IsDrawResolutionScaled()) {
     uint32_t page_first = start_unscaled >> 12;
     uint32_t page_last = (start_unscaled + length_unscaled - 1) >> 12;
@@ -347,6 +352,21 @@ void TextureCache::MarkRangeAsResolved(uint32_t start_unscaled, uint32_t length_
   // Invalidate textures. Toggling individual textures between scaled and
   // unscaled also relies on invalidation through shared memory.
   shared_memory().RangeWrittenByGpu(start_unscaled, length_unscaled);
+}
+
+bool TextureCache::IsRangeEverResolved(uint32_t start, uint32_t length) const {
+  if (length == 0) {
+    return false;
+  }
+  start &= 0x1FFFFFFF;
+  length = std::min(length, 0x20000000 - start);
+  for (uint32_t page = start >> 12, page_last = (start + length - 1) >> 12; page <= page_last;
+       ++page) {
+    if (ever_resolved_pages_[page >> 6] & (UINT64_C(1) << (page & 63))) {
+      return true;
+    }
+  }
+  return false;
 }
 
 uint32_t TextureCache::GuestToHostSwizzle(uint32_t guest_swizzle, uint32_t host_format_swizzle) {

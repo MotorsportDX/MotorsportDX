@@ -31,3 +31,8 @@ target_link_libraries(fm4_shader_mod_tests PRIVATE d3dcompiler)
 # The track lighting file edits of FM4_TRACK_SETTINGS (header only).
 add_executable(fm4_track_settings_tests track-settings-tests.cpp)
 target_include_directories(fm4_track_settings_tests PRIVATE ../src)
+# The texture replacement content hash and DDS reading and writing (header
+# only).
+add_executable(fm4_texture_replacement_tests texture-replacement-tests.cpp)
+target_include_directories(fm4_texture_replacement_tests SYSTEM PRIVATE "${REX_HEADER_ROOT}")
+target_compile_options(fm4_texture_replacement_tests PRIVATE -march=x86-64-v2)

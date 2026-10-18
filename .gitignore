@@ -192,5 +192,6 @@
 !/work/fm4-rex/tests/post-pass-shader-tests.cpp
 !/work/fm4-rex/tests/shader-mod-tests.cpp
 !/work/fm4-rex/tests/texture-integer.cpp
+!/work/fm4-rex/tests/texture-replacement-tests.cpp
 !/work/fm4-rex/tests/track-settings-tests.cpp
 !/work/fm4-rex/tests/vector-vectors.h

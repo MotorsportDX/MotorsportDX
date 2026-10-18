@@ -382,9 +382,9 @@ def post_pass_tests(root,jobs):
     shader mods, no GPU: the scene camera math, the GTAO passes of work/fm4-rex/passes on WARP
     (Direct3D 12 on the CPU) as the framework runs them, FXC compiles of the override library and
     the look mods with and without XE_POST_VIEWS (the library's post pass code is only compiled
-    with it), and the track lighting file edits of the look's track knobs
-    (fm4-track-settings.h). work/fm4-rex/tests, synced here like the runtime, built against the
-    installed runtime headers. The WARP scene's checks were set with a GTAO radius of 1 m."""
+    with it), the track lighting file edits of the look's track knobs (fm4-track-settings.h), and
+    the texture replacement content hash and DDS files (docs/analysis/texture-replacement.md).
+    work/fm4-rex/tests, synced here like the runtime, built against the installed runtime headers. The WARP scene's checks were set with a GTAO radius of 1 m."""
     source,build=root/'project/tests',root/'tests-build'
     inventory=json.loads((REPO/'outputs/FM4-source-control/tracked-files.json').read_text())
     for entry in inventory['files']:
@@ -396,9 +396,12 @@ def post_pass_tests(root,jobs):
          '-DCMAKE_CXX_COMPILER=clang++',f'-DREX_HEADER_ROOT={root/"runtime-install/include"}'],
         log=root/'logs/tests-configure.log')
     run(['cmake','--build',build,'--parallel',jobs,'--target','fm4_post_pass_camera_tests',
-         'fm4_post_pass_shader_tests','fm4_shader_mod_tests','fm4_track_settings_tests'],
+         'fm4_post_pass_shader_tests','fm4_shader_mod_tests','fm4_track_settings_tests',
+         'fm4_texture_replacement_tests'],
         log=root/'logs/tests-build.log')
     run([build/'fm4_track_settings_tests.exe'],cwd=build,log=root/'logs/track-settings-tests.log')
+    run([build/'fm4_texture_replacement_tests.exe'],cwd=build,
+        log=root/'logs/texture-replacement-tests.log')
     run([build/'fm4_post_pass_camera_tests.exe'],cwd=build,log=root/'logs/post-pass-camera-tests.log')
     run([build/'fm4_post_pass_shader_tests.exe',root/'runtime-source/src/graphics/d3d12/post_pass.hlsli',
          PASSES_DIRECTORY,'GTAO_RADIUS=1'],cwd=build,log=root/'logs/post-pass-shader-tests.log')
@@ -775,7 +778,7 @@ def save_content(root,content):
 def launch(root,single_tile=False,fixed_vblank=False,frame_rate=None,rov=False,
            resolution_scale=None,full_rate_mirror=False,look=None,shadow_workaround=False,
            quality=None,display=DEFAULT_DISPLAY,fullscreen=False,supersample=False,info=False,
-           ao=False,shader_dev=False):
+           ao=False,shader_dev=False,texture_dump=None,texture_replace=None):
     state = json.loads((root/'local.json').read_text())
     disc1,disc2 = validate_discs(state['disc1'],state['disc2'])
     report=json.loads((root/'build-result.json').read_text())
@@ -825,6 +828,15 @@ def launch(root,single_tile=False,fixed_vblank=False,frame_rate=None,rov=False,
     if track_settings:
         env['FM4_TRACK_SETTINGS']=track_settings
     cvars.update(ao_cvars(root,ao,shader_dev))
+    # Texture dumps and replacements by content hash (docs/analysis/texture-replacement.md).
+    if texture_dump:
+        cvars['texture_dump_path']=Path(texture_dump).resolve()
+        print(f'Texture dump: {cvars["texture_dump_path"]}')
+    if texture_replace:
+        if not Path(texture_replace).is_dir():
+            raise ValueError(f'-TextureReplace is not a directory: {texture_replace}')
+        cvars['texture_replace_path']=Path(texture_replace).resolve()
+        print(f'Texture replacements: {cvars["texture_replace_path"]}')
     # Disc 2 and the -Content packages: imported into user-data once, then kept there.
     packages=validate_content(disc2,state.get('content'))
     if packages:
@@ -931,6 +943,10 @@ def main():
                         help='run: shader mod development: the look mods load from work/fm4-rex/look '
                              'and hot reload when a file there is saved, and every look knob is a '
                              'live knob that shader_mod_set changes in the console (`)')
+    parser.add_argument('--texture-dump',type=Path,
+                        help='run: write each new game texture once as <hash>.dds to this directory')
+    parser.add_argument('--texture-replace',type=Path,
+                        help='run: use <hash>.dds files from this directory instead of the game textures')
     parser.add_argument('--flavor',default='',help='opt-in compiler experiment for build: comma list of '+','.join(FLAVORS))
     args=parser.parse_args()
     root=args.build_root.resolve()
@@ -960,7 +976,7 @@ def main():
                                      args.resolution_scale,args.full_rate_mirror,args.look,
                                      args.shadow_workaround,args.quality,args.display,
                                      args.fullscreen,args.supersample,args.info,args.ao,
-                                     args.shader_dev)
+                                     args.shader_dev,args.texture_dump,args.texture_replace)
     if args.action=='warmcache': warm_cache(root)
     if args.action=='profbuild': build_profiling(root,fxc,args.jobs)
 

@@ -105,6 +105,8 @@ takes a value.
 | `-Quality xbox\|high\|ultra` | `high` | Render quality of races. |
 | `-Look <preset/knobs>` | `pc` | Post-processing look and car paint. See [Look](#look). |
 | `-ShaderDev` | off | Shader mod development: the look mods reload when a file in `work/fm4-rex/look` is saved, and the knobs change live. See [Shader mod development](#shader-mod-development). |
+| `-TextureDump <dir>` | off | Write each new game texture once as `<hash>.dds` to this directory. See [Texture replacement](#texture-replacement). |
+| `-TextureReplace <dir>` | off | Use `<hash>.dds` files from this directory instead of the game textures with that hash. See [Texture replacement](#texture-replacement). |
 | `-Info` | off | Show the settings overlay at start. F2 toggles it in any run. |
 | `-Rov` | off | Use the earlier pixel shader interlock render target path, for comparisons. |
 | `-SingleTile` | off | Render races as one 720p tile without MSAA, with FXAA on the swap. |
@@ -409,6 +411,33 @@ FXC when they are first drawn. For the six measured, this took 0.15 to 1.4 s eac
   start with it on to change `FM4_LOOK_AO` live.
 - Live knobs make the mods larger and slower. Put the values you found into `-Look` for
   normal runs, for example `-Look "pc,sharpen=0.6,bloom=0.8"`.
+
+## Texture replacement
+
+The runtime can write the game's textures to DDS files and use edited files in their
+place, like a Dolphin texture pack. Each texture is named by a hash of its contents, so
+a file keeps working across runs, builds and game releases. The design and its limits
+are in [texture-replacement.md](analysis/texture-replacement.md).
+
+1. Dump: run with `-TextureDump D:m4-dump` and drive where the texture is shown. Each
+   new texture is written once as `<16 hex digits>.dds`, and a line about it (format,
+   size, mip count, guest address) is added to `textures.txt`. Files that are already
+   in the directory are not written again.
+2. Edit a dumped file, or make a new one with the same name, and put it in a pack
+   directory (subdirectories are allowed).
+3. Run with `-TextureReplace D:m4-pack`. `BuildRoot\logsuntime.log` lists every
+   file found, every texture that was replaced, and why a file was not used.
+
+A replacement may have another size and format than the original: BC1 to BC7, RGBA8,
+BGRA8, R8, RG8, R10G10B10A2 and RGBA16F, with or without mips. Give it a full mip chain;
+a file without mips is sampled without them. sRGB files are read as their UNORM
+equivalent, because the game's shaders decode gamma themselves. Block-compressed files
+must be a multiple of 4 in width and height.
+
+Both options are off by default and cost nothing then. With either one on, each
+texture load is hashed on the CPU (an untiling copy of its base level). Render
+targets, cube maps, arrays, 3D textures and textures that change every frame are never
+dumped or replaced.
 
 ## Controls
 
