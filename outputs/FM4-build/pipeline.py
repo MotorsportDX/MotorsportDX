@@ -459,7 +459,7 @@ LOOK_TRACK_KNOBS={'road_gloss':('RoadSpecular.RoadSpecular','RoadSpecular.RoadSp
 # without any shader mod. No preset has glass, chrome or rims yet: the A/B at 2x of 18 October
 # 2026 has not covered their sun highlights or the split-screen set
 # (docs/analysis/look-mod-coverage.md).
-LOOK_PRESETS={'pc':'tonemap=aces,saturation=1.1,bloom=0.7,sharpen=0.4,clearcoat=1,ao=0.6,sun=2',
+LOOK_PRESETS={'pc':'tonemap=aces,saturation=1.1,bloom=0.7,sharpen=0.4,clearcoat=1,ao=0.6,sun=2,sky=0.7',
               'aces':'tonemap=aces,clearcoat=1,ao=0.6,sun=2','gt':'tonemap=gt,clearcoat=1,ao=0.6,sun=2',
               'neutral':'tonemap=neutral,clearcoat=1,ao=0.6,sun=2','original':''}
 DEFAULT_LOOK='pc'
@@ -538,6 +538,8 @@ def look_track_settings(knobs):
             value=float(knobs[name])
             if value<0:
                 raise RuntimeError(f'{name} is a multiplier, 0 or more, not {knobs[name]!r}.')
+            if value==1:
+                continue
             items+=[f'{attribute}*={value!r}' for attribute in attributes]
     return ';'.join(items)
 
@@ -657,8 +659,8 @@ def info_overlay(cvars,env,look,quality,display=None):
                       if cvars.get('shader_mod_live_knobs')=='true' else ''))
     if env.get('FM4_TRACK_SETTINGS'):
         track={name:value for name,value in look_knobs(look).items() if name in LOOK_TRACK_KNOBS}
-        lines.append('Track lighting: '+(', '.join(f'{name.replace("_"," ")} x{float(value):g}'
-                                                   for name,value in track.items())
+        lines.append('Track lighting: '+(', '.join(f'{name.replace("_"," ")} x{float(track[name]):g}'
+                                                   for name in LOOK_TRACK_KNOBS if name in track)
                                          or env['FM4_TRACK_SETTINGS']))
     shadows=('cockpit only (workaround)' if env.get('FM4_SHADOW_WORKAROUND')=='1'
              else 'shadow map on every camera')

@@ -148,7 +148,7 @@ Details that matter for experiments:
 - The car body paint shader (`B85EF04779ABD438`, see [material-atlas.md](../analysis/material-atlas.md)) gets a clear coat from `fm4-paint.hlsli`. `clearcoat=1` adds a GGX highlight of the sun, soft limited by `clearcoat_glint` (in units of the sun's diffuse light; default 4, roughness 0.3), and the environment cube at grazing angles, in the paint's own shadow.
 - `flakes=0...1` adds metallic flakes (`flake_scale` cells per unit of the paint UV). No preset uses them, as in races they do not show (see `fm4-paint.hlsli`).
 - `ao=<strength>` applies the runtime's GTAO pass (`post_ao`, see [gtao-design.md](../analysis/gtao-design.md)) in the final combine shaders. Above 0 it also turns the pass on, with `post_ao_camera` and a 0.75 m radius (`pipeline.py` `ao_cvars`). `--ao` (on `pipeline.py` and `e2e.py`) runs the pass alone.
-- Presets name sets of knobs and mix with them, later items winning: `pc` (`tonemap=aces`, `saturation=1.1`, `bloom=0.7`, `sharpen=0.4`, `clearcoat=1`, `ao=0.6`); `aces`, `gt` and `neutral` (the tone curve, `clearcoat=1` and `ao=0.6`); and `original`, which runs without mods.
+- Presets name sets of knobs and mix with them, later items winning: `pc` (`tonemap=aces`, `saturation=1.1`, `bloom=0.7`, `sharpen=0.4`, `clearcoat=1`, `ao=0.6`, `sun=2`, `sky=0.7`); `aces`, `gt` and `neutral` (the tone curve, `clearcoat=1` and `ao=0.6`); and `original`, which runs without mods.
 - The launcher and `e2e.py` use `pc` unless `-Look`/`--look` says otherwise, so the gates run with it. `--look original` compares with the game's own look.
 
 ### Post AO diagnostics

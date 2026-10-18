@@ -133,7 +133,11 @@ class PipelineTests(unittest.TestCase):
             self.assertEqual(pipeline.look_track_settings(knobs),
                              'RoadSpecular.RoadSpecular*=0.5;RoadSpecular.RoadSpecular2*=0.5;'
                              'skyScale.value*=0.8')
-            self.assertEqual(pipeline.look_track_settings(pipeline.look_knobs('pc')),'')
+            # pc has sky 0.7 (the 2x sweep of 18 October 2026); the other presets keep the sky.
+            self.assertEqual(pipeline.look_track_settings(pipeline.look_knobs('pc')),'skyScale.value*=0.7')
+            self.assertEqual(pipeline.look_track_settings(pipeline.look_knobs('aces')),'')
+            # A knob at 1 edits nothing, so the files are not copied at all.
+            self.assertEqual(pipeline.look_track_settings(pipeline.look_knobs('pc,sky=1')),'')
             # Track knobs are not shader defines, and alone they need no shader mods.
             cvars=pipeline.look_cvars(root,'pc,road_gloss=0.5')
             self.assertNotIn('road_gloss',cvars['shader_mod_defines'])

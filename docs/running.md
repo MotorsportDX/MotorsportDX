@@ -266,7 +266,7 @@ preset, knobs, or both. A preset sets only its own knobs. Later items win, so
 
 | Preset | Settings |
 | --- | --- |
-| `pc` (default) | `tonemap=aces`, `saturation=1.1`, `bloom=0.7`, `sharpen=0.4`, `clearcoat=1`, `ao=0.6`, `sun=2` |
+| `pc` (default) | `tonemap=aces`, `saturation=1.1`, `bloom=0.7`, `sharpen=0.4`, `clearcoat=1`, `ao=0.6`, `sun=2`, `sky=0.7` |
 | `aces` | `tonemap=aces`, `clearcoat=1`, `ao=0.6`, `sun=2` |
 | `gt` | `tonemap=gt`, `clearcoat=1`, `ao=0.6`, `sun=2` |
 | `neutral` | `tonemap=neutral`, `clearcoat=1`, `ao=0.6`, `sun=2` |
@@ -330,11 +330,13 @@ The launcher passes them as `FM4_TRACK_SETTINGS` (`fm4-track-settings.h`). At st
 copies those files of every race location on Disc 1 from your own data, edits the values,
 writes the copies to `BuildRoot\cache\fm4-track-settings`, and opens the copies instead
 of the disc files. The garage, showroom and car thumbnail scenes (`HomeSpace*`,
-`UIThumb*`) and the tracks of downloadable content keep their files. No preset sets these
-knobs yet. Example: `-Look "pc,sky=0.7"`.
+`UIThumb*`) and the tracks of downloadable content keep their files. A knob at 1 edits
+nothing, and then no copies are made.
 
-In 2x captures of 18 October 2026 on the Bernese Alps, `sky=0.7` gives a bluer, less washed
-out sky that keeps the snow and clouds bright. Lowering `road_gloss` only removes the
+The `pc` preset sets `sky=0.7`; `aces`, `gt` and `neutral` keep the game's sky, and no preset
+sets `road_gloss`. `-Look "pc,sky=1"` restores the sky of `pc` before 18 October 2026. In 2x
+captures of that day on the Bernese Alps, `sky=0.7` gives a bluer, less washed out sky that
+keeps the snow and clouds bright. Lowering `road_gloss` only removes the
 sparkle of the asphalt aggregate. The bright sheet on sunlit asphalt toward the sun does not
 come from these two values, so `road_gloss` does not remove it. See
 [current status](status/current.md#display).
