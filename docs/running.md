@@ -419,13 +419,17 @@ place, like a Dolphin texture pack. Each texture is named by a hash of its conte
 a file keeps working across runs, builds and game releases. The design and its limits
 are in [texture-replacement.md](analysis/texture-replacement.md).
 
-1. Dump: run with `-TextureDump D:m4-dump` and drive where the texture is shown. Each
+1. Dump: run with `-TextureDump D:\fm4-dump` and drive where the texture is shown. Each
    new texture is written once as `<16 hex digits>.dds`, and a line about it (format,
    size, mip count, guest address) is added to `textures.txt`. Files that are already
    in the directory are not written again.
+   Without the game, `python outputs/FM4-build/texture_extract.py --build-root <BuildRoot>`
+   writes the same files for the textures stored in the track archives, the skies of
+   every track among them, to `<BuildRoot>\texextract`
+   ([offline extraction](analysis/texture-replacement.md#offline-extraction)).
 2. Edit a dumped file, or make a new one with the same name, and put it in a pack
    directory (subdirectories are allowed).
-3. Run with `-TextureReplace D:m4-pack`. `BuildRoot\logsuntime.log` lists every
+3. Run with `-TextureReplace D:\fm4-pack`. `BuildRoot\logs\runtime.log` lists every
    file found, every texture that was replaced, and why a file was not used.
 
 A replacement may have another size and format than the original: BC1 to BC7, RGBA8,

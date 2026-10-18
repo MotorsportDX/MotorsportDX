@@ -237,6 +237,14 @@
       "provenance": "Reviewed bootstrap tooling or documentation; no original game function bodies"
     },
     {
+      "path": "outputs/FM4-build/texture-extract.cpp",
+      "provenance": "Original tooling for this project; no game content or original game function bodies"
+    },
+    {
+      "path": "outputs/FM4-build/texture_extract.py",
+      "provenance": "Original tooling for this project; no game content or original game function bodies"
+    },
+    {
       "path": "outputs/FM4-build/verification.json",
       "provenance": "Reviewed bootstrap tooling or documentation; no original game function bodies"
     },

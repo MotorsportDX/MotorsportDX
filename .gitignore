@@ -28,6 +28,8 @@
 !/.claude/skills/**
 !/outputs/FM4-build/Build.ps1
 !/outputs/FM4-build/dump-image.cpp
+!/outputs/FM4-build/texture-extract.cpp
+!/outputs/FM4-build/texture_extract.py
 !/outputs/FM4-build/e2e/compare.py
 !/outputs/FM4-build/e2e/cp_profile.py
 !/outputs/FM4-build/e2e/inventory.py

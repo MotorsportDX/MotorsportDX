@@ -103,11 +103,80 @@ Uploads go through a committed upload buffer per replacement, freed once its sub
 
 ## Offline extraction
 
-A probe on 19 October 2026 found the sky in the track archive, so textures can be collected without driving every track:
+[texture_extract.py](../../outputs/FM4-build/texture_extract.py) collects the textures stored in the track archives as a runtime dump writes them, so a pack can be built without driving every track:
 
-- `Media	racks\Alpsin.zip` has 4,387 entries (4,376 LZX, 11 stored); all decompress with the runtime's `lzx_decompress` and match their CRC.
-- 368 distinctive blocks of the dumped sky are all in `_0x00000005.bin` at file offset 672 plus their tiled offset, swapped 8-in-16: the file holds the texture exactly as guest memory does. `_0x00000006.bin`, the same size, shares 184 of them (a second sky with the same lower half, not checked further).
-- These files are `CAFF` containers (`CAFF21.11.05.0034`, sections `.data` and `.gpu`). A `texture` record (`04.05.05.0032`) holds what looks like the Xbox 360 `D3DFORMAT` (`0x1A207F52` here, `0x1A200152` and `0x1A200154` in other files; `0x52` and `0x54` match DXT1 and DXT5) and the width and height as big-endian 16-bit values; the `.gpu` data (8 MB for the sky) starts after the header.
-- Only 60 of the 4,387 entries are such single-texture files. Where the other track textures are stored (the `.bix` files, the ribbon files) is not known yet.
+```text
+python outputs/FM4-build/texture_extract.py --build-root I:\FM4-build-usa [--track Alps] [--no-dump]
+```
 
-An offline extractor would untile and swap these files as the runtime does and name them by the same hash, so a pack built from them matches `texture_replace_path`. Not written yet.
+It reads every `Media\tracks\<track>\bin.zip` of Disc 1 (`disc1` in `local.json`), decompresses the entries with the runtime's `lzx_decompress` (as [material_atlas.py](../../outputs/FM4-build/e2e/material_atlas.py) does), and writes into `<BuildRoot>\texextract`:
+
+| Output | Contents |
+| --- | --- |
+| `dds\<hash>.dds`, `dds\textures.txt` | The dump, exactly as `texture_dump_path` writes it (the guest address is 0). |
+| `index.tsv` | Every texture record: track, archive entry, chunk, source file name, format, size, mip levels, `D3DFORMAT`, and the hash or why there is none (`cube`, `external`). |
+| `panoramas.txt` | Per track, the sky candidates: textures without mips at least 1,024 wide, marked `wide` when at least twice as wide as high. |
+
+The hashes and the files come from [texture-extract.cpp](../../outputs/FM4-build/texture-extract.cpp), a DLL the script builds with clang++ on first use. It compiles the BuildRoot's own `replacement.cpp` (`ReadGuestBaseLevel`, `HashGuestLevel`, `Dumper`) and links the installed `rexruntime` for the guest layout, the tiling and the format table, so the untiling, the endian swap, the hash and the DDS writer are the runtime's code, not a copy. Each texture is read as the game's Direct3D sets it up: the pitch rounded up to 32 texels, packed mips, and the format, endianness and tiling of its `D3DFORMAT`.
+
+### The CAFF container
+
+The `.bin` files of the archives that hold textures are `CAFF` containers (`CAFF21.11.05.0034`). The layout below was found in the files; the field names are guesses. All values are big-endian.
+
+| Offset | Field |
+| --- | --- |
+| `0x18` | Chunk name count N. |
+| `0x1c` | Chunk list length M. |
+| `0x44` | Offset of the name table in `.data`. |
+| `0x48` | Header size: `.data` starts here, `.gpu` right after `.data`. |
+| `0x50` | Sections, `0x28` bytes each: name (8 bytes), alignment log2 at `+0x08`, size at `+0x10`. |
+
+The name table is a blob size, N offsets and the names (the source paths, `...\scene\compiled\_0x00000005.bin`). After it come a zero word and the chunk list: M entries of 14 bytes (chunk id, offset, size, section 1 for `.data` or 2 for `.gpu`, alignment log2). A chunk id has a `.data` chunk, its record, and may have a `.gpu` chunk, its GPU data. A texture record is a `.data` chunk that starts with `texture` and `04.05.05.0032`:
+
+| Offset in the record | Field |
+| --- | --- |
+| `+0x18` | Xbox 360 `D3DFORMAT`: bits 0 to 5 the `xenos::TextureFormat`, 6 and 7 the endianness, 8 tiled. `0x1A207F52` is a tiled DXT1, 8-in-16, with gamma. |
+| `+0x1c` | 0 for a 2D texture, 2 for a cube map (6 faces of base level and mips). |
+| `+0x24` | Width and height, 16 bits each. |
+| `+0x28`, `+0x2c` | Base and mip offsets in the texture's GPU data; `0xffffffff` for the mips when there are none or they are packed into the base's tail. |
+| `+0x30` | Mip levels (8 bits). |
+
+Each track has single-texture files (`_0x00000005.bin` and the like: the skies and large billboards) and `<track>.stx.bin`, a container of several hundred texture records (789 on the Bernese Alps). Records without a `.gpu` chunk (`external` in the index) keep their data elsewhere, presumably in the streamed `.bix` files: their base offsets overlap other textures' data in the container. The `.bix` files (1,479 of the Bernese Alps ones start with `BIX1`, the others look like raw blocks) are not read yet.
+
+### Results, 19 October 2026
+
+USA Disc 1, BuildRoot `I:\FM4-build-usa`, the runtime of the texture replacement branch:
+
+- **The sky matches**: the Bernese Alps `_0x00000005.bin` gives `5de3b416781cfd97`, and its DDS file is byte-identical to the runtime's dump of the sky (`texdump\5de3b416781cfd97.dds`, 8,388,736 bytes).
+- **Other textures match too**: 103 of the 493 Bernese Alps hashes are also in the three runtime dumps of that track (4,074 distinct hashes, most of them cars, interface and streamed track textures). They include packed small textures (`k_DXT4_5` 16x32, `k_DXN` 4x4), so the packed mip path is right. The others were not loaded in the 20 s races of those dumps, or not seen; a texture the extractor hashes differently from the runtime would also be among them, and no such case is known.
+- **All 32 archives**: 10,647 containers with textures, 28,827 texture records: 19,652 hashed (18,473 distinct, 559 MB of DDS files), 875 cube maps, 8,300 external. The formats are `k_DXT1` (11,253), `k_DXT4_5` (4,463), `k_DXT5A` (3,229), `k_DXN` (576), `k_8_8_8_8` (105) and a few others; 2 `k_5_6_5` textures get no file (not a dump format). A run takes about 30 s without the dump.
+- **Skies**: every race track except Road America and Silverstone has a 360-degree panorama 8,192 texels wide without mips (8192x2048, 8192x1960 or 8192x1024, DXT1 or DXT5); seven have two (probably weather or time variants). Road America has five 1024x1024 and Silverstone four 2048x1024 textures without mips instead, probably a sky in tiles (not looked at). The HomeSpace scenes have one RGBA8 4096x2048 each. Crown Jewel also has 3508x872 and 2663x872 strips, the Bernese Alps three textures of about 1600x1024. Only the Bernese Alps sky was seen in game.
+
+| Track folder | Sky panoramas |
+| --- | --- |
+| `Alps` | `5de3b416781cfd97`, `832fa222daf4e206` (DXT1 8192x2048) |
+| `AmalfiGP` | `1336c1626e200a6e` (DXT1 8192x1960) |
+| `Autopark` | `48160ab4c432091a` (DXT5 8192x2048) |
+| `Catalunya` | `5bf7fbed71765cb1` (DXT5 8192x2048) |
+| `CrownJewel` | `9b69285de138eff2`, `5b300e4508f0a85d` (DXT1 8192x1960) |
+| `FujimiKaido` | `7cea8d31f0e79d87` (DXT1 8192x2048) |
+| `Hockenheim` | `738d45786bb69133`, `75703d5271690893` (DXT1 8192x2048) |
+| `Indi` | `c71963ec6156a6ff`, `a233139ce01ed0c0` (DXT1 8192x1024) |
+| `Infin` | `d249083f4929356f`, `26b894d147e7e975` (DXT5 8192x1024) |
+| `LagunaSeca` | `8bacc8d62f4d0ea5` (DXT5 8192x1024) |
+| `LeMans` | `77200fb29104ec08` (DXT1 8192x1960) |
+| `MapleValley` | `bdd3a7d4a544e93b` (DXT5 8192x2048) |
+| `Motegi` | `e8d280e10e79b820` (DXT5 8192x1024) |
+| `Mugello` | `651754d7b7662437` (DXT1 8192x1960) |
+| `Nurburgring` | `ecd5ff85f66409ca` (DXT1 8192x1960) |
+| `NurburgringF1` | `98362911b3672926` (DXT1 8192x1960) |
+| `RoadAmerica` | Tiles: `249f1daf6b000007`, `d9ef131a9ca99e6f`, `4159bd573eae83f5`, `2ac79af79215a633`, `9d3b2cc934bd8e04` (DXT5 1024x1024) |
+| `RoadAtlanta` | `9f8582dc8c337ae0` (DXT5 8192x2048) |
+| `Sebring` | `c142cc270cc35eb4` (DXT1 8192x2048) |
+| `Silverstone` | Tiles: `d1095ecf22a89b0a`, `3cbf372b64e39584`, `06bb81b43d89dcc9`, `bab0877680e86652` (DXT5 2048x1024) |
+| `SunsetInfield` | `445d0c999d8c2326` (DXT1 8192x1960) |
+| `Suzuka` | `9e8d2e08ff34edae`, `0290aa6703e61f34` (DXT5 8192x2048) |
+| `TopGear` | `1b38999f7949efb1`, `c3ca8bd507a1f510` (DXT1 8192x2048) |
+| `Tsukuba` | `6a05b8bbf978557f` (DXT1 8192x1024) |
+
+**Not covered**: the external records (the `.bix` streaming files), cube maps (the runtime does not hash them either), DLC tracks (none are on Disc 1) and the other folders of `Media` (cars, interface).
