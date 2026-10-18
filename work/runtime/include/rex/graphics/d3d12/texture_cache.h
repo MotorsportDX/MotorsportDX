@@ -307,9 +307,10 @@ class D3D12TextureCache final : public TextureCache {
     uint32_t replacement_id() const { return replacement_ ? replacement_->id : 0; }
     void SetReplacement(const ReplacementResource* replacement) { replacement_ = replacement; }
 
-    // Frame of the last content hash and the number of consecutive frames it
-    // was hashed in, to skip textures that are updated every frame.
-    uint64_t content_hash_frame = 0;
+    // Host uptime of the last content hash and the number of loads in a row
+    // that came soon after the one before, to skip textures that are updated
+    // all the time.
+    uint64_t content_hash_time_ms = 0;
     uint32_t content_hash_streak = 0;
 
    private:
@@ -546,7 +547,6 @@ class D3D12TextureCache final : public TextureCache {
   uint32_t replacement_next_id_ = 1;
   // Upload buffers in use until their submission completes.
   std::vector<std::pair<uint64_t, Microsoft::WRL::ComPtr<ID3D12Resource>>> replacement_uploads_;
-  uint64_t content_hash_frame_ = 1;
 
   // Unsupported texture formats used during this frame (for research and
   // testing).

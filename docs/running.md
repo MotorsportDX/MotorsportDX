@@ -436,7 +436,7 @@ must be a multiple of 4 in width and height.
 
 Both options are off by default and cost nothing then. With either one on, each
 texture load is hashed on the CPU (an untiling copy of its base level). Render
-targets, cube maps, arrays, 3D textures and textures that change every frame are never
+targets, cube maps, arrays, 3D textures and textures that change all the time are never
 dumped or replaced.
 
 ## Controls

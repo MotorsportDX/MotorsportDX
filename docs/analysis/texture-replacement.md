@@ -9,7 +9,7 @@ Usage is in [running.md](../running.md#texture-replacement). For the current sta
 - **Switches**: `texture_dump_path=<directory>` writes each new texture once as `<hash>.dds` and a line about it to `textures.txt`. `texture_replace_path=<directory>` samples `<hash>.dds` from the directory or any subdirectory instead of the texture with that hash. Both are empty (off) by default and need a restart. The launcher sets them with `-TextureDump` and `-TextureReplace`.
 - **Hash**: XXH3 64 over the hash version, the guest format, the width and the height, then the base level's blocks row by row after untiling and endian swapping. Mips are not hashed.
 - **Replacements**: any 2D DDS file of a supported format, of any size and with any number of mips. They are decoded on the CPU, uploaded once per hash and shared by every guest texture with that hash.
-- **Not covered**: render targets, cube maps, arrays, 3D textures, and textures that change every frame.
+- **Not covered**: render targets, cube maps, arrays, 3D textures, and textures that change all the time (video planes, for instance).
 - **Code**: [content_hash.h](../../work/runtime/include/rex/graphics/pipeline/texture/content_hash.h) and [dds.h](../../work/runtime/include/rex/graphics/pipeline/texture/dds.h) (header only), [replacement.cpp](../../work/runtime/src/graphics/pipeline/texture/replacement.cpp) (the guest read, the file store and the dumper), and the D3D12 texture cache ([texture_cache.cpp](../../work/runtime/src/graphics/d3d12/texture_cache.cpp)). CPU tests: [texture-replacement-tests.cpp](../../work/fm4-rex/tests/texture-replacement-tests.cpp).
 
 ## Where it hooks in
@@ -85,7 +85,7 @@ Uploads go through a committed upload buffer per replacement, freed once its sub
 ## Limits
 
 - **Render targets** are not hashed: a texture whose memory a resolve has ever written (`IsRangeEverResolved`) is skipped, because those texels are only in the GPU copy of guest memory. That bit is not cleared when the CPU later reuses the page for a normal texture, so such a reused page stays unreplaceable. Memory exports from shaders (`memexport`) are not tracked; a texture written that way would hash stale CPU data, but FM4 does not sample such textures as far as is known.
-- **Textures updated every frame** are hashed until they have been loaded in 8 consecutive frames, then skipped (and shown as the original) until they stay unchanged for a frame. Dumps of such textures stop there too.
+- **Textures that change all the time** are hashed until they have been loaded 8 times in a row, each load within 250 ms of the one before, then skipped (and shown as the original) until they stay unchanged for 250 ms. Dumps of such textures stop there too. The first version counted consecutive frames only and missed the attract video, whose Y, U and V planes (`k_8`, 1280x720 and 640x360, double-buffered) reload every 2 to 4 frames: they made 1,012 of the 2,005 dumped textures of a Quick Race. With the time window, a run of the same scenario dumps 2 of them (969 textures in all).
 - **Mips** are not part of the hash. Two textures with the same base level and different mips match the same file, and the replacement's mips are used for both.
 - **Cube maps, arrays and 3D textures** are not hashed. A sky drawn from a cube map would need cube support in the hash, the dumper and the views.
 - **Resolution-scaled textures** (`scaled_resolve`) are render targets and are skipped.
@@ -95,4 +95,19 @@ Uploads go through a committed upload buffer per replacement, freed once its sub
 ## Verification
 
 - CPU: `fm4_texture_replacement_tests` (built and run by `pipeline.py build` with the other CPU tests) checks the fixed hash, that padding, pitch and row splitting do not change it, that format, size and one bit do, the hash file names, and DDS round trips for BC1, BC2, BC3, BC4, BC5, BC7, RGBA8, BGRA8, R8, RG8 and RGBA16F (legacy and DX10 headers, mips, a 5x3 BC1), sRGB, mip count handling and rejected files.
-- In game: not run yet. The planned check dumps on Bernese Alps, replaces the sky texture with a test pattern, compares 2x captures and runs the smoke gate.
+- In game, 19 October 2026: BuildRoot `I:\FM4-build-usa` (USA), this branch, launcher defaults, AI driver.
+  - **Dump**: a Quick Race on the Bernese Alps (`quickrace` scenario, 20 s of race) wrote 2,005 textures (649 MB) with the first version of the dynamic texture check, 969 with the second. Between the two runs 813 of the hashes are the same; the rest are the cars and streamed textures of a race that is not deterministic.
+  - **The sky**: `5de3b416781cfd97`, `k_DXT1` 8192x2048 without mips, a 360-degree photo panorama of the Alps with the sun and the mountains in it. Its hash is the same in both runs although its guest address differs (`0xa91f000`, `0xa91e000`).
+  - **Replacement**: a test pattern of the same size as RGBA8 with 14 levels replaces it (a format change from BC1). In 2x captures (2560x1440) of the same camera, with and without the pack, the pattern shows where the sky and the mountains were, and in the car's window and exhaust reflections, which the game renders from the sky.
+  - **Smoke gate** `texon` (both switches on, the test pack) against `texoff` (the same binary, switches off), 240 Hz: 3 of 3 cells passed in both. `career` PASS; `photo` and `photo_view` WARN on capture statistics (the replaced sky) and, in `photo`, the guest idle wait (8.4 to 27.8 ms/s). No new error keys. Single runs: race 207.0 against 172.3 fps (`photo`) and 204.1 against 148.4 fps (`career`), which is run-to-run noise, not a measurement.
+
+## Offline extraction
+
+A probe on 19 October 2026 found the sky in the track archive, so textures can be collected without driving every track:
+
+- `Media	racks\Alpsin.zip` has 4,387 entries (4,376 LZX, 11 stored); all decompress with the runtime's `lzx_decompress` and match their CRC.
+- 368 distinctive blocks of the dumped sky are all in `_0x00000005.bin` at file offset 672 plus their tiled offset, swapped 8-in-16: the file holds the texture exactly as guest memory does. `_0x00000006.bin`, the same size, shares 184 of them (a second sky with the same lower half, not checked further).
+- These files are `CAFF` containers (`CAFF21.11.05.0034`, sections `.data` and `.gpu`). A `texture` record (`04.05.05.0032`) holds what looks like the Xbox 360 `D3DFORMAT` (`0x1A207F52` here, `0x1A200152` and `0x1A200154` in other files; `0x52` and `0x54` match DXT1 and DXT5) and the width and height as big-endian 16-bit values; the `.gpu` data (8 MB for the sky) starts after the header.
+- Only 60 of the 4,387 entries are such single-texture files. Where the other track textures are stored (the `.bix` files, the ribbon files) is not known yet.
+
+An offline extractor would untile and swap these files as the runtime does and name them by the same hash, so a pack built from them matches `texture_replace_path`. Not written yet.

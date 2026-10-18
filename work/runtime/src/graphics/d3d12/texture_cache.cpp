@@ -19,6 +19,7 @@
 #include <utility>
 
 #include <rex/assert.h>
+#include <rex/chrono/clock.h>
 #include <rex/cvar.h>
 #include <rex/dbg.h>
 #include <rex/graphics/d3d12/command_processor.h>
@@ -49,9 +50,11 @@ namespace rex::graphics::d3d12 {
 
 namespace {
 
-// A texture hashed in this many consecutive frames is updated every frame: it
-// is not hashed (nor dumped or replaced) until it stays unchanged for a frame.
+// A texture loaded this many times in a row, each within kContentHashRapidMs
+// of the one before, is updated all the time (a video plane, for instance): it
+// is not hashed (nor dumped or replaced) until it stays unchanged that long.
 constexpr uint32_t kContentHashMaxStreak = 8;
+constexpr uint64_t kContentHashRapidMs = 250;
 
 }  // namespace
 
@@ -702,7 +705,6 @@ void D3D12TextureCache::BeginSubmission(uint64_t new_submission_index) {
 void D3D12TextureCache::BeginFrame() {
   TextureCache::BeginFrame();
 
-  ++content_hash_frame_;
   if (!replacement_uploads_.empty()) {
     uint64_t completed_submission = command_processor_.GetCompletedSubmission();
     std::erase_if(replacement_uploads_,
@@ -2046,10 +2048,12 @@ bool D3D12TextureCache::LoadTextureReplacement(D3D12Texture& texture, bool load_
        key.dimension == xenos::DataDimension::k2DOrStacked) &&
       key.GetDepthOrArraySize() == 1 &&
       !IsRangeEverResolved(key.base_page << 12, texture.GetGuestBaseSize())) {
-    uint64_t last_frame = texture.content_hash_frame;
-    texture.content_hash_frame = content_hash_frame_;
-    texture.content_hash_streak =
-        last_frame && content_hash_frame_ - last_frame <= 1 ? texture.content_hash_streak + 1 : 0;
+    uint64_t now_ms = rex::chrono::Clock::QueryHostUptimeMillis();
+    uint64_t last_ms = texture.content_hash_time_ms;
+    texture.content_hash_time_ms = now_ms;
+    texture.content_hash_streak = last_ms && now_ms - last_ms <= kContentHashRapidMs
+                                      ? texture.content_hash_streak + 1
+                                      : 0;
     texture_replacement::GuestLevel level;
     if (texture.content_hash_streak < kContentHashMaxStreak &&
         texture_replacement::ReadGuestBaseLevel(
