@@ -14,7 +14,10 @@ BUTTONS = {'up': 0x1, 'down': 0x2, 'left': 0x4, 'right': 0x8, 'start': 0x10, 'ba
 # comma-separated sequence taps each in turn (released between). These change no input:
 #   'wait'             only waits (keeps a held throttle);
 #   'phase:<name>'     starts a measured phase ('phase:end' closes it) for summary.json phases;
-#   'select:<label>'   moves the menu highlight to the OCR'd label, for up to <seconds>.
+#   'select:<label>'   moves the menu highlight to the OCR'd label, for up to <seconds>;
+#   'defines:<NAME=VALUE ...>'  writes shader_mod_defines.txt in the shader_mod_path, which the
+#                      runtime applies with hot reload (--shader-dev): live knobs at once, other
+#                      defines through a recompile. The file is restored after the run.
 # [timeout, action, hold, text(, retry)] checks the screen: the action (comma-separated
 # presses, or 'wait') is repeated every retry (default RETRY_S) seconds until one of the
 # '|'-separated texts appears in a capture taken after it. The run fails (goal_reached false)
@@ -697,6 +700,35 @@ def summarize(perf, measure):
 DRIVING_INPUT = ('rt=', 'lt=', 'lx=', 'ly=')
 
 
+class ModDefines:
+    """The 'defines:' steps: shader_mod_defines.txt in the shader_mod_path, restored to what it
+    was (or removed) after the run, so a later run does not start with these values."""
+
+    def __init__(self, directory):
+        self.path = Path(directory) / 'shader_mod_defines.txt' if directory else None
+        self.original = None
+        self.written = False
+
+    def write(self, items):
+        if self.path is None:
+            raise RuntimeError("a 'defines:' step needs shader_mod_path (a look with mods)")
+        if not self.written:
+            self.original = self.path.read_bytes() if self.path.is_file() else None
+            self.written = True
+        text = ''.join(f'{item}\n' for item in items.replace(';', ' ').split())
+        temporary = self.path.with_suffix('.tmp')
+        temporary.write_text(text)
+        temporary.replace(self.path)
+
+    def restore(self):
+        if not self.written:
+            return
+        if self.original is None:
+            self.path.unlink(missing_ok=True)
+        else:
+            self.path.write_bytes(self.original)
+
+
 def without_driving_input(steps):
     """Steps without throttle, brake and steering: 'rt=255' becomes 'wait', 'rt=255+back'
     becomes 'back'. Menu presses and checks stay."""
@@ -778,6 +810,7 @@ def run_once(options, out):
     goal_reached = None
     failed_step = None
     phases = []
+    mod_defines = ModDefines(args.get('shader_mod_path'))
     screen = Screen(capture, process, out / 'steps.jsonl')
     try:
         if options.goal:
@@ -801,6 +834,8 @@ def run_once(options, out):
                 done = True
                 if action.startswith('phase:'):
                     phases.append((action[6:], perf_lines(out / 'perf.jsonl')))
+                elif action.startswith('defines:'):
+                    mod_defines.write(action[8:])
                 elif ',' in action:
                     press(input_file, action, hold)
                 elif action != 'wait':
@@ -827,6 +862,7 @@ def run_once(options, out):
         crashed = f'harness error: {error!r}'
     finally:
         screen.close()
+        mod_defines.restore()
         if process.poll() is None:
             process.kill()
             process.wait()

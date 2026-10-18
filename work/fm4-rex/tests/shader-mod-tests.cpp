@@ -75,7 +75,7 @@ constexpr uint32_t kPostViews = 3;
 // The synthetic system constants are 16 vectors; the live knobs follow them
 // (ShaderOverrides::kKnobCount).
 constexpr uint32_t kSystemConstantVectors = 16;
-constexpr uint32_t kKnobCount = 32;
+constexpr uint32_t kKnobCount = 64;
 
 // What ShaderOverrides::BuildContract writes for a pixel shader with color
 // target 0, all interpolators, every fetch constant bound as 2D, 3D and cube
@@ -169,6 +169,10 @@ const char kOverride[] = R"(void xe_pixel_shader(inout XePixel p) {
   float4 sum = 0.0;
   {
     float4 t = XE_HOOK_TFETCH(0u, XE_TFETCH2D(0, r0.xy), r0);
+    sum += t;
+  }
+  {
+    float4 t = XE_HOOK_TFETCH(1u, XE_TFETCH2D(1, r1.zw), r1.zwxy);
     sum += t;
   }
   {
@@ -383,7 +387,9 @@ int main(int argc, char** argv) {
       {"FM4_LOOK_RIMS", "1.0"},        {"FM4_LOOK_SKY_SATURATION", "1.2"},
       {"FM4_LOOK_SKY_CONTRAST", "0.3"}, {"FM4_LOOK_SKY_WARMTH", "0.3"},
       {"FM4_LOOK_SKY_HORIZON", "0.5"}, {"FM4_LOOK_FOLIAGE_HUE", "-30.0"},
-      {"FM4_LOOK_FOLIAGE_SATURATION", "1.2"}, {"FM4_LOOK_FOLIAGE_BRIGHTNESS", "1.1"}};
+      {"FM4_LOOK_FOLIAGE_SATURATION", "1.2"}, {"FM4_LOOK_FOLIAGE_BRIGHTNESS", "1.1"},
+      {"FM4_LOOK_ROAD_BRIGHTNESS", "0.9"}, {"FM4_LOOK_ROAD_CONTRAST", "0.3"},
+      {"FM4_LOOK_ROAD_SPECULAR", "0.5"}, {"FM4_LOOK_ROAD_SHEEN", "1.0"}};
   std::vector<std::filesystem::path> mods;
   for (const auto& entry : std::filesystem::directory_iterator(look)) {
     std::string name = entry.path().filename().string();

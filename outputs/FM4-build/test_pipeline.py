@@ -195,8 +195,35 @@ class PipelineTests(unittest.TestCase):
             self.assertEqual(defines['FM4_LOOK_SKY_HORIZON'],'0.5')
             self.assertEqual(defines['FM4_LOOK_FOLIAGE_HUE'],'-30.0')
             self.assertNotIn('FM4_LOOK_FOLIAGE_SATURATION',defines)
-            # Every knob of the look files fits the 32 live knob slots (shader_mod_live_knobs).
-            self.assertLessEqual(len(pipeline.look_knob_defaults()),32)
+            # Every knob of the look files fits the 64 live knob slots (shader_mod_live_knobs,
+            # ShaderOverrides::kKnobCount).
+            self.assertLessEqual(len(pipeline.look_knob_defaults()),64)
+
+    def test_look_road_knobs(self):
+        with tempfile.TemporaryDirectory(prefix='fm4 look test ') as directory:
+            root=Path(directory)
+            # road_gloss edits the track lighting files; the road_* shader knobs are defines of
+            # fm4-road.hlsli, with the original look as their defaults.
+            look='pc,road_gloss=0.5,road_specular=0,road_sheen=1,road_roughness=0.4,road_contrast=0.3'
+            self.assertEqual(pipeline.look_track_settings(pipeline.look_knobs(look)),
+                             'RoadSpecular.RoadSpecular*=0.5;RoadSpecular.RoadSpecular2*=0.5;'
+                             'skyScale.value*=0.7')
+            defines=dict(define.split('=',1)
+                         for define in pipeline.look_cvars(root,look)['shader_mod_defines'].split(';'))
+            self.assertEqual(defines['FM4_LOOK_ROAD_SPECULAR'],'0.0')
+            self.assertEqual(defines['FM4_LOOK_ROAD_SHEEN'],'1.0')
+            self.assertEqual(defines['FM4_LOOK_ROAD_ROUGHNESS'],'0.4')
+            self.assertEqual(defines['FM4_LOOK_ROAD_CONTRAST'],'0.3')
+            self.assertNotIn('FM4_LOOK_ROAD_BRIGHTNESS',defines)
+            self.assertNotIn('road_gloss',pipeline.look_cvars(root,look)['shader_mod_defines'])
+            knob_defaults=pipeline.look_knob_defaults()
+            for name,value in (('FM4_LOOK_ROAD_BRIGHTNESS','1.0'),('FM4_LOOK_ROAD_CONTRAST','0.0'),
+                               ('FM4_LOOK_ROAD_SPECULAR','1.0'),('FM4_LOOK_ROAD_SHEEN','0.0'),
+                               ('FM4_LOOK_ROAD_DEBUG','0.0')):
+                self.assertEqual(knob_defaults[name],value)
+            # Every road knob of the look files has a launcher name.
+            self.assertTrue({name for name in knob_defaults if name.startswith('FM4_LOOK_ROAD_')}
+                            <=set(pipeline.LOOK_KNOBS.values()))
 
     def test_new_clone_has_all_source_inputs(self):
         for name in ('rexglue.cmake','guard-generated.py','dump-image.cpp','switch-recipes.json'):

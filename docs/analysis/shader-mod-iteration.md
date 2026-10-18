@@ -72,7 +72,7 @@ The knobs must reach the mods without changing the bindless root signature that 
 
 1. **A new root constant buffer.** This changes the root signature of every pipeline. Rejected.
 2. **A small texture in a system bindless view**, like the GTAO occlusion (`xe_post_ao`). The root signature stays the same, but every change needs an upload and barriers on the command list, and every knob read is a texture load.
-3. **Floats after the system constants in `b0`** (chosen). `DxbcShaderTranslator::SystemConstants` (592 bytes) stays the same, and so does every DXBC translation. The system constant buffer is a root descriptor, which has no size. The command processor writes 32 knob floats (128 bytes) at offset 592 when live knobs are on. The 720 bytes still fit the 768 bytes that the 256-byte placement alignment already reserves for 592.
+3. **Floats after the system constants in `b0`** (chosen). `DxbcShaderTranslator::SystemConstants` (592 bytes) stays the same, and so does every DXBC translation. The system constant buffer is a root descriptor, which has no size. The command processor writes the knob floats at offset 592 when live knobs are on: 32 of them (128 bytes, 720 bytes in all, within the 768 bytes that the 256-byte placement alignment already reserves for 592) until 18 October 2026, 64 (256 bytes, 848 bytes in all, within 1,024) since the road mods brought the look files to 34 knobs.
 
 **How the mods see them.**
 
@@ -87,7 +87,7 @@ The knobs must reach the mods without changing the bindless root signature that 
 - **Use.** Live knobs are a tool for finding values. The values found go into `-Look` (defines) for normal runs.
 - **Compiler warning.** An early `if (knob) return` becomes a run-time branch, and FXC reports it as a potentially uninitialized return value (X4000). The library disables that warning only when `XE_SYS_MOD_KNOBS` is defined.
 - **Precision.** At equal values, the result of a live knob can differ from the `#define` result in the last bits, where FXC would otherwise fold constants at compile time.
-- **Scope.** Only numeric defines become live, up to 32 of them. A define that was not given at the start, or one with a value that is not a number, needs a recompile (hot reload), so `-ShaderDev` gives every knob of the look files from the start.
+- **Scope.** Only numeric defines become live, up to 64 of them (`ShaderOverrides::kKnobCount`). A define that was not given at the start, or one with a value that is not a number, needs a recompile (hot reload), so `-ShaderDev` gives every knob of the look files from the start.
 
 ## Workflow
 

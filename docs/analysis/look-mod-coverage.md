@@ -1,6 +1,6 @@
 # Look Mod Coverage (17 October 2026)
 
-Look mods are keyed by the ucode hash of a pixel shader. A mode or track that draws the same role with a different ucode gets the original shader without any warning. This note lists, per track and per mode, which final combine, motion blur and car paint hashes occur, and the mods added on 17 October 2026 for the ones that had none. The car glass, chrome and rims, which got mods on 18 October 2026, are in [their own section](#glass-chrome-and-rims-18-october-2026), and so are the sky and vegetation of the tracks ([Sky and Vegetation](#sky-and-vegetation-18-october-2026)). It contains hashes, technique names and constant names only, no shader code.
+Look mods are keyed by the ucode hash of a pixel shader. A mode or track that draws the same role with a different ucode gets the original shader without any warning. This note lists, per track and per mode, which final combine, motion blur and car paint hashes occur, and the mods added on 17 October 2026 for the ones that had none. The car glass, chrome and rims, which got mods on 18 October 2026, are in [their own section](#glass-chrome-and-rims-18-october-2026), and so are the sky and vegetation of the tracks ([Sky and Vegetation](#sky-and-vegetation-18-october-2026)) and the road surface ([Road Surface](#road-surface-18-october-2026)). It contains hashes, technique names and constant names only, no shader code.
 
 ## Method
 
@@ -257,6 +257,120 @@ The A/B runs set only the nature knobs (every other knob at the original look) w
 | Smoke gate `natc1` (`pc` plus the candidate set) against `pcsky07` (`pc`, the same BuildRoot, run earlier the same day), 240 Hz, 1x | 3 of 3 cells passed, no FAIL, no new error keys, no clear-gray frames; WARN on capture statistics only. Race GPU per frame 3.01 to 2.93 ms (`photo`) and 3.14 to 3.13 ms (`career`); photo mode 4.62 to 4.00 ms; replay 4.58 to 4.42 ms. The race fps follows the draws per frame: 204.6 to 213.7 at 2,406 to 2,143 draws (`photo`), 192.0 to 180.8 at 2,458 to 2,751 draws (`career`). One run per cell. |
 
 **The `pc` preset**: unchanged. The candidate set is an improvement only in the sky, and a small one, seen on two tracks at one time of day, against the game's look rather than against `pc`, which already has `saturation=1.1` and `sky=0.7`. No preset sets the nature knobs.
+
+## Road Surface (18 October 2026)
+
+The road, its painted lines, its edges and the paved shoulders beside it have mods too: [fm4-road.hlsli](../../work/fm4-rex/look/fm4-road.hlsli) and one `shader_<hash>.mod.hlsli` per hash (25 hashes), with the knobs `road_brightness`, `road_contrast`, `road_specular`, `road_sheen`, `road_roughness` and the debug views `road_debug` ([running.md](../running.md)). The track knob `road_gloss`, which scales `RoadSpecular` and `RoadSpecular2` in the track lighting files, stays as it is.
+
+### Hashes
+
+From the [material atlas](material-atlas.md) of `I:\FM4-build2` (draws of its Bernese Alps sample), the techniques and track archives of each hash, and what the false color runs below showed it drawing:
+
+| Hash | Techniques | Track archives | Draws | Mod | On screen |
+|---|---|---|---|---|---|
+| `5E33CD06E3AF5B04` | `ROAD_BLND_2`, `ROAD_BLND_TRILIN_2` | 17 | 23,179 | lit, debug views | the asphalt of the Bernese Alps, the brick of its pit lane, parts of Sebring and Top Gear; also in the mirror |
+| `29A611FD8CFB545D` | as above, unlit | the same 17 | 7,246 | tone | draws in the main scene in a third of the race frames, not seen in the frozen cameras |
+| `719181479E75D490` | `ROAD_2BLND_3`, `ROAD_2BLND_TRILIN_3` | `Nurburgring`, `RoadAtlanta`, `Sebring`, `SunsetInfield` | 0 | lit | the concrete of the Sebring start straight |
+| `AB06B72B8FC00531` | as above, unlit, and `TERR_ROAD_2BLND_3` | the same 4 | 0 | tone | as `29A611FD8CFB545D` |
+| `E2DECBB50FE1F549` | `ROAD_BLND_DIFF_SPEC_3`, `_TRILIN_3` | `CrownJewel`, `TopGear` | 0 | lit | the asphalt of Top Gear |
+| `B456A6A80C358BE8` | `ROAD_BLND_DIFF_LOCALSPEC_3` | `CrownJewel` | 0 | lit | not run |
+| `6FAC53A84493D9C8` | the three above, unlit | `CrownJewel`, `TopGear` | 0 | tone | as `29A611FD8CFB545D` |
+| `2AD313C93939CC4E` | `ROAD_BLND_REFL_NORM_NOCUBE_4` | `Indi`, `Infin` | 0 | lit | not run |
+| `F54ECAB765C4EF80` | `ROAD_BLND_NORM_ANI3_4` | `Tsukuba` | 0 | lit | the asphalt of Tsukuba |
+| `68BFCEB3128D4243` | `ROAD_BLND_NORM_ANI3_4`, `ROAD_BLND_REFL_NORM_4`, `_NOCUBE_4`, unlit | `Indi`, `Infin`, `Tsukuba` | 0 | tone | as `29A611FD8CFB545D` |
+| `3659E347F2BC25C4` | `ROAD_BLND_REFL_NORM_4` | `Tsukuba` | 0 | tone | drew on Tsukuba (102,933 draws), not identified |
+| `23820B0944BFEA99` | `ROAD_BLND_REFL_NORM_ANI3_VCLR_4` | `Tsukuba` | 0 | tone | 3,017 draws on Tsukuba, not identified |
+| `FDB6220AC64BFAA7` | as above, unlit | `Tsukuba` | 0 | tone | never drew |
+| `49E644093DA8F52F` | `RDLINE_BLND_SPEC_OPAC_3` | 17 | 47,376 | plain | the white and yellow lines and the arrows |
+| `38BB332354AB004E` | `RDLINE_BLND_DIFF_OPAC_2` | 7 | 0 | plain | lines of Sebring and Top Gear |
+| `B45FDB6F029E956C` | `RDLINE_DIFF_OPAC_2` | 15 | 0 | plain | lines of Tsukuba, Sebring and Top Gear |
+| `2721A94BE9720ED6` | `RDEDG_BLND_DIFF_SPEC_BUMP_5` | `Alps` | 6,475 | lit (fetch 1) | not seen in the frozen cameras |
+| `511B7ED1E9C15776` | `RDEDG_BLND_DIFF_SPEC_BUMP_4` | `Alps`, `CrownJewel`, `TopGear` | 543 | lit (fetch 1) | the road edge of Top Gear |
+| `E6504978C414C01D`, `29F5E60933DDD558` | the two above, unlit | as above | 349, 265 | tone (fetch 1) | not seen |
+| `21CE6E592CD9B840` | `SHLDR_BLND_SPEC_2` | `Alps`, `Autopark`, `Catalunya`, `Hockenheim`, `LeMans` | 36,374 | plain | the paved shoulders and the pit lane of the Bernese Alps |
+| `61BDABDE43ED4AA5` | `SHLDR_DIFF_SPEC_DECAL_MULT_NORM_5` | `Alps`, `TopGear` | 11,835 | plain | the paved run-off beside the road (Alps, Top Gear) |
+| `22F2AAD7D46B3D62` | `SHLDR_BLND_SPEC_3` | 15 | 6,328 | plain | a paved strip beside the road (Alps) |
+| `7A1AD82DFA7556E8` | `SHLDR_4CLR_BLND_MASK_2` | `Alps`, `CrownJewel` | 10,650 | plain | not seen |
+| `E7723323FB183E69` | `SHLDR_DIFF_SPEC_MULT_NORM_4` | `Alps` | 908 | plain | not seen |
+
+Mod kinds: **lit** gives the asphalt texture the tone knobs (fetch 0, or fetch 1, the `RoadSampler` of the edges, whose fetch 0 is the shoulder texture), scales the game's sun highlight (`road_specular`) and adds the sheen; **plain** has no asphalt texture, so only the highlight knobs; **tone** is a road shader without a sun highlight, so only the tone knobs.
+
+Left without a mod:
+
+- `A61C8E704FB1CCDB` (`SHLDR_DIFF_SPEC_1`, also `SIGN_DIFF_SPEC_SHAD_1`, 23 tracks): false color shows it drawing the walls, banners and signs along the track, not the ground.
+- `AC785C2DA14FB0F4` (`SHLDR_BLND_SKIDSPEC_2`, 3 tracks): its sun shadow comes from other interpolators and from a projected track lightmap (fetch 13), so the shared shadow of the sheen does not fit it; it keeps the game's look.
+- The unlit shoulders `471771339781970C`, `AFE1EDF44F357517`, `429AE74455107F56` have no highlight to change.
+- The shoulders of Tsukuba (`C9656A1E9EF64D28`, the painted run-off, 755,315 draws; `4267DC196B990989`, the grass verges, 509,710 draws; `33AE5A6528F5D1B2`, `A775803D3CCB7C56`, `C8F59933FE159062`, `4BF1AB3CEA368C88`) and the other `SHLDR_*`, `RDEDG_DIFF_OPAC_2` and `RDDET_*` hashes of the atlas: not decoded yet.
+- `3659E347F2BC25C4` and `23820B0944BFEA99` read no sun direction: their highlight is a cube map reflection times the W of `c249`, which `road_specular` would remove with no sheen to replace it, so only the tone knobs apply.
+- The roads of Amalfi, Fujimi Kaido and Maple Valley are not road shaders at all (no `ROAD_*` technique in their archives): they are drawn by terrain, shoulder and track object shaders.
+
+### Inputs
+
+Read from the ucode dumps of `I:\FM4-build-iter\e2e\cov-ab-16car-dump` (all hashes above but four, which only the runs below translated) with a symbolic listing of each shader, and the literal constants from the containers (`c255` = (1, 0, 0, 0) in `5E33CD06E3AF5B04`; other shaders keep 0 and 1 in other components). `5E33CD06E3AF5B04`:
+
+- Interpolator 0 the normal, 1 the direction to the eye, 2 X the fog, 2 ZW and 4 ZW the cascade selection of the shadow map, 3 XY, 3 ZW and 4 XY its three taps, 5 XY the UV of the asphalt, 6 XY the UV of the blend value and the lightmap.
+- The asphalt color: the texel of `Blend_B` (fetch 0) times `c0` blended to the texel plus `c2` by the blend value (`Blend_Value`, fetch 1, Y).
+- The diffuse: that color times the lower, per channel, of two lights blended from `V2LightmapColor1` (`c247`) to `V2LightmapColor2` (`c248`): one by the lightmap texel (fetch 7, RGB), one by the cascade shadow through `shad_color` (`c240`).
+- The sun highlight: `pow(N.H, power)` times `sunColor` (`c251`), the shadow and the specular amount, times the W of `TimeGain` (`c249`). The shadow is the lower of the three taps (fetch 11, Y, Z and X) and the lightmap's Y mapped from `c224.z` to `c224.w`, raised from the W of `SunGainScale` (`c214`) to 1. The amount is `c223.x` to `c223.y` by the asphalt texel's alpha, plus `c223.w` to `c223.z` by the blend value, and the power is `c224.x` to `c224.y` by the amount.
+- `RoadSpecularParams1` (`c223`) and `RoadSpecularParams2` (`c224`) hold the eight values of the track's `RoadSpecular` element: `RoadSpecular` and `RoadSpecular2` in `c223` X and Y (the `road_gloss` knob scales those, and only the aggregate's sparkle changed with it), the rubber values `RoadSkid` and `RoadSkid2` in Z and W, `RoadGlossiness` and `RoadGlossiness2` in `c224` X and Y (25 and 25 on the Bernese Alps, so the power is 25), and `RoadLightmapDarkPoint` and `RoadLightmapLightPoint` in Z and W (0.42 and 0.86). This assignment is inferred from how each value is used.
+- The output: the fog towards `FogColor` (`c242`) and the square root (gamma 2), alpha 1.
+
+Every lit shader of the table reads the same shadow (three taps at the same interpolators, the same cascade selection and the lightmap mapping of `c224`), the normal in interpolator 0, the direction to the eye in 1 and the fog in 2 X, and adds its highlight with the W of `c249` before the fog towards `c242`. The variants differ in the color (two blend textures, normal maps, skids) and in the amount. The unlit variants (`29A611FD8CFB545D` and the others marked tone) light the same asphalt color by the lightmap alone, with no shadow map and no highlight, and multiply the result by the W of `c222`.
+
+### The Bright Sheet
+
+[Current status](../status/current.md#display) recorded a near-white sheet on sunlit asphalt toward the sun on the Bernese Alps, which `road_gloss` did not remove. The debug views of the `5E33CD06E3AF5B04` mod split the shader's result in the game: a Quick Race grid start without the AI driver, the second camera turned to the side with the right stick, at 2x, the views switched every 4.5 s through `shader_mod_defines.txt` (`defines:` steps, [e2e README](../e2e/README.md#scenario-steps)) in the same frame. The Quick Race put the car in the same grid slot in this run and in the `CameraExposureRange` run, and the crop is the 640x300 one of the `road_gloss` checks:
+
+| Setting | Crop mean (8-bit) | Pixels at 230 or more | At 250 or more |
+|---|---|---|---|
+| `pc` | 225 | 51.7% | 0.2% |
+| `pc`, `road_specular=0` (no game highlight) | 116 to 123 | 0.0% | 0.0% |
+| `pc`, `road_specular=0.5` | 214 | 22.2% | 0.0% |
+| `pc`, `exposure=-1` | 195 | 2.6% | 0.0% |
+| `pc` with `CameraExposureRange` `maxval` 1 instead of 6 (another run) | 225 | 51.7% | 0.2% |
+
+- View 1 colors the sheet orange to red: the sun highlight is 70 to 80% of the light there. View 2 (without the highlight) has no sheet; view 3 (the highlight alone) is the sheet. View 4 shows the lightmap deciding the diffuse light everywhere but in the car's own shadow, where the dynamic shadow does.
+- View 5 shows the specular amount mostly from the blend value of the rubber (`RoadSkid`, `RoadSkid2`), not from the texture's alpha. So the sheet is the game's highlight, a Blinn-Phong lobe of power 25 with no Fresnel and no N.L, whose amount is a smooth mask: `road_gloss` scales only the alpha's part, the sparkle of the aggregate.
+- `CameraExposureRange` does not take part: with `maxval` 1 the track settings copy was mounted (60 changes) and the frame is the same, so the auto exposure there lies within the range. A lower exposure only darkens the whole picture.
+
+A look mod is therefore the place for it, not the exposure range.
+
+### Mods
+
+- **Tone** (`fm4_road_asphalt`): `road_brightness` scales the asphalt texel; `road_contrast` raises the ratio of each texel's luminance to the texture's local mean (the same fetch four mip levels coarser) to the power 1 + contrast, so the aggregate stands out while the mean tone stays. The alpha (the specular mask) is the game's. Measured on the grid: `road_contrast=0.5` raises the standard deviation of a road crop's green from 41.8 to 49.2 at the same mean.
+- **Specular** (`fm4_road_constant`): `road_specular` scales the W of `c249`, which these shaders read for the sun highlight only.
+- **Sheen** (`fm4_road_sheen`): an energy normalized GGX highlight with Schlick Fresnel (F0 0.04, roughness `road_roughness`, default 0.5), the height correlated Smith visibility and N.L, times pi as the clear coat, in the sun's share of the diffuse light (`c248 - c247`) and the shared shadow, soft limited at 4 times that light, before the fog. The road shaders `5E33CD06E3AF5B04` and `719181479E75D490` weight it by the game's own specular amount (in full from 0.5); the others by a uniform 0.5. The normal is interpolator 0, without the normal maps of the variants.
+- **Debug** (`fm4_road_debug`, `5E33CD06E3AF5B04` only): the views above. Views 1, 4 and 5 keep the luminance of the game's output, so the auto exposure stays.
+
+At the default knobs each mod compiles to the DXBC of the library without a mod.
+
+An earlier version, which weighted the sheen by the texel's brightness against the mean instead, gave the sheet back: 55.8% of the crop at 230 or more with `road_specular=0`, a flat gradient with no aggregate. Weighted by the amount it gives 5.4% (mean 187), the aggregate visible through a smaller glare.
+
+### Verification Without the Game
+
+- `fm4_shader_mod_tests` (94 mods): 1,781 checks pass. The synthetic override now also fetches fetch 1 through `XE_HOOK_TFETCH`, for the asphalt of the road edges, so every fingerprint differs from the earlier ones: with the `pc` defines the 25 new mods compile to the DXBC of the library without a mod (fingerprint `BF287DBE415AA801`, 1,432 instruction slots), and with every knob away from the original each changes. The look files have 34 knobs, and the live knob slots are raised from 32 to 64 (`ShaderOverrides::kKnobCount`, 848 bytes of system constants with live knobs). With live knobs the lit road mods take 1,844 to 1,961 instruction slots, the plain ones 1,708, the tone ones 1,569.
+- `override_fxc.py --stub` against the real contracts: all 99 contracts of 76 modded hashes in the dumps of the runs below and of `I:\FM4-build-iter`, among them 24 of the 25 new hashes, compile with and without the road knobs moved, and each road mod's DXBC changes with them. `2AD313C93939CC4E` (Indianapolis, Infineon) has no contract and compiled only on the synthetic one.
+
+### In-Game Checks: Road Surface (18 October 2026)
+
+BuildRoot `I:\FM4-build-usa`, 240 Hz, `--profile copy`, quality `high`, at 2x (2560x1440) with `--keep-ppm`. The false color runs use `--look original` and a look directory in the BuildRoot (not in the repository) with every mod of the repository plus a tint of each listed hash, its luminance kept, in groups of up to eight that a live define switches through `defines:` steps while a race camera is frozen (rewind, Y); `REX_GPU_INVENTORY` records what drew. Tracks: the Bernese Alps (Quick Race), and Tsukuba, Sebring and Top Gear (Quick Race, the location picked on the TRACKS screen), with the AI driver and five race cameras each. The A/B runs switch the road knobs through `defines:` steps with `--shader-dev` in one frozen frame, on top of `pc`.
+
+| Check | Result |
+|---|---|
+| False color, Bernese Alps | `5E33CD06E3AF5B04` draws the whole road, the brick of the pit lane and the road in the mirror; `49E644093DA8F52F` the white and yellow lines and the arrows; `21CE6E592CD9B840` the pit lane and paved shoulders; `61BDABDE43ED4AA5` the paved run-off beside the road; `22F2AAD7D46B3D62` a paved strip; `A61C8E704FB1CCDB` the walls and banners. `29A611FD8CFB545D` drew 76,593 times in 12,726 of 36,063 frames, only in the main scene, not in the frozen cameras; so did the unlit variants on the other tracks. Kerbs are other shaders. |
+| False color, Tsukuba | `F54ECAB765C4EF80` draws the whole road, `49E644093DA8F52F` its lines. `3659E347F2BC25C4` (102,933 draws) and `23820B0944BFEA99` (3,017) drew but were not seen; `FDB6220AC64BFAA7` never drew. The painted run-off is `C9656A1E9EF64D28`, the grass verges `4267DC196B990989` (no mods). |
+| False color, Sebring | `719181479E75D490` draws the concrete of the start straight; `5E33CD06E3AF5B04`, `38BB332354AB004E` and `B45FDB6F029E956C` drew (267,650, 501,912 and 155,062 draws). |
+| False color, Top Gear | `E2DECBB50FE1F549` draws the runway asphalt, `511B7ED1E9C15776` the road edge, `61BDABDE43ED4AA5` the paved apron, `5E33CD06E3AF5B04` a part of the track. In the game's look its hood view shows the same white glare towards the sun on `E2DECBB50FE1F549`. |
+| Debug views and `CameraExposureRange` | See [The Bright Sheet](#the-bright-sheet). |
+| A/B, sheet view (Bernese Alps grid) | The crop of [The Bright Sheet](#the-bright-sheet), 1:1 at 2x: `pc` a milky sheet, the aggregate barely visible; `road_specular=0` dark asphalt with sharp aggregate and no glare; `road_specular=0,road_sheen=1` a smaller glare towards the sun with the aggregate through it (5.4% at 230 or more, mean 187); `road_roughness=0.35` a hot spot (5.9% at 250 or more), 0.7 almost no glare. `road_contrast=0.5` alone leaves the sheet as it is. |
+| A/B, another grid slot (a moderate sun angle) | An 800x380 crop over the asphalt and a painted arrow: `pc` mean (175, 190, 180), 2.1% at 230 or more, a soft glare over asphalt and arrow alike; `road_specular=0,road_sheen=1` (122, 147, 134), 0%, no glare, sharp aggregate; `road_specular=0.5,road_sheen=1` (162, 179, 168), 0.8%; `road_specular=0,road_sheen=1,road_roughness=0.4` (138, 161, 148), 0.4%. The arrow (`49E644093DA8F52F`) and the asphalt change together in every set: no seam. |
+| A/B, five race cameras (cockpit, hood, bumper, two chase cameras), none facing the sun | Road crops change by 1 or 2 of 255 between `pc` and every set; `road_contrast=0.3` adds a little grain to the aggregate. The skid marks, the apron and the lines look the same. |
+| Smoke gate `roadc` (`pc` plus `road_specular=0,road_sheen=1`) against `roadbase` (`pc`, run just before it), 240 Hz, 1x | 3 of 3 cells passed, the same error keys, no clear-gray frames. `photo` and `photo_view` WARN on capture statistics only. `career` FAIL on fps: race 213.7 to 189.5 fps, but that race drew 2,585 instead of 2,007 draws per frame (`photo`: 215.4 to 199.2 fps at 2,154 to 2,521), and the race is limited by the command processor. Race GPU per frame 3.01 to 3.08 ms (`photo`) and 3.08 to 3.20 ms (`career`), replay 4.49 to 4.70 ms, photo mode 4.34 to 4.20 ms. One run per cell. |
+| `RoadSkid` and `RoadSkid2` set to 0 (track settings) | The copies mounted (90 changes), but the Quick Race put the car in another grid slot, with no view into the sun, so the run does not show whether the sheet goes with them. |
+
+**The `pc` preset**: unchanged. `road_specular=0,road_sheen=1` removes the sheet, but also the soft glare that the game's highlight gives at moderate sun angles, and the views away from the sun do not change; `road_specular=0.5,road_sheen=1` halves the game's term instead. Which reads better is a matter of taste, seen on one track at one time of day, and the race GPU time rose by 0.07 to 0.12 ms per frame. No preset sets the road knobs; try `-Look "pc,road_specular=0,road_sheen=1"` or `-Look "pc,road_specular=0.5,road_sheen=1"`.
+
+Not checked: a sun-facing view with the mods on another track (the Top Gear hood view showed the glare in the game's look only), Indianapolis and Infineon (`2AD313C93939CC4E`), Crown Jewel (`B456A6A80C358BE8`), other times of day, replays and photo mode, and the cost at 2x.
 
 ## Related
 

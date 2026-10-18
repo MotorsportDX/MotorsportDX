@@ -91,7 +91,7 @@ python outputs\FM4-build\e2e\override_fxc.py <override file or dir> <dump_shader
 
 Options: `--asm <dir>` writes the FXC disassembly of each override there, `--mods` gives a `shader_mod_path` directory, `--define NAME=VALUE` (repeatable) sets the defines of the mods, and `--workers` (default 8) sets the parallel compiles.
 
-`--stub` compiles the mods themselves against the contracts, without override files: every `shader_<hash>.mod.hlsli` of `--mods` on every contract of its hash, around a stub override that writes interpolator 0 plus every 2D texture the contract binds, each fetched through `XE_HOOK_TFETCH` as a generated override fetches it (so the fetch hooks of the sky and foliage mods run too):
+`--stub` compiles the mods themselves against the contracts, without override files: every `shader_<hash>.mod.hlsli` of `--mods` on every contract of its hash, around a stub override that writes interpolator 0 plus every 2D texture the contract binds, each fetched through `XE_HOOK_TFETCH` as a generated override fetches it (so the fetch hooks of the sky, foliage and road mods run too):
 
 ```
 python outputs\FM4-build\e2e\override_fxc.py --stub <dump_shaders dir> --mods work\fm4-rex\look --define FM4_LOOK_GLASS=1.0 ...
@@ -149,6 +149,7 @@ Details that matter for experiments:
 - `flakes=0...1` adds metallic flakes (`flake_scale` cells per unit of the paint UV). No preset uses them, as in races they do not show (see `fm4-paint.hlsli`).
 - `ao=<strength>` applies the runtime's GTAO pass (see [gtao-design.md](../analysis/gtao-design.md)) in the final combine shaders. Above 0 it also turns the post passes on (`post_pass_path`, `pipeline.py` `ao_cvars`), whose `passes.toml` names the camera vertex shaders and the 0.75 m radius. `--ao` (on `pipeline.py` and `e2e.py`) runs the pass alone.
 - Presets name sets of knobs and mix with them, later items winning: `pc` (`tonemap=aces`, `saturation=1.1`, `bloom=0.7`, `sharpen=0.4`, `clearcoat=1`, `ao=0.6`, `sun=2`, `sky=0.7`); `aces`, `gt` and `neutral` (the tone curve, `clearcoat=1` and `ao=0.6`); and `original`, which runs without mods.
+- `road_debug=1...5` (`FM4_LOOK_ROAD_DEBUG`) shows the terms of the lit road `ROAD_BLND_2` instead of its result: the share of the sun highlight, the result without it, the highlight alone, which light the diffuse takes, and the parts of the specular amount (see [look mod coverage](../analysis/look-mod-coverage.md#the-bright-sheet)). With `--shader-dev`, `defines:` steps ([README](README.md#scenario-steps)) switch the views and the other road knobs in one frozen frame.
 - The launcher and `e2e.py` use `pc` unless `-Look`/`--look` says otherwise, so the gates run with it. `--look original` compares with the game's own look.
 
 ### Post pass and AO diagnostics

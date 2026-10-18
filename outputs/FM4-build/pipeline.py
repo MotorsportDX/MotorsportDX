@@ -468,6 +468,14 @@ LOOK_KNOBS={'sharpen':'FM4_LOOK_SHARPEN','bloom':'FM4_LOOK_BLOOM','exposure':'FM
             'sky_warmth':'FM4_LOOK_SKY_WARMTH','sky_horizon':'FM4_LOOK_SKY_HORIZON',
             'foliage_hue':'FM4_LOOK_FOLIAGE_HUE','foliage_saturation':'FM4_LOOK_FOLIAGE_SATURATION',
             'foliage_brightness':'FM4_LOOK_FOLIAGE_BRIGHTNESS',
+            # Road surface of the tracks (work/fm4-rex/look/fm4-road.hlsli): the tone of the
+            # asphalt texture, the game's sun highlight on the road, its lines, edges and
+            # shoulders, and a GGX sheen with Fresnel in its place; road_debug shows the terms
+            # of the lit road. The track knob road_gloss (LOOK_TRACK_KNOBS) scales the game's
+            # specular amounts instead.
+            'road_brightness':'FM4_LOOK_ROAD_BRIGHTNESS','road_contrast':'FM4_LOOK_ROAD_CONTRAST',
+            'road_specular':'FM4_LOOK_ROAD_SPECULAR','road_sheen':'FM4_LOOK_ROAD_SHEEN',
+            'road_roughness':'FM4_LOOK_ROAD_ROUGHNESS','road_debug':'FM4_LOOK_ROAD_DEBUG',
             # Ambient occlusion of the GTAO post pass on the scene; above 0 it also turns
             # the post passes on (ao_cvars).
             'ao':'FM4_LOOK_AO'}
@@ -492,7 +500,9 @@ LOOK_TRACK_KNOBS={'road_gloss':('RoadSpecular.RoadSpecular','RoadSpecular.RoadSp
 # without any shader mod. No preset has glass, chrome or rims yet: the A/B at 2x of 18 October
 # 2026 has not covered their sun highlights or the split-screen set. No preset has the sky_* or
 # foliage_* knobs: their A/B at 2x of the same day showed only a slightly deeper sky
-# (docs/analysis/look-mod-coverage.md).
+# (docs/analysis/look-mod-coverage.md). No preset has the road_* knobs: road_specular=0 with
+# road_sheen=1 removes the bright sheet towards the sun but also the softer glare at moderate
+# sun angles, a matter of taste seen on one track.
 LOOK_PRESETS={'pc':'tonemap=aces,saturation=1.1,bloom=0.7,sharpen=0.4,clearcoat=1,ao=0.6,sun=2,sky=0.7',
               'aces':'tonemap=aces,clearcoat=1,ao=0.6,sun=2','gt':'tonemap=gt,clearcoat=1,ao=0.6,sun=2',
               'neutral':'tonemap=neutral,clearcoat=1,ao=0.6,sun=2','original':''}

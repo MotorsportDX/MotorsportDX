@@ -260,7 +260,7 @@ every race camera on this runtime show none.
 
 The look mods are original shader code hooked into the HLSL that the runtime
 generates from the game's post-processing shaders, car shaders (body paint,
-glass, chrome and rims) and track shaders (sky, trees, bushes and grass;
+glass, chrome and rims) and track shaders (sky, trees, bushes, grass and the road surface;
 `work/fm4-rex/look`; see [Shader overrides](e2e/experiments.md)). `-Look` takes a
 preset, knobs, or both. A preset sets only its own knobs. Later items win, so
 `-Look "pc,sharpen=0.6"` uses the `pc` preset with sharpening at 0.6.
@@ -304,6 +304,12 @@ and `-Look original`.
 | `foliage_hue` | degrees | Hue of the green of trees, tree cards, bushes and grass on every track: below 0 towards yellow and orange (-30 dry, -60 autumn), above 0 towards blue green. Bark, flowers and gray chain-link fences keep their color. |
 | `foliage_saturation` | number | Saturation of that green. |
 | `foliage_brightness` | number | Brightness of that green. |
+| `road_brightness` | number, default 1 | Brightness of the asphalt texture of the road and the road edges on every track (`fm4-road.hlsli`). |
+| `road_contrast` | number, default 0 | Contrast of the asphalt aggregate against the texture's local mean: light stones lighter, the binder darker, the overall tone kept. |
+| `road_specular` | number, default 1 | The game's sun highlight on the road, its lines, edges and paved shoulders. `0` removes it, and with it the bright sheet on sunlit asphalt toward the sun. |
+| `road_sheen` | number, 0 to 1 | A GGX sun highlight with Fresnel on the same surfaces, in the sun's share of their diffuse light, glinting with the aggregate. With `road_specular=0` it replaces the game's highlight. |
+| `road_roughness` | number, default 0.5 | Roughness of that highlight: lower is a smaller, brighter glare. |
+| `road_debug` | 0 to 5 | Debug views of the lit road `ROAD_BLND_2`: 1 the highlight's share of the light, 2 without the highlight, 3 the highlight alone, 4 which light the diffuse takes, 5 the parts of the specular amount. See [look mod coverage](analysis/look-mod-coverage.md#road-surface-18-october-2026). |
 | `ao` | number, `0` turns it off | Strength of the screen-space ambient occlusion. |
 | `sun` | number, `0` turns the glare off | Strength of the sun glare on the RTV path, the same at every MSAA level. Without it (`original`) the glare follows the counted samples. See [Sun glare](#sun-glare). |
 | `road_gloss` | multiplier, default 1 | Specular of the road surface. See [Track lighting](#track-lighting). |
@@ -316,6 +322,11 @@ and Maple Valley, `sky_saturation=1.15,sky_contrast=0.3,sky_horizon=0.5` gave a 
 blue sky, and `foliage_saturation=1.15` was barely visible (see
 [look mod coverage](analysis/look-mod-coverage.md#in-game-checks-sky-and-vegetation-18-october-2026)).
 For autumn colors try `-Look "pc,foliage_hue=-45"`.
+No preset sets the `road_*` knobs: on the Bernese Alps at 2x, `road_specular=0,road_sheen=1`
+removes the bright sheet on sunlit asphalt toward the sun but also the softer glare at moderate
+sun angles, and views away from the sun look the same (see
+[look mod coverage](analysis/look-mod-coverage.md#in-game-checks-road-surface-18-october-2026)).
+Try `-Look "pc,road_specular=0,road_sheen=1"` or `-Look "pc,road_specular=0.5,road_sheen=1"`.
 
 ### Sun glare
 
@@ -350,9 +361,11 @@ The `pc` preset sets `sky=0.7`; `aces`, `gt` and `neutral` keep the game's sky, 
 sets `road_gloss`. `-Look "pc,sky=1"` restores the sky of `pc` before 18 October 2026. In 2x
 captures of that day on the Bernese Alps, `sky=0.7` gives a bluer, less washed out sky that
 keeps the snow and clouds bright. Lowering `road_gloss` only removes the
-sparkle of the asphalt aggregate. The bright sheet on sunlit asphalt toward the sun does not
-come from these two values, so `road_gloss` does not remove it. See
-[current status](status/current.md#display).
+sparkle of the asphalt aggregate. The bright sheet on sunlit asphalt toward the sun is the
+road shader's sun highlight, but most of its specular amount comes from the blend value of
+the rubber (`RoadSkid` and `RoadSkid2`), which `road_gloss` leaves as it is. `road_specular`
+and `road_sheen` (see [Look](#look)) act on the whole highlight. See
+[look mod coverage](analysis/look-mod-coverage.md#road-surface-18-october-2026).
 
 ### Ambient occlusion
 
@@ -385,7 +398,7 @@ FXC when they are first drawn. For the six measured, this took 0.15 to 1.4 s eac
 - Every knob of the look files is live. Open the console with the backtick key and type
   `shader_mod_set FM4_LOOK_SHARPEN=0.6 FM4_LOOK_BLOOM=0.8`: the image changes in the next
   frame. `shader_mod_set` alone lists the values. The names are the `FM4_LOOK_*` defines
-  of `fm4-look.hlsli`, `fm4-paint.hlsli`, `fm4-car.hlsli` and `fm4-nature.hlsli`; `FM4_LOOK_TONEMAP` takes 0 to 3 (`filmic`,
+  of `fm4-look.hlsli`, `fm4-paint.hlsli`, `fm4-car.hlsli`, `fm4-nature.hlsli` and `fm4-road.hlsli`; `FM4_LOOK_TONEMAP` takes 0 to 3 (`filmic`,
   `gt`, `aces`, `neutral`).
 - `NAME=VALUE` lines in `work/fm4-rex/look/shader_mod_defines.txt` (not tracked by Git)
   apply in the same way whenever the file is saved.

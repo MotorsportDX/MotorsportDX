@@ -60,7 +60,9 @@ class ShaderOverrides {
 
   // Live knobs: floats in the system constant buffer (b0) after
   // DxbcShaderTranslator::SystemConstants, which the translations don't read.
-  static constexpr uint32_t kKnobCount = 32;
+  // 64 of them take 256 bytes: with the 592 of the system constants, the
+  // buffer fits the 1024 bytes of four 256-byte placement steps.
+  static constexpr uint32_t kKnobCount = 64;
   static constexpr uint32_t kKnobsOffset =
       uint32_t((sizeof(DxbcShaderTranslator::SystemConstants) + 15) & ~size_t(15));
   static constexpr uint32_t kKnobsSize = kKnobCount * uint32_t(sizeof(float));
