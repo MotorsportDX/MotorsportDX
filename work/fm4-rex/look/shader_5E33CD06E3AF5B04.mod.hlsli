@@ -38,7 +38,7 @@ float fm4_road_5e33_weight() {
 
 void fm4_road_5e33(inout XePixel p, XePixel input) {
   FM4_ROAD_LIT_OUTPUT(p, input, fm4_road_5e33_weight());
-  if (FM4_LOOK_ROAD_DEBUG > 0.0) {
+  if (FM4_LOOK_ROAD_DEBUG > 0.0 && FM4_LOOK_ROAD_DEBUG < 6.0) {
     fm4_road_5e33_debug(p, input);
   }
 }

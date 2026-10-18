@@ -309,7 +309,8 @@ and `-Look original`.
 | `road_specular` | number, default 1 | The game's sun highlight on the road, its lines, edges and paved shoulders. `0` removes it, and with it the bright sheet on sunlit asphalt toward the sun. |
 | `road_sheen` | number, 0 to 1 | A GGX sun highlight with Fresnel on the same surfaces, in the sun's share of their diffuse light, glinting with the aggregate. With `road_specular=0` it replaces the game's highlight. |
 | `road_roughness` | number, default 0.5 | Roughness of that highlight: lower is a smaller, brighter glare. |
-| `road_debug` | 0 to 5 | Debug views of the lit road `ROAD_BLND_2`: 1 the highlight's share of the light, 2 without the highlight, 3 the highlight alone, 4 which light the diffuse takes, 5 the parts of the specular amount. See [look mod coverage](analysis/look-mod-coverage.md#road-surface-18-october-2026). |
+| `road_sheen_grain` | number, default 1 | How much that highlight follows the aggregate and the skid marks: it scales the highlight by the asphalt texel's brightness against the texture's local mean, to this power (and on the Top Gear and Crown Jewel road by the darkening of the skid marks). `0` gives an even sheen. |
+| `road_debug` | 0 to 7 | Debug views of the lit road `ROAD_BLND_2`: 1 the highlight's share of the light, 2 without the highlight, 3 the highlight alone, 4 which light the diffuse takes, 5 the parts of the specular amount. With `road_sheen` above 0, on every lit road shader: 6 the image times the sheen's grain, 7 the sheen alone. See [look mod coverage](analysis/look-mod-coverage.md#road-surface-18-october-2026). |
 | `ao` | number, `0` turns it off | Strength of the screen-space ambient occlusion. |
 | `sun` | number, `0` turns the glare off | Strength of the sun glare on the RTV path, the same at every MSAA level. Without it (`original`) the glare follows the counted samples. See [Sun glare](#sun-glare). |
 | `road_gloss` | multiplier, default 1 | Specular of the road surface. See [Track lighting](#track-lighting). |
@@ -322,11 +323,13 @@ and Maple Valley, `sky_saturation=1.15,sky_contrast=0.3,sky_horizon=0.5` gave a 
 blue sky, and `foliage_saturation=1.15` was barely visible (see
 [look mod coverage](analysis/look-mod-coverage.md#in-game-checks-sky-and-vegetation-18-october-2026)).
 For autumn colors try `-Look "pc,foliage_hue=-45"`.
-No preset sets the `road_*` knobs: on the Bernese Alps at 2x, `road_specular=0,road_sheen=1`
-removes the bright sheet on sunlit asphalt toward the sun but also the softer glare at moderate
-sun angles, and views away from the sun look the same (see
-[look mod coverage](analysis/look-mod-coverage.md#in-game-checks-road-surface-18-october-2026)).
-Try `-Look "pc,road_specular=0,road_sheen=1"` or `-Look "pc,road_specular=0.5,road_sheen=1"`.
+No preset sets the `road_*` knobs yet. In A/B runs at 2x on the Bernese Alps and Top Gear,
+`road_specular=0,road_sheen=0.4` (with the default `road_sheen_grain=1`) turns the bright sheet on
+sunlit asphalt toward the sun into a glare with the aggregate and the skid marks showing through
+it, and views away from the sun look the same; without the grain the sheen is an even, milky
+haze on Top Gear (see
+[look mod coverage](analysis/look-mod-coverage.md#the-sheen-on-top-gear-and-its-grain-18-october-2026)).
+Try `-Look "pc,road_specular=0,road_sheen=0.4"`.
 
 ### Sun glare
 

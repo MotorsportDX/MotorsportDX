@@ -204,7 +204,8 @@ class PipelineTests(unittest.TestCase):
             root=Path(directory)
             # road_gloss edits the track lighting files; the road_* shader knobs are defines of
             # fm4-road.hlsli, with the original look as their defaults.
-            look='pc,road_gloss=0.5,road_specular=0,road_sheen=1,road_roughness=0.4,road_contrast=0.3'
+            look=('pc,road_gloss=0.5,road_specular=0,road_sheen=1,road_roughness=0.4,road_contrast=0.3,'
+                  'road_sheen_grain=2')
             self.assertEqual(pipeline.look_track_settings(pipeline.look_knobs(look)),
                              'RoadSpecular.RoadSpecular*=0.5;RoadSpecular.RoadSpecular2*=0.5;'
                              'skyScale.value*=0.7')
@@ -214,12 +215,13 @@ class PipelineTests(unittest.TestCase):
             self.assertEqual(defines['FM4_LOOK_ROAD_SHEEN'],'1.0')
             self.assertEqual(defines['FM4_LOOK_ROAD_ROUGHNESS'],'0.4')
             self.assertEqual(defines['FM4_LOOK_ROAD_CONTRAST'],'0.3')
+            self.assertEqual(defines['FM4_LOOK_ROAD_SHEEN_GRAIN'],'2.0')
             self.assertNotIn('FM4_LOOK_ROAD_BRIGHTNESS',defines)
             self.assertNotIn('road_gloss',pipeline.look_cvars(root,look)['shader_mod_defines'])
             knob_defaults=pipeline.look_knob_defaults()
             for name,value in (('FM4_LOOK_ROAD_BRIGHTNESS','1.0'),('FM4_LOOK_ROAD_CONTRAST','0.0'),
                                ('FM4_LOOK_ROAD_SPECULAR','1.0'),('FM4_LOOK_ROAD_SHEEN','0.0'),
-                               ('FM4_LOOK_ROAD_DEBUG','0.0')):
+                               ('FM4_LOOK_ROAD_SHEEN_GRAIN','1.0'),('FM4_LOOK_ROAD_DEBUG','0.0')):
                 self.assertEqual(knob_defaults[name],value)
             # Every road knob of the look files has a launcher name.
             self.assertTrue({name for name in knob_defaults if name.startswith('FM4_LOOK_ROAD_')}

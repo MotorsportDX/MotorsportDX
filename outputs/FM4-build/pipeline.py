@@ -475,7 +475,8 @@ LOOK_KNOBS={'sharpen':'FM4_LOOK_SHARPEN','bloom':'FM4_LOOK_BLOOM','exposure':'FM
             # specular amounts instead.
             'road_brightness':'FM4_LOOK_ROAD_BRIGHTNESS','road_contrast':'FM4_LOOK_ROAD_CONTRAST',
             'road_specular':'FM4_LOOK_ROAD_SPECULAR','road_sheen':'FM4_LOOK_ROAD_SHEEN',
-            'road_roughness':'FM4_LOOK_ROAD_ROUGHNESS','road_debug':'FM4_LOOK_ROAD_DEBUG',
+            'road_roughness':'FM4_LOOK_ROAD_ROUGHNESS','road_sheen_grain':'FM4_LOOK_ROAD_SHEEN_GRAIN',
+            'road_debug':'FM4_LOOK_ROAD_DEBUG',
             # Ambient occlusion of the GTAO post pass on the scene; above 0 it also turns
             # the post passes on (ao_cvars).
             'ao':'FM4_LOOK_AO'}
@@ -500,9 +501,10 @@ LOOK_TRACK_KNOBS={'road_gloss':('RoadSpecular.RoadSpecular','RoadSpecular.RoadSp
 # without any shader mod. No preset has glass, chrome or rims yet: the A/B at 2x of 18 October
 # 2026 has not covered their sun highlights or the split-screen set. No preset has the sky_* or
 # foliage_* knobs: their A/B at 2x of the same day showed only a slightly deeper sky
-# (docs/analysis/look-mod-coverage.md). No preset has the road_* knobs: road_specular=0 with
-# road_sheen=1 removes the bright sheet towards the sun but also the softer glare at moderate
-# sun angles, a matter of taste seen on one track.
+# (docs/analysis/look-mod-coverage.md). No preset has the road_* knobs yet: the candidate
+# road_specular=0,road_sheen=0.4 (with the grain) removes the bright sheet towards the sun on the
+# Bernese Alps and keeps the aggregate and skid marks on Top Gear, and waits for the project
+# owner's review of the crops.
 LOOK_PRESETS={'pc':'tonemap=aces,saturation=1.1,bloom=0.7,sharpen=0.4,clearcoat=1,ao=0.6,sun=2,sky=0.7',
               'aces':'tonemap=aces,clearcoat=1,ao=0.6,sun=2','gt':'tonemap=gt,clearcoat=1,ao=0.6,sun=2',
               'neutral':'tonemap=neutral,clearcoat=1,ao=0.6,sun=2','original':''}

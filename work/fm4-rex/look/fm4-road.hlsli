@@ -13,8 +13,13 @@
 //                                      surfaces, in the sun's share of their diffuse light
 //                                      (0: off)
 //   FM4_LOOK_ROAD_ROUGHNESS   > 0      roughness of that highlight (GGX alpha is its square)
-//   FM4_LOOK_ROAD_DEBUG       0...5    debug views of the lit road ROAD_BLND_2 (0: off; see
-//                                      fm4_road_debug)
+//   FM4_LOOK_ROAD_SHEEN_GRAIN >= 0     how much that highlight follows the aggregate and the
+//                                      skid marks: the power of the asphalt texel's
+//                                      luminance against its mean around the pixel (0: a
+//                                      smooth sheen)
+//   FM4_LOOK_ROAD_DEBUG       0...7    debug views: 1 to 5 of the lit road ROAD_BLND_2 (see
+//                                      fm4_road_debug), 6 and 7 of the sheen (see
+//                                      fm4_road_output); 0: off
 // The track knob road_gloss (pipeline.py) scales RoadSpecular and RoadSpecular2 in
 // the track lighting files instead.
 //
@@ -38,11 +43,22 @@
 // the fog. Its light is the sun's share of the diffuse light, c248 - c247, so it
 // agrees with how bright the same pixel is in the sun; the game's highlight uses
 // sunColor, which has no such relation. The road shaders weight it by the
-// game's own specular amount, so the aggregate and the rubber keep their
-// pattern; the other surfaces by a uniform weight of the same size, so they meet
-// the road without a seam. At full strength a GGX highlight of a smooth
-// dielectric towards a low sun is a bright sheet of its own: the weight stands
-// for the pores of dry asphalt, which hide most of its surface from the sun.
+// game's own specular amount, so the rubber keeps its pattern; the other
+// surfaces by a uniform weight of the same size, so they meet the road without a
+// seam. At full strength a GGX highlight of a smooth dielectric towards a low sun
+// is a bright sheet of its own: the weight stands for the pores of dry asphalt,
+// which hide most of its surface from the sun. The specular amount is a smooth
+// mask on most tracks, and a highlight that is a share of the diffuse light
+// lifts dark texels as much as light ones, so on its own the sheen is an even
+// haze over the aggregate and the skid marks (Top Gear, facing the sun). The
+// grain gives it their pattern back: where the shader has the asphalt texture,
+// the sheen is scaled by the texel's luminance against the mean of the texels
+// a few pixels around it (the light stones catch the sun, the binder in the
+// pores does not), and where it knows the darkening of the skid marks, by that
+// too. The ratio has a mean near 1, so the overall brightness stays and the
+// surfaces without the texture (lines, shoulders) meet the road without a
+// seam. It scales the highlight after its soft limit, so the grain stays where
+// the sheen is brightest.
 //
 // A rain look can build on this: water fills the pores, so wetness darkens the
 // asphalt (road_brightness below 1), raises the sheen's weight towards 1 and
@@ -62,6 +78,9 @@
 #endif
 #ifndef FM4_LOOK_ROAD_ROUGHNESS
 #define FM4_LOOK_ROAD_ROUGHNESS 0.5
+#endif
+#ifndef FM4_LOOK_ROAD_SHEEN_GRAIN
+#define FM4_LOOK_ROAD_SHEEN_GRAIN 1.0
 #endif
 #ifndef FM4_LOOK_ROAD_DEBUG
 #define FM4_LOOK_ROAD_DEBUG 0.0
@@ -83,6 +102,13 @@ static const float FM4_ROAD_MEAN_LOD = 4.0;
 // The sheen's weight on surfaces without the road's specular amount: that of a
 // road texel with the amount 0.25.
 static const float FM4_ROAD_UNIFORM_WEIGHT = 0.5;
+// How far from the pixel, in pixels along each screen axis, the grain reads the
+// asphalt's mean around it: about the size of a stone of the aggregate near the
+// car at 2x.
+static const float FM4_ROAD_GRAIN_SPAN = 3.0;
+// The range of the grain ratio: dark binder and light stones lie within it.
+static const float FM4_ROAD_GRAIN_MIN = 0.25;
+static const float FM4_ROAD_GRAIN_MAX = 4.0;
 
 // ---------------------------------------------------------------------------
 // The asphalt texture.
@@ -114,24 +140,72 @@ float4 fm4_road_asphalt(float4 texel, float4 mean) {
 
 // The texels of the shader's fetches, the last one of each fetch constant, for
 // the output: the lightmap (fetch 7) for the sheen's shadow, and the specular
-// masks of the road shaders.
+// masks of the road shaders; fm4_road_previous the one before it, for shaders
+// that fetch a constant twice.
 static float4 fm4_road_texels[32];
+static float4 fm4_road_previous[32];
 
 float4 fm4_road_keep(uint fetch, float4 value) {
+  fm4_road_previous[fetch & 31u] = fm4_road_texels[fetch & 31u];
   fm4_road_texels[fetch & 31u] = value;
   return value;
 }
 
+// The asphalt color's luminance against its mean around the pixel, for the
+// sheen's grain; 1 in shaders without the asphalt texture.
+static float fm4_road_grain_ratio = 1.0;
+
+// A texture coordinate FM4_ROAD_GRAIN_SPAN pixels away on screen, diagonally
+// (x and y: 1 or -1).
+float2 fm4_road_beside(float2 coord, float x, float y) {
+  return coord + FM4_ROAD_GRAIN_SPAN * (x * ddx(coord) + y * ddy(coord));
+}
+
+// The asphalt fetch: keeps the grain ratio for the sheen and gives the texel
+// the tone knobs. mean: the texture's local mean (for road_contrast); center
+// and around: the texel fetched again at the pixel, and the mean of four
+// texels around it on screen, at the same level of detail and by the same
+// code. The grain does not divide the game's texel by them: in the game the
+// fetches of this file return a darker texel than the shader's own fetch of
+// the same one, which made the ratio a smooth factor of about 3 on Top Gear
+// (18 October 2026). offset: what the shader adds to the texel for the
+// asphalt's color (0 where it scales the texel instead). The asphalt textures
+// of ROAD_BLND_DIFF_SPEC_3, ROAD_BLND_DIFF_LOCALSPEC_3 and the road edges are a
+// dark detail that the shader adds to a constant color, so the ratio of the
+// texel alone would be far from the color's.
+float4 fm4_road_asphalt_fetch(float4 texel, float4 mean, float4 center, float4 around,
+                              float3 offset) {
+  if (FM4_LOOK_ROAD_SHEEN > 0.0 && FM4_LOOK_ROAD_SHEEN_GRAIN != 0.0) {
+    float luminance = dot(max(center.rgb + offset, 0.0), FM4_ROAD_LUMA);
+    float average = dot(max(around.rgb + offset, 0.0), FM4_ROAD_LUMA);
+    fm4_road_grain_ratio = average > 1.0e-4 ? luminance / average : 1.0;
+  }
+  return fm4_road_asphalt(texel, mean);
+}
+
 // The XE_HOOK_TFETCH of the road shaders: FM4_ROAD_FETCH keeps every texel,
 // FM4_ROAD_ASPHALT_FETCH also gives the asphalt texture of fetch n the tone
-// knobs. The fetch number of each call is a literal, so only the asphalt fetch
-// gets the code, and texels the output does not read cost nothing.
+// knobs and the grain, and FM4_ROAD_ASPHALT_OFFSET_FETCH takes the offset of
+// fm4_road_asphalt_fetch. The fetch number of each call is a literal, so only
+// the asphalt fetch gets the code, and texels the output does not read cost
+// nothing.
 #define FM4_ROAD_FETCH(fetch, value, coord) fm4_road_keep(fetch, value)
+#define FM4_ROAD_TFETCH2D_BESIDE(n, coord, x, y)                                           \
+  FM4_ROAD_TFETCH2D_BIAS(n, fm4_road_beside((coord).xy, x, y), 0.0)
+#define FM4_ROAD_ASPHALT_OFFSET_FETCH(n, offset, fetch, value, coord)                      \
+  fm4_road_keep(fetch,                                                                     \
+                (fetch) == n##u                                                            \
+                    ? fm4_road_asphalt_fetch(                                              \
+                          value, FM4_ROAD_TFETCH2D_BIAS(n, (coord).xy, FM4_ROAD_MEAN_LOD), \
+                          FM4_ROAD_TFETCH2D_BIAS(n, (coord).xy, 0.0),                      \
+                          0.25 * (FM4_ROAD_TFETCH2D_BESIDE(n, coord, 1.0, 1.0) +           \
+                                  FM4_ROAD_TFETCH2D_BESIDE(n, coord, -1.0, 1.0) +          \
+                                  FM4_ROAD_TFETCH2D_BESIDE(n, coord, 1.0, -1.0) +          \
+                                  FM4_ROAD_TFETCH2D_BESIDE(n, coord, -1.0, -1.0)),         \
+                          offset)                                                          \
+                    : (value))
 #define FM4_ROAD_ASPHALT_FETCH(n, fetch, value, coord)                                     \
-  fm4_road_keep(fetch, (fetch) == n##u                                                     \
-                           ? fm4_road_asphalt(value, FM4_ROAD_TFETCH2D_BIAS(                \
-                                                         n, (coord).xy, FM4_ROAD_MEAN_LOD)) \
-                           : (value))
+  FM4_ROAD_ASPHALT_OFFSET_FETCH(n, 0.0, fetch, value, coord)
 
 // ---------------------------------------------------------------------------
 // The sun highlight.
@@ -164,6 +238,7 @@ struct FM4RoadView {
   float3 v;       // unit direction to the eye
   float shadow;   // the sun's shadow: 1 lit, 0 shadowed
   float weight;   // the sheen's weight, 0...1
+  float grain;    // the sheen's grain: the asphalt against its mean around, 1 for none
   float fog;      // the fog amount
 };
 
@@ -185,13 +260,19 @@ float fm4_road_shadow(XePixel input, float lightmap_y, float4 points) {
 
 // The view of a lit road shader: interpolator 0 the normal (without the normal
 // map of the variants that have one), 1 the direction to the eye, 2 X the fog,
-// the lightmap kept from fetch 7; points: c224; weight: the sheen's weight.
-FM4RoadView fm4_road_view(XePixel input, float4 points, float weight) {
+// the lightmap kept from fetch 7; points: c224; weight: the sheen's weight;
+// albedo: the shader's own darkening of the asphalt texel (the skid marks), 1
+// for none. The grain is the asphalt's grain ratio times that albedo, to the
+// power road_sheen_grain.
+FM4RoadView fm4_road_view(XePixel input, float4 points, float weight, float albedo) {
   FM4RoadView view;
   view.n = normalize(input.r[0].xyz);
   view.v = normalize(input.r[1].xyz);
   view.shadow = fm4_road_shadow(input, fm4_road_texels[7].y, points);
   view.weight = saturate(weight);
+  view.grain = pow(clamp(fm4_road_grain_ratio * max(albedo, 0.0), FM4_ROAD_GRAIN_MIN,
+                         FM4_ROAD_GRAIN_MAX),
+                   max(FM4_LOOK_ROAD_SHEEN_GRAIN, 0.0));
   view.fog = input.r[2].x;
   return view;
 }
@@ -200,7 +281,7 @@ FM4RoadView fm4_road_view(XePixel input, float4 points, float weight) {
 // The sheen: an energy normalized GGX highlight of the sun (height correlated
 // Smith visibility, Schlick Fresnel from F0 0.04), scaled by pi like the clear
 // coat's to match the game's lighting, which leaves out 1/pi, times the weight
-// and the shadow, soft limited at FM4_ROAD_SHEEN_LIMIT.
+// and the shadow, soft limited at FM4_ROAD_SHEEN_LIMIT, then times the grain.
 // sun: the sun's light that the diffuse of the pixel gets (c248 - c247). Linear
 // light, before the fog.
 float3 fm4_road_sheen(FM4RoadView view, float3 to_sun, float3 sun) {
@@ -217,7 +298,7 @@ float3 fm4_road_sheen(FM4RoadView view, float3 to_sun, float3 sun) {
   float glint =
       FM4_PI * distribution * fm4_ggx_visibility(n_dot_v, n_dot_l, a2) * fresnel * n_dot_l;
   glint *= view.weight * view.shadow;
-  glint = glint / (1.0 + glint / FM4_ROAD_SHEEN_LIMIT);
+  glint = glint / (1.0 + glint / FM4_ROAD_SHEEN_LIMIT) * view.grain;
   return glint * max(sun, 0.0) * saturate(FM4_LOOK_ROAD_SHEEN);
 }
 
@@ -228,19 +309,31 @@ void fm4_road_add(inout XePixel p, float3 light, float fog) {
   p.color[0].rgb = sqrt(max(color * color + light * (1.0 - saturate(fog)), 0.0));
 }
 
-// The sheen of a lit road shader at its output, with its view.
+// The sheen of a lit road shader at its output, with its view. On every lit
+// road shader with the sheen on, road_debug 6 shows the game's result times
+// the grain instead (the same image where the grain is 1, so the auto exposure
+// keeps it readable), 7 the sheen alone (fogged towards black).
 void fm4_road_output(inout XePixel p, FM4RoadView view, float3 to_sun, float3 sun) {
-  fm4_road_add(p, fm4_road_sheen(view, to_sun, sun), view.fog);
+  float3 sheen = fm4_road_sheen(view, to_sun, sun);
+  if (FM4_LOOK_ROAD_DEBUG == 6.0) {
+    p.color[0].rgb *= sqrt(view.grain);
+  } else if (FM4_LOOK_ROAD_DEBUG == 7.0) {
+    p.color[0].rgb = sqrt(max(sheen * (1.0 - saturate(view.fog)), 0.0));
+  } else {
+    fm4_road_add(p, sheen, view.fog);
+  }
 }
 
 // The XE_HOOK_OUTPUT of a lit road shader: the sheen towards the sun (c250) in
 // the sun's diffuse light (c248 - c247), with the lightmap points of c224, at
-// the weight given (FM4_ROAD_UNIFORM_WEIGHT, or fm4_road_weight of the road).
-#define FM4_ROAD_LIT_OUTPUT(p, input, weight)                                              \
+// the weight given (FM4_ROAD_UNIFORM_WEIGHT, or fm4_road_weight of the road),
+// and in FM4_ROAD_LIT_OUTPUT_ALBEDO with the shader's darkening of the asphalt.
+#define FM4_ROAD_LIT_OUTPUT_ALBEDO(p, input, weight, albedo)                               \
   if (FM4_LOOK_ROAD_SHEEN > 0.0) {                                                         \
-    fm4_road_output(p, fm4_road_view(input, XE_C(224), weight), XE_C(250).xyz,             \
+    fm4_road_output(p, fm4_road_view(input, XE_C(224), weight, albedo), XE_C(250).xyz,     \
                     XE_C(248).xyz - XE_C(247).xyz);                                        \
   }
+#define FM4_ROAD_LIT_OUTPUT(p, input, weight) FM4_ROAD_LIT_OUTPUT_ALBEDO(p, input, weight, 1.0)
 
 // ---------------------------------------------------------------------------
 // Debug views (road_debug) of shaders whose mod passes the terms of the game's

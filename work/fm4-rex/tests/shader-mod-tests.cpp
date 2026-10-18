@@ -389,7 +389,8 @@ int main(int argc, char** argv) {
       {"FM4_LOOK_SKY_HORIZON", "0.5"}, {"FM4_LOOK_FOLIAGE_HUE", "-30.0"},
       {"FM4_LOOK_FOLIAGE_SATURATION", "1.2"}, {"FM4_LOOK_FOLIAGE_BRIGHTNESS", "1.1"},
       {"FM4_LOOK_ROAD_BRIGHTNESS", "0.9"}, {"FM4_LOOK_ROAD_CONTRAST", "0.3"},
-      {"FM4_LOOK_ROAD_SPECULAR", "0.5"}, {"FM4_LOOK_ROAD_SHEEN", "1.0"}};
+      {"FM4_LOOK_ROAD_SPECULAR", "0.5"}, {"FM4_LOOK_ROAD_SHEEN", "1.0"},
+      {"FM4_LOOK_ROAD_SHEEN_GRAIN", "2.0"}};
   std::vector<std::filesystem::path> mods;
   for (const auto& entry : std::filesystem::directory_iterator(look)) {
     std::string name = entry.path().filename().string();
