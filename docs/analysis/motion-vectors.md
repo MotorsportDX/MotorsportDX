@@ -1,6 +1,6 @@
 # Motion vectors: sources and design
 
-Research note on where the runtime can get per-pixel motion vectors for FM4, as groundwork for TAA, temporal SSR and the FSR or DLSS upscalers. Nothing here is implemented. Today the runtime injects one screen pass, GTAO ([GTAO design](gtao-design.md)), on the [post pass framework](post-pass-framework.md), which keeps the previous frame's scene color, depth and camera but no motion vectors.
+Research note on where the runtime can get per-pixel motion vectors for FM4, as groundwork for TAA, temporal SSR and the FSR or DLSS upscalers, and the design of the source the runtime builds. Since 18 October 2026 the [post pass framework](post-pass-framework.md) builds the recommended per-car vectors (section 3.2) next to GTAO ([GTAO design](gtao-design.md)): [section 8](#8-implementation-18-october-2026). They pass the CPU and WARP tests but have not run in the game yet.
 
 This note contains no game code, shaders or ucode. Addresses, hashes, registers, constant values and file element names are observations only.
 
@@ -22,7 +22,7 @@ Offline sources:
 - **The object ID is the scene stencil.** Every static scene draw (track, objects, trees, road) writes 0 and every draw of car n writes 7n (7 to 84 in a 12-car race), with `ALWAYS` / `REPLACE`, in every frame, races included (verified in the game, section 7). The motion blur turns the stencil byte into a slot as round(stencil / 7); the shadow passes mark track pixels with 128 and 129, which count as slot 0 because they are 126 or more.
 - **The game runs motion blur only with cinematic cameras.** In the 12-car Quick Race runs it drew in about 265 frames, the car shots of the start sequence and the 3-2-1, and never while driving. Each camera definition carries its own `MotionBlurAmount` (0.15 for the start, replay and car reveal cameras); the driving cameras have none, and `motionBlurAmount` is 0 in all 38 `TrackSettings` files. No RenderScenario sets the title's `MotionBlur` render control, and neither setting it nor a nonzero track `motionBlurAmount` makes the blur run while driving (section 7).
 - **The game's matrices are the host matrices, scaled.** In the start sequence each slot equals I + k (M - I), where M is the frame-to-frame reprojection the host builds from the camera and the car's world matrix, and k is about 0.34 for the world and every car alike. So the game folds a blur amount into the matrices, and the host route reproduces the game's own reprojection.
-- **Recommendation: build the vectors on the host, the same way the game does, every frame.** The runtime reads the depth and stencil the game already resolves in every race frame, captures the camera and each car's world matrix from the vertex shader constants (grouped by the draw's stencil reference), keeps the previous frame's matrices, and runs one compute pass that writes the motion vectors. This needs no change to the game's behavior and costs an estimated 0.1 ms of GPU time at 1x and 0.2 to 0.3 ms at 2x. Where the game's own motion blur runs (pre-race, replays), its 17 matrices serve as a reference to check the host matrices.
+- **Recommendation: build the vectors on the host, the same way the game does, every frame.** The runtime reads the depth and stencil the game already resolves in every race frame, captures the camera and each car's world matrix from the vertex shader constants (grouped by the draw's stencil reference), keeps the previous frame's matrices, and runs one compute pass that writes the motion vectors. This needs no change to the game's behavior and costs an estimated 0.1 ms of GPU time at 1x and 0.2 to 0.3 ms at 2x. Where the game's own motion blur runs (pre-race, replays), its 17 matrices serve as a reference to check the host matrices. Built on 18 October 2026 ([section 8](#8-implementation-18-october-2026)); the in-game checks and the GPU time are still open.
 - **Second choice ruled out**: the existing `FM4_RACE_SETTINGS="MotionBlur=1"` and `FM4_TRACK_SETTINGS="motionBlurAmount.value=0.15"` overrides do not make the game run its motion blur in races, so the game's matrices exist only in cinematic frames.
 - **Camera-only vectors are not enough** for a racing game: in the chase and hood cameras the player's car would get the world's motion and smear under TAA.
 
@@ -124,6 +124,8 @@ With either, the pass still drew only in the start sequence (267 and 269 frames,
 
 ### 3.2 Per car (recommended)
 
+Built as described here, in view space rather than clip space: [section 8](#8-implementation-18-october-2026).
+
 The car vertex shaders in the material atlas all have `matWVP` at c0 and `matW` (the world matrix) at c8 ( body `8D05A46C3584CA9E`, the `42CB1356564CF9FA` family, chrome `A42BEA3C0A6E5603`, rims `C00542278E7CCC25`, glass `F936B2AD861F53BE`, lamps `EFE6E73205BB1F64` and `A7B129D19544EFED`, tires `8317040277B5F496`, the car shadow `CC292E3F829D24CC`). So:
 
 1. **Capture** (in `IssueDraw`, as the post passes do for the camera): for each draw on the scene depth buffer whose vertex shader is in a configured list (like the post passes' `[scene] camera`), read the stencil reference from `RB_STENCILREFMASK` and `matW` c8-c11. Verified in the game: the body and the `42CB1356564CF9FA` family carry the same `matW` for a car, while the rims carry one per wheel (four per car), so the body's matrix must win for each reference. The rear-view mirror is a second view on its own depth buffer with the same references; the scene depth test keeps it out.
@@ -162,7 +164,7 @@ The game's reprojection and the host route share these, because both use one mat
 - **Cockpit interior**: drawn with a compressed depth range (GTAO M3; in the cockpit camera the player's car body has its own projection), so the depth reconstruction with the scene camera is wrong there. The interior carries the player's car ID and moves with the camera, so its reprojection is close to identity whatever the depth; the error stays small. The interior mirror shows a moving image on a surface that does not move, which needs the reactive mask.
 - **Sky**: at the far plane, it gets the camera's rotation, which is correct for a distant dome.
 - **MSAA edges**: the depth resolve takes one sample while the color resolve averages, so the ID and depth at an edge belong to sample 0.
-- **Camera cuts**: replays and the start sequence cut between cameras. The pass framework must reset the history on a cut. A cut can be detected on the host (a jump in camera position or orientation beyond what one frame allows, or a change of FOV).
+- **Camera cuts**: replays and the start sequence cut between cameras. The pass framework must reset the history on a cut. A cut can be detected on the host (a jump in camera position or orientation beyond what one frame allows, or a change of FOV); the framework does so with its `[history]` thresholds, and the motion vectors are zero in such a frame (section 8).
 - **Split screen**: two views per frame, not handled (as for GTAO).
 
 ## 6. Requirements for TAA and the upscalers
@@ -240,4 +242,48 @@ Verified. With `-SingleTile` (`mvD`) race frames render one 1280x720 tile withou
 
 - A 16-car grid (slots up to 16), replays and photo mode motion blur: not traced.
 - What sets k, and whether it changes with `MotionBlurAmount` (replays use 0.095 to 0.181) or the frame rate.
-- The host route itself: its capture, the matrix table and the pass are not written yet.
+- The host route itself: written since 18 October 2026 ([section 8](#8-implementation-18-october-2026)), not yet run in the game.
+
+## 8. Implementation (18 October 2026)
+
+The per-car route of section 3.2 is part of the [post pass framework](post-pass-framework.md): the runtime captures the objects and builds one matrix per object slot, and FM4's [passes.toml](../../work/fm4-rex/passes/passes.toml) and [motion.hlsl](../../work/fm4-rex/passes/motion.hlsl) turn them into vectors. The code is generic: the vertex shaders, the constant of the world matrix and the slot rule are in the manifest's `[motion]`.
+
+### Capture
+
+- **Draws**: in `IssueDraw` (`PostPasses::OnDraw`), every draw whose vertex shader is in `[motion] objects`, on the scene's depth buffer (the camera's test), with the stencil enabled, `REPLACE` on depth pass and write mask `FF`. The draw's `RB_STENCILREFMASK` reference is the object ID; its slot is round(ref / 7) below 126, else 0 (`stencil_step = 7`, `stencil_limit = 126`), so 19 slots (0 to 18; the game's motion blur has 17). Slot 0 is the static world and takes no object.
+- **The car list**: the 13 car vertex shaders of the material atlas, all with `matW` in c8-c11 (row vectors): paint `8D05A46C3584CA9E` and `BBD01C26B1C45733`, the `42CB1356564CF9FA` family, glass `F936B2AD861F53BE` and `D7B380C7A7F72EF5`, lights `EFE6E73205BB1F64` and `A7B129D19544EFED`, chrome `A42BEA3C0A6E5603`, cockpit `4EE552137CA415E3` and `918AF0171F6F6F4A`, brakes `7B69DF9819BBA422`, tires `8317040277B5F496`, rims `C00542278E7CCC25`.
+- **One matrix per car**: the list order is a priority, and per slot the first draw of the highest priority source of the frame gives the car's world matrix. The paint comes first; the wheel parts, which have one matrix per wheel (section 7), come last, so they count only for a car none of whose body parts drew. The `post_pass_log_every` log names, per slot, the reference, the chosen source, the sources that drew, and those whose first matrix of the frame differs from the chosen one.
+- **History**: the table of the previous frame is kept at every swap of a frame with a scene camera, together with the previous camera (also when no pass reads the history textures). A slot uses its object's own matrices only when the object was captured in both frames with the same reference and moved less than `[history] cut_distance` (5 m); otherwise (a car new in the frame, a car put back onto the track) it holds slot 0's, and its bit in `xe_motion_slots_own` is clear.
+
+### Matrices
+
+Per slot the CPU builds, in double, the previous frame's view position of a view position of this frame:
+
+- static world: inverse(previous view to world) * view to world, the framework's `xe_view_to_previous_view`;
+- object: inverse(previous view to world) * previous W * inverse(W) * view to world, with W the object's world matrix.
+
+The view to world matrix is the road's view inverse (`C81F8D92FF6529EB` c243), as for the framework's reprojection. Working in view space reuses the scene depth unpack and the previous frame's projection, so a change of the field of view between frames is handled. The clip space form, previous projection * that matrix * inverse(projection), equals the game's previous VP * previous W * inverse(W) * inverse(VP) (section 1); `fm4_post_pass_camera_tests` checks the equality and the reprojection of a car 3 km from the origin (errors of about 1e-12 m). This assumes that the cars' `matW` and the road's view inverse share one world space, which the in-game check below tests.
+
+The matrices go to the passes in the scene constants (`xe_motion_view_to_previous_view[32]`, `xe_motion_slots_own`, the slot rule), with the flag `xe_motion_valid()`: the previous frame had a scene with a known camera view, and the camera did not cut (`[history]`: 5 m, 30 degrees, focal length 0.1). Without it the vectors are zero, which is the history reset on camera cuts.
+
+### Stencil and pass
+
+- **Stencil**: the framework input `scene_stencil` reads the resolved scene depth again through the texture cache as `k_8_8_8_8`, an `R8G8B8A8_UINT` view with the stencil byte in R, the way the game's motion blur reads it (section 1). It is loaded only when a pass that reads it runs.
+- **Pass** `motion_vectors` (scene_depth point, after GTAO; 8x8 threads, one pixel each): W from the depth, the view position, the slot from the stencil (`xe_motion_slot`), the slot's matrix, the previous frame's host pixel position through the previous camera (`xe_motion_previous_host_position`). Output: `motion_vectors`, `R16G16_FLOAT`, previous minus current position in host pixels of the scene textures and in their layout (FM4's is rotated 180 degrees against the screen: negate both components for screen directions), cleared at the swap. It is post texture slot 1 for the shader mods (`xe_post_texture(1, uv)`) and an input of later passes. A surface behind the previous camera gets 16,384 pixels (off screen).
+- **Params**: `MOTION_VECTORS` (1; 0 skips the passes and the stencil load), `MOTION_DEBUG` (0), `MOTION_DEBUG_PIXELS` (16).
+- **Debug views** (`MOTION_DEBUG`, a compute pass at scene_depth and a pixel pass at the final point, under the HUD): 1 the motion color coded (the hue is the screen direction: right red, down yellow-green, left cyan, up violet; white still; full color at `MOTION_DEBUG_PIXELS`), 2 the same blended over the frame by the motion length, 3 the object slots (the track transparent, a color per car, magenta stripes for a car without its own motion), 4 the object motion alone (the motion less the static world's at the same depth, so the track and the cars that move with the camera stay white). `shader_mod_set MOTION_DEBUG=1` switches them while running. With `MOTION_DEBUG` at 0 the final point does nothing.
+- **Check against the game**: `post_pass_motion_check=4746CAD32EF168CF:0:17` logs, at every motion blur draw, the game's rows 0, 1 and 3 of each of its 17 matrices next to the host's clip space matrix of the same slot; the relation to test is G = I + k (M - I) with k about 0.335 for every slot of a frame (section 7).
+
+### Tests
+
+- `fm4_post_pass_camera_tests`: the world matrix from row and column constants; a car point and a static world point reprojected into the previous view (left- and right-handed, 3 km from the origin, errors of 1.5e-12 m); the clip space form equal to the game's formula (6e-12).
+- `fm4_post_pass_shader_tests` (WARP, the passes of `passes.toml` as the framework runs them): a synthetic scene with stencil IDs (track 0, a box as car 1, a wall as car 2 without its own motion, track under a shadow at 128), the camera moving 1 m forward and turning 1 degree, the box moving besides, and a previous projection zoomed 2%. Against the traced view positions reprojected on the CPU, every pixel class is within 0.41 of the allowed error (0.02 pixels plus 0.2% of the motion, for the half floats), up to 121 pixels of motion; the box moves up to 14 pixels apart from the world; zero motion without a valid previous frame; the slot debug view right for the track, car 1 and car 2. The final point's pixel pass compiles.
+
+### Not yet done
+
+On 18 October 2026 the in-game runs were deferred. Planned, on `I:\FM4-build-pass`:
+
+- `photo` at 1x and 2x with `post_pass_motion_check` (the start sequence), fitting k and the residual per slot as in section 7, check 2;
+- the GPU time: `post_pass_variants=MOTION_VECTORS=1;MOTION_VECTORS=0` with `REX_FRAME_GRAPH`, the median difference of the last scene depth resolve between both (the passes run inside it), against the estimate of 0.1 ms at 1x and 0.2 to 0.3 ms at 2x;
+- the debug views at 2x with 1:1 crops, in the chase, hood and cockpit cameras and with cars passing;
+- a smoke gate.

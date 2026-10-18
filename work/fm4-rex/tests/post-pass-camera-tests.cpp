@@ -3,8 +3,9 @@
 // guest vertex shader's constants, in both layouts FM4 uses, the view position
 // reconstructed from a stored depth, and the camera's view to world matrix and
 // the reprojection into the previous frame's view built from it (as
-// post_pass.cpp builds xe_view_to_previous_view). Synthetic cameras only;
-// prints the worst errors and returns 1 on failure.
+// post_pass.cpp builds xe_view_to_previous_view), also for a moving car (the
+// motion matrices) and in the clip space form of FM4's motion blur. Synthetic
+// cameras only; prints the worst errors and returns 1 on failure.
 
 #include <cmath>
 #include <cstdio>
@@ -218,6 +219,106 @@ void TestReprojection(bool right_handed) {
   Check(worst < 1.0e-4, "view position reprojected into the previous view");
 }
 
+// The motion of a car: ViewToPreviousView with the car's world matrices of
+// both frames (read from row-vector constants, as FM4's matW c8-c11) takes a
+// view position on the car to the previous frame's view position of the same
+// point of the car, kilometers from the world origin; without them, a point of
+// the static world. ClipToPreviousClip gives the game's clip space form,
+// previous VP * previous world * inverse(world) * inverse(VP).
+void TestObjectReprojection(bool right_handed) {
+  Matrix previous_view =
+      LookAt({3000.0, 52.0, -2010.0}, {3020.0, 50.0, -1985.0}, {0.0, 1.0, 0.0}, right_handed);
+  Matrix view =
+      LookAt({3001.4, 52.05, -2008.2}, {3021.0, 50.0, -1983.0}, {0.0, 1.0, 0.0}, right_handed);
+  Matrix previous_world = World(0.20, {3012.0, 50.0, -1992.0}, 1.0);
+  Matrix world = World(0.23, {3013.3, 50.02, -1990.4}, 1.0);
+  Matrix previous_projection =
+      Perspective(62.0 * 3.14159265358979 / 180.0, 16.0 / 9.0, 0.3, 7500.0, 0.0, right_handed);
+  Matrix projection =
+      Perspective(60.0 * 3.14159265358979 / 180.0, 16.0 / 9.0, 0.3, 7500.0, 0.0, right_handed);
+
+  // The world matrices as a vertex shader keeps them: rows (4 constants, the
+  // transpose) and columns (3 constants).
+  float rows[2][4][4], columns[2][3][4];
+  const Matrix* worlds[2] = {&world, &previous_world};
+  for (int k = 0; k < 2; ++k) {
+    for (int i = 0; i < 4; ++i) {
+      for (int j = 0; j < 4; ++j) {
+        rows[k][i][j] = worlds[k]->m[j][i];
+        if (i < 3) columns[k][i][j] = worlds[k]->m[i][j];
+      }
+    }
+  }
+  MatrixD world_d = WorldMatrix(WorldLayout::kRows, rows[0]);
+  MatrixD previous_world_d = WorldMatrix(WorldLayout::kRows, rows[1]);
+  Check(MaxRelativeDifference(ToFloat(world_d), world) == 0.0 &&
+            MaxRelativeDifference(ToFloat(WorldMatrix(WorldLayout::kColumns, columns[0])), world) ==
+                0.0,
+        "world matrix from row and column constants");
+
+  // The camera as the runtime gets it: a float view to world matrix (the
+  // road's view inverse constants), whose double inverse is the view here.
+  Matrix view_to_world, previous_view_to_world;
+  MatrixD view_d, previous_view_d;
+  Check(Invert(view, view_to_world) && Invert(previous_view, previous_view_to_world) &&
+            Invert(ToDouble(view_to_world), view_d) &&
+            Invert(ToDouble(previous_view_to_world), previous_view_d),
+        "object reprojection inverses");
+  MatrixD car, static_world;
+  Check(ViewToPreviousView(ToDouble(view_to_world), ToDouble(previous_view_to_world), &world_d,
+                           &previous_world_d, car) &&
+            ViewToPreviousView(ToDouble(view_to_world), ToDouble(previous_view_to_world), nullptr,
+                               nullptr, static_world),
+        "view to previous view");
+  auto transform = [](const MatrixD& m, const double p[4], double out[4]) {
+    for (int i = 0; i < 4; ++i) {
+      out[i] = 0.0;
+      for (int j = 0; j < 4; ++j) out[i] += m.m[i][j] * p[j];
+    }
+  };
+  double worst_car = 0.0, worst_world = 0.0;
+  const double points[][3] = {{0.0, 0.0, 0.0}, {2.1, 0.6, -0.9}, {-0.8, 1.2, 1.9}};
+  for (const auto& point : points) {
+    double object[4] = {point[0], point[1], point[2], 1.0}, on_car[4], before_on_car[4];
+    transform(world_d, object, on_car);
+    transform(previous_world_d, object, before_on_car);
+    double now[4], before[4], reprojected[4];
+    // The car.
+    transform(view_d, on_car, now);
+    transform(previous_view_d, before_on_car, before);
+    transform(car, now, reprojected);
+    for (int k = 0; k < 3; ++k) {
+      worst_car = std::fmax(worst_car, std::fabs(reprojected[k] - before[k]));
+    }
+    // The same world position on the static world.
+    transform(previous_view_d, on_car, before);
+    transform(static_world, now, reprojected);
+    for (int k = 0; k < 3; ++k) {
+      worst_world = std::fmax(worst_world, std::fabs(reprojected[k] - before[k]));
+    }
+  }
+  // The game's form, in double.
+  MatrixD clip, game, vp_inverse, world_inverse;
+  MatrixD vp = Multiply(ToDouble(projection), view_d);
+  MatrixD previous_vp = Multiply(ToDouble(previous_projection), previous_view_d);
+  bool ok = ClipToPreviousClip(car, ToDouble(projection), ToDouble(previous_projection), clip) &&
+            Invert(vp, vp_inverse) && Invert(world_d, world_inverse);
+  game = Multiply(Multiply(Multiply(previous_vp, previous_world_d), world_inverse), vp_inverse);
+  double clip_error = 0.0;
+  for (int i = 0; i < 4; ++i) {
+    for (int j = 0; j < 4; ++j) {
+      clip_error = std::fmax(clip_error, std::fabs(clip.m[i][j] - game.m[i][j]));
+    }
+  }
+  std::printf("%s object reprojection: car %.2e m, static world %.2e m, clip form %.2e\n",
+              right_handed ? "right-handed" : "left-handed", worst_car, worst_world, clip_error);
+  // 1e-5 m: the float inputs are exact in double, the error is that of double
+  // at kilometers.
+  Check(worst_car < 1.0e-5, "car point reprojected into the previous view");
+  Check(worst_world < 1.0e-5, "static world point reprojected into the previous view");
+  Check(ok && clip_error < 1.0e-6, "clip form equals previous VP * previous W * W^-1 * VP^-1");
+}
+
 void TestRejectsOrthographic() {
   Matrix ortho = Identity();
   ortho.m[0][0] = 0.01f;
@@ -235,6 +336,8 @@ int main() {
   TestCamera("right-handed", true);
   TestReprojection(false);
   TestReprojection(true);
+  TestObjectReprojection(false);
+  TestObjectReprojection(true);
   TestRejectsOrthographic();
   std::printf(failures ? "post pass camera tests: %d failed\n" : "post pass camera tests: passed\n",
               failures);

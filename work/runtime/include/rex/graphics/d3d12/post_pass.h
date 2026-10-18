@@ -12,14 +12,17 @@
  * - scene_color: right after it resolves the last tile of its scene color;
  * - final: after the draws of the final combine pixel shaders of the manifest,
  *   before the next draw (the HUD), on the render target they drew into.
- * Inputs are the scene depth and color, the previous frame's scene color and
- * depth (kept only if a pass reads them, dropped on camera cuts, resolution
- * changes and frames without a scene), the final color, and the textures of
- * earlier passes. Textures with a slot are bound in the bindless heap at
- * SystemBindlessView::kPostPassViewsStart + slot for shader mods
- * (xe_post_texture in shader_override.hlsli). The scene camera (the projection
- * and, where the vertex shader carries it, the view) comes from the constants
- * of the vertex shaders the manifest names.
+ * Inputs are the scene depth, its stencil and the scene color, the previous
+ * frame's scene color and depth (kept only if a pass reads them, dropped on
+ * camera cuts, resolution changes and frames without a scene), the final color,
+ * and the textures of earlier passes. Textures with a slot are bound in the
+ * bindless heap at SystemBindlessView::kPostPassViewsStart + slot for shader
+ * mods (xe_post_texture in shader_override.hlsli). The scene camera (the
+ * projection and, where the vertex shader carries it, the view) comes from the
+ * constants of the vertex shaders the manifest names; so do the world matrices
+ * of the objects whose draws write an object ID into the stencil ([motion]),
+ * from which the passes get each object's reprojection into the previous frame
+ * (motion vectors).
  *
  * Params and defines come from shader_mod_defines by name, and shader_mod_set
  * changes them while running (params at once, defines with a recompile). With
@@ -57,9 +60,10 @@ class PostPasses {
   static std::unique_ptr<PostPasses> Create(D3D12CommandProcessor& command_processor);
   ~PostPasses();
 
-  // Every draw, before its render targets are bound: keeps the scene camera,
-  // logs post_pass_log_constants, and runs the final point at the first draw
-  // after the final combine.
+  // Every draw, before its render targets are bound: keeps the scene camera and
+  // the world matrices of the motion objects, logs post_pass_log_constants and
+  // post_pass_motion_check, and runs the final point at the first draw after
+  // the final combine.
   void OnDraw(const RegisterFile& regs, uint64_t vertex_shader_hash, uint64_t pixel_shader_hash);
   // Before every resolve: runs a final point still pending.
   void OnBeforeResolve();
@@ -76,6 +80,9 @@ class PostPasses {
   enum class Builtin : uint32_t {
     kNone,
     kSceneDepth,
+    // The stencil byte of the scene depth resolve, an R8G8B8A8_UINT view of it
+    // (the stencil in R).
+    kSceneStencil,
     kSceneColor,
     kPreviousColor,
     kPreviousDepth,
@@ -136,11 +143,24 @@ class PostPasses {
     post_pass::CameraLayout layout;
     uint32_t constants[3];
   };
+  // A vertex shader of the motion objects ([motion] objects): where its world
+  // matrix is. Its index in the list is its priority (0 first).
+  struct MotionSource {
+    uint64_t vertex_shader_hash;
+    post_pass::WorldLayout layout;
+    uint32_t constant;
+  };
+  static constexpr uint32_t kMaxMotionSources = 32;
   struct Manifest {
     std::vector<CameraSource> camera_sources;
     uint32_t min_width = 1024;
     std::vector<uint64_t> final_pixel_shaders;
     float cut_distance = 5.0f, cut_angle = 30.0f, cut_focal = 0.1f;
+    // [motion]: the slot of a stencil value s is round(s / stencil_step) below
+    // stencil_limit, else 0; slot_count from both (at most kMotionSlots).
+    std::vector<MotionSource> motion_sources;
+    uint32_t motion_stencil_step = 1, motion_stencil_limit = 256;
+    uint32_t motion_slot_count = 1;
     // Name and the value of the manifest.
     std::vector<std::pair<std::string, std::string>> defines;
     std::vector<ParamDesc> params;
@@ -148,6 +168,7 @@ class PostPasses {
     std::vector<PassDesc> passes;
     bool uses_point[size_t(Point::kCount)] = {};
     bool uses_scene_color = false, uses_previous_color = false, uses_previous_depth = false;
+    bool uses_scene_stencil = false;
     // The defines as compiled (after shader_mod_defines).
     std::vector<std::pair<std::string, std::string>> compiled_defines;
     std::vector<uint8_t> vertex_shader;
@@ -180,9 +201,38 @@ class PostPasses {
     float guest_origin = 0.0f;
     // For the log: ndc_z = q - q_near / view z of a Direct3D style projection.
     float q = 0.0f, q_near = 0.0f;
+    // Clip = projection * view position (post_pass_motion_check).
+    post_pass::Matrix projection = {};
     bool view_known = false;
     uint64_t view_frame = UINT64_MAX;
     post_pass::Matrix view_to_world = {};
+  };
+  // A motion object of a frame: the world matrix of the draw of the highest
+  // priority source with its stencil reference.
+  struct MotionObject {
+    uint64_t frame = UINT64_MAX;
+    uint32_t source = UINT32_MAX;
+    uint32_t reference = 0;
+    post_pass::MatrixD world = {};
+    // The sources that drew the object in the frame (their first world matrix
+    // is in motion_first_worlds_, for the log).
+    uint32_t sources_drawn = 0;
+  };
+  // The motion constants of a frame (SceneConstants::motion_*), computed at
+  // its first point.
+  struct Motion {
+    uint64_t frame = UINT64_MAX;
+    bool valid = false;
+    uint32_t slots_own = 0;
+    uint32_t slots_drawn = 0;
+    float view_to_previous_view[post_pass::kMotionSlots][3][4] = {};
+  };
+  // post_pass_motion_check: a guest pixel shader holding its own reprojection
+  // matrices, logged next to the host's.
+  struct MotionCheck {
+    uint64_t pixel_shader_hash;
+    uint32_t constant, slots;
+    uint64_t next_frame;
   };
   // A pixel shader float constant to log (post_pass_log_constants).
   struct LoggedConstant {
@@ -233,8 +283,21 @@ class PostPasses {
   void PollFiles();
 
   // Scene tracking.
+  bool IsSceneDepthBuffer(const RegisterFile& regs, uint32_t& depth_edram_base_out) const;
   void CaptureCamera(const RegisterFile& regs, const CameraSource& source);
+  void CaptureObject(const RegisterFile& regs, uint32_t source_index);
+  // The motion slot of a stencil value (0: the static world).
+  uint32_t MotionSlot(uint32_t stencil) const;
   void LogConstants(const RegisterFile& regs, uint64_t pixel_shader_hash);
+  // Motion.
+  void UpdateMotion();
+  // An object's own view_to_previous_view, if it was captured in both frames
+  // and did not jump.
+  bool ObjectReprojection(uint32_t slot, const post_pass::MatrixD& view_to_world,
+                          const post_pass::MatrixD& previous_view_to_world,
+                          post_pass::MatrixD& out) const;
+  void LogMotionCheck(const RegisterFile& regs, MotionCheck& check);
+  std::string MotionSummary() const;
   bool TrackGroup(ResolveGroup& group, uint32_t address, uint32_t length, uint32_t pitch,
                   uint32_t height, uint32_t edram_base, uint64_t frame);
   // The scene color of the frame is complete, after its scene depth.
@@ -244,9 +307,12 @@ class PostPasses {
   // Runs.
   bool IsSkipped(int32_t* variant_index_out);
   void UpdateParams(int32_t variant_index);
+  // The pass's conditions on the current params and defines.
+  bool PassEnabled(const PassDesc& pass) const;
   void FillSceneConstants(post_pass::SceneConstants& constants) const;
   void RunPoint(Point point);
-  bool RequestExternal(const ResolveGroup& group, bool depth, External& out);
+  enum class ExternalKind { kColor, kDepth, kStencil };
+  bool RequestExternal(const ResolveGroup& group, ExternalKind kind, External& out);
   void RunPass(PassDesc& pass, D3D12_GPU_VIRTUAL_ADDRESS scene_constants);
   bool BindingSize(const Binding& binding, uint32_t& width, uint32_t& height) const;
   void CopyHistory();
@@ -283,6 +349,7 @@ class PostPasses {
   std::vector<std::pair<std::filesystem::path, ShaderOverrides::FileState>> watched_;
   uint64_t defines_generation_ = 0;
   std::vector<LoggedConstant> logged_constants_;
+  std::vector<MotionCheck> motion_checks_;
 
   Microsoft::WRL::ComPtr<ID3D12RootSignature> root_signature_;
   // Pipelines replaced by a reload, released once the GPU is past them.
@@ -318,8 +385,10 @@ class PostPasses {
   uint32_t final_guest_width_ = 0, final_guest_height_ = 0;
   uint32_t final_width_ = 0, final_height_ = 0;
   bool warned_final_ = false;
-  // The passes' inputs at the current run.
-  External scene_depth_, scene_color_;
+  // The passes' inputs at the current run; the stencil is requested by the
+  // first pass that reads it.
+  External scene_depth_, scene_color_, scene_stencil_;
+  bool scene_stencil_requested_ = false;
   struct {
     ID3D12Resource* resource = nullptr;
     D3D12_CPU_DESCRIPTOR_HANDLE rtv = {};
@@ -334,10 +403,20 @@ class PostPasses {
   bool history_written_ = false;
   bool previous_valid_ = false;
   uint32_t previous_width_ = 0, previous_height_ = 0;
+  // The previous frame's camera and motion objects, kept from every frame with
+  // a scene (also without history textures).
+  bool previous_scene_ = false;
   Camera previous_camera_;
+
+  // Motion objects by slot, of this frame and the previous one.
+  std::array<MotionObject, post_pass::kMotionSlots> motion_objects_, previous_motion_objects_;
+  // Per slot and source, the first world matrix of the frame (for the log).
+  std::vector<std::array<post_pass::Matrix, kMaxMotionSources>> motion_first_worlds_;
+  Motion motion_;
 
   uint64_t runs_ = 0;
   bool warned_no_camera_ = false;
+  bool warned_stencil_ = false;
 };
 
 }  // namespace rex::graphics::d3d12
