@@ -58,6 +58,7 @@ One binary for both releases: the `I:\FM4-build-usa` game build, with the launch
 - 12 of 12 runs passed. Race phase: USA 214.2 fps (standard deviation 14.2), p99 6.46 ms; Japan/Asia 202.1 fps (13.1), p99 7.04 ms. Photo mode ran at 29.9 fps in every run.
 - The race fps of a run follows its draws per frame (correlation -0.98 over the 12 runs), because the AI races differ from run to run: the USA runs averaged 2,189 draws per frame and the Japan/Asia runs 2,494. With that workload taken out, the difference is -0.2 fps (permutation test, p = 0.92). The raw difference (+6.0%, p = 0.16) came from lighter races, not from the release.
 - This agrees with the code: the images are identical, and the game's two `XamGetExecutionId` calls read only the title ID, which both releases share.
+- The USA BuildRoot is the development base, and Japan/Asia is checked on it through `game_data_root`. After a rebuild at commit `8c7d3e1` (build and CPU tests passed), the smoke gate `jpsmoke` on the Japan/Asia disc passed 3 of 3 cells against the USA gate `usa`. Its `photo` race ran at 146.5 fps (FAIL), but that race drew 3,516 draws per frame, more than any earlier run; the rerun `jpsmoke2` ran at 179.6 fps at 2,843 draws per frame (WARN on capture statistics only), in line with the workload curve above. `career`: 202.7 fps, PASS.
 
 ### USA release, 18 October 2026
 
