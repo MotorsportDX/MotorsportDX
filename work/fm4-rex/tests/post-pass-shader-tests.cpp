@@ -5,10 +5,15 @@
 // signature and constant layouts (post_pass_layout.h), the textures, params,
 // defines, bindings and conditions of passes.toml. Their input is a synthetic
 // scene traced into a stored depth texture the way FM4 stores it (reversed Z
-// through the viewport). The GTAO occlusion (the texture in slot 0) is checked
-// where the answer is known: sky and open ground without occlusion, the corner
-// of a wall and the ground, and the contact of a box, darker; and its W debug
-// view (GTAO_DEBUG 1) against the traced W.
+// through the viewport), with a stencil of object IDs the way FM4 writes it (0
+// for the static scene, 7n for car n, 128 under shadows). The GTAO occlusion
+// (the texture in slot 0) is checked where the answer is known: sky and open
+// ground without occlusion, the corner of a wall and the ground, and the
+// contact of a box, darker; and its W debug view (GTAO_DEBUG 1) against the
+// traced W. The motion vectors (the texture in slot 1) are checked against the
+// traced view positions reprojected on the CPU, with the camera and the box
+// (object slot 1) moving, and zero without a valid previous frame; their debug
+// views run, and the passes of the other points are compiled.
 //
 // usage: fm4_post_pass_shader_tests <post_pass.hlsli> <passes directory>
 //                                   [occlusion.pgm] [NAME=VALUE ...]
@@ -154,7 +159,7 @@ struct Texture {
   uint32_t srv = 0, srv_mips[8] = {}, uavs[8] = {};
 };
 struct Binding {
-  std::string texture;  // or scene_depth
+  std::string texture;  // or scene_depth, scene_stencil
   int mip = -1;
 };
 struct Pass {
@@ -165,6 +170,61 @@ struct Pass {
   std::string condition;
   ComPtr<ID3D12PipelineState> pipeline;
 };
+
+// A 4x4 transform of a point, in double.
+void Transform(const double m[4][4], const double in[4], double out[4]) {
+  for (int i = 0; i < 4; ++i) {
+    out[i] = m[i][0] * in[0] + m[i][1] * in[1] + m[i][2] * in[2] + m[i][3] * in[3];
+  }
+}
+
+// A rigid motion of view space: a turn about Y by yaw radians, then a move.
+void RigidMotion(double yaw, double tx, double ty, double tz, double out[4][4]) {
+  const double c = std::cos(yaw), s = std::sin(yaw);
+  const double m[4][4] = {{c, 0.0, s, tx}, {0.0, 1.0, 0.0, ty}, {-s, 0.0, c, tz},
+                          {0.0, 0.0, 0.0, 1.0}};
+  std::memcpy(out, m, sizeof(m));
+}
+
+void MultiplyMatrices(const double a[4][4], const double b[4][4], double out[4][4]) {
+  double r[4][4];
+  for (int i = 0; i < 4; ++i) {
+    for (int j = 0; j < 4; ++j) {
+      r[i][j] = a[i][0] * b[0][j] + a[i][1] * b[1][j] + a[i][2] * b[2][j] + a[i][3] * b[3][j];
+    }
+  }
+  std::memcpy(out, r, sizeof(r));
+}
+
+// The terms of an if (NAME OP NUMBER [&& ...]) on the param and define values.
+bool ConditionHolds(const std::string& condition,
+                    const std::map<std::string, double>& values, bool& valid) {
+  valid = true;
+  size_t start = 0;
+  bool holds = true;
+  while (start <= condition.size()) {
+    size_t end = condition.find("&&", start);
+    std::string term = condition.substr(start, end == std::string::npos ? end : end - start);
+    char name[64] = {}, op[3] = {};
+    double number = 0.0;
+    if (std::sscanf(term.c_str(), " %63[A-Z_0-9] %2[<>=!] %lf", name, op, &number) != 3 ||
+        !values.count(name)) {
+      valid = false;
+      return false;
+    }
+    double value = values.at(name);
+    std::string o = op;
+    holds &= o == "==" ? value == number
+             : o == "!=" ? value != number
+             : o == "<"  ? value < number
+             : o == "<=" ? value <= number
+             : o == ">"  ? value > number
+                         : value >= number;
+    if (end == std::string::npos) break;
+    start = end + 2;
+  }
+  return holds;
+}
 
 Binding ParseBinding(const std::string& text) {
   Binding binding;
@@ -260,10 +320,12 @@ int main(int argc, char** argv) {
       Texture texture;
       texture.name = key.str();
       std::string format = fields["format"].value_or(std::string());
-      texture.format = format == "R32_FLOAT"  ? DXGI_FORMAT_R32_FLOAT
-                       : format == "R8_UNORM" ? DXGI_FORMAT_R8_UNORM
-                       : format == "R16_FLOAT" ? DXGI_FORMAT_R16_FLOAT
-                                               : DXGI_FORMAT_UNKNOWN;
+      texture.format = format == "R32_FLOAT"        ? DXGI_FORMAT_R32_FLOAT
+                       : format == "R8_UNORM"       ? DXGI_FORMAT_R8_UNORM
+                       : format == "R16_FLOAT"      ? DXGI_FORMAT_R16_FLOAT
+                       : format == "R16G16_FLOAT"   ? DXGI_FORMAT_R16G16_FLOAT
+                       : format == "R8G8B8A8_UNORM" ? DXGI_FORMAT_R8G8B8A8_UNORM
+                                                    : DXGI_FORMAT_UNKNOWN;
       texture.mips = uint32_t(Number(fields["mips"].node(), 1.0));
       texture.slot = int(Number(fields["slot"].node(), -1.0));
       if (texture.format == DXGI_FORMAT_UNKNOWN) {
@@ -280,24 +342,31 @@ int main(int argc, char** argv) {
     }
     return nullptr;
   };
-  std::vector<Pass> passes;
+  // The passes of the other points are only compiled.
+  std::vector<Pass> passes, compiled_only;
+  std::vector<bool> compiled_only_pixel;
   if (const toml::array* array = manifest["passes"].as_array()) {
     for (const toml::node& node : *array) {
       const toml::table& fields = *node.as_table();
-      if (fields["point"].value_or(std::string()) != "scene_depth") continue;
       Pass pass;
       pass.name = fields["name"].value_or(std::string());
       pass.shader = fields["shader"].value_or(std::string());
       pass.entry = fields["entry"].value_or(std::string("main"));
       pass.condition = fields["if"].value_or(std::string());
-      if (fields["type"].value_or(std::string("compute")) != "compute") {
-        std::printf("FAIL pass %s: only compute passes run here\n", pass.name.c_str());
-        return 1;
-      }
       if (const toml::table* pass_defines = fields["defines"].as_table()) {
         for (auto&& [key, value] : *pass_defines) {
           pass.defines.emplace_back(std::string(key.str()), DefineText(value));
         }
+      }
+      bool pixel = fields["type"].value_or(std::string("compute")) == "pixel";
+      if (fields["point"].value_or(std::string()) != "scene_depth") {
+        compiled_only.push_back(std::move(pass));
+        compiled_only_pixel.push_back(pixel);
+        continue;
+      }
+      if (pixel) {
+        std::printf("FAIL pass %s: only compute passes run here\n", pass.name.c_str());
+        return 1;
       }
       for (auto [list, bindings] : {std::pair{"srv", &pass.srvs}, std::pair{"uav", &pass.uavs}}) {
         if (const toml::array* names = fields[list].as_array()) {
@@ -340,6 +409,10 @@ int main(int argc, char** argv) {
   std::vector<float> depth(kWidth * kHeight);
   std::vector<int> surface(kWidth * kHeight);
   std::vector<double> hit_y(kWidth * kHeight), view_w(kWidth * kHeight);
+  std::vector<double> view_x(kWidth * kHeight), view_y(kWidth * kHeight);
+  // Object IDs: the box is car 1 (7), the wall car 2 (14), the ground beyond
+  // 10 m on the right is under a shadow (128), the rest is the track (0).
+  std::vector<uint32_t> stencil(kWidth * kHeight);
   for (uint32_t y = 0; y < kHeight; ++y) {
     for (uint32_t x = 0; x < kWidth; ++x) {
       double gx = (x + 0.5) * guest_per_host - 0.5, gy = (y + 0.5) * guest_per_host - 0.5;
@@ -347,10 +420,17 @@ int main(int argc, char** argv) {
       double ndc_y = (gy - viewport.y_offset) / viewport.y_scale;
       // View direction with z = 1 (P has no off-center terms here).
       double dx = ndc_x / projection.m[0][0], dy = ndc_y / projection.m[1][1];
-      double t = Trace(dx, dy, 1.0, hit_y[y * kWidth + x], surface[y * kWidth + x]);
+      uint32_t i = y * kWidth + x;
+      double t = Trace(dx, dy, 1.0, hit_y[i], surface[i]);
       double ndc_z = t > 0.0 ? q - q * near_z / t : 1.0;  // Sky at the far plane.
-      depth[y * kWidth + x] = float(ndc_z * viewport.z_scale + viewport.z_offset);
-      view_w[y * kWidth + x] = t > 0.0 ? t : far_z;
+      depth[i] = float(ndc_z * viewport.z_scale + viewport.z_offset);
+      view_w[i] = t > 0.0 ? t : far_z;
+      view_x[i] = view_w[i] * dx;
+      view_y[i] = view_w[i] * dy;
+      stencil[i] = surface[i] == 3   ? 7u
+                   : surface[i] == 2 ? 14u
+                   : surface[i] == 1 && view_w[i] > 10.0 && view_x[i] > 0.0 ? 128u
+                                                                              : 0u;
     }
   }
 
@@ -414,7 +494,7 @@ int main(int argc, char** argv) {
   for (const Param& param : params) {
     params_fields += std::string(" ") + (param.is_uint ? "uint " : "float ") + param.name + ";";
   }
-  for (Pass& pass : passes) {
+  auto compile = [&](const Pass& pass, const char* target, ComPtr<ID3DBlob>& code) {
     std::string source = "#define XE_POST_PASS_PARAMS" + params_fields +
                          "\n#include \"xe_post_pass.hlsli\"\n#include \"" + pass.shader + "\"\n";
     std::vector<std::pair<std::string, std::string>> all = defines;
@@ -431,12 +511,21 @@ int main(int argc, char** argv) {
     for (const auto& define : all) macros.push_back({define.first.c_str(), define.second.c_str()});
     macros.push_back({nullptr, nullptr});
     Include include(library, directory);
-    ComPtr<ID3DBlob> code, messages;
+    ComPtr<ID3DBlob> messages;
     HRESULT result = D3DCompile(source.data(), source.size(), pass.name.c_str(), macros.data(),
-                                &include, pass.entry.c_str(), "cs_5_1",
+                                &include, pass.entry.c_str(), target,
                                 D3DCOMPILE_OPTIMIZATION_LEVEL3, 0, &code, &messages);
     if (messages) std::printf("%s\n", static_cast<const char*>(messages->GetBufferPointer()));
-    if (!Succeeded(result, pass.name.c_str())) return 1;
+    return Succeeded(result, pass.name.c_str());
+  };
+  for (size_t i = 0; i < compiled_only.size(); ++i) {
+    ComPtr<ID3DBlob> code;
+    if (!compile(compiled_only[i], compiled_only_pixel[i] ? "ps_5_1" : "cs_5_1", code)) return 1;
+    std::printf("ok   %s compiled\n", compiled_only[i].name.c_str());
+  }
+  for (Pass& pass : passes) {
+    ComPtr<ID3DBlob> code;
+    if (!compile(pass, "cs_5_1", code)) return 1;
     D3D12_COMPUTE_PIPELINE_STATE_DESC desc = {};
     desc.pRootSignature = root_signature.Get();
     desc.CS = {code->GetBufferPointer(), code->GetBufferSize()};
@@ -467,6 +556,10 @@ int main(int argc, char** argv) {
   };
   ComPtr<ID3D12Resource> depth_texture =
       create_texture(DXGI_FORMAT_R32_FLOAT, 1, false, D3D12_RESOURCE_STATE_COPY_DEST);
+  // The stencil as the runtime views the depth resolve read as 8_8_8_8: an
+  // R8G8B8A8_UINT view with the stencil in R.
+  ComPtr<ID3D12Resource> stencil_texture =
+      create_texture(DXGI_FORMAT_R8G8B8A8_UINT, 1, false, D3D12_RESOURCE_STATE_COPY_DEST);
   ComPtr<ID3D12DescriptorHeap> heap;
   D3D12_DESCRIPTOR_HEAP_DESC heap_desc = {D3D12_DESCRIPTOR_HEAP_TYPE_CBV_SRV_UAV, 256,
                                           D3D12_DESCRIPTOR_HEAP_FLAG_SHADER_VISIBLE, 0};
@@ -502,6 +595,7 @@ int main(int argc, char** argv) {
     return next_descriptor++;
   };
   const UINT depth_srv = srv(depth_texture.Get(), DXGI_FORMAT_R32_FLOAT, 0, 1);
+  const UINT stencil_srv = srv(stencil_texture.Get(), DXGI_FORMAT_R8G8B8A8_UINT, 0, 1);
   for (Texture& texture : textures) {
     // As EnsureTexture: mips while the size allows.
     uint32_t mips = 1;
@@ -516,17 +610,26 @@ int main(int argc, char** argv) {
       texture.uavs[mip] = uav(texture.resource.Get(), texture.format, mip);
     }
   }
-  Texture* occlusion_texture = nullptr;
+  Texture *occlusion_texture = nullptr, *motion_texture = nullptr;
   for (Texture& texture : textures) {
     if (texture.slot == 0) occlusion_texture = &texture;
+    if (texture.slot == 1) motion_texture = &texture;
   }
   if (!occlusion_texture || occlusion_texture->format != DXGI_FORMAT_R8_UNORM) {
     std::printf("FAIL no R8_UNORM texture in slot 0 (xe_post_ao)\n");
     return 1;
   }
+  if (!motion_texture || motion_texture->format != DXGI_FORMAT_R16G16_FLOAT) {
+    std::printf("FAIL no R16G16_FLOAT texture in slot 1 (the motion vectors)\n");
+    return 1;
+  }
+  Texture* motion_debug_texture = find_texture("motion_debug_color");
 
-  // Upload and readback buffers (rows aligned to 256 bytes).
+  // Upload and readback buffers (rows aligned to 256 bytes): the occlusion in
+  // two R8 blocks, then three blocks of 4 bytes per pixel (the motion with and
+  // without a valid previous frame, and the slot debug view).
   const UINT depth_pitch = (kWidth * 4 + 255) & ~255u, r8_pitch = (kWidth + 255) & ~255u;
+  const UINT64 r8_block = UINT64(r8_pitch) * kHeight, wide_block = UINT64(depth_pitch) * kHeight;
   auto buffer = [&](D3D12_HEAP_TYPE type, UINT64 size, D3D12_RESOURCE_STATES state) {
     D3D12_HEAP_PROPERTIES properties = {type};
     D3D12_RESOURCE_DESC desc = {};
@@ -543,18 +646,25 @@ int main(int argc, char** argv) {
               "buffer");
     return resource;
   };
-  ComPtr<ID3D12Resource> upload = buffer(D3D12_HEAP_TYPE_UPLOAD, UINT64(depth_pitch) * kHeight,
-                                         D3D12_RESOURCE_STATE_GENERIC_READ);
+  ComPtr<ID3D12Resource> upload =
+      buffer(D3D12_HEAP_TYPE_UPLOAD, wide_block * 2, D3D12_RESOURCE_STATE_GENERIC_READ);
+  // Two sets of scene constants: with a valid previous frame, and without.
+  const UINT64 constants_stride = (sizeof(post_pass::SceneConstants) + 255) & ~UINT64(255);
   ComPtr<ID3D12Resource> constants_buffer =
-      buffer(D3D12_HEAP_TYPE_UPLOAD, 256, D3D12_RESOURCE_STATE_GENERIC_READ);
-  ComPtr<ID3D12Resource> readback = buffer(D3D12_HEAP_TYPE_READBACK, UINT64(r8_pitch) * kHeight * 2,
-                                           D3D12_RESOURCE_STATE_COPY_DEST);
+      buffer(D3D12_HEAP_TYPE_UPLOAD, constants_stride * 2, D3D12_RESOURCE_STATE_GENERIC_READ);
+  ComPtr<ID3D12Resource> readback = buffer(
+      D3D12_HEAP_TYPE_READBACK, r8_block * 2 + wide_block * 3, D3D12_RESOURCE_STATE_COPY_DEST);
   if (failures) return 1;
   {
     uint8_t* mapped = nullptr;
     upload->Map(0, nullptr, reinterpret_cast<void**>(&mapped));
     for (uint32_t y = 0; y < kHeight; ++y) {
       std::memcpy(mapped + y * depth_pitch, &depth[y * kWidth], kWidth * 4);
+      for (uint32_t x = 0; x < kWidth; ++x) {
+        uint8_t* texel = mapped + wide_block + y * depth_pitch + x * 4;
+        texel[0] = uint8_t(stencil[y * kWidth + x]);
+        texel[1] = texel[2] = texel[3] = 0;
+      }
     }
     upload->Unmap(0, nullptr);
   }
@@ -575,12 +685,60 @@ int main(int argc, char** argv) {
   scene.w_far = unpack.w_far;
   scene.focal[0] = unpack.pixels_per_unit_x / guest_per_host;
   scene.focal[1] = unpack.pixels_per_unit_y / guest_per_host;
+  scene.flags = post_pass::kSceneFlagViewKnown;
+  scene.motion_stencil_scale = 1.0f / 7.0f;
+  scene.motion_stencil_limit = 126;
+  scene.motion_slot_count = 19;
+  // Without a previous frame: the identity in every slot, nothing own.
+  for (auto& rows : scene.motion_view_to_previous_view) {
+    for (int i = 0; i < 3; ++i) rows[i][i] = 1.0f;
+  }
+  post_pass::SceneConstants scene_no_motion = scene;
+  // The motion since the previous frame: the camera went 1 m forward, 0.2 m to
+  // the side and turned by 1 degree; car 1 (the box) also moved 0.4 m to the
+  // side and 0.3 m back; car 2 (the wall) is new in this frame, so its slot
+  // holds the static world's. The previous frame's projection was zoomed 2%
+  // in.
+  double world_motion[4][4], box_offset[4][4], box_motion[4][4];
+  RigidMotion(1.0 * 3.14159265358979 / 180.0, 0.2, 0.05, 1.0, world_motion);
+  RigidMotion(0.0, 0.4, 0.0, -0.3, box_offset);
+  MultiplyMatrices(world_motion, box_offset, box_motion);
+  post_pass::Matrix previous_projection = projection;
+  previous_projection.m[0][0] *= 1.02f;
+  previous_projection.m[1][1] *= 1.02f;
+  post_pass::Unpack previous_unpack;
+  if (!post_pass::UnpackFromProjection(previous_projection, viewport, previous_unpack)) {
+    std::printf("FAIL previous unpack constants\n");
+    return 1;
+  }
+  scene.flags |= post_pass::kSceneFlagMotionValid;
+  scene.previous_xy_mul_add[0] = previous_unpack.x_mul;
+  scene.previous_xy_mul_add[1] = previous_unpack.x_add;
+  scene.previous_xy_mul_add[2] = previous_unpack.y_mul;
+  scene.previous_xy_mul_add[3] = previous_unpack.y_add;
+  scene.previous_w_numerator = previous_unpack.w_numerator;
+  scene.previous_w_depth_mul = previous_unpack.w_depth_mul;
+  scene.previous_w_depth_add = previous_unpack.w_depth_add;
+  scene.previous_z_from_w = previous_unpack.z_from_w;
+  scene.motion_slots_own = 0b11;
+  for (uint32_t slot = 0; slot < post_pass::kMotionSlots; ++slot) {
+    const double(*matrix)[4] = slot == 1 ? box_motion : world_motion;
+    for (int i = 0; i < 3; ++i) {
+      for (int j = 0; j < 4; ++j) {
+        scene.motion_view_to_previous_view[slot][i][j] = float(matrix[i][j]);
+        if (!slot) scene.view_to_previous_view[i][j] = float(matrix[i][j]);
+      }
+    }
+  }
   {
-    void* mapped = nullptr;
-    constants_buffer->Map(0, nullptr, &mapped);
+    uint8_t* mapped = nullptr;
+    constants_buffer->Map(0, nullptr, reinterpret_cast<void**>(&mapped));
     std::memcpy(mapped, &scene, sizeof(scene));
+    std::memcpy(mapped + constants_stride, &scene_no_motion, sizeof(scene_no_motion));
     constants_buffer->Unmap(0, nullptr);
   }
+  const D3D12_GPU_VIRTUAL_ADDRESS constants_motion = constants_buffer->GetGPUVirtualAddress();
+  const D3D12_GPU_VIRTUAL_ADDRESS constants_no_motion = constants_motion + constants_stride;
 
   ComPtr<ID3D12CommandQueue> queue;
   ComPtr<ID3D12CommandAllocator> allocator;
@@ -595,6 +753,14 @@ int main(int argc, char** argv) {
   D3D12_TEXTURE_COPY_LOCATION depth_src = {upload.Get(), D3D12_TEXTURE_COPY_TYPE_PLACED_FOOTPRINT};
   depth_src.PlacedFootprint.Footprint = {DXGI_FORMAT_R32_FLOAT, kWidth, kHeight, 1, depth_pitch};
   list->CopyTextureRegion(&depth_dst, 0, 0, 0, &depth_src, nullptr);
+  D3D12_TEXTURE_COPY_LOCATION stencil_dst = {stencil_texture.Get(),
+                                             D3D12_TEXTURE_COPY_TYPE_SUBRESOURCE_INDEX};
+  D3D12_TEXTURE_COPY_LOCATION stencil_src = {upload.Get(),
+                                             D3D12_TEXTURE_COPY_TYPE_PLACED_FOOTPRINT};
+  stencil_src.PlacedFootprint.Offset = wide_block;
+  stencil_src.PlacedFootprint.Footprint = {DXGI_FORMAT_R8G8B8A8_UINT, kWidth, kHeight, 1,
+                                           depth_pitch};
+  list->CopyTextureRegion(&stencil_dst, 0, 0, 0, &stencil_src, nullptr);
   auto transition = [&](ID3D12Resource* resource, D3D12_RESOURCE_STATES& state,
                         D3D12_RESOURCE_STATES after) {
     if (state == after) return;
@@ -605,26 +771,45 @@ int main(int argc, char** argv) {
     state = after;
   };
   D3D12_RESOURCE_STATES depth_state = D3D12_RESOURCE_STATE_COPY_DEST;
+  D3D12_RESOURCE_STATES stencil_state = D3D12_RESOURCE_STATE_COPY_DEST;
   transition(depth_texture.Get(), depth_state, D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE);
+  transition(stencil_texture.Get(), stencil_state, D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE);
   ID3D12DescriptorHeap* heaps[] = {heap.Get()};
   list->SetDescriptorHeaps(1, heaps);
 
-  // Runs the point's passes with the params and their debug view, then copies
-  // the slot 0 texture to readback row block `block`.
-  auto run_point = [&](uint32_t debug, uint32_t block) {
+  // Copies a texture's mip 0 to a readback block.
+  auto copy_out = [&](Texture& texture, UINT64 offset, DXGI_FORMAT format, UINT pitch) {
+    transition(texture.resource.Get(), texture.state, D3D12_RESOURCE_STATE_COPY_SOURCE);
+    D3D12_TEXTURE_COPY_LOCATION src = {texture.resource.Get(),
+                                       D3D12_TEXTURE_COPY_TYPE_SUBRESOURCE_INDEX};
+    D3D12_TEXTURE_COPY_LOCATION dst = {readback.Get(), D3D12_TEXTURE_COPY_TYPE_PLACED_FOOTPRINT};
+    dst.PlacedFootprint.Offset = offset;
+    dst.PlacedFootprint.Footprint = {format, kWidth, kHeight, 1, pitch};
+    list->CopyTextureRegion(&dst, 0, 0, 0, &src, nullptr);
+  };
+  // Runs the point's passes with the params of the manifest and those of set,
+  // then copies the slot 0 texture to occlusion block occlusion_block and the
+  // slot 1 texture to wide block motion_block (none if negative).
+  auto run_point = [&](const std::map<std::string, double>& set, int occlusion_block,
+                       int motion_block, D3D12_GPU_VIRTUAL_ADDRESS scene_constants) {
     uint32_t constants[post_pass::kPassConstantCount] = {};
     post_pass::PassHeader header = {{kWidth, kHeight}, {1.0f / kWidth, 1.0f / kHeight}};
     std::memcpy(constants, &header, sizeof(header));
     uint32_t* values = constants + sizeof(header) / 4;
     std::vector<float> floats(params.size());
+    std::map<std::string, double> condition_values;
+    for (const auto& define : defines) {
+      condition_values[define.first] = std::atof(define.second.c_str());
+    }
     for (size_t i = 0; i < params.size(); ++i) {
-      double value = params[i].name == "GTAO_DEBUG" ? double(debug) : params[i].value;
+      double value = set.count(params[i].name) ? set.at(params[i].name) : params[i].value;
       floats[i] = std::clamp(float(value), float(params[i].min), float(params[i].max));
       if (params[i].is_uint) {
         values[i] = uint32_t(floats[i]);
       } else {
         std::memcpy(&values[i], &floats[i], 4);
       }
+      condition_values[params[i].name] = params[i].is_uint ? values[i] : floats[i];
     }
     for (size_t i = 0; i < params.size(); ++i) {
       for (size_t j = 0; j < params.size(); ++j) {
@@ -636,36 +821,24 @@ int main(int argc, char** argv) {
       }
     }
     for (Pass& pass : passes) {
-      // NAME OP NUMBER (the manifest's GTAO conditions are single terms).
       if (!pass.condition.empty()) {
-        char name[64] = {}, op[3] = {};
-        double number = 0.0;
-        if (std::sscanf(pass.condition.c_str(), " %63[A-Z_0-9] %2[<>=!] %lf", name, op, &number) !=
-            3) {
+        bool valid;
+        bool enabled = ConditionHolds(pass.condition, condition_values, valid);
+        if (!valid) {
           std::printf("FAIL pass %s: condition %s\n", pass.name.c_str(), pass.condition.c_str());
           ++failures;
           return;
         }
-        double value = 0.0;
-        for (const auto& define : defines) {
-          if (define.first == name) value = std::atof(define.second.c_str());
-        }
-        for (size_t i = 0; i < params.size(); ++i) {
-          if (params[i].name == name) value = params[i].is_uint ? values[i] : floats[i];
-        }
-        std::string o = op;
-        bool enabled = o == "==" ? value == number
-                       : o == "!=" ? value != number
-                       : o == "<"  ? value < number
-                       : o == "<=" ? value <= number
-                       : o == ">"  ? value > number
-                                   : value >= number;
         if (!enabled) continue;
       }
       D3D12_GPU_DESCRIPTOR_HANDLE srvs[post_pass::kMaxSrvs], uavs[post_pass::kMaxUavs];
       for (auto& handle : srvs) handle = gpu(depth_srv);
       for (size_t i = 0; i < pass.srvs.size(); ++i) {
         if (pass.srvs[i].texture == "scene_depth") continue;
+        if (pass.srvs[i].texture == "scene_stencil") {
+          srvs[i] = gpu(stencil_srv);
+          continue;
+        }
         Texture* texture = find_texture(pass.srvs[i].texture);
         if (!texture) {
           std::printf("FAIL pass %s: no texture %s\n", pass.name.c_str(),
@@ -697,8 +870,7 @@ int main(int argc, char** argv) {
       std::memcpy(constants, &header, sizeof(header));
       list->SetPipelineState(pass.pipeline.Get());
       list->SetComputeRootSignature(root_signature.Get());
-      list->SetComputeRootConstantBufferView(post_pass::kRootSceneConstants,
-                                             constants_buffer->GetGPUVirtualAddress());
+      list->SetComputeRootConstantBufferView(post_pass::kRootSceneConstants, scene_constants);
       list->SetComputeRoot32BitConstants(post_pass::kRootPassConstants,
                                          UINT(4 + std::max(params.size(), size_t(1))), constants,
                                          0);
@@ -711,21 +883,30 @@ int main(int argc, char** argv) {
       list->Dispatch((width + pass.group[0] - 1) / pass.group[0],
                      (height + pass.group[1] - 1) / pass.group[1], 1);
     }
-    transition(occlusion_texture->resource.Get(), occlusion_texture->state,
-               D3D12_RESOURCE_STATE_COPY_SOURCE);
-    D3D12_TEXTURE_COPY_LOCATION src = {occlusion_texture->resource.Get(),
-                                       D3D12_TEXTURE_COPY_TYPE_SUBRESOURCE_INDEX};
-    D3D12_TEXTURE_COPY_LOCATION dst = {readback.Get(), D3D12_TEXTURE_COPY_TYPE_PLACED_FOOTPRINT};
-    dst.PlacedFootprint.Offset = UINT64(block) * r8_pitch * kHeight;
-    dst.PlacedFootprint.Footprint = {DXGI_FORMAT_R8_UNORM, kWidth, kHeight, 1, r8_pitch};
-    list->CopyTextureRegion(&dst, 0, 0, 0, &src, nullptr);
+    if (occlusion_block >= 0) {
+      copy_out(*occlusion_texture, UINT64(occlusion_block) * r8_block, DXGI_FORMAT_R8_UNORM,
+               r8_pitch);
+    }
+    if (motion_block >= 0) {
+      copy_out(*motion_texture, r8_block * 2 + UINT64(motion_block) * wide_block,
+               DXGI_FORMAT_R16G16_FLOAT, depth_pitch);
+    }
   };
   uint32_t debug = 0;
   for (const Param& param : params) {
     if (param.name == "GTAO_DEBUG") debug = uint32_t(param.value);
   }
-  run_point(debug, 0);
-  run_point(1, 1);  // The W debug view.
+  run_point({{"GTAO_DEBUG", double(debug)}}, 0, 0, constants_motion);
+  run_point({{"GTAO_DEBUG", 1.0}}, 1, -1, constants_motion);  // The W debug view.
+  run_point({}, -1, 1, constants_no_motion);
+  // The motion debug views run; the slot view (3) is read back.
+  for (double view : {1.0, 2.0, 4.0, 3.0}) {
+    run_point({{"MOTION_DEBUG", view}}, -1, -1, constants_motion);
+  }
+  if (motion_debug_texture && motion_debug_texture->format == DXGI_FORMAT_R8G8B8A8_UNORM) {
+    copy_out(*motion_debug_texture, r8_block * 2 + wide_block * 2, DXGI_FORMAT_R8G8B8A8_UNORM,
+             depth_pitch);
+  }
   if (failures) return 1;
   if (!Succeeded(list->Close(), "command list")) return 1;
   ID3D12CommandList* lists[] = {list.Get()};
@@ -739,13 +920,19 @@ int main(int argc, char** argv) {
   if (!Succeeded(device->GetDeviceRemovedReason(), "device")) return 1;
 
   std::vector<uint8_t> occlusion(kWidth * kHeight), w_debug(kWidth * kHeight);
+  std::vector<uint16_t> motion(kWidth * kHeight * 2), motion_none(kWidth * kHeight * 2);
+  std::vector<uint8_t> slot_view(kWidth * kHeight * 4);
   {
     uint8_t* mapped = nullptr;
-    D3D12_RANGE range = {0, SIZE_T(r8_pitch) * kHeight * 2};
+    D3D12_RANGE range = {0, SIZE_T(r8_block * 2 + wide_block * 3)};
     readback->Map(0, &range, reinterpret_cast<void**>(&mapped));
     for (uint32_t y = 0; y < kHeight; ++y) {
       std::memcpy(&occlusion[y * kWidth], mapped + y * r8_pitch, kWidth);
-      std::memcpy(&w_debug[y * kWidth], mapped + (kHeight + y) * r8_pitch, kWidth);
+      std::memcpy(&w_debug[y * kWidth], mapped + r8_block + y * r8_pitch, kWidth);
+      const uint8_t* wide = mapped + r8_block * 2 + y * depth_pitch;
+      std::memcpy(&motion[y * kWidth * 2], wide, kWidth * 4);
+      std::memcpy(&motion_none[y * kWidth * 2], wide + wide_block, kWidth * 4);
+      std::memcpy(&slot_view[y * kWidth * 4], wide + wide_block * 2, kWidth * 4);
     }
     readback->Unmap(0, nullptr);
   }
@@ -758,6 +945,98 @@ int main(int argc, char** argv) {
     // A debug view was asked for: written to the image, not checked.
     std::printf("post pass shader tests: debug view %u written\n", debug);
     return 0;
+  }
+
+  // Motion vectors against the traced view positions reprojected in double:
+  // the slot's matrix, the previous projection, the guest viewport, then host
+  // pixels (guest = (host + 0.5) * 2 - 0.5 as above).
+  auto half = [](uint16_t h) {
+    uint32_t sign = uint32_t(h >> 15) << 31, exponent = (h >> 10) & 31, mantissa = h & 1023;
+    uint32_t bits;
+    if (exponent == 0) {
+      if (!mantissa) {
+        bits = sign;
+      } else {
+        float value = std::ldexp(float(mantissa), -24);
+        std::memcpy(&bits, &value, 4);
+        bits |= sign;
+      }
+    } else if (exponent == 31) {
+      bits = sign | 0x7F800000u | (mantissa << 13);
+    } else {
+      bits = sign | ((exponent + 112) << 23) | (mantissa << 13);
+    }
+    float value;
+    std::memcpy(&value, &bits, 4);
+    return value;
+  };
+  // 0 track, 1 track under a shadow (128), 2 the box (car 1), 3 the wall (car
+  // 2, not own), 4 sky.
+  const char* class_names[] = {"track", "shadowed track", "box (car 1)", "wall (car 2, new)",
+                               "sky"};
+  double worst_motion[5] = {}, largest_motion[5] = {};
+  int class_count[5] = {};
+  double box_object_motion = 0.0;
+  uint32_t nonzero_without_previous = 0;
+  for (uint32_t y = 0; y < kHeight; ++y) {
+    for (uint32_t x = 0; x < kWidth; ++x) {
+      uint32_t i = y * kWidth + x;
+      int motion_class = surface[i] == 0   ? 4
+                         : surface[i] == 3 ? 2
+                         : surface[i] == 2 ? 3
+                         : stencil[i] == 128 ? 1
+                                             : 0;
+      auto expected = [&](const double matrix[4][4], double out[2]) {
+        double view[4] = {view_x[i], view_y[i], view_w[i], 1.0}, previous[4];
+        Transform(matrix, view, previous);
+        double ndc_x = (previous_projection.m[0][0] * previous[0] +
+                        previous_projection.m[0][2] * previous[2]) / previous[2];
+        double ndc_y = (previous_projection.m[1][1] * previous[1] +
+                        previous_projection.m[1][2] * previous[2]) / previous[2];
+        double gx = ndc_x * viewport.x_scale + viewport.x_offset;
+        double gy = ndc_y * viewport.y_scale + viewport.y_offset;
+        out[0] = (gx + 0.5) / guest_per_host - (x + 0.5);
+        out[1] = (gy + 0.5) / guest_per_host - (y + 0.5);
+      };
+      double want[2], world_want[2];
+      expected(motion_class == 2 ? box_motion : world_motion, want);
+      expected(world_motion, world_want);
+      double got[2] = {half(motion[i * 2]), half(motion[i * 2 + 1])};
+      double error = std::hypot(got[0] - want[0], got[1] - want[1]);
+      double length = std::hypot(want[0], want[1]);
+      // RG16F keeps 11 significant bits; the stored depth of the far ground
+      // is the least precise input.
+      double allowed = 0.02 + 2.0e-3 * length;
+      worst_motion[motion_class] = std::fmax(worst_motion[motion_class], error / allowed);
+      largest_motion[motion_class] = std::fmax(largest_motion[motion_class], length);
+      ++class_count[motion_class];
+      if (motion_class == 2) {
+        box_object_motion = std::fmax(box_object_motion,
+                                      std::hypot(want[0] - world_want[0], want[1] - world_want[1]));
+      }
+      if (motion_none[i * 2] || motion_none[i * 2 + 1]) ++nonzero_without_previous;
+    }
+  }
+  for (int c = 0; c < 5; ++c) {
+    std::printf("motion %s: %d pixels, up to %.1f px, worst error %.2f of the allowed\n",
+                class_names[c], class_count[c], largest_motion[c], worst_motion[c]);
+    char what[96];
+    std::snprintf(what, sizeof(what), "motion of the %s reprojected", class_names[c]);
+    Check(class_count[c] > 100 && worst_motion[c] <= 1.0, what, worst_motion[c]);
+  }
+  Check(box_object_motion > 2.0, "the box moves apart from the static world", box_object_motion);
+  Check(nonzero_without_previous == 0, "no motion without a valid previous frame",
+        nonzero_without_previous);
+  if (motion_debug_texture) {
+    // Slot view: the track transparent, car 1 its color at alpha 0.65, car 2
+    // (no own motion) striped at alpha 0.85.
+    uint32_t wrong_alpha = 0;
+    for (uint32_t i = 0; i < kWidth * kHeight; ++i) {
+      int alpha = slot_view[i * 4 + 3];
+      int want_alpha = surface[i] == 3 ? 166 : surface[i] == 2 ? 217 : 0;
+      if (std::abs(alpha - want_alpha) > 1) ++wrong_alpha;
+    }
+    Check(wrong_alpha == 0, "slot debug view: track, own and new object slots", wrong_alpha);
   }
 
   // Averages of the occlusion (0..1) over pixels of a region.

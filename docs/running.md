@@ -382,7 +382,13 @@ final combine shaders darken the scene by the occlusion, less on bright pixels.
 there is saved; `shader_mod_set GTAO_RADIUS=1` in the console changes a pass param at
 once.
 
-The pass costs about 0.2 ms of GPU time per race frame at 1x, and 0.7 to 0.8 ms at 2x
+The passes also write the scene's motion vectors (see
+[motion vectors](analysis/motion-vectors.md#8-implementation-18-october-2026)), for later
+temporal passes; `shader_mod_set MOTION_VECTORS=0` skips them. `shader_mod_set
+MOTION_DEBUG=1` draws them color coded over the frame, under the HUD (2: over the scene,
+3: the car IDs, 4: the cars' own motion; 0: off).
+
+The GTAO pass costs about 0.2 ms of GPU time per race frame at 1x, and 0.7 to 0.8 ms at 2x
 (2560x1440). Races stay at 60 fps. At 240 Hz, races at 2x drop from about 174 fps to
 about 162 fps. Replays and photo mode have occlusion too. The cockpit interior, the
 garage and the showroom get none. The first run of a look compiles the mod shaders with

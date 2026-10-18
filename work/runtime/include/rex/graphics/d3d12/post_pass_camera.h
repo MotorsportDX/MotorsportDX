@@ -1,7 +1,9 @@
 /**
  * @file        graphics/d3d12/post_pass_camera.h
  * @brief       Scene camera math of the post passes: the projection of a guest
- *              vertex shader's matrices and the depth unpacking constants
+ *              vertex shader's matrices, the depth unpacking constants, and the
+ *              reprojection of the static world and of objects into the
+ *              previous frame's view (motion vectors)
  *
  * Header only and free of runtime dependencies, so CPU tests can include it.
  * Matrices are 4x4, m[row][column], applied to column vectors (clip = M * p).
@@ -18,9 +20,37 @@ struct Matrix {
   float m[4][4];
 };
 
+// In double, for the reprojection of the motion vectors: world positions on a
+// track are kilometers, and they cancel only in double.
+struct MatrixD {
+  double m[4][4];
+};
+
 inline Matrix Identity() {
   Matrix r = {};
   for (int i = 0; i < 4; ++i) r.m[i][i] = 1.0f;
+  return r;
+}
+
+inline MatrixD IdentityD() {
+  MatrixD r = {};
+  for (int i = 0; i < 4; ++i) r.m[i][i] = 1.0;
+  return r;
+}
+
+inline MatrixD ToDouble(const Matrix& a) {
+  MatrixD r;
+  for (int i = 0; i < 4; ++i) {
+    for (int j = 0; j < 4; ++j) r.m[i][j] = a.m[i][j];
+  }
+  return r;
+}
+
+inline Matrix ToFloat(const MatrixD& a) {
+  Matrix r;
+  for (int i = 0; i < 4; ++i) {
+    for (int j = 0; j < 4; ++j) r.m[i][j] = float(a.m[i][j]);
+  }
   return r;
 }
 
@@ -36,8 +66,20 @@ inline Matrix Multiply(const Matrix& a, const Matrix& b) {
   return r;
 }
 
-// General 4x4 inverse (Gauss-Jordan with partial pivoting, in double).
-inline bool Invert(const Matrix& a, Matrix& out) {
+inline MatrixD Multiply(const MatrixD& a, const MatrixD& b) {
+  MatrixD r = {};
+  for (int i = 0; i < 4; ++i) {
+    for (int j = 0; j < 4; ++j) {
+      double sum = 0.0;
+      for (int k = 0; k < 4; ++k) sum += a.m[i][k] * b.m[k][j];
+      r.m[i][j] = sum;
+    }
+  }
+  return r;
+}
+
+// General 4x4 inverse (Gauss-Jordan with partial pivoting).
+inline bool Invert(const MatrixD& a, MatrixD& out) {
   double w[4][8];
   for (int i = 0; i < 4; ++i) {
     for (int j = 0; j < 4; ++j) {
@@ -68,8 +110,16 @@ inline bool Invert(const Matrix& a, Matrix& out) {
     }
   }
   for (int i = 0; i < 4; ++i) {
-    for (int j = 0; j < 4; ++j) out.m[i][j] = float(w[i][4 + j]);
+    for (int j = 0; j < 4; ++j) out.m[i][j] = w[i][4 + j];
   }
+  return true;
+}
+
+// The same in float, computed in double.
+inline bool Invert(const Matrix& a, Matrix& out) {
+  MatrixD inverse;
+  if (!Invert(ToDouble(a), inverse)) return false;
+  out = ToFloat(inverse);
   return true;
 }
 
@@ -212,6 +262,66 @@ inline void ViewFromDepth(const Unpack& u, float x, float y, float stored_depth,
   view_out[0] = w * (x * u.x_mul + u.x_add);
   view_out[1] = w * (y * u.y_mul + u.y_add);
   view_out[2] = w * u.z_from_w;
+}
+
+// How a guest vertex shader keeps an object's world matrix (object to world) in
+// its float constants, for the motion vectors.
+enum class WorldLayout : uint32_t {
+  // Row vectors, 4 constants: world = x * c[0] + y * c[1] + z * c[2] + c[3]
+  // (FM4's car vertex shaders, matW).
+  kRows,
+  // Column vectors, 3 constants: world.i = dot(c[i], p).
+  kColumns,
+};
+
+// constants: the guest float constants from the first of the matrix on (4 for
+// kRows, 3 for kColumns). Returns world = M * p as a column-vector 4x4.
+inline MatrixD WorldMatrix(WorldLayout layout, const float (*constants)[4]) {
+  MatrixD world = IdentityD();
+  for (int i = 0; i < 4; ++i) {
+    for (int j = 0; j < 4; ++j) {
+      if (layout == WorldLayout::kRows) {
+        // Constant i is row i of the row-vector matrix, so column i here.
+        world.m[j][i] = constants[i][j];
+      } else if (i < 3) {
+        world.m[i][j] = constants[i][j];
+      }
+    }
+  }
+  return world;
+}
+
+// The previous frame's view position of a view position of this frame, as a
+// column-vector 4x4: inverse(previous view to world) * previous world *
+// inverse(world) * view to world for an object that moved from previous_world
+// to world (object to world matrices), or inverse(previous view to world) *
+// view to world for the static world (both world matrices nullptr). In double:
+// the world translations cancel, the result is in view units.
+inline bool ViewToPreviousView(const MatrixD& view_to_world, const MatrixD& previous_view_to_world,
+                               const MatrixD* world, const MatrixD* previous_world,
+                               MatrixD& out) {
+  MatrixD world_to_previous_view;
+  if (!Invert(previous_view_to_world, world_to_previous_view)) return false;
+  if (!world || !previous_world) {
+    out = Multiply(world_to_previous_view, view_to_world);
+    return true;
+  }
+  MatrixD object_from_world;
+  if (!Invert(*world, object_from_world)) return false;
+  out = Multiply(Multiply(Multiply(world_to_previous_view, *previous_world), object_from_world),
+                 view_to_world);
+  return true;
+}
+
+// The same reprojection between clip positions, as the game's motion blur keeps
+// it (FM4's invCurrentVPThenPrevVP): previous projection * view_to_previous_view
+// * inverse(projection), for checking the host matrices against the game's.
+inline bool ClipToPreviousClip(const MatrixD& view_to_previous_view, const MatrixD& projection,
+                               const MatrixD& previous_projection, MatrixD& out) {
+  MatrixD clip_to_view;
+  if (!Invert(projection, clip_to_view)) return false;
+  out = Multiply(Multiply(previous_projection, view_to_previous_view), clip_to_view);
+  return true;
 }
 
 }  // namespace rex::graphics::d3d12::post_pass

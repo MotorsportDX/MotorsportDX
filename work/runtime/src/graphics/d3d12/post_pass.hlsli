@@ -16,6 +16,9 @@
 #define XE_POST_PASS_PARAMS
 #endif
 
+// post_pass_layout.h kMotionSlots.
+#define XE_MOTION_SLOTS 32
+
 // post_pass_layout.h SceneConstants.
 cbuffer xe_post_pass_scene : register(b0) {
   // The scene depth's camera: view position from W and the guest screen
@@ -40,15 +43,17 @@ cbuffer xe_post_pass_scene : register(b0) {
   uint xe_frame;
   // Host pixels per view unit at W = 1 (the focal length).
   float2 xe_scene_focal;
-  // XE_SCENE_HISTORY_VALID, XE_SCENE_VIEW_KNOWN.
+  // XE_SCENE_HISTORY_VALID, XE_SCENE_VIEW_KNOWN, XE_SCENE_MOTION_VALID.
   uint xe_scene_flags;
   // Seconds since the passes were created.
   float xe_time;
   // World position = mul(xe_scene_view_to_world, float4(view, 1.0)).
   row_major float3x4 xe_scene_view_to_world;
-  // The previous frame's view position of a view position.
+  // The previous frame's view position of a view position (of the static
+  // world), with xe_motion_valid().
   row_major float3x4 xe_view_to_previous_view;
-  // The previous frame's camera (like xe_scene_xy_mul_add and the W terms).
+  // The previous frame's camera (like xe_scene_xy_mul_add and the W terms),
+  // with xe_motion_valid().
   float4 xe_previous_xy_mul_add;
   float xe_previous_w_numerator;
   float xe_previous_w_depth_mul;
@@ -59,10 +64,21 @@ cbuffer xe_post_pass_scene : register(b0) {
   // more than the frame).
   uint2 xe_final_size;
   float2 xe_final_uv_scale;
+  // Object motion (the manifest's [motion]): the slot of a stencil value is
+  // xe_motion_slot.
+  float xe_motion_stencil_scale;
+  uint xe_motion_stencil_limit;
+  uint xe_motion_slot_count;
+  // Bit n: slot n holds its object's own motion (xe_motion_slot_own).
+  uint xe_motion_slots_own;
+  // Per slot, the previous frame's view position of a view position on that
+  // object; slot 0, the static world, is xe_view_to_previous_view.
+  row_major float3x4 xe_motion_view_to_previous_view[XE_MOTION_SLOTS];
 };
 
 #define XE_SCENE_HISTORY_VALID 1u
 #define XE_SCENE_VIEW_KNOWN 2u
+#define XE_SCENE_MOTION_VALID 4u
 
 // post_pass_layout.h PassHeader, then the params of the manifest.
 cbuffer xe_post_pass_constants : register(b1) {
@@ -78,6 +94,11 @@ SamplerState xe_point_clamp : register(s1);
 SamplerState xe_trilinear_clamp : register(s2);
 
 bool xe_history_valid() { return (xe_scene_flags & XE_SCENE_HISTORY_VALID) != 0u; }
+
+// The previous frame had a scene with a known camera view, and the camera did
+// not cut: the reprojection (xe_previous_host_position) and the motion matrices
+// hold.
+bool xe_motion_valid() { return (xe_scene_flags & XE_SCENE_MOTION_VALID) != 0u; }
 
 // The guest screen position of a host pixel position of the scene.
 float2 xe_scene_guest_position(float2 host_pixel_center) {
@@ -102,14 +123,40 @@ float3 xe_scene_view_position(float2 host_pixel_center, float w) {
 
 bool xe_scene_is_sky(float w) { return w >= xe_scene_w_far * 0.999; }
 
-// The host pixel position of the scene where the previous frame saw a view
-// position of this frame, and its W then; valid with xe_history_valid() and
-// XE_SCENE_VIEW_KNOWN.
-float2 xe_previous_host_position(float3 view_position, out float previous_w) {
-  float3 previous = mul(xe_view_to_previous_view, float4(view_position, 1.0));
-  previous_w = previous.z / xe_previous_z_from_w;
-  float2 guest = (previous.xy / previous_w - xe_previous_xy_mul_add.yw) / xe_previous_xy_mul_add.xz;
+// The host pixel position of the scene of a view position of the previous
+// frame, and its W then.
+float2 xe_previous_view_host_position(float3 previous_view_position, out float previous_w) {
+  previous_w = previous_view_position.z / xe_previous_z_from_w;
+  float2 guest = (previous_view_position.xy / previous_w - xe_previous_xy_mul_add.yw) /
+                 xe_previous_xy_mul_add.xz;
   return (guest - xe_scene_guest_origin) / xe_scene_guest_per_host;
+}
+
+// The host pixel position of the scene where the previous frame saw a view
+// position of this frame on the static world, and its W then; valid with
+// xe_motion_valid().
+float2 xe_previous_host_position(float3 view_position, out float previous_w) {
+  return xe_previous_view_host_position(mul(xe_view_to_previous_view, float4(view_position, 1.0)),
+                                        previous_w);
+}
+
+// The object slot of a scene stencil value (scene_stencil): round(stencil /
+// stencil_step) below the manifest's stencil_limit, else 0 (the static world).
+uint xe_motion_slot(uint stencil) {
+  uint slot = stencil < xe_motion_stencil_limit
+                  ? uint(float(stencil) * xe_motion_stencil_scale + 0.5)
+                  : 0u;
+  return slot < xe_motion_slot_count ? slot : 0u;
+}
+
+// The slot holds its object's own motion; otherwise (an object new in this
+// frame, or one that jumped) the static world's.
+bool xe_motion_slot_own(uint slot) { return ((xe_motion_slots_own >> slot) & 1u) != 0u; }
+
+// As xe_previous_host_position for a view position on the object of a slot.
+float2 xe_motion_previous_host_position(uint slot, float3 view_position, out float previous_w) {
+  return xe_previous_view_host_position(
+      mul(xe_motion_view_to_previous_view[slot], float4(view_position, 1.0)), previous_w);
 }
 
 // The previous frame's W of a stored depth of the previous scene depth.
