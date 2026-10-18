@@ -1,6 +1,6 @@
 # GTAO design: injecting the ambient occlusion pass
 
-Design of the screen-space ambient occlusion (GTAO) pass that the runtime injects into FM4 frames, together with the frame graph data that determines it. M0-M4 are complete (section 6): the pc default look has used AO since M4. For the current state see [status/current.md](../status/current.md); for dated results see [status/history.md](../status/history.md).
+Design of the screen-space ambient occlusion (GTAO) pass that the runtime injects into FM4 frames, together with the frame graph data that determines it. M0-M5 are complete (section 6): the pc default look has used AO since M4. Since M5 (18 October 2026) GTAO is a pass of the runtime's [post pass framework](post-pass-framework.md): its HLSL and manifest are in [work/fm4-rex/passes](../../work/fm4-rex/passes), and the bespoke C++ (`post_ao.cpp`) is gone. For the current state see [status/current.md](../status/current.md); for dated results see [status/history.md](../status/history.md).
 
 This note contains no game code, shaders or ucode. Addresses, hashes and registers are observations only.
 
@@ -10,9 +10,9 @@ Sources: `REX_FRAME_GRAPH` traces of the race in BuildRoot (see [setup.md](../se
 
 - **Depth**: the full-screen depth texture that the game itself resolves in every race frame, read through the texture cache. It is not copied per tile from EDRAM.
 - **Camera**: the projection matrix P, taken from the vertex shader constants of the scene, plus the viewport registers. GTAO needs only P, not the view matrix.
-- **Injection point**: right after the resolve of the last depth tile (`IssueCopy`), before the whole post chain. Four compute passes (depth prefilter, GTAO, denoise once or twice) produce an R8 occlusion texture, which is cleared again on swap.
-- **Use**: mods read `xe_post_ao(uv)`. The FinalCombine mod ([fm4-look.hlsli](../../work/fm4-rex/look/fm4-look.hlsli)) darkens the scene before tonemapping, less strongly on bright pixels.
-- **Default**: off in the runtime (`post_ao*` cvars). The launcher turns it on through the look knob `-Look ao=<strength>`. The presets pc, aces, gt and neutral use `ao=0.6` with a radius of 0.75 m (M4). `original` and `ao=0` run without the pass. See [running.md](../running.md).
+- **Injection point**: the framework's `scene_depth` point, right after the resolve of the last depth tile (`IssueCopy`), before the whole post chain. Four compute passes (depth prefilter, GTAO, denoise once or twice) produce an R8 occlusion texture, which is cleared again on swap.
+- **Use**: mods read `xe_post_ao(uv)` (the framework's slot 0, `xe_post_texture(0, uv)`). The FinalCombine mod ([fm4-look.hlsli](../../work/fm4-rex/look/fm4-look.hlsli)) darkens the scene before tonemapping, less strongly on bright pixels.
+- **Default**: off in the runtime (`post_pass_path` empty). The launcher sets `post_pass_path` to a copy of `work/fm4-rex/passes` through the look knob `-Look ao=<strength>`. The presets pc, aces, gt and neutral use `ao=0.6` with a radius of 0.75 m (M4). `original` and `ao=0` run without the pass. See [running.md](../running.md).
 - **v1 limits**: bloom and auto-exposure do not see AO. Menus without AO (no scene depth), the garage and the showroom do not get it either (they do not draw the camera VS, M1), and neither does the cockpit interior (depth range compressed, M3-M4). Races, replays and photo mode get AO. Only the RTV path can use it (the override shader acts as a consumer and needs host render targets).
 
 ## Where the pass runs
@@ -20,8 +20,8 @@ Sources: `REX_FRAME_GRAPH` traces of the race in BuildRoot (see [setup.md](../se
 ```mermaid
 flowchart LR
     tiles["Race frame: scene tiles<br/>draw, depth resolve, color resolve"] --> depth
-    depth["Last depth tile resolved<br/>(IssueCopy)"] --> gtao
-    gtao["post_ao passes<br/>depth prefilter, GTAO, denoise"] --> occ
+    depth["scene_depth point: last depth tile resolved<br/>(IssueCopy)"] --> gtao
+    gtao["GTAO passes of passes.toml<br/>depth prefilter, GTAO, denoise"] --> occ
     occ["R8 occlusion texture<br/>cleared on swap"] --> combine
     combine["FinalCombine mod<br/>reads xe_post_ao(uv), darkens before tonemap"] --> rest
     rest["Remaining post chain<br/>bloom and exposure do not see AO in v1"]
@@ -88,10 +88,10 @@ c. **Camera**:
 d. **Injection point**:
    - Depth resolves (`copy_src_select >= 4`, destination pitch >= `post_ao_min_width`) are merged per frame into one group of contiguous tiles. Re-resolves of the same tile (the motion blur frame) stay in that group.
    - When the group covers all 32x32 tiles of the texture, the pass runs right then, inside `IssueCopy`, once per frame. The depth used is complete, because the second resolve in the motion blur frame only changes stencil (an assumption, from two draws in between).
-   - The off phase of `post_ao_ab_ms` skips the pass, so the texture stays empty.
+   - The off phase of `post_ao_ab_ms` (now `post_pass_ab_ms`) skips the pass, so the texture stays empty.
    - Swap (`IssueSwap`) clears the occlusion. As a result, frames without scene depth (menus, photo mode when it does not re-resolve) never use stale AO.
 
-e. **Pass** (compute, `cs_5_1`, [post_ao.hlsl](../../work/runtime/src/graphics/d3d12/post_ao.hlsl), compiled with FXC at startup):
+e. **Pass** (compute, `cs_5_1`, now [gtao.hlsl](../../work/fm4-rex/passes/gtao.hlsl), compiled with FXC at startup):
    1. **Prefilter**: depth to 1/W, 5 R32F mips. 1/W is linear in screen space on flat planes, so bilinear samples stay on the surface. The coarse mips use a weighted average that favors the farthest W, so thin edges do not spread.
    2. **GTAO**: slices x steps per side according to quality, fixed spatial noise (no TAA), normals from depth (neighboring sides that connect), samples denser near the center, falloff at the edge of the radius. The slice directions are spread evenly around the view vector and sampled along their projection on screen. Only this way does the slice average cover the full hemisphere; directions spread evenly in screen space are off by 3-7% away from the axis. Output: visibility raised to the power `post_ao_power` (R8, divided by 1.5 so that values above 1 from a few slices survive until denoise), and 2-bit edges per side (R8).
    3. **Denoise**: 3x3, edge-weighted, once (low/medium) or twice (high/ultra). The last pass writes the occlusion (1 - visibility) to R8 at host depth resolution.
@@ -99,9 +99,9 @@ e. **Pass** (compute, `cs_5_1`, [post_ao.hlsl](../../work/runtime/src/graphics/d
    The textures are zero-filled, so occlusion 0 (no AO) is the safe default.
 
 f. **Binding to mods**:
-   - A new SystemBindlessView `kPostAoOcclusion` after `kNullTextureCube`, in the unbounded SRV range. At start it holds a null SRV (reads as 0), and then the SRV of the occlusion texture once that texture is created.
+   - A SystemBindlessView after `kNullTextureCube`, in the unbounded SRV range (now the first of the framework's eight `kPostPassViewsStart` views, at the same index). At start it holds a null SRV (reads as 0), and then the SRV of the occlusion texture once that texture is created.
    - SystemConstants are not changed: validity is guarded by the texture contents (cleared on swap). The DXBC translation and the pipeline cache stay intact.
-   - The override contract defines `XE_POST_AO_VIEW`. The library [shader_override.hlsli](../../work/runtime/src/graphics/d3d12/shader_override.hlsli) adds `float xe_post_ao(float2 uv)`: the occlusion at scene texture coordinates, 0 without post_ao.
+   - The override contract defined `XE_POST_AO_VIEW` (now `XE_POST_VIEWS`). The library [shader_override.hlsli](../../work/runtime/src/graphics/d3d12/shader_override.hlsli) adds `float xe_post_ao(float2 uv)`: the occlusion at scene texture coordinates, 0 without the pass.
 
 g. **Use in FinalCombine** (M3-M4, `fm4_combine_fetch`, fetch 0 at the pixel itself): occlusion o, and weight w = strength x (1 - smoothstep(l0, l1, exposed luminance)). AO really only attenuates ambient light, but the scene does not separate ambient from sunlight, so bright pixels are attenuated less. Then `scene.rgb *= sqrt(1 - w*o)`, because the scene is stored in gamma 2. The sky sits at the far plane, so o = 0.
 
@@ -110,23 +110,31 @@ h. **v1 limits**:
    - In motion blur frames, sharp AO lies over the blurred scene. Planned fix (v1.1): mod 4746 multiplies the AO on each scene tap, and FinalCombine skips it in that frame.
    - Side mirrors and HUD have no AO.
 
-## 4. Components (branch gtao-m0)
+## 4. Components
 
-- [`post_ao_camera.h`](../../work/runtime/include/rex/graphics/d3d12/post_ao_camera.h): camera math (header only): the matrices from the second constant layout, P, and the unpack constants.
-- [`post_ao.h`](../../work/runtime/include/rex/graphics/d3d12/post_ao.h), [`post_ao.cpp`](../../work/runtime/src/graphics/d3d12/post_ao.cpp): class `PostAo`.
+Since 18 October 2026, on the [post pass framework](post-pass-framework.md):
+
+- [`passes.toml`](../../work/fm4-rex/passes/passes.toml): the scene camera vertex shaders, the GTAO textures (W with 5 mips, visibility, denoised visibility, edges, and the occlusion in slot 0, cleared on swap), the five passes at `scene_depth` (the second denoise only `if = "GTAO_QUALITY >= 2"`), the define `GTAO_QUALITY` and the params `GTAO_RADIUS` (0.75), `GTAO_RADIUS_PIXELS` (the radius times the focal length, on the CPU), `GTAO_FALLOFF`, `GTAO_POWER`, `GTAO_DENOISE_CENTER`, `GTAO_SCALE` and `GTAO_DEBUG`, with the clamps of the former cvars.
+- [`gtao.hlsl`](../../work/fm4-rex/passes/gtao.hlsl): `gtao_prefilter`, `gtao_main`, `gtao_denoise` (`GTAO_FINAL` for the last one). The math is that of `post_ao.hlsl`, unchanged; the depth unpack moved to the library ([post_pass.hlsli](../../work/runtime/src/graphics/d3d12/post_pass.hlsli) `xe_scene_w`, `xe_scene_view_position`, `xe_scene_is_sky`). Debug view 2 reads the GTAO output from its own input (t3) instead of skipping the first denoise, so every view shows what it showed before. The framework clears the occlusion, so `post_ao_clear` is gone.
+- The former cvars map to: `post_ao` and `post_ao_camera` to `post_pass_path` and `[scene] camera`; `post_ao_quality` to the define `GTAO_QUALITY`; `post_ao_radius`, `post_ao_falloff`, `post_ao_power` and `post_ao_debug` to the params (set by `shader_mod_defines` or `shader_mod_set`); `post_ao_min_width` to `[scene] min_width`; `post_ao_ab_ms`, `post_ao_variants` (now `NAME=VALUE` entries), `post_ao_variant_ms`, `post_ao_log_every` and `post_ao_log_constants` to `post_pass_*`.
+
+Before the framework (branch gtao-m0, M0-M4):
+
+- `post_ao_camera.h` (now [`post_pass_camera.h`](../../work/runtime/include/rex/graphics/d3d12/post_pass_camera.h)): camera math (header only): the matrices from the second constant layout, P, and the unpack constants.
+- `post_ao.h`, `post_ao.cpp` (removed): class `PostAo`.
   - cvars: `post_ao`, `post_ao_quality`, `post_ao_radius`, `post_ao_falloff`, `post_ao_power`, `post_ao_camera`, `post_ao_min_width`, `post_ao_ab_ms`, `post_ao_debug` (1: W 0-100, 2: before denoising, 3: depth discontinuities, that is the denoise edges, 4: W 0-2), `post_ao_log_every`, and for tuning `post_ao_variants` with `post_ao_variant_ms` (radius, occlusion scale and debug view switch by the steady clock, to compare settings on one frozen scene).
   - `OnDraw` (camera capture), `OnResolve` (depth group, pass trigger), `OnSwap` (clear).
   - Its own root signature (constants b0, 22 dwords; SRV tables t0-t2; UAV tables u0-u4; one static clamp sampler, `MIN_MAG_LINEAR_MIP_POINT`, so linear in x/y and point between mips), the `resolve_downscale` dispatch pattern, and `SetExternalPipeline`, so the next guest draw reinstalls its PSO.
   - Textures that change size: the old resource goes to `resources_for_deletion_`, and the old descriptors are freed after the GPU has passed their submission.
-- [`src/graphics/d3d12/post_ao.hlsl`](../../work/runtime/src/graphics/d3d12/post_ao.hlsl): the four entry points (`post_ao_prefilter`, `post_ao_main`, `post_ao_denoise`, `post_ao_clear`). CMake embeds it as `kPostAoHlsl`, the same pattern as `shader_override.hlsli` ([CMakeLists.txt](../../work/runtime/src/graphics/CMakeLists.txt)).
-- [`command_processor.h`](../../work/runtime/include/rex/graphics/d3d12/command_processor.h) / [`command_processor.cpp`](../../work/runtime/src/graphics/d3d12/command_processor.cpp): `kPostAoOcclusion` (null SRV at start), `friend PostAo`, `post_ao_`; hooks in `IssueDraw` (after the VS analysis), in both `IssueCopy` paths (after `CountResolveDestination`), and in `IssueSwap` (after `BeginSubmission`).
+- `src/graphics/d3d12/post_ao.hlsl` (now `gtao.hlsl`): the four entry points (`post_ao_prefilter`, `post_ao_main`, `post_ao_denoise`, `post_ao_clear`), embedded as `kPostAoHlsl`.
+- [`command_processor.h`](../../work/runtime/include/rex/graphics/d3d12/command_processor.h) / [`command_processor.cpp`](../../work/runtime/src/graphics/d3d12/command_processor.cpp): `kPostAoOcclusion` (null SRV at start), `friend PostAo`, `post_ao_`; hooks in `IssueDraw` (after the VS analysis), in both `IssueCopy` paths (after `CountResolveDestination`), and in `IssueSwap` (after `BeginSubmission`). The framework keeps these hooks.
 - [`texture_cache.h`](../../work/runtime/include/rex/graphics/d3d12/texture_cache.h) / [`texture_cache.cpp`](../../work/runtime/src/graphics/d3d12/texture_cache.cpp): `RequestResolvedTexture`, like `RequestSwapTexture` for a synthesized fetch constant, in the same SRV state as guest draws.
 - [`shader_override.cpp`](../../work/runtime/src/graphics/d3d12/shader_override.cpp) / `shader_override.hlsli`: `XE_POST_AO_VIEW` and `xe_post_ao(uv)`.
 - Tests in [`work/fm4-rex/tests`](../../work/fm4-rex/tests/):
-  - [`post-ao-camera-tests.cpp`](../../work/fm4-rex/tests/post-ao-camera-tests.cpp) (target `fm4_post_ao_camera_tests`): CPU tests of the camera math;
-  - [`post-ao-shader-tests.cpp`](../../work/fm4-rex/tests/post-ao-shader-tests.cpp) (target `fm4_post_ao_shader_tests`): the four passes on WARP;
+  - `post-ao-camera-tests.cpp` (now [`post-pass-camera-tests.cpp`](../../work/fm4-rex/tests/post-pass-camera-tests.cpp), target `fm4_post_pass_camera_tests`): CPU tests of the camera math;
+  - `post-ao-shader-tests.cpp` (now [`post-pass-shader-tests.cpp`](../../work/fm4-rex/tests/post-pass-shader-tests.cpp), target `fm4_post_pass_shader_tests`, which runs the passes from `passes.toml`): the four passes on WARP;
   - [`shader-mod-tests.cpp`](../../work/fm4-rex/tests/shader-mod-tests.cpp) (target `fm4_shader_mod_tests`): all look mods compiled with FXC under a synthetic contract, with and without the AO knob.
-- FM4 configuration in the launcher ([pipeline.py](../../outputs/FM4-build/pipeline.py) `ao_cvars`, used by the `ao` knob and `--ao`):
+- FM4 configuration in the launcher ([pipeline.py](../../outputs/FM4-build/pipeline.py) `ao_cvars`, used by the `ao` knob and `--ao`), before the framework; now `post_pass_path` and `passes.toml`:
 
   ```
   post_ao=true
@@ -137,9 +145,9 @@ h. **v1 limits**:
 ## 5. GTAO parameters
 
 - **Algorithm**: Jimenez et al. 2016, "Practical Real-Time Strategies for Accurate Indirect Occlusion". For each pixel and each screen-space slice direction, the horizon angles on both sides are found within a world-space radius projected to the screen. Cosine-weighted visibility is integrated analytically against the projected normal (equation 10 of the paper), plus falloff at the edge of the radius.
-- **`post_ao_quality` presets** (full resolution, slices x steps per side): 0 = 2x2, 1 = 2x4 (denoise once), 2 = 3x6 (default), 3 = 4x8 (denoise twice).
-- **Cvar defaults**: radius 1 m, falloff 0.6, power 1.5, denoise center weight 2. Launcher (M4): radius 0.75 m, look strength 0.6.
-- **Shader size** (FXC `/O3`): prefilter 193 instructions; GTAO 457 / 614 / 1094 / 1725 per preset (loops unrolled); denoise 74 and 88 (final); clear 6.
+- **`GTAO_QUALITY` presets** (formerly `post_ao_quality`; full resolution, slices x steps per side): 0 = 2x2, 1 = 2x4 (denoise once), 2 = 3x6 (default), 3 = 4x8 (denoise twice).
+- **Defaults**: radius 0.75 m in `passes.toml` (the runtime cvar default was 1 m, and the launcher set 0.75 m since M4), falloff 0.6, power 1.5, denoise center weight 2; look strength 0.6.
+- **Shader size** (FXC `/O3`, high preset): prefilter 193 instruction slots; GTAO 457 / 614 / 1094 / 1725 per preset (loops unrolled); denoise 74, and 102 for the final one with the debug views (101 before the framework).
 - **Estimated cost** at 2x (2560x1440, 3.7 million pixels), high preset: about 55 texture reads per pixel, roughly 0.3-0.8 ms on an RTX 5070 Ti. Measured in M3 through the frame graph (section 6). The race GPU frame is about 2.5 ms at 1x, so there is room. At 240 Hz the limit is the CP, not the GPU.
 - **World units** are assumed to be meters. Confirmed in M1: for example, the car length in view space is about 4.5 m.
 
@@ -177,6 +185,11 @@ Stages that run the game begin only after the owner confirms the GPU is free.
 - `pipeline.py`: the look knob `ao` (`FM4_LOOK_AO`) above 0 also turns on the pass (`ao_cvars`: `post_ao`, `post_ao_camera`, `post_ao_radius` 0.75). The presets pc, aces, gt and neutral use `ao=0.6`; `original` has no mod. The `-Info` overlay writes "Ambient occlusion: GTAO, strength 0.6, radius 0.75 m, high". `--ao` still runs the pass without the look.
 - Gate in this branch's BuildRoot, 240 Hz, pc look compared with a no-AO baseline (`post_ao=false`, pc define without `FM4_LOOK_AO`): smoke 1x 3/3 and 3/3 (photo_view and career PASS; photo WARN only for capture statistics); replay and photo mode at 30 fps; no clear-color frames. Performance (photo, 3 runs; race phase, 12 cars): 1x GPU 2.82 -> 3.01 ms (+0.19), race 196 -> 200 fps (CP-limited; the difference is noise); 2x GPU 5.32 -> 6.09 ms (+0.77), race 174 -> 162 fps (at 2x 240 Hz the GPU is the limit). Photo mode 2x 7.74 -> 8.16 ms; replay 1x 3.90 -> 4.05 ms. The WARN `black_pct` on the final capture (SAVE SUCCESSFUL dialog over the dimmed photo) rises consistently: correct AO plus a different race scene.
 - Visual run at 2x with its own launcher (pc look, 60 Hz, median 60.0 fps, GPU 5.82 ms), `post_ao_ab_ms=4000`, six cameras frozen, and photo mode: 27 on/off pairs. AO at the contacts and under the car, lamp recesses, bumper curves and exhaust, the sides of the hood bulge, and wall legs; open asphalt and sky are unchanged. The cockpit interior stays without AO (the world beyond the glass gets it). Photo mode also gets AO, both in the live view and in the rendered photo shown: depth is resolved again there and the camera is captured.
+
+**M5**: complete 18 October 2026. GTAO runs on the [post pass framework](post-pass-framework.md) (`passes.toml` and `gtao.hlsl` in `work/fm4-rex/passes`), and `post_ao.cpp`, `post_ao.h` and `post_ao.hlsl` are gone. BuildRoot `I:\FM4-build-pass`, main `ad2797a` against this change:
+- The output is identical. FXC gives the same instructions for the prefilter, GTAO and denoise passes; the WARP test gives a byte-identical occlusion; and in the game a temporary build that runs the old pass beside the new one and compares their textures on the GPU at every swap found no differing texel in 22,321 frames at 2x with the debug views 0-4 cycled and 18,241 frames with the `pc` look. Frozen frames that show the old and the new occlusion in turn are byte-identical captures at 2x (17 pairs with the look, 2 with the debug views). Details in the [framework's verification](post-pass-framework.md#verification).
+- The mods compile to the same DXBC (204 fingerprints of `fm4_shader_mod_tests`), since the slot of `xe_post_ao` kept its bindless index.
+- GPU time (perf tier, photo at 240 Hz, 1x, three runs each): race GPU 3.02, 3.24 and 2.91 ms per frame on main, 3.04, 3.10 and 3.09 ms with the framework, at 2,347, 3,454 and 1,970 against 2,392, 2,920 and 2,763 draws per frame; the closest pair (2,347 and 2,392 draws) is 3.02 against 3.04 ms. The dispatches are the same five (and the same clear), so the pass costs what it did; the race fps follows the draws per frame, as before.
 
 **Later**:
 - AO in the cockpit interior: the interior is drawn with a compressed depth range (W close to constant at about 0.024 m), so the interior viewport's `ZSCALE`/`ZOFFSET` must be captured separately.

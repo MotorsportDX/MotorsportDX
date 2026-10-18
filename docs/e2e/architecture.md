@@ -36,7 +36,7 @@ Command line: `<BuildRoot>\<game-build>\fm4_rex.exe --name=value ...`. The value
 1. `pipeline.launch_cvars` in [`pipeline.py`](../../outputs/FM4-build/pipeline.py), shared with `Build.ps1 -Action run`. `game_data_root` comes from `<BuildRoot>\local.json` (`disc1`), and `log_file` is `<out>\runtime.log`.
 2. `headless=true`, so XAM prompts such as the keyboard dialog answer with their default text (`work/runtime/src/kernel/xam/xam_ui.cpp`).
 3. `user_data_root=<out>\user-data` with `--profile`.
-4. `pipeline.look_cvars` (shader mods of the look) and `pipeline.ao_cvars` (`post_ao`).
+4. `pipeline.look_cvars` (shader mods of the look) and `pipeline.ao_cvars` (`post_pass_path`, the post passes).
 5. The `--arg` items.
 
 The runtime does not reject an unknown `--name=value`. `work/runtime/src/core/cvar.cpp` stores it for a cvar that may register later, and the value is dropped without an error if no cvar of that name ever registers. A backend that lacks a cvar of the launcher therefore runs with its default, silently.
@@ -203,7 +203,7 @@ After the game exits or is killed, `run_once`:
 | `ReadProcessMemory`, `_byteswap_ulong` | `fm4-ui-diagnostics.cpp`, `fm4-gpu-probe.cpp` | safe reads of guest memory and GPU registers for diagnostics |
 | `<Windows.h>` without a platform guard | `fm4-crash-diagnostics.cpp`, `fm4-ui-diagnostics.cpp`, `fm4-gpu-probe.cpp`, `fm4-jpeg-diagnostics.cpp`, `fm4-stream-trace.cpp` | these files compile only on Windows |
 | `ctypes.windll` | `pipeline.py` `primary_monitor` | the launcher's `-Display native`; `e2e.py` does not call it |
-| Windows SDK `fxc.exe` | `override_fxc.py`; the look and `post_ao` shaders | HLSL compilation |
+| Windows SDK `fxc.exe` | `override_fxc.py`; the look mods and the post passes | HLSL compilation |
 
 `compare.py`, `race_clock.py`, `frame_graph.py`, `inventory.py` and the summary code of `e2e.py` (`--resummarize`) are plain Python and work on any platform, on results copied from a Windows run.
 
@@ -216,7 +216,7 @@ The launcher cvars include settings that only the D3D12 backend defines. Another
 | `render_target_path_d3d12` | `src/graphics/d3d12/render_target_cache.cpp` |
 | `rov_occlusion_awaited_report_divisor`, `rov_occlusion_async` | `src/graphics/d3d12/command_processor.cpp` |
 | `d3d12_submit_thread`, `d3d12_readback_publish_thread` | `src/graphics/d3d12/command_processor.cpp` |
-| `post_ao` and its settings (`--ao`, the `ao` look knob) | `src/graphics/d3d12/post_ao.cpp` |
+| `post_pass_path` and the `post_pass_*` diagnostics (`--ao`, the `ao` look knob) | `src/graphics/d3d12/post_pass.cpp` |
 | `shader_mod_path`, `shader_mod_defines` (every look except `original`), `shader_override_cache_path`, and with `--shader-dev` `shader_mod_hot_reload` and `shader_mod_live_knobs` | `src/graphics/d3d12/shader_override.cpp` |
 
 These launcher cvars are backend-neutral: `edram_single_rt_no_wrap`, `readback_resolve`, `gpu_allow_invalid_fetch_constants`, `async_shader_compilation`, `vblank_vrr`, `anisotropic_override`, `clear_memory_page_state`, `draw_resolution_scale_x` and `_y`, `video_mode_refresh_rate`, `input_backend`, `headless`.
@@ -236,7 +236,7 @@ The steps below are the work a port needs, in dependency order. None of them has
 1. Implement `CaptureGuestOutput` in the new presenter. It must return the guest output before the overlay as RGBA8 rows (`RawImage`: `width`, `height`, `stride`, `data`).
 2. Call the `perf_trace` helpers at the matching points of the new command processor and shared memory: `OnSwap` at the swap (first, since it writes the trace), `AddFenceWait` and `CauseScope` around GPU waits, `ZoneStart`/`ZoneEnd` around the same zones, `CountDraw`, `CountCopy`, `CountReadback`, `CountResolve`, `Increment(Count::kSubmissions)`, and `AddGpuFrame` from GPU timestamps. Use the same causes and zones, so `compare.py` compares like with like.
 3. Decide for each D3D12-only cvar of `launch_cvars` whether the backend gets an equivalent, and give the equivalent its own name. Then make `pipeline.launch_cvars` choose the cvars by backend, so neither backend gets cvars that it would ignore.
-4. Until the shader mods and `post_ao` exist for the backend, run the harness with `--look original` and without `--ao`.
+4. Until the shader mods and the post passes exist for the backend, run the harness with `--look original` and without `--ao`.
 
 ### 2. Integration code (work/fm4-rex)
 

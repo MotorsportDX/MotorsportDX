@@ -84,13 +84,13 @@ if(REXGLUE_USE_D3D12)
         d3d12/deferred_command_list.cpp
         d3d12/pipeline_cache.cpp
         d3d12/shader_override.cpp
-        d3d12/post_ao.cpp
+        d3d12/post_pass.cpp
     )
 
-    # The HLSL library of shader overrides, embedded as kShaderOverrideHlsli, and
-    # the post_ao compute shaders (compiled at startup), as kPostAoHlsl.
+    # The HLSL libraries of shader overrides and of post passes, embedded as
+    # kShaderOverrideHlsli and kPostPassHlsli.
     foreach(REXGPU_EMBEDDED IN ITEMS "shader_override.hlsli;kShaderOverrideHlsli"
-                                     "post_ao.hlsl;kPostAoHlsl")
+                                     "post_pass.hlsli;kPostPassHlsli")
         list(GET REXGPU_EMBEDDED 0 REXGPU_EMBEDDED_FILE)
         list(GET REXGPU_EMBEDDED 1 REXGPU_EMBEDDED_NAME)
         set(REXGPU_EMBEDDED_PATH ${CMAKE_CURRENT_SOURCE_DIR}/d3d12/${REXGPU_EMBEDDED_FILE})
@@ -158,6 +158,7 @@ endif()
 # and relinking them would duplicate global state.
 target_link_libraries(rexgpu-xenos PRIVATE
     rexruntime
+    tomlplusplus
     xxHash::xxhash
 )
 

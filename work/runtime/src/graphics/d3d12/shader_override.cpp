@@ -75,6 +75,9 @@ REXCVAR_DEFINE_BOOL(shader_mod_hot_reload, false, "GPU/D3D12",
                     "changed and rebuild only their pipelines")
     .lifecycle(rex::cvar::Lifecycle::kRequiresRestart);
 
+// post_pass.cpp: post passes use the compiler and the defines of the overrides.
+REXCVAR_DECLARE(std::string, post_pass_path);
+
 REXCVAR_DEFINE_BOOL(shader_mod_live_knobs, false, "GPU/D3D12",
                     "Development: compile the numeric shader_mod_defines as constants read at "
                     "run time (xe_mod_knob), so shader_mod_set changes them without a recompile")
@@ -173,18 +176,22 @@ void SetDefine(std::vector<std::pair<std::string, std::string>>& defines, const 
   defines.emplace_back(name, value);
 }
 
-// Serves the embedded library, and other includes from the mod and override
-// directories, recording the files it read.
+// Serves an embedded library (the override library unless another is given),
+// and other includes from the directories, recording the files it read.
 class OverrideInclude final : public ID3DInclude {
  public:
-  explicit OverrideInclude(std::vector<std::filesystem::path> directories)
-      : directories_(std::move(directories)) {}
+  explicit OverrideInclude(std::vector<std::filesystem::path> directories,
+                           const char* library_name = kHlsliName,
+                           std::string_view library = std::string_view(
+                               reinterpret_cast<const char*>(kShaderOverrideHlsli),
+                               sizeof(kShaderOverrideHlsli)))
+      : directories_(std::move(directories)), library_name_(library_name), library_(library) {}
 
   HRESULT __stdcall Open(D3D_INCLUDE_TYPE, LPCSTR file_name, LPCVOID, LPCVOID* data_out,
                          UINT* bytes_out) noexcept override {
-    if (!std::strcmp(file_name, kHlsliName)) {
-      *data_out = kShaderOverrideHlsli;
-      *bytes_out = UINT(sizeof(kShaderOverrideHlsli));
+    if (!std::strcmp(file_name, library_name_)) {
+      *data_out = library_.data();
+      *bytes_out = UINT(library_.size());
       return S_OK;
     }
     for (const std::filesystem::path& directory : directories_) {
@@ -219,6 +226,8 @@ class OverrideInclude final : public ID3DInclude {
 
  private:
   std::vector<std::filesystem::path> directories_;
+  const char* library_name_;
+  std::string_view library_;
   std::list<std::string> files_;
   std::vector<Read> read_;
 };
@@ -364,7 +373,8 @@ std::unique_ptr<ShaderOverrides> ShaderOverrides::Create(const HostConfig& confi
   std::string generate_path = REXCVAR_GET(shader_override_generate_path);
   std::string mod_path = REXCVAR_GET(shader_mod_path);
   bool use_generated = REXCVAR_GET(shader_override_generated);
-  if (path.empty() && generate_path.empty() && mod_path.empty() && !use_generated) {
+  if (path.empty() && generate_path.empty() && mod_path.empty() && !use_generated &&
+      REXCVAR_GET(post_pass_path).empty()) {
     return nullptr;
   }
   if (!config.bindless_resources_used || config.edram_rov_used) {
@@ -472,6 +482,10 @@ bool ShaderOverrides::IsAbOffPhase() {
 void ShaderOverrides::RebuildCompileDefines() {
   compile_defines_.clear();
   for (const auto& define : mod_defines_) {
+    if (pass_names_.count(define.first)) {
+      // The post passes read it (GetDefine), the mods don't.
+      continue;
+    }
     float value;
     if (live_knobs_ && ParseFloat(define.second, value)) {
       auto slot = knob_slots_.find(define.first);
@@ -489,6 +503,32 @@ void ShaderOverrides::RebuildCompileDefines() {
     compile_defines_.push_back(define);
   }
   knob_generation_.fetch_add(1, std::memory_order_release);
+  defines_generation_.fetch_add(1, std::memory_order_release);
+}
+
+bool ShaderOverrides::GetDefine(const std::string& name, std::string& value_out) const {
+  std::lock_guard<std::mutex> lock(knob_mutex_);
+  for (const auto& define : mod_defines_) {
+    if (define.first == name) {
+      value_out = define.second;
+      return true;
+    }
+  }
+  return false;
+}
+
+void ShaderOverrides::SetPassNames(std::vector<std::string> names) {
+  std::lock_guard<std::mutex> lock(knob_mutex_);
+  std::unordered_set<std::string> pass_names(names.begin(), names.end());
+  if (pass_names == pass_names_) {
+    return;
+  }
+  pass_names_ = std::move(pass_names);
+  // The live knob slots of the mods without the pass names (no mod is compiled
+  // yet when the passes are created).
+  knob_slots_.clear();
+  std::memset(knob_values_, 0, sizeof(knob_values_));
+  RebuildCompileDefines();
 }
 
 bool ShaderOverrides::UpdateKnobs(float* values_out, uint64_t& generation) const {
@@ -526,12 +566,19 @@ void ShaderOverrides::SetDefines(std::string_view text) {
                     [&define](const auto& pending) { return pending.first == define.first; });
       continue;
     }
+    if (pass_names_.count(define.first)) {
+      SetDefine(mod_defines_, define.first, define.second);
+      defines_generation_.fetch_add(1, std::memory_order_release);
+      REXGPU_INFO("shader_mod_set: {}={} (post passes)", define.first, define.second);
+      continue;
+    }
     float value;
     auto slot = knob_slots_.find(define.first);
     if (slot != knob_slots_.end() && ParseFloat(define.second, value)) {
       knob_values_[slot->second] = value;
       SetDefine(mod_defines_, define.first, define.second);
       knob_generation_.fetch_add(1, std::memory_order_release);
+      defines_generation_.fetch_add(1, std::memory_order_release);
       REXGPU_INFO("shader_mod_set: {}={} (live)", define.first, value);
     } else if (hot_reload_) {
       SetDefine(pending_defines_, define.first, define.second);
@@ -601,11 +648,13 @@ std::string ShaderOverrides::BuildContract(
   line("#define XE_GAMMA_RENDER_TARGET_AS_UNORM8 {}", int(config_.gamma_render_target_as_unorm8));
   line("#define XE_MSAA_2X_SUPPORTED {}", int(config_.msaa_2x_supported));
   line("#define XE_FUZZY_ALPHA_EPSILON {}", int(REXCVAR_GET(use_fuzzy_alpha_epsilon)));
-  // The post_ao occlusion in xe_textures_2d (xe_post_ao): 0, no occlusion,
-  // without post_ao and in frames it has not run in.
-  line("#define XE_POST_AO_VIEW {}u",
-       uint32_t(D3D12CommandProcessor::SystemBindlessView::kPostAoOcclusion) -
+  // The textures the post passes expose to mods in xe_textures_2d
+  // (xe_post_texture, xe_post_ao): 0 without post passes and in frames they
+  // have not run in.
+  line("#define XE_POST_VIEWS {}u",
+       uint32_t(D3D12CommandProcessor::SystemBindlessView::kPostPassViewsStart) -
            uint32_t(D3D12CommandProcessor::SystemBindlessView::kUnboundedSRVsStart));
+  line("#define XE_POST_VIEW_COUNT {}u", D3D12CommandProcessor::kPostPassViewCount);
 
   // Registers and interpolators (StartTranslation, StartPixelShader).
   uint32_t register_count = shader.register_static_address_bound();
@@ -740,8 +789,9 @@ std::filesystem::path ShaderOverrides::CachePath(
                                         translation.modification(), key);
 }
 
-std::filesystem::path ShaderOverrides::ResolveInclude(const std::string& name) const {
-  for (const std::filesystem::path& directory : {mod_directory_, directory_}) {
+std::filesystem::path ShaderOverrides::ResolveInclude(
+    const std::string& name, const std::vector<std::filesystem::path>& directories) {
+  for (const std::filesystem::path& directory : directories) {
     if (directory.empty()) {
       continue;
     }
@@ -754,6 +804,7 @@ std::filesystem::path ShaderOverrides::ResolveInclude(const std::string& name) c
 }
 
 bool ShaderOverrides::LoadCached(const std::filesystem::path& path, uint64_t key,
+                                 const std::vector<std::filesystem::path>& directories,
                                  std::vector<uint8_t>& binary_out,
                                  std::vector<Dependency>& files_out) const {
   std::string data;
@@ -789,7 +840,7 @@ bool ShaderOverrides::LoadCached(const std::filesystem::path& path, uint64_t key
       return false;
     }
     // Still the content it was compiled with, where the include finds it now.
-    file.path = ResolveInclude(file.name);
+    file.path = ResolveInclude(file.name, directories);
     std::string text;
     if (file.path.empty() || !ReadFile(file.path, text) ||
         HashBytes(text.data(), text.size()) != file.hash) {
@@ -873,7 +924,7 @@ bool ShaderOverrides::Compile(const D3D12Shader::D3D12Translation& translation,
   if (!cache_directory_.empty()) {
     key = CacheKey(source, define_values);
     cache_path = CachePath(translation, key);
-    if (LoadCached(cache_path, key, binary_out, files_out)) {
+    if (LoadCached(cache_path, key, {mod_directory_, directory_}, binary_out, files_out)) {
       std::string mismatch = CompareSignatures(dxbc, binary_out);
       if (mismatch.empty()) {
         REXGPU_INFO("Shader override {}{}{} loaded from the cache for modification {:016X}",
@@ -933,6 +984,87 @@ bool ShaderOverrides::Compile(const D3D12Shader::D3D12Translation& translation,
   }
   REXGPU_INFO("Shader override {}{}{} compiled for modification {:016X} in {:.1f} ms", name,
               mod.empty() ? "" : " with ", mod, translation.modification(), milliseconds);
+  if (!cache_path.empty()) {
+    StoreCached(cache_path, key, files_out, binary_out);
+  }
+  return true;
+}
+
+bool ShaderOverrides::CompileProgram(
+    const std::string& source, const std::string& name, const std::string& entry,
+    const char* target, uint32_t flags,
+    const std::vector<std::pair<std::string, std::string>>& defines,
+    const std::filesystem::path& directory, const char* library_name, std::string_view library,
+    std::vector<uint8_t>& binary_out, std::vector<Dependency>& files_out) const {
+  files_out.clear();
+  uint64_t key = 0;
+  std::filesystem::path cache_path;
+  if (!cache_directory_.empty()) {
+    XXH3_state_t state;
+    XXH3_64bits_reset(&state);
+    uint64_t header[] = {kCacheVersion, compiler_id_, HashBytes(library.data(), library.size()),
+                         flags};
+    XXH3_64bits_update(&state, header, sizeof(header));
+    // NUL-terminated, so the strings can't run into each other.
+    for (const std::string* text : {&source, &entry}) {
+      XXH3_64bits_update(&state, text->c_str(), text->size() + 1);
+    }
+    XXH3_64bits_update(&state, target, std::strlen(target) + 1);
+    for (const auto& define : defines) {
+      XXH3_64bits_update(&state, define.first.c_str(), define.first.size() + 1);
+      XXH3_64bits_update(&state, define.second.c_str(), define.second.size() + 1);
+    }
+    key = XXH3_64bits_digest(&state);
+    cache_path = cache_directory_ / fmt::format("pass_{:016X}_{:016X}.dxbc",
+                                                HashBytes(name.data(), name.size()), key);
+    if (LoadCached(cache_path, key, {directory}, binary_out, files_out)) {
+      REXGPU_INFO("Post pass {} ({}) loaded from the cache", name, entry);
+      return true;
+    }
+    files_out.clear();
+  }
+
+  std::vector<D3D_SHADER_MACRO> macros;
+  for (const auto& define : defines) {
+    macros.push_back({define.first.c_str(), define.second.c_str()});
+  }
+  macros.push_back({nullptr, nullptr});
+  OverrideInclude include({directory}, library_name, library);
+  ID3DBlob* code = nullptr;
+  ID3DBlob* messages = nullptr;
+  auto start = std::chrono::steady_clock::now();
+  HRESULT result =
+      pD3DCompile(d3d_compile_)(source.data(), source.size(), name.c_str(), macros.data(),
+                                &include, entry.c_str(), target, flags, 0, &code, &messages);
+  double milliseconds =
+      std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - start).count();
+  for (const auto& read : include.read()) {
+    auto same = [&read](const Dependency& file) { return file.path == read.path; };
+    if (std::find_if(files_out.begin(), files_out.end(), same) == files_out.end()) {
+      files_out.push_back({read.name, read.path, read.hash});
+    }
+  }
+  std::string message_text;
+  if (messages) {
+    message_text.assign(static_cast<const char*>(messages->GetBufferPointer()),
+                        messages->GetBufferSize());
+    messages->Release();
+  }
+  if (FAILED(result) || !code) {
+    REXGPU_ERROR("Post pass {} ({}): FXC failed (0x{:08X}):\n{}", name, entry, uint32_t(result),
+                 message_text);
+    if (code) {
+      code->Release();
+    }
+    return false;
+  }
+  const uint8_t* bytes = static_cast<const uint8_t*>(code->GetBufferPointer());
+  binary_out.assign(bytes, bytes + code->GetBufferSize());
+  code->Release();
+  if (!message_text.empty()) {
+    REXGPU_WARN("Post pass {} ({}): FXC warnings:\n{}", name, entry, message_text);
+  }
+  REXGPU_INFO("Post pass {} ({}) compiled in {:.1f} ms", name, entry, milliseconds);
   if (!cache_path.empty()) {
     StoreCached(cache_path, key, files_out, binary_out);
   }

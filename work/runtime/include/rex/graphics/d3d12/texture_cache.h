@@ -161,12 +161,12 @@ class D3D12TextureCache final : public TextureCache {
                                      xenos::TextureFormat& format_out,
                                      uint32_t* width_unscaled_out = nullptr,
                                      uint32_t* height_unscaled_out = nullptr);
-  // A tiled 2D guest texture written by resolves (post_ao's scene depth),
-  // loaded as a texture fetch of it would load it: returns its resource in
-  // NON_PIXEL_SHADER_RESOURCE | PIXEL_SHADER_RESOURCE state, or nullptr in case
-  // of failure, and writes a 2D SRV description and its host size (resolution-
-  // scaled if the resolves were). May call LoadTextureData, like
-  // RequestSwapTexture.
+  // A tiled 2D guest texture written by resolves (the post passes' scene depth
+  // and color), loaded as a texture fetch of it would load it: returns its
+  // resource in NON_PIXEL_SHADER_RESOURCE | PIXEL_SHADER_RESOURCE state, or
+  // nullptr in case of failure, and writes a 2D SRV description and its host
+  // size (resolution-scaled if the resolves were). May call LoadTextureData,
+  // like RequestSwapTexture.
   ID3D12Resource* RequestResolvedTexture(uint32_t base_address, uint32_t pitch, uint32_t width,
                                          uint32_t height, xenos::TextureFormat format,
                                          xenos::Endian endianness,

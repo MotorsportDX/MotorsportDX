@@ -1,6 +1,6 @@
 /**
- * @file        graphics/d3d12/post_ao_camera.h
- * @brief       Camera math of the post_ao pass: the projection of a guest
+ * @file        graphics/d3d12/post_pass_camera.h
+ * @brief       Scene camera math of the post passes: the projection of a guest
  *              vertex shader's matrices and the depth unpacking constants
  *
  * Header only and free of runtime dependencies, so CPU tests can include it.
@@ -12,7 +12,7 @@
 #include <cmath>
 #include <cstdint>
 
-namespace rex::graphics::d3d12::post_ao {
+namespace rex::graphics::d3d12::post_pass {
 
 struct Matrix {
   float m[4][4];
@@ -123,6 +123,18 @@ inline bool CameraMatrices(CameraLayout layout, const float (*constants)[4], uin
   return false;
 }
 
+// The camera's view to world matrix (world = M * view), where the layout carries
+// it: only kWvpWorldViewInverse does (its third constants).
+inline bool ViewToWorld(CameraLayout layout, const float (*constants)[4], uint32_t third,
+                        Matrix& out) {
+  if (layout != CameraLayout::kWvpWorldViewInverse || third + 3 > 256) return false;
+  out = Identity();
+  for (int i = 0; i < 3; ++i) {
+    for (int j = 0; j < 4; ++j) out.m[i][j] = constants[third + i][j];
+  }
+  return true;
+}
+
 // The projection, clip = P * view position, of the matrices of one draw.
 inline bool ProjectionFromCamera(const Matrix& wvp, const Matrix& wv, Matrix& projection_out) {
   Matrix wv_inverse;
@@ -137,7 +149,7 @@ struct Viewport {
   float x_scale, x_offset, y_scale, y_offset, z_scale, z_offset;
 };
 
-// Constants of the post_ao shaders for turning a stored depth d at a guest
+// Constants of the post pass library (xe_scene_*) for turning a stored depth d at a guest
 // pixel center (x, y) into a view position:
 //   w = w_numerator / (d * w_depth_mul + w_depth_add),
 //   view.z = w * z_from_w,
@@ -194,7 +206,7 @@ inline bool UnpackFromProjection(const Matrix& p, const Viewport& viewport, Unpa
   return true;
 }
 
-// The view position the post_ao shaders reconstruct (for tests).
+// The view position the post pass library reconstructs (for tests).
 inline void ViewFromDepth(const Unpack& u, float x, float y, float stored_depth, float view_out[3]) {
   const float w = u.w_numerator / (stored_depth * u.w_depth_mul + u.w_depth_add);
   view_out[0] = w * (x * u.x_mul + u.x_add);
@@ -202,4 +214,4 @@ inline void ViewFromDepth(const Unpack& u, float x, float y, float stored_depth,
   view_out[2] = w * u.z_from_w;
 }
 
-}  // namespace rex::graphics::d3d12::post_ao
+}  // namespace rex::graphics::d3d12::post_pass

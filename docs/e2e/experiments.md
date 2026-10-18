@@ -147,23 +147,26 @@ Details that matter for experiments:
 - `tonemap=gt|aces|neutral` replaces the game's filmic curve before its color grading LUT, with middle gray where the game puts it. `filmic` is the original.
 - The car body paint shader (`B85EF04779ABD438`, see [material-atlas.md](../analysis/material-atlas.md)) gets a clear coat from `fm4-paint.hlsli`. `clearcoat=1` adds a GGX highlight of the sun, soft limited by `clearcoat_glint` (in units of the sun's diffuse light; default 4, roughness 0.3), and the environment cube at grazing angles, in the paint's own shadow.
 - `flakes=0...1` adds metallic flakes (`flake_scale` cells per unit of the paint UV). No preset uses them, as in races they do not show (see `fm4-paint.hlsli`).
-- `ao=<strength>` applies the runtime's GTAO pass (`post_ao`, see [gtao-design.md](../analysis/gtao-design.md)) in the final combine shaders. Above 0 it also turns the pass on, with `post_ao_camera` and a 0.75 m radius (`pipeline.py` `ao_cvars`). `--ao` (on `pipeline.py` and `e2e.py`) runs the pass alone.
+- `ao=<strength>` applies the runtime's GTAO pass (see [gtao-design.md](../analysis/gtao-design.md)) in the final combine shaders. Above 0 it also turns the post passes on (`post_pass_path`, `pipeline.py` `ao_cvars`), whose `passes.toml` names the camera vertex shaders and the 0.75 m radius. `--ao` (on `pipeline.py` and `e2e.py`) runs the pass alone.
 - Presets name sets of knobs and mix with them, later items winning: `pc` (`tonemap=aces`, `saturation=1.1`, `bloom=0.7`, `sharpen=0.4`, `clearcoat=1`, `ao=0.6`, `sun=2`, `sky=0.7`); `aces`, `gt` and `neutral` (the tone curve, `clearcoat=1` and `ao=0.6`); and `original`, which runs without mods.
 - The launcher and `e2e.py` use `pc` unless `-Look`/`--look` says otherwise, so the gates run with it. `--look original` compares with the game's own look.
 
-### Post AO diagnostics
+### Post pass and AO diagnostics
+
+The [post pass framework](../analysis/post-pass-framework.md) reads its params from `shader_mod_defines` by name, so a GTAO param is set by adding `NAME=VALUE` to the look's defines (or with `shader_mod_set` in the console, or in `shader_mod_defines.txt` with `--shader-dev`).
 
 - `FM4_LOOK_AO_DEBUG=1` in `shader_mod_defines`: the final combine shaders show the GTAO texture as it is.
-- `--arg post_ao_debug=1|2|3|4` makes that texture view:
+- `GTAO_DEBUG=1|2|3|4` (a param of `passes.toml`, formerly `--arg post_ao_debug`) makes that texture view:
   - `1`: W over 0-100 units, for checking the depth and its alignment;
   - `2`: the occlusion before denoising;
   - `3`: the depth discontinuities (1 across a depth discontinuity on any side, the edges of the denoise);
   - `4`: view W over 0-2 units, for close surfaces.
-- `--arg post_ao_ab_ms=<N>` skips the pass in every other period of N ms.
-- `--arg post_ao_variants="<radius>,<occlusion scale>[,<debug view>];...;off"` with `--arg post_ao_variant_ms=<N>` cycles settings, to compare them in one frozen frame. Freeze a race with Y (rewind) on the camera first, as above.
+- `--arg post_pass_ab_ms=<N>` skips the passes in every other period of N ms.
+- `--arg post_pass_variants="GTAO_RADIUS=0.5,GTAO_SCALE=0.6;GTAO_DEBUG=2;...;off"` with `--arg post_pass_variant_ms=<N>` cycles param values, to compare them in one frozen frame. Freeze a race with Y (rewind) on the camera first, as above.
+- `--arg post_pass_log_every=<N>` logs the scene depth, camera, history and params of every N-th scene; `--arg post_pass_path=` (empty) runs without the passes.
 
-Source: [`post_ao.cpp`](../../work/runtime/src/graphics/d3d12/post_ao.cpp), [`post_ao.hlsl`](../../work/runtime/src/graphics/d3d12/post_ao.hlsl), and the GTAO notes in [gtao-design.md](../analysis/gtao-design.md).
+Source: [`post_pass.cpp`](../../work/runtime/src/graphics/d3d12/post_pass.cpp), [`passes.toml`](../../work/fm4-rex/passes/passes.toml), [`gtao.hlsl`](../../work/fm4-rex/passes/gtao.hlsl), and the GTAO notes in [gtao-design.md](../analysis/gtao-design.md).
 
-## Mod and post AO tests
+## Mod and post pass tests
 
-The tests for the shader mods and the post AO pass are in [`work/fm4-rex/tests/`](../../work/fm4-rex/tests/): `shader-mod-tests.cpp`, `post-ao-shader-tests.cpp` and `post-ao-camera-tests.cpp`.
+The tests for the shader mods and the post passes are in [`work/fm4-rex/tests/`](../../work/fm4-rex/tests/): `shader-mod-tests.cpp`, `post-pass-shader-tests.cpp` (the scene_depth passes of `passes.toml` on WARP) and `post-pass-camera-tests.cpp`.

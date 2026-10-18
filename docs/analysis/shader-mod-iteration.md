@@ -71,7 +71,7 @@ The check runs every 250 ms, at the end of a submission (`PipelineCache::EndSubm
 The knobs must reach the mods without changing the bindless root signature that every guest pipeline shares, and without changing the override contract for runs that do not use them. Three placements were considered:
 
 1. **A new root constant buffer.** This changes the root signature of every pipeline. Rejected.
-2. **A small texture in a system bindless view**, like the `post_ao` occlusion (`xe_post_ao`). The root signature stays the same, but every change needs an upload and barriers on the command list, and every knob read is a texture load.
+2. **A small texture in a system bindless view**, like the GTAO occlusion (`xe_post_ao`). The root signature stays the same, but every change needs an upload and barriers on the command list, and every knob read is a texture load.
 3. **Floats after the system constants in `b0`** (chosen). `DxbcShaderTranslator::SystemConstants` (592 bytes) stays the same, and so does every DXBC translation. The system constant buffer is a root descriptor, which has no size. The command processor writes 32 knob floats (128 bytes) at offset 592 when live knobs are on. The 720 bytes still fit the 768 bytes that the 256-byte placement alignment already reserves for 592.
 
 **How the mods see them.**

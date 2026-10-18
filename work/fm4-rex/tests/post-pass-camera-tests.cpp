@@ -1,16 +1,19 @@
-// CPU tests of the post_ao camera math (rex/graphics/d3d12/post_ao_camera.h):
-// the projection of the matrices in a guest vertex shader's constants, in both
-// layouts FM4 uses, and the view position reconstructed from a stored depth.
-// Synthetic cameras only; prints the worst errors and returns 1 on failure.
+// CPU tests of the scene camera math of the post passes
+// (rex/graphics/d3d12/post_pass_camera.h): the projection of the matrices in a
+// guest vertex shader's constants, in both layouts FM4 uses, the view position
+// reconstructed from a stored depth, and the camera's view to world matrix and
+// the reprojection into the previous frame's view built from it (as
+// post_pass.cpp builds xe_view_to_previous_view). Synthetic cameras only;
+// prints the worst errors and returns 1 on failure.
 
 #include <cmath>
 #include <cstdio>
 
-#include <rex/graphics/d3d12/post_ao_camera.h>
+#include <rex/graphics/d3d12/post_pass_camera.h>
 
 namespace {
 
-using namespace rex::graphics::d3d12::post_ao;
+using namespace rex::graphics::d3d12::post_pass;
 
 int failures = 0;
 
@@ -182,6 +185,37 @@ void TestCamera(const char* name, bool right_handed) {
     Check(worst < 1.0e-3, "view position from depth");
     Check(far_error < 1.0e-3, "far plane W");
   }
+
+  // The view to world matrix: only the layout with the view inverse has it.
+  Matrix view_to_world, unused;
+  Check(ViewToWorld(CameraLayout::kWvpWorldViewInverse, constants, 243, view_to_world) &&
+            MaxRelativeDifference(view_to_world, view_inverse) < 1.0e-6,
+        "view to world from the view inverse");
+  Check(!ViewToWorld(CameraLayout::kWvpWvRows, constants, 0, unused), "no view in the rows layout");
+}
+
+// xe_view_to_previous_view = inverse(previous view to world) * view to world
+// takes a view position of this frame to the previous frame's view position of
+// the same world point.
+void TestReprojection(bool right_handed) {
+  Matrix previous_view = LookAt({10.0, 2.0, -30.0}, {0.0, 1.0, 0.0}, {0.0, 1.0, 0.0}, right_handed);
+  Matrix view = LookAt({11.5, 2.1, -28.0}, {0.5, 1.0, 0.0}, {0.0, 1.0, 0.0}, right_handed);
+  Matrix previous_view_to_world, view_to_world, world_to_previous_view;
+  bool ok = Invert(previous_view, previous_view_to_world) && Invert(view, view_to_world) &&
+            Invert(previous_view_to_world, world_to_previous_view);
+  Check(ok, "reprojection inverses");
+  Matrix view_to_previous_view = Multiply(world_to_previous_view, view_to_world);
+  double worst = 0.0;
+  const double points[][3] = {{0.0, 0.0, 0.0}, {3.0, 1.0, 5.0}, {-20.0, 0.0, 60.0}};
+  for (const auto& point : points) {
+    double world[4] = {point[0], point[1], point[2], 1.0}, now[4], before[4], reprojected[4];
+    Transform(view, world, now);
+    Transform(previous_view, world, before);
+    Transform(view_to_previous_view, now, reprojected);
+    for (int k = 0; k < 3; ++k) worst = std::fmax(worst, std::fabs(reprojected[k] - before[k]));
+  }
+  std::printf("%s reprojection: %.2e\n", right_handed ? "right-handed" : "left-handed", worst);
+  Check(worst < 1.0e-4, "view position reprojected into the previous view");
 }
 
 void TestRejectsOrthographic() {
@@ -199,8 +233,10 @@ void TestRejectsOrthographic() {
 int main() {
   TestCamera("left-handed", false);
   TestCamera("right-handed", true);
+  TestReprojection(false);
+  TestReprojection(true);
   TestRejectsOrthographic();
-  std::printf(failures ? "post_ao camera tests: %d failed\n" : "post_ao camera tests: passed\n",
+  std::printf(failures ? "post pass camera tests: %d failed\n" : "post pass camera tests: passed\n",
               failures);
   return failures ? 1 : 0;
 }

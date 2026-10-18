@@ -13,6 +13,7 @@
 !/work/fm4-rex/src/
 !/work/fm4-rex/tests/
 !/work/fm4-rex/look/
+!/work/fm4-rex/passes/
 !/outputs/FM4-build/e2e/
 !/.gitattributes
 !/.gitignore
@@ -131,6 +132,8 @@
 !/work/fm4-rex/look/shader_F0BC67CC35A4DC6B.mod.hlsli
 !/work/fm4-rex/look/shader_F8CDBAFAD23FD784.mod.hlsli
 !/work/fm4-rex/look/shader_FF6CFFF501187440.mod.hlsli
+!/work/fm4-rex/passes/gtao.hlsl
+!/work/fm4-rex/passes/passes.toml
 !/work/fm4-rex/observe-frame.py
 !/work/fm4-rex/send-input.py
 !/work/fm4-rex/src/fm4-command-line.cpp
@@ -159,8 +162,8 @@
 !/work/fm4-rex/src/vector-instruction-tests.h
 !/work/fm4-rex/tests/CMakeLists.txt
 !/work/fm4-rex/tests/make-vector-vectors.py
-!/work/fm4-rex/tests/post-ao-camera-tests.cpp
-!/work/fm4-rex/tests/post-ao-shader-tests.cpp
+!/work/fm4-rex/tests/post-pass-camera-tests.cpp
+!/work/fm4-rex/tests/post-pass-shader-tests.cpp
 !/work/fm4-rex/tests/shader-mod-tests.cpp
 !/work/fm4-rex/tests/texture-integer.cpp
 !/work/fm4-rex/tests/track-settings-tests.cpp

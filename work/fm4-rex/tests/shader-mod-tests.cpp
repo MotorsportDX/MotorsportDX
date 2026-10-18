@@ -10,12 +10,13 @@
 // DXBC. The real contracts of a run define only the fetches and constants their
 // shader reads: override_fxc.py --stub compiles the mods against those.
 //
-// The library's code under #ifdef XE_POST_AO_VIEW is only compiled when the
-// contract defines it, so both contracts are compiled, and the disassembly must
-// show the occlusion texture read (resinfo, from xe_post_ao) exactly where it
-// is expected: in an override that calls xe_post_ao with the define, never
-// without it, never in a mod at its default knobs, and in at least one mod
-// with FM4_LOOK_AO=1 and with FM4_LOOK_AO_DEBUG=1.
+// The library's code under #ifdef XE_POST_VIEWS (the textures of the post
+// passes) is only compiled when the contract defines it, so both contracts are
+// compiled, and the disassembly must show the occlusion texture read (resinfo,
+// from xe_post_ao) exactly where it is expected: in an override that calls
+// xe_post_ao with the define, never without it, never in a mod at its default
+// knobs, and in at least one mod with FM4_LOOK_AO=1 and with
+// FM4_LOOK_AO_DEBUG=1.
 //
 // With live knobs (shader_mod_live_knobs) the runtime puts the knobs after the
 // system constants and defines each as xe_mod_knob(<slot>): every mod must also
@@ -68,8 +69,9 @@ bool ReadFile(const std::filesystem::path& path, std::string& out) {
 
 constexpr uint32_t kFetchConstants = 32;
 constexpr uint32_t kInterpolators = 16;
-// Any index past the system views: only compiled, never bound.
-constexpr uint32_t kPostAoView = 3;
+// Any index past the system views: only compiled, never bound (3 is the
+// runtime's).
+constexpr uint32_t kPostViews = 3;
 // The synthetic system constants are 16 vectors; the live knobs follow them
 // (ShaderOverrides::kKnobCount).
 constexpr uint32_t kSystemConstantVectors = 16;
@@ -108,7 +110,8 @@ std::string Contract(bool post_ao, bool live_knobs) {
   line("#define XE_MSAA_2X_SUPPORTED 1");
   line("#define XE_FUZZY_ALPHA_EPSILON 0");
   if (post_ao) {
-    line("#define XE_POST_AO_VIEW " + std::to_string(kPostAoView) + "u");
+    line("#define XE_POST_VIEWS " + std::to_string(kPostViews) + "u");
+    line("#define XE_POST_VIEW_COUNT 8u");
   }
   line("#define XE_REGISTER_COUNT " + std::to_string(kInterpolators));
   line("#define XE_INTERPOLATOR_MASK 0xFFFFu");
@@ -351,9 +354,9 @@ int main(int argc, char** argv) {
   }
   std::filesystem::path look = argv[2];
 
-  // The library alone: the occlusion read exists with XE_POST_AO_VIEW only.
+  // The library alone: the occlusion read exists with XE_POST_VIEWS only.
   for (bool post_ao : {true, false}) {
-    std::string contract = post_ao ? "with XE_POST_AO_VIEW" : "without XE_POST_AO_VIEW";
+    std::string contract = post_ao ? "with XE_POST_VIEWS" : "without XE_POST_VIEWS";
     Result plain = Compile(library, {}, {}, post_ao, kOverride, {});
     Report(plain, "library, override with hooks, " + contract);
     Check(plain.compiled && !plain.reads_post_ao,
@@ -394,7 +397,7 @@ int main(int argc, char** argv) {
   for (const auto& path : mods) {
     std::string name = path.filename().string();
     for (bool post_ao : {true, false}) {
-      std::string contract = post_ao ? "with XE_POST_AO_VIEW" : "without XE_POST_AO_VIEW";
+      std::string contract = post_ao ? "with XE_POST_VIEWS" : "without XE_POST_VIEWS";
       Result plain = Compile(library, look, name, post_ao, kOverride, {});
       Report(plain, name + ", default knobs, " + contract);
       Check(plain.compiled && !plain.reads_post_ao,
@@ -466,7 +469,7 @@ int main(int argc, char** argv) {
     std::string name = path.filename().string();
     for (bool post_ao : {true, false}) {
       std::string what = name + ", live knobs, " +
-                         (post_ao ? "with XE_POST_AO_VIEW" : "without XE_POST_AO_VIEW");
+                         (post_ao ? "with XE_POST_VIEWS" : "without XE_POST_VIEWS");
       Result result = Compile(library, look, name, post_ao, kOverride, live, true);
       Report(result, what);
       Check(result.compiled && result.reads_knobs, what + ": reads the knobs at run time");

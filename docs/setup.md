@@ -222,8 +222,9 @@ runtime edits need only this stage. It then:
 
 - compiles the application and both modules;
 - stages the matching runtime and GPU DLLs;
-- runs the arithmetic instruction tests and the post_ao and shader-mod CPU tests
-  (no GPU needed; see [GTAO design](analysis/gtao-design.md));
+- runs the arithmetic instruction tests, the post pass tests (the GTAO passes on WARP)
+  and the shader-mod CPU tests (no GPU needed; see the
+  [post pass framework](analysis/post-pass-framework.md));
 - writes `build-result.json`, which lists the SHA-256 hashes of the artifacts and
   records `gameplay_verified: false`.
 

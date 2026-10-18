@@ -12,15 +12,17 @@ target_include_directories(fm4_instruction_tests SYSTEM PRIVATE "${REX_HEADER_RO
 target_compile_definitions(fm4_instruction_tests PRIVATE NOMINMAX WIN32_LEAN_AND_MEAN)
 target_compile_options(fm4_instruction_tests PRIVATE -march=x86-64-v2 -ffp-contract=off)
 # This target has no runtime import library, code generator, or DLL-copy step.
-# Camera math of the runtime's post_ao pass (header only).
-add_executable(fm4_post_ao_camera_tests post-ao-camera-tests.cpp)
-target_include_directories(fm4_post_ao_camera_tests SYSTEM PRIVATE "${REX_HEADER_ROOT}")
-target_compile_options(fm4_post_ao_camera_tests PRIVATE -march=x86-64-v2 -ffp-contract=off)
-# The post_ao compute shaders on WARP (CPU Direct3D 12); argument: post_ao.hlsl.
-add_executable(fm4_post_ao_shader_tests post-ao-shader-tests.cpp)
-target_include_directories(fm4_post_ao_shader_tests SYSTEM PRIVATE "${REX_HEADER_ROOT}")
-target_compile_definitions(fm4_post_ao_shader_tests PRIVATE NOMINMAX WIN32_LEAN_AND_MEAN)
-target_link_libraries(fm4_post_ao_shader_tests PRIVATE d3d12 dxgi d3dcompiler)
+# Scene camera math of the runtime's post passes (header only).
+add_executable(fm4_post_pass_camera_tests post-pass-camera-tests.cpp)
+target_include_directories(fm4_post_pass_camera_tests SYSTEM PRIVATE "${REX_HEADER_ROOT}")
+target_compile_options(fm4_post_pass_camera_tests PRIVATE -march=x86-64-v2 -ffp-contract=off)
+# The scene_depth passes of work/fm4-rex/passes on WARP (CPU Direct3D 12), as
+# the post pass framework runs them; arguments: post_pass.hlsli, the passes
+# directory.
+add_executable(fm4_post_pass_shader_tests post-pass-shader-tests.cpp)
+target_include_directories(fm4_post_pass_shader_tests SYSTEM PRIVATE "${REX_HEADER_ROOT}")
+target_compile_definitions(fm4_post_pass_shader_tests PRIVATE NOMINMAX WIN32_LEAN_AND_MEAN)
+target_link_libraries(fm4_post_pass_shader_tests PRIVATE d3d12 dxgi d3dcompiler)
 # FXC compiles of the shader override library and the look mods on a synthetic
 # contract; arguments: shader_override.hlsli, the look directory.
 add_executable(fm4_shader_mod_tests shader-mod-tests.cpp)

@@ -600,20 +600,25 @@ float2 xe_texture_size_2d(uint fetch) {
   return float2((uint2(size_word, size_word >> 13u) & 0x1FFFu) + 1u);
 }
 
-// Ambient occlusion of the frame's scene from the runtime's post_ao pass, 0
-// (none) to 1, at a texture coordinate of the guest scene (the frame's resolved
-// depth texture spans 0...1). 0 without post_ao, before it runs in a frame and
-// outside the scene, so mods may apply it unconditionally.
-float xe_post_ao(float2 uv) {
-#ifdef XE_POST_AO_VIEW
+// A texture of the runtime's post passes (post_pass_path), by the slot its
+// manifest exposes it in, at a texture coordinate of the guest scene (the
+// frame's resolved scene textures span 0...1): 0 without post passes, before
+// they write it in a frame and outside the scene, so mods may apply it
+// unconditionally.
+float4 xe_post_texture(uint slot, float2 uv) {
+#ifdef XE_POST_VIEWS
   uint3 size;
-  xe_textures_2d[XE_POST_AO_VIEW].GetDimensions(size.x, size.y, size.z);
+  xe_textures_2d[XE_POST_VIEWS + slot].GetDimensions(size.x, size.y, size.z);
   int2 texel = clamp(int2(uv * float2(size.xy)), int2(0, 0), int2(size.xy) - 1);
-  return xe_textures_2d[XE_POST_AO_VIEW].Load(int4(texel, 0, 0)).x;
+  return xe_textures_2d[XE_POST_VIEWS + slot].Load(int4(texel, 0, 0));
 #else
   return 0.0;
 #endif
 }
+
+// Ambient occlusion of the frame's scene, 0 (none) to 1: the GTAO pass exposes
+// it in slot 0.
+float xe_post_ao(float2 uv) { return xe_post_texture(0u, uv).x; }
 
 #if XE_PIXEL_SHADER
 #define XE_LOD_DEFAULT XE_LOD_COMPUTED

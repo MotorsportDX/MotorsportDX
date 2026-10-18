@@ -63,7 +63,7 @@ Without network access (Jev unreachable), `--scenario quickrace` drives the same
 | `--arg NAME=value` | none | extra or overriding `--cvar=value`; repeatable (`--arg=--readback_resolve=fast` also works) |
 | `--look` | launcher's (`pc`) | look as `Build.ps1 -Look`, for example `original` or `pc,sharpen=0.6` |
 | `--quality` | launcher's (`high`) | race render quality as `Build.ps1 -Quality`: `xbox`, `high` or `ultra` |
-| `--ao` | off | the runtime's ambient occlusion pass (`post_ao`), as `pipeline.py --ao` |
+| `--ao` | off | the runtime's ambient occlusion pass (the GTAO post pass, `post_pass_path`), as `pipeline.py --ao` |
 | `--tail` | 10 | seconds to keep running after the last step |
 | `--keep-ppm` | off | keep the full-resolution PPM captures next to the PNG files |
 | `--measure` | 0 | summarize only the last N perf seconds |

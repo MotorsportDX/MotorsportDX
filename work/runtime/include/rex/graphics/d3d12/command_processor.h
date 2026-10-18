@@ -48,12 +48,12 @@
 
 namespace rex::graphics::d3d12 {
 
-class PostAo;
+class PostPasses;
 
 class D3D12CommandProcessor : public CommandProcessor {
   // Records its passes into the open submission, with the private state of the
   // resolve and readback paths.
-  friend class PostAo;
+  friend class PostPasses;
 
  public:
   explicit D3D12CommandProcessor(D3D12GraphicsSystem* graphics_system,
@@ -166,11 +166,16 @@ class D3D12CommandProcessor : public CommandProcessor {
     kNullTexture2DArray = kUnboundedSRVsStart,
     kNullTexture3D,
     kNullTextureCube,
-    // post_ao occlusion (2D array, R), for shader mods; reads 0 without post_ao.
-    kPostAoOcclusion,
+    // Textures the post passes expose to shader mods (2D arrays,
+    // xe_post_texture), kPostPassViewCount of them; read 0 without them.
+    kPostPassViewsStart,
+    kPostPassViewsEnd = kPostPassViewsStart + 8,
 
-    kCount,
+    kCount = kPostPassViewsEnd,
   };
+  static constexpr uint32_t kPostPassViewCount =
+      uint32_t(SystemBindlessView::kPostPassViewsEnd) -
+      uint32_t(SystemBindlessView::kPostPassViewsStart);
   ui::d3d12::util::DescriptorCpuGpuHandlePair GetSystemBindlessViewHandlePair(
       SystemBindlessView view) const;
   ui::d3d12::util::DescriptorCpuGpuHandlePair GetSharedMemoryUintPow2BindlessSRVHandlePair(
@@ -708,8 +713,8 @@ class D3D12CommandProcessor : public CommandProcessor {
 
   std::unique_ptr<D3D12TextureCache> texture_cache_;
 
-  // Ambient occlusion of the scene depth (post_ao), or nullptr.
-  std::unique_ptr<PostAo> post_ao_;
+  // Screen passes of post_pass_path inside the guest frame, or nullptr.
+  std::unique_ptr<PostPasses> post_passes_;
 
   // Bytes 0x0...0x3FF - 256-entry gamma ramp table with B10G10R10X2 data (read
   // as R10G10B10X2 with swizzle).

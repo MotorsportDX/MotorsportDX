@@ -45,6 +45,8 @@ namespace rex::graphics::d3d12 {
 // - shader_mod_live_knobs compiles the numeric shader_mod_defines as constants
 //   after the system constants (xe_mod_knob), which shader_mod_set changes
 //   while running without a recompile.
+// The post passes (post_pass.h) compile with the same compiler and cache, and
+// take their defines and params from shader_mod_defines by name.
 class ShaderOverrides {
  public:
   struct HostConfig {
@@ -90,10 +92,52 @@ class ShaderOverrides {
   bool UpdateKnobs(float* values_out, uint64_t& generation) const;
 
   // shader_mod_set: NAME=VALUE pairs (separated by ';', spaces or lines) over
-  // shader_mod_defines while running. Live knobs change at once; other defines
-  // are recompiled at the next PollChanges with hot reload, and rejected
-  // without it. Empty: logs the defines and the knob values.
+  // shader_mod_defines while running. Live knobs and post pass names change at
+  // once; other defines are recompiled at the next PollChanges with hot
+  // reload, and rejected without it. Empty: logs the defines and the knob
+  // values.
   void SetDefines(std::string_view text);
+
+  // A file read by a compile: as the source includes it, where it was found,
+  // and the XXH3 of its content.
+  struct Dependency {
+    std::string name;
+    std::filesystem::path path;
+    uint64_t hash;
+  };
+  struct FileState {
+    bool exists = false;
+    std::filesystem::file_time_type time;
+    uintmax_t size = 0;
+    uint64_t hash = 0;
+  };
+  // Whether the content of the file changed, or it appeared or disappeared,
+  // since state (updated); its content in text_out if it changed and exists.
+  static bool RefreshFileState(const std::filesystem::path& path, FileState& state,
+                               std::string* text_out = nullptr);
+
+  // Post passes (post_pass.cpp) share the compiler, the DXBC cache and the
+  // defines of the shader mods.
+  // Compiles source, named name, for target with FXC and the flags and defines
+  // given (not shader_mod_defines): the include handler serves library as
+  // library_name and other includes from directory. With
+  // shader_override_cache_path, keeps the DXBC there. files_out lists the files
+  // read, also of a failed compile.
+  bool CompileProgram(const std::string& source, const std::string& name,
+                      const std::string& entry, const char* target, uint32_t flags,
+                      const std::vector<std::pair<std::string, std::string>>& defines,
+                      const std::filesystem::path& directory, const char* library_name,
+                      std::string_view library, std::vector<uint8_t>& binary_out,
+                      std::vector<Dependency>& files_out) const;
+  // The value of a define after shader_mod_set and shader_mod_defines.txt.
+  bool GetDefine(const std::string& name, std::string& value_out) const;
+  // Changes whenever a define's value changes.
+  uint64_t defines_generation() const {
+    return defines_generation_.load(std::memory_order_acquire);
+  }
+  // Names of post pass defines and params: shader_mod_set applies them at
+  // once, and they are neither defines nor live knobs of the mods.
+  void SetPassNames(std::vector<std::string> names);
 
   // Hot reload (shader_mod_hot_reload), on the thread that creates pipelines
   // while no pipeline is being created and no shader translated: if PollChanges
@@ -112,13 +156,6 @@ class ShaderOverrides {
   // to the end of a line a comment.
   static constexpr char kDefinesFile[] = "shader_mod_defines.txt";
 
-  // A file read by a compile: as the source includes it, where it was found,
-  // and the XXH3 of its content.
-  struct Dependency {
-    std::string name;
-    std::filesystem::path path;
-    uint64_t hash;
-  };
   enum class Outcome {
     // No override for the translation.
     kNone,
@@ -134,12 +171,6 @@ class ShaderOverrides {
     std::vector<std::filesystem::path> files;
     // Whether the binary is the override.
     bool overridden = false;
-  };
-  struct FileState {
-    bool exists = false;
-    std::filesystem::file_time_type time;
-    uintmax_t size = 0;
-    uint64_t hash = 0;
   };
   struct PathHasher {
     size_t operator()(const std::filesystem::path& path) const {
@@ -165,12 +196,15 @@ class ShaderOverrides {
                     const std::vector<std::pair<std::string, std::string>>& defines) const;
   std::filesystem::path CachePath(const D3D12Shader::D3D12Translation& translation,
                                   uint64_t key) const;
+  // Includes resolve in directories, as OverrideInclude resolves them.
   bool LoadCached(const std::filesystem::path& path, uint64_t key,
+                  const std::vector<std::filesystem::path>& directories,
                   std::vector<uint8_t>& binary_out, std::vector<Dependency>& files_out) const;
   void StoreCached(const std::filesystem::path& path, uint64_t key,
                    const std::vector<Dependency>& files, const std::vector<uint8_t>& binary) const;
   // The file an include of name resolves to, as OverrideInclude resolves it.
-  std::filesystem::path ResolveInclude(const std::string& name) const;
+  static std::filesystem::path ResolveInclude(
+      const std::string& name, const std::vector<std::filesystem::path>& directories);
 
   // The defines FXC gets: shader_mod_defines, with the live knobs as
   // xe_mod_knob(slot). Needs knob_mutex_.
@@ -178,11 +212,6 @@ class ShaderOverrides {
   // Hot reload bookkeeping after Apply or Reload. Needs entries_mutex_.
   void Record(const D3D12Shader::D3D12Translation& translation, std::vector<uint8_t> dxbc,
               const std::vector<Dependency>& files, bool overridden);
-  // Whether the content of the file changed, or it appeared or disappeared,
-  // since state (updated); its content in text_out if it changed and exists.
-  static bool RefreshFileState(const std::filesystem::path& path, FileState& state,
-                               std::string* text_out = nullptr);
-
   HostConfig config_;
   std::filesystem::path directory_;
   std::string generate_path_;
@@ -211,6 +240,9 @@ class ShaderOverrides {
   std::atomic<uint64_t> knob_generation_{1};
   // shader_mod_set defines waiting for a recompile.
   std::vector<std::pair<std::string, std::string>> pending_defines_;
+  // Post pass names (SetPassNames).
+  std::unordered_set<std::string> pass_names_;
+  std::atomic<uint64_t> defines_generation_{1};
 
   // Hot reload.
   bool hot_reload_ = false;

@@ -73,6 +73,10 @@
       "provenance": "Project documentation; design and research note on the GTAO pass (summarized observations, no game content)"
     },
     {
+      "path": "docs/analysis/post-pass-framework.md",
+      "provenance": "Project documentation; design note on the runtime post pass framework (manifest, injection points, history, verification; no game content)"
+    },
+    {
       "path": "docs/analysis/shader-mod-iteration.md",
       "provenance": "Project documentation; design note on the shader override cache, hot reload and live look knobs (no game content)"
     },
@@ -467,6 +471,14 @@
     {
       "path": "work/fm4-rex/look/fm4-nature.hlsli",
       "provenance": "Original shader mods of this project (HLSL hooks on generated overrides); no game shader code or original game function bodies"
+    },
+    {
+      "path": "work/fm4-rex/passes/gtao.hlsl",
+      "provenance": "Original post pass of this project (GTAO written from Jimenez et al. 2016); no game shader code or original game function bodies"
+    },
+    {
+      "path": "work/fm4-rex/passes/passes.toml",
+      "provenance": "Original post pass manifest of this project; names game shader hashes and constant registers as observations only, no game code"
     },
     {
       "path": "work/fm4-rex/look/shader_0667025D0DA05D28.mod.hlsli",
@@ -993,11 +1005,15 @@
       "provenance": "runtime-fork"
     },
     {
-      "path": "work/runtime/include/rex/graphics/d3d12/post_ao.h",
+      "path": "work/runtime/include/rex/graphics/d3d12/post_pass.h",
       "provenance": "runtime-fork"
     },
     {
-      "path": "work/runtime/include/rex/graphics/d3d12/post_ao_camera.h",
+      "path": "work/runtime/include/rex/graphics/d3d12/post_pass_camera.h",
+      "provenance": "runtime-fork"
+    },
+    {
+      "path": "work/runtime/include/rex/graphics/d3d12/post_pass_layout.h",
       "provenance": "runtime-fork"
     },
     {
@@ -2522,11 +2538,11 @@
       "provenance": "runtime-fork"
     },
     {
-      "path": "work/runtime/src/graphics/d3d12/post_ao.cpp",
+      "path": "work/runtime/src/graphics/d3d12/post_pass.cpp",
       "provenance": "runtime-fork"
     },
     {
-      "path": "work/runtime/src/graphics/d3d12/post_ao.hlsl",
+      "path": "work/runtime/src/graphics/d3d12/post_pass.hlsli",
       "provenance": "runtime-fork"
     },
     {
@@ -3954,11 +3970,11 @@
       "provenance": "runtime-fork"
     },
     {
-      "path": "work/fm4-rex/tests/post-ao-camera-tests.cpp",
+      "path": "work/fm4-rex/tests/post-pass-camera-tests.cpp",
       "provenance": "Synthetic tests/oracle; no game input data"
     },
     {
-      "path": "work/fm4-rex/tests/post-ao-shader-tests.cpp",
+      "path": "work/fm4-rex/tests/post-pass-shader-tests.cpp",
       "provenance": "Synthetic tests/oracle; no game input data"
     },
     {

@@ -4849,6 +4849,31 @@ void D3D12RenderTargetCache::PerformTransfersAndResolveClears(
   }
 }
 
+ID3D12Resource* D3D12RenderTargetCache::TransitionLastColorRenderTarget(
+    uint32_t index, D3D12_RESOURCE_STATES state, LastColorRenderTarget& out) {
+  if (GetPath() != Path::kHostRenderTargets || index >= xenos::kMaxColorRenderTargets) {
+    return nullptr;
+  }
+  RenderTarget* render_target = last_update_accumulated_render_targets()[1 + index];
+  if (!render_target || render_target->key().is_depth ||
+      render_target->key().msaa_samples != xenos::MsaaSamples::k1X) {
+    return nullptr;
+  }
+  // The transfers kept pending write into the render targets first.
+  PerformPendingTransfers();
+  auto& d3d12_rt = *static_cast<D3D12RenderTarget*>(render_target);
+  command_processor_.PushTransitionBarrier(d3d12_rt.resource(), d3d12_rt.SetResourceState(state),
+                                           state);
+  D3D12_RESOURCE_DESC desc = d3d12_rt.resource()->GetDesc();
+  out.resource = d3d12_rt.resource();
+  out.rtv = d3d12_rt.descriptor_draw().GetHandle();
+  out.guest_format = render_target->key().GetColorFormat();
+  out.format = GetColorDrawDXGIFormat(out.guest_format);
+  out.width = uint32_t(desc.Width);
+  out.height = desc.Height;
+  return out.resource;
+}
+
 void D3D12RenderTargetCache::SetCommandListRenderTargets(
     RenderTarget* const* depth_and_color_render_targets) {
   assert_true(GetPath() == Path::kHostRenderTargets);

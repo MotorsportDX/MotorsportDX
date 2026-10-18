@@ -1,6 +1,6 @@
 # FM4 Recompilation: Current Status
 
-As of 17 October 2026. Latest code commit: `48ed669` (GTAO ambient occlusion, `-Look ao`). The dated chronology and earlier results are in [history](history.md).
+As of 18 October 2026. Latest code change: the runtime's [post pass framework](../analysis/post-pass-framework.md), with GTAO on it. The dated chronology and earlier results are in [history](history.md).
 
 This page describes the state now. Results from earlier builds came from different binaries, profiles and settings, so a past pass does not show that a feature was retested on the newer binary. Retested results are listed under [Verified on the latest build](#verified-on-the-latest-build).
 
@@ -8,7 +8,8 @@ This page describes the state now. Results from earlier builds came from differe
 
 The project is an experimental build. On the latest binary, the e2e harness checks that Quick Race, photo mode and career races run through to rewards. It is not yet a full port: the full feature set, visuals and stability have not been verified.
 
-- The default launcher (`look pc` with clearcoat and ambient occlusion) passed the smoke gate on 17 October 2026.
+- The default launcher (`look pc` with clearcoat and ambient occlusion) passed the smoke gate on 17 October 2026, and again on 18 October 2026 with GTAO on the post pass framework.
+- Screen passes run on the runtime's post pass framework since 18 October 2026 (HLSL files and a manifest; scene depth, scene color and final points; history). GTAO moved onto it with identical output, texel by texel in the game, and the same GPU time.
 - The USA release (media ID `26FF1101`) is supported beside the Japan/Asia release since 18 October 2026. A clean setup, generate and build from the USA discs and a smoke gate with the `dlc` cell passed.
 - The latest full matrix (240, 120 and 60 Hz) ran on 16 October 2026. The 17 October changes were checked with smoke gates, plus a three-run race-phase measurement for ambient occlusion.
 - The clean build was verified on 13 October 2026 (commit `d1fa29a`). The project-owned runtime was verified on 14 October 2026.
@@ -31,6 +32,7 @@ The project is an experimental build. On the latest binary, the e2e harness chec
 | BMW M1 1981 (Disc 2) | Finished and continued on an earlier development build | Not covered by e2e |
 | Look presets, clearcoat, ambient occlusion, display options | Checked with smoke gates | 17 October 2026 |
 | Shader mod cache, hot reload, live knobs | Checked with a smoke gate, the `perf` tier and one hot reload run | [Shader mod iteration](#automated-gates-17-october-2026), 17 October 2026 |
+| Post pass framework (GTAO on it, history, final point) | GTAO identical in the game, `perf` tier and smoke gate against main; history, the final point and hot reload checked with test manifests | [Post pass framework](#post-pass-framework-18-october-2026), 18 October 2026 |
 | Downloadable content: import, mount, a DLC car on a DLC track | Verified on the latest binary (8 DLC packages; `dlc` scenario) | [Content import](#content-import-17-october-2026), 17 October 2026 |
 | Split screen, Rivals, Hot Lap, Kinect, multiplayer/online, audio, DLC cars and tracks in game | Not validated | See [Current gaps](#current-gaps) |
 | All cars and tracks, a full career season | Not validated | Status not verified; this does not mean they are broken |
@@ -51,7 +53,23 @@ The project is an experimental build. On the latest binary, the e2e harness chec
 
 The race phase of `photo` is 30 seconds of racing after 10 seconds of driving, with 12 cars. `career` is a World Tour race with quit, replay and continue.
 
-### USA release, 18 October 2026
+### Post pass framework, 18 October 2026
+
+Details in [post pass framework](../analysis/post-pass-framework.md#verification) and [GTAO design](../analysis/gtao-design.md) (M5). BuildRoot `I:\FM4-build-pass` (Japan/Asia), main `ad2797a` (`pfbase`) against the framework (`pfcand`), 240 Hz, launcher defaults.
+
+- **GTAO output identical**: the same FXC instructions, a byte-identical occlusion on WARP, and in the game a temporary build that ran the old and the new pass side by side and compared them on the GPU at every swap: no differing texel in 22,321 frames at 2x with the debug views cycled and 18,241 frames with the `pc` look. Frozen frames that showed the old and the new occlusion in turn were byte-identical at 2x. The look mods compile to the same DXBC (204 fingerprints).
+- **`perf` tier**: 3 of 3 runs each, WARN (guest idle wait, final capture statistics), no FAIL. Race GPU per frame 3.02 / 3.24 / 2.91 ms on main and 3.04 / 3.10 / 3.09 ms with the framework, at 2,347 / 3,454 / 1,970 and 2,392 / 2,920 / 2,763 draws per frame; race fps 206.8 against 187.5, following the draws per frame.
+- **Smoke gate** `pfcsmoke` against `pfbsmoke` (main, run just before it):
+
+  | Cell | Main | Framework | `compare` |
+  |---|---|---|---|
+  | `photo` | race 187.1 fps, p99 7.7 ms, GPU 3.08 ms (2,766 draws per frame); photo mode 29.95 fps | race 217.0 fps, p99 6.7 ms, GPU 2.93 ms (2,055 draws per frame); photo mode 29.95 fps | WARN on capture statistics |
+  | `photo_view` | 56.99 fps | 56.87 fps; the saved photo loads in color | WARN on capture statistics |
+  | `career` | race 193.4 fps, p99 7.5 ms, GPU 3.11 ms; replay 30.0 fps | race 181.1 fps, p99 7.9 ms, GPU 3.17 ms; replay 30.0 fps | PASS |
+
+  3 of 3 cells passed in both, with the same error keys and no clear-gray frames.
+- **New points, history and hot reload** (test manifests, not in the repository, 2x): the history is valid from the second scene frame on; reprojected through the depth, the previous frame's color matches the world where the plain difference shows every moving edge. Passes drawn into the final color show under the HUD. Two bugs found by these runs were fixed before the gates above (the pixel passes and the sun occlusion query; the views of the framework's own descriptor heaps).
+
 
 BuildRoot `I:\FM4-build-usa`, a new BuildRoot set up from the USA Disc 1 and Disc 2 and the eight DLC packages. The two releases differ only in the executable headers; see the [release comparison](../analysis/releases.md).
 
@@ -286,6 +304,7 @@ Everything still open, grouped by area.
   - Smoke gates at 240 Hz passed 3 of 3 cells with the knobs off (`rsoff`, which covers the runtime's file link lookup in every file open) and with `road_gloss=0.5` and `sky=0.8` (`rson`). `rson` against `rsoff`: `career` PASS; `photo` and `photo_view` WARN on capture statistics only. The error keys are the same, and there are no clear-gray frames.
   - The new `pc` preset (`sky=0.7`, gate `pcsky07`) against `pc` with the game's sky (`pcsky1`, the same binary, run just before it) at 240 Hz: 3 of 3 cells passed. `career` PASS (race 192.0 fps, p99 8.5 ms; replay 30.0 fps). `photo` WARN on capture statistics only (race 204.6 fps; photo mode 29.94 fps). `photo_view` WARN on capture statistics only (56.98 fps). There are no new error keys and no clear-gray frames, and only the `pcsky07` cells mounted the copies.
 - Parity with the original Xbox (shadows, color, reflections, noise and object edges) has not been compared. The combinations of MSAA and render scale are not all verified.
+- The post pass framework has GTAO only: rain screen effects, screen-space reflections, TAA and temporal upscalers are not written yet, and there are no motion vectors (camera motion only, through the depth). See [post pass framework](../analysis/post-pass-framework.md#the-final-point-and-upscalers).
 - Not done: modern anti-aliasing on top of MSAA (SMAA or FXAA), HDR10 output, new lighting for tracks (beyond the `TrackSettings` knobs), car materials other than paint, glass, chrome and rims (the cockpit interior, tires, brakes and lamp lenses), track surfaces, and car flake paint. Flake cells in UV space are too small for race cameras and need an LOD model.
 - Widescreen and ultrawide need a FOV and projection hook, culling and HUD changes. The image is always 16:9, with bars on other screens.
 
@@ -335,7 +354,7 @@ This page documents the status. It does not report that all further tests have b
 - [history](history.md): dated chronology and past results
 - [setup](../setup.md), [running](../running.md)
 - [e2e overview](../e2e/README.md), [traces](../e2e/traces.md), [experiments](../e2e/experiments.md)
-- Analysis: [GTAO design](../analysis/gtao-design.md), [B4 shader research](../analysis/b4-shader-research.md), [visual style](../analysis/visual-style.md), [material atlas](../analysis/material-atlas.md)
+- Analysis: [post pass framework](../analysis/post-pass-framework.md), [GTAO design](../analysis/gtao-design.md), [B4 shader research](../analysis/b4-shader-research.md), [visual style](../analysis/visual-style.md), [material atlas](../analysis/material-atlas.md)
 - [sources and licensing](../sources-and-licensing.md)
 - [Build script](../../outputs/FM4-build/Build.ps1), [verification record](../../outputs/FM4-build/verification.json), [e2e harness](../../outputs/FM4-build/e2e/e2e.py), [matrix](../../outputs/FM4-build/e2e/matrix.py)
 - [Project overview](../../README.md), [agent guide](../../AGENTS.md)

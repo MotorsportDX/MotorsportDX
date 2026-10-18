@@ -1,0 +1,124 @@
+# Post passes of FM4 for the runtime's post pass framework (post_pass_path):
+# screen passes that run inside the guest frame, written as HLSL files and this
+# manifest. See docs/analysis/post-pass-framework.md for the format, and
+# docs/analysis/gtao-design.md for GTAO.
+
+[scene]
+# Vertex shaders that carry the scene camera: <ucode hash>:rows:<WVP>:<WV>
+# (row vectors, 4 constants each) or <ucode hash>:world:<WVP>:<world>:<view
+# inverse> (column vectors, 4, 3 and 3 constants). The car body paint and the
+# road; only the road's layout carries the view (kSceneFlagViewKnown).
+camera = ["8D05A46C3584CA9E:rows:0:4", "C81F8D92FF6529EB:world:128:140:243"]
+# The narrowest depth resolve taken as the scene depth, in guest pixels.
+min_width = 1024
+# The final combine pixel shaders (with and without depth of field): the final
+# point runs before the first draw after them, before the HUD.
+final_pixel_shaders = [
+  "E97AA211B556A9B3",
+  "9CDA139F232A8A73",
+  "30B67D8B86C37587",
+  "AE3B2E36FCA4958D",
+]
+
+[history]
+# The previous frame's scene color and depth are kept only when a pass reads
+# them. A camera cut drops them: a move of more than cut_distance view units,
+# a turn of more than cut_angle degrees, or a focal length change of more
+# than cut_focal (relative) from one frame to the next.
+cut_distance = 5.0
+cut_angle = 30.0
+cut_focal = 0.1
+
+# Compile-time defines of the passes; shader_mod_defines (and shader_mod_set,
+# shader_mod_defines.txt) override them by name.
+[defines]
+# Slices x steps per side: 0 2x2, 1 2x4 (one denoise pass), 2 3x6, 3 4x8 (two).
+GTAO_QUALITY = 2
+
+# Run-time params, constants of every pass (b1); shader_mod_defines,
+# shader_mod_set and shader_mod_defines.txt override them by name, live.
+# Integer values are uint params, others float.
+[params]
+# Radius in view units (meters in FM4), picked from a 2x grid (M4).
+GTAO_RADIUS = { value = 0.75, min = 0.001 }
+# The radius in host pixels at W = 1.
+GTAO_RADIUS_PIXELS = { focal_length_of = "GTAO_RADIUS" }
+# Fraction of the radius over which occluders fade out.
+GTAO_FALLOFF = { value = 0.6, min = 0.01, max = 1.0 }
+# Visibility exponent (1: the GTAO integral as is).
+GTAO_POWER = { value = 1.5, min = 0.01 }
+GTAO_DENOISE_CENTER = 2.0
+# Factor of the final occlusion.
+GTAO_SCALE = { value = 1.0, min = 0.0, max = 1.0 }
+# Output: 0 occlusion, 1 view W over 0-100 units, 2 occlusion before
+# denoising, 3 depth discontinuities (the denoise edges), 4 view W over 0-2.
+GTAO_DEBUG = { value = 0, min = 0, max = 4 }
+
+# Textures of the passes, at the size of the scene depth unless scale says
+# otherwise. slot exposes one to shader mods (xe_post_texture; slot 0 is
+# xe_post_ao), clear zeroes it after every frame it was written in.
+[textures.gtao_w]
+format = "R32_FLOAT"
+mips = 5
+
+[textures.gtao_visibility]
+format = "R8_UNORM"
+
+[textures.gtao_visibility_denoised]
+format = "R8_UNORM"
+
+[textures.gtao_edges]
+format = "R8_UNORM"
+
+[textures.gtao_occlusion]
+format = "R8_UNORM"
+slot = 0
+clear = true
+
+# GTAO after the last scene depth tile is resolved, before the post chain.
+[[passes]]
+name = "gtao_prefilter"
+point = "scene_depth"
+shader = "gtao.hlsl"
+entry = "gtao_prefilter"
+srv = ["scene_depth"]
+uav = ["gtao_w:0", "gtao_w:1", "gtao_w:2", "gtao_w:3", "gtao_w:4"]
+group = [16, 16]
+
+[[passes]]
+name = "gtao_main"
+point = "scene_depth"
+shader = "gtao.hlsl"
+entry = "gtao_main"
+srv = ["gtao_w"]
+uav = ["gtao_visibility", "gtao_edges"]
+
+# High and ultra denoise twice; debug view 2 shows the visibility before both.
+[[passes]]
+name = "gtao_denoise"
+point = "scene_depth"
+shader = "gtao.hlsl"
+entry = "gtao_denoise"
+if = "GTAO_QUALITY >= 2"
+srv = ["gtao_visibility", "gtao_edges", "gtao_w"]
+uav = ["gtao_visibility_denoised"]
+
+[[passes]]
+name = "gtao_final"
+point = "scene_depth"
+shader = "gtao.hlsl"
+entry = "gtao_denoise"
+defines = { GTAO_FINAL = 1 }
+if = "GTAO_QUALITY >= 2"
+srv = ["gtao_visibility_denoised", "gtao_edges", "gtao_w", "gtao_visibility"]
+uav = ["gtao_occlusion"]
+
+[[passes]]
+name = "gtao_final_once"
+point = "scene_depth"
+shader = "gtao.hlsl"
+entry = "gtao_denoise"
+defines = { GTAO_FINAL = 1 }
+if = "GTAO_QUALITY < 2"
+srv = ["gtao_visibility", "gtao_edges", "gtao_w", "gtao_visibility"]
+uav = ["gtao_occlusion"]

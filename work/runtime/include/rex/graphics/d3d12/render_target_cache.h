@@ -65,6 +65,21 @@ class D3D12RenderTargetCache final : public RenderTargetCache {
 
   bool msaa_2x_supported() const { return msaa_2x_supported_; }
 
+  // Post passes (post_pass.cpp): the single-sampled host color render target
+  // that the last draw bound as color target `index`, after the pending
+  // transfers, transitioned to `state` (the next draw binding it transitions
+  // it back). Its draw RTV and format; nullptr without one, with MSAA, or with
+  // ROV.
+  struct LastColorRenderTarget {
+    ID3D12Resource* resource;
+    D3D12_CPU_DESCRIPTOR_HANDLE rtv;
+    DXGI_FORMAT format;
+    uint32_t width, height;
+    xenos::ColorRenderTargetFormat guest_format;
+  };
+  ID3D12Resource* TransitionLastColorRenderTarget(uint32_t index, D3D12_RESOURCE_STATES state,
+                                                  LastColorRenderTarget& out);
+
   // Performs the transfers kept for a clear split into several rectangles (see
   // PendingTransfers), if any. Called before anything else uses the render
   // targets, and at the end of a submission.

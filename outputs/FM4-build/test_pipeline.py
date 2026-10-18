@@ -136,6 +136,29 @@ class PipelineTests(unittest.TestCase):
                 self.assertEqual(cvars['shader_mod_live_knobs'],'true')
             self.assertEqual(defines['FM4_LOOK_SHARPEN'],repr(float(defaults['FM4_LOOK_SHARPEN'])))
 
+    def test_post_passes(self):
+        """The ao knob turns the post passes on: a copy of work/fm4-rex/passes, or with
+        shader_dev the directory itself; the overlay reads GTAO's radius and quality from it."""
+        with tempfile.TemporaryDirectory(prefix='fm4 passes test ') as directory:
+            root=Path(directory)
+            self.assertNotIn('post_pass_path',pipeline.look_cvars(root,'original'))
+            self.assertNotIn('post_pass_path',pipeline.look_cvars(root,'pc,ao=0'))
+            cvars=pipeline.look_cvars(root,'pc')
+            self.assertEqual(Path(cvars['post_pass_path']),root/'passes')
+            for name in ('passes.toml','gtao.hlsl'):
+                self.assertTrue((root/'passes'/name).is_file(),name)
+            self.assertEqual(pipeline.ao_cvars(root,True),{'post_pass_path':root/'passes'})
+            self.assertEqual(pipeline.ao_cvars(root,False),{})
+            self.assertEqual(pipeline.look_cvars(root,'pc',shader_dev=True)['post_pass_path'],
+                             pipeline.PASSES_DIRECTORY)
+            self.assertNotIn('post_pass_path',pipeline.look_cvars(root,'original',shader_dev=True))
+            settings=pipeline.passes_settings(root/'passes',{})
+            self.assertEqual(settings,{'GTAO_RADIUS':0.75,'GTAO_QUALITY':2.0})
+            self.assertEqual(pipeline.passes_settings(root/'passes',{'GTAO_RADIUS':'1'})['GTAO_RADIUS'],
+                             1.0)
+            overlay=pipeline.info_overlay(cvars,{},'pc','high')
+            self.assertIn('Ambient occlusion: GTAO, strength 0.6, radius 0.75 m, high',overlay)
+
     def test_look_track_settings(self):
         with tempfile.TemporaryDirectory(prefix='fm4 look test ') as directory:
             root=Path(directory)

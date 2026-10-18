@@ -356,10 +356,15 @@ come from these two values, so `road_gloss` does not remove it. See
 
 ### Ambient occlusion
 
-`ao` above 0 turns on the runtime's GTAO pass on the scene depth (`post_ao`, see
-[GTAO design](analysis/gtao-design.md)) with a radius of 0.75 m. The final combine
-shaders darken the scene by the occlusion, less on bright pixels. `pipeline.py --ao`
-(and `e2e.py --ao`) runs the pass without a look applying it.
+`ao` above 0 turns on the runtime's post passes (`post_pass_path`, a copy of
+`work/fm4-rex/passes` in `BuildRoot\passes`; see the
+[post pass framework](analysis/post-pass-framework.md)), whose GTAO pass works on the
+scene depth (see [GTAO design](analysis/gtao-design.md)) with a radius of 0.75 m. The
+final combine shaders darken the scene by the occlusion, less on bright pixels.
+`pipeline.py --ao` (and `e2e.py --ao`) runs the pass without a look applying it. With
+`-ShaderDev` the passes load from `work/fm4-rex/passes` itself and reload when a file
+there is saved; `shader_mod_set GTAO_RADIUS=1` in the console changes a pass param at
+once.
 
 The pass costs about 0.2 ms of GPU time per race frame at 1x, and 0.7 to 0.8 ms at 2x
 (2560x1440). Races stay at 60 fps. At 240 Hz, races at 2x drop from about 174 fps to

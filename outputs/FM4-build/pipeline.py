@@ -371,19 +371,20 @@ def build_game(root,fxc,jobs,flavor=()):
     for dll in (install/'bin').glob('*.dll'):
         shutil.copyfile(dll,build/dll.name)
     run([build/'fm4_instruction_tests.exe'],cwd=build,log=root/f'logs/instruction-tests{suffix}.log')
-    post_ao_tests(root,jobs)
+    post_pass_tests(root,jobs)
     artifacts = ['fm4_rex.exe','fm4_rex_XMediaFacade_default.dll','fm4_rex_SpeechFacade_default.dll','rexruntime.dll','rexgpu-xenos.dll']
     report = {'artifacts':{name:digest(build/name) for name in artifacts},'gameplay_verified':False}
     (root/f'build-result{suffix}.json').write_text(json.dumps(report,indent=2))
     print('Build and instruction tests passed. Run with Build.ps1 -Action run using the same -BuildRoot.')
 
-def post_ao_tests(root,jobs):
-    """CPU tests of the runtime's post_ao pass (docs/analysis/gtao-design.md) and of the shader mods, no GPU:
-    the camera math, the compute shaders on WARP (Direct3D 12 on the CPU), and FXC compiles of
-    the override library and the look mods with and without XE_POST_AO_VIEW (the library's
-    post_ao code is only compiled with it), and the track lighting file edits of the look's
-    track knobs (fm4-track-settings.h). work/fm4-rex/tests, synced here like the runtime,
-    built against the installed runtime headers."""
+def post_pass_tests(root,jobs):
+    """CPU tests of the runtime's post passes (docs/analysis/post-pass-framework.md) and of the
+    shader mods, no GPU: the scene camera math, the GTAO passes of work/fm4-rex/passes on WARP
+    (Direct3D 12 on the CPU) as the framework runs them, FXC compiles of the override library and
+    the look mods with and without XE_POST_VIEWS (the library's post pass code is only compiled
+    with it), and the track lighting file edits of the look's track knobs
+    (fm4-track-settings.h). work/fm4-rex/tests, synced here like the runtime, built against the
+    installed runtime headers. The WARP scene's checks were set with a GTAO radius of 1 m."""
     source,build=root/'project/tests',root/'tests-build'
     inventory=json.loads((REPO/'outputs/FM4-source-control/tracked-files.json').read_text())
     for entry in inventory['files']:
@@ -394,13 +395,13 @@ def post_ao_tests(root,jobs):
     run(['cmake','-S',source,'-B',build,'-G','Ninja','-DCMAKE_BUILD_TYPE=Release',
          '-DCMAKE_CXX_COMPILER=clang++',f'-DREX_HEADER_ROOT={root/"runtime-install/include"}'],
         log=root/'logs/tests-configure.log')
-    run(['cmake','--build',build,'--parallel',jobs,'--target','fm4_post_ao_camera_tests',
-         'fm4_post_ao_shader_tests','fm4_shader_mod_tests','fm4_track_settings_tests'],
+    run(['cmake','--build',build,'--parallel',jobs,'--target','fm4_post_pass_camera_tests',
+         'fm4_post_pass_shader_tests','fm4_shader_mod_tests','fm4_track_settings_tests'],
         log=root/'logs/tests-build.log')
     run([build/'fm4_track_settings_tests.exe'],cwd=build,log=root/'logs/track-settings-tests.log')
-    run([build/'fm4_post_ao_camera_tests.exe'],cwd=build,log=root/'logs/post-ao-camera-tests.log')
-    run([build/'fm4_post_ao_shader_tests.exe',root/'runtime-source/src/graphics/d3d12/post_ao.hlsl'],
-        cwd=build,log=root/'logs/post-ao-shader-tests.log')
+    run([build/'fm4_post_pass_camera_tests.exe'],cwd=build,log=root/'logs/post-pass-camera-tests.log')
+    run([build/'fm4_post_pass_shader_tests.exe',root/'runtime-source/src/graphics/d3d12/post_pass.hlsli',
+         PASSES_DIRECTORY,'GTAO_RADIUS=1'],cwd=build,log=root/'logs/post-pass-shader-tests.log')
     run([build/'fm4_shader_mod_tests.exe',root/'runtime-source/src/graphics/d3d12/shader_override.hlsli',
          LOOK_DIRECTORY,';'.join(look_defines(look_knobs(DEFAULT_LOOK)))],cwd=build,
         log=root/'logs/shader-mod-tests.log')
@@ -467,8 +468,8 @@ LOOK_KNOBS={'sharpen':'FM4_LOOK_SHARPEN','bloom':'FM4_LOOK_BLOOM','exposure':'FM
             'sky_warmth':'FM4_LOOK_SKY_WARMTH','sky_horizon':'FM4_LOOK_SKY_HORIZON',
             'foliage_hue':'FM4_LOOK_FOLIAGE_HUE','foliage_saturation':'FM4_LOOK_FOLIAGE_SATURATION',
             'foliage_brightness':'FM4_LOOK_FOLIAGE_BRIGHTNESS',
-            # Ambient occlusion of the runtime's GTAO pass on the scene; above 0 it also
-            # turns the pass on (ao_cvars).
+            # Ambient occlusion of the GTAO post pass on the scene; above 0 it also turns
+            # the post passes on (ao_cvars).
             'ao':'FM4_LOOK_AO'}
 # Knobs that set runtime cvars instead of shader defines. sun: the strength of the sun glare
 # on the RTV path. The title reads its sun visibility from an awaited occlusion query, which
@@ -519,6 +520,8 @@ def race_settings(quality,single_tile=False):
                     if not (single_tile and s.startswith('TilingScenario=')))
 
 LOOK_DIRECTORY=REPO/'work/fm4-rex/look'
+# The runtime's post passes (docs/analysis/post-pass-framework.md): passes.toml and its HLSL.
+PASSES_DIRECTORY=REPO/'work/fm4-rex/passes'
 
 def look_knob_defaults():
     """Every knob of the look mods and its default: the #ifndef NAME / #define NAME value pairs
@@ -605,7 +608,7 @@ def look_cvars(root,look,shader_dev=False):
     if shader_dev:
         cvars.update(shader_mod_hot_reload='true',shader_mod_live_knobs='true')
     # The ao knob needs the runtime's GTAO pass.
-    cvars.update(ao_cvars(float(knobs.get('ao','0'))>0))
+    cvars.update(ao_cvars(root,float(knobs.get('ao','0'))>0,shader_dev))
     return cvars
 
 def sun_cvars(strength):
@@ -704,11 +707,12 @@ def info_overlay(cvars,env,look,quality,display=None):
     mirror='half rate' if env.get('FM4_HALF_RATE_MIRROR')=='1' else 'every frame'
     path=cvars.get('render_target_path_d3d12','rtv').upper()
     lines.append(f'Races: {rate} fps, {pacing}; mirror {mirror}; {path} render targets')
-    if cvars.get('post_ao')=='true':
+    if 'post_pass_path' in cvars:
         strength=dict(defines).get('FM4_LOOK_AO')
         applied=f'strength {float(strength):g}' if strength else 'pass only (no look applies it)'
-        quality={'0':'low','1':'medium','2':'high','3':'ultra'}.get(cvars.get('post_ao_quality','2'),'high')
-        lines.append(f"Ambient occlusion: GTAO, {applied}, radius {cvars.get('post_ao_radius','1')} m, "
+        gtao=passes_settings(cvars['post_pass_path'],dict(defines))
+        quality={0:'low',1:'medium',2:'high',3:'ultra'}.get(int(gtao['GTAO_QUALITY']),'high')
+        lines.append(f"Ambient occlusion: GTAO, {applied}, radius {gtao['GTAO_RADIUS']:g} m, "
                      f'{quality}')
     if 'rtv_occlusion_awaited_scale' in cvars:
         strength=float(cvars['rtv_occlusion_awaited_scale'])
@@ -718,17 +722,36 @@ def info_overlay(cvars,env,look,quality,display=None):
         lines.append(f'Shader A/B: game shaders every other {cvars["shader_override_ab_ms"]} ms')
     return '|'.join(lines)
 
-# Screen-space ambient occlusion of the scene depth (the runtime's post_ao pass,
-# docs/analysis/gtao-design.md): the vertex shaders that carry the scene camera, the car
-# body paint (WVP and WV rows from c0 and c4) and the road (WVP from c128, world c140, view
-# inverse c243), and the radius in meters picked with the user from a 2x variant grid. The look
-# knob ao applies it in the final combine shaders (xe_post_ao); --ao alone only runs the pass.
-POST_AO_CAMERA='8D05A46C3584CA9E:rows:0:4;C81F8D92FF6529EB:world:128:140:243'
-POST_AO_RADIUS='0.75'
+# Screen-space ambient occlusion of the scene depth: the GTAO post pass of work/fm4-rex/passes
+# (docs/analysis/gtao-design.md), whose passes.toml names the vertex shaders that carry the
+# scene camera and holds the radius picked with the user from a 2x variant grid. The look knob
+# ao applies it in the final combine shaders (xe_post_ao); --ao alone only runs the pass.
+def ao_cvars(root,enabled,shader_dev=False):
+    """Cvars of the post passes: copies work/fm4-rex/passes to BuildRoot/passes, or with
+    shader_dev uses it in place (the look's hot reload then reloads saved pass files too)."""
+    if not enabled:
+        return {}
+    if shader_dev:
+        return {'post_pass_path':PASSES_DIRECTORY}
+    directory=root/'passes'
+    if directory.is_dir():
+        shutil.rmtree(directory)
+    directory.mkdir()
+    for path in PASSES_DIRECTORY.iterdir():
+        if path.suffix in ('.toml','.hlsl','.hlsli'):
+            shutil.copyfile(path,directory/path.name)
+    return {'post_pass_path':directory}
 
-def ao_cvars(enabled):
-    return ({'post_ao':'true','post_ao_camera':POST_AO_CAMERA,'post_ao_radius':POST_AO_RADIUS}
-            if enabled else {})
+def passes_settings(directory,defines):
+    """GTAO_RADIUS and GTAO_QUALITY of the passes.toml in directory, after defines (as
+    shader_mod_defines overrides them in the runtime), for the settings overlay."""
+    import tomllib
+    manifest=tomllib.loads((Path(directory)/'passes.toml').read_text(encoding='utf-8'))
+    radius=manifest.get('params',{}).get('GTAO_RADIUS',1.0)
+    radius=radius.get('value',1.0) if isinstance(radius,dict) else radius
+    quality=manifest.get('defines',{}).get('GTAO_QUALITY',2)
+    return {'GTAO_RADIUS':float(defines.get('GTAO_RADIUS',radius)),
+            'GTAO_QUALITY':float(defines.get('GTAO_QUALITY',quality))}
 
 def save_content(root,content):
     """run -Content: replaces the saved content paths without generating again."""
@@ -789,7 +812,7 @@ def launch(root,single_tile=False,fixed_vblank=False,frame_rate=None,rov=False,
     track_settings=look_track_settings(look_knobs(look))
     if track_settings:
         env['FM4_TRACK_SETTINGS']=track_settings
-    cvars.update(ao_cvars(ao))
+    cvars.update(ao_cvars(root,ao,shader_dev))
     # Disc 2 and the -Content packages: imported into user-data once, then kept there.
     packages=validate_content(disc2,state.get('content'))
     if packages:
@@ -889,7 +912,7 @@ def main():
                              '"pc,sharpen=0.6" (knobs: '+', '.join(LOOK_KNOBS)+
                              '; work/fm4-rex/look/fm4-look.hlsli)')
     parser.add_argument('--ao',action='store_true',
-                        help="run: the runtime's screen-space ambient occlusion pass (post_ao, GTAO) "
+                        help="run: the runtime's screen-space ambient occlusion pass (the GTAO post pass) "
                              'even without the ao look knob, which also applies it (on in every '
                              'look but original)')
     parser.add_argument('--shader-dev',action='store_true',

@@ -98,9 +98,10 @@ class PipelineCache {
     return reinterpret_cast<const Pipeline*>(handle)->state.load(std::memory_order_acquire);
   }
 
-  // HLSL replacing translations (shader_override_path, shader_mod_path), or
-  // nullptr.
+  // HLSL replacing translations (shader_override_path, shader_mod_path), also
+  // compiling the post passes (post_pass_path), or nullptr.
   const ShaderOverrides* shader_overrides() const { return shader_overrides_.get(); }
+  ShaderOverrides* shader_overrides() { return shader_overrides_.get(); }
 
  private:
   REXPACKEDSTRUCT(ShaderStoredHeader, {
