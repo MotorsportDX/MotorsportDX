@@ -286,6 +286,7 @@ Everything still open, grouped by area.
   - Smoke gates at 240 Hz passed 3 of 3 cells with the knobs off (`rsoff`, which covers the runtime's file link lookup in every file open) and with `road_gloss=0.5` and `sky=0.8` (`rson`). `rson` against `rsoff`: `career` PASS; `photo` and `photo_view` WARN on capture statistics only. The error keys are the same, and there are no clear-gray frames.
   - The new `pc` preset (`sky=0.7`, gate `pcsky07`) against `pc` with the game's sky (`pcsky1`, the same binary, run just before it) at 240 Hz: 3 of 3 cells passed. `career` PASS (race 192.0 fps, p99 8.5 ms; replay 30.0 fps). `photo` WARN on capture statistics only (race 204.6 fps; photo mode 29.94 fps). `photo_view` WARN on capture statistics only (56.98 fps). There are no new error keys and no clear-gray frames, and only the `pcsky07` cells mounted the copies.
 - Parity with the original Xbox (shadows, color, reflections, noise and object edges) has not been compared. The combinations of MSAA and render scale are not all verified.
+- Temporal passes (TAA, temporal SSR, FSR or DLSS) have no motion vectors or history buffers yet. The research and the recommended source, host-built vectors from the game's resolved depth, its stencil object IDs and the car and camera matrices of the vertex shader constants, are in [motion vectors](../analysis/motion-vectors.md) (18 October 2026, offline only). That race frames give each car its own stencil ID is not yet verified in the game.
 - Not done: modern anti-aliasing on top of MSAA (SMAA or FXAA), HDR10 output, new lighting for tracks (beyond the `TrackSettings` knobs), car materials other than paint, glass, chrome and rims (the cockpit interior, tires, brakes and lamp lenses), track surfaces, and car flake paint. Flake cells in UV space are too small for race cameras and need an LOD model.
 - Widescreen and ultrawide need a FOV and projection hook, culling and HUD changes. The image is always 16:9, with bars on other screens.
 
@@ -327,6 +328,7 @@ The proposed order is:
 5. **Finish the glass, chrome and rim check.** A sun-facing scene (a replay camera or another track) for the highlights, and the split-screen set; then decide whether `pc` gets them. See [look mod coverage](../analysis/look-mod-coverage.md#in-game-checks-18-october-2026).
 6. **Re-run the gate tiers after each change.** Use `smoke` for quick checks, `perf` for performance, `full` before committing a stage, and `career` for the rewards path. See the [e2e overview](../e2e/README.md) for the commands and gates.
 7. **Decide the default tiling scenario.** The `-SingleTile` quality versus fps trade-off is for the project owner.
+8. **Verify the motion vector sources.** One traced run for the stencil reference of each car and track draw, the game's motion blur matrices in the start sequence, the two switches that might turn the game's motion blur on in races, and the depth resolve with `-SingleTile`. See [motion vectors](../analysis/motion-vectors.md#7-validation-steps).
 
 This page documents the status. It does not report that all further tests have been run, and it is not an instruction to run them automatically.
 
@@ -335,7 +337,7 @@ This page documents the status. It does not report that all further tests have b
 - [history](history.md): dated chronology and past results
 - [setup](../setup.md), [running](../running.md)
 - [e2e overview](../e2e/README.md), [traces](../e2e/traces.md), [experiments](../e2e/experiments.md)
-- Analysis: [GTAO design](../analysis/gtao-design.md), [B4 shader research](../analysis/b4-shader-research.md), [visual style](../analysis/visual-style.md), [material atlas](../analysis/material-atlas.md)
+- Analysis: [GTAO design](../analysis/gtao-design.md), [motion vectors](../analysis/motion-vectors.md), [B4 shader research](../analysis/b4-shader-research.md), [visual style](../analysis/visual-style.md), [material atlas](../analysis/material-atlas.md)
 - [sources and licensing](../sources-and-licensing.md)
 - [Build script](../../outputs/FM4-build/Build.ps1), [verification record](../../outputs/FM4-build/verification.json), [e2e harness](../../outputs/FM4-build/e2e/e2e.py), [matrix](../../outputs/FM4-build/e2e/matrix.py)
 - [Project overview](../../README.md), [agent guide](../../AGENTS.md)

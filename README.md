@@ -113,6 +113,7 @@ The next validation priorities are a second computer, Disc 2 car races on the la
 | [docs/e2e/traces.md](docs/e2e/traces.md) | Debug trace environment variables |
 | [docs/e2e/experiments.md](docs/e2e/experiments.md) | A/B overrides and shader override diagnostics |
 | [docs/analysis/gtao-design.md](docs/analysis/gtao-design.md) | Design of the GTAO (post_ao) ambient occlusion pass, from frame graph observations |
+| [docs/analysis/motion-vectors.md](docs/analysis/motion-vectors.md) | Where per-pixel motion vectors for TAA and upscalers can come from: the game's motion blur reprojection, its stencil object IDs, and a host-built pass |
 | [docs/analysis/b4-shader-research.md](docs/analysis/b4-shader-research.md) | Research on the editable shader path (HLSL through FXC, with overrides per hash) |
 | [docs/analysis/shader-mod-iteration.md](docs/analysis/shader-mod-iteration.md) | Iterating on shader mods: the DXBC cache, hot reload and live look knobs |
 | [docs/analysis/visual-style.md](docs/analysis/visual-style.md) | Research on the origin of FM4's visual style |

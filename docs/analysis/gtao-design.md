@@ -46,7 +46,7 @@ flowchart LR
     - The last tile ends at base + 1280 x 736 x 4 bytes.
   - The destination format is recorded as `8_8_8_8` (a D3D9 quirk, `xenos.h`). Its content is 24-bit float depth plus stencil.
 - **Users of that depth**:
-  - Motion blur `4746CAD32EF168CF`, only in some frames (q-high 4800-6000; in those frames the depth is resolved twice per tile). Slot s2 holds the depth. Its constants are `QAndNegNearQAndScale` c69, viewport c68, and `invCurrentVPThenPrevVP` c0[68]: 17 matrices selected per pixel through a0, probably per object.
+  - Motion blur `4746CAD32EF168CF`, only in some frames (q-high 4800-6000; in those frames the depth is resolved twice per tile). Slot s2 holds the depth. Its constants are `QAndNegNearQAndScale` c69, viewport c68, and `invCurrentVPThenPrevVP` c0[68]: 17 matrices selected per pixel through a0, from the scene stencil (one per object; see [motion vectors](motion-vectors.md)).
   - FinalCombine DOF `30B67D8B86C37587` and `AE3B2E36FCA4958D`: tf1 holds the depth, and its linear depth is `c1.y / (c1.x - (1 - d))`. This is the usual D3D projection form, z = Q*n / (Q - ndc_z), with `combineQVals` = (Q, Q*n) and stored depth d = 1 - ndc_z. So Z is inverted through the viewport (zscale -1, zoffset 1), not through the matrix, and post_ao reads that viewport. Confirmed in M1.
 - **Frames without a depth resolve**: frames with a 3D scene before the race (84 to 2,898 scene draws per frame at q-high 1080-4080: menus, showroom, loading screens). The exact scenes have not yet been mapped to e2e steps.
 - **Race frame order** (q-high, frame 9600):
