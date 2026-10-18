@@ -20,7 +20,7 @@ timeline
     15 October : Streaming fix (sGPU fallback) for missing road, RTV default again
     16 October : Photo, career and matrix e2e scenarios, gate tiers, look pc and quality high defaults
     17 October : Clearcoat, display options and settings overlay, Alt+Enter, GTAO ambient occlusion, generic content import (DLC), shader mod cache and hot reload
-    18 October : ROV occlusion divisor removed, sun query samples measured per MSAA level : Glass, chrome and rim look mods (false color, A/B at 2x, smoke gate), look mods compiled against real contracts : Track lighting knobs road_gloss and sky (TrackSettings copies, 2x sweep)
+    18 October : ROV occlusion divisor removed, sun query samples measured per MSAA level : Glass, chrome and rim look mods (false color, A/B at 2x, smoke gate), look mods compiled against real contracts : Track lighting knobs road_gloss and sky (TrackSettings copies, 2x sweep) : USA release support (clean build, smoke gate with dlc)
 ```
 
 | Date | Milestone |
@@ -30,7 +30,7 @@ timeline
 | 15 October 2026 | The streaming fix (sGPU fallback) resolves the missing road segments, and RTV is the launcher default again. Command processor work: EDRAM transfers, upload removal, event-based wait and readback fixes. |
 | 16 October 2026 | Photo, photo_view and career e2e scenarios, the regression and 240 Hz matrices, the dynamic vblank rate, the rebuilt developer AI driver and career race to rewards, the shader override and look knobs, the shadow workaround no longer default, and 16x anisotropic filtering. |
 | 17 October 2026 | Clearcoat on the car paint, display and render scale options, the settings overlay, Alt+Enter, and GTAO ambient occlusion. The default launcher (look `pc` with clearcoat and AO) passes the smoke gate. The generic content installer (`-Content`) imports and mounts Disc 2 and eight DLC packages. The compiled look mods are cached, and shader mods hot reload with live knobs (`-ShaderDev`). |
-| 18 October 2026 | The launcher no longer passes the ROV occlusion divisor of 2, so `-Rov` reports the counted samples. On ROV the sun query counts guest samples in proportion to the MSAA sample count, which explains the factor 2 of 13 October. Look mods and AO are RTV only by design. Look mods for the car glass, chrome and rims of the race, 16-car, split-screen and garage car shader sets (`-Look glass`, `chrome`, `rims`; in no preset): `fm4_shader_mod_tests`, `override_fxc.py --stub` (the look mods against the real contracts of earlier runs), false color and an A/B at 2x in the game, and a smoke gate. See [look mod coverage](../analysis/look-mod-coverage.md#glass-chrome-and-rims-18-october-2026). The look knobs `road_gloss` and `sky` edit copies of the track lighting files; after a 2x sweep on the Bernese Alps the `pc` preset gets `sky=0.7`, and `road_gloss` stays at 1 in no preset. |
+| 18 October 2026 | The launcher no longer passes the ROV occlusion divisor of 2, so `-Rov` reports the counted samples. On ROV the sun query counts guest samples in proportion to the MSAA sample count, which explains the factor 2 of 13 October. Look mods and AO are RTV only by design. Look mods for the car glass, chrome and rims of the race, 16-car, split-screen and garage car shader sets (`-Look glass`, `chrome`, `rims`; in no preset): `fm4_shader_mod_tests`, `override_fxc.py --stub` (the look mods against the real contracts of earlier runs), false color and an A/B at 2x in the game, and a smoke gate. See [look mod coverage](../analysis/look-mod-coverage.md#glass-chrome-and-rims-18-october-2026). The look knobs `road_gloss` and `sky` edit copies of the track lighting files; after a 2x sweep on the Bernese Alps the `pc` preset gets `sky=0.7`, and `road_gloss` stays at 1 in no preset. The USA release (media ID `26FF1101`) is supported: its discs differ from the Japan/Asia discs only in the executable headers, and a clean build from them passes the smoke gate with the `dlc` cell (see [release comparison](../analysis/releases.md)). |
 
 ## 1. Clean-build verification (13-14 October 2026)
 
@@ -319,6 +319,7 @@ Each row gives the date of the change, the setting that was replaced, and what h
 | 18 Oct 2026 | Launcher without `rov_occlusion_awaited_report_divisor` (runtime default 1) | Divisor 2 on the ROV path since 13 October | None recorded |
 | 18 Oct 2026 | Look knob `sun=2` in presets pc, aces, gt and neutral (RTV sun glare per pixel, soft limit 1,200) | Counted host samples (glare grows with the MSAA level) | None recorded |
 | 18 Oct 2026 | Track lighting knob `sky=0.7` in preset pc (`skyScale` of every race location times 0.7) | The game's sky (`sky=1`), as aces, gt and neutral keep | None recorded |
+| 18 Oct 2026 | `generate` accepts the executables of the Japan/Asia or the USA release (`RELEASES` in `pipeline.py`) and records the release in `local.json` | The Japan/Asia executables only (`XEX_HASHES`) | None recorded |
 
 ## 6. Corrections and qualifications of earlier entries
 

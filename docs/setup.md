@@ -16,11 +16,20 @@ compatibility.
 
 ## Supported game version
 
-- **Forza Motorsport 4 Japan/Asia**, Play Disc with media ID `633772A0`.
-- The three executables are checked by SHA-256 hash (`XEX_HASHES` in
-  [pipeline.py](../outputs/FM4-build/pipeline.py)) before generation. Other
-  releases, modified executables and title updates are rejected. Do not rename
-  another release to bypass the check.
+- **Forza Motorsport 4 Japan/Asia** (Play Disc media ID `633772A0`) or **USA**
+  (media ID `26FF1101`).
+- The three executables are checked by SHA-256 hash (`RELEASES` in
+  [pipeline.py](../outputs/FM4-build/pipeline.py)) before generation, and all
+  three must come from the same release. Other releases, modified executables,
+  a mix of executables from both releases, and title updates are rejected. Do not
+  rename another release to bypass the check. `generate` prints the release it
+  found and saves it in `local.json`.
+- The two releases have the same game code and assets: only the headers of the
+  executables differ, and the decrypted images are identical. One set of function
+  bounds and switch tables serves both, and Disc 2 and the downloadable content
+  are the same. See the [release comparison](analysis/releases.md).
+- To change the release of a `BuildRoot`, run `generate` with the other Disc 1
+  (and Disc 2), then `build`.
 - **Disc 1 is required.** It must be the extracted root of the Play Disc with all
   of its assets: the three executables, `Database.xmplr` and the `Media` folder.
   A folder that contains only the three XEX files is rejected.
@@ -268,7 +277,7 @@ FM4-build/
 ├── e2e/              # e2e run output (captures, logs, summary.json)
 ├── snapshots/        # game-build copies used by the matrix.py gates
 ├── loaded-image.bin  # Private image of your executable
-├── local.json        # Local Disc and content paths
+├── local.json        # Local Disc and content paths, and the release
 ├── content-packages.txt # Packages the last run imports, written by the launcher
 └── build-result.json # Artifact hashes and build result
 ```
@@ -314,9 +323,10 @@ repository.
 
 - **Setup or build fails:** run `doctor` first. Check that `Python` points to a real
   Python executable and that `LLVMRoot` points to LLVM 20.x.
-- **An executable is rejected** (`Unsupported or missing executable`): check the
-  game version and that the extraction is complete. Renaming a file does not make
-  another revision compatible.
+- **An executable is rejected** (`Unsupported executables in ...` or `Missing
+  executable`): check the game version and that the extraction is complete. The
+  three executables must all be those of one supported release, as extracted from
+  its Play Disc. Renaming a file does not make another revision compatible.
 - **Assets are not found:** `Disc1` must point to the complete extracted root, not
   to a folder that contains only the three XEX files.
 - **Disc 2 package is missing** (`Missing Disc 2 content package`): check that the

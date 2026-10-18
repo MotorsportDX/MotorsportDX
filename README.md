@@ -6,13 +6,13 @@ The repository does not include the game, original assets, recompiled code, or a
 
 ## Status
 
-- **Latest verification:** 16 October 2026, by the automated e2e harness on the current build. Setup, generate, and build from a clean copy of the Git files were checked on 13 and 14 October 2026.
+- **Latest verification:** 16 October 2026, by the automated e2e harness on the current build. Setup, generate, and build from a clean copy of the Git files were checked on 13 and 14 October 2026. The USA release was checked on 18 October 2026 with a clean setup, generate, and build from its discs and a smoke gate.
 - **Status:** Builds from a clean source tree and runs Quick Race, photo mode, and career races through to the reward on the latest build (tested automatically). It is not yet a full port with all features and verified stability.
 - **Details:** [current status](docs/status/current.md) and [history](docs/status/history.md).
 
 ## Supported game version
 
-- **Forza Motorsport 4 Japan/Asia**, Play Disc with media ID `633772A0`. The three executables are checked by SHA-256 in [`pipeline.py`](outputs/FM4-build/pipeline.py). Other regions, other revisions, modified executables, and title updates that do not match are rejected.
+- **Forza Motorsport 4 Japan/Asia** (Play Disc media ID `633772A0`) or **USA** (media ID `26FF1101`). The three executables are checked by SHA-256 in [`pipeline.py`](outputs/FM4-build/pipeline.py), and all three must come from one of these releases. Both releases have the same game code and assets; only the executable headers differ (see [release comparison](docs/analysis/releases.md)). Other regions, other revisions, modified executables, and title updates are rejected.
 - **Disc 1 is required**, extracted, and it must contain all game assets.
 - **Disc 2 is optional.** It is not needed for basic startup, but it is required to import its additional car content.
 - **Downloadable content is optional.** FM4 car and track packs you own are imported from their content packages with `-Content`.
@@ -90,7 +90,7 @@ The end-to-end harness, [`e2e.py`](outputs/FM4-build/e2e/e2e.py), runs the game 
 
 ## Known limitations
 
-- **Limited compatibility:** only Windows x64 and the Japan/Asia revision whose hashes are checked. Other regions and title updates are not supported.
+- **Limited compatibility:** only Windows x64 and the Japan/Asia and USA releases whose hashes are checked. Other regions and title updates are not supported.
 - **Graphics not fully accurate:** the sun glare strength changes with the MSAA level on both render target paths (parity with the Xbox glare is not a goal). The empirical sun occlusion correction (factor 2) of the ROV path (`-Rov`) was removed on 18 October 2026, so `-Rov` stays an uncorrected reference. Noise, reflections, object edges, and combinations of MSAA and resolution scale need wider testing.
 - **Synchronous shaders:** shader sync is on by default to avoid skipped draws that once caused black photos. An empty shader cache only adds load hitches, not race fps loss, but photos taken with an empty cache have not been retested.
 - **Runtime incomplete:** some Xbox services are still stubs. The instruction tests do not prove that the kernel, audio, timing, or synchronization is correct.
@@ -116,6 +116,7 @@ The next validation priorities are a second computer, Disc 2 car races on the la
 | [docs/analysis/b4-shader-research.md](docs/analysis/b4-shader-research.md) | Research on the editable shader path (HLSL through FXC, with overrides per hash) |
 | [docs/analysis/shader-mod-iteration.md](docs/analysis/shader-mod-iteration.md) | Iterating on shader mods: the DXBC cache, hot reload and live look knobs |
 | [docs/analysis/visual-style.md](docs/analysis/visual-style.md) | Research on the origin of FM4's visual style |
+| [docs/analysis/releases.md](docs/analysis/releases.md) | How the Japan/Asia and USA releases differ, and why one build serves both |
 | [docs/analysis/dlc-structure.md](docs/analysis/dlc-structure.md) | How FM4 content packages are laid out, mounted and licensed, and what a new mod package would need |
 | [docs/analysis/material-atlas.md](docs/analysis/material-atlas.md) | Summary of the material atlas: names and registers of the game's constant tables |
 | [docs/analysis/look-mod-coverage.md](docs/analysis/look-mod-coverage.md) | Which final combine, motion blur and car paint hashes each track and mode uses, and which have no look mod |

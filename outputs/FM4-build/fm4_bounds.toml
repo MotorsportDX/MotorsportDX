@@ -1,4 +1,4 @@
-# FM4 Japan/Asia Disc 1, media 633772A0.
+# FM4 Disc 1 default.xex: the same image in the Japan/Asia (media 633772A0) and USA (media 26FF1101) releases.
 # Explicit thunks validated against original instructions and the previous CFG.
 # Keep the live register context across tail calls and shared code.
 skip_lr = false

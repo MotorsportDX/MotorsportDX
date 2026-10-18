@@ -9,6 +9,7 @@ This page describes the state now. Results from earlier builds came from differe
 The project is an experimental build. On the latest binary, the e2e harness checks that Quick Race, photo mode and career races run through to rewards. It is not yet a full port: the full feature set, visuals and stability have not been verified.
 
 - The default launcher (`look pc` with clearcoat and ambient occlusion) passed the smoke gate on 17 October 2026.
+- The USA release (media ID `26FF1101`) is supported beside the Japan/Asia release since 18 October 2026. A clean setup, generate and build from the USA discs and a smoke gate with the `dlc` cell passed.
 - The latest full matrix (240, 120 and 60 Hz) ran on 16 October 2026. The 17 October changes were checked with smoke gates, plus a three-run race-phase measurement for ambient occlusion.
 - The clean build was verified on 13 October 2026 (commit `d1fa29a`). The project-owned runtime was verified on 14 October 2026.
 - The clean build test covered startup and the intro only. It was not a race test, and it did not cover full mode coverage or performance.
@@ -20,6 +21,7 @@ The project is an experimental build. On the latest binary, the e2e harness chec
 | Area | State | Evidence |
 |---|---|---|
 | Boot, logos, intro video, main menu | Works | Clean build test (13 October 2026); menu reached about 30 seconds after start in the e2e boot |
+| USA release (Disc 1, Disc 2, DLC) | Verified on the latest binary | Clean build, content import and smoke gate with `dlc`, 18 October 2026 |
 | Quick Race at 60, 120 and 240 Hz | Verified on the latest binary | Matrix, 16 October 2026 |
 | Photo mode: take, save, load in a new process | Verified on the latest binary | `photo` and `photo_view`, 16 October 2026 |
 | Photo mode: overwrite, and photo with an empty shader cache | Not verified on the latest build | See [Current gaps](#current-gaps) |
@@ -48,6 +50,24 @@ The project is an experimental build. On the latest binary, the e2e harness chec
 | `career` | `career_finish` and `career_progress` at 240 Hz, one run | - |
 
 The race phase of `photo` is 30 seconds of racing after 10 seconds of driving, with 12 cars. `career` is a World Tour race with quit, replay and continue.
+
+### USA release, 18 October 2026
+
+BuildRoot `I:\FM4-build-usa`, a new BuildRoot set up from the USA Disc 1 and Disc 2 and the eight DLC packages. The two releases differ only in the executable headers; see the [release comparison](../analysis/releases.md).
+
+- **Setup, generate and build**: passed in the new BuildRoot in about 8 minutes with 16 jobs. The upstream SDK clone was copied from another BuildRoot instead of downloaded. `generate` printed `Disc 1: USA release, media ID 26FF1101`. The loaded image, the 271 switch tables, the guard audits and every generated source file are identical to those generated from the Japan/Asia discs; only the codegen stamp files differ, because they name the Disc paths. The instruction tests (295,650 checks, 0 failures) and the post_ao, shader mod and track settings tests pass.
+- **Content import**: the four USA Disc 2 packages and the eight DLC packages were imported into a new profile (the installer's developer import mode, `FM4_CONTENT_INSTALL_ONLY`).
+- **Boot with the new profile**: the logos and the intro car video render (e2e `boot`, 90 seconds).
+- **Smoke gate `usa` with the `dlc` cell** (240 Hz, 1x, launcher defaults), on a profile copied from the Japan/Asia BuildRoot `I:\FM4-build2`, so the saves and career progress were made by the Japan/Asia executable: 4 of 4 cells passed in 13 minutes. Against the Japan/Asia smoke gate `pcsky07` (same commit and settings) there is no FAIL and no new runtime error.
+
+| Cell | USA | Japan/Asia (`pcsky07`) | Verdict |
+|---|---|---|---|
+| `photo` | race 195.9 fps, p99 7.55 ms; photo mode 29.9 fps | race 204.6 fps, p99 7.59 ms; photo mode 29.9 fps | WARN: capture statistics, guest idle wait 7.0 to 32.5 ms/s |
+| `photo_view` | 55.8 fps; the saved photo loads in color | 57.0 fps | WARN: capture statistics |
+| `career` | race 185.9 fps, p99 7.99 ms; replay 30.0 fps | race 192.0 fps, p99 8.54 ms; replay 30.0 fps | PASS |
+| `dlc` | race 179.4 fps, p99 7.47 ms; the DLC car on the DLC track | no baseline at this commit | - |
+
+Each cell is one run, so the fps differences (within the 10-20% noise of single runs) show no performance difference. Not covered: 60 and 120 Hz, a new USA profile through a career race, races with Disc 2 cars, and title updates (not supported for either release).
 
 ### Glass, chrome and rim look mods, 18 October 2026
 
@@ -219,7 +239,7 @@ These numbers are baselines, not targets.
 
 ## Known limitations
 
-- **Supported input**: only three Japan/Asia XEX executables are supported. Their hashes are recorded in [outputs/FM4-build/pipeline.py](../../outputs/FM4-build/pipeline.py). Other regions or revisions, modified executables and title updates are rejected. The user must extract the ISO first.
+- **Supported input**: the three XEX executables of the Japan/Asia release (media ID `633772A0`) or of the USA release (`26FF1101`). Their hashes are recorded in [outputs/FM4-build/pipeline.py](../../outputs/FM4-build/pipeline.py). Other regions or revisions, modified executables, a mix of both releases and title updates are rejected. The user must extract the ISO first. The two releases differ only in their executable headers ([release comparison](../analysis/releases.md)).
 - **Platform**: Windows x64 only, with a matching toolchain and GPU. Setup checks the prerequisites and does not install Visual Studio, Python or LLVM. A clone alone is not a playable game package. See [setup](../setup.md).
 - **Save data**: saves and progress from historical builds loaded. Compatibility of all saves and profile migration between builds or computers is not guaranteed. The workflow uses its own local profile and does not copy old saves automatically.
 - **Profile state in e2e**: on 14 October 2026, three runs with a new, empty profile did not reach a race in the harness. The game then shows the default car and different pre-race screens, which the harness did not recognize. With a copied profile and shader cache, 6 of 6 runs reached the race. The e2e scenarios therefore use `--profile copy`. See [e2e overview](../e2e/README.md).
@@ -283,7 +303,7 @@ Everything still open, grouped by area.
 
 - The clone and the full workflow have not been run on a second Windows computer.
 - AMD and Intel GPUs and lower-end CPUs have not been tested.
-- Only the three Japan/Asia XEX files are supported. US and EU releases and title updates are not.
+- Only the Japan/Asia and USA releases are supported. The European release and title updates are not. The European discs have not been compared with the other two.
 - There is no CI, no setup wizard, and no license and provenance review for a release. This includes the pending `XenonRecomp-FM4-fixes.patch`. See [sources and licensing](../sources-and-licensing.md).
 
 ## Next validation steps

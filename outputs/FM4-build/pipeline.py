@@ -26,10 +26,20 @@ THIRDPARTY_VENDORED = ('aes_128','crypto','disasm','disruptorplus','dxbc','dxc',
 THIRDPARTY_SUBMODULES = ('cli11','libmspack','FFmpeg','tomlplusplus','simde','xxHash','spdlog','fmt',
                          'utfcpp','imgui','sdl3','inja','o1heap')
 RESOLVE_SHADERS = [f'resolve_full_{bits}bpp{suffix}' for bits in (8,16,32,64) for suffix in ('','_scaled')]
-XEX_HASHES = {
-    'default.xex': '763636fe8cc9d2ff822ade4c972efef907e193f31175def127863575bf3c4ad5',
-    'SpeechFacade_default.xex': 'cf06cac7c34e38a9b45db5c7da4a690c7414c8b461537463d3162465e89431bd',
-    'XMediaFacade_default.xex': 'fec814d3066c73b182543e80a50c7c7caf48749e4026ae933bf19654d4f118a7',
+EXECUTABLES = ('default.xex','SpeechFacade_default.xex','XMediaFacade_default.xex')
+# The supported releases and the SHA-256 of their three executables. The releases differ only
+# in the XEX headers (media ID, disc version, game region, ratings, LAN key). The decrypted
+# images of the three executables and every other file of both discs are identical, so the
+# function bounds and switch tables serve both.
+RELEASES = {
+    'Japan/Asia': {'media_id':'633772A0','executables':{
+        'default.xex': '763636fe8cc9d2ff822ade4c972efef907e193f31175def127863575bf3c4ad5',
+        'SpeechFacade_default.xex': 'cf06cac7c34e38a9b45db5c7da4a690c7414c8b461537463d3162465e89431bd',
+        'XMediaFacade_default.xex': 'fec814d3066c73b182543e80a50c7c7caf48749e4026ae933bf19654d4f118a7'}},
+    'USA': {'media_id':'26FF1101','executables':{
+        'default.xex': '3618e85af83e972ddcc1b0d0dd808e78e29ab4ab3890a15b31c210a6a3e93e09',
+        'SpeechFacade_default.xex': 'b8a5e5137bb18ec42c7e0e2fe5b3e5e760e11e0b0d5ddf0098186995aa7c0f5e',
+        'XMediaFacade_default.xex': '560bb53fc9a335399e82ba92121410e6781841cbabe3e9dfbf0de43dde7258e9'}},
 }
 
 def digest(path):
@@ -76,14 +86,26 @@ def doctor():
     print('Preflight passed. LLVM:', version.splitlines()[0], 'FXC:', fxc)
     return fxc
 
+def disc_release(disc1):
+    """The supported release whose three executables Disc 1 holds. A set that mixes releases
+    or revisions is rejected."""
+    hashes = {}
+    for name in EXECUTABLES:
+        if not (disc1/name).is_file():
+            raise ValueError(f'Missing executable: {disc1/name}.')
+        hashes[name] = digest(disc1/name)
+    for release, info in RELEASES.items():
+        if hashes == info['executables']:
+            return release
+    supported = ', '.join(f'{release} (media ID {info["media_id"]})' for release, info in RELEASES.items())
+    raise ValueError(f'Unsupported executables in {disc1}: the three must be those of one supported '
+                     f'release: {supported}.')
+
 def validate_discs(disc1, disc2):
     if not disc1:
         raise ValueError('Provide -Disc1 with the extracted Play Disc directory, not an ISO.')
     disc1 = Path(disc1).resolve()
-    for name, expected in XEX_HASHES.items():
-        path = disc1/name
-        if not path.is_file() or digest(path) != expected:
-            raise ValueError(f'Unsupported or missing executable: {path}. This profile supports the tested Japan/Asia release only.')
+    disc_release(disc1)
     if not (disc1/'Media').is_dir() or not (disc1/'Database.xmplr').is_file():
         raise ValueError('Disc1 must contain the extracted game assets (Media and Database.xmplr), not just the three XEX files.')
     if disc2:
@@ -298,8 +320,11 @@ def generate(root, disc1, disc2, content, jobs):
     for directory in ('default','xmedia','speech'):
         args = [sys.executable,project/'guard-generated.py',project/f'generated/{directory}',root/'loaded-image.bin']
         run(args + ([] if directory=='default' else ['--module']),log=root/f'logs/guard-{directory}.log')
+    release = disc_release(disc1)
+    print(f'Disc 1: {release} release, media ID {RELEASES[release]["media_id"]}.')
     state = {'disc1':str(disc1),'disc2':str(disc2) if disc2 else None,
-             'content':[str(Path(path).resolve()) for path in content or ()],'executables':XEX_HASHES}
+             'content':[str(Path(path).resolve()) for path in content or ()],'release':release,
+             'executables':RELEASES[release]['executables']}
     (root/'local.json').write_text(json.dumps(state,indent=2),encoding='utf-8')
 
 FLAVORS = ('thinlto','v3','pgo-gen','pgo-use')

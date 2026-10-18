@@ -44,15 +44,25 @@ class PipelineTests(unittest.TestCase):
     def test_hash_validation_and_disc2_paths(self):
         with tempfile.TemporaryDirectory(prefix='fm4 source test ') as directory:
             root=Path(directory)
-            executable=root/'default.xex'
-            executable.write_text('synthetic executable placeholder')
-            with patch.object(pipeline,'XEX_HASHES',{'default.xex':pipeline.digest(executable)}):
+            names=('default.xex','module.xex')
+            for name in names: (root/name).write_text('synthetic executable placeholder '+name)
+            first={name:pipeline.digest(root/name) for name in names}
+            second={'default.xex':'0'*64,'module.xex':first['module.xex']}
+            releases={'First':{'media_id':'00000001','executables':first},
+                      'Second':{'media_id':'00000002','executables':second}}
+            with patch.object(pipeline,'EXECUTABLES',names),patch.object(pipeline,'RELEASES',releases):
                 with self.assertRaises(ValueError): pipeline.validate_discs(root,None)
                 (root/'Media').mkdir()
                 (root/'Database.xmplr').write_text('synthetic placeholder')
                 self.assertEqual(pipeline.validate_discs(root,None),(root.resolve(),None))
+                self.assertEqual(pipeline.disc_release(root),'First')
                 with self.assertRaises(ValueError): pipeline.validate_discs(root,root/'missing disc 2')
-                executable.write_text('wrong revision')
+                # A set that matches no release as a whole, here one changed executable, is rejected.
+                (root/'default.xex').write_text('wrong revision')
+                with self.assertRaises(ValueError): pipeline.validate_discs(root,None)
+                second['default.xex']=pipeline.digest(root/'default.xex')
+                self.assertEqual(pipeline.disc_release(root),'Second')
+                (root/'module.xex').unlink()
                 with self.assertRaises(ValueError): pipeline.validate_discs(root,None)
 
     def package(self, path, title_id=0x4D530910, content_type=2, magic=b'LIVE'):
