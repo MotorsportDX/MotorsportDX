@@ -51,6 +51,14 @@ The project is an experimental build. On the latest binary, the e2e harness chec
 
 The race phase of `photo` is 30 seconds of racing after 10 seconds of driving, with 12 cars. `career` is a World Tour race with quit, replay and continue.
 
+### USA against Japan/Asia performance, 18 October 2026
+
+One binary for both releases: the `I:\FM4-build-usa` game build, with the launcher defaults (look `pc`, quality `high`, 1x), the `perf` tier (`photo` at 240 Hz, three runs a gate) and the Disc 1 chosen with `--arg game_data_root=...`. The gates ran in the order USA, Japan/Asia, Japan/Asia, USA (`relusa1`, `reljp1`, `reljp2`, `relusa2`) on copies of the same profile.
+
+- 12 of 12 runs passed. Race phase: USA 214.2 fps (standard deviation 14.2), p99 6.46 ms; Japan/Asia 202.1 fps (13.1), p99 7.04 ms. Photo mode ran at 29.9 fps in every run.
+- The race fps of a run follows its draws per frame (correlation -0.98 over the 12 runs), because the AI races differ from run to run: the USA runs averaged 2,189 draws per frame and the Japan/Asia runs 2,494. With that workload taken out, the difference is -0.2 fps (permutation test, p = 0.92). The raw difference (+6.0%, p = 0.16) came from lighter races, not from the release.
+- This agrees with the code: the images are identical, and the game's two `XamGetExecutionId` calls read only the title ID, which both releases share.
+
 ### USA release, 18 October 2026
 
 BuildRoot `I:\FM4-build-usa`, a new BuildRoot set up from the USA Disc 1 and Disc 2 and the eight DLC packages. The two releases differ only in the executable headers; see the [release comparison](../analysis/releases.md).
