@@ -14,13 +14,15 @@ included after the library, as shader_mod_path does (with --define as shader_mod
 Prints how many compiled and groups the failures by their first error.
 
 --stub compiles every mod of --mods against every contract of its hash, on a stub override that
-only writes interpolator 0 (the hooks run around it as around a generated one). A contract
+writes interpolator 0 plus every 2D texture the contract binds, each fetched at interpolator 0
+through XE_HOOK_TFETCH (the hooks run around and inside it as in a generated one). A contract
 defines only the fetches and constants its shader reads, so this finds a mod that reads others.
 With --define, each is also compiled without the defines: a mod whose DXBC the defines do not
 change never reached its code in that translation (an #if on a fetch it does not bind)."""
 import argparse
 import concurrent.futures
 import pathlib
+import re
 import subprocess
 import sys
 import tempfile
@@ -37,12 +39,21 @@ def find_fxc():
     return candidates[-1]
 
 
-# The override of --stub: the hooks of a mod run around it.
-STUB = 'void xe_pixel_shader(inout XePixel p) {\n  p.color[0] = p.r[0];\n}\n'
+def stub_override(contract_text):
+    """The override of --stub for a contract: interpolator 0 plus a fetch of every 2D texture the
+    contract binds, each through XE_HOOK_TFETCH as a generated override fetches, so that the fetch
+    hooks of a mod run too."""
+    fetches = sorted(int(n) for n in re.findall(r'^#define XE_TEXTURE(\d+)_2D_U ', contract_text,
+                                                re.M)
+                     if f'#define XE_TEXTURE{n}_2D_S ' in contract_text)
+    lines = ['void xe_pixel_shader(inout XePixel p) {', '  float4 sum = p.r[0];']
+    lines += [f'  {{ float4 t = XE_HOOK_TFETCH({n}u, XE_TFETCH2D({n}, p.r[0].xy), p.r[0]); '
+              'sum += t; }' for n in fetches]
+    return '\n'.join(lines + ['  p.color[0] = sum;', '}', ''])
 
 
 def compile_one(fxc, override, contract, asm_dir, mods, defines):
-    """Compiles override (a file, or None for STUB) after contract: (contract file name, FXC exit
+    """Compiles override (a file, or None for the stub) after contract: (contract file name, FXC exit
     code, error lines, DXBC or None)."""
     with tempfile.TemporaryDirectory() as work:
         work = pathlib.Path(work)
@@ -54,8 +65,8 @@ def compile_one(fxc, override, contract, asm_dir, mods, defines):
             name = f'{contract.name[:23]}.mod.hlsli'
             if (mods / name).is_file():
                 mod = f'#include "{name}"\n'
-        name, text = (('stub.ps.hlsl', STUB) if override is None else
-                      (override.as_posix(), override.read_text()))
+        name, text = (('stub.ps.hlsl', stub_override(contract.read_text())) if override is None
+                      else (override.as_posix(), override.read_text()))
         source = (contract.read_text() + '\n#include "xenos_override.hlsli"\n' + mod +
                   f'#line 1 "{name}"\n' + text +
                   '\n#define XE_OVERRIDE_MAIN\n#include "xenos_override.hlsli"\n')

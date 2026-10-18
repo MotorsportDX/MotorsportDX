@@ -435,6 +435,13 @@ LOOK_KNOBS={'sharpen':'FM4_LOOK_SHARPEN','bloom':'FM4_LOOK_BLOOM','exposure':'FM
             'glass':'FM4_LOOK_GLASS','glass_roughness':'FM4_LOOK_GLASS_ROUGHNESS',
             'chrome':'FM4_LOOK_CHROME','chrome_roughness':'FM4_LOOK_CHROME_ROUGHNESS',
             'rims':'FM4_LOOK_RIMS','rims_roughness':'FM4_LOOK_RIMS_ROUGHNESS',
+            # Sky dome and vegetation of the tracks (work/fm4-rex/look/fm4-nature.hlsli): the
+            # color of the sky texture and of the green of leaves and grass. The track knob sky
+            # (LOOK_TRACK_KNOBS) scales the sky's brightness instead.
+            'sky_saturation':'FM4_LOOK_SKY_SATURATION','sky_contrast':'FM4_LOOK_SKY_CONTRAST',
+            'sky_warmth':'FM4_LOOK_SKY_WARMTH','sky_horizon':'FM4_LOOK_SKY_HORIZON',
+            'foliage_hue':'FM4_LOOK_FOLIAGE_HUE','foliage_saturation':'FM4_LOOK_FOLIAGE_SATURATION',
+            'foliage_brightness':'FM4_LOOK_FOLIAGE_BRIGHTNESS',
             # Ambient occlusion of the runtime's GTAO pass on the scene; above 0 it also
             # turns the pass on (ao_cvars).
             'ao':'FM4_LOOK_AO'}
@@ -457,7 +464,8 @@ LOOK_TRACK_KNOBS={'road_gloss':('RoadSpecular.RoadSpecular','RoadSpecular.RoadSp
 # Named looks; a -Look value may mix them with knobs ('pc,sharpen=0.6': later items win).
 # Every look but original has the car paint clear coat and ambient occlusion; original runs
 # without any shader mod. No preset has glass, chrome or rims yet: the A/B at 2x of 18 October
-# 2026 has not covered their sun highlights or the split-screen set
+# 2026 has not covered their sun highlights or the split-screen set. No preset has the sky_* or
+# foliage_* knobs: their A/B at 2x of the same day showed only a slightly deeper sky
 # (docs/analysis/look-mod-coverage.md).
 LOOK_PRESETS={'pc':'tonemap=aces,saturation=1.1,bloom=0.7,sharpen=0.4,clearcoat=1,ao=0.6,sun=2,sky=0.7',
               'aces':'tonemap=aces,clearcoat=1,ao=0.6,sun=2','gt':'tonemap=gt,clearcoat=1,ao=0.6,sun=2',

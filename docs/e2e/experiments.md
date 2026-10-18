@@ -91,7 +91,7 @@ python outputs\FM4-build\e2e\override_fxc.py <override file or dir> <dump_shader
 
 Options: `--asm <dir>` writes the FXC disassembly of each override there, `--mods` gives a `shader_mod_path` directory, `--define NAME=VALUE` (repeatable) sets the defines of the mods, and `--workers` (default 8) sets the parallel compiles.
 
-`--stub` compiles the mods themselves against the contracts, without override files: every `shader_<hash>.mod.hlsli` of `--mods` on every contract of its hash, around a stub override that only writes interpolator 0:
+`--stub` compiles the mods themselves against the contracts, without override files: every `shader_<hash>.mod.hlsli` of `--mods` on every contract of its hash, around a stub override that writes interpolator 0 plus every 2D texture the contract binds, each fetched through `XE_HOOK_TFETCH` as a generated override fetches it (so the fetch hooks of the sky and foliage mods run too):
 
 ```
 python outputs\FM4-build\e2e\override_fxc.py --stub <dump_shaders dir> --mods work\fm4-rex\look --define FM4_LOOK_GLASS=1.0 ...

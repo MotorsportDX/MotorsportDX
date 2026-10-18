@@ -1,6 +1,6 @@
 # Look Mod Coverage (17 October 2026)
 
-Look mods are keyed by the ucode hash of a pixel shader. A mode or track that draws the same role with a different ucode gets the original shader without any warning. This note lists, per track and per mode, which final combine, motion blur and car paint hashes occur, and the mods added on 17 October 2026 for the ones that had none. The car glass, chrome and rims, which got mods on 18 October 2026, are in [their own section](#glass-chrome-and-rims-18-october-2026). It contains hashes, technique names and constant names only, no shader code.
+Look mods are keyed by the ucode hash of a pixel shader. A mode or track that draws the same role with a different ucode gets the original shader without any warning. This note lists, per track and per mode, which final combine, motion blur and car paint hashes occur, and the mods added on 17 October 2026 for the ones that had none. The car glass, chrome and rims, which got mods on 18 October 2026, are in [their own section](#glass-chrome-and-rims-18-october-2026), and so are the sky and vegetation of the tracks ([Sky and Vegetation](#sky-and-vegetation-18-october-2026)). It contains hashes, technique names and constant names only, no shader code.
 
 ## Method
 
@@ -181,6 +181,82 @@ BuildRoot `I:\FM4-build-iter` (the runtime of the shader mod iteration, which th
 Not checked: a sun highlight on glass or chrome (no frozen scene faced the sun), the split-screen set, the chrome rim shaders on screen (`F8CDBAFAD23FD784` drew 87,000 times in a photo-mode run, but not on a frozen camera), another track or time of day, and the cost at 2x.
 
 The A/B left nothing to tune: no default was changed with `--shader-dev`. Before a preset gets these mods: a sun-facing scene (a replay camera or another track) for the highlights, and the split-screen set.
+
+## Sky and Vegetation (18 October 2026)
+
+The track's sky dome, trees, tree cards, bushes and grass have mods too: [fm4-nature.hlsli](../../work/fm4-rex/look/fm4-nature.hlsli) and one `shader_<hash>.mod.hlsli` per hash (15 hashes), with the knobs `sky_saturation`, `sky_contrast`, `sky_warmth`, `sky_horizon`, `foliage_hue`, `foliage_saturation` and `foliage_brightness` ([running.md](../running.md)). The track knob `sky`, which scales `skyScale` in the track lighting files, stays as it is: it sets the sky's brightness, these knobs its color.
+
+### Hashes
+
+From the [material atlas](material-atlas.md) of `I:\FM4-build2`: the draw counts of its photo sample (a Quick Race on the Bernese Alps), and the techniques and track archives whose shader files compile to each hash. The atlas classes sky, tree, tree card, bush and grass hold the first 16 of these pixel shaders; the last one is in the atlas class track object, and false color found it drawing trees:
+
+| Hash | Techniques | Track archives | Draws | Mod |
+|---|---|---|---|---|
+| `BB5743878E0E85BC` | `SKY_DIFF_1`, `SKY_DIFF_1_NoClamp` | all 24 race locations | 5,295 | sky |
+| `091B9C98D6DF357A` | `SKY_DIFF_1` with the sun glow (`sunDir`, `SunGainScale`) | all 24 | 6 | sky |
+| `19596BCE89F6A0AF`, `758C560B3431D662` | `HS_SKY_DIFF_HDRI_SHAD_1` and `_ANISO_1` | HomeSpace scenes 02, 03, 07 and 20 | 1,962 and 460 | none (below) |
+| `9C8D86C330784DD7` | `TREE_DIFF_OPAC_DIRLIGHT_2_2SD` | all 24, HomeSpace07 | 103,552 | foliage |
+| `62A70440B0169EB2` | `TREE_DIFF_OPAC_DIRLIGHT_TRACK_2_2SD` | `Alps` | 41,841 | foliage |
+| `8EB93A26C6795BF8` | as above, with `Diffuse_Texture_uvOS` and `SkyScale` | `Alps` | 378 | foliage |
+| `BFD6CD588F9C96AC` | `TREE_DIFF_OPAC_DIRLIGHT_2_2SD` with `SkyScale` | all 24, HomeSpace07 | 0 | foliage |
+| `4C9BF8D6E00CE335` | `TREE_DIFF_OPAC_2_2SD`, `BUSH_DIFF_OPAC_2_2SD_FADE_VCLR_ANIM` | 10 | 0 | foliage |
+| `79C21B34BB497059` | as above, with `Diffuse_Texture_uvOS` and `SkyScale` | 10 | 0 | foliage |
+| `09226241FE1C9EDB` | `TREECARD_DIFF_OPAC_2_2SD`, `TREECARD_DIFF_OPAC_2_ANISO` | 12 | 0 | foliage |
+| `8647ED32C49921A5` | `TREECARD_DIFF_OPAC_2_VERT` | `CrownJewel`, `FujimiKaido`, `NurburgringF1` | 0 | foliage |
+| `7DC6FD96091632D3` | `BUSH_DIFF_OPAC_2_2SD` | 7 | 0 | foliage |
+| `DCCD09C3413E36DD` | `GRASS_DIFF_OPAC_2_2SD` | all 24, HomeSpace07 | 3,372 | foliage |
+| `D00FA3CA03AC0C29` | `GRASS_DIFF_OPAC_2_2SD_noCARSHAD`, `TREECARD_DIFF_OPAC_TANFADE_2_2SD` | `Alps`, `AmalfiGP`, `MapleValley` | 1,903 | foliage |
+| `0667025D0DA05D28` | `GRASS_DIFF_OPAC_2_2SD`, `TREECARD_DIFF_OPAC_TANFADE_2_2SD`, `CHAIN_DIFF_OPAC_2_2SD` (chain-link fences) | all 24, HomeSpace07 | 0 | foliage |
+| `2FABDDDB86C5AA15` | `DIFF_OPAC_2_2SD` | 22 | 21,311 | foliage |
+
+The HomeSpace skies are left without a mod: they draw only behind the garage and the career home, read a grayscale shadow map (fetch 11, `shad_color`), and `758C560B3431D662` decodes an encoded HDR texture (`bDoDynamicCubeLogLuv`). `DIFF_TREEBEND_1` (`DBAAD2C2B5ADEC50`, 29,630 draws, atlas class track object) has no mod: false color shows it drawing tree trunks and branches, whose bark the foliage knobs would leave as it is, and its specular mask is the texel's red ([In-Game Checks](#in-game-checks-sky-and-vegetation-18-october-2026)).
+
+### Inputs
+
+Read from the ucode dumps of `I:\FM4-build-iter` (`cov-ab-16car-dump`), which hold the first 16 hashes, and of the false color run `nat-fc-alps-dump` (`2FABDDDB86C5AA15`):
+
+- **Sky**: `BB5743878E0E85BC` fetches the dome texture (fetch 0) at interpolator 1 XY, scaled by `c0` and `Diffuse_Texture_uvOS` (`c120`), and writes the square root of its color times `SkyScale` (`c222.x`) plus `TimeGain` (`c249.y`) times its alpha; the alpha is the texel's. It loads interpolator 0 but does not read it. Its vertex shader `0D37C78343C4EE99` writes the world position of the dome (`world`, `c140`) into interpolator 0 and the UV into interpolator 1. `091B9C98D6DF357A`, drawn with the same vertex shader, normalizes interpolator 0 and takes its dot product with `sunDir` (`c250`) for the sun glow, so interpolator 0 is the direction of the view from the camera, and its Y the height above the horizon (checked with false color below). It also desaturates the texture by `c222.y`.
+- **Vegetation**: every one of the 13 shaders fetches its diffuse texture in fetch 0, multiplies its color by a light that blends `V2LightmapColor1` and `2` (`c247`, `c248`) by a vertex value (the `DIRLIGHT` trees) or by the lightmap in fetch 7, fogs it towards `FogColor` (`c242`) by an interpolator (0 X on most of them), and writes the square root (gamma 2). The texel is linear. Its alpha is the cut-out of the leaves (times interpolator 0 Y on most of them). `DCCD09C3413E36DD` also darkens the grass towards `shad_color` (`c240`) by three taps of the grayscale shadow map (fetch 11); several multiply the result by `c222.w`. `2FABDDDB86C5AA15` is a general cut-out shader: it also multiplies by the vertex color (interpolator 5) and adds a sun highlight (`sunDir` `c250`, `sunColor` `c251`) masked by the texel's red, so turning green leaves towards yellow makes that highlight a little stronger on them.
+
+### Mods
+
+All of them hook the texture fetch of fetch 0 and change the texel's color, so the game's lighting, shadow, fog and cut-out apply to the new color. The alpha is the game's. At the default knobs each mod returns the texel as it is.
+
+- **Sky** (`fm4_sky`): `sky_contrast` applies the S-curve of the global `contrast` to the texel's luminance in gamma 2 and keeps its hue; `sky_warmth` multiplies it by a white balance of 1.2, 1 and 0.8 (at 1; red, green, blue, normalized to the same luminance); `sky_saturation` scales its saturation. `sky_horizon` takes the height above the horizon from interpolator 0 (`XE_HOOK_INPUT`): at 1 the horizon is 0.6 times as saturated and a quarter stop brighter, the zenith 1.4 times as saturated and half a stop darker, the square root of the height rising fast above the horizon. The HDR gain in the alpha stays as it is.
+- **Vegetation** (`fm4_foliage`): the knobs act on green only, by a weight from the texel's hue and saturation: in full from yellow green to blue green (60 to 170 degrees), not at all below 35 or above 195 degrees, and not on gray texels (saturation below 0.08, in full from 0.3). Bark, branches, flowers and the gray chain-link fences that share the grass shader keep their color. `foliage_hue` turns that green about the gray axis by its angle times the weight and restores the texel's luminance; `foliage_saturation` and `foliage_brightness` scale its saturation and brightness by the weight.
+
+### Verification Without the Game
+
+- `fm4_shader_mod_tests` (68 mods): 1,306 checks pass. With the defines of the `pc` look, which leave these knobs at their defaults, the 15 new mods compile to the DXBC of the library without a mod (fingerprint `9F4285BB9A8C0E9A`, 1,283 instruction slots); with every knob away from the original, each mod's DXBC changes. The look files have 28 knobs of the 32 live knob slots. With live knobs the new mods take 1,353 to 1,357 slots.
+- `override_fxc.py --stub` against the real contracts: all 15 contracts of the 14 hashes in `I:\FM4-build-iter\e2e\cov-ab-16car-dump`, and the contracts of the false color run `I:\FM4-build2\e2e\nat-fc-alps-dump` (50 contracts of 39 modded hashes, among them `2FABDDDB86C5AA15`), compile with and without the seven knobs moved, and every new mod's DXBC changes with them. The stub override now fetches every 2D texture of the contract through `XE_HOOK_TFETCH`, as a generated override does; before, it fetched nothing, so a mod that only hooks a fetch could not change its DXBC.
+
+### In-Game Checks: Sky and Vegetation (18 October 2026)
+
+BuildRoot `I:\FM4-build2`, 240 Hz, the AI driver, `--profile copy`, quality `high`, at 2x (2560x1440) with `--keep-ppm`, a Quick Race from Free Play with the default car on the Bernese Alps (Festival Circuit) and on Maple Valley Raceway (its location picked on the TRACKS screen), then six race cameras. `REX_GPU_INVENTORY` records what drew. The false color runs use `--look original` and a look directory in the BuildRoot (not in the repository) that writes one flat color per hash, and for the sky 10-degree bands of the height that `fm4_sky` reads from interpolator 0 (red at the horizon to blue at the zenith, black below it).
+
+| Check | Result |
+|---|---|
+| Sky, both tracks | `BB5743878E0E85BC` draws the whole sky: in every camera, in the rear-view mirror, and in the environment cube that the car paint reflects (the hood reflects the false color). The bands lie level with the horizon and rise towards the zenith, so interpolator 0 is the direction of the view and Y is up. The snowy mountains of the Alps are geometry, not part of the dome. `091B9C98D6DF357A` drew 12 times per run. Draws: 38,294 (Alps) and 37,863 (Maple Valley). |
+| Trees, Alps | `9C8D86C330784DD7` (310,870 draws) draws conifers and the hedges along the fences, `62A70440B0169EB2` (218,259) and `8EB93A26C6795BF8` (4,200) most of the other conifers (their purple and magenta come out alike after the tone curve). Dark green tree lines kept their color; a second and a third run with candidate hashes found them in `2FABDDDB86C5AA15` (`DIFF_OPAC_2_2SD`, 66,411 to 83,922 draws), which now has a mod. The other candidates draw something else: `32F9BD5E1092DC31` (`DIFF_OPAC_VLIT_1`) the railings of the stands, `B5F9FC78D040A846` (`DIFF_OPAC_2_noLM`) the cable car pylons. With `2FABDDDB86C5AA15`, no tree on screen kept its color. |
+| Trees, Maple Valley | `9C8D86C330784DD7` draws the broadleaf canopies (1,545,422 draws), `D00FA3CA03AC0C29` the distant tree line (1,066,995), `09226241FE1C9EDB` tree cards (779,721; its red false color cannot be told from the red sky at the horizon), `BFD6CD588F9C96AC` 67,658 draws. `DIFF_TREEBEND_1` (`DBAAD2C2B5ADEC50`, 750,057 draws) draws the trunks and branches. |
+| Grass | `DCCD09C3413E36DD` draws the grass tufts beside the track on both tracks (8,525 and 30,199 draws), `D00FA3CA03AC0C29` also draws on the Alps (12,929). The ground itself is terrain and shoulder shaders, which have no mod. |
+| Never drew | `4C9BF8D6E00CE335`, `79C21B34BB497059`, `7DC6FD96091632D3`, `8647ED32C49921A5` and `0667025D0DA05D28` (their track archives are other tracks), and `62A70440B0169EB2` and `8EB93A26C6795BF8` on Maple Valley (Alps only). |
+| HomeSpace skies | `19596BCE89F6A0AF` and `758C560B3431D662` drew in every run (about 3,800 and 480 draws, in the menus), without a mod. |
+
+The capture check flagged one Alps false color frame with 1.2% clear gray pixels; they are all on the asphalt, whose color matched (102, 102, 102), and the frame shows the whole road.
+
+The A/B runs set only the nature knobs (every other knob at the original look) with `shader_override_ab_ms=4000`, so their off phase is the game's own DXBC. Five race cameras each are frozen with Y (rewind) for 22 s. A candidate set, `sky_saturation=1.15`, `sky_contrast=0.3`, `sky_horizon=0.5` and `foliage_saturation=1.15`, ran on both tracks, and an autumn set, `foliage_hue=-45`, `foliage_saturation=1.2` and `sky_warmth=0.5`, on Maple Valley. Colors below are 8-bit means of patches of the 2x captures, off then on.
+
+| Check | Result |
+|---|---|
+| Frozen pairs | Maple Valley: all five cameras froze (same-phase pairs identical; on/off pairs differ by a mean of 2.3 to 6.6 on 0.9 to 9.8 million bytes), both sets. Alps: two of five (the others kept moving through the rewind), with on/off means of 3.0 and 3.5. |
+| Sky, candidate set | The upper sky is a deeper blue: (184, 222, 242) to (172, 223, 244) on the Alps, (144, 184, 216) to (126, 178, 216) on Maple Valley. Clouds stand out a little more. The Alps mountains, which are geometry, do not change. No banding at the horizon, no seam on the dome. |
+| Vegetation, candidate set | Barely visible. The dark Alps conifers keep their brightness (a patch mean of (19.9, 26.5, 17.3) to (19.3, 26.8, 16.2)) and get a little greener. Maple Valley is an autumn track: its green trees get a little greener, and its red, orange and yellow trees do not change, since the weight leaves those hues alone. |
+| Autumn set | The green and olive trees of Maple Valley turn a rusty orange brown; the yellow and red ones keep their color; the cut-out edges of the leaves stay as they are. The ground stays green (terrain shaders, no mod). `sky_warmth=0.5` makes the sky a little paler and warmer. |
+| Artifacts | None seen: no blocks, halos or wrong colors on bark, fences, banners or cars. |
+| Smoke gate `natc1` (`pc` plus the candidate set) against `pcsky07` (`pc`, the same BuildRoot, run earlier the same day), 240 Hz, 1x | 3 of 3 cells passed, no FAIL, no new error keys, no clear-gray frames; WARN on capture statistics only. Race GPU per frame 3.01 to 2.93 ms (`photo`) and 3.14 to 3.13 ms (`career`); photo mode 4.62 to 4.00 ms; replay 4.58 to 4.42 ms. The race fps follows the draws per frame: 204.6 to 213.7 at 2,406 to 2,143 draws (`photo`), 192.0 to 180.8 at 2,458 to 2,751 draws (`career`). One run per cell. |
+
+**The `pc` preset**: unchanged. The candidate set is an improvement only in the sky, and a small one, seen on two tracks at one time of day, against the game's look rather than against `pc`, which already has `saturation=1.1` and `sky=0.7`. No preset sets the nature knobs.
 
 ## Related
 

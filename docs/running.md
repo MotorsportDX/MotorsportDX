@@ -259,8 +259,9 @@ every race camera on this runtime show none.
 ## Look
 
 The look mods are original shader code hooked into the HLSL that the runtime
-generates from the game's post-processing shaders and car shaders (body paint,
-glass, chrome and rims; `work/fm4-rex/look`; see [Shader overrides](e2e/experiments.md)). `-Look` takes a
+generates from the game's post-processing shaders, car shaders (body paint,
+glass, chrome and rims) and track shaders (sky, trees, bushes and grass;
+`work/fm4-rex/look`; see [Shader overrides](e2e/experiments.md)). `-Look` takes a
 preset, knobs, or both. A preset sets only its own knobs. Later items win, so
 `-Look "pc,sharpen=0.6"` uses the `pc` preset with sharpening at 0.6.
 
@@ -296,13 +297,25 @@ and `-Look original`.
 | `chrome_roughness` | number, default 0.1 | Roughness of the chrome highlight. |
 | `rims` | number | Painted and alloy rims, in the same car shader sets: a clear lacquer over the game's metal. |
 | `rims_roughness` | number, default 0.25 | Roughness of the rim lacquer. |
+| `sky_saturation` | number | Saturation of the sky dome of the race tracks (`fm4-nature.hlsli`). |
+| `sky_contrast` | number, 0 to 1 | Contrast of the sky dome: an S-curve on its brightness, so clouds stand out more against the sky. |
+| `sky_warmth` | number, -1 to 1 | White balance of the sky dome: below 0 bluer, above 0 warmer. |
+| `sky_horizon` | number, 0 to 1 | A gradient from the horizon to the zenith: a paler, brighter horizon and a deeper sky overhead. |
+| `foliage_hue` | degrees | Hue of the green of trees, tree cards, bushes and grass on every track: below 0 towards yellow and orange (-30 dry, -60 autumn), above 0 towards blue green. Bark, flowers and gray chain-link fences keep their color. |
+| `foliage_saturation` | number | Saturation of that green. |
+| `foliage_brightness` | number | Brightness of that green. |
 | `ao` | number, `0` turns it off | Strength of the screen-space ambient occlusion. |
 | `sun` | number, `0` turns the glare off | Strength of the sun glare on the RTV path, the same at every MSAA level. Without it (`original`) the glare follows the counted samples. See [Sun glare](#sun-glare). |
 | `road_gloss` | multiplier, default 1 | Specular of the road surface. See [Track lighting](#track-lighting). |
-| `sky` | multiplier, default 1 | Brightness of the sky. See [Track lighting](#track-lighting). |
+| `sky` | multiplier, default 1 | Brightness of the sky; the `sky_*` knobs above change its color. See [Track lighting](#track-lighting). |
 
 No preset sets `glass`, `chrome` or `rims` yet: an A/B at 2x showed them right, but their sun
 highlights are not yet checked (see [look mod coverage](analysis/look-mod-coverage.md#in-game-checks-18-october-2026)).
+No preset sets the `sky_*` or `foliage_*` knobs either: in an A/B at 2x on the Bernese Alps
+and Maple Valley, `sky_saturation=1.15,sky_contrast=0.3,sky_horizon=0.5` gave a slightly deeper
+blue sky, and `foliage_saturation=1.15` was barely visible (see
+[look mod coverage](analysis/look-mod-coverage.md#in-game-checks-sky-and-vegetation-18-october-2026)).
+For autumn colors try `-Look "pc,foliage_hue=-45"`.
 
 ### Sun glare
 
@@ -367,7 +380,7 @@ FXC when they are first drawn. For the six measured, this took 0.15 to 1.4 s eac
 - Every knob of the look files is live. Open the console with the backtick key and type
   `shader_mod_set FM4_LOOK_SHARPEN=0.6 FM4_LOOK_BLOOM=0.8`: the image changes in the next
   frame. `shader_mod_set` alone lists the values. The names are the `FM4_LOOK_*` defines
-  of `fm4-look.hlsli`, `fm4-paint.hlsli` and `fm4-car.hlsli`; `FM4_LOOK_TONEMAP` takes 0 to 3 (`filmic`,
+  of `fm4-look.hlsli`, `fm4-paint.hlsli`, `fm4-car.hlsli` and `fm4-nature.hlsli`; `FM4_LOOK_TONEMAP` takes 0 to 3 (`filmic`,
   `gt`, `aces`, `neutral`).
 - `NAME=VALUE` lines in `work/fm4-rex/look/shader_mod_defines.txt` (not tracked by Git)
   apply in the same way whenever the file is saved.
