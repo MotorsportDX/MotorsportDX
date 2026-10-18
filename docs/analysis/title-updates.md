@@ -53,6 +53,29 @@ Files (sizes for v1, then v4):
 
 `SpeechFacade_default` and `XMediaFacade_default`: v1 changes 6 words in `.rdata` and 1 word in `.text` (probably version data); every function keeps its address and bytes. v4 has the same code, and its images grow from `240000` to `2F0000` bytes and from `2B0000` to `360000` bytes: the added pages lie after the PE sections and hold compressed PNG data, not code. The one entry in `speech_bounds.toml` and the two in `xmedia_bounds.toml` stay valid for both updates.
 
+## What the updates fix
+
+From the changed functions (the strings they reference), the update files and the published notes:
+
+| Area | v1 | v4 (cumulative) | Evidence |
+|---|---|---|---|
+| Le Mans (Circuit de la Sarthe) | 226 replacement track files (`patch_bin.zip`), two visibility patches, a new track image; new code that loads `game:\Media\tracks\%s\patch_bin\%s.stx.bin` and reads `tu_mount.xml` | the same files | update files; strings of the changed track loader and zip mount functions |
+| Online | transport client (`TSTransportClient`), Live lobby and clan screens | lobby and scoreboard code, an anti-piracy web service call | changed functions |
+| Libraries | FMOD audio codecs and output, the Granny animation runtime | libpng | changed functions |
+| Car data | - | `CarPIOverrides` (38 cars), `MirroredPerformanceIndex`, 26 `PerformanceIndex` updates; PI mismatch checks in code | `db\patch\900_execute.sql`, `23500_execute.sql`; changed functions |
+| Player level | - | `PlayerLevelDef` levels 151 to 999 (cap 150 to 999) | `db\patch\950_execute.sql`; changed level functions |
+| Marketplace | - | Season Pass, VIP discounts, Car Tokens, buying single cars and car packs; a message for garage cars whose DLC is missing | `VipDiscounts`, `titleupdate2` strings in 16 languages, changed functions |
+| DLC cars | - | DeLorean DMC-12 points of interest, Wiesmann logos, a decal, DLC voice bank and car subtitles | update files; changed functions |
+| Physics and rules | tire slip (`CombinedSlip`) | `PhysicsSettings`, penalty settings (`GameSettings`) | changed functions |
+
+The published notes add what the changed functions alone do not name: the second update (7 December 2011) fixed 900-degree wheels (a zero credit bug, an anti-cheat rule that smooth wheel input triggered, and countersteering that treated 900 degrees as 270), blocked eight cars from leaderboards while their PI was revised, and capped auction prices. The update of 22 March 2012 fixed a lobby memory leak with liveried cars, raised the level cap to 999, corrected the PI of 38 cars, and fixed slow car menus caused by the save game volume. No notes for the first update were found. Sources: [OnlineRaceDriver, 7 December 2011](https://www.onlineracedriver.com/2011/12/07/forza-motorsport-4-second-title-updates-fixes-wheel-issues-and-demotes-cars/), [BSIMRacing, 23 March 2012](https://bsimracing.com/?p=27159).
+
+For this project most of it has no effect: Xbox Live, the marketplace, leaderboards and the auction house are offline, the game sees a controller and not a 900-degree wheel, and saves are host files rather than a save volume. What remains for offline play is the Le Mans track fix, the PI corrections, the level cap, and the DLC car assets.
+
+### Without the code patch
+
+The base `default.xex` already opens `update:\media.zip` (it resolves when `update_data_root` points at the extracted `disc001` folder; a 90-second boot then ran without errors, where every run without it logs `ResolvePath(update:\media.zip) failed`), names `update:\Database.xmplr`, and has the folder `game:\media\db\patch\`. It has no `tu_mount.xml` and no `patch_bin` path. So the Le Mans geometry files need the v1 code (or another way to replace the files in the track's `bin.zip`), while the database scripts may run on the base code; whether the base runs `db\patch` scripts from `update:\media.zip` is not verified.
+
 ## Runtime support
 
 - **Patch loading**: `UserModule::LoadFromFile` ([user_module.cpp](../../work/runtime/src/system/user_module.cpp)) looks for `<path>p` next to every XEX it loads and applies it with `XexModule::ApplyPatch`. The codegen loads the executable the same way (`Runtime::LoadXexImage`), so a `default.xexp` next to `default.xex` in the game root is applied before codegen and at launch.
