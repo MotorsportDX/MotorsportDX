@@ -101,6 +101,10 @@
       "provenance": "Project documentation; look mod coverage per track and mode (shader hashes, technique and constant names, no game code)"
     },
     {
+      "path": "docs/analysis/photo-autovista-replay.md",
+      "provenance": "Project documentation; research and plan note on photo mode, Autovista and replays (summarized observations: render scenario values, resolve sizes, hashes, no game content)"
+    },
+    {
       "path": "docs/analysis/dlc-structure.md",
       "provenance": "Project documentation; research note on the FM4 content package layout (file, table and column names and short identifiers, no game content)"
     },

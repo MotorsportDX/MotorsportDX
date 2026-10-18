@@ -372,7 +372,7 @@ The proposed order is:
 
 1. **Run the 2-hour soak test and the 60 vs 240 fps handling test.** The soak test watches memory, handles and VRAM. The handling test compares lap times and handling at both rates.
 2. **Run the clean setup on a second Windows computer.** Run `setup`, `generate`, `build` and `run` from a clean clone.
-3. **Extend e2e coverage.** Add photo overwrite, photo with an empty shader cache, Autovista, a Disc 2 car, cars of the other DLC packs, and direct launch. Re-test photo overwrite and the empty shader cache on the latest build, because neither has been repeated since the 16 October changes.
+3. **Extend e2e coverage.** Add photo overwrite, photo with an empty shader cache, Autovista, a Disc 2 car, cars of the other DLC packs, and direct launch. Re-test photo overwrite and the empty shader cache on the latest build, because neither has been repeated since the 16 October changes. The photo, Autovista and replay steps are planned in [photo mode, Autovista and replays](../analysis/photo-autovista-replay.md#4-proposed-plan).
 4. **Inventory the stubs.** List every XAM and kernel stub called in `runtime.log` across all scenarios.
 5. **Choose the road look.** Review the crops of `road_specular=0,road_sheen=0.4` (the Bernese Alps and Top Gear, facing the sun) and decide whether `pc` gets it; then run a smoke gate and confirm the race GPU cost with the `perf` tier. See [look mod coverage](../analysis/look-mod-coverage.md#the-sheen-on-top-gear-and-its-grain-18-october-2026).
 6. **Finish the glass, chrome and rim check.** A sun-facing scene (a replay camera or another track) for the highlights, and the split-screen set; then decide whether `pc` gets them. See [look mod coverage](../analysis/look-mod-coverage.md#in-game-checks-18-october-2026).
@@ -387,7 +387,7 @@ This page documents the status. It does not report that all further tests have b
 - [history](history.md): dated chronology and past results
 - [setup](../setup.md), [running](../running.md)
 - [e2e overview](../e2e/README.md), [traces](../e2e/traces.md), [experiments](../e2e/experiments.md)
-- Analysis: [post pass framework](../analysis/post-pass-framework.md), [GTAO design](../analysis/gtao-design.md), [motion vectors](../analysis/motion-vectors.md), [B4 shader research](../analysis/b4-shader-research.md), [visual style](../analysis/visual-style.md), [material atlas](../analysis/material-atlas.md)
+- Analysis: [post pass framework](../analysis/post-pass-framework.md), [GTAO design](../analysis/gtao-design.md), [motion vectors](../analysis/motion-vectors.md), [B4 shader research](../analysis/b4-shader-research.md), [visual style](../analysis/visual-style.md), [material atlas](../analysis/material-atlas.md), [photo mode, Autovista and replays](../analysis/photo-autovista-replay.md)
 - [sources and licensing](../sources-and-licensing.md)
 - [Build script](../../outputs/FM4-build/Build.ps1), [verification record](../../outputs/FM4-build/verification.json), [e2e harness](../../outputs/FM4-build/e2e/e2e.py), [matrix](../../outputs/FM4-build/e2e/matrix.py)
 - [Project overview](../../README.md), [agent guide](../../AGENTS.md)

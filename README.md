@@ -124,6 +124,7 @@ The next validation priorities are a second computer, Disc 2 car races on the la
 | [docs/analysis/rain-feasibility.md](docs/analysis/rain-feasibility.md) | Whether the physics still has a wet grip modifier (it does not read one), and how a hook or a surface file overlay could lower grip for a wet race |
 | [docs/analysis/material-atlas.md](docs/analysis/material-atlas.md) | Summary of the material atlas: names and registers of the game's constant tables |
 | [docs/analysis/look-mod-coverage.md](docs/analysis/look-mod-coverage.md) | Which final combine, motion blur and car paint hashes each track and mode uses, and which have no look mod |
+| [docs/analysis/photo-autovista-replay.md](docs/analysis/photo-autovista-replay.md) | How photo mode, Autovista and replays render, what the gates cover, and the plan for them (M5) |
 | [docs/sources-and-licensing.md](docs/sources-and-licensing.md) | Repository contents, attribution, licenses, and the pre-commit check |
 
 ## Licensing and attribution
