@@ -158,6 +158,23 @@ class PipelineTests(unittest.TestCase):
                                           'pc,road_gloss=0.5,sky=0.8','high')
             self.assertIn('Track lighting: road gloss x0.5, sky x0.8',overlay)
 
+    def test_look_nature_knobs(self):
+        with tempfile.TemporaryDirectory(prefix='fm4 look test ') as directory:
+            root=Path(directory)
+            # sky edits skyScale in the track lighting files; the sky_* and foliage_* knobs are
+            # defines of fm4-nature.hlsli.
+            look='pc,sky=0.8,sky_saturation=1.2,sky_horizon=0.5,foliage_hue=-30'
+            self.assertEqual(pipeline.look_track_settings(pipeline.look_knobs(look)),
+                             'skyScale.value*=0.8')
+            defines=dict(define.split('=',1)
+                         for define in pipeline.look_cvars(root,look)['shader_mod_defines'].split(';'))
+            self.assertEqual(defines['FM4_LOOK_SKY_SATURATION'],'1.2')
+            self.assertEqual(defines['FM4_LOOK_SKY_HORIZON'],'0.5')
+            self.assertEqual(defines['FM4_LOOK_FOLIAGE_HUE'],'-30.0')
+            self.assertNotIn('FM4_LOOK_FOLIAGE_SATURATION',defines)
+            # Every knob of the look files fits the 32 live knob slots (shader_mod_live_knobs).
+            self.assertLessEqual(len(pipeline.look_knob_defaults()),32)
+
     def test_new_clone_has_all_source_inputs(self):
         for name in ('rexglue.cmake','guard-generated.py','dump-image.cpp','switch-recipes.json'):
             self.assertTrue((pipeline.HERE/name).is_file(),name)
