@@ -6,10 +6,20 @@
 
 [scene]
 # Vertex shaders that carry the scene camera: <ucode hash>:rows:<WVP>:<WV>
-# (row vectors, 4 constants each) or <ucode hash>:world:<WVP>:<world>:<view
-# inverse> (column vectors, 4, 3 and 3 constants). The car body paint and the
-# road; only the road's layout carries the view (kSceneFlagViewKnown).
-camera = ["8D05A46C3584CA9E:rows:0:4", "C81F8D92FF6529EB:world:128:140:243"]
+# (row vectors, 4 constants each), with :<world> also the view (view to world
+# = world * inverse(WV)), or <ucode hash>:world:<WVP>:<world>:<view inverse>
+# (column vectors, 4, 3 and 3 constants). The car body paint (matWVP, matWV,
+# matW) and the road. The hash * is a fallback for other vertex shaders that
+# read every constant of its layout, taken only from a draw as wide as the
+# scene with a rotation as its view: 156 of the 162 environment vertex shaders
+# of a 16-car race dump share the road's layout (c243 to c245 hold the view
+# inverse). A frame can lack both the cars and the road (Tsukuba's bumper
+# camera in the lead).
+camera = [
+  "8D05A46C3584CA9E:rows:0:4:8",
+  "C81F8D92FF6529EB:world:128:140:243",
+  "*:world:128:140:243",
+]
 # The narrowest depth resolve taken as the scene depth, in guest pixels.
 min_width = 1024
 # The final combine pixel shaders (with and without depth of field): the final

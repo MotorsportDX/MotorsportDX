@@ -3457,7 +3457,8 @@ bool D3D12CommandProcessor::IssueDraw(xenos::PrimitiveType primitive_type, uint3
   pipeline_cache_->AnalyzeShaderUcode(*vertex_shader);
   if (post_passes_) {
     post_passes_->OnDraw(regs, vertex_shader->ucode_data_hash(),
-                         active_pixel_shader() ? active_pixel_shader()->ucode_data_hash() : 0);
+                         active_pixel_shader() ? active_pixel_shader()->ucode_data_hash() : 0,
+                         vertex_shader->constant_register_map().float_bitmap);
   }
   if (DrawListTrace* draw_list = GetDrawListTrace()) {
     const uint64_t vertex_shader_hash = vertex_shader->ucode_data_hash();

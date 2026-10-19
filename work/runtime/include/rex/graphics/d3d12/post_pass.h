@@ -66,7 +66,10 @@ class PostPasses {
   // the world matrices of the motion objects, logs post_pass_log_constants and
   // post_pass_motion_check, and runs the final point at the first draw after
   // the final combine.
-  void OnDraw(const RegisterFile& regs, uint64_t vertex_shader_hash, uint64_t pixel_shader_hash);
+  // vertex_float_constants: the bitmap of the float constants the vertex shader
+  // reads (256 bits), for the fallback camera layout; nullptr if unknown.
+  void OnDraw(const RegisterFile& regs, uint64_t vertex_shader_hash, uint64_t pixel_shader_hash,
+              const uint64_t* vertex_float_constants = nullptr);
   // Before every resolve: runs a final point still pending.
   void OnBeforeResolve();
   // After every resolve (address and length of the written range): tracks the
@@ -168,6 +171,10 @@ class PostPasses {
   static constexpr uint32_t kMaxMotionSources = 32;
   struct Manifest {
     std::vector<CameraSource> camera_sources;
+    // A camera entry with the hash *: the layout most vertex shaders of the
+    // title share, for draws of vertex shaders not in camera_sources.
+    bool has_camera_fallback = false;
+    CameraSource camera_fallback = {};
     uint32_t min_width = 1024;
     std::vector<uint64_t> final_pixel_shaders;
     float cut_distance = 5.0f, cut_angle = 30.0f, cut_focal = 0.1f;
@@ -318,7 +325,12 @@ class PostPasses {
 
   // Scene tracking.
   bool IsSceneDepthBuffer(const RegisterFile& regs, uint32_t& depth_edram_base_out) const;
-  void CaptureCamera(const RegisterFile& regs, const CameraSource& source);
+  // fallback: the manifest's layout for any vertex shader, taken only when the
+  // draw is as wide as the scene and its matrices are a camera's.
+  void CaptureCamera(const RegisterFile& regs, const CameraSource& source, bool fallback = false);
+  // The vertex shader reads every constant of the source's layout (its float
+  // constant bitmap).
+  static bool ReadsCameraConstants(const CameraSource& source, const uint64_t* float_constants);
   void CaptureObject(const RegisterFile& regs, uint32_t source_index);
   // A draw of an interior source ([motion] interior): the interior of the
   // object with its stencil reference.

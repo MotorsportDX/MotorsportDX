@@ -133,7 +133,16 @@ enum class CameraLayout : uint32_t {
   // dot(c[world + i], p) and world = view inverse: world.i = dot(c[view_inverse
   // + i].xyz, v) + c[view_inverse + i].w (3 constants each).
   kWvpWorldViewInverse,
+  // kWvpWvRows and the object's world matrix in 4 more row-vector constants:
+  // world = x * c[world] + y * c[world + 1] + z * c[world + 2] + c[world + 3].
+  // With WV = V * W, the view to world matrix is W * inverse(WV).
+  kWvpWvWorldRows,
 };
+
+// The layout carries the camera's view to world matrix.
+inline bool CarriesView(CameraLayout layout) {
+  return layout == CameraLayout::kWvpWorldViewInverse || layout == CameraLayout::kWvpWvWorldRows;
+}
 
 // constants: the guest float constants c0..c255 as 256 float4.
 // Returns the matrices clip = wvp * p and view = wv * p as column-vector 4x4.
@@ -141,7 +150,8 @@ inline bool CameraMatrices(CameraLayout layout, const float (*constants)[4], uin
                            uint32_t second, uint32_t third, Matrix& wvp_out, Matrix& wv_out) {
   if (wvp + 4 > 256) return false;
   switch (layout) {
-    case CameraLayout::kWvpWvRows: {
+    case CameraLayout::kWvpWvRows:
+    case CameraLayout::kWvpWvWorldRows: {
       if (second + 4 > 256) return false;
       // Constant i is row i of the row-vector matrix, so column i here.
       for (int i = 0; i < 4; ++i) {
@@ -174,15 +184,62 @@ inline bool CameraMatrices(CameraLayout layout, const float (*constants)[4], uin
 }
 
 // The camera's view to world matrix (world = M * view), where the layout carries
-// it: only kWvpWorldViewInverse does (its third constants).
-inline bool ViewToWorld(CameraLayout layout, const float (*constants)[4], uint32_t third,
-                        Matrix& out) {
-  if (layout != CameraLayout::kWvpWorldViewInverse || third + 3 > 256) return false;
-  out = Identity();
-  for (int i = 0; i < 3; ++i) {
-    for (int j = 0; j < 4; ++j) out.m[i][j] = constants[third + i][j];
+// it (CarriesView): the view inverse of kWvpWorldViewInverse (its third
+// constants), or W * inverse(WV) of kWvpWvWorldRows (its second and third), in
+// double: the world translation cancels.
+inline bool ViewToWorld(CameraLayout layout, const float (*constants)[4], uint32_t second,
+                        uint32_t third, Matrix& out) {
+  if (layout == CameraLayout::kWvpWorldViewInverse) {
+    if (third + 3 > 256) return false;
+    out = Identity();
+    for (int i = 0; i < 3; ++i) {
+      for (int j = 0; j < 4; ++j) out.m[i][j] = constants[third + i][j];
+    }
+    return true;
   }
+  if (layout != CameraLayout::kWvpWvWorldRows || second + 4 > 256 || third + 4 > 256) {
+    return false;
+  }
+  MatrixD wv = IdentityD(), world = IdentityD();
+  for (int i = 0; i < 4; ++i) {
+    for (int j = 0; j < 4; ++j) {
+      // Constant i is row i of the row-vector matrix, so column i here.
+      if (j < 3) wv.m[j][i] = constants[second + i][j];
+      world.m[j][i] = constants[third + i][j];
+    }
+  }
+  MatrixD wv_inverse;
+  if (!Invert(wv, wv_inverse)) return false;
+  out = ToFloat(Multiply(world, wv_inverse));
   return true;
+}
+
+// The 3x3 of a view to world matrix is a rotation (unit, orthogonal rows), so
+// the constants it came from hold a camera, not other data.
+inline bool IsRigidView(const Matrix& view_to_world) {
+  for (int i = 0; i < 3; ++i) {
+    for (int j = i; j < 3; ++j) {
+      double dot = 0.0;
+      for (int k = 0; k < 3; ++k) {
+        dot += double(view_to_world.m[i][k]) * double(view_to_world.m[j][k]);
+      }
+      if (!(std::fabs(dot - (i == j ? 1.0 : 0.0)) < 1.0e-3)) return false;
+    }
+  }
+  return view_to_world.m[3][0] == 0.0f && view_to_world.m[3][1] == 0.0f &&
+         view_to_world.m[3][2] == 0.0f && view_to_world.m[3][3] == 1.0f;
+}
+
+// The largest difference of two matrices relative to the largest element of b.
+inline double MaxRelativeDifference(const Matrix& a, const Matrix& b) {
+  double scale = 0.0, difference = 0.0;
+  for (int i = 0; i < 4; ++i) {
+    for (int j = 0; j < 4; ++j) {
+      scale = std::fmax(scale, std::fabs(double(b.m[i][j])));
+      difference = std::fmax(difference, std::fabs(double(a.m[i][j]) - double(b.m[i][j])));
+    }
+  }
+  return scale > 0.0 ? difference / scale : difference;
 }
 
 // The projection, clip = P * view position, of the matrices of one draw.
@@ -198,6 +255,14 @@ inline bool ProjectionFromCamera(const Matrix& wvp, const Matrix& wv, Matrix& pr
 struct Viewport {
   float x_scale, x_offset, y_scale, y_offset, z_scale, z_offset;
 };
+
+// The projection's aspect (focal length in Y over X) is the viewport's (its
+// width over its height) within 2%: a camera drawn for that viewport.
+inline bool MatchesViewportAspect(const Matrix& projection, const Viewport& viewport) {
+  double focal_x = std::fabs(double(projection.m[0][0]) * viewport.x_scale);
+  double focal_y = std::fabs(double(projection.m[1][1]) * viewport.y_scale);
+  return focal_x > 0.0 && std::fabs(focal_y / focal_x - 1.0) < 0.02;
+}
 
 // Constants of the post pass library (xe_scene_*) for turning a stored depth d at a guest
 // pixel center (x, y) into a view position:

@@ -96,17 +96,6 @@ void Transform(const Matrix& m, const double p[4], double out[4]) {
   }
 }
 
-double MaxRelativeDifference(const Matrix& a, const Matrix& b) {
-  double scale = 0.0, difference = 0.0;
-  for (int i = 0; i < 4; ++i) {
-    for (int j = 0; j < 4; ++j) {
-      scale = std::fmax(scale, std::fabs(double(b.m[i][j])));
-      difference = std::fmax(difference, std::fabs(double(a.m[i][j]) - double(b.m[i][j])));
-    }
-  }
-  return difference / scale;
-}
-
 void TestCamera(const char* name, bool right_handed) {
   const double near_z = 0.25, far_z = 8000.0;
   Matrix view = LookAt({10.0, 2.0, -30.0}, {0.0, 1.0, 0.0}, {0.0, 1.0, 0.0}, right_handed);
@@ -125,6 +114,7 @@ void TestCamera(const char* name, bool right_handed) {
     for (int j = 0; j < 4; ++j) {
       constants[0 + i][j] = wvp.m[j][i];  // Row vectors: constant i is column i.
       if (j < 3) constants[4 + i][j] = wv.m[j][i];
+      constants[8 + i][j] = world.m[j][i];
       constants[128 + i][j] = wvp.m[i][j];  // Column vectors: constant i is row i.
       if (i < 3) {
         constants[140 + i][j] = world.m[i][j];
@@ -139,6 +129,7 @@ void TestCamera(const char* name, bool right_handed) {
     CameraLayout kind;
     uint32_t a, b, c;
   } cases[] = {{"wvp+wv rows", CameraLayout::kWvpWvRows, 0, 4, 0},
+               {"wvp+wv+world rows", CameraLayout::kWvpWvWorldRows, 0, 4, 8},
                {"wvp+world+view inverse", CameraLayout::kWvpWorldViewInverse, 128, 140, 243}};
   for (const Case& test : cases) {
     Matrix wvp_read, wv_read, projection_read;
@@ -192,12 +183,64 @@ void TestCamera(const char* name, bool right_handed) {
     Check(far_error < 1.0e-3, "far plane W");
   }
 
-  // The view to world matrix: only the layout with the view inverse has it.
+  // The view to world matrix: the layouts with the view inverse or the world
+  // matrix have it.
   Matrix view_to_world, unused;
-  Check(ViewToWorld(CameraLayout::kWvpWorldViewInverse, constants, 243, view_to_world) &&
+  Check(ViewToWorld(CameraLayout::kWvpWorldViewInverse, constants, 140, 243, view_to_world) &&
             MaxRelativeDifference(view_to_world, view_inverse) < 1.0e-6,
         "view to world from the view inverse");
-  Check(!ViewToWorld(CameraLayout::kWvpWvRows, constants, 0, unused), "no view in the rows layout");
+  Check(ViewToWorld(CameraLayout::kWvpWvWorldRows, constants, 4, 8, view_to_world) &&
+            MaxRelativeDifference(view_to_world, view_inverse) < 1.0e-6,
+        "view to world from the world and world view matrices");
+  Check(!ViewToWorld(CameraLayout::kWvpWvRows, constants, 4, 0, unused),
+        "no view in the rows layout");
+  Check(CarriesView(CameraLayout::kWvpWvWorldRows) &&
+            CarriesView(CameraLayout::kWvpWorldViewInverse) &&
+            !CarriesView(CameraLayout::kWvpWvRows),
+        "layouts with a view");
+  // The fallback layout takes a view only from a rotation and a translation.
+  Matrix scaled = view_inverse, garbage = {};
+  for (int i = 0; i < 3; ++i) scaled.m[i][i] *= 1.5f;
+  for (int i = 0; i < 4; ++i) {
+    for (int j = 0; j < 4; ++j) garbage.m[i][j] = 0.5f;
+  }
+  Check(IsRigidView(view_inverse) && !IsRigidView(scaled) && !IsRigidView(garbage) &&
+            !IsRigidView(wvp),
+        "rigid view check");
+  // The fallback layout's aspect check: the projection's against the viewport's.
+  Check(MatchesViewportAspect(projection, viewport), "the scene's aspect");
+  Matrix strip = projection;
+  strip.m[1][1] *= 2.5f;  // A wide strip such as the rear-view mirror's.
+  Check(!MatchesViewportAspect(strip, viewport), "another aspect");
+
+  // A car and its camera far from the world origin, as on a large track: the
+  // world view matrix is float, and the view to world matrix keeps the camera
+  // position within a millimeter.
+  Matrix far_view = LookAt({2410.0, 31.5, -1840.0}, {2400.0, 30.0, -1800.0}, {0.0, 1.0, 0.0},
+                           right_handed);
+  Matrix far_world = World(2.1, {2400.0, 30.0, -1800.0}, 1.0);
+  Matrix far_wv = Multiply(far_view, far_world), far_view_inverse;
+  Check(Invert(far_view, far_view_inverse), "far view inverse");
+  for (int i = 0; i < 4; ++i) {
+    for (int j = 0; j < 4; ++j) {
+      if (j < 3) constants[4 + i][j] = far_wv.m[j][i];
+      constants[8 + i][j] = far_world.m[j][i];
+    }
+  }
+  bool far_ok = ViewToWorld(CameraLayout::kWvpWvWorldRows, constants, 4, 8, view_to_world);
+  double position_error = 0.0, axis_error = 0.0;
+  for (int i = 0; far_ok && i < 3; ++i) {
+    position_error = std::fmax(position_error, std::fabs(double(view_to_world.m[i][3]) -
+                                                         double(far_view_inverse.m[i][3])));
+    for (int j = 0; j < 3; ++j) {
+      axis_error = std::fmax(axis_error, std::fabs(double(view_to_world.m[i][j]) -
+                                                   double(far_view_inverse.m[i][j])));
+    }
+  }
+  std::printf("%s far from the origin: camera position %.2e, axes %.2e\n", name, position_error,
+              axis_error);
+  Check(far_ok && position_error < 1.0e-3 && axis_error < 1.0e-5,
+        "view to world far from the origin");
 }
 
 // xe_view_to_previous_view = inverse(previous view to world) * view to world
