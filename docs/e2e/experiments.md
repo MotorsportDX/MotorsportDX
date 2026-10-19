@@ -164,7 +164,9 @@ The [post pass framework](../analysis/post-pass-framework.md) reads its params f
   - `4`: view W over 0-2 units, for close surfaces.
 - `--arg post_pass_ab_ms=<N>` skips the passes in every other period of N ms.
 - `--arg post_pass_variants="GTAO_RADIUS=0.5,GTAO_SCALE=0.6;GTAO_DEBUG=2;...;off"` with `--arg post_pass_variant_ms=<N>` cycles param values, to compare them in one frozen frame. Freeze a race with Y (rewind) on the camera first, as above.
-- `--arg post_pass_log_every=<N>` logs the scene depth, camera, history and params of every N-th scene; `--arg post_pass_path=` (empty) runs without the passes.
+- `--arg post_pass_log_every=<N>` logs the scene depth, the camera (whether its view is known and from which source), the history, the jitter, the write-back counts and the params of every N-th scene; `--arg post_pass_path=` (empty) runs without the passes.
+- TAA ([TAA](../analysis/taa.md#10-validation)): `defines:` steps with `--shader-dev` switch `TAA`, `TAA_SHARPEN`, `TAA_DEBUG` and `TAA_POINT` on a frozen frame; `--arg post_pass_variants="TAA=1;TAA=0"` with `--arg post_pass_variant_ms=1000` and `--env REX_FRAME_GRAPH_EVERY=1` measures its GPU time in one run; `SCENE_PATTERN=1` writes a test pattern into the game's scene through the write-back.
+- `--arg post_pass_jitter=<phases>` jitters the scene draws in every frame after a scene, without the pass that would undo it (`auto`, the default, follows the manifest's `[jitter]`; `off` never jitters), and `--arg post_pass_jitter_offset=x,y` uses a fixed offset in host pixels instead of the sequence: to check that the motion vectors stay unjittered and that no seam opens at the tile boundaries ([post pass framework](../analysis/post-pass-framework.md#jitter)).
 
 Source: [`post_pass.cpp`](../../work/runtime/src/graphics/d3d12/post_pass.cpp), [`passes.toml`](../../work/fm4-rex/passes/passes.toml), [`gtao.hlsl`](../../work/fm4-rex/passes/gtao.hlsl), and the GTAO notes in [gtao-design.md](../analysis/gtao-design.md).
 

@@ -3,13 +3,19 @@
 // guest vertex shader's constants, in both layouts FM4 uses, the view position
 // reconstructed from a stored depth, and the camera's view to world matrix and
 // the reprojection into the previous frame's view built from it (as
-// post_pass.cpp builds xe_view_to_previous_view). Synthetic cameras only;
-// prints the worst errors and returns 1 on failure.
+// post_pass.cpp builds xe_view_to_previous_view), also for a moving car (the
+// motion matrices) and in the clip space form of FM4's motion blur. Also the
+// scene jitter (rex/graphics/d3d12/post_pass_jitter.h): the Halton (2, 3)
+// phases, the shift that its ndc_offset gives a vertex in host pixels, and
+// which draws it moves. Synthetic cameras only; prints the worst errors and
+// returns 1 on failure.
 
 #include <cmath>
+#include <cstdint>
 #include <cstdio>
 
 #include <rex/graphics/d3d12/post_pass_camera.h>
+#include <rex/graphics/d3d12/post_pass_jitter.h>
 
 namespace {
 
@@ -90,17 +96,6 @@ void Transform(const Matrix& m, const double p[4], double out[4]) {
   }
 }
 
-double MaxRelativeDifference(const Matrix& a, const Matrix& b) {
-  double scale = 0.0, difference = 0.0;
-  for (int i = 0; i < 4; ++i) {
-    for (int j = 0; j < 4; ++j) {
-      scale = std::fmax(scale, std::fabs(double(b.m[i][j])));
-      difference = std::fmax(difference, std::fabs(double(a.m[i][j]) - double(b.m[i][j])));
-    }
-  }
-  return difference / scale;
-}
-
 void TestCamera(const char* name, bool right_handed) {
   const double near_z = 0.25, far_z = 8000.0;
   Matrix view = LookAt({10.0, 2.0, -30.0}, {0.0, 1.0, 0.0}, {0.0, 1.0, 0.0}, right_handed);
@@ -119,6 +114,7 @@ void TestCamera(const char* name, bool right_handed) {
     for (int j = 0; j < 4; ++j) {
       constants[0 + i][j] = wvp.m[j][i];  // Row vectors: constant i is column i.
       if (j < 3) constants[4 + i][j] = wv.m[j][i];
+      constants[8 + i][j] = world.m[j][i];
       constants[128 + i][j] = wvp.m[i][j];  // Column vectors: constant i is row i.
       if (i < 3) {
         constants[140 + i][j] = world.m[i][j];
@@ -133,6 +129,7 @@ void TestCamera(const char* name, bool right_handed) {
     CameraLayout kind;
     uint32_t a, b, c;
   } cases[] = {{"wvp+wv rows", CameraLayout::kWvpWvRows, 0, 4, 0},
+               {"wvp+wv+world rows", CameraLayout::kWvpWvWorldRows, 0, 4, 8},
                {"wvp+world+view inverse", CameraLayout::kWvpWorldViewInverse, 128, 140, 243}};
   for (const Case& test : cases) {
     Matrix wvp_read, wv_read, projection_read;
@@ -186,12 +183,64 @@ void TestCamera(const char* name, bool right_handed) {
     Check(far_error < 1.0e-3, "far plane W");
   }
 
-  // The view to world matrix: only the layout with the view inverse has it.
+  // The view to world matrix: the layouts with the view inverse or the world
+  // matrix have it.
   Matrix view_to_world, unused;
-  Check(ViewToWorld(CameraLayout::kWvpWorldViewInverse, constants, 243, view_to_world) &&
+  Check(ViewToWorld(CameraLayout::kWvpWorldViewInverse, constants, 140, 243, view_to_world) &&
             MaxRelativeDifference(view_to_world, view_inverse) < 1.0e-6,
         "view to world from the view inverse");
-  Check(!ViewToWorld(CameraLayout::kWvpWvRows, constants, 0, unused), "no view in the rows layout");
+  Check(ViewToWorld(CameraLayout::kWvpWvWorldRows, constants, 4, 8, view_to_world) &&
+            MaxRelativeDifference(view_to_world, view_inverse) < 1.0e-6,
+        "view to world from the world and world view matrices");
+  Check(!ViewToWorld(CameraLayout::kWvpWvRows, constants, 4, 0, unused),
+        "no view in the rows layout");
+  Check(CarriesView(CameraLayout::kWvpWvWorldRows) &&
+            CarriesView(CameraLayout::kWvpWorldViewInverse) &&
+            !CarriesView(CameraLayout::kWvpWvRows),
+        "layouts with a view");
+  // The fallback layout takes a view only from a rotation and a translation.
+  Matrix scaled = view_inverse, garbage = {};
+  for (int i = 0; i < 3; ++i) scaled.m[i][i] *= 1.5f;
+  for (int i = 0; i < 4; ++i) {
+    for (int j = 0; j < 4; ++j) garbage.m[i][j] = 0.5f;
+  }
+  Check(IsRigidView(view_inverse) && !IsRigidView(scaled) && !IsRigidView(garbage) &&
+            !IsRigidView(wvp),
+        "rigid view check");
+  // The fallback layout's aspect check: the projection's against the viewport's.
+  Check(MatchesViewportAspect(projection, viewport), "the scene's aspect");
+  Matrix strip = projection;
+  strip.m[1][1] *= 2.5f;  // A wide strip such as the rear-view mirror's.
+  Check(!MatchesViewportAspect(strip, viewport), "another aspect");
+
+  // A car and its camera far from the world origin, as on a large track: the
+  // world view matrix is float, and the view to world matrix keeps the camera
+  // position within a millimeter.
+  Matrix far_view = LookAt({2410.0, 31.5, -1840.0}, {2400.0, 30.0, -1800.0}, {0.0, 1.0, 0.0},
+                           right_handed);
+  Matrix far_world = World(2.1, {2400.0, 30.0, -1800.0}, 1.0);
+  Matrix far_wv = Multiply(far_view, far_world), far_view_inverse;
+  Check(Invert(far_view, far_view_inverse), "far view inverse");
+  for (int i = 0; i < 4; ++i) {
+    for (int j = 0; j < 4; ++j) {
+      if (j < 3) constants[4 + i][j] = far_wv.m[j][i];
+      constants[8 + i][j] = far_world.m[j][i];
+    }
+  }
+  bool far_ok = ViewToWorld(CameraLayout::kWvpWvWorldRows, constants, 4, 8, view_to_world);
+  double position_error = 0.0, axis_error = 0.0;
+  for (int i = 0; far_ok && i < 3; ++i) {
+    position_error = std::fmax(position_error, std::fabs(double(view_to_world.m[i][3]) -
+                                                         double(far_view_inverse.m[i][3])));
+    for (int j = 0; j < 3; ++j) {
+      axis_error = std::fmax(axis_error, std::fabs(double(view_to_world.m[i][j]) -
+                                                   double(far_view_inverse.m[i][j])));
+    }
+  }
+  std::printf("%s far from the origin: camera position %.2e, axes %.2e\n", name, position_error,
+              axis_error);
+  Check(far_ok && position_error < 1.0e-3 && axis_error < 1.0e-5,
+        "view to world far from the origin");
 }
 
 // xe_view_to_previous_view = inverse(previous view to world) * view to world
@@ -218,6 +267,106 @@ void TestReprojection(bool right_handed) {
   Check(worst < 1.0e-4, "view position reprojected into the previous view");
 }
 
+// The motion of a car: ViewToPreviousView with the car's world matrices of
+// both frames (read from row-vector constants, as FM4's matW c8-c11) takes a
+// view position on the car to the previous frame's view position of the same
+// point of the car, kilometers from the world origin; without them, a point of
+// the static world. ClipToPreviousClip gives the game's clip space form,
+// previous VP * previous world * inverse(world) * inverse(VP).
+void TestObjectReprojection(bool right_handed) {
+  Matrix previous_view =
+      LookAt({3000.0, 52.0, -2010.0}, {3020.0, 50.0, -1985.0}, {0.0, 1.0, 0.0}, right_handed);
+  Matrix view =
+      LookAt({3001.4, 52.05, -2008.2}, {3021.0, 50.0, -1983.0}, {0.0, 1.0, 0.0}, right_handed);
+  Matrix previous_world = World(0.20, {3012.0, 50.0, -1992.0}, 1.0);
+  Matrix world = World(0.23, {3013.3, 50.02, -1990.4}, 1.0);
+  Matrix previous_projection =
+      Perspective(62.0 * 3.14159265358979 / 180.0, 16.0 / 9.0, 0.3, 7500.0, 0.0, right_handed);
+  Matrix projection =
+      Perspective(60.0 * 3.14159265358979 / 180.0, 16.0 / 9.0, 0.3, 7500.0, 0.0, right_handed);
+
+  // The world matrices as a vertex shader keeps them: rows (4 constants, the
+  // transpose) and columns (3 constants).
+  float rows[2][4][4], columns[2][3][4];
+  const Matrix* worlds[2] = {&world, &previous_world};
+  for (int k = 0; k < 2; ++k) {
+    for (int i = 0; i < 4; ++i) {
+      for (int j = 0; j < 4; ++j) {
+        rows[k][i][j] = worlds[k]->m[j][i];
+        if (i < 3) columns[k][i][j] = worlds[k]->m[i][j];
+      }
+    }
+  }
+  MatrixD world_d = WorldMatrix(WorldLayout::kRows, rows[0]);
+  MatrixD previous_world_d = WorldMatrix(WorldLayout::kRows, rows[1]);
+  Check(MaxRelativeDifference(ToFloat(world_d), world) == 0.0 &&
+            MaxRelativeDifference(ToFloat(WorldMatrix(WorldLayout::kColumns, columns[0])), world) ==
+                0.0,
+        "world matrix from row and column constants");
+
+  // The camera as the runtime gets it: a float view to world matrix (the
+  // road's view inverse constants), whose double inverse is the view here.
+  Matrix view_to_world, previous_view_to_world;
+  MatrixD view_d, previous_view_d;
+  Check(Invert(view, view_to_world) && Invert(previous_view, previous_view_to_world) &&
+            Invert(ToDouble(view_to_world), view_d) &&
+            Invert(ToDouble(previous_view_to_world), previous_view_d),
+        "object reprojection inverses");
+  MatrixD car, static_world;
+  Check(ViewToPreviousView(ToDouble(view_to_world), ToDouble(previous_view_to_world), &world_d,
+                           &previous_world_d, car) &&
+            ViewToPreviousView(ToDouble(view_to_world), ToDouble(previous_view_to_world), nullptr,
+                               nullptr, static_world),
+        "view to previous view");
+  auto transform = [](const MatrixD& m, const double p[4], double out[4]) {
+    for (int i = 0; i < 4; ++i) {
+      out[i] = 0.0;
+      for (int j = 0; j < 4; ++j) out[i] += m.m[i][j] * p[j];
+    }
+  };
+  double worst_car = 0.0, worst_world = 0.0;
+  const double points[][3] = {{0.0, 0.0, 0.0}, {2.1, 0.6, -0.9}, {-0.8, 1.2, 1.9}};
+  for (const auto& point : points) {
+    double object[4] = {point[0], point[1], point[2], 1.0}, on_car[4], before_on_car[4];
+    transform(world_d, object, on_car);
+    transform(previous_world_d, object, before_on_car);
+    double now[4], before[4], reprojected[4];
+    // The car.
+    transform(view_d, on_car, now);
+    transform(previous_view_d, before_on_car, before);
+    transform(car, now, reprojected);
+    for (int k = 0; k < 3; ++k) {
+      worst_car = std::fmax(worst_car, std::fabs(reprojected[k] - before[k]));
+    }
+    // The same world position on the static world.
+    transform(previous_view_d, on_car, before);
+    transform(static_world, now, reprojected);
+    for (int k = 0; k < 3; ++k) {
+      worst_world = std::fmax(worst_world, std::fabs(reprojected[k] - before[k]));
+    }
+  }
+  // The game's form, in double.
+  MatrixD clip, game, vp_inverse, world_inverse;
+  MatrixD vp = Multiply(ToDouble(projection), view_d);
+  MatrixD previous_vp = Multiply(ToDouble(previous_projection), previous_view_d);
+  bool ok = ClipToPreviousClip(car, ToDouble(projection), ToDouble(previous_projection), clip) &&
+            Invert(vp, vp_inverse) && Invert(world_d, world_inverse);
+  game = Multiply(Multiply(Multiply(previous_vp, previous_world_d), world_inverse), vp_inverse);
+  double clip_error = 0.0;
+  for (int i = 0; i < 4; ++i) {
+    for (int j = 0; j < 4; ++j) {
+      clip_error = std::fmax(clip_error, std::fabs(clip.m[i][j] - game.m[i][j]));
+    }
+  }
+  std::printf("%s object reprojection: car %.2e m, static world %.2e m, clip form %.2e\n",
+              right_handed ? "right-handed" : "left-handed", worst_car, worst_world, clip_error);
+  // 1e-5 m: the float inputs are exact in double, the error is that of double
+  // at kilometers.
+  Check(worst_car < 1.0e-5, "car point reprojected into the previous view");
+  Check(worst_world < 1.0e-5, "static world point reprojected into the previous view");
+  Check(ok && clip_error < 1.0e-6, "clip form equals previous VP * previous W * W^-1 * VP^-1");
+}
+
 void TestRejectsOrthographic() {
   Matrix ortho = Identity();
   ortho.m[0][0] = 0.01f;
@@ -228,13 +377,87 @@ void TestRejectsOrthographic() {
         "orthographic rejected");
 }
 
+// The jitter: 8 phases inside the pixel, none on its edge, spread evenly; the
+// ndc_offset moving a vertex by exactly the jitter in host pixels for host
+// viewports of 1x, 2x and 3x (and of the huge viewport of draws without
+// clipping); and the draws the rules jitter.
+void TestJitter() {
+  Check(Halton(1, 2) == 0.5f && Halton(2, 2) == 0.25f && Halton(3, 2) == 0.75f &&
+            std::fabs(Halton(1, 3) - 1.0f / 3.0f) < 1.0e-7f &&
+            std::fabs(Halton(4, 3) - 4.0f / 9.0f) < 1.0e-7f,
+        "Halton sequence");
+  double mean[2] = {}, closest = 1.0;
+  float offsets[8][2];
+  for (uint32_t phase = 0; phase < 8; ++phase) {
+    JitterOffset(phase, offsets[phase]);
+    for (int k = 0; k < 2; ++k) {
+      Check(offsets[phase][k] > -0.5f && offsets[phase][k] < 0.5f, "jitter inside the pixel");
+      mean[k] += offsets[phase][k] / 8.0;
+    }
+    for (uint32_t other = 0; other < phase; ++other) {
+      closest = std::fmin(closest, std::hypot(offsets[phase][0] - offsets[other][0],
+                                              offsets[phase][1] - offsets[other][1]));
+    }
+  }
+  std::printf("jitter: 8 phases, mean %.4f %.4f, closest pair %.4f px\n", mean[0], mean[1],
+              closest);
+  Check(std::fabs(mean[0]) < 0.06 && std::fabs(mean[1]) < 0.06, "jitter phases centered");
+  Check(closest > 0.15, "jitter phases spread");
+
+  // A vertex at clip (x, y, z, w): host pixel = offset + (ndc * scale + ndc
+  // offset + 1) / 2 * extent along X, and (1 - ...) / 2 * extent along Y.
+  double worst = 0.0;
+  const uint32_t extents[][2] = {{1280, 720}, {2560, 1440}, {3840, 2160}, {8192, 8192}};
+  for (const auto& extent : extents) {
+    for (uint32_t phase = 0; phase < 8; ++phase) {
+      const float ndc_scale[2] = {0.75f, -1.25f}, base_offset[3] = {0.0125f, -0.03f, 0.5f};
+      float ndc_offset[3] = {base_offset[0], base_offset[1], base_offset[2]};
+      AddJitterToNdcOffset(offsets[phase], extent, ndc_offset);
+      Check(ndc_offset[2] == base_offset[2], "jitter leaves Z alone");
+      const double clip[2] = {0.3, -0.6}, w = 7.5;
+      for (int k = 0; k < 2; ++k) {
+        double before = (clip[k] * ndc_scale[k] + base_offset[k] * w) / w;
+        double after = (clip[k] * ndc_scale[k] + ndc_offset[k] * w) / w;
+        double pixels = (after - before) * 0.5 * extent[k] * (k ? -1.0 : 1.0);
+        worst = std::fmax(worst, std::fabs(pixels - offsets[phase][k]));
+      }
+    }
+  }
+  std::printf("jitter: worst vertex shift error %.2e px\n", worst);
+  Check(worst < 2.0e-3, "jitter moves a vertex by the jitter in host pixels");
+
+  JitterDraw scene;
+  scene.depth_base = scene.scene_depth_base = 1024;
+  scene.scene_depth_known = true;
+  scene.depth_or_stencil = true;
+  Check(IsJitteredDraw(scene), "a scene draw is jittered");
+  JitterDraw draw = scene;
+  draw.scene_depth_known = false;
+  Check(!IsJitteredDraw(draw), "nothing jittered before the scene depth is known");
+  draw = scene;
+  draw.depth_base = 80;  // The rear-view mirror's depth buffer.
+  Check(!IsJitteredDraw(draw), "another depth buffer is not jittered");
+  draw = scene;
+  draw.depth_or_stencil = false;  // A post chain draw with the scene's depth named.
+  Check(!IsJitteredDraw(draw), "a draw without depth or stencil test is not jittered");
+  draw = scene;
+  draw.rectangle = true;
+  Check(!IsJitteredDraw(draw), "rectangles and clears are not jittered");
+  draw = scene;
+  draw.excluded = true;
+  Check(!IsJitteredDraw(draw), "excluded vertex shaders are not jittered");
+}
+
 }  // namespace
 
 int main() {
+  TestJitter();
   TestCamera("left-handed", false);
   TestCamera("right-handed", true);
   TestReprojection(false);
   TestReprojection(true);
+  TestObjectReprojection(false);
+  TestObjectReprojection(true);
   TestRejectsOrthographic();
   std::printf(failures ? "post pass camera tests: %d failed\n" : "post pass camera tests: passed\n",
               failures);

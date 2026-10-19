@@ -15,6 +15,12 @@
 //   gtao_main       1 / W mips -> visibility (R8) and edges (R8, 2 bits per side)
 //   gtao_denoise    edge-aware 3x3 blur of the visibility; with GTAO_FINAL, writes
 //                   the occlusion (1 - visibility)
+//   gtao_temporal   the occlusion accumulated over frames along the motion
+//                   vectors (GTAO_TEMPORAL), for a jittered scene whose
+//                   occlusion TAA does not average (TAA at the scene_color
+//                   point): occlusion, previous history, motion, mask, depth
+//                   -> history (occlusion, frames accumulated)
+//   gtao_temporal_out  the history's occlusion -> the occlusion
 // The define GTAO_QUALITY sets the slices and steps of gtao_main; the params
 // (GTAO_*) are run-time constants of the manifest.
 
@@ -301,4 +307,70 @@ void gtao_denoise(uint3 id : SV_DispatchThreadID) {
 #else
   gtao_denoised_out[id.xy] = visibility;
 #endif
+}
+
+// ---------------------------------------------------------------------------
+// gtao_temporal: the occlusion of this frame blended with the previous frame's
+// accumulated occlusion at the pixel's previous position, limited to the
+// occlusion around the pixel now (the jitter moves it by sub-pixels each
+// frame), and dropped where the motion is unknown, the previous position is
+// off the screen or the previous depth there shows another surface.
+
+Texture2D<unorm float> gtao_temporal_occlusion : register(t0);
+Texture2D<float2> gtao_temporal_motion : register(t1);
+Texture2D<float2> gtao_temporal_mask : register(t2);
+Texture2D<float2> gtao_temporal_previous : register(t3);
+Texture2D<float> gtao_temporal_depth : register(t4);
+Texture2D<float> gtao_temporal_previous_depth : register(t5);
+RWTexture2D<float2> gtao_temporal_history_out : register(u0);
+
+[numthreads(8, 8, 1)]
+void gtao_temporal(uint3 id : SV_DispatchThreadID) {
+  if (any(id.xy >= xe_scene_size)) {
+    return;
+  }
+  int2 pixel = int2(id.xy);
+  int2 last = int2(xe_scene_size) - 1;
+  float current = gtao_temporal_occlusion.Load(int3(pixel, 0));
+  float low = current, high = current;
+  [unroll] for (int y = -1; y <= 1; ++y) {
+    [unroll] for (int x = -1; x <= 1; ++x) {
+      float value = gtao_temporal_occlusion.Load(int3(clamp(pixel + int2(x, y), 0, last), 0));
+      low = min(low, value);
+      high = max(high, value);
+    }
+  }
+  float2 motion = gtao_temporal_motion.Load(int3(pixel, 0));
+  float2 mask = gtao_temporal_mask.Load(int3(pixel, 0));
+  float2 position = float2(pixel) + 0.5 + motion;
+  bool usable = xe_history_valid() && mask.x < 0.5 && all(position >= 0.0) &&
+                all(position <= float2(xe_scene_size));
+  if (usable) {
+    // Another surface: the previous W at that position against this W.
+    float previous_w = xe_previous_w(gtao_temporal_previous_depth.Load(
+        int3(clamp(int2(position), 0, last), 0)));
+    float w = xe_scene_w(gtao_temporal_depth.Load(int3(pixel, 0)));
+    usable = previous_w > 0.0 && abs(previous_w - w) < 0.1 * w + 0.05;
+  }
+  float2 history = usable ? gtao_temporal_previous.SampleLevel(
+                                xe_linear_clamp, position / float2(xe_scene_size), 0.0)
+                          : 0.0;
+  float age = usable ? gtao_temporal_previous.Load(int3(clamp(int2(position), 0, last), 0)).y
+                     : 0.0;
+  float alpha = max(GTAO_TEMPORAL_BLEND, 1.0 / (age + 1.0));
+  if (mask.y > 0.5) alpha = max(alpha, 0.5);
+  if (!usable) alpha = 1.0;
+  float result = lerp(clamp(history.x, low, high), current, alpha);
+  gtao_temporal_history_out[pixel] = float2(result, usable ? min(age + 1.0, 32.0) : 1.0);
+}
+
+Texture2D<float2> gtao_temporal_history : register(t0);
+RWTexture2D<unorm float> gtao_temporal_occlusion_out : register(u0);
+
+[numthreads(8, 8, 1)]
+void gtao_temporal_out(uint3 id : SV_DispatchThreadID) {
+  if (any(id.xy >= xe_scene_size)) {
+    return;
+  }
+  gtao_temporal_occlusion_out[id.xy] = gtao_temporal_history.Load(int3(id.xy, 0)).x;
 }

@@ -16,9 +16,9 @@ target_compile_options(fm4_instruction_tests PRIVATE -march=x86-64-v2 -ffp-contr
 add_executable(fm4_post_pass_camera_tests post-pass-camera-tests.cpp)
 target_include_directories(fm4_post_pass_camera_tests SYSTEM PRIVATE "${REX_HEADER_ROOT}")
 target_compile_options(fm4_post_pass_camera_tests PRIVATE -march=x86-64-v2 -ffp-contract=off)
-# The scene_depth passes of work/fm4-rex/passes on WARP (CPU Direct3D 12), as
-# the post pass framework runs them; arguments: post_pass.hlsli, the passes
-# directory.
+# The scene_depth and final passes of work/fm4-rex/passes on WARP (CPU Direct3D
+# 12), as the post pass framework runs them; arguments: post_pass.hlsli, the
+# passes directory.
 add_executable(fm4_post_pass_shader_tests post-pass-shader-tests.cpp)
 target_include_directories(fm4_post_pass_shader_tests SYSTEM PRIVATE "${REX_HEADER_ROOT}")
 target_compile_definitions(fm4_post_pass_shader_tests PRIVATE NOMINMAX WIN32_LEAN_AND_MEAN)

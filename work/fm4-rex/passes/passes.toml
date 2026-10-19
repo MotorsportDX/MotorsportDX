@@ -1,14 +1,28 @@
 # Post passes of FM4 for the runtime's post pass framework (post_pass_path):
 # screen passes that run inside the guest frame, written as HLSL files and this
-# manifest. See docs/analysis/post-pass-framework.md for the format, and
-# docs/analysis/gtao-design.md for GTAO.
+# manifest. See docs/analysis/post-pass-framework.md for the format,
+# docs/analysis/gtao-design.md for GTAO, docs/analysis/motion-vectors.md for
+# the motion vectors and docs/analysis/taa.md for TAA.
 
 [scene]
 # Vertex shaders that carry the scene camera: <ucode hash>:rows:<WVP>:<WV>
-# (row vectors, 4 constants each) or <ucode hash>:world:<WVP>:<world>:<view
-# inverse> (column vectors, 4, 3 and 3 constants). The car body paint and the
-# road; only the road's layout carries the view (kSceneFlagViewKnown).
-camera = ["8D05A46C3584CA9E:rows:0:4", "C81F8D92FF6529EB:world:128:140:243"]
+# (row vectors, 4 constants each), with :<world> also the view (view to world
+# = world * inverse(WV)), or <ucode hash>:world:<WVP>:<world>:<view inverse>
+# (column vectors, 4, 3 and 3 constants). The road (the game's own view
+# inverse), then the car body paint (matWVP, matWV, matW): in a frame, a source
+# earlier in the list replaces the matrices of a later one. The hash * is the
+# fallback, last in priority, for any other vertex shader that reads every
+# constant of its layout and gives a rotation as its view: 156 of the 162
+# vertex shaders with the position at c128 in a 16-car race dump have the
+# road's layout (c243 to c245 hold the view inverse). Some frames show neither
+# a car nor the road (Tsukuba's bumper camera in the lead). Every source counts
+# only on a draw as wide as the scene whose projection has the viewport's
+# aspect, which leaves out the rear-view mirror's strip.
+camera = [
+  "C81F8D92FF6529EB:world:128:140:243",
+  "8D05A46C3584CA9E:rows:0:4:8",
+  "*:world:128:140:243",
+]
 # The narrowest depth resolve taken as the scene depth, in guest pixels.
 min_width = 1024
 # The final combine pixel shaders (with and without depth of field): the final
@@ -29,11 +43,59 @@ cut_distance = 5.0
 cut_angle = 30.0
 cut_focal = 0.1
 
+[motion]
+# The objects of the motion vectors: draws on the scene depth whose stencil
+# operation replaces the stencil with their reference, an object ID. FM4 writes
+# 0 for the track and 7n for every draw of car n. The vertex shaders of the car
+# draws and where their world matrix is (<ucode hash>:rows:<first constant>,
+# row vectors in 4 constants, or :columns: in 3): all keep matW in c8-c11. Per
+# car, the first one in this list that drew in a frame gives the car's matrix:
+# the body first; the wheels (brakes, tires, rims) have one matrix per wheel,
+# so they come last.
+objects = [
+  "8D05A46C3584CA9E:rows:8",  # paint
+  "BBD01C26B1C45733:rows:8",  # paint
+  "42CB1356564CF9FA:rows:8",  # the rest of the body (the paint's matrix)
+  "F936B2AD861F53BE:rows:8",  # glass
+  "D7B380C7A7F72EF5:rows:8",  # glass
+  "EFE6E73205BB1F64:rows:8",  # lights
+  "A7B129D19544EFED:rows:8",  # lights
+  "A42BEA3C0A6E5603:rows:8",  # chrome
+  "4EE552137CA415E3:rows:8",  # cockpit
+  "918AF0171F6F6F4A:rows:8",  # cockpit
+  "7B69DF9819BBA422:rows:8",  # brakes
+  "8317040277B5F496:rows:8",  # tires
+  "C00542278E7CCC25:rows:8",  # rims
+]
+# The slot of a stencil value s is round(s / stencil_step) below stencil_limit,
+# else 0 (the static world): FM4's motion blur rule. The shadow passes turn the
+# track's 0 into 128 and 129, which stay slot 0.
+stencil_step = 7
+stencil_limit = 126
+# The cockpit interior: FM4 draws the player's cockpit with its own world
+# matrix (the shell 4EE552137CA415E3; the steering wheel and hands
+# 918AF0171F6F6F4A have one per part) and then covers it with a mask at the
+# stored depth 1.0, so its pixels have the car's stencil ID but no depth of
+# their own (motion.hlsl). Other pixels at that depth or within 1% of the near
+# plane (the rear-view mirror panel of the hood and bumper cameras) get no
+# motion.
+interior = ["4EE552137CA415E3:rows:8"]
+interior_depth = 1.0
+
 # Compile-time defines of the passes; shader_mod_defines (and shader_mod_set,
 # shader_mod_defines.txt) override them by name.
 [defines]
 # Slices x steps per side: 0 2x2, 1 2x4 (one denoise pass), 2 3x6, 3 4x8 (two).
 GTAO_QUALITY = 2
+# TAA: the history filtered with Catmull-Rom (1) or bilinear (0), and the
+# history dropped where the previous scene depth was clearly nearer (1).
+TAA_HISTORY_FILTER = 1
+TAA_DISOCCLUSION = 1
+# Where TAA runs: 0 at the final point (after the game's post chain, before
+# the HUD), 1 at the scene_color point (before the post chain, its output
+# written back into the game's scene; the occlusion then gets its own temporal
+# filter, gtao_temporal).
+TAA_POINT = 0
 
 # Run-time params, constants of every pass (b1); shader_mod_defines,
 # shader_mod_set and shader_mod_defines.txt override them by name, live.
@@ -53,6 +115,49 @@ GTAO_SCALE = { value = 1.0, min = 0.0, max = 1.0 }
 # Output: 0 occlusion, 1 view W over 0-100 units, 2 occlusion before
 # denoising, 3 depth discontinuities (the denoise edges), 4 view W over 0-2.
 GTAO_DEBUG = { value = 0, min = 0, max = 4 }
+# Motion vectors (slot 1) every frame; 0 skips their passes and the stencil
+# load.
+MOTION_VECTORS = { value = 1, min = 0, max = 1 }
+# Drawn over the frame before the HUD (motion.hlsl): 0 off, 1 motion color
+# coded, 2 the same over the frame, 3 object slots, 4 object motion alone,
+# 5 pixel kinds (interior, world through glass, mask), 6 the motion mask.
+MOTION_DEBUG = { value = 0, min = 0, max = 6 }
+# Debug views 1, 2 and 4: the motion length in host pixels at full color.
+MOTION_DEBUG_PIXELS = { value = 16.0, min = 0.01 }
+# The view distance in meters taken for the cockpit interior, whose pixels have
+# no depth of their own.
+MOTION_INTERIOR_W = { value = 0.6, min = 0.05 }
+# A pixel with a car's stencil ID farther than this from the car's origin (in
+# meters) is the world seen through the car's glass.
+MOTION_OBJECT_RADIUS = { value = 3.0, min = 0.1 }
+# Temporal anti-aliasing at the final point (taa.hlsl): 1 runs it and jitters
+# the scene draws ([jitter]); off unless the look's taa knob turns it on.
+TAA = { value = 0, min = 0, max = 1 }
+# 0 keeps TAA without the jitter.
+TAA_JITTER = { value = 1, min = 0, max = 1 }
+# The weight of the current frame when still, and at TAA_MOTION_PIXELS of
+# motion (host pixels).
+TAA_BLEND = { value = 0.1, min = 0.01, max = 1.0 }
+TAA_BLEND_MOTION = { value = 0.25, min = 0.01, max = 1.0 }
+TAA_MOTION_PIXELS = { value = 16.0, min = 0.1 }
+# The width of the box the history is clipped to, in standard deviations of
+# the 3x3 around the pixel.
+TAA_CLIP_GAMMA = { value = 1.0, min = 0.1 }
+# The weight of the current frame at least on reactive pixels (car glass).
+TAA_REACTIVE = { value = 0.5, min = 0.0, max = 1.0 }
+# Sharpening after the resolve (0 to 1); the history stays unsharpened.
+TAA_SHARPEN = { value = 0.4, min = 0.0, max = 1.0 }
+# Drawn instead of the image (taa.hlsl): 0 off, 1 the history alone, 2 the
+# weight of the current frame, 3 the clip, 4 why there is no history, 5 the
+# current frame without the jitter.
+TAA_DEBUG = { value = 0, min = 0, max = 5 }
+# With TAA at the scene_color point: the occlusion accumulated over frames (1)
+# and the weight of the current frame when still.
+GTAO_TEMPORAL = { value = 1, min = 0, max = 1 }
+GTAO_TEMPORAL_BLEND = { value = 0.15, min = 0.01, max = 1.0 }
+# 1 writes a test pattern into the game's scene at the scene_color point
+# (scene_pattern.hlsl, the S1 check of the write-back).
+SCENE_PATTERN = { value = 0, min = 0, max = 1 }
 
 # Textures of the passes, at the size of the scene depth unless scale says
 # otherwise. slot exposes one to shader mods (xe_post_texture; slot 0 is
@@ -74,6 +179,54 @@ format = "R8_UNORM"
 format = "R8_UNORM"
 slot = 0
 clear = true
+
+# The motion in host pixels of the scene textures: previous position minus
+# this one, in their layout (rotated 180 degrees against the screen).
+[textures.motion_vectors]
+format = "R16G16_FLOAT"
+slot = 1
+clear = true
+
+# Where the motion vectors are unknown (R: leave out of the history) or the
+# pixel mixes surfaces that move apart (G: reactive), in the scene's layout.
+[textures.motion_mask]
+format = "R8G8_UNORM"
+slot = 2
+clear = true
+
+[textures.motion_debug_color]
+format = "R8G8B8A8_UNORM"
+clear = true
+
+# The TAA output of this frame and the previous one (previous:taa_history):
+# linear color, and the frames accumulated in alpha; the size of the final
+# color, in screen orientation.
+[textures.taa_history]
+format = "R16G16B16A16_FLOAT"
+size = "final"
+history = true
+
+[textures.taa_debug]
+format = "R8G8B8A8_UNORM"
+size = "final"
+
+# The same at the scene_color point (TAA_POINT 1): the scene's size and
+# layout, and the output written back into the game's scene.
+[textures.taa_scene_history]
+format = "R16G16B16A16_FLOAT"
+history = true
+
+[textures.taa_scene_debug]
+format = "R8G8B8A8_UNORM"
+
+[textures.taa_scene_out]
+format = "R10G10B10A2_UNORM"
+write_back = true
+
+# The occlusion accumulated over frames (gtao_temporal) and the frames in it.
+[textures.gtao_history]
+format = "R16G16_FLOAT"
+history = true
 
 # GTAO after the last scene depth tile is resolved, before the post chain.
 [[passes]]
@@ -122,3 +275,124 @@ defines = { GTAO_FINAL = 1 }
 if = "GTAO_QUALITY < 2"
 srv = ["gtao_visibility", "gtao_edges", "gtao_w", "gtao_visibility"]
 uav = ["gtao_occlusion"]
+
+# Motion vectors after GTAO, from the same depth and the stencil of its resolve.
+[[passes]]
+name = "motion_vectors"
+point = "scene_depth"
+shader = "motion.hlsl"
+entry = "motion_vectors"
+if = "MOTION_VECTORS > 0"
+srv = ["scene_depth", "scene_stencil"]
+uav = ["motion_vectors", "motion_mask"]
+
+[[passes]]
+name = "motion_debug"
+point = "scene_depth"
+shader = "motion.hlsl"
+entry = "motion_debug"
+if = "MOTION_VECTORS > 0 && MOTION_DEBUG > 0"
+srv = ["motion_vectors", "scene_stencil", "scene_depth", "motion_mask"]
+uav = ["motion_debug_color"]
+
+# With TAA at the scene_color point, the occlusion over frames: GTAO's of the
+# jittered depth moves by sub-pixels each frame, and TAA no longer averages it.
+[[passes]]
+name = "gtao_temporal"
+point = "scene_depth"
+shader = "gtao.hlsl"
+entry = "gtao_temporal"
+if = "TAA > 0 && TAA_POINT > 0 && GTAO_TEMPORAL > 0"
+srv = ["gtao_occlusion", "motion_vectors", "motion_mask", "previous:gtao_history",
+       "scene_depth", "previous_depth"]
+uav = ["gtao_history"]
+
+[[passes]]
+name = "gtao_temporal_out"
+point = "scene_depth"
+shader = "gtao.hlsl"
+entry = "gtao_temporal_out"
+if = "TAA > 0 && TAA_POINT > 0 && GTAO_TEMPORAL > 0"
+srv = ["gtao_history"]
+uav = ["gtao_occlusion"]
+
+# TAA at the final point, before the HUD: the resolve, then the output drawn
+# into final_color (before the motion debug view, which draws over it).
+[[passes]]
+name = "taa_resolve"
+point = "final"
+shader = "taa.hlsl"
+entry = "taa_resolve"
+if = "TAA > 0 && TAA_POINT == 0 && XE_SCENE > 0"
+srv = ["final_color", "scene_depth", "motion_vectors", "motion_mask", "previous:taa_history",
+       "previous_depth"]
+uav = ["taa_history", "taa_debug"]
+
+[[passes]]
+name = "taa_output"
+point = "final"
+type = "pixel"
+shader = "taa.hlsl"
+entry = "taa_output"
+if = "TAA > 0 && TAA_POINT == 0 && XE_SCENE > 0"
+srv = ["taa_history", "taa_debug"]
+rtv = ["final_color"]
+
+# TAA at the scene_color point: the same resolve on the scene, its output
+# written back into the game's scene before the post chain.
+[[passes]]
+name = "taa_scene_resolve"
+point = "scene_color"
+shader = "taa.hlsl"
+entry = "taa_resolve"
+defines = { TAA_SCENE = 1 }
+if = "TAA > 0 && TAA_POINT > 0 && XE_SCENE > 0"
+srv = ["scene_color", "scene_depth", "motion_vectors", "motion_mask",
+       "previous:taa_scene_history", "previous_depth"]
+uav = ["taa_scene_history", "taa_scene_debug"]
+
+[[passes]]
+name = "taa_scene_output"
+point = "scene_color"
+type = "pixel"
+shader = "taa.hlsl"
+entry = "taa_output"
+defines = { TAA_SCENE = 1 }
+if = "TAA > 0 && TAA_POINT > 0 && XE_SCENE > 0"
+srv = ["taa_scene_history", "taa_scene_debug", "scene_color"]
+rtv = ["taa_scene_out"]
+
+[[passes]]
+name = "motion_debug_show"
+point = "final"
+type = "pixel"
+shader = "motion.hlsl"
+entry = "motion_debug_show"
+if = "MOTION_VECTORS > 0 && MOTION_DEBUG > 0"
+srv = ["motion_debug_color"]
+rtv = ["final_color"]
+blend = "alpha"
+
+# The S1 check of the write-back: the scene with a test pattern, copied into
+# the texture cache's host texture of the scene after the scene_color point,
+# so the game's bloom, motion blur and final combine sample it.
+[textures.scene_written]
+format = "R10G10B10A2_UNORM"
+write_back = true
+
+[[passes]]
+name = "scene_pattern"
+point = "scene_color"
+type = "pixel"
+shader = "scene_pattern.hlsl"
+entry = "scene_pattern"
+if = "SCENE_PATTERN > 0"
+srv = ["scene_color"]
+rtv = ["scene_written"]
+
+# The scene draws move by a sub-pixel Halton (2, 3) offset per frame while TAA
+# runs, in frames after one in which taa_resolve or taa_scene_resolve ran.
+[jitter]
+phases = 8
+if = "TAA > 0 && TAA_JITTER > 0"
+consumer = ["taa_resolve", "taa_scene_resolve"]

@@ -1450,16 +1450,17 @@ ID3D12Resource* D3D12TextureCache::RequestSwapTexture(D3D12_SHADER_RESOURCE_VIEW
   return texture_resource;
 }
 
-ID3D12Resource* D3D12TextureCache::RequestResolvedTexture(
-    uint32_t base_address, uint32_t pitch, uint32_t width, uint32_t height,
-    xenos::TextureFormat format, xenos::Endian endianness,
-    D3D12_SHADER_RESOURCE_VIEW_DESC& srv_desc_out, uint32_t& host_width_out,
-    uint32_t& host_height_out) {
+bool D3D12TextureCache::ResolvedTextureKey(uint32_t base_address, uint32_t pitch,
+                                           uint32_t width, uint32_t height,
+                                           xenos::TextureFormat format, xenos::Endian endianness,
+                                           TextureKey& key_out,
+                                           xenos::xe_gpu_texture_fetch_t& fetch_out) {
   if (!width || !height || width > pitch || (pitch & 31) || (base_address & 4095)) {
-    return nullptr;
+    return false;
   }
   // The fetch constant a guest shader sampling the resolve target would use.
-  xenos::xe_gpu_texture_fetch_t fetch = {};
+  xenos::xe_gpu_texture_fetch_t& fetch = fetch_out;
+  fetch = {};
   fetch.type = xenos::FetchConstantType::kTexture;
   fetch.pitch = pitch >> 5;
   fetch.tiled = 1;
@@ -1470,9 +1471,18 @@ ID3D12Resource* D3D12TextureCache::RequestResolvedTexture(
   fetch.size_2d.height = height - 1;
   fetch.swizzle = xenos::XE_GPU_TEXTURE_SWIZZLE_RGBA;
   fetch.dimension = xenos::DataDimension::k2DOrStacked;
+  BindingInfoFromFetchConstant(fetch, key_out, nullptr);
+  return key_out.is_valid && key_out.base_page != 0;
+}
+
+ID3D12Resource* D3D12TextureCache::RequestResolvedTexture(
+    uint32_t base_address, uint32_t pitch, uint32_t width, uint32_t height,
+    xenos::TextureFormat format, xenos::Endian endianness,
+    D3D12_SHADER_RESOURCE_VIEW_DESC& srv_desc_out, uint32_t& host_width_out,
+    uint32_t& host_height_out) {
   TextureKey key;
-  BindingInfoFromFetchConstant(fetch, key, nullptr);
-  if (!key.is_valid || key.base_page == 0) {
+  xenos::xe_gpu_texture_fetch_t fetch;
+  if (!ResolvedTextureKey(base_address, pitch, width, height, format, endianness, key, fetch)) {
     return nullptr;
   }
   D3D12Texture* texture = static_cast<D3D12Texture*>(FindOrCreateTexture(key));
@@ -1501,6 +1511,64 @@ ID3D12Resource* D3D12TextureCache::RequestResolvedTexture(
   host_width_out = width * (scaled ? draw_resolution_scale_x() : 1);
   host_height_out = height * (scaled ? draw_resolution_scale_y() : 1);
   return texture_resource;
+}
+
+bool D3D12TextureCache::WriteResolvedTexture(uint32_t base_address, uint32_t pitch,
+                                             uint32_t width, uint32_t height,
+                                             xenos::TextureFormat format,
+                                             xenos::Endian endianness, ID3D12Resource* source,
+                                             uint32_t source_width, uint32_t source_height,
+                                             WriteBackCounts& previous_counts_out) {
+  TextureKey key;
+  xenos::xe_gpu_texture_fetch_t fetch;
+  if (!source ||
+      !ResolvedTextureKey(base_address, pitch, width, height, format, endianness, key, fetch)) {
+    return false;
+  }
+  auto write = [&](D3D12Texture& texture) {
+    // Loaded first: a load after the copy would replace it.
+    if (!LoadTextureData(texture)) {
+      return false;
+    }
+    texture.MarkAsUsed();
+    ID3D12Resource* texture_resource = texture.resource();
+    D3D12_RESOURCE_DESC texture_desc = texture_resource->GetDesc();
+    D3D12_BOX box = {0, 0, 0, std::min(source_width, uint32_t(texture_desc.Width)),
+                     std::min(source_height, uint32_t(texture_desc.Height)), 1};
+    command_processor_.PushTransitionBarrier(
+        texture_resource, texture.SetResourceState(D3D12_RESOURCE_STATE_COPY_DEST),
+        D3D12_RESOURCE_STATE_COPY_DEST);
+    command_processor_.SubmitBarriers();
+    D3D12_TEXTURE_COPY_LOCATION location_dest, location_source;
+    location_dest.pResource = texture_resource;
+    location_dest.Type = D3D12_TEXTURE_COPY_TYPE_SUBRESOURCE_INDEX;
+    location_dest.SubresourceIndex = 0;
+    location_source.pResource = source;
+    location_source.Type = D3D12_TEXTURE_COPY_TYPE_SUBRESOURCE_INDEX;
+    location_source.SubresourceIndex = 0;
+    command_processor_.GetDeferredCommandList().D3DCopyTextureRegion(&location_dest, 0, 0, 0,
+                                                                     &location_source, &box);
+    // As guest draws bind it.
+    constexpr D3D12_RESOURCE_STATES kState = D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE |
+                                             D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE;
+    command_processor_.PushTransitionBarrier(texture_resource, texture.SetResourceState(kState),
+                                             kState);
+    return true;
+  };
+  D3D12Texture* texture = static_cast<D3D12Texture*>(FindOrCreateTexture(key));
+  if (texture == nullptr || !write(*texture)) {
+    return false;
+  }
+  // FM4 fetches its scene with packed mips on, as a resolve target has them
+  // off: another key for the same data.
+  TextureKey variant_key = texture->key();
+  variant_key.packed_mips ^= 1;
+  D3D12Texture* variant = static_cast<D3D12Texture*>(FindTexture(variant_key));
+  if (variant && !write(*variant)) {
+    variant = nullptr;
+  }
+  previous_counts_out = StartWriteBackCount(texture, variant);
+  return true;
 }
 
 D3D12TextureCache::D3D12Texture::D3D12Texture(D3D12TextureCache& texture_cache,

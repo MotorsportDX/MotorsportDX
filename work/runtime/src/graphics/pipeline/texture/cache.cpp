@@ -291,6 +291,15 @@ void TextureCache::CompletedSubmissionUpdated(uint64_t completed_submission_inde
       // any texture has been destroyed.
       ResetTextureBindings();
     }
+    for (Texture*& written : write_back_textures_) {
+      if (written == texture) {
+        written = nullptr;
+      }
+    }
+    if (!write_back_textures_[0]) {
+      write_back_textures_[0] = write_back_textures_[1];
+      write_back_textures_[1] = nullptr;
+    }
     // Remove the texture from the map and destroy it via its unique_ptr.
     auto found_texture_it = textures_.find(texture->key());
     assert_true(found_texture_it != textures_.end());
@@ -409,6 +418,9 @@ bool TextureCache::PrepareTextureLoad(Texture& texture, PendingTextureLoad& pend
     return false;
   }
 
+  if (&texture == write_back_textures_[0] || &texture == write_back_textures_[1]) {
+    ++write_back_counts_.reloads;
+  }
   pending_load_out.texture = &texture;
   pending_load_out.load_base = base_outdated;
   pending_load_out.load_mips = mips_outdated;
@@ -619,6 +631,33 @@ void TextureCache::RequestTextures(uint32_t used_texture_mask) {
   if (bindings_changed) {
     UpdateTextureBindingsImpl(bindings_changed);
   }
+
+  if (write_back_textures_[0]) {
+    uint32_t bound = used_texture_mask;
+    uint32_t bound_index;
+    while (rex::bit_scan_forward(bound, &bound_index)) {
+      bound &= ~(UINT32_C(1) << bound_index);
+      const TextureBinding& binding = texture_bindings_[bound_index];
+      if (!binding.key.is_valid) {
+        continue;
+      }
+      if (binding.texture == write_back_textures_[0] ||
+          binding.texture == write_back_textures_[1]) {
+        ++write_back_counts_.binds;
+      } else if (binding.key.base_page == write_back_base_page_) {
+        if (!write_back_counts_.other_binds) {
+          write_back_counts_.other_width = binding.key.GetWidth();
+          write_back_counts_.other_height = binding.key.GetHeight();
+          write_back_counts_.other_pitch = binding.key.pitch;
+          write_back_counts_.other_format = uint32_t(binding.key.format);
+          write_back_counts_.other_mip_max_level = binding.key.mip_max_level;
+          write_back_counts_.other_packed_mips = binding.key.packed_mips;
+          write_back_counts_.other_dimension = uint32_t(binding.key.dimension);
+        }
+        ++write_back_counts_.other_binds;
+      }
+    }
+  }
 }
 
 const char* TextureCache::TextureKey::GetLogDimensionName(xenos::DataDimension dimension) {
@@ -785,6 +824,7 @@ void TextureCache::WatchCallback(const std::unique_lock<std::recursive_mutex>& g
 
 void TextureCache::DestroyAllTextures(bool from_destructor) {
   ResetTextureBindings(from_destructor);
+  write_back_textures_ = {};
   textures_.clear();
   COUNT_profile_set("gpu/texture_cache/textures", 0);
 }
@@ -906,6 +946,20 @@ TextureCache::Texture* TextureCache::FindOrCreateTexture(TextureKey key) {
   COUNT_profile_set("gpu/texture_cache/textures", textures_.size());
   texture->LogAction("Created");
   return texture;
+}
+
+TextureCache::Texture* TextureCache::FindTexture(const TextureKey& key) const {
+  auto found = textures_.find(key);
+  return found != textures_.end() ? found->second.get() : nullptr;
+}
+
+TextureCache::WriteBackCounts TextureCache::StartWriteBackCount(Texture* texture,
+                                                                Texture* variant) {
+  WriteBackCounts previous = write_back_counts_;
+  write_back_counts_ = {};
+  write_back_textures_ = {texture, variant};
+  write_back_base_page_ = texture ? texture->key().base_page : 0;
+  return previous;
 }
 
 bool TextureCache::LoadTextureData(Texture& texture) {

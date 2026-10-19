@@ -101,6 +101,8 @@ def main():
                         help='drive with the harness input instead of the AI driver (engageaionstart)')
     parser.add_argument('--env', action='append', default=[], help='extra NAME=value for every cell')
     parser.add_argument('--arg', action='append', default=[], help='extra --cvar=value for every cell')
+    parser.add_argument('--look', help="look of every cell as Build.ps1 -Look (default: the launcher's, pc), "
+                                       'for example "pc,taa=1"')
     options = parser.parse_args()
     root = options.build_root.resolve()
     scenarios, rates, repeat = TIERS[options.tier]
@@ -117,6 +119,8 @@ def main():
     env = options.env if options.human or any(e.startswith('FM4_GAME_CMDLINE=') for e in options.env) \
         else options.env + ['FM4_GAME_CMDLINE=engageaionstart']
     extra = [f'--env={e}' for e in env] + [f'--arg={a}' for a in options.arg]
+    if options.look:
+        extra += ['--look', options.look]
     log = root / 'e2e' / f'{options.name}.log'
     log.parent.mkdir(parents=True, exist_ok=True)
     started, results = time.time(), []

@@ -51,7 +51,8 @@ Running with no options gives this configuration:
 - **Shadows** use the title's shadow map for every camera. See
   [-ShadowWorkaround](#-shadowworkaround).
 - **Race quality** is `high`. See [-Quality](#-quality).
-- **Look** is the `pc` preset, with screen-space ambient occlusion. See [Look](#look).
+- **Look** is the `pc` preset, with screen-space ambient occlusion and temporal
+  anti-aliasing. See [Look](#look).
 - **Display** is `native`: borderless fullscreen on the primary monitor, with a render
   scale of 2x on 1080p, 1440p and 2560x1600 screens and 3x on 4K. See
   [-Display](#-display-and-render-scale).
@@ -60,7 +61,8 @@ Running with no options gives this configuration:
 
 Performance on the defaults: Quick Race holds 60 fps on the development computer.
 The GPU time per race frame with the defaults (`high` quality, `pc` look with
-ambient occlusion) is about 3.0 ms at 1x (1280x720) and about 6.1 ms at 2x. The 2x
+ambient occlusion) is about 3.0 ms at 1x (1280x720) and about 6.1 ms at 2x, measured
+before `pc` had TAA, which adds about 0.1 ms at 1x and 0.15 ms at 2x. The 2x
 scale is the one that `native` uses on 1080p, 1440p and 2560x1600 screens.
 
 ### Render path and frame pacing
@@ -195,7 +197,7 @@ measured at 120 Hz). `ultra` is meant for 60 to 120 Hz.
 
 Shows the settings overlay at the top left from the start. It lists the display and
 render scale, the race quality, the look and its knobs, the ambient occlusion, the
-shadows, the anisotropic filtering, the race frame rate and pacing, the mirror rate,
+anti-aliasing (TAA and its point and sharpening), the shadows, the anisotropic filtering, the race frame rate and pacing, the mirror rate,
 the render target path, and the window size and present rate, as the launcher set them
 up (`info_overlay` in `pipeline.py`, `FM4_INFO`; `work/fm4-rex/src/fm4-info-overlay.h`).
 The presenter draws the overlay over the guest output, so captures never show it.
@@ -219,7 +221,8 @@ the title's own. Compare the default path against `-Rov` with `-Look original`.
 #### -SingleTile
 
 Renders races as one 720p tile without MSAA. This is the title's own UI tiling
-scenario, selected through the render scenario override. The swap applies FXAA.
+scenario, selected through the render scenario override. The swap applies FXAA, unless the look
+has `taa=1` (see [Temporal anti-aliasing](#temporal-anti-aliasing)).
 Measured with Quick Race on `-Rov`: 58.6 fps instead of 54.3, frame p95 20 ms instead of
 33 ms, GPU 13 ms instead of 17.5 ms. Edges are visibly more jagged than with MSAA (2x
 with `-Quality xbox`, 4x with the default `high`): thin cables break up. Photo mode and
@@ -269,7 +272,7 @@ preset, knobs, or both. A preset sets only its own knobs. Later items win, so
 
 | Preset | Settings |
 | --- | --- |
-| `pc` (default) | `tonemap=aces`, `saturation=1.1`, `bloom=0.7`, `sharpen=0.4`, `clearcoat=1`, `ao=0.6`, `sun=2`, `sky=0.7` |
+| `pc` (default) | `tonemap=aces`, `saturation=1.1`, `bloom=0.7`, `sharpen=0.4`, `clearcoat=1`, `ao=0.6`, `sun=2`, `sky=0.7`, `taa=1` |
 | `aces` | `tonemap=aces`, `clearcoat=1`, `ao=0.6`, `sun=2` |
 | `gt` | `tonemap=gt`, `clearcoat=1`, `ao=0.6`, `sun=2` |
 | `neutral` | `tonemap=neutral`, `clearcoat=1`, `ao=0.6`, `sun=2` |
@@ -314,6 +317,8 @@ and `-Look original`.
 | `road_sheen_grain` | number, default 1 | How much that highlight follows the aggregate and the skid marks: it scales the highlight by the asphalt texel's brightness against the texture's local mean, to this power (and on the Top Gear and Crown Jewel road by the darkening of the skid marks). `0` gives an even sheen. |
 | `road_debug` | 0 to 7 | Debug views of the lit road `ROAD_BLND_2`: 1 the highlight's share of the light, 2 without the highlight, 3 the highlight alone, 4 which light the diffuse takes, 5 the parts of the specular amount. With `road_sheen` above 0, on every lit road shader: 6 the image times the sheen's grain, 7 the sheen alone. See [look mod coverage](analysis/look-mod-coverage.md#road-surface-18-october-2026). |
 | `ao` | number, `0` turns it off | Strength of the screen-space ambient occlusion. |
+| `taa` | `1` on (in `pc`), `0` off (the default of the other presets) | Temporal anti-aliasing before the HUD, with the scene jittered; the look's `sharpen` moves after it. See [Temporal anti-aliasing](#temporal-anti-aliasing). |
+| `taa_point` | `0` (default) or `1` | With `taa`: `1` runs TAA at the scene_color point, before the game's post chain, instead of before the HUD; the look's `sharpen` stays in the final combine. See [Temporal anti-aliasing](#temporal-anti-aliasing). |
 | `sun` | number, `0` turns the glare off | Strength of the sun glare on the RTV path, the same at every MSAA level. Without it (`original`) the glare follows the counted samples. See [Sun glare](#sun-glare). |
 | `road_gloss` | multiplier, default 1 | Specular of the road surface. See [Track lighting](#track-lighting). |
 | `sky` | multiplier, default 1 | Brightness of the sky; the `sky_*` knobs above change its color. See [Track lighting](#track-lighting). |
@@ -384,13 +389,41 @@ final combine shaders darken the scene by the occlusion, less on bright pixels.
 there is saved; `shader_mod_set GTAO_RADIUS=1` in the console changes a pass param at
 once.
 
-The pass costs about 0.2 ms of GPU time per race frame at 1x, and 0.7 to 0.8 ms at 2x
+The passes also write the scene's motion vectors (see
+[motion vectors](analysis/motion-vectors.md#8-implementation-18-october-2026)), for later
+temporal passes, and a mask of the pixels whose motion is unknown or mixed;
+`shader_mod_set MOTION_VECTORS=0` skips them. `shader_mod_set MOTION_DEBUG=1` draws
+them color coded over the frame, under the HUD (2: over the scene, 3: the car IDs, 4: the
+cars' own motion, 5: the cockpit interior, the world through glass and the depth masks,
+6: the mask; 0: off).
+
+The GTAO pass costs about 0.2 ms of GPU time per race frame at 1x, and 0.7 to 0.8 ms at 2x
 (2560x1440). Races stay at 60 fps. At 240 Hz, races at 2x drop from about 174 fps to
 about 162 fps. Replays and photo mode have occlusion too. The cockpit interior, the
 garage and the showroom get none. The first run of a look compiles the mod shaders with
 FXC when they are first drawn. For the six measured, this took 0.15 to 1.4 s each and
 2.5 to 3.0 s for the paint (about 5.4 s at the start). Later runs load them from
 `BuildRoot\cache\shader-overrides` in milliseconds.
+
+### Temporal anti-aliasing
+
+`taa=1` turns on the TAA post pass ([TAA](analysis/taa.md)): the scene draws move by a
+sub-pixel offset each frame, and the frames before the HUD are accumulated along the motion
+vectors, so wires, fences, lattices, distant road lines and shading glints stop stepping and
+shimmering. The HUD and the side mirrors are drawn after it and stay sharp. The `pc` preset
+sets it since 19 October 2026, with the `high` tiling; `-Look "pc,taa=0"` is the `pc` look
+before it (the look's sharpening, no jitter).
+
+- The look's `sharpen` (0.4 in `pc`) is applied after TAA instead of before it (the pass param
+  `TAA_SHARPEN`), since sharpening the jittered frame would sharpen the jitter. TAA without
+  sharpening is visibly softer; 0.4 comes close to `pc` without its stair steps.
+- With `-SingleTile` the swap's FXAA is left out: TAA anti-aliases the single tile itself.
+- It costs about 0.1 ms of GPU time per race frame at 1x and 0.15 to 0.2 ms at 2x.
+- `shader_mod_set TAA=0` switches it off at once with `-ShaderDev`; `TAA_DEBUG=1` to `5` shows
+  the debug views ([TAA, debug views](analysis/taa.md#76-debug-views-taa_debug)).
+- The `-Info` overlay shows "Anti-aliasing: TAA before the HUD, sharpen 0.4, scene jittered".
+- RTV only, like the other post passes; not with `-Rov` or `-Look original`.
+- `taa_point=1` (`-Look "pc,taa_point=1"`) moves TAA to the scene_color point: it runs on the scene before the game's motion blur, bloom, exposure and final combine, and its output is written back into the game's scene, which those then sample. The occlusion gets its own temporal filter there (`GTAO_TEMPORAL`), and the look's `sharpen` stays in the final combine, after TAA. It costs about 0.47 ms of GPU time per race frame at 2x, and the `-Info` overlay shows "Anti-aliasing: TAA before the post chain (scene_color), the look's sharpening, scene jittered". `pc` keeps the final point; see [TAA, the comparison](analysis/taa.md#23-comparison).
 
 ### Shader mod development
 

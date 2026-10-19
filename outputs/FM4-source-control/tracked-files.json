@@ -81,6 +81,10 @@
       "provenance": "Project documentation; research and design note on motion vector sources (summarized observations: hashes, registers, constant and element names, no game content)"
     },
     {
+      "path": "docs/analysis/taa.md",
+      "provenance": "Project documentation; implementation plan for TAA on the post pass framework (design, steps and validation; no game content)"
+    },
+    {
       "path": "docs/analysis/texture-replacement.md",
       "provenance": "Project documentation; design note on texture dumps and replacements keyed by content hash (design, hash, limits; no game content)"
     },
@@ -499,6 +503,18 @@
     {
       "path": "work/fm4-rex/passes/gtao.hlsl",
       "provenance": "Original post pass of this project (GTAO written from Jimenez et al. 2016); no game shader code or original game function bodies"
+    },
+    {
+      "path": "work/fm4-rex/passes/motion.hlsl",
+      "provenance": "Original post pass of this project (motion vectors from the scene depth, stencil object IDs and host-built reprojection matrices); no game shader code or original game function bodies"
+    },
+    {
+      "path": "work/fm4-rex/passes/taa.hlsl",
+      "provenance": "Original post pass of this project (temporal anti-aliasing of the final color with jitter, motion vectors and a variance clip); no game shader code or original game function bodies"
+    },
+    {
+      "path": "work/fm4-rex/passes/scene_pattern.hlsl",
+      "provenance": "Original post pass of this project (a test pattern written back into the scene texture, the check of the scene_color write-back); no game shader code or original game function bodies"
     },
     {
       "path": "work/fm4-rex/passes/passes.toml",
@@ -1138,6 +1154,10 @@
     },
     {
       "path": "work/runtime/include/rex/graphics/d3d12/post_pass_camera.h",
+      "provenance": "runtime-fork"
+    },
+    {
+      "path": "work/runtime/include/rex/graphics/d3d12/post_pass_jitter.h",
       "provenance": "runtime-fork"
     },
     {

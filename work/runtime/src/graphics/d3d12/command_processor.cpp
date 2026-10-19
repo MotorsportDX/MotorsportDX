@@ -32,6 +32,7 @@
 #include <rex/graphics/d3d12/command_processor.h>
 #include <rex/graphics/d3d12/graphics_system.h>
 #include <rex/graphics/d3d12/post_pass.h>
+#include <rex/graphics/d3d12/post_pass_jitter.h>
 #include <rex/graphics/d3d12/shader.h>
 #include <rex/graphics/flags.h>
 #include <rex/graphics/registers.h>
@@ -268,7 +269,11 @@ std::ofstream* OcclusionDrawTrace() {
 // every REX_DRAW_LIST_EVERY-th frame (default 10). Lines, hexadecimal:
 //   F <frame> <steady clock ms, decimal>
 //   <vs> <ps> <indices> <index base> <vertex base> <color 0 info> <depth info>
-//   <window offset> <edram mode> <depth control> <stencil ref mask> <outcome>
+//   <window offset> <edram mode> <depth control> <stencil ref mask>
+//   <viewport z scale> <viewport z offset> <blend control 0> <color mask>
+//   <jitter x> <jitter y> <outcome>
+// (the jitter of the post passes in host pixels as float dwords, 0 unless the
+// draw was jittered)
 // REX_DRAW_LIST_CONSTANTS="<shader hash>:<first>[-<last>];..." (64-bit ucode
 // hash of a vertex or pixel shader, decimal constant numbers of that shader)
 // adds after each matching draw the line
@@ -327,7 +332,7 @@ DrawListTrace* GetSampledDrawListTrace() {
 // Writes the draw when it goes out of scope; outcome is set at the exits.
 struct DrawListEntry {
   DrawListTrace* trace = nullptr;
-  uint32_t values[11] = {};
+  uint32_t values[17] = {};
   // Per REX_DRAW_LIST_CONSTANTS match: first constant, dword count, dwords.
   std::vector<uint32_t> constants;
   const char* outcome = "fail";
@@ -3425,6 +3430,10 @@ bool D3D12CommandProcessor::IssueDraw(xenos::PrimitiveType primitive_type, uint3
     values[8] = uint32_t(edram_mode);
     values[9] = regs.values[XE_GPU_REG_RB_DEPTHCONTROL];
     values[10] = regs.values[XE_GPU_REG_RB_STENCILREFMASK];
+    values[11] = regs.values[XE_GPU_REG_PA_CL_VPORT_ZSCALE];
+    values[12] = regs.values[XE_GPU_REG_PA_CL_VPORT_ZOFFSET];
+    values[13] = regs.values[XE_GPU_REG_RB_BLENDCONTROL0];
+    values[14] = regs.values[XE_GPU_REG_RB_COLOR_MASK];
   }
   if (edram_mode == xenos::EdramMode::kCopy) {
     // Special copy handling.
@@ -3448,7 +3457,8 @@ bool D3D12CommandProcessor::IssueDraw(xenos::PrimitiveType primitive_type, uint3
   pipeline_cache_->AnalyzeShaderUcode(*vertex_shader);
   if (post_passes_) {
     post_passes_->OnDraw(regs, vertex_shader->ucode_data_hash(),
-                         active_pixel_shader() ? active_pixel_shader()->ucode_data_hash() : 0);
+                         active_pixel_shader() ? active_pixel_shader()->ucode_data_hash() : 0,
+                         vertex_shader->constant_register_map().float_bitmap);
   }
   if (DrawListTrace* draw_list = GetDrawListTrace()) {
     const uint64_t vertex_shader_hash = vertex_shader->ucode_data_hash();
@@ -3644,6 +3654,9 @@ bool D3D12CommandProcessor::IssueDraw(xenos::PrimitiveType primitive_type, uint3
   } surface_info_restore;
   uint32_t uniform_draw_overwritten_slots;
   bool uniform_draw_values_may_be_uniform;
+  // A uniform overwrite of the render target cache, such as a clear: never
+  // jittered.
+  bool uniform_draw_set = false;
   uniform_draw_debug_reason = 0;
   if (render_target_cache_->GetPath() == RenderTargetCache::Path::kHostRenderTargets &&
       REXCVAR_GET(rtv_uniform_draws) && is_rasterization_done && !memexport_used &&
@@ -3695,6 +3708,7 @@ bool D3D12CommandProcessor::IssueDraw(xenos::PrimitiveType primitive_type, uint3
       uniform_draw.scale_x = uniform_draw_scale_x;
       uniform_draw.scale_y = uniform_draw_scale_y;
       render_target_cache_->SetUniformDraw(uniform_draw);
+      uniform_draw_set = true;
     }
   }
 
@@ -3863,6 +3877,21 @@ bool D3D12CommandProcessor::IssueDraw(xenos::PrimitiveType primitive_type, uint3
     previous_viewport_key_ = viewport_key;
     previous_viewport_info_ = viewport_info;
     viewport_cache_valid_ = true;
+  }
+  // The post passes' jitter of the scene draws (TAA), in host pixels of the
+  // render target: a shift of the image through ndc_offset, on this draw's
+  // copy of the viewport info only.
+  float jitter[2];
+  if (post_passes_ &&
+      post_passes_->DrawJitter(regs, vertex_shader->ucode_data_hash(), normalized_depth_control,
+                               primitive_type == xenos::PrimitiveType::kRectangleList ||
+                                   uniform_draw_set,
+                               jitter)) {
+    post_pass::AddJitterToNdcOffset(jitter, viewport_info.xy_extent, viewport_info.ndc_offset);
+    if (draw_list_entry.trace) {
+      std::memcpy(&draw_list_entry.values[15], &jitter[0], sizeof(float));
+      std::memcpy(&draw_list_entry.values[16], &jitter[1], sizeof(float));
+    }
   }
 
   draw_util::Scissor scissor;

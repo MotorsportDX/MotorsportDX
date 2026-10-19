@@ -12,14 +12,19 @@
  * - scene_color: right after it resolves the last tile of its scene color;
  * - final: after the draws of the final combine pixel shaders of the manifest,
  *   before the next draw (the HUD), on the render target they drew into.
- * Inputs are the scene depth and color, the previous frame's scene color and
- * depth (kept only if a pass reads them, dropped on camera cuts, resolution
- * changes and frames without a scene), the final color, and the textures of
- * earlier passes. Textures with a slot are bound in the bindless heap at
- * SystemBindlessView::kPostPassViewsStart + slot for shader mods
- * (xe_post_texture in shader_override.hlsli). The scene camera (the projection
- * and, where the vertex shader carries it, the view) comes from the constants
- * of the vertex shaders the manifest names.
+ * Inputs are the scene depth, its stencil and the scene color, the previous
+ * frame's scene color and depth (kept only if a pass reads them, dropped on
+ * camera cuts, resolution changes and frames without a scene), the final color,
+ * and the textures of earlier passes. Textures with a slot are bound in the
+ * bindless heap at SystemBindlessView::kPostPassViewsStart + slot for shader
+ * mods (xe_post_texture in shader_override.hlsli). The scene camera (the
+ * projection and, where the vertex shader carries it, the view) comes from the
+ * constants of the vertex shaders the manifest names; so do the world matrices
+ * of the objects whose draws write an object ID into the stencil ([motion]),
+ * from which the passes get each object's reprojection into the previous frame
+ * (motion vectors). With the manifest's [jitter], the draws of the scene are
+ * moved by a sub-pixel Halton (2, 3) sequence for temporal passes, in frames
+ * after one in which the consuming pass ran (post_pass_jitter.h).
  *
  * Params and defines come from shader_mod_defines by name, and shader_mod_set
  * changes them while running (params at once, defines with a recompile). With
@@ -42,6 +47,7 @@
 #include <rex/graphics/d3d12/post_pass_camera.h>
 #include <rex/graphics/d3d12/post_pass_layout.h>
 #include <rex/graphics/d3d12/shader_override.h>
+#include <rex/graphics/pipeline/texture/cache.h>
 #include <rex/graphics/register_file.h>
 #include <rex/graphics/xenos.h>
 #include <rex/ui/d3d12/d3d12_api.h>
@@ -57,18 +63,29 @@ class PostPasses {
   static std::unique_ptr<PostPasses> Create(D3D12CommandProcessor& command_processor);
   ~PostPasses();
 
-  // Every draw, before its render targets are bound: keeps the scene camera,
-  // logs post_pass_log_constants, and runs the final point at the first draw
-  // after the final combine.
-  void OnDraw(const RegisterFile& regs, uint64_t vertex_shader_hash, uint64_t pixel_shader_hash);
+  // Every draw, before its render targets are bound: keeps the scene camera and
+  // the world matrices of the motion objects, logs post_pass_log_constants and
+  // post_pass_motion_check, and runs the final point at the first draw after
+  // the final combine.
+  // vertex_float_constants: the bitmap of the float constants the vertex shader
+  // reads (256 bits), for the fallback camera layout; nullptr if unknown.
+  void OnDraw(const RegisterFile& regs, uint64_t vertex_shader_hash, uint64_t pixel_shader_hash,
+              const uint64_t* vertex_float_constants = nullptr);
   // Before every resolve: runs a final point still pending.
   void OnBeforeResolve();
   // After every resolve (address and length of the written range): tracks the
   // scene depth and color, and runs the scene points when they are complete.
   void OnResolve(const RegisterFile& regs, uint32_t address, uint32_t length);
   // In the swap, in an open submission: clears the exposed outputs of the
-  // frame, keeps or drops the history, and reloads changed files.
+  // frame, keeps or drops the history, picks the next frame's jitter, and
+  // reloads changed files.
   void OnSwap();
+  // A draw after its host viewport is known: the jitter of the scene draws of
+  // this frame in host pixels (post_pass_jitter.h), if the draw is one of
+  // them. rectangle: a rectangle list or a clear (a uniform draw).
+  bool DrawJitter(const RegisterFile& regs, uint64_t vertex_shader_hash,
+                  const reg::RB_DEPTHCONTROL& depth_control, bool rectangle,
+                  float jitter_out[2]) const;
 
  private:
   enum class Point : uint32_t { kSceneDepth, kSceneColor, kFinal, kCount };
@@ -76,6 +93,9 @@ class PostPasses {
   enum class Builtin : uint32_t {
     kNone,
     kSceneDepth,
+    // The stencil byte of the scene depth resolve, an R8G8B8A8_UINT view of it
+    // (the stencil in R).
+    kSceneStencil,
     kSceneColor,
     kPreviousColor,
     kPreviousDepth,
@@ -87,6 +107,9 @@ class PostPasses {
     uint32_t texture = UINT32_MAX;
     // A single mip, or -1 for all of them (SRVs) or mip 0.
     int32_t mip = -1;
+    // previous:<texture> of a history texture: the one written in the
+    // previous frame.
+    bool previous = false;
   };
   struct Condition {
     std::string name;
@@ -111,6 +134,13 @@ class PostPasses {
     bool final_size = false;
     int32_t slot = -1;
     bool clear = false;
+    // Two textures swapped at the swap of a frame that wrote it: the passes
+    // write this frame's and read the previous frame's as previous:<name>.
+    bool history = false;
+    // Written at the scene_color point, then copied into the texture cache's
+    // host texture of the scene, which the game's next fetches of the scene
+    // bind (the write-back; R10G10B10A2_UNORM, the scene's size).
+    bool write_back = false;
     // Usage by the passes.
     bool uav = false, rtv = false;
   };
@@ -136,11 +166,41 @@ class PostPasses {
     post_pass::CameraLayout layout;
     uint32_t constants[3];
   };
+  // A vertex shader of the motion objects ([motion] objects): where its world
+  // matrix is. Its index in the list is its priority (0 first).
+  struct MotionSource {
+    uint64_t vertex_shader_hash;
+    post_pass::WorldLayout layout;
+    uint32_t constant;
+  };
+  static constexpr uint32_t kMaxMotionSources = 32;
   struct Manifest {
     std::vector<CameraSource> camera_sources;
+    // A camera entry with the hash *: the layout most vertex shaders of the
+    // title share, for draws of vertex shaders not in camera_sources.
+    bool has_camera_fallback = false;
+    CameraSource camera_fallback = {};
     uint32_t min_width = 1024;
     std::vector<uint64_t> final_pixel_shaders;
     float cut_distance = 5.0f, cut_angle = 30.0f, cut_focal = 0.1f;
+    // [motion]: the slot of a stencil value s is round(s / stencil_step) below
+    // stencil_limit, else 0; slot_count from both (at most kMotionSlots).
+    std::vector<MotionSource> motion_sources;
+    // [motion] interior: the vertex shaders of an object's interior, drawn with
+    // the object's stencil ID and then covered by a mask at the stored depth
+    // interior_depth (no interior_sources: none).
+    std::vector<MotionSource> interior_sources;
+    float interior_depth = 1.0f;
+    uint32_t motion_stencil_step = 1, motion_stencil_limit = 256;
+    uint32_t motion_slot_count = 1;
+    // [jitter]: the scene draws are jittered in a frame after one in which a
+    // pass of jitter_consumers ran, while jitter_conditions hold; jitter_exclude
+    // lists vertex shaders never jittered.
+    bool jitter = false;
+    uint32_t jitter_phases = 8;
+    std::vector<Condition> jitter_conditions;
+    std::vector<std::string> jitter_consumers;
+    std::vector<uint64_t> jitter_exclude;
     // Name and the value of the manifest.
     std::vector<std::pair<std::string, std::string>> defines;
     std::vector<ParamDesc> params;
@@ -148,6 +208,8 @@ class PostPasses {
     std::vector<PassDesc> passes;
     bool uses_point[size_t(Point::kCount)] = {};
     bool uses_scene_color = false, uses_previous_color = false, uses_previous_depth = false;
+    bool uses_scene_stencil = false;
+    bool uses_write_back = false;
     // The defines as compiled (after shader_mod_defines).
     std::vector<std::pair<std::string, std::string>> compiled_defines;
     std::vector<uint8_t> vertex_shader;
@@ -165,6 +227,8 @@ class PostPasses {
     std::array<uint32_t, kMaxMips> rtvs;
     uint32_t clear_uav = UINT32_MAX;
     bool written = false;
+    // The frame a pass last wrote it in.
+    uint64_t written_frame = UINT64_MAX;
     Texture() {
       srv_mips.fill(UINT32_MAX);
       uavs.fill(UINT32_MAX);
@@ -180,9 +244,46 @@ class PostPasses {
     float guest_origin = 0.0f;
     // For the log: ndc_z = q - q_near / view z of a Direct3D style projection.
     float q = 0.0f, q_near = 0.0f;
+    // Clip = projection * view position (post_pass_motion_check).
+    post_pass::Matrix projection = {};
     bool view_known = false;
     uint64_t view_frame = UINT64_MAX;
     post_pass::Matrix view_to_world = {};
+    // The camera sources that gave them: the index in camera_sources, or its
+    // size for the fallback. A source earlier in the list replaces a later
+    // one's matrices in the same frame.
+    uint32_t projection_source = 0, view_source = 0;
+  };
+  // A motion object of a frame: the world matrix of the draw of the highest
+  // priority source with its stencil reference.
+  struct MotionObject {
+    uint64_t frame = UINT64_MAX;
+    uint32_t source = UINT32_MAX;
+    uint32_t reference = 0;
+    post_pass::MatrixD world = {};
+    // The sources that drew the object in the frame (their first world matrix
+    // is in motion_first_worlds_, for the log).
+    uint32_t sources_drawn = 0;
+  };
+  // The motion constants of a frame (SceneConstants::motion_*), computed at
+  // its first point.
+  struct Motion {
+    uint64_t frame = UINT64_MAX;
+    bool valid = false;
+    uint32_t slots_own = 0;
+    uint32_t slots_drawn = 0;
+    float view_to_previous_view[post_pass::kMotionSlots][3][4] = {};
+    // The stencil slot of the interior's object, or kMotionNoInterior.
+    uint32_t interior_slot = post_pass::kMotionNoInterior;
+    // Per slot, the view position of the object's origin, w 1 if drawn.
+    float object_origin[post_pass::kMotionSlots][4] = {};
+  };
+  // post_pass_motion_check: a guest pixel shader holding its own reprojection
+  // matrices, logged next to the host's.
+  struct MotionCheck {
+    uint64_t pixel_shader_hash;
+    uint32_t constant, slots;
+    uint64_t next_frame;
   };
   // A pixel shader float constant to log (post_pass_log_constants).
   struct LoggedConstant {
@@ -233,8 +334,35 @@ class PostPasses {
   void PollFiles();
 
   // Scene tracking.
-  void CaptureCamera(const RegisterFile& regs, const CameraSource& source);
+  bool IsSceneDepthBuffer(const RegisterFile& regs, uint32_t& depth_edram_base_out) const;
+  // source_index: the priority of the source (its index in camera_sources, or
+  // their count for the fallback, the manifest's layout for any vertex shader).
+  void CaptureCamera(const RegisterFile& regs, const CameraSource& source, uint32_t source_index);
+  // The vertex shader reads every constant of the source's layout (its float
+  // constant bitmap).
+  static bool ReadsCameraConstants(const CameraSource& source, const uint64_t* float_constants);
+  void CaptureObject(const RegisterFile& regs, uint32_t source_index);
+  // A draw of an interior source ([motion] interior): the interior of the
+  // object with its stencil reference.
+  void CaptureInterior(const RegisterFile& regs, uint32_t source_index);
+  // The slot and stencil reference of a draw of a motion or interior source,
+  // if it writes its reference into the scene stencil.
+  bool ObjectDraw(const RegisterFile& regs, uint32_t& slot_out, uint32_t& reference_out) const;
+  // The world matrix of a draw of a source.
+  post_pass::MatrixD ObjectWorld(const RegisterFile& regs, const MotionSource& source) const;
+  // The motion slot of a stencil value (0: the static world).
+  uint32_t MotionSlot(uint32_t stencil) const;
   void LogConstants(const RegisterFile& regs, uint64_t pixel_shader_hash);
+  // Motion.
+  void UpdateMotion();
+  // An object's own view_to_previous_view, if it was captured in both frames
+  // and did not jump.
+  bool ObjectReprojection(const MotionObject& object, const MotionObject& previous,
+                          const post_pass::MatrixD& view_to_world,
+                          const post_pass::MatrixD& previous_view_to_world,
+                          post_pass::MatrixD& out) const;
+  void LogMotionCheck(const RegisterFile& regs, MotionCheck& check);
+  std::string MotionSummary() const;
   bool TrackGroup(ResolveGroup& group, uint32_t address, uint32_t length, uint32_t pitch,
                   uint32_t height, uint32_t edram_base, uint64_t frame);
   // The scene color of the frame is complete, after its scene depth.
@@ -244,16 +372,35 @@ class PostPasses {
   // Runs.
   bool IsSkipped(int32_t* variant_index_out);
   void UpdateParams(int32_t variant_index);
+  // Conditions (a pass's if, [jitter] if) on the current params and defines.
+  bool ConditionsHold(const std::vector<Condition>& conditions) const;
+  bool PassEnabled(const PassDesc& pass) const { return ConditionsHold(pass.conditions); }
+  // At the swap: the jitter of the next frame.
+  void UpdateJitter();
   void FillSceneConstants(post_pass::SceneConstants& constants) const;
   void RunPoint(Point point);
-  bool RequestExternal(const ResolveGroup& group, bool depth, External& out);
-  void RunPass(PassDesc& pass, D3D12_GPU_VIRTUAL_ADDRESS scene_constants);
+  enum class ExternalKind { kColor, kDepth, kStencil };
+  bool RequestExternal(const ResolveGroup& group, ExternalKind kind, External& out);
+  // False if the pass did not dispatch or draw (an input or output missing).
+  bool RunPass(PassDesc& pass, D3D12_GPU_VIRTUAL_ADDRESS scene_constants);
   bool BindingSize(const Binding& binding, uint32_t& width, uint32_t& height) const;
   void CopyHistory();
+  // Copies the write-back textures written at this frame's scene_color point
+  // into the texture cache's host texture of the scene.
+  void WriteBack();
   void LogRun(int32_t variant_index);
+  // The write-back counts of the log line (empty without a write-back).
+  std::string WriteBackSummary() const;
 
   // Resources.
-  bool EnsureTexture(uint32_t index);
+  // The texture of a manifest index, or with previous its history texture's
+  // copy of the previous frame.
+  bool EnsureTexture(uint32_t index, bool previous = false);
+  // The size of a texture of the manifest at the current scene and final
+  // sizes (0 if unknown).
+  void TextureSize(const TextureDesc& desc, uint32_t& width, uint32_t& height) const;
+  // The previous frame's copies of the history textures are usable.
+  bool HistoryTexturesValid() const;
   void ReleaseTexture(Texture& texture, const TextureDesc* desc);
   void ReleaseTextures();
   bool EnsureHistory(History& history, ID3D12Resource* source,
@@ -283,6 +430,7 @@ class PostPasses {
   std::vector<std::pair<std::filesystem::path, ShaderOverrides::FileState>> watched_;
   uint64_t defines_generation_ = 0;
   std::vector<LoggedConstant> logged_constants_;
+  std::vector<MotionCheck> motion_checks_;
 
   Microsoft::WRL::ComPtr<ID3D12RootSignature> root_signature_;
   // Pipelines replaced by a reload, released once the GPU is past them.
@@ -297,6 +445,10 @@ class PostPasses {
   std::vector<PendingDescriptor> pending_descriptors_;
 
   std::vector<Texture> textures_;
+  // Per history texture of the manifest, the previous frame's, and whether it
+  // was written in the frame before this one.
+  std::vector<Texture> previous_textures_;
+  std::vector<bool> previous_texture_ready_;
   // Per param, the value in the pass constants (b1).
   std::array<uint32_t, post_pass::kMaxParams> param_values_ = {};
   bool params_valid_ = false;
@@ -318,8 +470,10 @@ class PostPasses {
   uint32_t final_guest_width_ = 0, final_guest_height_ = 0;
   uint32_t final_width_ = 0, final_height_ = 0;
   bool warned_final_ = false;
-  // The passes' inputs at the current run.
-  External scene_depth_, scene_color_;
+  // The passes' inputs at the current run; the stencil is requested by the
+  // first pass that reads it.
+  External scene_depth_, scene_color_, scene_stencil_;
+  bool scene_stencil_requested_ = false;
   struct {
     ID3D12Resource* resource = nullptr;
     D3D12_CPU_DESCRIPTOR_HANDLE rtv = {};
@@ -334,10 +488,37 @@ class PostPasses {
   bool history_written_ = false;
   bool previous_valid_ = false;
   uint32_t previous_width_ = 0, previous_height_ = 0;
+  // The previous frame's camera and motion objects, kept from every frame with
+  // a scene (also without history textures).
+  bool previous_scene_ = false;
   Camera previous_camera_;
+
+  // The jitter of this frame's scene draws (UpdateJitter at the previous
+  // swap), in host pixels; the phases counted so far; the last frame in which
+  // a pass of the manifest's jitter_consumers ran.
+  bool jitter_active_ = false;
+  float jitter_[2] = {};
+  uint64_t jitter_count_ = 0;
+  uint64_t jitter_consumer_frame_ = UINT64_MAX;
+  bool warned_jitter_ = false;
+
+  // Motion objects by slot, of this frame and the previous one.
+  std::array<MotionObject, post_pass::kMotionSlots> motion_objects_, previous_motion_objects_;
+  // The interior of the frame and of the previous one (source: its index in
+  // interior_sources).
+  MotionObject interior_, previous_interior_;
+  // Per slot and source, the first world matrix of the frame (for the log).
+  std::vector<std::array<post_pass::Matrix, kMaxMotionSources>> motion_first_worlds_;
+  Motion motion_;
 
   uint64_t runs_ = 0;
   bool warned_no_camera_ = false;
+  bool warned_write_back_ = false;
+  // The guest's use of the last complete write-back (until the one after it),
+  // for the log.
+  uint64_t write_back_frame_ = UINT64_MAX;
+  TextureCache::WriteBackCounts write_back_counts_;
+  bool warned_stencil_ = false;
 };
 
 }  // namespace rex::graphics::d3d12
