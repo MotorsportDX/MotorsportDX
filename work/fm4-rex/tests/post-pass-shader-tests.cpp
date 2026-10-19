@@ -706,7 +706,8 @@ int main(int argc, char** argv) {
   ComPtr<ID3D12DescriptorHeap> rtv_heap;
   D3D12_DESCRIPTOR_HEAP_DESC rtv_heap_desc = {D3D12_DESCRIPTOR_HEAP_TYPE_RTV, 64,
                                               D3D12_DESCRIPTOR_HEAP_FLAG_NONE, 0};
-  if (!Succeeded(device->CreateDescriptorHeap(&rtv_heap_desc, IID_PPV_ARGS(&rtv_heap)), "RTV heap")) {
+  if (!Succeeded(device->CreateDescriptorHeap(&rtv_heap_desc, IID_PPV_ARGS(&rtv_heap)),
+                 "RTV heap")) {
     return 1;
   }
   UINT rtv_increment = device->GetDescriptorHandleIncrementSize(D3D12_DESCRIPTOR_HEAP_TYPE_RTV);
@@ -1419,8 +1420,9 @@ int main(int argc, char** argv) {
         if (name == "scene_stencil") {
           srvs[i] = gpu(frame_stencil_srv);
         } else if (name == "final_color") {
-          transition(final_texture.Get(), final_state, D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE |
-                                                           D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE);
+          transition(final_texture.Get(), final_state,
+                     D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE |
+                         D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE);
           srvs[i] = gpu(final_srv);
         } else if (name == "previous_depth") {
           srvs[i] = gpu(previous_depth_srv);
@@ -1445,11 +1447,13 @@ int main(int argc, char** argv) {
           const Binding& binding = pass.uavs[std::min(i, pass.uavs.size() - 1)];
           Texture* texture = find_texture(binding.texture);
           if (!texture) {
-            std::printf("FAIL pass %s: no texture %s\n", pass.name.c_str(), binding.texture.c_str());
+            std::printf("FAIL pass %s: no texture %s\n", pass.name.c_str(),
+                        binding.texture.c_str());
             ++failures;
             return false;
           }
-          transition(texture->resource.Get(), texture->state, D3D12_RESOURCE_STATE_UNORDERED_ACCESS);
+          transition(texture->resource.Get(), texture->state,
+                     D3D12_RESOURCE_STATE_UNORDERED_ACCESS);
           uavs[i] = gpu(texture->uavs[std::max(binding.mip, 0)]);
           if (texture->history) written_this_frame.push_back(texture->name);
         }
@@ -1614,7 +1618,8 @@ int main(int argc, char** argv) {
   auto read_final = [&](int block) {
     std::vector<float> rgb(kWidth * kHeight * 3);
     uint8_t* mapped = nullptr;
-    D3D12_RANGE range = {SIZE_T(UINT64(block) * wide_block), SIZE_T(UINT64(block + 1) * wide_block)};
+    D3D12_RANGE range = {SIZE_T(UINT64(block) * wide_block),
+                         SIZE_T(UINT64(block + 1) * wide_block)};
     final_readback->Map(0, &range, reinterpret_cast<void**>(&mapped));
     for (uint32_t y = 0; y < kHeight; ++y) {
       for (uint32_t x = 0; x < kWidth; ++x) {
@@ -1659,6 +1664,320 @@ int main(int argc, char** argv) {
     }
     Check(worst < 2.0 / 1023.0 + 1.0 / 255.0,
           "final point: the slot view drawn over final_color, rotated 180 degrees", worst * 1023.0);
+  }
+
+  // TAA (taa.hlsl) over frames on synthetic final images, with the motion
+  // vectors, their mask and the scene depth given directly (scene layout,
+  // rotated 180 degrees against the final image) and the runtime's jitter:
+  // what a final pixel q shows is the scene at q + 0.5 - jitter in final
+  // pixels, the scene jitter negated by the rotation.
+  if (find_texture("taa_history")) {
+    auto to_half = [](float value) {
+      uint32_t bits;
+      std::memcpy(&bits, &value, 4);
+      uint32_t sign = (bits >> 16) & 0x8000u;
+      int exponent = int((bits >> 23) & 0xFF) - 127 + 15;
+      uint32_t mantissa = bits & 0x7FFFFFu;
+      if (exponent <= 0) return uint16_t(sign);
+      if (exponent >= 31) return uint16_t(sign | 0x7C00u);
+      return uint16_t(sign | uint32_t(exponent) << 10 | ((mantissa + 0x1000u) >> 13));
+    };
+    Texture* motion_vectors_texture = find_texture("motion_vectors");
+    ComPtr<ID3D12Resource> taa_upload =
+        buffer(D3D12_HEAP_TYPE_UPLOAD, wide_block * 5, D3D12_RESOURCE_STATE_GENERIC_READ);
+    ComPtr<ID3D12Resource> taa_constants =
+        buffer(D3D12_HEAP_TYPE_UPLOAD, constants_stride, D3D12_RESOURCE_STATE_GENERIC_READ);
+    ComPtr<ID3D12Resource> taa_readback =
+        buffer(D3D12_HEAP_TYPE_READBACK, wide_block * 4, D3D12_RESOURCE_STATE_COPY_DEST);
+    // A frame: the final image (RGB per final pixel), the stored scene depth
+    // and the previous frame's, the motion (2 per scene pixel, previous minus
+    // current) and the mask (2 per scene pixel, 0 or 255).
+    struct Frame {
+      std::vector<float> rgb, depth, previous_depth, motion;
+      std::vector<uint8_t> mask;
+      float jitter[2] = {};
+      bool history_valid = true;
+    };
+    auto new_frame = [&]() {
+      Frame frame;
+      frame.rgb.assign(kWidth * kHeight * 3, 0.0f);
+      // Flat ground at a stored depth of 0.02 (W about 12 m).
+      frame.depth.assign(kWidth * kHeight, 0.02f);
+      frame.previous_depth = frame.depth;
+      frame.motion.assign(kWidth * kHeight * 2, 0.0f);
+      frame.mask.assign(kWidth * kHeight * 2, 0);
+      return frame;
+    };
+    auto scene_index = [](uint32_t x, uint32_t y) {
+      return (kHeight - 1 - y) * kWidth + (kWidth - 1 - x);
+    };
+    // Runs one frame: uploads, the final point's passes, the readback of
+    // final_color to block readback_block (none if negative), the swap.
+    auto run_taa = [&](const Frame& frame, const std::map<std::string, double>& set,
+                       int readback_block) {
+      post_pass::SceneConstants constants = scene;
+      constants.final_size[0] = kWidth;
+      constants.final_size[1] = kHeight;
+      constants.final_uv_scale[0] = constants.final_uv_scale[1] = 1.0f;
+      constants.jitter[0] = frame.jitter[0];
+      constants.jitter[1] = frame.jitter[1];
+      constants.flags = post_pass::kSceneFlagViewKnown | post_pass::kSceneFlagMotionValid |
+                        (frame.history_valid ? post_pass::kSceneFlagHistoryValid : 0u);
+      std::memcpy(constants.previous_xy_mul_add, constants.xy_mul_add,
+                  sizeof(constants.xy_mul_add));
+      constants.previous_w_numerator = constants.w_numerator;
+      constants.previous_w_depth_mul = constants.w_depth_mul;
+      constants.previous_w_depth_add = constants.w_depth_add;
+      constants.previous_z_from_w = constants.z_from_w;
+      void* mapped_constants = nullptr;
+      taa_constants->Map(0, nullptr, &mapped_constants);
+      std::memcpy(mapped_constants, &constants, sizeof(constants));
+      taa_constants->Unmap(0, nullptr);
+      uint8_t* mapped = nullptr;
+      taa_upload->Map(0, nullptr, reinterpret_cast<void**>(&mapped));
+      for (uint32_t y = 0; y < kHeight; ++y) {
+        std::memcpy(mapped + wide_block + y * depth_pitch, &frame.depth[y * kWidth], kWidth * 4);
+        std::memcpy(mapped + wide_block * 2 + y * depth_pitch, &frame.previous_depth[y * kWidth],
+                    kWidth * 4);
+        for (uint32_t x = 0; x < kWidth; ++x) {
+          uint16_t motion[2] = {to_half(frame.motion[(y * kWidth + x) * 2]),
+                                to_half(frame.motion[(y * kWidth + x) * 2 + 1])};
+          std::memcpy(mapped + wide_block * 3 + y * depth_pitch + x * 4, motion, 4);
+          std::memcpy(mapped + wide_block * 4 + y * depth_pitch + x * 2,
+                      &frame.mask[(y * kWidth + x) * 2], 2);
+        }
+      }
+      taa_upload->Unmap(0, nullptr);
+      upload_final(frame.rgb);
+      auto copy_in = [&](ID3D12Resource* resource, D3D12_RESOURCE_STATES& state,
+                         DXGI_FORMAT format, int block) {
+        transition(resource, state, D3D12_RESOURCE_STATE_COPY_DEST);
+        D3D12_TEXTURE_COPY_LOCATION dst = {resource, D3D12_TEXTURE_COPY_TYPE_SUBRESOURCE_INDEX};
+        D3D12_TEXTURE_COPY_LOCATION src = {taa_upload.Get(),
+                                           D3D12_TEXTURE_COPY_TYPE_PLACED_FOOTPRINT};
+        src.PlacedFootprint.Offset = UINT64(block) * wide_block;
+        src.PlacedFootprint.Footprint = {format, kWidth, kHeight, 1, depth_pitch};
+        list->CopyTextureRegion(&dst, 0, 0, 0, &src, nullptr);
+        transition(resource, state, D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE |
+                                        D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE);
+      };
+      copy_in(depth_texture.Get(), depth_state, DXGI_FORMAT_R32_FLOAT, 1);
+      copy_in(previous_depth_texture.Get(), previous_depth_state, DXGI_FORMAT_R32_FLOAT, 2);
+      copy_in(motion_vectors_texture->resource.Get(), motion_vectors_texture->state,
+              DXGI_FORMAT_R16G16_FLOAT, 3);
+      copy_in(motion_mask_texture->resource.Get(), motion_mask_texture->state,
+              DXGI_FORMAT_R8G8_UNORM, 4);
+      frame_depth_srv = depth_srv;
+      if (!run_final(set, taa_constants->GetGPUVirtualAddress())) return false;
+      if (readback_block >= 0) {
+        transition(final_texture.Get(), final_state, D3D12_RESOURCE_STATE_COPY_SOURCE);
+        D3D12_TEXTURE_COPY_LOCATION src = {final_texture.Get(),
+                                           D3D12_TEXTURE_COPY_TYPE_SUBRESOURCE_INDEX};
+        D3D12_TEXTURE_COPY_LOCATION dst = {taa_readback.Get(),
+                                           D3D12_TEXTURE_COPY_TYPE_PLACED_FOOTPRINT};
+        dst.PlacedFootprint.Offset = UINT64(readback_block) * wide_block;
+        dst.PlacedFootprint.Footprint = {kFinalFormat, kWidth, kHeight, 1, depth_pitch};
+        list->CopyTextureRegion(&dst, 0, 0, 0, &src, nullptr);
+      }
+      end_frame();
+      return submit();
+    };
+    auto read_taa = [&](int block) {
+      std::vector<float> rgb(kWidth * kHeight * 3);
+      uint8_t* mapped = nullptr;
+      D3D12_RANGE range = {0, SIZE_T(wide_block * 4)};
+      taa_readback->Map(0, &range, reinterpret_cast<void**>(&mapped));
+      for (uint32_t y = 0; y < kHeight; ++y) {
+        for (uint32_t x = 0; x < kWidth; ++x) {
+          uint32_t packed;
+          std::memcpy(&packed, mapped + UINT64(block) * wide_block + y * depth_pitch + x * 4, 4);
+          for (int k = 0; k < 3; ++k) {
+            rgb[(y * kWidth + x) * 3 + k] = float((packed >> (10 * k)) & 1023u) / 1023.0f;
+          }
+        }
+      }
+      taa_readback->Unmap(0, nullptr);
+      return rgb;
+    };
+    auto jitter_of = [](uint32_t index, float out[2]) { post_pass::JitterOffset(index % 8, out); };
+    // A tilted edge: white where x cos + y sin > c in final pixels.
+    const double edge_angle = 0.3;
+    const double edge_c =
+        0.5 * kWidth * std::cos(edge_angle) + 0.5 * kHeight * std::sin(edge_angle);
+    auto edge = [&](double x, double y) {
+      return x * std::cos(edge_angle) + y * std::sin(edge_angle) > edge_c ? 1.0f : 0.0f;
+    };
+    std::map<std::string, double> taa_on = {{"TAA", 1.0}, {"TAA_SHARPEN", 0.0}};
+
+    // 1. A still edge over 40 frames: it converges to the pixel coverage and
+    //    holds still, while the input flips between 0 and 1 on the edge.
+    std::vector<float> previous_input;
+    double input_change = 0.0;
+    bool ok = true;
+    for (uint32_t index = 0; index < 40 && ok; ++index) {
+      Frame frame = new_frame();
+      jitter_of(index, frame.jitter);
+      frame.history_valid = index > 0;
+      for (uint32_t y = 0; y < kHeight; ++y) {
+        for (uint32_t x = 0; x < kWidth; ++x) {
+          // The scene jitter in final pixels is its negation.
+          float value = edge(x + 0.5 + frame.jitter[0], y + 0.5 + frame.jitter[1]);
+          for (int k = 0; k < 3; ++k) frame.rgb[(y * kWidth + x) * 3 + k] = value;
+        }
+      }
+      if (!previous_input.empty()) {
+        for (size_t i = 0; i < frame.rgb.size(); ++i) {
+          input_change = std::fmax(input_change, std::fabs(frame.rgb[i] - previous_input[i]));
+        }
+      }
+      previous_input = frame.rgb;
+      ok = run_taa(frame, taa_on, index == 38 ? 0 : index == 39 ? 1 : -1);
+    }
+    if (!ok) return 1;
+    std::vector<float> out38 = read_taa(0), out39 = read_taa(1);
+    double coverage_error = 0.0, change = 0.0;
+    int edge_pixels = 0;
+    for (uint32_t y = 2; y + 2 < kHeight; ++y) {
+      for (uint32_t x = 2; x + 2 < kWidth; ++x) {
+        double coverage = 0.0;
+        for (int sy = 0; sy < 8; ++sy) {
+          for (int sx = 0; sx < 8; ++sx) {
+            coverage += edge(x + (sx + 0.5) / 8.0, y + (sy + 0.5) / 8.0);
+          }
+        }
+        coverage /= 64.0;
+        uint32_t i = (y * kWidth + x) * 3;
+        change = std::fmax(change, std::fabs(out39[i] - out38[i]));
+        if (coverage <= 0.0 || coverage >= 1.0) continue;
+        coverage_error += std::fabs(out39[i] * out39[i] - coverage);
+        ++edge_pixels;
+      }
+    }
+    coverage_error /= std::max(edge_pixels, 1);
+    std::printf("taa: still edge, %d edge pixels: mean |linear - coverage| %.3f, largest change "
+                "between the last two frames %.3f (input %.3f)\n",
+                edge_pixels, coverage_error, change, input_change);
+    Check(coverage_error < 0.1, "taa: a still edge converges to its pixel coverage",
+          coverage_error);
+    Check(change < 0.1 && change * 5.0 < input_change, "taa: a still edge holds still", change);
+
+    // 2. A white box 40 pixels wide moving 4 pixels to the right per frame
+    //    over a dark ground, nearer than it: no trail behind it, and the box
+    //    stays white.
+    double trail = 0.0, box_low = 1.0;
+    for (uint32_t index = 0; index < 16 && ok; ++index) {
+      Frame frame = new_frame();
+      jitter_of(index, frame.jitter);
+      frame.history_valid = index > 0;
+      double left = 100.0 + 4.0 * index;
+      for (uint32_t y = 0; y < kHeight; ++y) {
+        for (uint32_t x = 0; x < kWidth; ++x) {
+          double sx = x + 0.5 + frame.jitter[0], sy = y + 0.5 + frame.jitter[1];
+          bool in_box = sx >= left && sx < left + 40.0 && sy >= 120.0 && sy < 220.0;
+          for (int k = 0; k < 3; ++k) frame.rgb[(y * kWidth + x) * 3 + k] = in_box ? 1.0f : 0.0f;
+          bool box_pixel = x + 0.5 >= left && x + 0.5 < left + 40.0 && y + 0.5 >= 120.0 &&
+                           y + 0.5 < 220.0;
+          if (box_pixel) {
+            uint32_t s = scene_index(x, y);
+            frame.depth[s] = 0.2f;
+            // Previous minus current, final pixels (-4, 0), negated for the
+            // scene layout.
+            frame.motion[s * 2] = 4.0f;
+          }
+        }
+      }
+      frame.previous_depth = frame.depth;
+      ok = run_taa(frame, taa_on, index == 15 ? 2 : -1);
+      if (index == 15) {
+        if (!ok) return 1;
+        std::vector<float> out = read_taa(2);
+        for (uint32_t y = 124; y < 216; ++y) {
+          for (uint32_t x = 0; x < kWidth; ++x) {
+            double linear = out[(y * kWidth + x) * 3] * out[(y * kWidth + x) * 3];
+            if (x + 0.5 < left - 2.0 && x + 0.5 > 100.0) trail = std::fmax(trail, linear);
+            if (x + 0.5 > left + 2.0 && x + 0.5 < left + 38.0) box_low = std::fmin(box_low, linear);
+          }
+        }
+      }
+    }
+    if (!ok) return 1;
+    std::printf("taa: moving box: trail %.3f, box at least %.3f\n", trail, box_low);
+    Check(trail < 0.05, "taa: no trail behind a moving box", trail);
+    Check(box_low > 0.9, "taa: the moving box keeps its color", box_low);
+
+    // 3. The history is not used without xe_history_valid(): a white frame
+    //    after the box comes out white.
+    {
+      Frame frame = new_frame();
+      frame.history_valid = false;
+      std::fill(frame.rgb.begin(), frame.rgb.end(), 1.0f);
+      if (!run_taa(frame, taa_on, 3)) return 1;
+      std::vector<float> out = read_taa(3);
+      float darkest = *std::min_element(out.begin(), out.end());
+      Check(darkest > 0.99f, "taa: no history used without xe_history_valid()", darkest);
+    }
+
+    // 4. The weight of the current frame (TAA_DEBUG 2, its red channel) after
+    //    20 still frames of a flat gray: 1 under the mask's R (no motion
+    //    known), at least TAA_REACTIVE under G (reactive), TAA_BLEND elsewhere;
+    //    and (TAA_DEBUG 4) yellow where the previous scene depth was nearer,
+    //    but not along a thin near line that the jitter moves across pixels.
+    for (int view : {2, 4}) {
+      std::vector<float> last_depth;
+      for (uint32_t index = 0; index < 20 && ok; ++index) {
+        Frame frame = new_frame();
+        jitter_of(index, frame.jitter);
+        frame.history_valid = index > 0;
+        std::fill(frame.rgb.begin(), frame.rgb.end(), 0.5f);
+        for (uint32_t y = 40; y < 100; ++y) {
+          for (uint32_t x = 40; x < 140; ++x) frame.mask[scene_index(x, y) * 2] = 255;
+          for (uint32_t x = 240; x < 340; ++x) frame.mask[scene_index(x, y) * 2 + 1] = 255;
+          // Something at a stored depth of 0.5 (W about 0.5 m) was there.
+          for (uint32_t x = 440; x < 540; ++x) frame.previous_depth[scene_index(x, y)] = 0.5f;
+        }
+        // A line 0.6 pixels wide at a stored depth of 0.5, as the jittered
+        // draws render it.
+        for (uint32_t y = 200; y < 300; ++y) {
+          for (uint32_t x = 290; x < 310; ++x) {
+            double sx = x + 0.5 + frame.jitter[0];
+            if (sx >= 300.3 && sx < 300.9) {
+              frame.depth[scene_index(x, y)] = 0.5f;
+              for (int k = 0; k < 3; ++k) frame.rgb[(y * kWidth + x) * 3 + k] = 1.0f;
+            }
+          }
+        }
+        if (!last_depth.empty()) {
+          for (uint32_t y = 200; y < 300; ++y) {
+            for (uint32_t x = 290; x < 310; ++x) {
+              frame.previous_depth[scene_index(x, y)] = last_depth[scene_index(x, y)];
+            }
+          }
+        }
+        last_depth = frame.depth;
+        std::map<std::string, double> set = taa_on;
+        set["TAA_DEBUG"] = view;
+        ok = run_taa(frame, set, index == 19 ? 0 : -1);
+      }
+      if (!ok) return 1;
+      std::vector<float> out = read_taa(0);
+      auto at = [&](uint32_t x, uint32_t y, int k) { return out[(y * kWidth + x) * 3 + k]; };
+      if (view == 2) {
+        Check(at(90, 70, 0) > 0.99f, "taa: all current frame under mask R", at(90, 70, 0));
+        Check(at(290, 70, 0) > 0.49f, "taa: at least TAA_REACTIVE under mask G", at(290, 70, 0));
+        Check(std::fabs(at(320, 250, 0) - 0.1f) < 0.01f, "taa: TAA_BLEND on a settled history",
+              at(320, 250, 0));
+      } else {
+        bool yellow = at(490, 70, 0) > 0.9f && at(490, 70, 1) > 0.8f && at(490, 70, 2) < 0.2f;
+        Check(yellow, "taa: a history behind a nearer previous surface is dropped",
+              at(490, 70, 1));
+        Check(at(320, 250, 0) < 0.5f, "taa: the history kept elsewhere", at(320, 250, 0));
+        int line_dropped = 0;
+        for (uint32_t x = 296; x < 305; ++x) {
+          line_dropped += at(x, 250, 0) > 0.9f && at(x, 250, 1) > 0.8f && at(x, 250, 2) < 0.2f;
+        }
+        Check(line_dropped == 0, "taa: a jittered thin line keeps its history", line_dropped);
+      }
+    }
   }
 
   // Averages of the occlusion (0..1) over pixels of a region.

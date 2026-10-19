@@ -1,8 +1,8 @@
 # Post passes of FM4 for the runtime's post pass framework (post_pass_path):
 # screen passes that run inside the guest frame, written as HLSL files and this
 # manifest. See docs/analysis/post-pass-framework.md for the format,
-# docs/analysis/gtao-design.md for GTAO and docs/analysis/motion-vectors.md for
-# the motion vectors.
+# docs/analysis/gtao-design.md for GTAO, docs/analysis/motion-vectors.md for
+# the motion vectors and docs/analysis/taa.md for TAA.
 
 [scene]
 # Vertex shaders that carry the scene camera: <ucode hash>:rows:<WVP>:<WV>
@@ -74,6 +74,10 @@ interior_depth = 1.0
 [defines]
 # Slices x steps per side: 0 2x2, 1 2x4 (one denoise pass), 2 3x6, 3 4x8 (two).
 GTAO_QUALITY = 2
+# TAA: the history filtered with Catmull-Rom (1) or bilinear (0), and the
+# history dropped where the previous scene depth was clearly nearer (1).
+TAA_HISTORY_FILTER = 1
+TAA_DISOCCLUSION = 1
 
 # Run-time params, constants of every pass (b1); shader_mod_defines,
 # shader_mod_set and shader_mod_defines.txt override them by name, live.
@@ -108,6 +112,27 @@ MOTION_INTERIOR_W = { value = 0.6, min = 0.05 }
 # A pixel with a car's stencil ID farther than this from the car's origin (in
 # meters) is the world seen through the car's glass.
 MOTION_OBJECT_RADIUS = { value = 3.0, min = 0.1 }
+# Temporal anti-aliasing at the final point (taa.hlsl): 1 runs it and jitters
+# the scene draws ([jitter]); off unless the look's taa knob turns it on.
+TAA = { value = 0, min = 0, max = 1 }
+# 0 keeps TAA without the jitter.
+TAA_JITTER = { value = 1, min = 0, max = 1 }
+# The weight of the current frame when still, and at TAA_MOTION_PIXELS of
+# motion (host pixels).
+TAA_BLEND = { value = 0.1, min = 0.01, max = 1.0 }
+TAA_BLEND_MOTION = { value = 0.25, min = 0.01, max = 1.0 }
+TAA_MOTION_PIXELS = { value = 16.0, min = 0.1 }
+# The width of the box the history is clipped to, in standard deviations of
+# the 3x3 around the pixel.
+TAA_CLIP_GAMMA = { value = 1.0, min = 0.1 }
+# The weight of the current frame at least on reactive pixels (car glass).
+TAA_REACTIVE = { value = 0.5, min = 0.0, max = 1.0 }
+# Sharpening after the resolve (0 to 1); the history stays unsharpened.
+TAA_SHARPEN = { value = 0.4, min = 0.0, max = 1.0 }
+# Drawn instead of the image (taa.hlsl): 0 off, 1 the history alone, 2 the
+# weight of the current frame, 3 the clip, 4 why there is no history, 5 the
+# current frame without the jitter.
+TAA_DEBUG = { value = 0, min = 0, max = 5 }
 
 # Textures of the passes, at the size of the scene depth unless scale says
 # otherwise. slot exposes one to shader mods (xe_post_texture; slot 0 is
@@ -147,6 +172,18 @@ clear = true
 [textures.motion_debug_color]
 format = "R8G8B8A8_UNORM"
 clear = true
+
+# The TAA output of this frame and the previous one (previous:taa_history):
+# linear color, and the frames accumulated in alpha; the size of the final
+# color, in screen orientation.
+[textures.taa_history]
+format = "R16G16B16A16_FLOAT"
+size = "final"
+history = true
+
+[textures.taa_debug]
+format = "R8G8B8A8_UNORM"
+size = "final"
 
 # GTAO after the last scene depth tile is resolved, before the post chain.
 [[passes]]
@@ -215,6 +252,28 @@ if = "MOTION_VECTORS > 0 && MOTION_DEBUG > 0"
 srv = ["motion_vectors", "scene_stencil", "scene_depth", "motion_mask"]
 uav = ["motion_debug_color"]
 
+# TAA at the final point, before the HUD: the resolve, then the output drawn
+# into final_color (before the motion debug view, which draws over it).
+[[passes]]
+name = "taa_resolve"
+point = "final"
+shader = "taa.hlsl"
+entry = "taa_resolve"
+if = "TAA > 0 && XE_SCENE > 0"
+srv = ["final_color", "scene_depth", "motion_vectors", "motion_mask", "previous:taa_history",
+       "previous_depth"]
+uav = ["taa_history", "taa_debug"]
+
+[[passes]]
+name = "taa_output"
+point = "final"
+type = "pixel"
+shader = "taa.hlsl"
+entry = "taa_output"
+if = "TAA > 0 && XE_SCENE > 0"
+srv = ["taa_history", "taa_debug"]
+rtv = ["final_color"]
+
 [[passes]]
 name = "motion_debug_show"
 point = "final"
@@ -225,3 +284,10 @@ if = "MOTION_VECTORS > 0 && MOTION_DEBUG > 0"
 srv = ["motion_debug_color"]
 rtv = ["final_color"]
 blend = "alpha"
+
+# The scene draws move by a sub-pixel Halton (2, 3) offset per frame while TAA
+# runs, in frames after one in which taa_resolve ran.
+[jitter]
+phases = 8
+if = "TAA > 0 && TAA_JITTER > 0"
+consumer = "taa_resolve"

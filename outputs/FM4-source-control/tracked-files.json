@@ -501,6 +501,10 @@
       "provenance": "Original post pass of this project (motion vectors from the scene depth, stencil object IDs and host-built reprojection matrices); no game shader code or original game function bodies"
     },
     {
+      "path": "work/fm4-rex/passes/taa.hlsl",
+      "provenance": "Original post pass of this project (temporal anti-aliasing of the final color with jitter, motion vectors and a variance clip); no game shader code or original game function bodies"
+    },
+    {
       "path": "work/fm4-rex/passes/passes.toml",
       "provenance": "Original post pass manifest of this project; names game shader hashes and constant registers as observations only, no game code"
     },

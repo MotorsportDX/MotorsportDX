@@ -1409,17 +1409,32 @@ void PostPasses::OnResolve(const RegisterFile& regs, uint32_t address, uint32_t 
 
 void PostPasses::OnSceneColor() {
   scene_color_frame_ = command_processor_.GetCurrentFrame();
-  if (!manifest_->uses_point[size_t(Point::kSceneColor)] && !manifest_->uses_previous_color &&
-      !manifest_->uses_previous_depth) {
+  // The scene history is copied only while a pass that reads it is on (a TAA
+  // switched off by its params costs no copy); the next frame then has none.
+  bool history_read = false;
+  int32_t variant_index;
+  if ((manifest_->uses_previous_color || manifest_->uses_previous_depth) &&
+      !IsSkipped(&variant_index)) {
+    for (const PassDesc& pass : manifest_->passes) {
+      bool reads = std::any_of(pass.srvs.begin(), pass.srvs.end(), [](const Binding& binding) {
+        return binding.builtin == Builtin::kPreviousColor ||
+               binding.builtin == Builtin::kPreviousDepth;
+      });
+      history_read |= reads && PassEnabled(pass);
+    }
+  }
+  if (!manifest_->uses_point[size_t(Point::kSceneColor)] && !history_read) {
     return;
   }
   scene_color_ = {};
-  if (manifest_->uses_scene_color || manifest_->uses_previous_color) {
+  if (manifest_->uses_scene_color || (history_read && manifest_->uses_previous_color)) {
     RequestExternal(color_group_, ExternalKind::kColor, scene_color_);
   }
   RequestExternal(depth_group_, ExternalKind::kDepth, scene_depth_);
   RunPoint(Point::kSceneColor);
-  CopyHistory();
+  if (history_read) {
+    CopyHistory();
+  }
 }
 
 bool PostPasses::RequestExternal(const ResolveGroup& group, ExternalKind kind, External& out) {

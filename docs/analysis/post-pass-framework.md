@@ -1,6 +1,6 @@
 # Post pass framework
 
-The runtime's post pass framework runs screen passes inside the guest frame. A pass is an entry point of an HLSL file plus a few lines in a manifest, instead of bespoke C++ in the command processor. The framework gives the passes the scene depth, its stencil and the scene color, the previous frame's scene color and depth, the scene camera, the reprojection of each moving object into the previous frame, and the outputs of earlier passes, and it exposes chosen outputs to the shader mods. GTAO and the motion vectors run on it (see [gtao-design.md](gtao-design.md) and [motion-vectors.md](motion-vectors.md)).
+The runtime's post pass framework runs screen passes inside the guest frame. A pass is an entry point of an HLSL file plus a few lines in a manifest, instead of bespoke C++ in the command processor. The framework gives the passes the scene depth, its stencil and the scene color, the previous frame's scene color and depth, the scene camera, the reprojection of each moving object into the previous frame, and the outputs of earlier passes, and it exposes chosen outputs to the shader mods. GTAO, the motion vectors and TAA run on it (see [gtao-design.md](gtao-design.md), [motion-vectors.md](motion-vectors.md) and [taa.md](taa.md)).
 
 It is the common base for the planned rain screen effects, screen-space reflections, TAA and temporal upscalers: they all need new screen passes, and TAA and upscalers also need history and motion vectors. The [TAA v1 plan](taa.md) lists what TAA adds to the framework: jitter, pass-owned history textures, frame conditions, and later a write-back at the scene_color point. The motion of an object comes from the world matrices of the draws that write its ID into the stencil (`[motion]`), the way FM4's own motion blur reprojects each car.
 
@@ -139,7 +139,7 @@ with FXC `/O3` and the defines. The layouts are those of [post_pass_layout.h](..
 
 The scene color and depth are kept only when a pass reads `previous_color` or `previous_depth`, so GTAO alone costs nothing here. A pass keeps its own output across frames in a texture with `history = true`.
 
-- At the scene_color point, the scene color and the scene depth textures (as the texture cache loaded them) are copied (`CopyResource`) into one of two history textures each, of the same description.
+- At the scene_color point, while a pass that reads them is switched on by its `if` (a TAA turned off by its params costs no copy, and its next frame then has no history), the scene color and the scene depth textures (as the texture cache loaded them) are copied (`CopyResource`) into one of two history textures each, of the same description.
 - At the swap, a frame that copied its history makes it the previous frame's, with its size. A frame without a complete scene (menus, loading) drops the history.
 - History textures: at the swap, one written in the frame becomes the previous frame's (`previous:name`) and the other is written next; one not written in the frame has no previous frame's copy until it is written again (after its passes were switched off, for instance).
 - The previous frame's camera and motion objects are kept at the swap of every frame with a scene, whether or not a pass reads the history textures.
