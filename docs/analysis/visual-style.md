@@ -24,7 +24,7 @@ These match the race frame graph: an HDR scene in 7e3, a bloom/downsample chain 
 The tag names below also appear in the XEX (read by the code above).
 
 - `filmicTone` (`shoulderStrength`, `linearStrength`, `linearAngle`, `toeStrength`, `toeNumerator`, `toeDenominator`, `white`, `exposure`): the filmic tone curve. The parameter names match the Hable/Uncharted 2 style of curve.
-- `ToneMapAdaptiveExposure`, `ToneMapCockpitExposure`, `CameraExposureRange`, `ToneMapeDelay`: auto-exposure. The cockpit has its own settings.
+- `ToneMapAdaptiveExposure`, `ToneMapCockpitExposure`, `CameraExposureRange`, `ToneMapeDelay`: auto-exposure. The cockpit has its own settings. Each curve maps a scene key to extra stops at four points (`Key_*`, `Exp_*`). The dark cockpit interior on sunny tracks is the game's own lighting (the interior in its own shadow map, a small ambient term), not the cockpit curve: see [cockpit brightness](cockpit-brightness.md).
 - `bloomCutoff`, `bloomScale`, `bloomWeights`, `bloomPersist`: bloom.
 - `DesaturateAmount`, `DesatLuminosity` (Rec.709 coefficients), `DesatPostMod`, `cubeSkySaturation`: saturation.
 - `ShadowColor`, `LightAmbient`, `SHLighting` (up/down/sun direction), `DarkColor`, `LightColor`: lighting.

@@ -120,6 +120,7 @@ The next validation priorities are a second computer, Disc 2 car races on the la
 | [docs/analysis/b4-shader-research.md](docs/analysis/b4-shader-research.md) | Research on the editable shader path (HLSL through FXC, with overrides per hash) |
 | [docs/analysis/shader-mod-iteration.md](docs/analysis/shader-mod-iteration.md) | Iterating on shader mods: the DXBC cache, hot reload and live look knobs |
 | [docs/analysis/visual-style.md](docs/analysis/visual-style.md) | Research on the origin of FM4's visual style |
+| [docs/analysis/cockpit-brightness.md](docs/analysis/cockpit-brightness.md) | Why the cockpit interior is so dark on sunny tracks (the game's interior lighting, not RTV or the look), and knob candidates |
 | [docs/analysis/releases.md](docs/analysis/releases.md) | How the Japan/Asia and USA releases differ, and why one build serves both |
 | [docs/analysis/title-updates.md](docs/analysis/title-updates.md) | What the title updates contain and change, the runtime's patch support, and what supporting one would take |
 | [docs/analysis/dlc-structure.md](docs/analysis/dlc-structure.md) | How FM4 content packages are laid out, mounted and licensed, and what a new mod package would need |

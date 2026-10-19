@@ -101,6 +101,10 @@
       "provenance": "Project documentation; research notes on FM4 visual style (summarized observations, no game content)"
     },
     {
+      "path": "docs/analysis/cockpit-brightness.md",
+      "provenance": "Project documentation; measurements of the cockpit interior brightness (luma values, shader hashes, constant names and values, summarized ucode behavior, no game content)"
+    },
+    {
       "path": "docs/analysis/material-atlas.md",
       "provenance": "Project documentation; summary of the material atlas (names and registers of the game constant tables, no game code)"
     },
