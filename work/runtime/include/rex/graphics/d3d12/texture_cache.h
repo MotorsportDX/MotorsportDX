@@ -22,6 +22,7 @@
 #include <rex/graphics/d3d12/shader.h>
 #include <rex/graphics/d3d12/shared_memory.h>
 #include <rex/graphics/pipeline/texture/cache.h>
+#include <rex/graphics/pipeline/texture/replacement.h>
 #include <rex/graphics/pipeline/texture/util.h>
 #include <rex/graphics/register_file.h>
 #include <rex/graphics/xenos.h>
@@ -40,6 +41,9 @@ class D3D12TextureCache final : public TextureCache {
     TextureKey key;
     uint32_t host_swizzle;
     uint8_t swizzled_signs;
+    // Replacement textures of the unsigned and the signed versions, so the
+    // descriptors are rewritten when a reload switches them.
+    uint32_t replacement_ids;
   };
 
   // Sampler parameters that can be directly converted to a host sampler or used
@@ -234,6 +238,17 @@ class D3D12TextureCache final : public TextureCache {
     uint32_t swizzle;
   };
 
+  // A replacement texture (texture_replace_path) on the host GPU, shared by
+  // every guest texture with its content hash, in NON_PIXEL_SHADER_RESOURCE |
+  // PIXEL_SHADER_RESOURCE state after its upload.
+  struct ReplacementResource {
+    Microsoft::WRL::ComPtr<ID3D12Resource> resource;
+    DXGI_FORMAT format = DXGI_FORMAT_UNKNOWN;
+    uint32_t mip_levels = 0;
+    // 1-based, unique within the texture cache.
+    uint32_t id = 0;
+  };
+
   class D3D12Texture final : public Texture {
    public:
     union SRVDescriptorKey {
@@ -242,6 +257,8 @@ class D3D12TextureCache final : public TextureCache {
         uint32_t is_signed : 1;
         uint32_t host_swizzle : 12;
         uint32_t dimension : 2;
+        // ReplacementResource::id, 0 for the texture's own resource.
+        uint32_t replacement_id : 16;
       };
 
       SRVDescriptorKey() : key(0) { static_assert_size(*this, sizeof(key)); }
@@ -262,9 +279,16 @@ class D3D12TextureCache final : public TextureCache {
                           bool track_usage = true);
     ~D3D12Texture();
 
-    ID3D12Resource* resource() const { return resource_.Get(); }
+    // The replacement's resource while the texture is replaced.
+    ID3D12Resource* resource() const {
+      return replacement_ ? replacement_->resource.Get() : resource_.Get();
+    }
 
     D3D12_RESOURCE_STATES SetResourceState(D3D12_RESOURCE_STATES new_state) {
+      if (replacement_) {
+        // Replacements stay in the shader resource states (no barrier).
+        return new_state;
+      }
       D3D12_RESOURCE_STATES old_state = resource_state_;
       resource_state_ = new_state;
       return old_state;
@@ -279,6 +303,16 @@ class D3D12TextureCache final : public TextureCache {
       srv_descriptors_.emplace(descriptor_key, descriptor_index);
     }
 
+    const ReplacementResource* replacement() const { return replacement_; }
+    uint32_t replacement_id() const { return replacement_ ? replacement_->id : 0; }
+    void SetReplacement(const ReplacementResource* replacement) { replacement_ = replacement; }
+
+    // Host uptime of the last content hash and the number of loads in a row
+    // that came soon after the one before, to skip textures that are updated
+    // all the time.
+    uint64_t content_hash_time_ms = 0;
+    uint32_t content_hash_streak = 0;
+
    private:
     Microsoft::WRL::ComPtr<ID3D12Resource> resource_;
     D3D12_RESOURCE_STATES resource_state_;
@@ -289,6 +323,8 @@ class D3D12TextureCache final : public TextureCache {
     // according to profiling, was often a bottleneck in many games).
     // For bindless - indices in the global shader-visible descriptor heap.
     std::unordered_map<SRVDescriptorKey, uint32_t, SRVDescriptorKey::Hasher> srv_descriptors_;
+
+    const ReplacementResource* replacement_ = nullptr;
   };
 
   static constexpr uint32_t kSRVDescriptorCachePageSize = 65536;
@@ -391,6 +427,16 @@ class D3D12TextureCache final : public TextureCache {
 
   LoadShaderIndex GetLoadShaderIndex(TextureKey key) const;
 
+  // Content hashing for texture_dump_path and texture_replace_path, before a
+  // base level load. Returns true if the texture is replaced, so nothing is
+  // loaded; otherwise may set load_mips (when the texture stops being
+  // replaced, its own mips may be stale).
+  bool LoadTextureReplacement(D3D12Texture& texture, bool load_base, bool& load_mips);
+  // Creates the host texture and records its upload, or nullptr on failure
+  // (logged and not retried).
+  const ReplacementResource* GetOrCreateReplacementResource(uint64_t hash);
+  uint32_t GetBindingReplacementIds(const TextureBinding& binding) const;
+
   static constexpr bool AreDimensionsCompatible(xenos::FetchOpDimension binding_dimension,
                                                 xenos::DataDimension resource_dimension) {
     switch (binding_dimension) {
@@ -491,6 +537,16 @@ class D3D12TextureCache final : public TextureCache {
   D3D12_CPU_DESCRIPTOR_HANDLE null_srv_descriptor_heap_start_;
 
   std::array<D3D12TextureBinding, xenos::kTextureFetchConstantCount> d3d12_texture_bindings_;
+
+  // Texture dumps and replacements (texture_dump_path, texture_replace_path).
+  bool content_hash_enabled_ = false;
+  texture_replacement::Store replacement_store_;
+  texture_replacement::Dumper replacement_dumper_;
+  // By content hash; nullptr values for replacements that failed.
+  std::unordered_map<uint64_t, std::unique_ptr<ReplacementResource>> replacement_resources_;
+  uint32_t replacement_next_id_ = 1;
+  // Upload buffers in use until their submission completes.
+  std::vector<std::pair<uint64_t, Microsoft::WRL::ComPtr<ID3D12Resource>>> replacement_uploads_;
 
   // Unsupported texture formats used during this frame (for research and
   // testing).

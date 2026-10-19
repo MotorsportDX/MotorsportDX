@@ -81,6 +81,10 @@
       "provenance": "Project documentation; research and design note on motion vector sources (summarized observations: hashes, registers, constant and element names, no game content)"
     },
     {
+      "path": "docs/analysis/texture-replacement.md",
+      "provenance": "Project documentation; design note on texture dumps and replacements keyed by content hash (design, hash, limits; no game content)"
+    },
+    {
       "path": "docs/analysis/shader-mod-iteration.md",
       "provenance": "Project documentation; design note on the shader override cache, hot reload and live look knobs (no game content)"
     },
@@ -1210,6 +1214,18 @@
     },
     {
       "path": "work/runtime/include/rex/graphics/pipeline/texture/cache.h",
+      "provenance": "runtime-fork"
+    },
+    {
+      "path": "work/runtime/include/rex/graphics/pipeline/texture/content_hash.h",
+      "provenance": "runtime-fork"
+    },
+    {
+      "path": "work/runtime/include/rex/graphics/pipeline/texture/dds.h",
+      "provenance": "runtime-fork"
+    },
+    {
+      "path": "work/runtime/include/rex/graphics/pipeline/texture/replacement.h",
       "provenance": "runtime-fork"
     },
     {
@@ -2762,6 +2778,10 @@
       "provenance": "runtime-fork"
     },
     {
+      "path": "work/runtime/src/graphics/pipeline/texture/replacement.cpp",
+      "provenance": "runtime-fork"
+    },
+    {
       "path": "work/runtime/src/graphics/pipeline/texture/conversion.cpp",
       "provenance": "runtime-fork"
     },
@@ -4103,6 +4123,10 @@
     },
     {
       "path": "work/fm4-rex/tests/track-settings-tests.cpp",
+      "provenance": "Synthetic tests/oracle; no game input data"
+    },
+    {
+      "path": "work/fm4-rex/tests/texture-replacement-tests.cpp",
       "provenance": "Synthetic tests/oracle; no game input data"
     }
   ]

@@ -21,6 +21,8 @@ param(
     [ValidateRange(30,240)][int]$FrameRate,
     [string]$Look,
     [switch]$ShaderDev,
+    [string]$TextureDump,
+    [string]$TextureReplace,
     [ValidateSet('xbox','high','ultra')][string]$Quality
 )
 $ErrorActionPreference = 'Stop'
@@ -51,6 +53,8 @@ if ($ResolutionScale) { $arguments += @('--resolution-scale', "$ResolutionScale"
 if ($FrameRate) { $arguments += @('--frame-rate', "$FrameRate") }
 if ($Look) { $arguments += @('--look', $Look) }
 if ($ShaderDev) { $arguments += @('--shader-dev') }
+if ($TextureDump) { $arguments += @('--texture-dump', $TextureDump) }
+if ($TextureReplace) { $arguments += @('--texture-replace', $TextureReplace) }
 if ($Quality) { $arguments += @('--quality', $Quality) }
 & $Python @arguments
 if ($LASTEXITCODE -ne 0) { throw "FM4 workflow failed (exit $LASTEXITCODE). See the build-root logs." }

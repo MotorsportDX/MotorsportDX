@@ -552,6 +552,11 @@ class TextureCache {
   // implementation to update the internal dependencies of the binding.
   virtual void UpdateTextureBindingsImpl(uint32_t /*fetch_constant_mask*/) {}
 
+  // Whether a resolve has ever written to a 4 KB page of the range (the CPU
+  // copy of guest memory does not have that data). Not cleared when the CPU
+  // writes the page again.
+  bool IsRangeEverResolved(uint32_t start, uint32_t length) const;
+
  private:
   struct PendingTextureLoad {
     Texture* texture = nullptr;
@@ -605,6 +610,8 @@ class TextureCache {
   // >> 12 for 4 KB pages, >> 5 for uint32_t level 1 bits, >> 6 for uint64_t
   // level 2 bits.
   uint64_t scaled_resolve_pages_l2_[SharedMemory::kBufferSize >> (12 + 5 + 6)];
+  // One bit for each 4 KB page a resolve has written to (IsRangeEverResolved).
+  uint64_t ever_resolved_pages_[SharedMemory::kBufferSize >> (12 + 6)] = {};
 
   // Global watch for scaled resolve data invalidation.
   SharedMemory::GlobalWatchHandle scaled_resolve_global_watch_handle_ = nullptr;
