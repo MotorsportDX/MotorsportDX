@@ -21,7 +21,7 @@ timeline
     16 October : Photo, career and matrix e2e scenarios, gate tiers, look pc and quality high defaults
     17 October : Clearcoat, display options and settings overlay, Alt+Enter, GTAO ambient occlusion, generic content import (DLC), shader mod cache and hot reload
     18 October : ROV occlusion divisor removed, sun query samples measured per MSAA level : Glass, chrome and rim look mods (false color, A/B at 2x, smoke gate), look mods compiled against real contracts : Track lighting knobs road_gloss and sky (TrackSettings copies, 2x sweep) : USA release support (clean build, smoke gate with dlc) : Post pass framework, GTAO on it with identical output : Motion vector sources checked in the game (per-car stencil IDs, the game's blur matrices) : Per-car motion vectors on the post pass framework (CPU and WARP tests)
-    19 October : Motion vectors checked in the game (the game's blur matrices, debug views at 2x, GPU time, smoke gate) : Motion vector gaps: cockpit interior, glass, mirror panel, motion mask
+    19 October : Motion vectors checked in the game (the game's blur matrices, debug views at 2x, GPU time, smoke gate) : Motion vector gaps: cockpit interior, glass, mirror panel, motion mask : Cockpit light look knob (interior shadow floor)
 ```
 
 | Date | Milestone |
@@ -321,6 +321,10 @@ Shader mod iteration (17 October; design and results in [shader-mod-iteration.md
 - TAA was built in seven steps on 19 October 2026; the dated results of each step are in [TAA, history](../analysis/taa.md#12-history).
 - Superseded state of the current status page, before TAA reached `pc`: "Its first step, the sub-pixel jitter of the scene draws (`[jitter]`, 19 October 2026), works in the game: on frozen cameras at 2x the motion vectors stay free of it, no seam opens at the tile boundaries, only the scene draws move, and the command processor time per draw is unchanged at 240 Hz; FM4's passes do not turn it on until the TAA pass exists."
 - Superseded next step 9 of the current status page, in its last form before TAA was documented as built: "Build TAA v1, then trace a replay and a 16-car grid", with the progress of steps 1 to 7 in one sentence; replays have since been traced for the camera and the history reset ([TAA, the scene camera](../analysis/taa.md#4-the-scene-camera)).
+
+### 19 October 2026: cockpit interior brightness
+
+- The near-black cockpit interior on the Bernese Alps was traced to the game's lighting ([cockpit brightness](../analysis/cockpit-brightness.md)), and the shadow floor knob `cockpit_light` was built the same day. Superseded part of the Display gap of the current status page: "A shadow floor look knob is proposed and not built; a cockpit exposure of +2 stops blows out the windows."
 
 ## 5. Superseded settings and decisions
 

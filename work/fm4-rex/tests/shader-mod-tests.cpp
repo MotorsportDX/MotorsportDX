@@ -204,6 +204,9 @@ const char kOverride[] = R"(void xe_pixel_shader(inout XePixel p) {
   }
   sum += XE_CONSTANT(2) + XE_CONSTANT(4) + XE_CONSTANT(5) + XE_CONSTANT(8) + XE_CONSTANT(19) +
          XE_CONSTANT(22) + XE_CONSTANT(59) + XE_CONSTANT(255);
+  // The shadow floor constants of the cockpit interior shaders (fm4-cockpit.hlsli).
+  sum += XE_CONSTANT(82) + XE_CONSTANT(83) + XE_CONSTANT(84) + XE_CONSTANT(85) + XE_CONSTANT(86) +
+         XE_CONSTANT(87) + XE_CONSTANT(88) + XE_CONSTANT(89) + XE_CONSTANT(90) + XE_CONSTANT(91);
   p.color[0] = sum;
 }
 )";
@@ -390,7 +393,7 @@ int main(int argc, char** argv) {
       {"FM4_LOOK_FOLIAGE_SATURATION", "1.2"}, {"FM4_LOOK_FOLIAGE_BRIGHTNESS", "1.1"},
       {"FM4_LOOK_ROAD_BRIGHTNESS", "0.9"}, {"FM4_LOOK_ROAD_CONTRAST", "0.3"},
       {"FM4_LOOK_ROAD_SPECULAR", "0.5"}, {"FM4_LOOK_ROAD_SHEEN", "1.0"},
-      {"FM4_LOOK_ROAD_SHEEN_GRAIN", "2.0"}};
+      {"FM4_LOOK_ROAD_SHEEN_GRAIN", "2.0"}, {"FM4_LOOK_COCKPIT_LIGHT", "0.3"}};
   std::vector<std::filesystem::path> mods;
   for (const auto& entry : std::filesystem::directory_iterator(look)) {
     std::string name = entry.path().filename().string();

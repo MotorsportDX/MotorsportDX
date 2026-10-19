@@ -108,13 +108,57 @@ Measured on `-Look original`, RTV:
 | ambient times 8 (cockpit shaders) | 8.7, 13.1, 20.2, 10.4 | unchanged | Too weak, and the driver shader has no such term. |
 | shadow floor: `MinCockpitShadow` at least 0.15, 0.3, 0.5 (`cockpit-floor`, the 21 interior shaders that have it) | dashboard 0.7 to 1.1, 1.5, 2.0; gauges 1.8 to 17.7, 29.6, 41.5; wheel hub 19.7 to 22.5; hand unchanged | unchanged | The gauge faces become readable; at freeze 2 the gauges go from 2.1 to 23.1, 37.4, 51.8. The dashboard plastic, the wheel rim and the gloves stay dark. The gloves are the driver shader, which the prototype did not cover; which shader draws the dashboard top and the rim was not traced (candidates are the `MinShadowValue` variants, of which `68BAB030C58A2A06` and `9202A9306737F867` drew in the atlas sample, or a face turned from the sun, which a floor through N·L cannot light). Where the interior was already lit or in a tunnel, nothing changes. |
 
-Proposal: a look knob for the interior's shadow floor, for example `cockpit_light`, rather than a cockpit exposure knob.
+Proposal: a look knob for the interior's shadow floor, for example `cockpit_light`, rather than a cockpit exposure knob. It is built: see [the `cockpit_light` knob](#the-cockpit_light-knob-19-october-2026).
 
 - It lifts only the shaded interior and leaves the windows, the exposure and the bloom as they are, which an exposure knob cannot do: the auto exposure is one value for the whole frame (interpolator 1 W of the final combine, [B4 research](b4-shader-research.md#finalcombine-formula)), so every stop for the interior is also a stop for the sunlit snow.
 - It needs every interior pixel shader: the shaders with `MinCockpitShadow` (21 in the material atlas), those with `MinShadowValue` (17 more, two of which drew in the atlas sample), and the driver shader `30712480E0AB46E4`, whose shadow term has no floor constant and needs its result limited from below in the mod. Hashes of the 16-car, split-screen and UI shader sets come with them.
 - The floor lights the interior from the sun's direction (N·L), not from the sky, so faces turned away from the sun stay dark. A floor of about 0.3 made the gauges readable in the A/B without changing the exterior; the value for a preset needs the crops of the whole interior with every shader covered.
 - RTV only, like the other look mods; `-Rov` and `-Look original` keep the game's interior.
 - A cockpit exposure knob (`ToneMapCockpitExposure`, a track lighting knob through `FM4_TRACK_SETTINGS` like `road_gloss` and `sky`) needs no shader work, but at +2 stops it blows out every sunny window. A small value (0.5 to 1 stop) could go with the floor; it was not measured.
+
+## The `cockpit_light` knob (19 October 2026)
+
+`-Look "...,cockpit_light=<0 to 1>"` raises the shadow floor of the interior and the driver ([`fm4-cockpit.hlsli`](../../work/fm4-rex/look/fm4-cockpit.hlsli); [running](../running.md#look)). The default 0 is the game's interior, and no preset sets it.
+
+- **Interior shaders with a floor constant** (38 hashes, the material atlas class `cockpit`): 21 with `MinCockpitShadow` and 17 with `MinShadowValue`, of the race, 16-car, split-screen, UI and `shaders_slod_v16` sets and the `cockpit_*` material shaders. Each ucode reads the constant's X in a `max` with the shadow term (after the track lightmap's `min`); the mod's `XE_HOOK_CONSTANT` makes that X at least the knob. Five of the material shaders are shared with the engine bay (`engine_*` sources), which the floor lifts as well.
+- **The driver** (six hashes without a floor constant): the body `30712480E0AB46E4` (default.xex) and the suit `89F06E34104DF40C` (WhiteFelt), `85CB5573E78162CB` (ApendagesSuede), `1891C4772E7E7617` (Sleeves), `A4ECA613BEDB4468` (Stitching) and `C5CF0F92A4F120F2` (logos). Their shadow term is `min` of the track lightmap's share, `saturate((L * L - c60.x) / (c60.y - c60.x))` (fetch 1 for the body, 10 for the suit), and one tap of the variance shadow map darkened to p^4 (the ucode squares the Chebyshev bound twice); the suit then takes a small literal floor. The mod raises the lightmap texel and the second moment of the shadow map texel (with the pixel's depth from the interpolator of the fetch's coordinate) so that each term is at least the knob, which equals a floor after the `min`.
+- RTV only (`AGENTS.md`); `-Rov` and `-Look original` keep the game's interior.
+
+The gloves are the suit shaders, not `30712480E0AB46E4`: a bit-coded trace (run `cockpit-trace3`: 52 car, cockpit and driver hashes of a cockpit draw list, each writing the bits of its index as white or black in seven frozen steps, decoded per pixel) shows WhiteFelt and ApendagesSuede on the gloves, `327942867CAF7123` on the dashboard top and the gauge hood, `C7B414C46424E22F` and `327942867CAF7123` on the wheel rim, and `D5D4B516629428F6` on the cluster face; the body shader covers only a few hundred pixels at 1/4 sampling. A first trace with every candidate written at 50 turned the frame white through a full-screen shader of default.xex and the bloom; the decoded one writes 1.
+
+### A/B in the game
+
+`I:\FM4-build-pass` built from main `372ef6b` plus the knob (the runtime is unchanged since), with the USA discs (`game_data_root`) and the `I:\FM4-build-usa` profile, 2x, `-Look original` plus the mods of the knob alone (`shader_mod_path` with the 39 hashes of the first version, without the suit), `--shader-dev` style live knobs, the AI driver. Eight freezes in the cockpit camera, then one in each of the hood, chase near and chase far cameras; in each, `defines:` steps 0, 0.15, 0.3, 0.5 and 0 again (run `cockpit-light`). Patches as above; the hand patch holds the right glove where it is in view (freezes 3, 5 and 8 in the crops), and in freeze 1 the console beside the cluster.
+
+| Freeze | Dashboard (0 / 0.15 / 0.3 / 0.5) | Gauges | Wheel hub | Hand |
+|---|---|---|---|---|
+| 1, grid, sun behind the car | 0.8 / 1.1 / 1.5 / 1.9 | 1.8 / 18.0 / 30.0 / 42.1 | 19.8 / 19.9 / 20.8 / 22.4 | 9.5 / 10.9 / 14.6 / 20.2 |
+| 2 | 2.7 / 2.8 / 2.9 / 3.1 | 3.9 / 15.4 / 24.3 / 33.4 | 18.2 / 18.6 / 19.9 / 22.0 | 9.6 / 11.0 / 14.8 / 20.5 |
+| 3, sun on the wheel | 2.0 / 3.0 / 3.9 / 5.1 | 5.3 / 29.3 / 44.4 / 59.7 | 72.0 / 72.2 / 73.2 / 74.8 | 9.0 / 9.2 / 9.5 / 9.8 |
+| 4 | 12.8 / 12.9 / 13.0 / 13.1 | 1.9 / 13.2 / 21.9 / 31.6 | 36.9 / 37.0 / 37.2 / 37.3 | 17.4 / 17.5 / 17.6 / 17.6 |
+| 5, sun ahead | 4.8 / 4.8 / 4.9 / 4.9 | 1.7 / 1.8 / 1.9 / 2.0 | 31.9 / 31.9 / 32.3 / 33.0 | 16.5 / 16.5 / 16.5 / 16.5 |
+| 6 | 5.3 / 5.3 / 5.9 / 6.9 | 6.2 / 6.3 / 6.3 / 6.5 | 32.8 / 32.9 / 33.1 / 33.3 | 17.4 / 17.4 / 17.4 / 17.4 |
+| 7 | 1.2 / 1.2 / 1.2 / 1.2 | 2.2 / 2.3 / 2.3 / 2.4 | 22.5 / 22.5 / 22.6 / 23.0 | 15.3 / 15.3 / 15.3 / 15.3 |
+| 8 | 1.1 / 1.1 / 1.1 / 1.1 | 1.9 / 2.0 / 2.1 / 2.2 | 20.3 / 20.3 / 20.4 / 20.7 | 39.2 / 39.2 / 39.2 / 39.2 |
+
+- **The windows and the exposure do not change.** The road and sky patches are identical at every value in every cockpit freeze, and the step back to 0 restores each frame. In the hood camera no pixel changes at 0.5; in chase near 2,331 pixels (0.06%) and in chase far 1,323 (0.04%) change, all of them the driver and the headrest seen through the rear window. No artifacts in the 1:1 crops.
+- **What it lifts:** with the sun behind or beside the car (freezes 1 to 4) the gauge faces go from 2 to 4 of 255 to 32 to 60 at 0.5, the cluster bezel, the console and the headliner's grab handle become visible, and the console beside the cluster doubles (9.5 to 20.2). At 0.3 the gauges are readable (22 to 44).
+- **What it cannot lift:** with the sun ahead (freezes 5, 7, 8) the faces toward the driver have no N·L, and nothing changes by more than 1.1. The dashboard top and the wheel rim stay near black at every value even though their shaders are covered: their albedo is black plastic and rubber, which in direct sun reaches only 25 to 28 (see [over the lap](#over-the-lap-and-after-a-camera-switch)), and half of that light lands in the game's tone curve toe. The floor cannot brighten them further without lighting from the sky, which these shaders do not have.
+
+The gloves stayed as they were in this run (hand patch unchanged in freezes 4 to 8), which led to the trace above. Run `cockpit-light2` repeats the A/B with all 44 hashes (the same setup; six cockpit freezes, then chase near with 0, 0.5, 0):
+
+| Freeze | Dashboard (0 / 0.15 / 0.3 / 0.5) | Gauges | Wheel hub | Hand |
+|---|---|---|---|---|
+| 1, grid | 0.7 / 1.2 / 1.6 / 2.1 | 1.8 / 17.7 / 29.5 / 41.4 | 19.2 / 19.4 / 20.2 / 21.7 | 9.9 / 15.0 / 28.7 / 44.6 |
+| 2, sun on the wheel | 22.3 / 22.4 / 22.5 / 22.7 | 2.3 / 21.2 / 34.8 / 48.2 | 74.9 / 75.1 / 75.2 / 75.5 | 5.8 / 8.9 / 18.3 / 30.3 |
+| 3 | 0.9 / 1.0 / 1.1 / 1.2 | 2.1 / 2.2 / 2.3 / 2.5 | 27.6 / 27.6 / 29.2 / 31.6 | 3.7 / 5.0 / 8.9 / 13.8 |
+| 4 | 10.0 / 10.0 / 10.0 / 10.0 | 2.3 / 2.4 / 2.4 / 2.5 | 32.9 / 32.9 / 33.3 / 34.0 | 12.9 / 12.9 / 12.9 / 13.0 |
+| 5 and 6 (the car stood at the same point) | 3.1 at every value | 11.5 to 12.2 at every value | 30.1 / 30.1 / 30.2 / 30.5 | 10.5 to 10.7 at every value |
+
+- In freeze 1 the right glove goes from a dark shape to a white glove with its red logo (9.9 to 44.6 at 0.5, 28.7 at 0.3), and the left glove's palm and the sleeve cuffs show; the shading of the folds stays. The rise is smooth over the four values, as the p^4 ramp of the suit's shadow term predicts. With the sun ahead (freezes 4 to 6) the gloves change by at most 0.2.
+- The road and sky patches change by at most 0.3 in the cockpit freezes (freeze 3, likely the bloom of the brighter interior; the step back to 0 restores each frame), and in chase near 1,276 pixels (0.04%) change, the driver seen through the rear window. No artifacts in the 1:1 crops: no seams at the shadow edges, no light leaking onto the wheel rim or the windows.
+
+Crops (1:1 at 2560x1440, not in the repository) are in `I:\FM4-build-pass\e2e\cockpit-light-report`.
 
 ## Windshield and Side Windows
 

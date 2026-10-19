@@ -281,6 +281,17 @@ class PipelineTests(unittest.TestCase):
             self.assertTrue({name for name in knob_defaults if name.startswith('FM4_LOOK_ROAD_')}
                             <=set(pipeline.LOOK_KNOBS.values()))
 
+    def test_look_cockpit_knob(self):
+        with tempfile.TemporaryDirectory(prefix='fm4 look test ') as directory:
+            root=Path(directory)
+            # cockpit_light is a define of fm4-cockpit.hlsli: 0, the game's interior, by default
+            # and in every preset until its crops are reviewed.
+            defines=dict(define.split('=',1) for define in
+                         pipeline.look_cvars(root,'pc,cockpit_light=0.3')['shader_mod_defines'].split(';'))
+            self.assertEqual(defines['FM4_LOOK_COCKPIT_LIGHT'],'0.3')
+            self.assertNotIn('FM4_LOOK_COCKPIT_LIGHT',pipeline.look_cvars(root,'pc')['shader_mod_defines'])
+            self.assertEqual(pipeline.look_knob_defaults()['FM4_LOOK_COCKPIT_LIGHT'],'0.0')
+
     def test_new_clone_has_all_source_inputs(self):
         for name in ('rexglue.cmake','guard-generated.py','dump-image.cpp','switch-recipes.json'):
             self.assertTrue((pipeline.HERE/name).is_file(),name)

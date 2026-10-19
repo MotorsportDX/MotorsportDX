@@ -1,0 +1,9 @@
+// Cockpit interior material shader (cockpit_bump_stitchingA, cockpit_bump_stitchingB,
+// cockpit_bump_stitchingC, cockpit_bump_stitchingD, cockpit_bump_stitchingE,
+// cockpit_bump_stitchingF, cockpit_bump_stitchingG). MinShadowValue in c86;
+// docs/analysis/cockpit-brightness.md. See fm4-cockpit.hlsli.
+#define FM4_COCKPIT_FLOOR_CONSTANT 86u
+#include "fm4-cockpit.hlsli"
+
+#undef XE_HOOK_CONSTANT
+#define XE_HOOK_CONSTANT(n, value) fm4_cockpit_constant(n, value)

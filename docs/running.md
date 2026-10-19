@@ -265,7 +265,7 @@ every race camera on this runtime show none.
 
 The look mods are original shader code hooked into the HLSL that the runtime
 generates from the game's post-processing shaders, car shaders (body paint,
-glass, chrome and rims) and track shaders (sky, trees, bushes, grass and the road surface;
+glass, chrome, rims and the cockpit interior) and track shaders (sky, trees, bushes, grass and the road surface;
 `work/fm4-rex/look`; see [Shader overrides](e2e/experiments.md)). `-Look` takes a
 preset, knobs, or both. A preset sets only its own knobs. Later items win, so
 `-Look "pc,sharpen=0.6"` uses the `pc` preset with sharpening at 0.6.
@@ -316,6 +316,7 @@ and `-Look original`.
 | `road_roughness` | number, default 0.5 | Roughness of that highlight: lower is a smaller, brighter glare. |
 | `road_sheen_grain` | number, default 1 | How much that highlight follows the aggregate and the skid marks: it scales the highlight by the asphalt texel's brightness against the texture's local mean, to this power (and on the Top Gear and Crown Jewel road by the darkening of the skid marks). `0` gives an even sheen. |
 | `road_debug` | 0 to 7 | Debug views of the lit road `ROAD_BLND_2`: 1 the highlight's share of the light, 2 without the highlight, 3 the highlight alone, 4 which light the diffuse takes, 5 the parts of the specular amount. With `road_sheen` above 0, on every lit road shader: 6 the image times the sheen's grain, 7 the sheen alone. See [look mod coverage](analysis/look-mod-coverage.md#road-surface-18-october-2026). |
+| `cockpit_light` | number, 0 to 1 | The least share of the sun's direct light that the cockpit interior and the driver keep in the car's own shadow (`fm4-cockpit.hlsli`), in every car shader set: it raises the floor of their shadow term, which the game sets to 0. In the sun the shaded gauges, cluster and gloves become readable while the exposure, the windows and the bloom stay as they are. Faces turned away from the sun and the black dashboard top and wheel rim stay dark. See [cockpit brightness](analysis/cockpit-brightness.md). |
 | `ao` | number, `0` turns it off | Strength of the screen-space ambient occlusion. |
 | `taa` | `1` on (in `pc`), `0` off (the default of the other presets) | Temporal anti-aliasing before the HUD, with the scene jittered; the look's `sharpen` moves after it. See [Temporal anti-aliasing](#temporal-anti-aliasing). |
 | `taa_point` | `0` (default) or `1` | With `taa`: `1` runs TAA at the scene_color point, before the game's post chain, instead of before the HUD; the look's `sharpen` stays in the final combine. See [Temporal anti-aliasing](#temporal-anti-aliasing). |
@@ -337,6 +338,11 @@ it, and views away from the sun look the same; without the grain the sheen is an
 haze on Top Gear (see
 [look mod coverage](analysis/look-mod-coverage.md#the-sheen-on-top-gear-and-its-grain-18-october-2026)).
 Try `-Look "pc,road_specular=0,road_sheen=0.4"`.
+No preset sets `cockpit_light` yet. In an A/B at 2x on the Bernese Alps, `cockpit_light=0.5` took
+the gauges from 2 to 4 of 255 to 32 to 60 with the sun behind or beside the car and left the
+windows and the other cameras as they were (see
+[cockpit brightness](analysis/cockpit-brightness.md#the-cockpit_light-knob-19-october-2026)).
+Try `-Look "pc,cockpit_light=0.3"`.
 
 ### Sun glare
 

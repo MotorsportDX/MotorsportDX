@@ -1,0 +1,7 @@
+// Cockpit interior of shaders_16car_v16, shaders_splitscreen_v16, shaders_ui_v16, shaders_v16.
+// MinCockpitShadow in c83; docs/analysis/cockpit-brightness.md. See fm4-cockpit.hlsli.
+#define FM4_COCKPIT_FLOOR_CONSTANT 83u
+#include "fm4-cockpit.hlsli"
+
+#undef XE_HOOK_CONSTANT
+#define XE_HOOK_CONSTANT(n, value) fm4_cockpit_constant(n, value)

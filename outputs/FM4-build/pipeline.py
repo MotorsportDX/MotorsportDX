@@ -480,6 +480,9 @@ LOOK_KNOBS={'sharpen':'FM4_LOOK_SHARPEN','bloom':'FM4_LOOK_BLOOM','exposure':'FM
             'road_specular':'FM4_LOOK_ROAD_SPECULAR','road_sheen':'FM4_LOOK_ROAD_SHEEN',
             'road_roughness':'FM4_LOOK_ROAD_ROUGHNESS','road_sheen_grain':'FM4_LOOK_ROAD_SHEEN_GRAIN',
             'road_debug':'FM4_LOOK_ROAD_DEBUG',
+            # Cockpit interior and driver (work/fm4-rex/look/fm4-cockpit.hlsli): the least share
+            # of the sun's direct light that the interior keeps in its own shadow.
+            'cockpit_light':'FM4_LOOK_COCKPIT_LIGHT',
             # Ambient occlusion of the GTAO post pass on the scene; above 0 it also turns
             # the post passes on (ao_cvars).
             'ao':'FM4_LOOK_AO'}
