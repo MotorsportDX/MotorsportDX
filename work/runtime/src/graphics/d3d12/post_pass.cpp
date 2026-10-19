@@ -608,6 +608,16 @@ bool PostPasses::LoadManifest(Manifest& manifest) {
         return fail(fmt::format("texture {}: a history texture has no slot and is not cleared",
                                 texture.name));
       }
+      texture.write_back = (*fields)["write_back"].value_or(false);
+      if (texture.write_back &&
+          (texture.format != DXGI_FORMAT_R10G10B10A2_UNORM || texture.final_size ||
+           texture.scale != 1.0f || texture.mips != 1 || texture.history)) {
+        return fail(fmt::format(
+            "texture {}: a write_back texture is R10G10B10A2_UNORM, scene sized, unscaled, one mip "
+            "and no history",
+            texture.name));
+      }
+      manifest.uses_write_back |= texture.write_back;
       manifest.textures.push_back(texture);
     }
   }
@@ -775,6 +785,9 @@ bool PostPasses::LoadManifest(Manifest& manifest) {
           }
         }
         if (output.texture != UINT32_MAX) {
+          if (manifest.textures[output.texture].write_back && pass.point != Point::kSceneColor) {
+            return pass_fail("a write_back texture is written at the scene_color point only");
+          }
           (pass.pixel ? manifest.textures[output.texture].rtv
                       : manifest.textures[output.texture].uav) = true;
         }
@@ -1491,17 +1504,73 @@ void PostPasses::OnSceneColor() {
       history_read |= reads && PassEnabled(pass);
     }
   }
-  if (!manifest_->uses_point[size_t(Point::kSceneColor)] && !history_read) {
+  // The point's inputs only when one of its passes runs.
+  bool point_enabled = false;
+  if (manifest_->uses_point[size_t(Point::kSceneColor)] && !IsSkipped(&variant_index)) {
+    UpdateParams(variant_index);
+    for (const PassDesc& pass : manifest_->passes) {
+      point_enabled |= pass.point == Point::kSceneColor && PassEnabled(pass);
+    }
+  }
+  if (!point_enabled && !history_read) {
     return;
   }
   scene_color_ = {};
-  if (manifest_->uses_scene_color || (history_read && manifest_->uses_previous_color)) {
+  if ((point_enabled && manifest_->uses_scene_color) ||
+      (history_read && manifest_->uses_previous_color)) {
     RequestExternal(color_group_, ExternalKind::kColor, scene_color_);
   }
   RequestExternal(depth_group_, ExternalKind::kDepth, scene_depth_);
   RunPoint(Point::kSceneColor);
+  // The history keeps the game's scene, before the write-back replaces it.
   if (history_read) {
     CopyHistory();
+  }
+  if (point_enabled && manifest_->uses_write_back) {
+    WriteBack();
+  }
+}
+
+void PostPasses::WriteBack() {
+  uint64_t frame = command_processor_.GetCurrentFrame();
+  // The guest's scene as the passes read it: 2_10_10_10, with which the
+  // R10G10B10A2 host texture of the write-back is copyable.
+  xenos::TextureFormat format = xenos::TextureFormat(color_group_.format);
+  if (format != xenos::TextureFormat::k_2_10_10_10 &&
+      format != xenos::TextureFormat::k_2_10_10_10_AS_16_16_16_16) {
+    if (!warned_write_back_) {
+      warned_write_back_ = true;
+      REXGPU_WARN("Post passes: no write-back into a scene of format {}", uint32_t(format));
+    }
+    return;
+  }
+  for (size_t i = 0; i < textures_.size(); ++i) {
+    Texture& texture = textures_[i];
+    if (!manifest_->textures[i].write_back || texture.written_frame != frame ||
+        !texture.resource) {
+      continue;
+    }
+    Transition(texture.resource.Get(), texture.state, D3D12_RESOURCE_STATE_COPY_SOURCE);
+    command_processor_.SubmitBarriers();
+    TextureCache::WriteBackCounts counts;
+    if (!command_processor_.texture_cache_->WriteResolvedTexture(
+            color_group_.base, color_group_.pitch, color_group_.pitch, color_group_.height,
+            format,
+            xenos::Endian(
+                std::min(uint32_t(color_group_.endianness), uint32_t(xenos::Endian::k16in32))),
+            texture.resource.Get(), texture.width, texture.height, counts)) {
+      if (!warned_write_back_) {
+        warned_write_back_ = true;
+        REXGPU_WARN("Post passes: the write-back of texture {} into the scene at 0x{:08X} failed",
+                    manifest_->textures[i].name, color_group_.base);
+      }
+      continue;
+    }
+    // The counts of the previous write-back are complete now.
+    if (write_back_frame_ != UINT64_MAX) {
+      write_back_counts_ = counts;
+    }
+    write_back_frame_ = frame;
   }
 }
 
@@ -2385,7 +2454,7 @@ void PostPasses::LogRun(int32_t variant_index) {
       "0x{:08X}-0x{:08X} {}x{} (EDRAM {}), host {}x{}; camera Q {:.7g} Q*near {:.6g} (near "
       "{:.4g}), W(d=0) {:.4g} W(d=1) {:.4g}, far W {:.4g}, depth mul {:.6g} add {:.6g}, x {:.6g} "
       "{:.6g}, y {:.6g} {:.6g}, z/W {:.3g}, focal {:.1f} px (FOV x {:.1f} deg over {} px), origin "
-      "{}; history {}; motion {}; jitter {}; variant {}:{}",
+      "{}; history {}; motion {}; jitter {}{}; variant {}:{}",
       runs_ - 1, depth_group_.frame, SteadyMilliseconds(), camera_.frame,
       camera_.view_frame == command_processor_.GetCurrentFrame() ? "known" : "unknown",
       camera_.view_frame != command_processor_.GetCurrentFrame() ? std::string()
@@ -2400,7 +2469,24 @@ void PostPasses::LogRun(int32_t variant_index) {
       camera_.guest_origin,
       previous_valid_ ? (IsCameraCut() ? "cut" : "valid") : "none", MotionSummary(),
       jitter_active_ ? fmt::format("{:.4f},{:.4f}", jitter_[0], jitter_[1]) : std::string("off"),
-      variant_index, params);
+      WriteBackSummary(), variant_index, params);
+}
+
+std::string PostPasses::WriteBackSummary() const {
+  if (write_back_frame_ == UINT64_MAX) {
+    return std::string();
+  }
+  const TextureCache::WriteBackCounts& counts = write_back_counts_;
+  std::string summary = fmt::format("; write-back frame {}, before it binds {} reloads {} other {}",
+                                    write_back_frame_, counts.binds, counts.reloads,
+                                    counts.other_binds);
+  if (counts.other_binds) {
+    summary += fmt::format(" (key {}x{} pitch {} format {} mips {} packed {} dimension {})",
+                           counts.other_width, counts.other_height, counts.other_pitch,
+                           counts.other_format, counts.other_mip_max_level,
+                           counts.other_packed_mips, counts.other_dimension);
+  }
+  return summary;
 }
 
 void PostPasses::UpdateJitter() {

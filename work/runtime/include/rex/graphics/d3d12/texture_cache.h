@@ -171,11 +171,29 @@ class D3D12TextureCache final : public TextureCache {
   // nullptr in case of failure, and writes a 2D SRV description and its host
   // size (resolution-scaled if the resolves were). May call LoadTextureData,
   // like RequestSwapTexture.
+  // The key of a tiled 2D guest texture written by resolves, as a texture
+  // fetch of it would have.
+  bool ResolvedTextureKey(uint32_t base_address, uint32_t pitch, uint32_t width, uint32_t height,
+                          xenos::TextureFormat format, xenos::Endian endianness,
+                          TextureKey& key_out, xenos::xe_gpu_texture_fetch_t& fetch_out);
   ID3D12Resource* RequestResolvedTexture(uint32_t base_address, uint32_t pitch, uint32_t width,
                                          uint32_t height, xenos::TextureFormat format,
                                          xenos::Endian endianness,
                                          D3D12_SHADER_RESOURCE_VIEW_DESC& srv_desc_out,
                                          uint32_t& host_width_out, uint32_t& host_height_out);
+  // Copies source (in COPY_SOURCE state, at most source_width x source_height
+  // of it) into the host texture that RequestResolvedTexture gives for the
+  // same guest texture, and into the one of the same memory whose key has the
+  // other packed_mips (one mip, so the same data) if it exists: they stay
+  // loaded, so the guest's next fetches of that memory with either key bind
+  // the copy until a resolve or a CPU write replaces it. Returns the counts of
+  // the previous write-back (see WriteBackCounts) and starts counting for this
+  // one.
+  bool WriteResolvedTexture(uint32_t base_address, uint32_t pitch, uint32_t width,
+                            uint32_t height, xenos::TextureFormat format,
+                            xenos::Endian endianness, ID3D12Resource* source,
+                            uint32_t source_width, uint32_t source_height,
+                            WriteBackCounts& previous_counts_out);
 
  protected:
   bool IsSignedVersionSeparateForFormat(TextureKey key) const override;

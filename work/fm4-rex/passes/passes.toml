@@ -146,6 +146,9 @@ TAA_SHARPEN = { value = 0.4, min = 0.0, max = 1.0 }
 # weight of the current frame, 3 the clip, 4 why there is no history, 5 the
 # current frame without the jitter.
 TAA_DEBUG = { value = 0, min = 0, max = 5 }
+# 1 writes a test pattern into the game's scene at the scene_color point
+# (scene_pattern.hlsl, the S1 check of the write-back).
+SCENE_PATTERN = { value = 0, min = 0, max = 1 }
 
 # Textures of the passes, at the size of the scene depth unless scale says
 # otherwise. slot exposes one to shader mods (xe_post_texture; slot 0 is
@@ -297,6 +300,23 @@ if = "MOTION_VECTORS > 0 && MOTION_DEBUG > 0"
 srv = ["motion_debug_color"]
 rtv = ["final_color"]
 blend = "alpha"
+
+# The S1 check of the write-back: the scene with a test pattern, copied into
+# the texture cache's host texture of the scene after the scene_color point,
+# so the game's bloom, motion blur and final combine sample it.
+[textures.scene_written]
+format = "R10G10B10A2_UNORM"
+write_back = true
+
+[[passes]]
+name = "scene_pattern"
+point = "scene_color"
+type = "pixel"
+shader = "scene_pattern.hlsl"
+entry = "scene_pattern"
+if = "SCENE_PATTERN > 0"
+srv = ["scene_color"]
+rtv = ["scene_written"]
 
 # The scene draws move by a sub-pixel Halton (2, 3) offset per frame while TAA
 # runs, in frames after one in which taa_resolve ran.

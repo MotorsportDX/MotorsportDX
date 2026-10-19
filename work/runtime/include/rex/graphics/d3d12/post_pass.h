@@ -47,6 +47,7 @@
 #include <rex/graphics/d3d12/post_pass_camera.h>
 #include <rex/graphics/d3d12/post_pass_layout.h>
 #include <rex/graphics/d3d12/shader_override.h>
+#include <rex/graphics/pipeline/texture/cache.h>
 #include <rex/graphics/register_file.h>
 #include <rex/graphics/xenos.h>
 #include <rex/ui/d3d12/d3d12_api.h>
@@ -136,6 +137,10 @@ class PostPasses {
     // Two textures swapped at the swap of a frame that wrote it: the passes
     // write this frame's and read the previous frame's as previous:<name>.
     bool history = false;
+    // Written at the scene_color point, then copied into the texture cache's
+    // host texture of the scene, which the game's next fetches of the scene
+    // bind (the write-back; R10G10B10A2_UNORM, the scene's size).
+    bool write_back = false;
     // Usage by the passes.
     bool uav = false, rtv = false;
   };
@@ -204,6 +209,7 @@ class PostPasses {
     bool uses_point[size_t(Point::kCount)] = {};
     bool uses_scene_color = false, uses_previous_color = false, uses_previous_depth = false;
     bool uses_scene_stencil = false;
+    bool uses_write_back = false;
     // The defines as compiled (after shader_mod_defines).
     std::vector<std::pair<std::string, std::string>> compiled_defines;
     std::vector<uint8_t> vertex_shader;
@@ -379,7 +385,12 @@ class PostPasses {
   bool RunPass(PassDesc& pass, D3D12_GPU_VIRTUAL_ADDRESS scene_constants);
   bool BindingSize(const Binding& binding, uint32_t& width, uint32_t& height) const;
   void CopyHistory();
+  // Copies the write-back textures written at this frame's scene_color point
+  // into the texture cache's host texture of the scene.
+  void WriteBack();
   void LogRun(int32_t variant_index);
+  // The write-back counts of the log line (empty without a write-back).
+  std::string WriteBackSummary() const;
 
   // Resources.
   // The texture of a manifest index, or with previous its history texture's
@@ -502,6 +513,11 @@ class PostPasses {
 
   uint64_t runs_ = 0;
   bool warned_no_camera_ = false;
+  bool warned_write_back_ = false;
+  // The guest's use of the last complete write-back (until the one after it),
+  // for the log.
+  uint64_t write_back_frame_ = UINT64_MAX;
+  TextureCache::WriteBackCounts write_back_counts_;
   bool warned_stencil_ = false;
 };
 

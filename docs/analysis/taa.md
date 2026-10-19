@@ -468,3 +468,10 @@ No environment is left with an unknown view. The fallback gives the view in the 
 | `photo_view` | 56.94 fps | 56.97 fps | WARN: capture statistics only |
 
 The capture statistics differ because the AI races do not repeat: the `photo_view` final images show the same car before and under a bridge, and the photo renders as before. An earlier pair on the binary before the priority order (`taapc-new` against `taapc-old`) gave the same verdicts.
+
+### Step 6: the write-back at scene_color (19 October 2026)
+
+Route (b) of [section 2.2](#22-the-scene_color-point-v11): a texture with `write_back = true`, written at the scene_color point, is copied into the texture cache's host texture of the scene, which then stays loaded for the game's fetches ([post pass framework, the write-back](post-pass-framework.md#the-write-back)). A counter in the `post_pass_log_every` line shows what the guest bound. Route (c) is not needed.
+
+- **The key**: the first run (`taas1`) wrote only the texture of the resolve's key. The final combine bound it 2 to 7 times per frame, but 41 to 670 other bindings per frame took a texture with the same address, size (1280x720 guest, pitch 40 blocks) and format (`k_2_10_10_10`) whose key had packed mips on. The copy now also goes into that texture; its data is the same (one mip).
+- **S1** (`taas1b`: Quick Race with the AI driver, `--look "pc,taa=0"`, `--shader-dev`, 2x, `SCENE_PATTERN=1` with a stretch of 0 in the race, a 60 s replay, `post_pass_log_every=30`): in all 263 logged frames no binding missed the write (other 0), with on average 183 bindings of the written textures per frame and 4 reloads (the next frame's resolve). The pattern (white and magenta squares in a green frame over the middle third of the scene) shows in the final image in the menus with a 3D scene, the start sequence, the race and the replay; the bloom glows around it in every phase and not in the frames without it; the motion blur of the start sequence smears its edge along the camera's motion, and the replay, whose motion blur resolves its result over the scene before the final combine, still shows it.

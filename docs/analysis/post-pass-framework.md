@@ -96,6 +96,7 @@ A draw is jittered when its depth buffer's EDRAM base is the scene depth's (the 
 | `slot` | 0 to 7: exposed to the shader mods (`xe_post_texture`). |
 | `clear` | Cleared to zero at the swap after every frame it was written in. |
 | `history` | Two textures: the passes write this frame's (`name`) and read the previous frame's (`previous:name`); at the swap of a frame that wrote it the two trade places. No `slot` and no `clear` (see [History](#history)). |
+| `write_back` | Written at the scene_color point, then copied into the texture cache's host texture of the scene, which the game's next fetches of the scene bind (see [The write-back](#the-write-back)). `R10G10B10A2_UNORM`, the scene's size, one mip, no `scale` and no `history`. |
 
 Textures are created when a pass first writes them, zeroed, and recreated when their size changes. Their contents persist across frames unless `clear` is set.
 
@@ -170,6 +171,14 @@ What a temporal upscaler or TAA needs there, and what the framework gives:
 - **Resolution**: the framework works at the render scale. An upscaler that renders below the output size needs the guest's render targets at a lower scale than the HUD, which the runtime does not support; within one scale, the point suits TAA and temporal supersampling.
 
 The [TAA v1 plan](taa.md#2-injection-point) starts TAA at this point and moves it to scene_color in a second stage.
+
+## The write-back
+
+A pass at the scene_color point can replace the scene that the game's post chain samples: it writes a texture with `write_back = true`, and after the point (and after the copy of `previous_color`, which keeps the game's scene) the framework copies that texture into the texture cache's host texture of the scene (`D3D12TextureCache::WriteResolvedTexture`). That texture stays loaded, so the game's next fetches of the scene memory bind the copy until the next resolve to that memory or a CPU write replaces it; guest memory keeps the game's own scene (CPU readbacks such as the photo save read it). The scene must be `k_2_10_10_10` (or its `AS_16_16_16_16` view), which the `R10G10B10A2` texture copies into.
+
+A texture fetch's key holds its packed mips: FM4 fetches the scene with them on, while a resolve target has them off. The copy goes into the texture of the resolve's key and into the one with the other `packed_mips` if the cache has it (one mip, the same data).
+
+`post_pass_log_every` adds to each log line what the guest did with the last complete write-back: `write-back frame N, before it binds B reloads R other O`. B counts the texture bindings of guest draws that bound a written texture, R their reloads from guest memory (the next frame's resolve), and O the bindings of another texture of the scene memory (another key, followed by that key), which does not hold the write: O above 0 means the write-back misses a reader.
 
 ## FM4 specifics
 

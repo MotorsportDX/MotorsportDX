@@ -134,6 +134,18 @@ class TextureCache {
            (binding->texture_signed && binding->texture_signed->key().scaled_resolve);
   }
 
+  // The host textures the post passes wrote over (a write-back): what the
+  // guest did with them until the next write-back. binds counts the texture
+  // bindings of guest draws that bound one; other_binds those that bound
+  // another texture of the memory (another key, which does not hold the
+  // write); reloads their loads from guest memory, which replace the write.
+  struct WriteBackCounts {
+    uint32_t binds = 0, other_binds = 0, reloads = 0;
+    // The first other texture bound, for the log.
+    uint32_t other_width = 0, other_height = 0, other_pitch = 0, other_format = 0;
+    uint32_t other_mip_max_level = 0, other_packed_mips = 0, other_dimension = 0;
+  };
+
  protected:
   struct TextureKey {
     // Dimensions minus 1 are stored similarly to how they're stored in fetch
@@ -520,6 +532,13 @@ class TextureCache {
   // create the texture - if it's nullptr, occasionally a recreation attempt
   // should be made.
   Texture* FindOrCreateTexture(TextureKey key);
+  // The texture of key if it exists (a key from Texture::key(), with the
+  // resolution scale decided).
+  Texture* FindTexture(const TextureKey& key) const;
+  // After a write-back into textures (of one memory, nullptr where none):
+  // starts counting the guest's use of them and returns the counts of the
+  // previous write-back.
+  WriteBackCounts StartWriteBackCount(Texture* texture, Texture* variant);
 
   static const LoadShaderInfo& GetLoadShaderInfo(LoadShaderIndex load_shader_index) {
     assert_true(load_shader_index < kLoadShaderCount);
@@ -632,6 +651,11 @@ class TextureCache {
   std::atomic<bool> texture_became_outdated_{false};
 
   std::array<TextureBinding, xenos::kTextureFetchConstantCount> texture_bindings_;
+
+  // The textures of the last write-back, their base page, and the counts since.
+  std::array<Texture*, 2> write_back_textures_ = {};
+  uint32_t write_back_base_page_ = 0;
+  WriteBackCounts write_back_counts_;
   // Bit vector with bits reset on fetch constant writes to avoid parsing fetch
   // constants again and again.
   uint32_t texture_bindings_in_sync_ = 0;
