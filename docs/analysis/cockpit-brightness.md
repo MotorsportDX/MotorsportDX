@@ -116,6 +116,18 @@ Proposal: a look knob for the interior's shadow floor, for example `cockpit_ligh
 - RTV only, like the other look mods; `-Rov` and `-Look original` keep the game's interior.
 - A cockpit exposure knob (`ToneMapCockpitExposure`, a track lighting knob through `FM4_TRACK_SETTINGS` like `road_gloss` and `sky`) needs no shader work, but at +2 stops it blows out every sunny window. A small value (0.5 to 1 stop) could go with the floor; it was not measured.
 
+## Windshield and Side Windows
+
+In the cockpit camera the windshield and the side windows look like open frames: no tint, reflection or glare on the view outside. The game does not draw them in that camera.
+
+- Run `cockpit-glass` (same setup, `-Look original`, five freezes) with `REX_DRAW_LIST_TRACE` every 1,200 frames and a temporary mod on the car glass shader `E62CFDF09D758B6C` (live: glass hidden, opaque magenta coverage, opacity as gray, opacity times 4).
+- The player's car is the stencil reference of the interior draws (`4EE552137CA415E3`). In the 3-2-1 countdown camera, its draws include the body (`8D05A46C3584CA9E`), chrome (`A42BEA3C0A6E5603`), the lamps (`AD10B610621DEFE5`) and the windows: `D7B380C7A7F72EF5` with `E62CFDF09D758B6C`, two meshes of 883 and 910 indices, each drawn twice (`reflectionScaler` 0, then 1), with alpha blending, `GlassColor` (0.01, 0.01, 0.01) at alpha 0.3 and `GlassMaxOpacity` 1.
+- In every traced frame of the race in the cockpit camera (14 frames), the player's car draws none of these. The only glass left is a mesh of 17 indices with `GlassColor` alpha 0, the glass over the gauges. The draw list is the guest's command stream, so the title itself issues no window draws in this camera; the render path cannot change that, and the ROV captures show the same open windows.
+- The magenta coverage shows the windows of the other cars, the reflection of them in the mirrors and the gauge glass, and nothing on the player's windshield or side windows. Hiding the glass changes no pixel outside the gauges, and the gauge glass is fully transparent (opacity view 0.1 of 255).
+- The executable has a title command line option `hidecockpitglass` (in the table with `engageaionstart`, read through `FM4_GAME_CMDLINE`) and a windshield reflection feature (`WindshieldReflection`, `ICarPresentationSetWindshieldReflectionTexture`, the pixel shader `7226D929481D4274` with `WindshieldReflectionScale`), whose shader is only in `shaders_slod_v16`, the car set of `UI_Showroom`. Neither was tested; the option most likely hides the gauge glass, the only cockpit glass the race draws.
+
+Verdict: game behavior, the same on both render paths. A visible windshield would be new work: a post pass in the cockpit camera that tints the world seen through the windows (the pixels that are not the interior: the player's stencil reference) and adds a faint reflection or glare, or a hook that makes the title draw its exterior glass in this camera, whose shader is made for views from outside. Neither is built.
+
 ## Related
 
 - [Visual style](visual-style.md): `TrackSettings.xml`, the auto exposure and the cockpit exposure.
