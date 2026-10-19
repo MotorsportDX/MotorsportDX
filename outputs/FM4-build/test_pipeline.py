@@ -112,7 +112,7 @@ class PipelineTests(unittest.TestCase):
                 self.assertIn(name,defaults)
                 float(defaults[name])
             self.assertEqual(pipeline.look_cvars(root,'original'),{})
-            cvars=pipeline.look_cvars(root,'pc,sharpen=0.6')
+            cvars=pipeline.look_cvars(root,'pc,sharpen=0.6,taa=0')
             self.assertEqual(Path(cvars['shader_mod_path']),root/'look')
             defines=dict(define.split('=',1) for define in cvars['shader_mod_defines'].split(';'))
             self.assertEqual(defines['FM4_LOOK_SHARPEN'],'0.6')
@@ -130,7 +130,7 @@ class PipelineTests(unittest.TestCase):
             with self.assertRaises(RuntimeError):
                 pipeline.look_cvars(root,'pc,sun=-1')
             # Development: the repository files, every knob, hot reload and live knobs.
-            for look in ('pc,sharpen=0.6','original'):
+            for look in ('pc,sharpen=0.6,taa=0','original'):
                 cvars=pipeline.look_cvars(root,look,shader_dev=True)
                 self.assertEqual(Path(cvars['shader_mod_path']),pipeline.LOOK_DIRECTORY)
                 defines=dict(define.split('=',1) for define in cvars['shader_mod_defines'].split(';'))
@@ -145,7 +145,9 @@ class PipelineTests(unittest.TestCase):
         with tempfile.TemporaryDirectory(prefix='fm4 passes test ') as directory:
             root=Path(directory)
             self.assertNotIn('post_pass_path',pipeline.look_cvars(root,'original'))
-            self.assertNotIn('post_pass_path',pipeline.look_cvars(root,'pc,ao=0'))
+            self.assertNotIn('post_pass_path',pipeline.look_cvars(root,'pc,ao=0,taa=0'))
+            # TAA alone also turns them on.
+            self.assertIn('post_pass_path',pipeline.look_cvars(root,'pc,ao=0'))
             cvars=pipeline.look_cvars(root,'pc')
             self.assertEqual(Path(cvars['post_pass_path']),root/'passes')
             for name in ('passes.toml','gtao.hlsl'):
@@ -182,20 +184,23 @@ class PipelineTests(unittest.TestCase):
             cvars,defines=defines_of('aces,ao=0,taa=1')
             self.assertEqual(defines['TAA_SHARPEN'],'0.0')
             self.assertEqual(Path(cvars['post_pass_path']),root/'passes')
-            for look in ('pc','pc,taa=0'):
+            # pc has TAA; taa=0 gives the look's own sharpening back.
+            self.assertEqual(defines_of('pc')[1],defines_of('pc,taa=1')[1])
+            for look in ('pc,taa=0','aces,sharpen=0.4'):
                 self.assertNotIn('TAA',defines_of(look)[1])
                 self.assertEqual(defines_of(look)[1]['FM4_LOOK_SHARPEN'],'0.4')
             with self.assertRaises(RuntimeError):
                 pipeline.look_cvars(root,'pc,taa=-1')
-            self.assertEqual(pipeline.single_tile_settings('pc'),
+            self.assertEqual(pipeline.single_tile_settings('pc,taa=0'),
                              ({'FM4_TILING_SCENARIO':'2'},{'swap_post_effect':'fxaa'}))
+            self.assertEqual(pipeline.single_tile_settings('pc'),({'FM4_TILING_SCENARIO':'2'},{}))
             self.assertEqual(pipeline.single_tile_settings('pc,taa=1'),({'FM4_TILING_SCENARIO':'2'},{}))
             cvars=pipeline.look_cvars(root,'pc,taa=1')
             overlay=pipeline.info_overlay(cvars,{'FM4_TILING_SCENARIO':'2'},'pc,taa=1','high')
             self.assertIn('Anti-aliasing: TAA before the HUD, sharpen 0.4, scene jittered',overlay)
             self.assertIn('Quality: high, single tile|',overlay)
-            self.assertNotIn('Anti-aliasing',pipeline.info_overlay(pipeline.look_cvars(root,'pc'),{},
-                                                                  'pc','high'))
+            self.assertNotIn('Anti-aliasing',pipeline.info_overlay(
+                pipeline.look_cvars(root,'pc,taa=0'),{},'pc,taa=0','high'))
 
     def test_look_track_settings(self):
         with tempfile.TemporaryDirectory(prefix='fm4 look test ') as directory:

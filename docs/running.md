@@ -51,7 +51,8 @@ Running with no options gives this configuration:
 - **Shadows** use the title's shadow map for every camera. See
   [-ShadowWorkaround](#-shadowworkaround).
 - **Race quality** is `high`. See [-Quality](#-quality).
-- **Look** is the `pc` preset, with screen-space ambient occlusion. See [Look](#look).
+- **Look** is the `pc` preset, with screen-space ambient occlusion and temporal
+  anti-aliasing. See [Look](#look).
 - **Display** is `native`: borderless fullscreen on the primary monitor, with a render
   scale of 2x on 1080p, 1440p and 2560x1600 screens and 3x on 4K. See
   [-Display](#-display-and-render-scale).
@@ -60,7 +61,8 @@ Running with no options gives this configuration:
 
 Performance on the defaults: Quick Race holds 60 fps on the development computer.
 The GPU time per race frame with the defaults (`high` quality, `pc` look with
-ambient occlusion) is about 3.0 ms at 1x (1280x720) and about 6.1 ms at 2x. The 2x
+ambient occlusion) is about 3.0 ms at 1x (1280x720) and about 6.1 ms at 2x, measured
+before `pc` had TAA, which adds about 0.1 ms at 1x and 0.15 ms at 2x. The 2x
 scale is the one that `native` uses on 1080p, 1440p and 2560x1600 screens.
 
 ### Render path and frame pacing
@@ -270,7 +272,7 @@ preset, knobs, or both. A preset sets only its own knobs. Later items win, so
 
 | Preset | Settings |
 | --- | --- |
-| `pc` (default) | `tonemap=aces`, `saturation=1.1`, `bloom=0.7`, `sharpen=0.4`, `clearcoat=1`, `ao=0.6`, `sun=2`, `sky=0.7` |
+| `pc` (default) | `tonemap=aces`, `saturation=1.1`, `bloom=0.7`, `sharpen=0.4`, `clearcoat=1`, `ao=0.6`, `sun=2`, `sky=0.7`, `taa=1` |
 | `aces` | `tonemap=aces`, `clearcoat=1`, `ao=0.6`, `sun=2` |
 | `gt` | `tonemap=gt`, `clearcoat=1`, `ao=0.6`, `sun=2` |
 | `neutral` | `tonemap=neutral`, `clearcoat=1`, `ao=0.6`, `sun=2` |
@@ -315,7 +317,7 @@ and `-Look original`.
 | `road_sheen_grain` | number, default 1 | How much that highlight follows the aggregate and the skid marks: it scales the highlight by the asphalt texel's brightness against the texture's local mean, to this power (and on the Top Gear and Crown Jewel road by the darkening of the skid marks). `0` gives an even sheen. |
 | `road_debug` | 0 to 7 | Debug views of the lit road `ROAD_BLND_2`: 1 the highlight's share of the light, 2 without the highlight, 3 the highlight alone, 4 which light the diffuse takes, 5 the parts of the specular amount. With `road_sheen` above 0, on every lit road shader: 6 the image times the sheen's grain, 7 the sheen alone. See [look mod coverage](analysis/look-mod-coverage.md#road-surface-18-october-2026). |
 | `ao` | number, `0` turns it off | Strength of the screen-space ambient occlusion. |
-| `taa` | `1` on, `0` (default) off | Temporal anti-aliasing before the HUD, with the scene jittered; the look's `sharpen` moves after it. See [Temporal anti-aliasing](#temporal-anti-aliasing). |
+| `taa` | `1` on (in `pc`), `0` off (the default of the other presets) | Temporal anti-aliasing before the HUD, with the scene jittered; the look's `sharpen` moves after it. See [Temporal anti-aliasing](#temporal-anti-aliasing). |
 | `sun` | number, `0` turns the glare off | Strength of the sun glare on the RTV path, the same at every MSAA level. Without it (`original`) the glare follows the counted samples. See [Sun glare](#sun-glare). |
 | `road_gloss` | multiplier, default 1 | Specular of the road surface. See [Track lighting](#track-lighting). |
 | `sky` | multiplier, default 1 | Brightness of the sky; the `sky_*` knobs above change its color. See [Track lighting](#track-lighting). |
@@ -407,8 +409,9 @@ FXC when they are first drawn. For the six measured, this took 0.15 to 1.4 s eac
 `taa=1` turns on the TAA post pass ([TAA v1](analysis/taa.md)): the scene draws move by a
 sub-pixel offset each frame, and the frames before the HUD are accumulated along the motion
 vectors, so wires, fences, lattices, distant road lines and shading glints stop stepping and
-shimmering. The HUD and the side mirrors are drawn after it and stay sharp. No preset sets it
-yet: try `-Look "pc,taa=1"`.
+shimmering. The HUD and the side mirrors are drawn after it and stay sharp. The `pc` preset
+sets it since 19 October 2026, with the `high` tiling; `-Look "pc,taa=0"` is the `pc` look
+before it (the look's sharpening, no jitter).
 
 - The look's `sharpen` (0.4 in `pc`) is applied after TAA instead of before it (the pass param
   `TAA_SHARPEN`), since sharpening the jittered frame would sharpen the jitter. TAA without

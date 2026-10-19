@@ -1,6 +1,6 @@
 # TAA v1: implementation plan
 
-Plan for temporal anti-aliasing (TAA) at the existing render scale, built on the [post pass framework](post-pass-framework.md) and the [motion vectors](motion-vectors.md). Written on 19 October 2026 against main `0a8bba5`, and approved by the project owner the same day, including the staged injection point, the reactive mask route and TAA as an opt-in until step 5. Steps 1 to 4 (the jitter, the pass history textures, TAA at the final point, and the launcher knob with its gates) are built and checked in the game ([section 12](#12-progress)); step 5 is the project owner's review. Upscalers (DLSS, FSR) are out of scope; they need a separate scale for the scene tiles ([motion vectors, section 6](motion-vectors.md#injection-point)).
+Plan for temporal anti-aliasing (TAA) at the existing render scale, built on the [post pass framework](post-pass-framework.md) and the [motion vectors](motion-vectors.md). Written on 19 October 2026 against main `0a8bba5`, and approved by the project owner the same day, including the staged injection point, the reactive mask route and TAA as an opt-in until step 5. Steps 1 to 4 (the jitter, the pass history textures, TAA at the final point, and the launcher knob with its gates) are built and checked in the game ([section 12](#12-progress)); step 5 gave `pc` TAA after the checks of the project owner's review and a fix of the camera on tracks without the road shader. Upscalers (DLSS, FSR) are out of scope; they need a separate scale for the scene tiles ([motion vectors, section 6](motion-vectors.md#injection-point)).
 
 This note contains no game code, shaders or ucode. Hashes, registers and addresses are observations only.
 
@@ -267,7 +267,7 @@ The ghosting cases of [section 8](#8-validation) test whether (d) holds.
 
 The params come from `shader_mod_defines` by name and change live with `shader_mod_set`, `defines:` steps and `post_pass_variants`. The manifest has 12 params today; these add 9, within the limit of 28.
 
-**Presets**: v1 is opt-in, `-Look "pc,taa=1"` (and `e2e.py --look "pc,taa=1"`). The `pc` preset gets `taa=1`, and possibly a tiling pairing, in step 5, after the project owner has reviewed the 2x crops and the `perf` gate. `original` never gets it.
+**Presets**: v1 was opt-in, `-Look "pc,taa=1"`, until step 5 gave the `pc` preset `taa=1` with the `high` tiling (19 October 2026; [progress](#step-5-the-camera-on-every-track-and-pc-with-taa-19-october-2026)). `original` never gets it.
 
 ## 8. Validation
 
@@ -399,17 +399,38 @@ Gates on `I:\FM4-build-usa` (USA, the binary of step 3), results in `I:\FM4-buil
 
 ### Checks before step 5 (19 October 2026)
 
-The project owner chose `taa=1` for `pc` with the `high` tiling and `TAA_SHARPEN` 0.4, provided three remaining cases pass at 2x. One does not, so `pc` is unchanged. Runs on `I:\FM4-build-usa` (the binary of step 3), results in `I:\FM4-build-usa\e2e`:
+The project owner chose `taa=1` for `pc` with the `high` tiling and `TAA_SHARPEN` 0.4, provided three remaining cases pass at 2x. One failed at first, and step 5 fixed it (below). Runs on `I:\FM4-build-usa` (the binary of step 3), results in `I:\FM4-build-usa\e2e`:
 
 | Case | Run | Result |
 |---|---|---|
 | Sun glare facing the sun | `taasun-on`, `taasun-on2` and `taasun-off`: the Quick Race start sequence and camera cycle with `REX_OCCLUSION_SEGMENT_TRACE`, jitter on and off | Pass. The sun is in view about 78 to 89 s after the start, partly hidden (its occlusion count drops from 1,952 toward 0). The frame-to-frame variation of the count is 1.6% of its mean with jitter and 0.9% without; larger relative jumps occur only below about 60 samples, where the glare is invisible. No flicker, so the sun sprite needs no `[jitter]` exclude. |
 | Tire smoke close up | `taasmoke2`: Quick Race, no AI, `--shader-dev`, handbrake slides and wheelspin with `TAA` switched on and off per camera | Pass for the chase cameras: the smoke shows no trails or doubled edges with TAA, and the car's outline stays clean through it. The cockpit is not covered: the car ended against the wall and no smoke was in view. A first run (`taasmokecheck`) held throttle and brake at a standstill and raised no smoke. |
 | Replay with camera cuts, Bernese Alps | `taaqreplay`: Quick Race with AI, `--look "pc,taa=1"`, 60 s of the replay, `post_pass_log_every=1` | Pass. Every camera change in the replay logs one `history cut` frame and the history is valid again on the next frame (14 cuts in about 70 s; twice the view was unknown for 2 frames at a change, also a cut). A capture 3 frames after a cut shows no trace of the previous shot. |
-| Replay and race, Tsukuba Short Circuit | `taareplay`: the `career` scenario, `--look "pc,taa=1"`, `post_pass_log_every=1` | **Fail.** In every logged frame of the career race and its replay (6,464 frames) the scene camera's view is unknown, so every frame is a `history cut`: TAA never accumulates there, while the scene draws are still jittered. The result is a frame shifted by up to half a pixel each frame with no anti-aliasing. The view comes only from the road vertex shader `C81F8D92FF6529EB` (its view inverse at c243); Tsukuba's road presumably draws with another shader. The step 4 G2 `career` cell ran TAA in the same state. |
+| Replay and race, Tsukuba Short Circuit | `taareplay`: the `career` scenario, `--look "pc,taa=1"`, `post_pass_log_every=1` | **Failed** on the binary of step 3; fixed in step 5. In every logged frame of the career race and its replay (6,464 frames) the scene camera's view is unknown, so every frame is a `history cut`: TAA never accumulates there, while the scene draws are still jittered. The result is a frame shifted by up to half a pixel each frame with no anti-aliasing. The view comes only from the road vertex shader `C81F8D92FF6529EB` (its view inverse at c243); Tsukuba's road presumably draws with another shader. The step 4 G2 `career` cell ran TAA in the same state. |
 
-Proposed fix, before `pc` gets `taa=1`:
+### Step 5: the camera on every track, and `pc` with TAA (19 October 2026)
 
-1. Take the view from a source that every race frame has. The car body vertex shader `8D05A46C3584CA9E` carries `matWVP` (c0), `matWV` (c4) and `matW` (c8), so the view to world matrix is `inverse(matWV) * matW` (row vectors) for any car on any track. Alternatively, add the view inverse of each track's road shader (for example `5E33CD06E3AF5B04`, the second road shader in [motion vectors](motion-vectors.md)).
-2. Jitter only while the history can accumulate: arm `[jitter]` only after a frame with a known view, so that a missing camera degrades TAA to the frame without anti-aliasing instead of a shaking one.
-3. Check the view state on more tracks (a Quick Race per environment, `post_pass_log_every`), then rerun the Tsukuba career race and replay.
+**The view of the scene camera** now comes from three sources ([passes.toml](../../work/fm4-rex/passes/passes.toml) `[scene] camera`, [post pass framework](post-pass-framework.md)):
+
+- The car body vertex shader `8D05A46C3584CA9E` with its world matrix (`rows:0:4:8`, the layout `kWvpWvWorldRows`): the view to world matrix is `matW * inverse(matWV)`, computed in double. The camera tests check it against the view inverse, also 2.4 km from the origin (camera position error below 1 mm).
+- The road vertex shader `C81F8D92FF6529EB`, as before.
+- A fallback layout, `*:world:128:140:243`, for any other vertex shader that reads all of c128 to c131, c140 to c142 and c243 to c245 (its float constant bitmap). In a ucode dump of a 16-car race, 156 of the 162 vertex shaders that take their position from c128 have that layout. The fallback takes a draw only if its viewport is as wide as the scene, its view is a rotation, its projection's aspect is the viewport's, and its projection equals the frame's if that is known. The aspect check rejects the rear-view mirror, which draws into a scene-wide viewport with a strip projection (aspect about 4.5) and was caught in the first fallback run (`taaview-tsukuba2`: every frame of the bumper camera a cut).
+
+**Jitter** now starts only after a frame whose consumer ran with a known view. A frame without a camera gets TAA without history and without jitter, which is the frame without anti-aliasing, not a shaking one.
+
+**Per track** (Quick Race with the AI driver, `--look "pc,taa=1"`, 1x, the camera cycle, `post_pass_log_every=30`):
+
+| Run | Track | Result |
+|---|---|---|
+| `taaview-maple` | Maple Valley Raceway (no road shader) | view known in all 143 logged frames; history valid; jitter on |
+| `taaview-fujimi` | Fujimi Kaido (no road shader) | known in all 137 |
+| `taaview-indianapolis` | Indianapolis Motor Speedway | known in all 137 |
+| `taaview-topgear` | TopGear | known in all 143 |
+| `taaview-tsukuba` | Tsukuba Circuit, car body source only | known in 134 of 146: the bumper camera in the lead (no car and no road in view) lost the view for 6 s, without jitter |
+| `taaview-tsukuba3` | Tsukuba Circuit, with the fallback | known in every race frame (151 of 151); the 18 unknown lines are the loading screen and the menus before the race |
+
+**The failed case again** (`taareplay2`, the `career` scenario, 2x, `post_pass_log_every=1`): the view is known in 6,562 of 6,985 logged frames; the 423 others are the loading screen before the race (415, with the camera of an earlier frame) and the menus. Each replay camera change is one `history cut` frame. In 1:1 crops at 2x the power lines and fences over Tsukuba are smooth where the step 3 binary showed stair steps, cars moving through the frame leave no trails, and a capture half a second after a cut shows nothing of the previous shot.
+
+**Launcher**: `pc` is `tonemap=aces,saturation=1.1,bloom=0.7,sharpen=0.4,clearcoat=1,ao=0.6,sun=2,sky=0.7,taa=1` ([pipeline.py](../../outputs/FM4-build/pipeline.py)), with the `high` tiling and `TAA_SHARPEN` 0.4 from the look's `sharpen`; `-Look "pc,taa=0"` is the earlier `pc`. `test_pipeline.py` covers both.
+
+**Smoke gate** on the same binary, `smoke` tier, 240 Hz, 1x: `taapc-new` (the launcher default, now `pc` with TAA) against `taapc-old` (`--look "pc,taa=0"`). 3 of 3 cells in both, no clear-gray frames, no FAIL reasons. `career` PASS: race 188.2 against 200.8 fps (p99 8.14 against 7.37 ms), replay 30.0 fps. `photo` WARN on capture statistics only (luma mean 14.91 to 17.25, black share 21.5 points): race 215.6 against 210.7 fps, photo mode 29.95 fps. `photo_view` WARN on capture statistics only (luma mean 79.4 to 90.3): 56.98 against 56.95 fps; its final images show the same car at different points of the track (the old one under a bridge), and the photo renders as before.

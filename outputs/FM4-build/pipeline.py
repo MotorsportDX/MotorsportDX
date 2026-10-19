@@ -512,8 +512,9 @@ LOOK_TRACK_KNOBS={'road_gloss':('RoadSpecular.RoadSpecular','RoadSpecular.RoadSp
 # (docs/analysis/look-mod-coverage.md). No preset has the road_* knobs yet: the candidate
 # road_specular=0,road_sheen=0.4 (with the grain) removes the bright sheet towards the sun on the
 # Bernese Alps and keeps the aggregate and skid marks on Top Gear, and waits for the project
-# owner's review of the crops.
-LOOK_PRESETS={'pc':'tonemap=aces,saturation=1.1,bloom=0.7,sharpen=0.4,clearcoat=1,ao=0.6,sun=2,sky=0.7',
+# owner's review of the crops. pc has TAA (taa=1, its sharpening after the resolve) since
+# 19 October 2026, with the high tiling: 'pc,taa=0' is the earlier pc.
+LOOK_PRESETS={'pc':'tonemap=aces,saturation=1.1,bloom=0.7,sharpen=0.4,clearcoat=1,ao=0.6,sun=2,sky=0.7,taa=1',
               'aces':'tonemap=aces,clearcoat=1,ao=0.6,sun=2','gt':'tonemap=gt,clearcoat=1,ao=0.6,sun=2',
               'neutral':'tonemap=neutral,clearcoat=1,ao=0.6,sun=2','original':''}
 DEFAULT_LOOK='pc'

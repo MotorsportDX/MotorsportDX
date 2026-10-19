@@ -353,6 +353,7 @@ Each row gives the date of the change, the setting that was replaced, and what h
 | 18 Oct 2026 | Track lighting knob `sky=0.7` in preset pc (`skyScale` of every race location times 0.7) | The game's sky (`sky=1`), as aces, gt and neutral keep | None recorded |
 | 18 Oct 2026 | AO through `post_pass_path` (a copy of `work/fm4-rex/passes` in `BuildRoot\passes`); the camera vertex shaders and the 0.75 m radius are in `passes.toml` | `post_ao=true`, `post_ao_camera` and `post_ao_radius=0.75` | None recorded |
 | 18 Oct 2026 | `generate` accepts the executables of the Japan/Asia or the USA release (`RELEASES` in `pipeline.py`) and records the release in `local.json` | The Japan/Asia executables only (`XEX_HASHES`) | None recorded |
+| 19 Oct 2026 | `pc` without TAA; TAA opt-in with `-Look "pc,taa=1"`. The check before step 5 failed on Tsukuba Short Circuit: the scene camera's view came only from the road vertex shader, so on Tsukuba every frame was a history cut while the scene jittered (the step 4 G2 `career` cell ran in that state) | `pc` with `taa=1` and the `high` tiling, after the view sources of the car body and the fallback layout and the jitter armed only after a frame with a known view ([TAA progress, step 5](../analysis/taa.md#step-5-the-camera-on-every-track-and-pc-with-taa-19-october-2026)) | `-Look "pc,taa=0"` is the earlier `pc` |
 
 ## 6. Corrections and qualifications of earlier entries
 
