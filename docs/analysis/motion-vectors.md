@@ -170,6 +170,8 @@ The game's reprojection and the host route share these, because both use one mat
 
 ## 6. Requirements for TAA and the upscalers
 
+The [TAA v1 plan](taa.md) turns these requirements into steps for TAA at the existing render scale: its injection points, the jitter, the MSAA choice and the inputs.
+
 ### Jitter
 
 - The translated vertex shaders already apply the system constant `ndc_offset` after the guest's own transform ([command_processor.cpp](../../work/runtime/src/graphics/d3d12/command_processor.cpp) fills it from `GetHostViewportInfo`). A sub-pixel jitter is an addition to `ndc_offset.xy`, 2 * jitter / viewport size in host pixels, with the sign of the guest viewport scale. No vertex shader changes.
@@ -353,6 +355,6 @@ A `REX_DRAW_LIST_TRACE` race (`mvtrace`: 1x, 60 Hz, every 150th frame, the camer
 
 ### Open
 
-- **Particles and the interior mirror** have no reactive mask. Neither the depth, the stencil nor the blend state marks them, so a mask needs one of: (a) a copy of each tile's color before its first transparent draw, against the resolved color (the FSR 2 style automatic mask; needs a rule for "transparent" other than the blend state, and a copy per tile at 4x MSAA); (b) the transparent draws drawn a second time into a mask target (pipeline variants of the translated shaders); (c) shader mods of the particle and mirror pixel shaders that write the mask (one per shader hash, and a UAV in the override contract); or (d) no mask, leaving them to the color clamping of the TAA pass. This is a design choice for the TAA stage.
+- **Particles and the interior mirror** have no reactive mask. Neither the depth, the stencil nor the blend state marks them, so a mask needs one of: (a) a copy of each tile's color before its first transparent draw, against the resolved color (the FSR 2 style automatic mask; needs a rule for "transparent" other than the blend state, and a copy per tile at 4x MSAA); (b) the transparent draws drawn a second time into a mask target (pipeline variants of the translated shaders); (c) shader mods of the particle and mirror pixel shaders that write the mask (one per shader hash, and a UAV in the override contract); or (d) no mask, leaving them to the color clamping of the TAA pass. This is a design choice for the TAA stage: the [TAA v1 plan](taa.md#6-reactive-mask) takes (d) for v1 and (c) later, for the shaders that visibly ghost (the project owner's choice of 19 October 2026).
 - The steering wheel and hands take the interior shell's motion; `MOTION_INTERIOR_W` is an assumption.
 - A replay and a 16-car grid (slots above 12).

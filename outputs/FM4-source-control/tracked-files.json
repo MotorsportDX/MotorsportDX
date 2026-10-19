@@ -81,6 +81,10 @@
       "provenance": "Project documentation; research and design note on motion vector sources (summarized observations: hashes, registers, constant and element names, no game content)"
     },
     {
+      "path": "docs/analysis/taa.md",
+      "provenance": "Project documentation; implementation plan for TAA on the post pass framework (design, steps and validation; no game content)"
+    },
+    {
       "path": "docs/analysis/texture-replacement.md",
       "provenance": "Project documentation; design note on texture dumps and replacements keyed by content hash (design, hash, limits; no game content)"
     },

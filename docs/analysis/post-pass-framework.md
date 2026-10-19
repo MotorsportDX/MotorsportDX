@@ -2,7 +2,7 @@
 
 The runtime's post pass framework runs screen passes inside the guest frame. A pass is an entry point of an HLSL file plus a few lines in a manifest, instead of bespoke C++ in the command processor. The framework gives the passes the scene depth, its stencil and the scene color, the previous frame's scene color and depth, the scene camera, the reprojection of each moving object into the previous frame, and the outputs of earlier passes, and it exposes chosen outputs to the shader mods. GTAO and the motion vectors run on it (see [gtao-design.md](gtao-design.md) and [motion-vectors.md](motion-vectors.md)).
 
-It is the common base for the planned rain screen effects, screen-space reflections, TAA and temporal upscalers: they all need new screen passes, and TAA and upscalers also need history and motion vectors. The motion of an object comes from the world matrices of the draws that write its ID into the stencil (`[motion]`), the way FM4's own motion blur reprojects each car.
+It is the common base for the planned rain screen effects, screen-space reflections, TAA and temporal upscalers: they all need new screen passes, and TAA and upscalers also need history and motion vectors. The [TAA v1 plan](taa.md) lists what TAA adds to the framework: jitter, pass-owned history textures, frame conditions, and later a write-back at the scene_color point. The motion of an object comes from the world matrices of the draws that write its ID into the stencil (`[motion]`), the way FM4's own motion blur reprojects each car.
 
 For the current state see [status/current.md](../status/current.md).
 
@@ -151,6 +151,8 @@ What a temporal upscaler or TAA needs there, and what the framework gives:
 - **Motion vectors**: FM4's `motion_vectors` texture (slot 1), written at scene_depth: previous minus current position in host pixels of the scene textures, in their layout, zero without `xe_motion_valid()`. A pass can also reproject a position itself (`xe_motion_previous_host_position`).
 - **Output**: a pixel pass with `rtv = ["final_color"]` writes the result back before the HUD. A pass cannot read and write `final_color` at once: copy it into a texture first.
 - **Resolution**: the framework works at the render scale. An upscaler that renders below the output size needs the guest's render targets at a lower scale than the HUD, which the runtime does not support; within one scale, the point suits TAA and temporal supersampling.
+
+The [TAA v1 plan](taa.md#2-injection-point) starts TAA at this point and moves it to scene_color in a second stage.
 
 ## FM4 specifics
 
