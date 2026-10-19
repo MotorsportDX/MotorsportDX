@@ -191,6 +191,17 @@ class PipelineTests(unittest.TestCase):
                 self.assertEqual(defines_of(look)[1]['FM4_LOOK_SHARPEN'],'0.4')
             with self.assertRaises(RuntimeError):
                 pipeline.look_cvars(root,'pc,taa=-1')
+            # At the scene_color point: TAA_POINT, the look keeps its sharpening, none after TAA.
+            defines=defines_of('pc,taa_point=1')[1]
+            self.assertEqual((defines['TAA'],defines['TAA_POINT'],defines['TAA_SHARPEN']),('1','1','0.0'))
+            self.assertEqual(defines['FM4_LOOK_SHARPEN'],'0.4')
+            self.assertNotIn('TAA_POINT',defines_of('pc')[1])
+            self.assertNotIn('TAA',defines_of('pc,taa=0,taa_point=1')[1])
+            with self.assertRaises(RuntimeError):
+                pipeline.look_cvars(root,'pc,taa_point=2')
+            overlay=pipeline.info_overlay(pipeline.look_cvars(root,'pc,taa_point=1'),{},
+                                          'pc,taa_point=1','high')
+            self.assertIn('Anti-aliasing: TAA before the post chain (scene_color)',overlay)
             self.assertEqual(pipeline.single_tile_settings('pc,taa=0'),
                              ({'FM4_TILING_SCENARIO':'2'},{'swap_post_effect':'fxaa'}))
             self.assertEqual(pipeline.single_tile_settings('pc'),({'FM4_TILING_SCENARIO':'2'},{}))

@@ -495,7 +495,10 @@ SUN_LIMIT=1200
 # final point (work/fm4-rex/passes/taa.hlsl, docs/analysis/taa.md), with the scene draws
 # jittered; the look's sharpening moves after its resolve (TAA_SHARPEN), since sharpening the
 # jittered frame before it would sharpen the jitter, and -SingleTile drops its FXAA.
-LOOK_PASS_KNOBS=('taa',)
+# taa_point=1 moves TAA to the scene_color point (TAA_POINT): before the game's post chain, its
+# output written back into the scene, with the occlusion's own temporal filter; the look's
+# sharpening then stays in the final combine, after TAA.
+LOOK_PASS_KNOBS=('taa','taa_point')
 # Knobs that take a name instead of a number.
 LOOK_NAMES={'tonemap':{'filmic':0,'gt':1,'aces':2,'neutral':3}}
 # Knobs that edit the title's per-track lighting files instead of shaders (FM4_TRACK_SETTINGS,
@@ -577,9 +580,17 @@ def taa_enabled(knobs):
         raise RuntimeError(f'taa is 0 (off) or 1 (on), not {knobs["taa"]!r}.')
     return value>0
 
+def taa_scene_point(knobs):
+    """The taa_point knob: 0 (the final point, the default) or 1 (the scene_color point)."""
+    value=knobs.get('taa_point','0')
+    if value not in ('0','1'):
+        raise RuntimeError(f'taa_point is 0 (final) or 1 (scene_color), not {value!r}.')
+    return value=='1'
+
 def look_defines(knobs):
     """The shader_mod_defines of look knobs: NAME=VALUE with the hlsli names and numbers, and
-    with taa the pass params TAA and TAA_SHARPEN (the look's sharpening, which then is 0)."""
+    with taa the pass params TAA and TAA_SHARPEN (the look's sharpening, which then is 0), or at
+    the scene_color point (taa_point=1) TAA_POINT with the look's sharpening kept."""
     defines=[]
     for name,value in knobs.items():
         if name in LOOK_RUNTIME_KNOBS or name in LOOK_TRACK_KNOBS or name in LOOK_PASS_KNOBS:
@@ -593,7 +604,10 @@ def look_defines(knobs):
         elif names:
             raise RuntimeError(f'Unknown {name} {value!r}; use {", ".join(names)}.')
         defines.append(f'{LOOK_KNOBS[name]}={float(value)!r}')
-    if taa_enabled(knobs):
+    scene_point=taa_scene_point(knobs)
+    if taa_enabled(knobs) and scene_point:
+        defines+=['TAA=1','TAA_SHARPEN=0.0','TAA_POINT=1']
+    elif taa_enabled(knobs):
         sharpen=float(knobs.get('sharpen','0'))
         defines=[d for d in defines if not d.startswith('FM4_LOOK_SHARPEN=')]
         defines+=['FM4_LOOK_SHARPEN=0.0','TAA=1',f'TAA_SHARPEN={sharpen!r}']
@@ -748,7 +762,10 @@ def info_overlay(cvars,env,look,quality,display=None):
         quality={0:'low',1:'medium',2:'high',3:'ultra'}.get(int(gtao['GTAO_QUALITY']),'high')
         lines.append(f"Ambient occlusion: GTAO, {applied}, radius {gtao['GTAO_RADIUS']:g} m, "
                      f'{quality}')
-    if dict(defines).get('TAA')=='1':
+    if dict(defines).get('TAA')=='1' and dict(defines).get('TAA_POINT')=='1':
+        lines.append("Anti-aliasing: TAA before the post chain (scene_color), the look's sharpening, "
+                     'scene jittered')
+    elif dict(defines).get('TAA')=='1':
         lines.append(f"Anti-aliasing: TAA before the HUD, sharpen {float(dict(defines)['TAA_SHARPEN']):g}, "
                      'scene jittered')
     if 'rtv_occlusion_awaited_scale' in cvars:

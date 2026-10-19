@@ -879,14 +879,23 @@ bool PostPasses::LoadManifest(Manifest& manifest) {
         return fail("jitter: " + error);
       }
     }
-    // The pass whose run in a frame arms the jitter of the next one.
-    manifest.jitter_consumer = (*jitter)["consumer"].value_or(std::string());
-    bool consumer_found = false;
-    for (const PassDesc& pass : manifest.passes) {
-      consumer_found |= pass.name == manifest.jitter_consumer;
+    // The passes whose run in a frame arms the jitter of the next one: a name
+    // or a list of them (one per point TAA can run at).
+    if (const toml::array* consumers = (*jitter)["consumer"].as_array()) {
+      for (const toml::node& node : *consumers) {
+        manifest.jitter_consumers.push_back(node.value_or(std::string()));
+      }
+    } else {
+      manifest.jitter_consumers.push_back((*jitter)["consumer"].value_or(std::string()));
     }
-    if (!consumer_found) {
-      return fail(fmt::format("jitter: consumer '{}' names no pass", manifest.jitter_consumer));
+    for (const std::string& consumer : manifest.jitter_consumers) {
+      bool consumer_found = false;
+      for (const PassDesc& pass : manifest.passes) {
+        consumer_found |= pass.name == consumer;
+      }
+      if (!consumer_found) {
+        return fail(fmt::format("jitter: consumer '{}' names no pass", consumer));
+      }
     }
     if (const toml::array* exclude = (*jitter)["exclude"].as_array()) {
       for (const toml::node& node : *exclude) {
@@ -2129,7 +2138,8 @@ void PostPasses::RunPoint(Point point) {
 
   for (PassDesc& pass : manifest_->passes) {
     if (pass.point == point && PassEnabled(pass) && RunPass(pass, constants_address) &&
-        pass.name == manifest.jitter_consumer) {
+        std::find(manifest.jitter_consumers.begin(), manifest.jitter_consumers.end(),
+                  pass.name) != manifest.jitter_consumers.end()) {
       jitter_consumer_frame_ = frame;
     }
   }

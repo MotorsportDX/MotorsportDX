@@ -1,22 +1,28 @@
-// Temporal anti-aliasing at the final point, a post pass of the runtime's post
-// pass framework (passes.toml, post_pass_path; see docs/analysis/taa.md and
-// docs/analysis/post-pass-framework.md). Original code of this project.
+// Temporal anti-aliasing at the final point or the scene_color point, a post
+// pass of the runtime's post pass framework (passes.toml, post_pass_path; see
+// docs/analysis/taa.md and docs/analysis/post-pass-framework.md). Original code
+// of this project.
 //
 // The scene draws are jittered by a sub-pixel Halton sequence ([jitter] of the
 // manifest, xe_scene_jitter), and this pass accumulates the frames: the input
 // is final_color, the final combine's output before the HUD (screen
-// orientation, display referred), the history is the previous frame's output
-// (taa_history, linear, the number of frames accumulated in alpha), moved by
-// the motion vectors of the motion_vectors pass (scene layout, rotated 180
-// degrees against the screen) and limited to the colors around the pixel.
+// orientation, display referred), or with TAA_SCENE 1 scene_color, the scene
+// before the game's post chain (the scene layout, gamma 2); the history is
+// the previous frame's output (linear, the number of frames accumulated in
+// alpha), moved by the motion vectors of the motion_vectors pass (scene
+// layout, rotated 180 degrees against the screen) and limited to the colors
+// around the pixel.
 //
 // Entry points of passes.toml:
-//   taa_resolve  compute: final_color, the scene depth, the motion vectors and
+//   taa_resolve  compute: the input, the scene depth, the motion vectors and
 //                their mask, the previous history and the previous scene
 //                depth -> this frame's history (RGBA16F) and, with TAA_DEBUG,
 //                the debug views (RGBA8)
 //   taa_output   pixel: the history sharpened (TAA_SHARPEN) and encoded, or a
-//                debug view, drawn into final_color before the HUD
+//                debug view, drawn into final_color before the HUD; with
+//                TAA_SCENE 1 into a texture that the framework writes back
+//                into the game's scene (the game's alpha kept), so the motion
+//                blur, bloom, exposure and final combine sample it
 //
 // Per pixel (taa_resolve):
 // 1. The current frame without the jitter: the 3x3 neighbours weighted by a
@@ -50,9 +56,19 @@
 //   5 the current frame without the jitter alone
 // Colors are never the clear gray, which e2e counts as missing geometry.
 
+#ifndef TAA_SCENE
+#define TAA_SCENE 0
+#endif
 // FM4 draws its scene rotated 180 degrees within the tiles: the scene textures
-// are upside down and mirrored against the frame.
-static const bool kSceneRotated = true;
+// are upside down and mirrored against the frame. At the scene_color point the
+// input is the scene itself.
+static const bool kSceneRotated = TAA_SCENE == 0;
+// The size of the input, the history and the output.
+#if TAA_SCENE
+#define TAA_SIZE xe_scene_size
+#else
+#define TAA_SIZE xe_final_size
+#endif
 // Frames of history at most (the alpha of taa_history).
 static const float kMaxAge = 32.0;
 
@@ -68,7 +84,7 @@ float3 TaaFromYCoCg(float3 color) {
   return float3(color.x + color.y - color.z, color.x + color.z, color.x - color.y - color.z);
 }
 
-// The scene texture pixel of a final pixel (same sizes).
+// The scene texture pixel of an input pixel (same sizes).
 int2 TaaScenePixel(int2 final_pixel) {
   int2 last = int2(xe_scene_size) - 1;
   int2 pixel = clamp(final_pixel, 0, last);
@@ -87,9 +103,9 @@ Texture2D<float> taa_previous_depth : register(t5);
 RWTexture2D<float4> taa_history_out : register(u0);
 RWTexture2D<unorm float4> taa_debug_out : register(u1);
 
-// The previous history at a final position (pixel centers at + 0.5).
+// The previous history at an input position (pixel centers at + 0.5).
 float4 TaaHistory(float2 position) {
-  float2 inverse_size = 1.0 / float2(xe_final_size);
+  float2 inverse_size = 1.0 / float2(TAA_SIZE);
 #if TAA_HISTORY_FILTER
   // Catmull-Rom in 5 bilinear taps (the corners' weights left out).
   float2 center = floor(position - 0.5) + 0.5;
@@ -127,18 +143,18 @@ float3 TaaClip(float3 history, float3 box_min, float3 box_max) {
 
 [numthreads(8, 8, 1)]
 void taa_resolve(uint3 id : SV_DispatchThreadID) {
-  if (any(id.xy >= xe_final_size)) {
+  if (any(id.xy >= TAA_SIZE)) {
     return;
   }
   int2 pixel = int2(id.xy);
-  int2 last = int2(xe_final_size) - 1;
+  int2 last = int2(TAA_SIZE) - 1;
   float3 input = TaaLinear(taa_final.Load(int3(pixel, 0)).rgb);
   // Another size than the scene's (no case known): the frame as it is.
-  if (any(xe_final_size != xe_scene_size)) {
+  if (any(TAA_SIZE != xe_scene_size)) {
     taa_history_out[pixel] = float4(input, 0.0);
     return;
   }
-  // The jitter in final pixels: the content at final position q is the
+  // The jitter in input pixels: the content at input position q is the
   // unjittered scene at q - jitter.
   float2 jitter = kSceneRotated ? -xe_scene_jitter : xe_scene_jitter;
   float3 current = 0.0, moment1 = 0.0, moment2 = 0.0;
@@ -178,7 +194,7 @@ void taa_resolve(uint3 id : SV_DispatchThreadID) {
   float2 motion = taa_motion.Load(int3(TaaScenePixel(nearest), 0));
   if (kSceneRotated) motion = -motion;
   float2 position = float2(pixel) + 0.5 + motion;
-  bool on_screen = all(position >= 0.0) && all(position <= float2(xe_final_size));
+  bool on_screen = all(position >= 0.0) && all(position <= float2(TAA_SIZE));
   bool known = mask.x < 0.5;
   bool usable = xe_history_valid() && on_screen && known;
   bool disoccluded = false;
@@ -250,24 +266,32 @@ void taa_resolve(uint3 id : SV_DispatchThreadID) {
 }
 
 // ---------------------------------------------------------------------------
-// taa_output: the history into final_color, sharpened, or a debug view.
+// taa_output: the history into final_color (or the scene's write-back),
+// sharpened, or a debug view.
 
 Texture2D<float4> taa_output_history : register(t0);
 Texture2D<float4> taa_output_debug : register(t1);
+// TAA_SCENE 1: the game's scene, whose alpha the output keeps.
+Texture2D<float4> taa_output_scene : register(t2);
 
 float3 TaaOutputColor(int2 pixel) {
-  int2 last = int2(xe_final_size) - 1;
+  int2 last = int2(TAA_SIZE) - 1;
   return TaaDisplay(taa_output_history.Load(int3(clamp(pixel, 0, last), 0)).rgb);
 }
 
 float4 taa_output(XePostPassVertex input) : SV_Target {
   int2 pixel = int2(input.position.xy);
+#if TAA_SCENE
+  float alpha = taa_output_scene.Load(int3(pixel, 0)).a;
+#else
+  float alpha = 1.0;
+#endif
   if (TAA_DEBUG > 0u) {
-    return float4(taa_output_debug.Load(int3(pixel, 0)).rgb, 1.0);
+    return float4(taa_output_debug.Load(int3(pixel, 0)).rgb, alpha);
   }
   float3 middle = TaaOutputColor(pixel);
   if (TAA_SHARPEN <= 0.0) {
-    return float4(middle, 1.0);
+    return float4(middle, alpha);
   }
   // Contrast-adaptive sharpening of the display values: less where the
   // neighbourhood is dark or near white, so edges do not ring.
@@ -280,5 +304,5 @@ float4 taa_output(XePostPassVertex input) : SV_Target {
   float3 amount = sqrt(saturate(min(low, 1.0 - high) / max(high, 1.0 / 256.0)));
   float3 weight = amount * (-1.0 / lerp(8.0, 5.0, saturate(TAA_SHARPEN)));
   float3 sharpened = (middle + weight * (up + down + left + right)) / (1.0 + 4.0 * weight);
-  return float4(saturate(sharpened), 1.0);
+  return float4(saturate(sharpened), alpha);
 }

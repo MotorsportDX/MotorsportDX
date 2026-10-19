@@ -318,6 +318,7 @@ and `-Look original`.
 | `road_debug` | 0 to 7 | Debug views of the lit road `ROAD_BLND_2`: 1 the highlight's share of the light, 2 without the highlight, 3 the highlight alone, 4 which light the diffuse takes, 5 the parts of the specular amount. With `road_sheen` above 0, on every lit road shader: 6 the image times the sheen's grain, 7 the sheen alone. See [look mod coverage](analysis/look-mod-coverage.md#road-surface-18-october-2026). |
 | `ao` | number, `0` turns it off | Strength of the screen-space ambient occlusion. |
 | `taa` | `1` on (in `pc`), `0` off (the default of the other presets) | Temporal anti-aliasing before the HUD, with the scene jittered; the look's `sharpen` moves after it. See [Temporal anti-aliasing](#temporal-anti-aliasing). |
+| `taa_point` | `0` (default) or `1` | With `taa`: `1` runs TAA at the scene_color point, before the game's post chain, instead of before the HUD; the look's `sharpen` stays in the final combine. See [Temporal anti-aliasing](#temporal-anti-aliasing). |
 | `sun` | number, `0` turns the glare off | Strength of the sun glare on the RTV path, the same at every MSAA level. Without it (`original`) the glare follows the counted samples. See [Sun glare](#sun-glare). |
 | `road_gloss` | multiplier, default 1 | Specular of the road surface. See [Track lighting](#track-lighting). |
 | `sky` | multiplier, default 1 | Brightness of the sky; the `sky_*` knobs above change its color. See [Track lighting](#track-lighting). |
@@ -421,6 +422,7 @@ before it (the look's sharpening, no jitter).
 - `shader_mod_set TAA=0` switches it off at once with `-ShaderDev`; `TAA_DEBUG=1` to `5` shows
   the debug views (see [taa.hlsl](../work/fm4-rex/passes/taa.hlsl)).
 - RTV only, like the other post passes; not with `-Rov` or `-Look original`.
+- `taa_point=1` (`-Look "pc,taa_point=1"`) moves TAA to the scene_color point: it runs on the scene before the game's motion blur, bloom, exposure and final combine, and its output is written back into the game's scene, which those then sample. The occlusion gets its own temporal filter there (`GTAO_TEMPORAL`), and the look's `sharpen` stays in the final combine, after TAA. `pc` keeps the final point; see [TAA progress, step 7](analysis/taa.md#12-progress) for the comparison.
 
 ### Shader mod development
 

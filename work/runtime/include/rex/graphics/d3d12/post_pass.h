@@ -193,13 +193,13 @@ class PostPasses {
     float interior_depth = 1.0f;
     uint32_t motion_stencil_step = 1, motion_stencil_limit = 256;
     uint32_t motion_slot_count = 1;
-    // [jitter]: the scene draws are jittered in a frame after one in which the
-    // pass jitter_consumer ran, while jitter_conditions hold; jitter_exclude
+    // [jitter]: the scene draws are jittered in a frame after one in which a
+    // pass of jitter_consumers ran, while jitter_conditions hold; jitter_exclude
     // lists vertex shaders never jittered.
     bool jitter = false;
     uint32_t jitter_phases = 8;
     std::vector<Condition> jitter_conditions;
-    std::string jitter_consumer;
+    std::vector<std::string> jitter_consumers;
     std::vector<uint64_t> jitter_exclude;
     // Name and the value of the manifest.
     std::vector<std::pair<std::string, std::string>> defines;
@@ -495,7 +495,7 @@ class PostPasses {
 
   // The jitter of this frame's scene draws (UpdateJitter at the previous
   // swap), in host pixels; the phases counted so far; the last frame in which
-  // the manifest's jitter_consumer ran.
+  // a pass of the manifest's jitter_consumers ran.
   bool jitter_active_ = false;
   float jitter_[2] = {};
   uint64_t jitter_count_ = 0;

@@ -91,6 +91,11 @@ GTAO_QUALITY = 2
 # history dropped where the previous scene depth was clearly nearer (1).
 TAA_HISTORY_FILTER = 1
 TAA_DISOCCLUSION = 1
+# Where TAA runs: 0 at the final point (after the game's post chain, before
+# the HUD), 1 at the scene_color point (before the post chain, its output
+# written back into the game's scene; the occlusion then gets its own temporal
+# filter, gtao_temporal).
+TAA_POINT = 0
 
 # Run-time params, constants of every pass (b1); shader_mod_defines,
 # shader_mod_set and shader_mod_defines.txt override them by name, live.
@@ -146,6 +151,10 @@ TAA_SHARPEN = { value = 0.4, min = 0.0, max = 1.0 }
 # weight of the current frame, 3 the clip, 4 why there is no history, 5 the
 # current frame without the jitter.
 TAA_DEBUG = { value = 0, min = 0, max = 5 }
+# With TAA at the scene_color point: the occlusion accumulated over frames (1)
+# and the weight of the current frame when still.
+GTAO_TEMPORAL = { value = 1, min = 0, max = 1 }
+GTAO_TEMPORAL_BLEND = { value = 0.15, min = 0.01, max = 1.0 }
 # 1 writes a test pattern into the game's scene at the scene_color point
 # (scene_pattern.hlsl, the S1 check of the write-back).
 SCENE_PATTERN = { value = 0, min = 0, max = 1 }
@@ -200,6 +209,24 @@ history = true
 [textures.taa_debug]
 format = "R8G8B8A8_UNORM"
 size = "final"
+
+# The same at the scene_color point (TAA_POINT 1): the scene's size and
+# layout, and the output written back into the game's scene.
+[textures.taa_scene_history]
+format = "R16G16B16A16_FLOAT"
+history = true
+
+[textures.taa_scene_debug]
+format = "R8G8B8A8_UNORM"
+
+[textures.taa_scene_out]
+format = "R10G10B10A2_UNORM"
+write_back = true
+
+# The occlusion accumulated over frames (gtao_temporal) and the frames in it.
+[textures.gtao_history]
+format = "R16G16_FLOAT"
+history = true
 
 # GTAO after the last scene depth tile is resolved, before the post chain.
 [[passes]]
@@ -268,6 +295,27 @@ if = "MOTION_VECTORS > 0 && MOTION_DEBUG > 0"
 srv = ["motion_vectors", "scene_stencil", "scene_depth", "motion_mask"]
 uav = ["motion_debug_color"]
 
+# With TAA at the scene_color point, the occlusion over frames: GTAO's of the
+# jittered depth moves by sub-pixels each frame, and TAA no longer averages it.
+[[passes]]
+name = "gtao_temporal"
+point = "scene_depth"
+shader = "gtao.hlsl"
+entry = "gtao_temporal"
+if = "TAA > 0 && TAA_POINT > 0 && GTAO_TEMPORAL > 0"
+srv = ["gtao_occlusion", "motion_vectors", "motion_mask", "previous:gtao_history",
+       "scene_depth", "previous_depth"]
+uav = ["gtao_history"]
+
+[[passes]]
+name = "gtao_temporal_out"
+point = "scene_depth"
+shader = "gtao.hlsl"
+entry = "gtao_temporal_out"
+if = "TAA > 0 && TAA_POINT > 0 && GTAO_TEMPORAL > 0"
+srv = ["gtao_history"]
+uav = ["gtao_occlusion"]
+
 # TAA at the final point, before the HUD: the resolve, then the output drawn
 # into final_color (before the motion debug view, which draws over it).
 [[passes]]
@@ -275,7 +323,7 @@ name = "taa_resolve"
 point = "final"
 shader = "taa.hlsl"
 entry = "taa_resolve"
-if = "TAA > 0 && XE_SCENE > 0"
+if = "TAA > 0 && TAA_POINT == 0 && XE_SCENE > 0"
 srv = ["final_color", "scene_depth", "motion_vectors", "motion_mask", "previous:taa_history",
        "previous_depth"]
 uav = ["taa_history", "taa_debug"]
@@ -286,9 +334,33 @@ point = "final"
 type = "pixel"
 shader = "taa.hlsl"
 entry = "taa_output"
-if = "TAA > 0 && XE_SCENE > 0"
+if = "TAA > 0 && TAA_POINT == 0 && XE_SCENE > 0"
 srv = ["taa_history", "taa_debug"]
 rtv = ["final_color"]
+
+# TAA at the scene_color point: the same resolve on the scene, its output
+# written back into the game's scene before the post chain.
+[[passes]]
+name = "taa_scene_resolve"
+point = "scene_color"
+shader = "taa.hlsl"
+entry = "taa_resolve"
+defines = { TAA_SCENE = 1 }
+if = "TAA > 0 && TAA_POINT > 0 && XE_SCENE > 0"
+srv = ["scene_color", "scene_depth", "motion_vectors", "motion_mask",
+       "previous:taa_scene_history", "previous_depth"]
+uav = ["taa_scene_history", "taa_scene_debug"]
+
+[[passes]]
+name = "taa_scene_output"
+point = "scene_color"
+type = "pixel"
+shader = "taa.hlsl"
+entry = "taa_output"
+defines = { TAA_SCENE = 1 }
+if = "TAA > 0 && TAA_POINT > 0 && XE_SCENE > 0"
+srv = ["taa_scene_history", "taa_scene_debug", "scene_color"]
+rtv = ["taa_scene_out"]
 
 [[passes]]
 name = "motion_debug_show"
@@ -319,8 +391,8 @@ srv = ["scene_color"]
 rtv = ["scene_written"]
 
 # The scene draws move by a sub-pixel Halton (2, 3) offset per frame while TAA
-# runs, in frames after one in which taa_resolve ran.
+# runs, in frames after one in which taa_resolve or taa_scene_resolve ran.
 [jitter]
 phases = 8
 if = "TAA > 0 && TAA_JITTER > 0"
-consumer = "taa_resolve"
+consumer = ["taa_resolve", "taa_scene_resolve"]
