@@ -159,6 +159,11 @@ class PostPasses {
     // [motion]: the slot of a stencil value s is round(s / stencil_step) below
     // stencil_limit, else 0; slot_count from both (at most kMotionSlots).
     std::vector<MotionSource> motion_sources;
+    // [motion] interior: the vertex shaders of an object's interior, drawn with
+    // the object's stencil ID and then covered by a mask at the stored depth
+    // interior_depth (no interior_sources: none).
+    std::vector<MotionSource> interior_sources;
+    float interior_depth = 1.0f;
     uint32_t motion_stencil_step = 1, motion_stencil_limit = 256;
     uint32_t motion_slot_count = 1;
     // Name and the value of the manifest.
@@ -226,6 +231,10 @@ class PostPasses {
     uint32_t slots_own = 0;
     uint32_t slots_drawn = 0;
     float view_to_previous_view[post_pass::kMotionSlots][3][4] = {};
+    // The stencil slot of the interior's object, or kMotionNoInterior.
+    uint32_t interior_slot = post_pass::kMotionNoInterior;
+    // Per slot, the view position of the object's origin, w 1 if drawn.
+    float object_origin[post_pass::kMotionSlots][4] = {};
   };
   // post_pass_motion_check: a guest pixel shader holding its own reprojection
   // matrices, logged next to the host's.
@@ -286,6 +295,14 @@ class PostPasses {
   bool IsSceneDepthBuffer(const RegisterFile& regs, uint32_t& depth_edram_base_out) const;
   void CaptureCamera(const RegisterFile& regs, const CameraSource& source);
   void CaptureObject(const RegisterFile& regs, uint32_t source_index);
+  // A draw of an interior source ([motion] interior): the interior of the
+  // object with its stencil reference.
+  void CaptureInterior(const RegisterFile& regs, uint32_t source_index);
+  // The slot and stencil reference of a draw of a motion or interior source,
+  // if it writes its reference into the scene stencil.
+  bool ObjectDraw(const RegisterFile& regs, uint32_t& slot_out, uint32_t& reference_out) const;
+  // The world matrix of a draw of a source.
+  post_pass::MatrixD ObjectWorld(const RegisterFile& regs, const MotionSource& source) const;
   // The motion slot of a stencil value (0: the static world).
   uint32_t MotionSlot(uint32_t stencil) const;
   void LogConstants(const RegisterFile& regs, uint64_t pixel_shader_hash);
@@ -293,7 +310,8 @@ class PostPasses {
   void UpdateMotion();
   // An object's own view_to_previous_view, if it was captured in both frames
   // and did not jump.
-  bool ObjectReprojection(uint32_t slot, const post_pass::MatrixD& view_to_world,
+  bool ObjectReprojection(const MotionObject& object, const MotionObject& previous,
+                          const post_pass::MatrixD& view_to_world,
                           const post_pass::MatrixD& previous_view_to_world,
                           post_pass::MatrixD& out) const;
   void LogMotionCheck(const RegisterFile& regs, MotionCheck& check);
@@ -410,6 +428,9 @@ class PostPasses {
 
   // Motion objects by slot, of this frame and the previous one.
   std::array<MotionObject, post_pass::kMotionSlots> motion_objects_, previous_motion_objects_;
+  // The interior of the frame and of the previous one (source: its index in
+  // interior_sources).
+  MotionObject interior_, previous_interior_;
   // Per slot and source, the first world matrix of the frame (for the log).
   std::vector<std::array<post_pass::Matrix, kMaxMotionSources>> motion_first_worlds_;
   Motion motion_;

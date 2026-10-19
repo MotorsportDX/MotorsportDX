@@ -59,6 +59,15 @@ objects = [
 # track's 0 into 128 and 129, which stay slot 0.
 stencil_step = 7
 stencil_limit = 126
+# The cockpit interior: FM4 draws the player's cockpit with its own world
+# matrix (the shell 4EE552137CA415E3; the steering wheel and hands
+# 918AF0171F6F6F4A have one per part) and then covers it with a mask at the
+# stored depth 1.0, so its pixels have the car's stencil ID but no depth of
+# their own (motion.hlsl). Other pixels at that depth or within 1% of the near
+# plane (the rear-view mirror panel of the hood and bumper cameras) get no
+# motion.
+interior = ["4EE552137CA415E3:rows:8"]
+interior_depth = 1.0
 
 # Compile-time defines of the passes; shader_mod_defines (and shader_mod_set,
 # shader_mod_defines.txt) override them by name.
@@ -88,10 +97,17 @@ GTAO_DEBUG = { value = 0, min = 0, max = 4 }
 # load.
 MOTION_VECTORS = { value = 1, min = 0, max = 1 }
 # Drawn over the frame before the HUD (motion.hlsl): 0 off, 1 motion color
-# coded, 2 the same over the frame, 3 object slots, 4 object motion alone.
-MOTION_DEBUG = { value = 0, min = 0, max = 4 }
+# coded, 2 the same over the frame, 3 object slots, 4 object motion alone,
+# 5 pixel kinds (interior, world through glass, mask), 6 the motion mask.
+MOTION_DEBUG = { value = 0, min = 0, max = 6 }
 # Debug views 1, 2 and 4: the motion length in host pixels at full color.
 MOTION_DEBUG_PIXELS = { value = 16.0, min = 0.01 }
+# The view distance in meters taken for the cockpit interior, whose pixels have
+# no depth of their own.
+MOTION_INTERIOR_W = { value = 0.6, min = 0.05 }
+# A pixel with a car's stencil ID farther than this from the car's origin (in
+# meters) is the world seen through the car's glass.
+MOTION_OBJECT_RADIUS = { value = 3.0, min = 0.1 }
 
 # Textures of the passes, at the size of the scene depth unless scale says
 # otherwise. slot exposes one to shader mods (xe_post_texture; slot 0 is
@@ -119,6 +135,13 @@ clear = true
 [textures.motion_vectors]
 format = "R16G16_FLOAT"
 slot = 1
+clear = true
+
+# Where the motion vectors are unknown (R: leave out of the history) or the
+# pixel mixes surfaces that move apart (G: reactive), in the scene's layout.
+[textures.motion_mask]
+format = "R8G8_UNORM"
+slot = 2
 clear = true
 
 [textures.motion_debug_color]
@@ -181,7 +204,7 @@ shader = "motion.hlsl"
 entry = "motion_vectors"
 if = "MOTION_VECTORS > 0"
 srv = ["scene_depth", "scene_stencil"]
-uav = ["motion_vectors"]
+uav = ["motion_vectors", "motion_mask"]
 
 [[passes]]
 name = "motion_debug"
@@ -189,7 +212,7 @@ point = "scene_depth"
 shader = "motion.hlsl"
 entry = "motion_debug"
 if = "MOTION_VECTORS > 0 && MOTION_DEBUG > 0"
-srv = ["motion_vectors", "scene_stencil", "scene_depth"]
+srv = ["motion_vectors", "scene_stencil", "scene_depth", "motion_mask"]
 uav = ["motion_debug_color"]
 
 [[passes]]

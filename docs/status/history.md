@@ -21,7 +21,7 @@ timeline
     16 October : Photo, career and matrix e2e scenarios, gate tiers, look pc and quality high defaults
     17 October : Clearcoat, display options and settings overlay, Alt+Enter, GTAO ambient occlusion, generic content import (DLC), shader mod cache and hot reload
     18 October : ROV occlusion divisor removed, sun query samples measured per MSAA level : Glass, chrome and rim look mods (false color, A/B at 2x, smoke gate), look mods compiled against real contracts : Track lighting knobs road_gloss and sky (TrackSettings copies, 2x sweep) : USA release support (clean build, smoke gate with dlc) : Post pass framework, GTAO on it with identical output : Motion vector sources checked in the game (per-car stencil IDs, the game's blur matrices) : Per-car motion vectors on the post pass framework (CPU and WARP tests)
-    19 October : Motion vectors checked in the game (the game's blur matrices, debug views at 2x, GPU time, smoke gate)
+    19 October : Motion vectors checked in the game (the game's blur matrices, debug views at 2x, GPU time, smoke gate) : Motion vector gaps: cockpit interior, glass, mirror panel, motion mask
 ```
 
 | Date | Milestone |
@@ -302,6 +302,19 @@ Shader mod iteration (17 October; design and results in [shader-mod-iteration.md
 - The per-car route was built on the post pass framework ([motion vectors](../analysis/motion-vectors.md#8-implementation-18-october-2026)), on `I:\FM4-build-pass`. Superseded state of the current status page: "the motion vectors themselves are not written" and "the capture and the pass are not written", with the next validation step "Check the host motion vectors once they are built".
 - The build and its CPU tests passed (camera math, the passes on WARP, the shader mods); the in-game runs were deferred. Superseded state of the current status page: "Not run in the game: the in-game runs were deferred on 18 October 2026. The check against the game's motion blur matrices, the debug views at 2x, the GPU time and a smoke gate are open", with the next validation step "Check the motion vectors in the game".
 - On 18 and 19 October 2026 the branch was merged into main `1fb4560`, built again into `I:\FM4-build-pass`, and checked in the game (runs `mvchk1x`, `mvdbg2x`, `mvcost1x`, `mvcost2x`, `mvoffsmoke`, `mvsmoke`). The results are in [current status](current.md#motion-vectors-18-and-19-october-2026).
+- 19 October 2026, the gaps ([motion vectors](../analysis/motion-vectors.md#9-the-gaps-in-the-game-19-october-2026)). Superseded rows of the current status page, measured on the motion vectors before the gaps were handled:
+  - **Debug views at 2x** (views 1, 3 and 4 in the cockpit, hood, bumper, chase near and chase far cameras, cars passing): the player's car is still in the chase and hood cameras and has its own color in the slot view; the world moves outward from the direction of travel; other cars carry their own motion. The cockpit interior gets a small, nearly uniform motion (0.3 to 5.5 px at 2x, larger at speed). The rear-view mirror panel of the hood and bumper cameras gets a large wrong motion (16 px or more).
+  - **GPU time** (`REX_FRAME_GRAPH` every frame, the passes switched on and off every second in one race, at 240 Hz): the frame's last scene depth resolve, which runs the passes, takes 0.261 against 0.237 ms at 1x (+0.024 ms) and 0.917 against 0.813 ms at 2x (+0.104 ms), below the estimate of 0.1 ms and 0.2 to 0.3 ms.
+  - **Smoke gate** `mvsmoke` against `mvoffsmoke` (the same binary with `post_pass_variants=MOTION_VECTORS=0`, run just before it):
+
+    | Cell | Passes off | Motion vectors | `compare` |
+    |---|---|---|---|
+    | `photo` | race 196.0 fps, p99 7.2 ms (2,734 draws per frame); photo mode 29.95 fps | race 225.2 fps, p99 6.1 ms (1,978 draws per frame); photo mode 29.97 fps | WARN on capture statistics |
+    | `photo_view` | 56.93 fps | 56.95 fps; the saved photo loads in color | WARN on capture statistics |
+    | `career` | race 191.5 fps, p99 7.1 ms; replay 30.0 fps | race 210.7 fps, p99 6.7 ms; replay 29.97 fps | PASS |
+
+    3 of 3 cells passed in both, with the same three error keys and no clear-gray frames. The race fps follow the draws per frame of each AI race.
+  - The gap was "Not covered: wheel spin, particles, glass, the cockpit interior (a small wrong motion) and the rear-view mirror panel of the hood and bumper cameras (a large wrong motion), which need masks before TAA", with the next validation step "Finish the motion vector coverage before TAA".
 
 ## 5. Superseded settings and decisions
 

@@ -16,8 +16,10 @@
 #define XE_POST_PASS_PARAMS
 #endif
 
-// post_pass_layout.h kMotionSlots.
+// post_pass_layout.h kMotionSlots, kMotionInteriorSlot, kMotionNoInterior.
 #define XE_MOTION_SLOTS 32
+#define XE_MOTION_INTERIOR_SLOT 31u
+#define XE_MOTION_NO_INTERIOR 0xFFFFFFFFu
 
 // post_pass_layout.h SceneConstants.
 cbuffer xe_post_pass_scene : register(b0) {
@@ -71,9 +73,19 @@ cbuffer xe_post_pass_scene : register(b0) {
   uint xe_motion_slot_count;
   // Bit n: slot n holds its object's own motion (xe_motion_slot_own).
   uint xe_motion_slots_own;
+  // The stencil slot whose pixels at the stored depth xe_motion_interior_depth
+  // are its interior (xe_motion_is_interior), or XE_MOTION_NO_INTERIOR; the
+  // depth is negative without the manifest's [motion] interior.
+  uint xe_motion_interior_slot;
+  float xe_motion_interior_depth;
+  uint2 xe_motion_padding;
   // Per slot, the previous frame's view position of a view position on that
-  // object; slot 0, the static world, is xe_view_to_previous_view.
+  // object; slot 0, the static world, is xe_view_to_previous_view, and slot
+  // XE_MOTION_INTERIOR_SLOT the interior's.
   row_major float3x4 xe_motion_view_to_previous_view[XE_MOTION_SLOTS];
+  // Per slot, the view position of the object's origin (w 1 if the object was
+  // drawn in this frame, else 0).
+  float4 xe_motion_object_origin[XE_MOTION_SLOTS];
 };
 
 #define XE_SCENE_HISTORY_VALID 1u
@@ -152,6 +164,14 @@ uint xe_motion_slot(uint stencil) {
 // The slot holds its object's own motion; otherwise (an object new in this
 // frame, or one that jumped) the static world's.
 bool xe_motion_slot_own(uint slot) { return ((xe_motion_slots_own >> slot) & 1u) != 0u; }
+
+// The pixel of a stencil slot and a stored depth shows the interior of that
+// slot's object: it lies under the mask the manifest's interior_depth names,
+// which carries no depth of the interior itself.
+bool xe_motion_is_interior(uint slot, float stored_depth) {
+  return slot == xe_motion_interior_slot && slot != 0u &&
+         abs(stored_depth - xe_motion_interior_depth) <= 1.0e-6;
+}
 
 // As xe_previous_host_position for a view position on the object of a slot.
 float2 xe_motion_previous_host_position(uint slot, float3 view_position, out float previous_w) {

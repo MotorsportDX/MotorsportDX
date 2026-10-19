@@ -1,6 +1,6 @@
 # Motion vectors: sources and design
 
-Research note on where the runtime can get per-pixel motion vectors for FM4, as groundwork for TAA, temporal SSR and the FSR or DLSS upscalers, and the design of the source the runtime builds. Since 18 October 2026 the [post pass framework](post-pass-framework.md) builds the recommended per-car vectors (section 3.2) next to GTAO ([GTAO design](gtao-design.md)): [section 8](#8-implementation-18-october-2026). They pass the CPU and WARP tests and were checked in the game on 18 and 19 October 2026 ([in the game](#in-the-game-18-and-19-october-2026)).
+Research note on where the runtime can get per-pixel motion vectors for FM4, as groundwork for TAA, temporal SSR and the FSR or DLSS upscalers, and the design of the source the runtime builds. Since 18 October 2026 the [post pass framework](post-pass-framework.md) builds the recommended per-car vectors (section 3.2) next to GTAO ([GTAO design](gtao-design.md)): [section 8](#8-implementation-18-october-2026). They pass the CPU and WARP tests and were checked in the game on 18 and 19 October 2026 ([in the game](#in-the-game-18-and-19-october-2026)); the cockpit interior, car glass and the mirror panel got their own handling and a motion mask on 19 October 2026 ([section 9](#9-the-gaps-in-the-game-19-october-2026)).
 
 This note contains no game code, shaders or ucode. Addresses, hashes, registers, constant values and file element names are observations only.
 
@@ -157,12 +157,12 @@ The car vertex shaders in the material atlas all have `matWVP` at c0 and `matW` 
 The game's reprojection and the host route share these, because both use one matrix per stencil ID and the depth of the opaque surface:
 
 - **Wheels**: rims, tires and the spinning-wheel blur write the car's stencil, so they get the body's motion and no spin, in the game's blur as on the host. Spokes will smear or flicker under TAA. The tire VS has `tireRotation` c123 and each rim draw its own wheel's `matW` (four per car, measured), so the host knows the wheel motion, but there is no per-pixel wheel ID. Options: a reactive mask on the wheel draws, a host-side ID for the wheel draws (for example a separate target written by those draws), or less history weight on high-contrast moving detail.
-- **Particles, smoke, sparks, dust**: blended, no depth write. Their pixels get the motion of the surface behind. They need a reactive or transparency mask. FSR 2 and later can derive one from the opaque-only color and the final color, which the runtime could take as a copy of the scene before the first blended draw of each tile (the blend state of each draw tells which ones blend).
-- **Glass**: car windows write the car's stencil but not depth, so the track seen through a car's windows gets that car's matrix with the track's depth. Small for the player's car in the chase camera (it moves with the camera), visible on fast cars passing.
+- **Particles, smoke, sparks, dust**: blended, no depth write. Their pixels get the motion of the surface behind. They need a reactive or transparency mask, which is not built: the choice of route is open (section 9). The blend state does not tell them apart: FM4 draws its opaque car parts with alpha blending enabled too.
+- **Glass**: car windows write the car's stencil but not depth, and FM4 draws them after the world, so the track seen through a car's windows carries that car's ID with the track's depth. Since 19 October 2026 the pass takes a pixel farther than `MOTION_OBJECT_RADIUS` (3 m) from its car's origin as the world seen through glass: the world's motion, and reactive in the mask (section 9).
 - **Alpha-tested foliage and fences**: they write depth and the track's stencil, so their static motion is correct, which is what TAA needs against their shimmer. Any wind sway done in the tree vertex shaders is not in the vectors; with small sway this is acceptable.
 - **Animated track objects** (flags, cable cars, crowd): drawn with the track's ID, so treated as static.
-- **Cockpit interior**: drawn with a compressed depth range (GTAO M3; in the cockpit camera the player's car body has its own projection), so the depth reconstruction with the scene camera is wrong there. The interior carries the player's car ID and moves with the camera, so its reprojection is close to identity whatever the depth. In the game (section 8) the interior gets a small, nearly uniform motion: 0.3 pixels at 37 on the speedometer and 3 to 5.5 pixels at 70 to 120, in host pixels at 2x. Whether that is the cockpit camera's own movement against the car or the depth error is not separated. The interior mirror shows a moving image on a surface that does not move, which needs the reactive mask.
-- **Rear-view mirror panel**: in the hood and bumper cameras the panel at the top of the screen shows a second view, but the pass reads the scene's depth and stencil (the track's) there, and the panel gets a large wrong motion (16 pixels or more at 2x, section 8). Its pixels need a reactive mask or must be left out of the history.
+- **Cockpit interior**: FM4 draws it with the player's car ID and then covers it with a mask at the stored depth 1.0, so its pixels have no depth of their own (section 9). Since 19 October 2026 they move with the interior shell's own world matrix at an assumed distance (`MOTION_INTERIOR_W`, 0.6 m): the rotation of the cockpit camera against the interior is exact, its translation is scaled by the assumed distance. The steering wheel and the driver's hands have their own matrices and get the shell's. The interior mirror shows a moving image on a surface that does not move, which needs the reactive mask (not built).
+- **Rear-view mirror panel**: in the hood and bumper cameras the scene depth under the panel at the top of the screen reads just below 1.0 (a W within 1% of the near plane, where no geometry is). Since 19 October 2026 those pixels get no motion and are marked in the mask as unknown, to be left out of the history (section 9).
 - **Sky**: at the far plane, it gets the camera's rotation, which is correct for a distant dome.
 - **MSAA edges**: the depth resolve takes one sample while the color resolve averages, so the ID and depth at an edge belong to sample 0.
 - **Camera cuts**: replays and the start sequence cut between cameras. The pass framework must reset the history on a cut. A cut can be detected on the host (a jump in camera position or orientation beyond what one frame allows, or a change of FOV); the framework does so with its `[history]` thresholds, and the motion vectors are zero in such a frame (section 8).
@@ -195,7 +195,7 @@ The game's reprojection and the host route share these, because both use one mat
 - **Depth**: the resolved depth, with Z inverted through the viewport (stored 1 at the near plane, 0 at the far plane), so it is passed as inverted depth.
 - **Motion**: render pixels, previous minus current, without jitter (section 3).
 - **Exposure**: the game computes its exposure from a 32x32 luminance target after the scene. Pass the previous frame's value, or use the upscaler's own auto-exposure.
-- **Reactive mask**: for particles, glass and the interior mirror (section 5).
+- **Reactive mask**: for particles, glass and the interior mirror (section 5). The `motion_mask` texture (section 9) has the glass and the pixels without known motion; particles and the interior mirror are not in it.
 - **History reset** on camera cuts (section 5).
 - **Licensing**: the FSR SDK and the DLSS SDK need a review in [sources and licensing](../sources-and-licensing.md) before either is added.
 
@@ -311,4 +311,48 @@ The relative residual of a car slot is above 5% in 533 of the 1,369 slot frames 
 ### Not yet done
 
 - A replay and a 16-car grid (slots above 12).
-- A mask for the rear-view mirror panel and the cockpit's interior mirror, and the reactive mask for particles and glass (section 5), before TAA uses the vectors.
+- Superseded on 19 October 2026 by section 9: the mirror panel, the cockpit interior and the glass.
+
+## 9. The gaps in the game (19 October 2026)
+
+The gaps of section 5 that stood in the way of TAA, on `I:\FM4-build-pass` (Japan/Asia release; one run with the USA discs through `game_data_root`), with the launcher defaults. Results stay in `I:\FM4-build-pass\e2e\mvtrace`, `mvgap2x`, `mvgapusa2x`, `mvgap2x2`, `mvgap2x3`, `mvgapcost1x`, `mvgapcost2x`, `mvmainsmoke` and `mvgapsmoke2`, outside the repository.
+
+### What the draws show
+
+A `REX_DRAW_LIST_TRACE` race (`mvtrace`: 1x, 60 Hz, every 150th frame, the cameras cycled) with four new columns per draw: the viewport Z scale and offset, `RB_BLENDCONTROL0` and `RB_COLOR_MASK` ([traces](../e2e/traces.md#draw-traces)).
+
+- **Cockpit**: each tile draws the player's cockpit first (car ID 28 in that race) with the full depth range, then a mask: 24 indices, vertex shader hash ending in `2F76904F`, Z function always with Z write, viewport Z scale 0 and offset 1, no color write. It writes the stored depth 1.0, the near plane, over the interior, so the world drawn later stays behind it. The interior's pixels keep the car's ID but read W = near (0.1 m in the cockpit camera). This is the "compressed depth range" of the GTAO notes. The interior shell `4EE552137CA415E3` has a world matrix of its own, close to the body's (rotation terms differ by about 0.003); the steering wheel and hands `918AF0171F6F6F4A` have one per part. Between sampled frames both the shell's and the body's WVP change by up to 0.05 in their rotation terms: the cockpit camera moves against the car.
+- **Glass**: the car glass `F936B2AD861F53BE` draws after the world with the depth test, no depth write and the stencil replaced with the car's ID.
+- **Blend state**: the car paint, chrome, body and wheel draws, opaque and depth-writing, all have alpha blending enabled (source alpha, inverse source alpha), so the blend state does not mark transparent draws.
+- **Mirror panel**: the hood and bumper cameras render the rear view on its own EDRAM (base 64) before the scene; no draw of the scene's tiles writes the panel's depth.
+
+### The changes
+
+- Manifest `[motion] interior` and `interior_depth` ([post pass framework](post-pass-framework.md#motion)): the interior shell's matrix goes to slot 31, and the passes get `xe_motion_interior_slot`, `xe_motion_interior_depth` and `xe_motion_is_interior`. Each car slot also gets its origin in view space (`xe_motion_object_origin`). Stencil slots stop at 30.
+- [motion.hlsl](../../work/fm4-rex/passes/motion.hlsl) sorts each pixel into one of four kinds: its surface; the interior (the interior's car ID at the mask depth: slot 31 at `MOTION_INTERIOR_W`, 0.6 m); the world through glass (a car ID farther than `MOTION_OBJECT_RADIUS`, 3 m, from that car's origin: the world's motion); and unknown (the mask depth or a W within 1% of the near plane without the interior: no motion).
+- A new output, `motion_mask` (`R8G8_UNORM`, post texture slot 2): R 1 where no motion is known (leave out of the history), G 1 where the pixel is reactive (the world through glass).
+- Debug views 5 (the pixel kinds over the W) and 6 (the mask).
+- `fm4_post_pass_shader_tests`: an interior of car 3 under a mask with its own matrix, a bare mask at 1.0 and at a W 0.5% beyond the near plane, and ground with car 1's ID 4.3 to 6.3 m from the box; their motion within 0.2 of the allowed error, and the mask also in a frame without the interior.
+
+### Results
+
+- **Cockpit** (2x, 240 Hz, view 1 measured from the debug colors): the interior's motion is 0.06 to 0.25 px at the start, 0.3 to 1.25 px at 85 on the speedometer and 0.2 to 3.2 px at 125, against 0.3 to 5.5 px before with a radial pattern. What is left changes smoothly across the interior, as a rotation of the camera against the shell does. View 5 marks the whole interior, its mirror and the pillars.
+- **Glass**: in the chase cameras view 5 and view 6 mark the parts of a car's side windows where the track shows through. Where the car's own interior shows behind its glass, the pixels stay the car's, which is right for them.
+- **Mirror panel**: with a rule of "a W below the near plane" (`mvgap2x2`) the panel stayed unmarked; with "within 1% of the near plane" (`mvgap2x3`) view 6 marks the whole panel and view 1 shows it still, in the hood and bumper cameras. So its stored depth lies just below 1.0, closer than 1% to the near plane.
+- **USA release** (`mvgapusa2x`, 2x, the USA Disc 1 through `game_data_root` on the same binary): goal reached, race 151.7 fps; the interior, glass and debug views as in the Japan/Asia runs.
+- **GPU time** (`REX_FRAME_GRAPH` every frame, `MOTION_VECTORS` 1 and 0 every second, race frames, the frame's last scene depth resolve, which runs the passes): 0.260 against 0.236 ms at 1x (+0.024 ms) and 0.939 against 0.828 ms at 2x (+0.111 ms), as before the changes.
+- **Smoke gate**: `mvgapsmoke2` against `mvmainsmoke`, main's build (the `mvsmoke` snapshot with main's passes) run just before it, 240 Hz:
+
+  | Cell | Main | This branch | `compare` |
+  |---|---|---|---|
+  | `photo` | race 221.3 fps, p99 5.9 ms (1,981 draws per frame); photo mode 29.95 fps | race 216.1 fps, p99 6.7 ms (2,050 draws per frame); photo mode 29.97 fps | WARN on capture statistics |
+  | `photo_view` | 56.03 fps | 56.99 fps | WARN on capture statistics |
+  | `career` | race 195.2 fps, p99 7.2 ms; replay 30.0 fps | race 206.2 fps, p99 7.2 ms; replay 30.0 fps | PASS |
+
+  3 of 3 cells passed in both, with the same error keys and no clear-gray frames. The draw time per draw is 1.23 against 1.21 microseconds. An earlier gate (`mvgapsmoke`, against the older `mvsmoke` and before the capture's early return was restored) failed on the `photo` race fps (179.9 against 225.2 at 2,626 against 1,978 draws per frame); the bracketed gate above replaces it.
+
+### Open
+
+- **Particles and the interior mirror** have no reactive mask. Neither the depth, the stencil nor the blend state marks them, so a mask needs one of: (a) a copy of each tile's color before its first transparent draw, against the resolved color (the FSR 2 style automatic mask; needs a rule for "transparent" other than the blend state, and a copy per tile at 4x MSAA); (b) the transparent draws drawn a second time into a mask target (pipeline variants of the translated shaders); (c) shader mods of the particle and mirror pixel shaders that write the mask (one per shader hash, and a UAV in the override contract); or (d) no mask, leaving them to the color clamping of the TAA pass. This is a design choice for the TAA stage.
+- The steering wheel and hands take the interior shell's motion; `MOTION_INTERIOR_W` is an assumption.
+- A replay and a 16-car grid (slots above 12).

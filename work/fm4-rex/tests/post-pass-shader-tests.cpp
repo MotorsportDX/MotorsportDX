@@ -12,8 +12,13 @@
 // contact of a box, darker; and its W debug view (GTAO_DEBUG 1) against the
 // traced W. The motion vectors (the texture in slot 1) are checked against the
 // traced view positions reprojected on the CPU, with the camera and the box
-// (object slot 1) moving, and zero without a valid previous frame; their debug
-// views run, and the passes of the other points are compiled.
+// (object slot 1) moving, and zero without a valid previous frame; so are the
+// pixel kinds FM4 adds: an interior under a mask at the stored depth 1.0 (car
+// 3, its own matrix at MOTION_INTERIOR_W), a mask without an interior (no
+// motion known), and ground seen through car 1's glass (car 1's ID on ground
+// far from the box: the world's motion); with the motion mask (slot 2), also
+// in a frame without the interior, where the whole mask has no motion known.
+// Their debug views run, and the passes of the other points are compiled.
 //
 // usage: fm4_post_pass_shader_tests <post_pass.hlsli> <passes directory>
 //                                   [occlusion.pgm] [NAME=VALUE ...]
@@ -323,6 +328,7 @@ int main(int argc, char** argv) {
       texture.format = format == "R32_FLOAT"        ? DXGI_FORMAT_R32_FLOAT
                        : format == "R8_UNORM"       ? DXGI_FORMAT_R8_UNORM
                        : format == "R16_FLOAT"      ? DXGI_FORMAT_R16_FLOAT
+                       : format == "R8G8_UNORM"     ? DXGI_FORMAT_R8G8_UNORM
                        : format == "R16G16_FLOAT"   ? DXGI_FORMAT_R16G16_FLOAT
                        : format == "R8G8B8A8_UNORM" ? DXGI_FORMAT_R8G8B8A8_UNORM
                                                     : DXGI_FORMAT_UNKNOWN;
@@ -431,8 +437,28 @@ int main(int argc, char** argv) {
                    : surface[i] == 2 ? 14u
                    : surface[i] == 1 && view_w[i] > 10.0 && view_x[i] > 0.0 ? 128u
                                                                               : 0u;
+      // In the sky band at the top: an interior of car 3 (21) under FM4's mask
+      // at the stored depth 1.0 on the left, the mask without an interior on
+      // the right, half of it at a W 0.5% beyond the near plane (within the 1%
+      // the pass takes as a mask, as the mirror panel of the hood and bumper
+      // cameras reads).
+      if (y >= 8 && y < 48 && ((x >= 20 && x < 140) || (x >= 480 && x < 600))) {
+        surface[i] = x < 140 ? 5 : 6;
+        stencil[i] = x < 140 ? 21u : 0u;
+        depth[i] = x < 540 ? 1.0f : 0.995f;
+        view_w[i] = near_z;
+        view_x[i] = near_z * dx;
+        view_y[i] = near_z * dy;
+      }
+      // Ground 11.5 to 13 m ahead with car 1's ID: the world through its glass.
+      if (surface[i] == 1 && view_w[i] > 11.5 && view_w[i] < 13.0 && view_x[i] > -1.0 &&
+          view_x[i] < 0.5) {
+        stencil[i] = 7u;
+      }
     }
   }
+  // Car 1's origin, the center of the box.
+  const double box_origin[3] = {-2.5, -1.0, 7.5};
 
   ComPtr<IDXGIFactory4> factory;
   ComPtr<IDXGIAdapter> warp;
@@ -624,6 +650,11 @@ int main(int argc, char** argv) {
     return 1;
   }
   Texture* motion_debug_texture = find_texture("motion_debug_color");
+  Texture* motion_mask_texture = find_texture("motion_mask");
+  if (!motion_mask_texture || motion_mask_texture->format != DXGI_FORMAT_R8G8_UNORM) {
+    std::printf("FAIL no R8G8_UNORM texture motion_mask\n");
+    return 1;
+  }
 
   // Upload and readback buffers (rows aligned to 256 bytes): the occlusion in
   // two R8 blocks, then three blocks of 4 bytes per pixel (the motion with and
@@ -653,7 +684,7 @@ int main(int argc, char** argv) {
   ComPtr<ID3D12Resource> constants_buffer =
       buffer(D3D12_HEAP_TYPE_UPLOAD, constants_stride * 2, D3D12_RESOURCE_STATE_GENERIC_READ);
   ComPtr<ID3D12Resource> readback = buffer(
-      D3D12_HEAP_TYPE_READBACK, r8_block * 2 + wide_block * 3, D3D12_RESOURCE_STATE_COPY_DEST);
+      D3D12_HEAP_TYPE_READBACK, r8_block * 2 + wide_block * 5, D3D12_RESOURCE_STATE_COPY_DEST);
   if (failures) return 1;
   {
     uint8_t* mapped = nullptr;
@@ -689,18 +720,27 @@ int main(int argc, char** argv) {
   scene.motion_stencil_scale = 1.0f / 7.0f;
   scene.motion_stencil_limit = 126;
   scene.motion_slot_count = 19;
+  scene.motion_interior_slot = 3;
+  scene.motion_interior_depth = 1.0f;
+  for (int k = 0; k < 3; ++k) scene.motion_object_origin[1][k] = float(box_origin[k]);
+  scene.motion_object_origin[1][3] = 1.0f;
   // Without a previous frame: the identity in every slot, nothing own.
   for (auto& rows : scene.motion_view_to_previous_view) {
     for (int i = 0; i < 3; ++i) rows[i][i] = 1.0f;
   }
   post_pass::SceneConstants scene_no_motion = scene;
+  // That frame also has no interior: car 3's interior pixels are a bare mask.
+  scene_no_motion.motion_interior_slot = post_pass::kMotionNoInterior;
   // The motion since the previous frame: the camera went 1 m forward, 0.2 m to
   // the side and turned by 1 degree; car 1 (the box) also moved 0.4 m to the
   // side and 0.3 m back; car 2 (the wall) is new in this frame, so its slot
   // holds the static world's. The previous frame's projection was zoomed 2%
   // in.
-  double world_motion[4][4], box_offset[4][4], box_motion[4][4];
+  double world_motion[4][4], box_offset[4][4], box_motion[4][4], interior_motion[4][4];
   RigidMotion(1.0 * 3.14159265358979 / 180.0, 0.2, 0.05, 1.0, world_motion);
+  // The interior: a small turn and move of its own (the cockpit camera against
+  // the car).
+  RigidMotion(0.3 * 3.14159265358979 / 180.0, 0.01, -0.005, 0.02, interior_motion);
   RigidMotion(0.0, 0.4, 0.0, -0.3, box_offset);
   MultiplyMatrices(world_motion, box_offset, box_motion);
   post_pass::Matrix previous_projection = projection;
@@ -720,9 +760,11 @@ int main(int argc, char** argv) {
   scene.previous_w_depth_mul = previous_unpack.w_depth_mul;
   scene.previous_w_depth_add = previous_unpack.w_depth_add;
   scene.previous_z_from_w = previous_unpack.z_from_w;
-  scene.motion_slots_own = 0b11;
+  scene.motion_slots_own = 0b11 | 1u << post_pass::kMotionInteriorSlot;
   for (uint32_t slot = 0; slot < post_pass::kMotionSlots; ++slot) {
-    const double(*matrix)[4] = slot == 1 ? box_motion : world_motion;
+    const double(*matrix)[4] = slot == 1                               ? box_motion
+                               : slot == post_pass::kMotionInteriorSlot ? interior_motion
+                                                                        : world_motion;
     for (int i = 0; i < 3; ++i) {
       for (int j = 0; j < 4; ++j) {
         scene.motion_view_to_previous_view[slot][i][j] = float(matrix[i][j]);
@@ -897,10 +939,14 @@ int main(int argc, char** argv) {
     if (param.name == "GTAO_DEBUG") debug = uint32_t(param.value);
   }
   run_point({{"GTAO_DEBUG", double(debug)}}, 0, 0, constants_motion);
+  copy_out(*motion_mask_texture, r8_block * 2 + wide_block * 3, DXGI_FORMAT_R8G8_UNORM,
+           depth_pitch);
   run_point({{"GTAO_DEBUG", 1.0}}, 1, -1, constants_motion);  // The W debug view.
   run_point({}, -1, 1, constants_no_motion);
+  copy_out(*motion_mask_texture, r8_block * 2 + wide_block * 4, DXGI_FORMAT_R8G8_UNORM,
+           depth_pitch);
   // The motion debug views run; the slot view (3) is read back.
-  for (double view : {1.0, 2.0, 4.0, 3.0}) {
+  for (double view : {1.0, 2.0, 4.0, 5.0, 6.0, 3.0}) {
     run_point({{"MOTION_DEBUG", view}}, -1, -1, constants_motion);
   }
   if (motion_debug_texture && motion_debug_texture->format == DXGI_FORMAT_R8G8B8A8_UNORM) {
@@ -921,10 +967,11 @@ int main(int argc, char** argv) {
 
   std::vector<uint8_t> occlusion(kWidth * kHeight), w_debug(kWidth * kHeight);
   std::vector<uint16_t> motion(kWidth * kHeight * 2), motion_none(kWidth * kHeight * 2);
-  std::vector<uint8_t> slot_view(kWidth * kHeight * 4);
+  std::vector<uint8_t> slot_view(kWidth * kHeight * 4), mask(kWidth * kHeight * 2),
+      mask_no_interior(kWidth * kHeight * 2);
   {
     uint8_t* mapped = nullptr;
-    D3D12_RANGE range = {0, SIZE_T(r8_block * 2 + wide_block * 3)};
+    D3D12_RANGE range = {0, SIZE_T(r8_block * 2 + wide_block * 5)};
     readback->Map(0, &range, reinterpret_cast<void**>(&mapped));
     for (uint32_t y = 0; y < kHeight; ++y) {
       std::memcpy(&occlusion[y * kWidth], mapped + y * r8_pitch, kWidth);
@@ -933,6 +980,8 @@ int main(int argc, char** argv) {
       std::memcpy(&motion[y * kWidth * 2], wide, kWidth * 4);
       std::memcpy(&motion_none[y * kWidth * 2], wide + wide_block, kWidth * 4);
       std::memcpy(&slot_view[y * kWidth * 4], wide + wide_block * 2, kWidth * 4);
+      std::memcpy(&mask[y * kWidth * 2], wide + wide_block * 3, kWidth * 2);
+      std::memcpy(&mask_no_interior[y * kWidth * 2], wide + wide_block * 4, kWidth * 2);
     }
     readback->Unmap(0, nullptr);
   }
@@ -971,23 +1020,37 @@ int main(int argc, char** argv) {
     return value;
   };
   // 0 track, 1 track under a shadow (128), 2 the box (car 1), 3 the wall (car
-  // 2, not own), 4 sky.
-  const char* class_names[] = {"track", "shadowed track", "box (car 1)", "wall (car 2, new)",
-                               "sky"};
-  double worst_motion[5] = {}, largest_motion[5] = {};
-  int class_count[5] = {};
+  // 2, not own), 4 sky, 5 the interior of car 3, 6 the mask without an
+  // interior, 7 the track through car 1's glass.
+  constexpr int kClasses = 8;
+  const char* class_names[kClasses] = {"track", "shadowed track", "box (car 1)",
+                                       "wall (car 2, new)", "sky", "interior (car 3)",
+                                       "mask without an interior", "track through glass"};
+  double worst_motion[kClasses] = {}, largest_motion[kClasses] = {};
+  int class_count[kClasses] = {};
   double box_object_motion = 0.0;
-  uint32_t nonzero_without_previous = 0;
+  uint32_t nonzero_without_previous = 0, wrong_mask = 0, wrong_mask_no_interior = 0;
+  // MOTION_INTERIOR_W of the manifest (or the command line).
+  double interior_w = 0.6;
+  for (const Param& param : params) {
+    if (param.name == "MOTION_INTERIOR_W") interior_w = param.value;
+  }
   for (uint32_t y = 0; y < kHeight; ++y) {
     for (uint32_t x = 0; x < kWidth; ++x) {
       uint32_t i = y * kWidth + x;
       int motion_class = surface[i] == 0   ? 4
+                         : surface[i] == 5 ? 5
+                         : surface[i] == 6 ? 6
                          : surface[i] == 3 ? 2
                          : surface[i] == 2 ? 3
+                         : stencil[i] == 7 ? 7
                          : stencil[i] == 128 ? 1
                                              : 0;
+      // The interior has no depth: its view position at MOTION_INTERIOR_W.
+      double scale = motion_class == 5 ? interior_w / view_w[i] : 1.0;
       auto expected = [&](const double matrix[4][4], double out[2]) {
-        double view[4] = {view_x[i], view_y[i], view_w[i], 1.0}, previous[4];
+        double view[4] = {view_x[i] * scale, view_y[i] * scale, view_w[i] * scale, 1.0},
+               previous[4];
         Transform(matrix, view, previous);
         double ndc_x = (previous_projection.m[0][0] * previous[0] +
                         previous_projection.m[0][2] * previous[2]) / previous[2];
@@ -999,8 +1062,19 @@ int main(int argc, char** argv) {
         out[1] = (gy + 0.5) / guest_per_host - (y + 0.5);
       };
       double want[2], world_want[2];
-      expected(motion_class == 2 ? box_motion : world_motion, want);
+      expected(motion_class == 2   ? box_motion
+               : motion_class == 5 ? interior_motion
+                                   : world_motion,
+               want);
       expected(world_motion, world_want);
+      if (motion_class == 6) want[0] = want[1] = 0.0;
+      // The mask: no motion known on the mask without an interior, reactive
+      // through glass.
+      int want_mask[2] = {motion_class == 6 ? 255 : 0, motion_class == 7 ? 255 : 0};
+      if (mask[i * 2] != want_mask[0] || mask[i * 2 + 1] != want_mask[1]) ++wrong_mask;
+      if (mask_no_interior[i * 2] != (motion_class == 5 || motion_class == 6 ? 255 : 0)) {
+        ++wrong_mask_no_interior;
+      }
       double got[2] = {half(motion[i * 2]), half(motion[i * 2 + 1])};
       double error = std::hypot(got[0] - want[0], got[1] - want[1]);
       double length = std::hypot(want[0], want[1]);
@@ -1017,23 +1091,27 @@ int main(int argc, char** argv) {
       if (motion_none[i * 2] || motion_none[i * 2 + 1]) ++nonzero_without_previous;
     }
   }
-  for (int c = 0; c < 5; ++c) {
+  for (int c = 0; c < kClasses; ++c) {
     std::printf("motion %s: %d pixels, up to %.1f px, worst error %.2f of the allowed\n",
                 class_names[c], class_count[c], largest_motion[c], worst_motion[c]);
     char what[96];
     std::snprintf(what, sizeof(what), "motion of the %s reprojected", class_names[c]);
     Check(class_count[c] > 100 && worst_motion[c] <= 1.0, what, worst_motion[c]);
   }
+  Check(wrong_mask == 0, "motion mask: no motion known on the bare mask, reactive through glass",
+        wrong_mask);
+  Check(wrong_mask_no_interior == 0, "motion mask without an interior: the whole mask unknown",
+        wrong_mask_no_interior);
   Check(box_object_motion > 2.0, "the box moves apart from the static world", box_object_motion);
   Check(nonzero_without_previous == 0, "no motion without a valid previous frame",
         nonzero_without_previous);
   if (motion_debug_texture) {
-    // Slot view: the track transparent, car 1 its color at alpha 0.65, car 2
-    // (no own motion) striped at alpha 0.85.
+    // Slot view: the track transparent, car 1 its color at alpha 0.65, cars 2
+    // and 3 (no own motion) striped at alpha 0.85.
     uint32_t wrong_alpha = 0;
     for (uint32_t i = 0; i < kWidth * kHeight; ++i) {
       int alpha = slot_view[i * 4 + 3];
-      int want_alpha = surface[i] == 3 ? 166 : surface[i] == 2 ? 217 : 0;
+      int want_alpha = stencil[i] == 7 ? 166 : stencil[i] == 14 || stencil[i] == 21 ? 217 : 0;
       if (std::abs(alpha - want_alpha) > 1) ++wrong_alpha;
     }
     Check(wrong_alpha == 0, "slot debug view: track, own and new object slots", wrong_alpha);
@@ -1083,7 +1161,7 @@ int main(int argc, char** argv) {
   // W debug output: saturate(W / 100), against the traced W.
   double worst_w = 0.0;
   for (uint32_t i = 0; i < kWidth * kHeight; ++i) {
-    if (surface[i] && view_w[i] < 90.0) {
+    if (surface[i] && surface[i] < 5 && view_w[i] < 90.0) {
       worst_w = std::fmax(worst_w, std::fabs(w_debug[i] / 255.0 - view_w[i] * 0.01));
     }
   }

@@ -422,7 +422,11 @@ bool PostPasses::LoadManifest(Manifest& manifest) {
   }
   // [motion]
   if (const toml::table* motion = root["motion"].as_table()) {
-    if (const toml::array* objects = (*motion)["objects"].as_array()) {
+    auto parse_sources = [&](const char* key, std::vector<MotionSource>& sources) {
+      const toml::array* objects = (*motion)[key].as_array();
+      if (!objects) {
+        return true;
+      }
       for (const toml::node& node : *objects) {
         // <hash>:rows:<world> or <hash>:columns:<world>.
         std::string text = node.value_or(std::string());
@@ -439,14 +443,22 @@ bool PostPasses::LoadManifest(Manifest& manifest) {
           valid = source.constant + (fields[1] == "rows" ? 4 : 3) <= 256;
         }
         if (!valid) {
-          return fail(fmt::format("invalid motion object '{}'", text));
+          return fail(fmt::format("invalid motion {} '{}'", key, text));
         }
-        manifest.motion_sources.push_back(source);
+        sources.push_back(source);
       }
+      if (sources.size() > kMaxMotionSources) {
+        return fail(fmt::format("more than {} motion {}", kMaxMotionSources, key));
+      }
+      return true;
+    };
+    if (!parse_sources("objects", manifest.motion_sources) ||
+        !parse_sources("interior", manifest.interior_sources)) {
+      return false;
     }
-    if (manifest.motion_sources.size() > kMaxMotionSources) {
-      return fail(fmt::format("more than {} motion objects", kMaxMotionSources));
-    }
+    double interior_depth = 1.0;
+    NodeNumber((*motion)["interior_depth"].node(), interior_depth);
+    manifest.interior_depth = float(interior_depth);
     double step = 1.0, limit = 256.0;
     NodeNumber((*motion)["stencil_step"].node(), step);
     NodeNumber((*motion)["stencil_limit"].node(), limit);
@@ -458,9 +470,10 @@ bool PostPasses::LoadManifest(Manifest& manifest) {
     // The slot of the highest stencil value below the limit.
     uint32_t last = (2 * (manifest.motion_stencil_limit - 1) + manifest.motion_stencil_step) /
                     (2 * manifest.motion_stencil_step);
-    if (last >= post_pass::kMotionSlots) {
+    // The last slot is the interior's.
+    if (last >= post_pass::kMotionInteriorSlot) {
       return fail(fmt::format("motion: stencil values below {} give slots above {}",
-                              manifest.motion_stencil_limit, post_pass::kMotionSlots - 1));
+                              manifest.motion_stencil_limit, post_pass::kMotionInteriorSlot - 1));
     }
     manifest.motion_slot_count = last + 1;
   }
@@ -883,13 +896,13 @@ bool PostPasses::CompileManifest(Manifest& manifest) {
   }
   REXGPU_INFO(
       "Post passes: {} passes, {} textures, {} params from {} in {:.1f} ms; {} scene camera "
-      "vertex shader{}, {} motion object vertex shader{} ({} slots){}{}",
+      "vertex shader{}, {} motion object vertex shader{} ({} slots), {} interior{}{}",
       manifest.passes.size(), manifest.textures.size(), manifest.params.size(),
       directory_.generic_string(),
       std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - start).count(),
       manifest.camera_sources.size(), manifest.camera_sources.size() == 1 ? "" : "s",
       manifest.motion_sources.size(), manifest.motion_sources.size() == 1 ? "" : "s",
-      manifest.motion_slot_count,
+      manifest.motion_slot_count, manifest.interior_sources.size(),
       manifest.uses_previous_color || manifest.uses_previous_depth ? ", history" : "",
       manifest.uses_point[size_t(Point::kFinal)] ? ", final point" : "");
   if (manifest.camera_sources.empty()) {
@@ -940,6 +953,8 @@ void PostPasses::Reload(const char* reason) {
   // The slots may have changed.
   motion_objects_.fill(MotionObject());
   previous_motion_objects_.fill(MotionObject());
+  interior_ = MotionObject();
+  previous_interior_ = MotionObject();
   motion_ = {};
   params_valid_ = false;
   watched_.clear();
@@ -985,6 +1000,13 @@ void PostPasses::OnDraw(const RegisterFile& regs, uint64_t vertex_shader_hash,
   for (uint32_t i = 0; i < uint32_t(motion_sources.size()); ++i) {
     if (motion_sources[i].vertex_shader_hash == vertex_shader_hash) {
       CaptureObject(regs, i);
+      break;
+    }
+  }
+  const std::vector<MotionSource>& interior_sources = manifest_->interior_sources;
+  for (uint32_t i = 0; i < uint32_t(interior_sources.size()); ++i) {
+    if (interior_sources[i].vertex_shader_hash == vertex_shader_hash) {
+      CaptureInterior(regs, i);
       break;
     }
   }
@@ -1114,10 +1136,11 @@ uint32_t PostPasses::MotionSlot(uint32_t stencil) const {
   return slot < manifest.motion_slot_count ? slot : 0;
 }
 
-void PostPasses::CaptureObject(const RegisterFile& regs, uint32_t source_index) {
+bool PostPasses::ObjectDraw(const RegisterFile& regs, uint32_t& slot_out,
+                            uint32_t& reference_out) const {
   uint32_t depth_edram_base;
   if (!IsSceneDepthBuffer(regs, depth_edram_base)) {
-    return;
+    return false;
   }
   // Only draws that write their stencil reference, the object's ID, wherever
   // they pass the depth test.
@@ -1125,10 +1148,32 @@ void PostPasses::CaptureObject(const RegisterFile& regs, uint32_t source_index) 
   const auto ref_mask = regs.Get<reg::RB_STENCILREFMASK>();
   if (!depth_control.stencil_enable || depth_control.stencilzpass != xenos::StencilOp::kReplace ||
       ref_mask.stencilwritemask != 0xFF) {
-    return;
+    return false;
   }
-  uint32_t slot = MotionSlot(ref_mask.stencilref);
-  if (!slot) {
+  slot_out = MotionSlot(ref_mask.stencilref);
+  if (!slot_out) {
+    return false;
+  }
+  reference_out = ref_mask.stencilref;
+  return true;
+}
+
+post_pass::MatrixD PostPasses::ObjectWorld(const RegisterFile& regs,
+                                           const MotionSource& source) const {
+  uint32_t rows = source.layout == post_pass::WorldLayout::kRows ? 4 : 3;
+  float constants[4][4] = {};
+  for (uint32_t row = 0; row < rows; ++row) {
+    for (uint32_t k = 0; k < 4; ++k) {
+      constants[row][k] =
+          regs.Get<float>(XE_GPU_REG_SHADER_CONSTANT_000_X + (source.constant + row) * 4 + k);
+    }
+  }
+  return post_pass::WorldMatrix(source.layout, constants);
+}
+
+void PostPasses::CaptureObject(const RegisterFile& regs, uint32_t source_index) {
+  uint32_t slot, reference;
+  if (!ObjectDraw(regs, slot, reference)) {
     return;
   }
   uint64_t frame = command_processor_.GetCurrentFrame();
@@ -1144,25 +1189,36 @@ void PostPasses::CaptureObject(const RegisterFile& regs, uint32_t source_index) 
   if (!first_of_source && !chosen) {
     return;
   }
-  const MotionSource& source = manifest_->motion_sources[source_index];
-  uint32_t rows = source.layout == post_pass::WorldLayout::kRows ? 4 : 3;
-  float constants[4][4] = {};
-  for (uint32_t row = 0; row < rows; ++row) {
-    for (uint32_t k = 0; k < 4; ++k) {
-      constants[row][k] =
-          regs.Get<float>(XE_GPU_REG_SHADER_CONSTANT_000_X + (source.constant + row) * 4 + k);
-    }
-  }
-  post_pass::MatrixD world = post_pass::WorldMatrix(source.layout, constants);
+  post_pass::MatrixD world = ObjectWorld(regs, manifest_->motion_sources[source_index]);
   if (first_of_source) {
     object.sources_drawn |= source_bit;
     motion_first_worlds_[slot][source_index] = post_pass::ToFloat(world);
   }
   if (chosen) {
     object.source = source_index;
-    object.reference = ref_mask.stencilref;
+    object.reference = reference;
     object.world = world;
   }
+}
+
+void PostPasses::CaptureInterior(const RegisterFile& regs, uint32_t source_index) {
+  uint64_t frame = command_processor_.GetCurrentFrame();
+  // One interior per frame: the first draw of the highest priority source.
+  if (interior_.frame == frame && interior_.source <= source_index) {
+    return;
+  }
+  uint32_t slot, reference;
+  if (!ObjectDraw(regs, slot, reference)) {
+    return;
+  }
+  if (interior_.frame != frame) {
+    interior_ = MotionObject();
+    interior_.frame = frame;
+  }
+  interior_.source = source_index;
+  interior_.reference = reference;
+  interior_.world = ObjectWorld(regs, manifest_->interior_sources[source_index]);
+  interior_.sources_drawn |= 1u << source_index;
 }
 
 void PostPasses::LogConstants(const RegisterFile& regs, uint64_t pixel_shader_hash) {
@@ -1371,11 +1427,10 @@ bool PostPasses::IsCameraCut() const {
 // ---------------------------------------------------------------------------
 // Motion.
 
-bool PostPasses::ObjectReprojection(uint32_t slot, const post_pass::MatrixD& view_to_world,
+bool PostPasses::ObjectReprojection(const MotionObject& object, const MotionObject& previous,
+                                    const post_pass::MatrixD& view_to_world,
                                     const post_pass::MatrixD& previous_view_to_world,
                                     post_pass::MatrixD& out) const {
-  const MotionObject& object = motion_objects_[slot];
-  const MotionObject& previous = previous_motion_objects_[slot];
   if (object.frame != command_processor_.GetCurrentFrame() || previous.frame == UINT64_MAX ||
       object.reference != previous.reference) {
     return false;
@@ -1406,10 +1461,27 @@ void PostPasses::UpdateMotion() {
   for (auto& rows : motion_.view_to_previous_view) {
     for (int i = 0; i < 3; ++i) rows[i][i] = 1.0f;
   }
+  if (interior_.frame == frame) {
+    motion_.interior_slot = MotionSlot(interior_.reference);
+  }
+  post_pass::MatrixD view_to_world = post_pass::ToDouble(camera_.view_to_world);
+  // The objects' origins in this frame's view (the glass test of the passes).
+  post_pass::MatrixD world_to_view;
+  if (camera_.view_frame == frame && post_pass::Invert(view_to_world, world_to_view)) {
+    for (uint32_t slot = 1; slot < manifest_->motion_slot_count; ++slot) {
+      const MotionObject& object = motion_objects_[slot];
+      if (object.frame != frame) continue;
+      for (int i = 0; i < 3; ++i) {
+        double value = world_to_view.m[i][3];
+        for (int k = 0; k < 3; ++k) value += world_to_view.m[i][k] * object.world.m[k][3];
+        motion_.object_origin[slot][i] = float(value);
+      }
+      motion_.object_origin[slot][3] = 1.0f;
+    }
+  }
   if (!previous_scene_ || IsCameraCut()) {
     return;
   }
-  post_pass::MatrixD view_to_world = post_pass::ToDouble(camera_.view_to_world);
   post_pass::MatrixD previous_view_to_world = post_pass::ToDouble(previous_camera_.view_to_world);
   post_pass::MatrixD world_reprojection;
   if (!post_pass::ViewToPreviousView(view_to_world, previous_view_to_world, nullptr, nullptr,
@@ -1420,8 +1492,20 @@ void PostPasses::UpdateMotion() {
   motion_.slots_own = 1;
   for (uint32_t slot = 0; slot < post_pass::kMotionSlots; ++slot) {
     post_pass::MatrixD reprojection = world_reprojection;
-    if (slot && slot < manifest_->motion_slot_count &&
-        ObjectReprojection(slot, view_to_world, previous_view_to_world, reprojection)) {
+    if (slot == post_pass::kMotionInteriorSlot) {
+      // The interior's own matrices, else its object's.
+      uint32_t object_slot = motion_.interior_slot;
+      if (object_slot != post_pass::kMotionNoInterior &&
+          !ObjectReprojection(interior_, previous_interior_, view_to_world,
+                              previous_view_to_world, reprojection)) {
+        ObjectReprojection(motion_objects_[object_slot], previous_motion_objects_[object_slot],
+                           view_to_world, previous_view_to_world, reprojection);
+      } else if (object_slot != post_pass::kMotionNoInterior) {
+        motion_.slots_own |= 1u << slot;
+      }
+    } else if (slot && slot < manifest_->motion_slot_count &&
+               ObjectReprojection(motion_objects_[slot], previous_motion_objects_[slot],
+                                  view_to_world, previous_view_to_world, reprojection)) {
       motion_.slots_own |= 1u << slot;
     }
     for (int i = 0; i < 3; ++i) {
@@ -1487,6 +1571,10 @@ std::string PostPasses::MotionSummary() const {
   }
   std::string text = fmt::format("{}, own 0x{:X}", motion_.valid ? "valid" : "invalid",
                                  motion_.slots_own);
+  if (motion_.interior_slot != post_pass::kMotionNoInterior) {
+    text += fmt::format(", interior of slot {} (source {})", motion_.interior_slot,
+                        interior_.source);
+  }
   for (uint32_t slot = 1; slot < post_pass::kMotionSlots; ++slot) {
     const MotionObject& object = motion_objects_[slot];
     if (object.frame != frame) continue;
@@ -1637,10 +1725,16 @@ void PostPasses::FillSceneConstants(post_pass::SceneConstants& constants) const 
   constants.motion_stencil_scale = 1.0f / float(manifest.motion_stencil_step);
   constants.motion_stencil_limit = manifest.motion_stencil_limit;
   constants.motion_slot_count = manifest.motion_slot_count;
+  constants.motion_interior_slot = post_pass::kMotionNoInterior;
+  constants.motion_interior_depth =
+      manifest.interior_sources.empty() ? -1.0f : manifest.interior_depth;
   if (motion_.frame == frame) {
     constants.motion_slots_own = motion_.slots_own;
+    constants.motion_interior_slot = motion_.interior_slot;
     std::memcpy(constants.motion_view_to_previous_view, motion_.view_to_previous_view,
                 sizeof(constants.motion_view_to_previous_view));
+    std::memcpy(constants.motion_object_origin, motion_.object_origin,
+                sizeof(constants.motion_object_origin));
   } else {
     for (auto& rows : constants.motion_view_to_previous_view) {
       for (int i = 0; i < 3; ++i) rows[i][i] = 1.0f;
@@ -2171,8 +2265,10 @@ void PostPasses::OnSwap() {
       previous_motion_objects_[slot] =
           motion_objects_[slot].frame == frame ? motion_objects_[slot] : MotionObject();
     }
+    previous_interior_ = interior_.frame == frame ? interior_ : MotionObject();
   } else {
     previous_motion_objects_.fill(MotionObject());
+    previous_interior_ = MotionObject();
   }
 
   uint64_t completed = command_processor_.GetCompletedSubmission();

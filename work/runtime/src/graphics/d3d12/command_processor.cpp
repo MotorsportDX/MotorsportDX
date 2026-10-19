@@ -268,7 +268,9 @@ std::ofstream* OcclusionDrawTrace() {
 // every REX_DRAW_LIST_EVERY-th frame (default 10). Lines, hexadecimal:
 //   F <frame> <steady clock ms, decimal>
 //   <vs> <ps> <indices> <index base> <vertex base> <color 0 info> <depth info>
-//   <window offset> <edram mode> <depth control> <stencil ref mask> <outcome>
+//   <window offset> <edram mode> <depth control> <stencil ref mask>
+//   <viewport z scale> <viewport z offset> <blend control 0> <color mask>
+//   <outcome>
 // REX_DRAW_LIST_CONSTANTS="<shader hash>:<first>[-<last>];..." (64-bit ucode
 // hash of a vertex or pixel shader, decimal constant numbers of that shader)
 // adds after each matching draw the line
@@ -327,7 +329,7 @@ DrawListTrace* GetSampledDrawListTrace() {
 // Writes the draw when it goes out of scope; outcome is set at the exits.
 struct DrawListEntry {
   DrawListTrace* trace = nullptr;
-  uint32_t values[11] = {};
+  uint32_t values[15] = {};
   // Per REX_DRAW_LIST_CONSTANTS match: first constant, dword count, dwords.
   std::vector<uint32_t> constants;
   const char* outcome = "fail";
@@ -3425,6 +3427,10 @@ bool D3D12CommandProcessor::IssueDraw(xenos::PrimitiveType primitive_type, uint3
     values[8] = uint32_t(edram_mode);
     values[9] = regs.values[XE_GPU_REG_RB_DEPTHCONTROL];
     values[10] = regs.values[XE_GPU_REG_RB_STENCILREFMASK];
+    values[11] = regs.values[XE_GPU_REG_PA_CL_VPORT_ZSCALE];
+    values[12] = regs.values[XE_GPU_REG_PA_CL_VPORT_ZOFFSET];
+    values[13] = regs.values[XE_GPU_REG_RB_BLENDCONTROL0];
+    values[14] = regs.values[XE_GPU_REG_RB_COLOR_MASK];
   }
   if (edram_mode == xenos::EdramMode::kCopy) {
     // Special copy handling.

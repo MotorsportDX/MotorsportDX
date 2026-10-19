@@ -20,8 +20,12 @@ constexpr uint32_t kMaxRenderTargets = 4;
 // Run-time params of a pass set (b1 after the pass header), 4 bytes each.
 constexpr uint32_t kMaxParams = 28;
 // Object slots of the motion vectors (the manifest's [motion]): slot 0 is the
-// static world, which moves with the camera only.
+// static world, which moves with the camera only. The last slot holds the
+// interior ([motion] interior), so stencil slots stop one below it.
 constexpr uint32_t kMotionSlots = 32;
+constexpr uint32_t kMotionInteriorSlot = kMotionSlots - 1;
+// SceneConstants::motion_interior_slot without an interior in the frame.
+constexpr uint32_t kMotionNoInterior = 0xFFFFFFFFu;
 
 // Root parameters, all visible to every stage: the scene constants (b0, a root
 // CBV), the pass constants (b1, root constants: PassHeader then the params),
@@ -106,12 +110,23 @@ struct SceneConstants {
   // Bit n: slot n holds its object's own motion (the object was captured in
   // this frame and the previous one); otherwise it holds slot 0's.
   uint32_t motion_slots_own;
+  // The interior ([motion] interior): the stencil slot of the object whose
+  // interior was drawn (kMotionNoInterior if none), and the stored depth of the
+  // mask that covers it (negative without [motion] interior). Those pixels move
+  // with slot kMotionInteriorSlot; other pixels at that depth are masks too,
+  // with no motion known.
+  uint32_t motion_interior_slot;
+  float motion_interior_depth;
+  uint32_t motion_padding[2];
   // Per slot, view_to_previous_view of the object: the previous frame's view
   // position of a view position of this frame on that object, with
   // kSceneFlagMotionValid. Slot 0 is view_to_previous_view.
   float motion_view_to_previous_view[kMotionSlots][3][4];
+  // Per slot, the view position of the object's origin in this frame (w 1 if
+  // the object was drawn, else 0).
+  float motion_object_origin[kMotionSlots][4];
 };
-static_assert(sizeof(SceneConstants) == (15 + 3 * kMotionSlots) * 16,
-              "SceneConstants is 15 cbuffer rows and 3 per motion slot");
+static_assert(sizeof(SceneConstants) == (16 + 4 * kMotionSlots) * 16,
+              "SceneConstants is 16 cbuffer rows and 4 per motion slot");
 
 }  // namespace rex::graphics::d3d12::post_pass
