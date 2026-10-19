@@ -163,9 +163,22 @@ RETRY_S = 5
 # the race cameras (cockpit, hood, bumper, chase near, chase far, back to cockpit).
 _CAMERA = [[4, 'rt=255+back', 0.15], [0.2, 'rt=255', 0]] + [[6, 'rt=255+back', 0.15], [0.2, 'rt=255', 0]] * 5
 STEP_PRESETS = {'camera': _CAMERA}
-# Exact FM4 clear color: where it covers >= 1% of a race capture, geometry such as the road
-# surface was not drawn (seen on the RTV path).
+# Exact FM4 clear color: where it covers >= 1% of a race capture as a peak among the neutral grays
+# around it, geometry such as the road surface was not drawn (seen on the RTV path).
 CLEAR_GRAY = bytes([102, 102, 102])
+
+
+def is_clear_gray(rgb, width, height):
+    """The capture shows the clear color where geometry is missing: (102, 102, 102) covers at
+    least 1% of it more than the mean of the neutral grays 97-101 and 103-107 do. Asphalt
+    smoothed by TAA hits 102 by chance in 1% of a capture and more, but as part of an even spread
+    of neutral grays; a surface left undrawn is a peak of that one value. Runs of a color count
+    once per pixel; misaligned matches are negligible."""
+    clear = rgb.count(CLEAR_GRAY)
+    if clear < 0.01 * width * height:
+        return False
+    around = [rgb.count(bytes([v, v, v])) for v in (*range(97, 102), *range(103, 108))]
+    return clear - sum(around) / len(around) >= 0.01 * width * height
 
 # Goals for Jev-driven navigation. The route is guidance for the judgment, not a script.
 GOALS = {
@@ -877,8 +890,7 @@ def run_once(options, out):
     clear_gray_frames = []
     for frame in frames:
         width, height, rgb = read_ppm(frame)
-        # Runs of the clear color count once per pixel; misaligned matches are negligible.
-        if rgb.count(CLEAR_GRAY) >= 0.01 * width * height:
+        if is_clear_gray(rgb, width, height):
             clear_gray_frames.append(frame.stem)
         ppm_to_png(frame, frame.with_suffix('.png'))
         if not options.keep_ppm:

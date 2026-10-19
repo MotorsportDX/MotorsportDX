@@ -491,6 +491,11 @@ LOOK_KNOBS={'sharpen':'FM4_LOOK_SHARPEN','bloom':'FM4_LOOK_BLOOM','exposure':'FM
 # (look original) the counted samples are reported. -Rov always reports its counted samples.
 LOOK_RUNTIME_KNOBS=('sun',)
 SUN_LIMIT=1200
+# Knobs of the post passes instead of the look mods. taa above 0: temporal anti-aliasing at the
+# final point (work/fm4-rex/passes/taa.hlsl, docs/analysis/taa.md), with the scene draws
+# jittered; the look's sharpening moves after its resolve (TAA_SHARPEN), since sharpening the
+# jittered frame before it would sharpen the jitter, and -SingleTile drops its FXAA.
+LOOK_PASS_KNOBS=('taa',)
 # Knobs that take a name instead of a number.
 LOOK_NAMES={'tonemap':{'filmic':0,'gt':1,'aces':2,'neutral':3}}
 # Knobs that edit the title's per-track lighting files instead of shaders (FM4_TRACK_SETTINGS,
@@ -564,21 +569,33 @@ def look_knobs(look):
         knobs[name]=value
     return knobs
 
+def taa_enabled(knobs):
+    """The taa knob of a look's knobs is above 0."""
+    value=float(knobs.get('taa','0'))
+    if value<0:
+        raise RuntimeError(f'taa is 0 (off) or 1 (on), not {knobs["taa"]!r}.')
+    return value>0
+
 def look_defines(knobs):
-    """The shader_mod_defines of look knobs: NAME=VALUE with the hlsli names and numbers."""
+    """The shader_mod_defines of look knobs: NAME=VALUE with the hlsli names and numbers, and
+    with taa the pass params TAA and TAA_SHARPEN (the look's sharpening, which then is 0)."""
     defines=[]
     for name,value in knobs.items():
-        if name in LOOK_RUNTIME_KNOBS or name in LOOK_TRACK_KNOBS:
+        if name in LOOK_RUNTIME_KNOBS or name in LOOK_TRACK_KNOBS or name in LOOK_PASS_KNOBS:
             continue
         if name not in LOOK_KNOBS:
             raise RuntimeError(f'Unknown look knob {name!r}; use '
-                               f'{", ".join((*LOOK_KNOBS,*LOOK_RUNTIME_KNOBS,*LOOK_TRACK_KNOBS))}.')
+                               f'{", ".join((*LOOK_KNOBS,*LOOK_RUNTIME_KNOBS,*LOOK_TRACK_KNOBS,*LOOK_PASS_KNOBS))}.')
         names=LOOK_NAMES.get(name,{})
         if value in names:
             value=names[value]
         elif names:
             raise RuntimeError(f'Unknown {name} {value!r}; use {", ".join(names)}.')
         defines.append(f'{LOOK_KNOBS[name]}={float(value)!r}')
+    if taa_enabled(knobs):
+        sharpen=float(knobs.get('sharpen','0'))
+        defines=[d for d in defines if not d.startswith('FM4_LOOK_SHARPEN=')]
+        defines+=['FM4_LOOK_SHARPEN=0.0','TAA=1',f'TAA_SHARPEN={sharpen!r}']
     return defines
 
 def look_track_settings(knobs):
@@ -622,8 +639,8 @@ def look_cvars(root,look,shader_dev=False):
     cvars.update({'shader_mod_path':directory,'shader_mod_defines':';'.join(defines)})
     if shader_dev:
         cvars.update(shader_mod_hot_reload='true',shader_mod_live_knobs='true')
-    # The ao knob needs the runtime's GTAO pass.
-    cvars.update(ao_cvars(root,float(knobs.get('ao','0'))>0,shader_dev))
+    # The ao and taa knobs need the runtime's post passes.
+    cvars.update(ao_cvars(root,float(knobs.get('ao','0'))>0 or taa_enabled(knobs),shader_dev))
     return cvars
 
 def sun_cvars(strength):
@@ -691,7 +708,8 @@ def info_overlay(cvars,env,look,quality,display=None):
     scale=int(cvars.get('draw_resolution_scale_x','1'))
     downscale='area' if cvars.get('present_area_downscale','true')=='true' else 'bilinear'
     lines=[(display or f'Render {scale}x ({1280*scale}x{720*scale})')+f', {downscale} downscale']
-    tiling=', single tile with FXAA' if env.get('FM4_TILING_SCENARIO')=='2' else ''
+    tiling=(', single tile'+(' with FXAA' if cvars.get('swap_post_effect')=='fxaa' else '')
+            if env.get('FM4_TILING_SCENARIO')=='2' else '')
     lines.append(f'Quality: {quality}'+(" (the game's own)" if quality=='xbox' else '')+tiling)
     knobs={value:name for name,value in LOOK_KNOBS.items()}
     tonemaps={str(float(number)):name for name,number in LOOK_NAMES['tonemap'].items()}
@@ -729,6 +747,9 @@ def info_overlay(cvars,env,look,quality,display=None):
         quality={0:'low',1:'medium',2:'high',3:'ultra'}.get(int(gtao['GTAO_QUALITY']),'high')
         lines.append(f"Ambient occlusion: GTAO, {applied}, radius {gtao['GTAO_RADIUS']:g} m, "
                      f'{quality}')
+    if dict(defines).get('TAA')=='1':
+        lines.append(f"Anti-aliasing: TAA before the HUD, sharpen {float(dict(defines)['TAA_SHARPEN']):g}, "
+                     'scene jittered')
     if 'rtv_occlusion_awaited_scale' in cvars:
         strength=float(cvars['rtv_occlusion_awaited_scale'])
         lines.append(f'Sun glare: {strength:g}x per pixel, soft limit {cvars["rtv_occlusion_awaited_limit"]}'
@@ -775,6 +796,13 @@ def save_content(root,content):
     state['content']=[str(Path(path).resolve()) for path in content]
     (root/'local.json').write_text(json.dumps(state,indent=2),encoding='utf-8')
 
+def single_tile_settings(look):
+    """-SingleTile: races render 720p in one tile without MSAA (the title's UI tiling scenario),
+    without predicated tiling, and FXAA on the swap unless the look has TAA, which anti-aliases
+    the tile itself (FXAA after it would blur the HUD and fight it). Environment and cvars."""
+    return ({'FM4_TILING_SCENARIO':'2'},
+            {} if taa_enabled(look_knobs(look)) else {'swap_post_effect':'fxaa'})
+
 def launch(root,single_tile=False,fixed_vblank=False,frame_rate=None,rov=False,
            resolution_scale=None,full_rate_mirror=False,look=None,shadow_workaround=False,
            quality=None,display=DEFAULT_DISPLAY,fullscreen=False,supersample=False,info=False,
@@ -797,11 +825,11 @@ def launch(root,single_tile=False,fixed_vblank=False,frame_rate=None,rov=False,
     if settings:
         env['FM4_RACE_SETTINGS']=settings
     cvars=launch_cvars(root,disc1,root/'logs/runtime.log')
+    look=DEFAULT_LOOK if look is None else look
     if single_tile:
-        # Races render 720p in one tile without MSAA (the title's UI tiling
-        # scenario): no predicated tiling, FXAA on the swap instead.
-        env['FM4_TILING_SCENARIO']='2'
-        cvars['swap_post_effect']='fxaa'
+        tiling_env,tiling_cvars=single_tile_settings(look)
+        env.update(tiling_env)
+        cvars.update(tiling_cvars)
     if fixed_vblank:
         cvars['vblank_vrr']='false'
     if rov:
@@ -822,7 +850,6 @@ def launch(root,single_tile=False,fixed_vblank=False,frame_rate=None,rov=False,
         env['FM4_FRAME_RATE']=str(frame_rate)
     # Shader mods on the game's post-processing (tone curve, sharpening, bloom, exposure,
     # contrast, saturation, vignette, motion blur): the pc look unless -Look says otherwise.
-    look=DEFAULT_LOOK if look is None else look
     cvars.update(look_cvars(root,look,shader_dev))
     track_settings=look_track_settings(look_knobs(look))
     if track_settings:
@@ -933,7 +960,8 @@ def main():
     parser.add_argument('--look',
                         help='run: post-processing look, a preset ('+', '.join(LOOK_PRESETS)+
                              '; default '+DEFAULT_LOOK+') and/or knobs, for example '
-                             '"pc,sharpen=0.6" (knobs: '+', '.join(LOOK_KNOBS)+
+                             '"pc,sharpen=0.6" (knobs: '+
+                             ', '.join((*LOOK_KNOBS,*LOOK_RUNTIME_KNOBS,*LOOK_TRACK_KNOBS,*LOOK_PASS_KNOBS))+
                              '; work/fm4-rex/look/fm4-look.hlsli)')
     parser.add_argument('--ao',action='store_true',
                         help="run: the runtime's screen-space ambient occlusion pass (the GTAO post pass) "

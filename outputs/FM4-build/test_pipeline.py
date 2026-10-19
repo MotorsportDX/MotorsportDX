@@ -8,6 +8,9 @@ from unittest.mock import patch
 
 import pipeline
 from prepare import switches, BASE
+import sys
+sys.path.insert(0,str(Path(__file__).resolve().parent/'e2e'))
+from e2e import is_clear_gray
 
 class PipelineTests(unittest.TestCase):
     def dispatch(self):
@@ -159,6 +162,41 @@ class PipelineTests(unittest.TestCase):
             overlay=pipeline.info_overlay(cvars,{},'pc','high')
             self.assertIn('Ambient occlusion: GTAO, strength 0.6, radius 0.75 m, high',overlay)
 
+    def test_taa(self):
+        """The taa knob: the pass param TAA, the post passes on, the look's sharpening moved into
+        TAA_SHARPEN, no FXAA with -SingleTile, and the overlay line."""
+        with tempfile.TemporaryDirectory(prefix='fm4 taa test ') as directory:
+            root=Path(directory)
+            def defines_of(look):
+                cvars=pipeline.look_cvars(root,look)
+                return cvars,dict(d.split('=',1) for d in cvars['shader_mod_defines'].split(';'))
+            cvars,defines=defines_of('pc,taa=1')
+            self.assertEqual(defines['TAA'],'1')
+            self.assertEqual(defines['TAA_SHARPEN'],'0.4')
+            self.assertEqual(defines['FM4_LOOK_SHARPEN'],'0.0')
+            self.assertEqual(defines['FM4_LOOK_TONEMAP'],'2.0')
+            self.assertEqual(Path(cvars['post_pass_path']),root/'passes')
+            self.assertTrue((root/'passes/taa.hlsl').is_file())
+            self.assertEqual(defines_of('pc,sharpen=0.6,taa=1')[1]['TAA_SHARPEN'],'0.6')
+            # Without the sharpening knob or the ao knob: no sharpening, the passes still on.
+            cvars,defines=defines_of('aces,ao=0,taa=1')
+            self.assertEqual(defines['TAA_SHARPEN'],'0.0')
+            self.assertEqual(Path(cvars['post_pass_path']),root/'passes')
+            for look in ('pc','pc,taa=0'):
+                self.assertNotIn('TAA',defines_of(look)[1])
+                self.assertEqual(defines_of(look)[1]['FM4_LOOK_SHARPEN'],'0.4')
+            with self.assertRaises(RuntimeError):
+                pipeline.look_cvars(root,'pc,taa=-1')
+            self.assertEqual(pipeline.single_tile_settings('pc'),
+                             ({'FM4_TILING_SCENARIO':'2'},{'swap_post_effect':'fxaa'}))
+            self.assertEqual(pipeline.single_tile_settings('pc,taa=1'),({'FM4_TILING_SCENARIO':'2'},{}))
+            cvars=pipeline.look_cvars(root,'pc,taa=1')
+            overlay=pipeline.info_overlay(cvars,{'FM4_TILING_SCENARIO':'2'},'pc,taa=1','high')
+            self.assertIn('Anti-aliasing: TAA before the HUD, sharpen 0.4, scene jittered',overlay)
+            self.assertIn('Quality: high, single tile|',overlay)
+            self.assertNotIn('Anti-aliasing',pipeline.info_overlay(pipeline.look_cvars(root,'pc'),{},
+                                                                  'pc','high'))
+
     def test_look_track_settings(self):
         with tempfile.TemporaryDirectory(prefix='fm4 look test ') as directory:
             root=Path(directory)
@@ -235,5 +273,19 @@ class PipelineTests(unittest.TestCase):
         for recipe in json.loads((pipeline.HERE/'switch-recipes.json').read_text()):
             self.assertEqual(set(recipe),{'start','end','address','register','count'})
             self.assertNotIn('labels',recipe)
+
+    def test_clear_gray(self):
+        """The e2e clear color check: smooth neutral grays that pass 102 (asphalt under TAA) are no
+        missing geometry; 102 over 1% of the capture more than the grays around it is."""
+        width,height=200,100
+        # Neutral grays 92-112 in turn, so 102 alone covers about 4.8% of the image.
+        smooth=b''.join(bytes([92+(x+y)%21]*3) for y in range(height) for x in range(width))
+        self.assertGreater(smooth.count(bytes([102]*3)),0.01*width*height)
+        self.assertFalse(is_clear_gray(smooth,width,height))
+        for rows in (3,50):
+            missing=bytearray(smooth)
+            missing[-rows*width*3:]=bytes([102]*3)*(rows*width)
+            self.assertTrue(is_clear_gray(bytes(missing),width,height),rows)
+        self.assertFalse(is_clear_gray(bytes([30,30,30])*width*height,width,height))
 
 if __name__=='__main__': unittest.main()

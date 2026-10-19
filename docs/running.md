@@ -219,7 +219,8 @@ the title's own. Compare the default path against `-Rov` with `-Look original`.
 #### -SingleTile
 
 Renders races as one 720p tile without MSAA. This is the title's own UI tiling
-scenario, selected through the render scenario override. The swap applies FXAA.
+scenario, selected through the render scenario override. The swap applies FXAA, unless the look
+has `taa=1` (see [Temporal anti-aliasing](#temporal-anti-aliasing)).
 Measured with Quick Race on `-Rov`: 58.6 fps instead of 54.3, frame p95 20 ms instead of
 33 ms, GPU 13 ms instead of 17.5 ms. Edges are visibly more jagged than with MSAA (2x
 with `-Quality xbox`, 4x with the default `high`): thin cables break up. Photo mode and
@@ -314,6 +315,7 @@ and `-Look original`.
 | `road_sheen_grain` | number, default 1 | How much that highlight follows the aggregate and the skid marks: it scales the highlight by the asphalt texel's brightness against the texture's local mean, to this power (and on the Top Gear and Crown Jewel road by the darkening of the skid marks). `0` gives an even sheen. |
 | `road_debug` | 0 to 7 | Debug views of the lit road `ROAD_BLND_2`: 1 the highlight's share of the light, 2 without the highlight, 3 the highlight alone, 4 which light the diffuse takes, 5 the parts of the specular amount. With `road_sheen` above 0, on every lit road shader: 6 the image times the sheen's grain, 7 the sheen alone. See [look mod coverage](analysis/look-mod-coverage.md#road-surface-18-october-2026). |
 | `ao` | number, `0` turns it off | Strength of the screen-space ambient occlusion. |
+| `taa` | `1` on, `0` (default) off | Temporal anti-aliasing before the HUD, with the scene jittered; the look's `sharpen` moves after it. See [Temporal anti-aliasing](#temporal-anti-aliasing). |
 | `sun` | number, `0` turns the glare off | Strength of the sun glare on the RTV path, the same at every MSAA level. Without it (`original`) the glare follows the counted samples. See [Sun glare](#sun-glare). |
 | `road_gloss` | multiplier, default 1 | Specular of the road surface. See [Track lighting](#track-lighting). |
 | `sky` | multiplier, default 1 | Brightness of the sky; the `sky_*` knobs above change its color. See [Track lighting](#track-lighting). |
@@ -399,6 +401,23 @@ garage and the showroom get none. The first run of a look compiles the mod shade
 FXC when they are first drawn. For the six measured, this took 0.15 to 1.4 s each and
 2.5 to 3.0 s for the paint (about 5.4 s at the start). Later runs load them from
 `BuildRoot\cache\shader-overrides` in milliseconds.
+
+### Temporal anti-aliasing
+
+`taa=1` turns on the TAA post pass ([TAA v1](analysis/taa.md)): the scene draws move by a
+sub-pixel offset each frame, and the frames before the HUD are accumulated along the motion
+vectors, so wires, fences, lattices, distant road lines and shading glints stop stepping and
+shimmering. The HUD and the side mirrors are drawn after it and stay sharp. No preset sets it
+yet: try `-Look "pc,taa=1"`.
+
+- The look's `sharpen` (0.4 in `pc`) is applied after TAA instead of before it (the pass param
+  `TAA_SHARPEN`), since sharpening the jittered frame would sharpen the jitter. TAA without
+  sharpening is visibly softer; 0.4 comes close to `pc` without its stair steps.
+- With `-SingleTile` the swap's FXAA is left out: TAA anti-aliases the single tile itself.
+- It costs about 0.1 ms of GPU time per race frame at 1x and 0.15 ms at 2x.
+- `shader_mod_set TAA=0` switches it off at once with `-ShaderDev`; `TAA_DEBUG=1` to `5` shows
+  the debug views (see [taa.hlsl](../work/fm4-rex/passes/taa.hlsl)).
+- RTV only, like the other post passes; not with `-Rov` or `-Look original`.
 
 ### Shader mod development
 
