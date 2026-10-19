@@ -1072,19 +1072,21 @@ void PostPasses::OnDraw(const RegisterFile& regs, uint64_t vertex_shader_hash,
   if (!manifest_) {
     return;
   }
-  bool camera_source = false;
-  for (const CameraSource& source : manifest_->camera_sources) {
-    if (source.vertex_shader_hash == vertex_shader_hash) {
-      CaptureCamera(regs, source);
-      camera_source = true;
+  const std::vector<CameraSource>& camera_sources = manifest_->camera_sources;
+  uint32_t camera_source = 0;
+  for (; camera_source < uint32_t(camera_sources.size()); ++camera_source) {
+    if (camera_sources[camera_source].vertex_shader_hash == vertex_shader_hash) {
+      CaptureCamera(regs, camera_sources[camera_source], camera_source);
       break;
     }
   }
-  if (!camera_source && manifest_->has_camera_fallback && vertex_float_constants) {
+  if (camera_source == uint32_t(camera_sources.size()) && manifest_->has_camera_fallback &&
+      vertex_float_constants) {
+    // The lowest priority: only while the frame lacks a matrix.
     uint64_t frame = command_processor_.GetCurrentFrame();
     if ((camera_.frame != frame || camera_.view_frame != frame) &&
         ReadsCameraConstants(manifest_->camera_fallback, vertex_float_constants)) {
-      CaptureCamera(regs, manifest_->camera_fallback, true);
+      CaptureCamera(regs, manifest_->camera_fallback, camera_source);
     }
   }
   const std::vector<MotionSource>& motion_sources = manifest_->motion_sources;
@@ -1164,16 +1166,20 @@ bool PostPasses::ReadsCameraConstants(const CameraSource& source,
 }
 
 void PostPasses::CaptureCamera(const RegisterFile& regs, const CameraSource& source,
-                                bool fallback) {
+                                uint32_t source_index) {
   uint32_t depth_edram_base;
   if (!IsSceneDepthBuffer(regs, depth_edram_base)) {
     return;
   }
   uint64_t frame = command_processor_.GetCurrentFrame();
-  bool projection_needed = !(camera_.valid && camera_.frame == frame &&
-                             camera_.depth_edram_base == depth_edram_base);
-  bool view_needed = post_pass::CarriesView(source.layout) && camera_.view_frame != frame;
-  // Once per frame and depth buffer: the matrices are the same for the passes.
+  bool fallback = source_index >= uint32_t(manifest_->camera_sources.size());
+  // Once per frame and depth buffer, from the source earliest in the list that
+  // drew: the matrices are the same for the passes, whichever draw gave them.
+  bool projection_known = camera_.valid && camera_.frame == frame &&
+                          camera_.depth_edram_base == depth_edram_base;
+  bool projection_needed = !projection_known || source_index < camera_.projection_source;
+  bool view_needed = post_pass::CarriesView(source.layout) &&
+                     (camera_.view_frame != frame || source_index < camera_.view_source);
   if (!projection_needed && !view_needed) {
     return;
   }
@@ -1188,9 +1194,9 @@ void PostPasses::CaptureCamera(const RegisterFile& regs, const CameraSource& sou
       viewport_value(vte.vport_y_offset_ena, XE_GPU_REG_PA_CL_VPORT_YOFFSET, 0.0f),
       viewport_value(vte.vport_z_scale_ena, XE_GPU_REG_PA_CL_VPORT_ZSCALE, 1.0f),
       viewport_value(vte.vport_z_offset_ena, XE_GPU_REG_PA_CL_VPORT_ZOFFSET, 0.0f)};
-  // The fallback layout reads any vertex shader: only a draw as wide as the
-  // scene (not a mirror, a cube map face or a shadow map) can carry its camera.
-  if (fallback && std::fabs(viewport.x_scale) * 2.0f < float(manifest_->min_width)) {
+  // Only a draw as wide as the scene (not a cube map face or a shadow map) can
+  // carry its camera.
+  if (std::fabs(viewport.x_scale) * 2.0f < float(manifest_->min_width)) {
     return;
   }
   float constants_read[256][4];
@@ -1210,29 +1216,29 @@ void PostPasses::CaptureCamera(const RegisterFile& regs, const CameraSource& sou
   bool view_valid = view_needed &&
                     post_pass::ViewToWorld(source.layout, constants_read, source.constants[1],
                                            source.constants[2], view_to_world) &&
-                    (!fallback || post_pass::IsRigidView(view_to_world));
+                    post_pass::IsRigidView(view_to_world);
   post_pass::Matrix wvp, wv, projection;
   post_pass::Unpack unpack;
   bool projection_valid =
-      (projection_needed || fallback) &&
       post_pass::CameraMatrices(source.layout, constants_read, source.constants[0],
                                 source.constants[1], source.constants[2], wvp, wv) &&
       post_pass::ProjectionFromCamera(wvp, wv, projection) &&
       post_pass::UnpackFromProjection(projection, viewport, unpack);
-  if (fallback) {
-    // Another camera drawn into a scene-wide viewport (the rear-view mirror's
-    // strip) has another aspect, or another projection than the scene's of this
-    // frame; other data in the constants fails the checks. Then take nothing.
-    if (!projection_valid || (view_needed && !view_valid) ||
-        !post_pass::MatchesViewportAspect(projection, viewport) ||
-        (!projection_needed && post_pass::MaxRelativeDifference(projection, camera_.projection) >
-                                   1.0e-3)) {
-      return;
-    }
+  // Another camera drawn into a scene-wide viewport (the rear-view mirror's
+  // strip) has another aspect, or another projection than the scene's of this
+  // frame. Then take nothing from the draw; from the fallback also not when
+  // the constants hold other data.
+  bool other_camera =
+      projection_valid && (!post_pass::MatchesViewportAspect(projection, viewport) ||
+                           (projection_known && post_pass::MaxRelativeDifference(
+                                                    projection, camera_.projection) > 1.0e-3));
+  if (other_camera || (fallback && (!projection_valid || (view_needed && !view_valid)))) {
+    return;
   }
   if (view_valid) {
     camera_.view_to_world = view_to_world;
     camera_.view_frame = frame;
+    camera_.view_source = source_index;
   }
   if (!projection_needed) {
     return;
@@ -1249,6 +1255,7 @@ void PostPasses::CaptureCamera(const RegisterFile& regs, const CameraSource& sou
   camera_.valid = true;
   camera_.depth_edram_base = depth_edram_base;
   camera_.frame = frame;
+  camera_.projection_source = source_index;
   camera_.unpack = unpack;
   camera_.q = projection.m[2][2] / projection.m[3][2];
   camera_.q_near = -projection.m[2][3] / projection.m[3][2];
@@ -2374,13 +2381,17 @@ void PostPasses::LogRun(int32_t variant_index) {
   // (combineQVals of the DOF final combine, QAndNegNearQAndScale of the motion
   // blur; post_pass_log_constants).
   REXGPU_INFO(
-      "Post passes scene {} frame {} ms {} (camera frame {}, view {}): scene depth "
+      "Post passes scene {} frame {} ms {} (camera frame {}, view {}{}): scene depth "
       "0x{:08X}-0x{:08X} {}x{} (EDRAM {}), host {}x{}; camera Q {:.7g} Q*near {:.6g} (near "
       "{:.4g}), W(d=0) {:.4g} W(d=1) {:.4g}, far W {:.4g}, depth mul {:.6g} add {:.6g}, x {:.6g} "
       "{:.6g}, y {:.6g} {:.6g}, z/W {:.3g}, focal {:.1f} px (FOV x {:.1f} deg over {} px), origin "
       "{}; history {}; motion {}; jitter {}; variant {}:{}",
       runs_ - 1, depth_group_.frame, SteadyMilliseconds(), camera_.frame,
       camera_.view_frame == command_processor_.GetCurrentFrame() ? "known" : "unknown",
+      camera_.view_frame != command_processor_.GetCurrentFrame() ? std::string()
+      : camera_.view_source < manifest_->camera_sources.size()
+          ? fmt::format(" from source {}", camera_.view_source)
+          : std::string(" from the fallback"),
       depth_group_.base, depth_group_.end, depth_group_.pitch, depth_group_.height,
       depth_group_.edram_base, scene_width_, scene_height_, camera_.q, camera_.q_near,
       camera_.q != 0.0f ? camera_.q_near / camera_.q : 0.0f, w_depth_0, w_depth_1, unpack.w_far,

@@ -243,6 +243,10 @@ class PostPasses {
     bool view_known = false;
     uint64_t view_frame = UINT64_MAX;
     post_pass::Matrix view_to_world = {};
+    // The camera sources that gave them: the index in camera_sources, or its
+    // size for the fallback. A source earlier in the list replaces a later
+    // one's matrices in the same frame.
+    uint32_t projection_source = 0, view_source = 0;
   };
   // A motion object of a frame: the world matrix of the draw of the highest
   // priority source with its stencil reference.
@@ -325,9 +329,9 @@ class PostPasses {
 
   // Scene tracking.
   bool IsSceneDepthBuffer(const RegisterFile& regs, uint32_t& depth_edram_base_out) const;
-  // fallback: the manifest's layout for any vertex shader, taken only when the
-  // draw is as wide as the scene and its matrices are a camera's.
-  void CaptureCamera(const RegisterFile& regs, const CameraSource& source, bool fallback = false);
+  // source_index: the priority of the source (its index in camera_sources, or
+  // their count for the fallback, the manifest's layout for any vertex shader).
+  void CaptureCamera(const RegisterFile& regs, const CameraSource& source, uint32_t source_index);
   // The vertex shader reads every constant of the source's layout (its float
   // constant bitmap).
   static bool ReadsCameraConstants(const CameraSource& source, const uint64_t* float_constants);

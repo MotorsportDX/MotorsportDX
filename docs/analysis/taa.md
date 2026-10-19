@@ -410,27 +410,61 @@ The project owner chose `taa=1` for `pc` with the `high` tiling and `TAA_SHARPEN
 
 ### Step 5: the camera on every track, and `pc` with TAA (19 October 2026)
 
-**The view of the scene camera** now comes from three sources ([passes.toml](../../work/fm4-rex/passes/passes.toml) `[scene] camera`, [post pass framework](post-pass-framework.md)):
+**The view of the scene camera** now comes from three sources, in this priority ([passes.toml](../../work/fm4-rex/passes/passes.toml) `[scene] camera`, [post pass framework](post-pass-framework.md)):
 
-- The car body vertex shader `8D05A46C3584CA9E` with its world matrix (`rows:0:4:8`, the layout `kWvpWvWorldRows`): the view to world matrix is `matW * inverse(matWV)`, computed in double. The camera tests check it against the view inverse, also 2.4 km from the origin (camera position error below 1 mm).
-- The road vertex shader `C81F8D92FF6529EB`, as before.
-- A fallback layout, `*:world:128:140:243`, for any other vertex shader that reads all of c128 to c131, c140 to c142 and c243 to c245 (its float constant bitmap). In a ucode dump of a 16-car race, 156 of the 162 vertex shaders that take their position from c128 have that layout. The fallback takes a draw only if its viewport is as wide as the scene, its view is a rotation, its projection's aspect is the viewport's, and its projection equals the frame's if that is known. The aspect check rejects the rear-view mirror, which draws into a scene-wide viewport with a strip projection (aspect about 4.5) and was caught in the first fallback run (`taaview-tsukuba2`: every frame of the bumper camera a cut).
+1. The road vertex shader `C81F8D92FF6529EB` (the game's own view inverse at c243), as before.
+2. The car body vertex shader `8D05A46C3584CA9E` with its world matrix (`rows:0:4:8`, the layout `kWvpWvWorldRows`): the view to world matrix is `matW * inverse(matWV)`, computed in double. The camera tests check it against the view inverse, also 2.4 km from the origin (camera position error below 1 mm).
+3. A fallback layout, `*:world:128:140:243`, for any other vertex shader that reads all of c128 to c131, c140 to c142 and c243 to c245 (its float constant bitmap) and gives a rotation as its view. In a ucode dump of a 16-car race, 156 of the 162 vertex shaders that take their position from c128 have that layout.
+
+In a frame, a draw of a source earlier in the list replaces the matrices of a later one, so the source is the same whatever the draw order. Every source counts only on a draw whose viewport is as wide as the scene, whose projection has the viewport's aspect, and whose projection equals the frame's when that is known. The aspect check leaves out the rear-view mirror, which draws on the scene's depth buffer into a scene-wide viewport with a strip projection (aspect about 4.5); the first fallback run took it (`taaview-tsukuba2`: every frame of the bumper camera a cut). The post pass log names the source of the view (`view known from source 1`, `from the fallback`).
 
 **Jitter** now starts only after a frame whose consumer ran with a known view. A frame without a camera gets TAA without history and without jitter, which is the frame without anti-aliasing, not a shaking one.
 
-**Per track** (Quick Race with the AI driver, `--look "pc,taa=1"`, 1x, the camera cycle, `post_pass_log_every=30`):
+**Before the fix on Tsukuba** (`taareplay`, the step 3 binary): the motion vectors were invalid in all 6,465 logged frames of the career race and replay, and TAA had no history. GTAO, which needs only the projection, had it from the car bodies in 6,448 of them; the other 17 used the projection of an earlier frame.
 
-| Run | Track | Result |
-|---|---|---|
-| `taaview-maple` | Maple Valley Raceway (no road shader) | view known in all 143 logged frames; history valid; jitter on |
-| `taaview-fujimi` | Fujimi Kaido (no road shader) | known in all 137 |
-| `taaview-indianapolis` | Indianapolis Motor Speedway | known in all 137 |
-| `taaview-topgear` | TopGear | known in all 143 |
-| `taaview-tsukuba` | Tsukuba Circuit, car body source only | known in 134 of 146: the bumper camera in the lead (no car and no road in view) lost the view for 6 s, without jitter |
-| `taaview-tsukuba3` | Tsukuba Circuit, with the fallback | known in every race frame (151 of 151); the 18 unknown lines are the loading screen and the menus before the race |
+**Per track** with the final binary (Quick Race with the AI driver, `--look "pc,taa=1"`, 1x, the camera cycle of all six cameras, `post_pass_log_every=30`; runs `taasweep-*`): every environment the TRACKS screen offers. "Frames" are the logged scene frames with a camera of their own; the 18 or 19 others per run are the loading screen before the race.
 
-**The failed case again** (`taareplay2`, the `career` scenario, 2x, `post_pass_log_every=1`): the view is known in 6,562 of 6,985 logged frames; the 423 others are the loading screen before the race (415, with the camera of an earlier frame) and the menus. Each replay camera change is one `history cut` frame. In 1:1 crops at 2x the power lines and fences over Tsukuba are smooth where the step 3 binary showed stair steps, cars moving through the frame leave no trails, and a capture half a second after a cut shows nothing of the previous shot.
+| Environment | View known | Source of the view (road, car, fallback) | Motion valid |
+|---|---|---|---|
+| Bernese Alps | 161 of 161 | 146, 4, 11 | 161 |
+| Circuit de Catalunya | 152 of 152 | 136, 5, 11 | 151 |
+| Fujimi Kaido (`taaview-fujimi`, car source only) | 137 of 137 | - | - |
+| Hockenheimring | 153 of 153 | 138, 4, 11 | 153 |
+| Iberian International Circuit | 154 of 154 | 138, 4, 12 | 154 |
+| Indianapolis Motor Speedway (`taaview-indianapolis`, car source only) | 137 of 137 | - | - |
+| Infineon Raceway | 154 of 154 | 0, 142, 12 | 154 |
+| Ladera Test Track | 158 of 158 | 143, 4, 11 | 158 |
+| Le Mans Circuit de la Sarthe | 152 of 152 | 138, 3, 11 | 151 |
+| Maple Valley Raceway (`taaview-maple`, car source only) | 143 of 143 | - | - |
+| Mazda Raceway Laguna Seca | 155 of 155 | 133, 4, 18 | 154 |
+| Mugello Autodromo Internazionale | 155 of 155 | 138, 4, 13 | 155 |
+| Nürburgring Grand Prix Circuit | 156 of 156 | 138, 4, 14 | 156 |
+| Nürburgring Nordschleife | 154 of 154 | 140, 2, 12 | 154 |
+| Rally di Positano | 156 of 156 | 0, 134, 22 | 156 |
+| Road America | 155 of 155 | 92, 44, 19 | 155 |
+| Road Atlanta | 153 of 153 | 0, 137, 16 | 153 |
+| Sebring International Raceway | 153 of 153 | 101, 41, 11 | 153 |
+| Sedona Raceway Park | 153 of 153 | 138, 4, 11 | 150 |
+| Silverstone Racing Circuit | 156 of 156 | 139, 4, 13 | 156 |
+| Sunset Peninsula Raceway | 154 of 154 | 139, 3, 12 | 153 |
+| Suzuka Circuit | 155 of 155 | 138, 4, 13 | 155 |
+| Test Track Benchmark | 153 of 153 | 138, 4, 11 | 153 |
+| TopGear | 153 of 153 | 71, 70, 12 | 153 |
+| Tsukuba Circuit | 159 of 159 | 0, 133, 26 | 159 |
+| Twin Ring Motegi | 153 of 153 | 138, 4, 11 | 153 |
+
+No environment is left with an unknown view. The fallback gives the view in the menus before the race (about 11 lines per run) and where neither a car nor the road is in view (Tsukuba's bumper camera in the lead); the motion vectors are invalid only in the frame of a camera change. Fujimi Kaido, Indianapolis and Maple Valley ran on the binary with the car source alone (all known) and were not run again with the final binary. Before the fix, Tsukuba Circuit lost the view for 6 s with the bumper camera in the lead (`taaview-tsukuba`, 134 of 146).
+
+**The failed case again** (`taareplay3`, the final binary, the `career` scenario, 2x, `post_pass_log_every=1`): the view is known in all 6,608 logged frames with a camera of their own (6,381 from the car, 227 from the fallback); the 423 others are the loading screen before the race. The motion vectors are valid in 6,584. Each replay camera change is one `history cut` frame. In 1:1 crops at 2x (`taareplay2`, the binary before the priority order) the power lines and fences over Tsukuba are smooth where the step 3 binary showed stair steps, cars moving through the frame leave no trails, and a capture half a second after a cut shows nothing of the previous shot.
 
 **Launcher**: `pc` is `tonemap=aces,saturation=1.1,bloom=0.7,sharpen=0.4,clearcoat=1,ao=0.6,sun=2,sky=0.7,taa=1` ([pipeline.py](../../outputs/FM4-build/pipeline.py)), with the `high` tiling and `TAA_SHARPEN` 0.4 from the look's `sharpen`; `-Look "pc,taa=0"` is the earlier `pc`. `test_pipeline.py` covers both.
 
-**Smoke gate** on the same binary, `smoke` tier, 240 Hz, 1x: `taapc-new` (the launcher default, now `pc` with TAA) against `taapc-old` (`--look "pc,taa=0"`). 3 of 3 cells in both, no clear-gray frames, no FAIL reasons. `career` PASS: race 188.2 against 200.8 fps (p99 8.14 against 7.37 ms), replay 30.0 fps. `photo` WARN on capture statistics only (luma mean 14.91 to 17.25, black share 21.5 points): race 215.6 against 210.7 fps, photo mode 29.95 fps. `photo_view` WARN on capture statistics only (luma mean 79.4 to 90.3): 56.98 against 56.95 fps; its final images show the same car at different points of the track (the old one under a bridge), and the photo renders as before.
+**Smoke gate** on the final binary, `smoke` tier, 240 Hz, 1x: `taapc-new2` (the launcher default, now `pc` with TAA) against `taapc-old2` (`--look "pc,taa=0"`). 3 of 3 cells in both, no clear-gray frames, no FAIL reasons.
+
+| Cell | `pc` with TAA | `pc,taa=0` | Verdict |
+|---|---|---|---|
+| `career` | race 207.1 fps, p99 7.09 ms; replay 30.0 fps | race 199.3 fps, p99 7.39 ms; replay 30.0 fps | PASS |
+| `photo` | race 212.3 fps, p99 6.93 ms; photo mode 29.95 fps | race 219.8 fps, p99 6.19 ms; photo mode 29.95 fps | WARN: guest idle wait 5.4 to 12.9 ms/s, capture statistics |
+| `photo_view` | 56.94 fps | 56.97 fps | WARN: capture statistics only |
+
+The capture statistics differ because the AI races do not repeat: the `photo_view` final images show the same car before and under a bridge, and the photo renders as before. An earlier pair on the binary before the priority order (`taapc-new` against `taapc-old`) gave the same verdicts.
