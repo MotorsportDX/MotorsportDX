@@ -197,7 +197,7 @@ measured at 120 Hz). `ultra` is meant for 60 to 120 Hz.
 
 Shows the settings overlay at the top left from the start. It lists the display and
 render scale, the race quality, the look and its knobs, the ambient occlusion, the
-shadows, the anisotropic filtering, the race frame rate and pacing, the mirror rate,
+anti-aliasing (TAA and its point and sharpening), the shadows, the anisotropic filtering, the race frame rate and pacing, the mirror rate,
 the render target path, and the window size and present rate, as the launcher set them
 up (`info_overlay` in `pipeline.py`, `FM4_INFO`; `work/fm4-rex/src/fm4-info-overlay.h`).
 The presenter draws the overlay over the guest output, so captures never show it.
@@ -407,7 +407,7 @@ FXC when they are first drawn. For the six measured, this took 0.15 to 1.4 s eac
 
 ### Temporal anti-aliasing
 
-`taa=1` turns on the TAA post pass ([TAA v1](analysis/taa.md)): the scene draws move by a
+`taa=1` turns on the TAA post pass ([TAA](analysis/taa.md)): the scene draws move by a
 sub-pixel offset each frame, and the frames before the HUD are accumulated along the motion
 vectors, so wires, fences, lattices, distant road lines and shading glints stop stepping and
 shimmering. The HUD and the side mirrors are drawn after it and stay sharp. The `pc` preset
@@ -418,11 +418,12 @@ before it (the look's sharpening, no jitter).
   `TAA_SHARPEN`), since sharpening the jittered frame would sharpen the jitter. TAA without
   sharpening is visibly softer; 0.4 comes close to `pc` without its stair steps.
 - With `-SingleTile` the swap's FXAA is left out: TAA anti-aliases the single tile itself.
-- It costs about 0.1 ms of GPU time per race frame at 1x and 0.15 ms at 2x.
+- It costs about 0.1 ms of GPU time per race frame at 1x and 0.15 to 0.2 ms at 2x.
 - `shader_mod_set TAA=0` switches it off at once with `-ShaderDev`; `TAA_DEBUG=1` to `5` shows
-  the debug views (see [taa.hlsl](../work/fm4-rex/passes/taa.hlsl)).
+  the debug views ([TAA, debug views](analysis/taa.md#76-debug-views-taa_debug)).
+- The `-Info` overlay shows "Anti-aliasing: TAA before the HUD, sharpen 0.4, scene jittered".
 - RTV only, like the other post passes; not with `-Rov` or `-Look original`.
-- `taa_point=1` (`-Look "pc,taa_point=1"`) moves TAA to the scene_color point: it runs on the scene before the game's motion blur, bloom, exposure and final combine, and its output is written back into the game's scene, which those then sample. The occlusion gets its own temporal filter there (`GTAO_TEMPORAL`), and the look's `sharpen` stays in the final combine, after TAA. `pc` keeps the final point; see [TAA progress, step 7](analysis/taa.md#12-progress) for the comparison.
+- `taa_point=1` (`-Look "pc,taa_point=1"`) moves TAA to the scene_color point: it runs on the scene before the game's motion blur, bloom, exposure and final combine, and its output is written back into the game's scene, which those then sample. The occlusion gets its own temporal filter there (`GTAO_TEMPORAL`), and the look's `sharpen` stays in the final combine, after TAA. It costs about 0.47 ms of GPU time per race frame at 2x, and the `-Info` overlay shows "Anti-aliasing: TAA before the post chain (scene_color), the look's sharpening, scene jittered". `pc` keeps the final point; see [TAA, the comparison](analysis/taa.md#23-comparison).
 
 ### Shader mod development
 

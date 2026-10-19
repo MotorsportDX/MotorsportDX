@@ -1,347 +1,359 @@
-# TAA v1: implementation plan
+# TAA
 
-Plan for temporal anti-aliasing (TAA) at the existing render scale, built on the [post pass framework](post-pass-framework.md) and the [motion vectors](motion-vectors.md). Written on 19 October 2026 against main `0a8bba5`, and approved by the project owner the same day, including the staged injection point, the reactive mask route and TAA as an opt-in until step 5. Steps 1 to 4 (the jitter, the pass history textures, TAA at the final point, and the launcher knob with its gates) are built and checked in the game ([section 12](#12-progress)); step 5 gave `pc` TAA after the checks of the project owner's review and a fix of the camera on tracks without the road shader. Upscalers (DLSS, FSR) are out of scope; they need a separate scale for the scene tiles ([motion vectors, section 6](motion-vectors.md#injection-point)).
+Temporal anti-aliasing (TAA) at the existing render scale, built on the [post pass framework](post-pass-framework.md) and the [motion vectors](motion-vectors.md). The scene draws are jittered by a sub-pixel offset each frame, and a post pass accumulates the frames along the motion vectors. This note describes what is built, how it works, and what was measured; [section 12](#12-history) keeps the dated record of each step. Upscalers (DLSS, FSR) are not part of it; they need a separate scale for the scene tiles ([motion vectors, section 6](motion-vectors.md#injection-point)).
 
 This note contains no game code, shaders or ucode. Hashes, registers and addresses are observations only.
 
-## Summary
+## Current state
 
-| Topic | Plan |
+Built on 19 October 2026 in seven steps ([section 12](#12-history)): the jitter in the framework, pass-owned history textures and frame conditions, TAA at the final point, the launcher knob and harness changes, the scene camera on every track with `pc` using TAA, the write-back at the scene_color point, and TAA at the scene_color point as an option.
+
+**Defaults**: the `pc` look has `taa=1` ([running](../running.md#temporal-anti-aliasing)): TAA at the final point, before the HUD, with the `high` tiling (three tiles, 4x MSAA) and the look's sharpening of 0.4 moved after the resolve (`TAA_SHARPEN` 0.4, `FM4_LOOK_SHARPEN` 0). The other presets (`aces`, `gt`, `neutral`) have no TAA unless `taa=1` is added; `original` never has it.
+
+**Options**:
+
+- `-Look "pc,taa=0"`: `pc` without TAA (the look's own sharpening, no jitter).
+- `-Look "pc,taa_point=1"`: TAA at the scene_color point, before the game's post chain, with the occlusion's own temporal filter and the look's sharpening in the final combine ([section 2.2](#22-the-scene_color-point-option)).
+- `-SingleTile` with TAA: one 720p tile without MSAA; the launcher leaves out the swap's FXAA while TAA is on ([section 5](#5-msaa-and-tiling)).
+
+The knobs, cvars and debug views are in [section 9](#9-knobs-cvars-and-presets).
+
+**Measured** (the development computer, BuildRoot `I:\FM4-build-usa`, results in `I:\FM4-build-usa\e2e`):
+
+| What | Result |
 |---|---|
-| Injection point | Staged. **v1 at the `final` point** (after the game's motion blur, bloom and final combine, before the HUD), which the framework supports today. **v1.1 at the `scene_color` point**, with the TAA output copied into the texture cache's host texture of the scene, which the game's post chain then samples. That write-back is also what the upscalers need later. |
-| Jitter | Halton (2, 3), 8 phases, in host pixels, added to `ndc_offset` of the scene draws only: the scene depth EDRAM base, a depth or stencil test, no rectangle lists or clears, and a list of excluded vertex shaders. The post pass framework owns it (`[jitter]` in the manifest), applies it only after a frame in which the TAA pass ran, and hands it to the passes (`xe_scene_jitter`), so the motion vectors and view positions stay jitter-free. |
-| MSAA | TAA does not depend on the tiling. v1 is validated on `-Quality high` (4x MSAA, three tiles) and on `-SingleTile` (one 720p tile without MSAA, and without its FXAA while TAA is on). Which one goes with TAA by default is decided from 2x crops and the GPU time. |
-| Resolve | Linear color (the stored value squared), a jitter-aware 3x3 reconstruction of the current frame, a YCoCg variance clip, the history fetched with Catmull-Rom at the motion of the nearest neighbour, a depth disocclusion test, a luminance-weighted blend, history in `R16G16B16A16_FLOAT`, and sharpening after the resolve, never in the history. Reset whenever `xe_history_valid()` is false. |
-| Masks | `motion_mask` R (no history: the current frame, un-jittered) and G (reactive: car glass, a higher blend and a tighter clip). Chosen by the project owner: no particle or interior mirror mask in v1 (option (d) of [motion vectors, section 9](motion-vectors.md#open)); later, shader mods that write a mask (option (c)) for the shaders that visibly ghost. |
-| Knobs | Pass params `TAA`, `TAA_JITTER`, `TAA_SHARPEN` and tuning params, live through `shader_mod_set`; cvars that force the jitter off or to a fixed offset; the launcher knob `-Look "pc,taa=1"`. Opt-in first: the `pc` preset gets TAA only after the project owner has seen the crops and the cost. |
-| Validation | CPU and WARP tests in every step; in the game, frozen cameras (rewind, the grid with the right stick held) at 2x with 1:1 crops, the ghosting cases, GPU time from the frame graph, the `perf` tier for `frame_ms_p99` and `hitch_50ms_per_min`, the `smoke` gate, and the Japan/Asia release on the same binary. Every game run waits for the project owner's OK. |
-| Steps | Eight steps, each built and checked on its own ([section 9](#9-steps)). |
+| GPU time per race frame, final point | +0.10 ms at 1x and +0.15 ms at 2x in separate runs (step 3); +0.21 ms at 2x with TAA switched every second in one run (step 7) |
+| GPU time per race frame, scene_color point | +0.47 ms at 2x with TAA switched every second in one run (step 7) |
+| Smoke gate, `pc` with TAA against `pc,taa=0` | 3 of 3 cells; `career` PASS (race 207.1 against 199.3 fps), `photo` and `photo_view` WARN on capture statistics only (step 5) |
+| Perf gate, TAA against no TAA | 3 of 3 runs, WARN on capture statistics only; `frame_ms_p99` 7.42 against 7.88 ms, no hitches above 50 ms (step 4) |
+| The scene camera | known in every frame with a camera on all 26 environments of the TRACKS screen, in the Tsukuba career race and in replays (step 5) |
+| WARP tests | convergence, no trail behind a moving box, reset, masks, disocclusion, at both points (steps 3 and 7) |
+| Japan/Asia release | the same behavior on the same binary (step 4) |
 
-## 1. What exists and what is missing
+**Decisions of the project owner** (all 19 October 2026):
 
-In main (`0a8bba5`), from the [post pass framework](post-pass-framework.md) and the [motion vectors](motion-vectors.md#9-the-gaps-in-the-game-19-october-2026):
+- The plan approved: TAA at the existing render scale, the final point first and the scene_color point second, opt-in until reviewed.
+- The reactive mask: option (d) of [motion vectors, section 9](motion-vectors.md#open) (no particle or interior mirror mask), and option (c) later, only for shaders that visibly ghost ([section 6](#6-reactive-mask)).
+- `pc` gets `taa=1` with the `high` tiling and `TAA_SHARPEN` 0.4.
+- `pc` keeps the final point; the scene_color point stays an option.
 
-- `motion_vectors` (`R16G16_FLOAT`, slot 1): the previous minus the current host pixel position, in the layout of the scene textures (rotated 180 degrees against the screen), zero without `xe_motion_valid()`.
-- `motion_mask` (`R8G8_UNORM`, slot 2): R where no motion is known (the rear-view mirror panel of the hood and bumper cameras, depth masks without an interior), G where the pixel is reactive (the world seen through car glass).
-- The inputs `scene_depth`, `scene_stencil`, `scene_color`, `previous_color`, `previous_depth` and `final_color`.
-- `xe_motion_valid()` (the previous frame had a scene with a known view and the camera did not cut: 5 m, 30 degrees, a focal length change of 0.1) and `xe_history_valid()` (also the framework's history copy at the same size).
-- The final point: the single-sampled render target of the final combine, before the first HUD draw; a pixel pass can draw into `final_color`.
-- Costs so far: GTAO about 0.2 ms at 1x and 0.7 to 0.8 ms at 2x; the motion vectors 0.024 ms at 1x and 0.11 ms at 2x.
+**Open**:
 
-Missing for TAA:
-
-- **Jitter**: nothing offsets the scene today.
-- **A history the pass owns**: the framework's limits say "No pass-owned double-buffered textures yet". A pass cannot read and write one texture, so TAA needs two textures that swap at the swap, with a validity flag.
-- **Frame conditions**: a pass's `if` reads params and defines only, so a final point pass also runs in menus that draw the final combine without a scene.
-- **Tests over frames**: `fm4_post_pass_shader_tests` runs the scene_depth passes on WARP and only compiles the passes of the other points.
-- **For v1.1**: a write-back of a pass output where the game reads its scene.
+- Not observed yet: tire smoke from the cockpit camera, sparks of a collision, the heavy smoke of a full grid at the start, gravel dust. Ghosting there would make step 8 (a reactive mask written by a shader mod for that shader) necessary; step 8 is conditional and skipped for now.
+- Before the scene_color point could be the default: a smoke gate with `taa_point=1`; the write-back counter on more tracks, in career, replays and photo mode; and a check that `gtao_temporal` helps (it made no measurable difference on frozen frames).
+- `-SingleTile` as the default tiling with TAA (the single tile with TAA looks close to `high` with TAA at 2x and costs about 1 ms less GPU time per frame); the project owner kept `high`.
+- DLAA, or FSR in its native AA mode, beside this TAA; upscalers at a separate scale ([section 11](#11-open-items-and-later)).
 
 ```mermaid
 flowchart LR
-    shadow["Shadow map, environment,<br/>mirrors: not jittered"] --> tiles
+    shadow["Shadow maps, environment,<br/>mirrors: not jittered"] --> tiles
     tiles["Scene tiles: jittered draws,<br/>depth resolve, color resolve"] --> depth
-    depth["scene_depth<br/>GTAO, motion vectors"] --> color
-    color["scene_color<br/>TAA v1.1 + write-back"] --> chain
+    depth["scene_depth<br/>GTAO, motion vectors,<br/>gtao_temporal (option)"] --> color
+    color["scene_color<br/>TAA (option) + write-back"] --> chain
     chain["Motion blur, bloom, exposure"] --> combine
     combine["Final combine<br/>AO applied, look"] --> final
-    final["final<br/>TAA v1"] --> hud
+    final["final<br/>TAA (default)"] --> hud
     hud["HUD, side mirrors, swap<br/>not jittered, never in the history"]
 ```
 
+## 1. What TAA uses
+
+From the [post pass framework](post-pass-framework.md) and the [motion vectors](motion-vectors.md):
+
+- `motion_vectors` (`R16G16_FLOAT`, slot 1): the previous minus the current host pixel position of what each pixel shows, in the layout of the scene textures (rotated 180 degrees against the screen), between unjittered positions, zero without `xe_motion_valid()`.
+- `motion_mask` (`R8G8_UNORM`, slot 2): R where no motion is known (the rear-view mirror panel of the hood and bumper cameras, depth masks without an interior), G where the pixel is reactive (the world seen through car glass).
+- The inputs `scene_depth`, `scene_color`, `previous_depth` and `final_color`.
+- `xe_motion_valid()` (the previous frame had a scene, both frames know the camera's view, and the camera did not cut: 5 m, 30 degrees, a focal length change of 0.1) and `xe_history_valid()` (also the previous frame's history copy and history textures at the same size).
+- History textures (`history = true`, read as `previous:name`), the frame condition `XE_SCENE`, the jitter (`[jitter]`, `xe_scene_jitter`) and the write-back (`write_back = true`), which the framework gained for TAA.
+
 ## 2. Injection point
 
-### 2.1 The final point (v1)
+TAA runs at one of two points, chosen by the define `TAA_POINT`: 0, the final point (the default), or 1, the scene_color point. [taa.hlsl](../../work/fm4-rex/passes/taa.hlsl) serves both; its passes at the scene_color point are compiled with `TAA_SCENE=1`.
+
+### 2.1 The final point (default)
 
 The input is `final_color`: the final combine's single-sampled render target (`R10G10B10A2_UNORM` on the host), the frame in its top left part (`xe_final_size`, `xe_final_uv_scale`), before the HUD and the side mirrors. Everything before it is in the input: the scene with the GTAO occlusion (the final combine mod applies it), the game's motion blur in the start sequence and replays, bloom, exposure, depth of field, and the look's tone curve and color.
 
 Two passes:
 
-1. `taa_resolve` (compute): reads `final_color`, `scene_depth`, `motion_vectors`, `motion_mask`, `previous_depth` and the previous history; writes this frame's history (linear, unsharpened).
-2. `taa_output` (pixel): reads the new history, sharpens it, encodes it and draws it into `final_color` with no blending. The HUD is drawn over it.
+1. `taa_resolve` (compute): reads `final_color`, `scene_depth`, `motion_vectors`, `motion_mask`, `previous:taa_history` and `previous_depth`; writes this frame's history `taa_history` (linear, unsharpened) and, with `TAA_DEBUG`, `taa_debug`.
+2. `taa_output` (pixel): reads the history, sharpens it (`TAA_SHARPEN`), encodes it and draws it into `final_color` with no blending. The HUD is drawn over it.
 
 A pass cannot read and write `final_color` at once, hence the two passes.
 
-**Orientation.** `final_color` is in screen orientation; the scene textures are rotated 180 degrees. With `xe_final_size` equal to `xe_scene_size`, final pixel f is scene pixel `xe_scene_size - 1 - f`, and the motion and the jitter change sign. The final combine samples the scene one to one: in GTAO M2, the depth shown through the final combine at the scene's own coordinates lined up with the image at a shift of (0, 0) at 1x and 2x ([GTAO design](gtao-design.md#6-stages-and-verification)). The motion debug view draws the scene layout over the frame with the mapping above. Step 3 checks it on a frozen frame (`TAA_DEBUG=1`, the history alone, with the jitter off: it must not drift). If the sizes differ (no case is known), the pass keeps the frame as it is and resets the history.
+**Orientation.** `final_color` is in screen orientation; the scene textures are rotated 180 degrees. With `xe_final_size` equal to `xe_scene_size`, final pixel f is scene pixel `xe_scene_size - 1 - f`, and the motion and the jitter change sign. The final combine samples the scene one to one ([GTAO design](gtao-design.md#6-stages-and-verification)); `TAA_DEBUG=1` on a frozen frame with the jitter off shows the history standing still. If the sizes differed (no case is known), the pass would keep the frame as it is and reset the history.
 
-**For it**:
+**Properties**:
 
-- No change to the texture cache or guest memory: one pass file and two framework features.
-- The HUD, the side mirrors and the HUD mirror are drawn after it. They are never in the history, so they cannot ghost and stay sharp.
-- The occlusion, bloom, depth of field and motion blur are in the input, so TAA averages them too: GTAO's slightly jagged edges (one depth sample at MSAA) and its sub-pixel movement under the jitter come out smooth.
-- The values are bounded (0 to 1 after the tone curve), so there are no HDR fireflies.
+- No change to guest memory or the texture cache.
+- The HUD, the side mirrors and the HUD mirror are drawn after it: never in the history, so they cannot ghost and stay sharp.
+- The occlusion, bloom, depth of field and motion blur are in the input, so TAA averages them too: GTAO's edges and its sub-pixel movement under the jitter come out smooth.
+- The values are bounded (0 to 1 after the tone curve): no HDR fireflies.
+- Bloom, exposure and depth of field are computed from the jittered scene; a sub-pixel highlight flickers in the bloom by less than half a pixel, which TAA then averages.
+- The look's sharpening (`fm4_sharpen_scene` in the final combine) would run on the jittered frame, so the launcher moves its value into `TAA_SHARPEN` and sets `FM4_LOOK_SHARPEN` to 0: the image is sharpened once, after the resolve.
+- The output curve is display-referred; squaring it approximates linear light (gamma 2).
 
-**Against it**:
+**Cost**: +0.10 ms per race frame at 1x and +0.15 to +0.21 ms at 2x (section 12, steps 3 and 7).
 
-- Bloom, exposure and depth of field are computed from the aliased, jittered scene. A sub-pixel highlight also flickers in the bloom, which TAA then averages; the bloom moves by less than half a pixel per frame.
-- The `pc` look's sharpening (`sharpen=0.4`, `fm4_sharpen_scene` in the final combine) runs before TAA, on the jittered frame. While TAA runs at this point, the launcher moves the value into `TAA_SHARPEN` and sets `FM4_LOOK_SHARPEN` to 0, so the image is sharpened once, after the resolve.
-- The output curve is display-referred; squaring it is an approximation of linear light (gamma 2).
+### 2.2 The scene_color point (option)
 
-**Cost** (estimate, from the GTAO and motion vector measurements at 2x on the development computer): `taa_resolve` reads about 12 values per pixel (the 3x3 color and depth from a groupshared tile, the motion and mask, five bilinear history taps, the previous depth), about 0.25 to 0.4 ms at 2x; `taa_output` about 0.05 to 0.1 ms; the framework's copy of the previous depth about 0.03 ms. In all 0.1 to 0.15 ms at 1x and 0.35 to 0.55 ms at 2x.
+TAA after the last color tile resolve, before the motion blur, bloom, exposure and the final combine, as [motion vectors, section 6](motion-vectors.md#injection-point) recommends. The input is `scene_color` (the `k_2_10_10_10` resolve of the 7e3 scene: 10-bit unorm in gamma 2, in the scene layout, so no rotation), and the output replaces what the game samples next.
 
-**Risk**: low. The final point is in use (the motion debug view); its unknowns are the size match in every mode (photo mode, replays, the start sequence) and the exact pixel mapping.
+Two passes, the same entry points with `TAA_SCENE=1`: `taa_scene_resolve` (`scene_color` in, `taa_scene_history` at the scene size) and `taa_scene_output` (into `taa_scene_out`, with the game's alpha). `taa_scene_out` has `write_back = true`: after the point the framework copies it into the texture cache's host texture of the scene ([post pass framework, the write-back](post-pass-framework.md#the-write-back)):
 
-### 2.2 The scene_color point (v1.1)
-
-TAA after the last color tile resolve, before the motion blur, bloom, exposure and the final combine, as [motion vectors, section 6](motion-vectors.md#injection-point) recommends. The input is `scene_color` (the `k_2_10_10_10` resolve of the 7e3 scene: 10-bit unorm in gamma 2, in the scene layout), and the output has to replace what the game samples next.
-
-Write-back routes:
-
-- **(a) Re-tile into the resolve memory**: a compute pass writes the guest layout (32x32 tiles, the endianness, the 2_10_10_10 packing) into shared memory, or into the scaled resolve buffer at 2x and 3x, and marks the range so the texture cache reloads it. It repeats what a resolve does, costs a store and a reload, and puts host-made pixels into guest memory, which CPU readbacks then see (the photo save would contain TAA). Rejected: the most work and the highest risk.
-- **(b) Write into the texture cache's host texture** (preferred). `PostPasses::RequestExternal` already gets the texture cache's host texture of the scene (`RequestResolvedTexture`: `FindOrCreateTexture`, then `LoadTextureData`). The texture key holds the base format (`GetBaseFormat` in `BindingInfoFromFetchConstant`, [cache.cpp](../../work/runtime/src/graphics/pipeline/texture/cache.cpp)), so the game's fetches as `k_2_10_10_10` and as `k_2_10_10_10_AS_16_16_16_16` (the motion blur) share one host texture when the address, pitch, size and endianness match. A `CopyTextureRegion` of the TAA output (`R10G10B10A2_UNORM`, the same typeless family) into it after the scene_color passes leaves that texture loaded and up to date, so the next guest fetch binds the TAA output. The next resolve to that memory (the next frame, or the motion blur's resolve over the scene) invalidates it, and the texture cache reloads guest memory as it does today.
-- **(c) A substitution in the texture cache**: an address range valid for one frame, mapped to a host resource, checked where the bindings are requested. The fallback if step 6 finds that the game fetches the scene with another key (a height of 736 against 720, another pitch).
+- The texture of the resolve's key is loaded first, then the copy goes over it; it stays loaded, so the game's next fetches of the scene memory bind the copy until the next resolve to that memory (the next frame, or the motion blur's resolve over the scene) replaces it.
+- FM4 fetches its scene with packed mips on, while a resolve target has them off: another key for the same data (one mip). The copy also goes into the texture of that key if the cache has it.
+- The post pass log counts what the guest bound: written textures, their reloads, and other keys of the memory, which would miss the write. In the runs of steps 6 and 7 no binding missed it.
+- Guest memory keeps the game's own scene, so CPU readbacks (the photo save) see no TAA, only the jitter of under half a pixel.
+- Rejected routes: re-tiling the output into guest memory (the most work, and the photo save would contain TAA); a substitution in the texture cache (not needed, since the keys differ only in packed mips).
 
 What changes at this point:
 
-- GTAO's occlusion is applied in the final combine, after TAA. Without TAA's averaging, the occlusion of the jittered depth moves by sub-pixels each frame, so v1.1 adds a temporal filter of the occlusion (`gtao_temporal`, at the scene_depth point: the occlusion reprojected with the motion vectors into a 16-bit history).
-- The look's sharpening in the final combine follows TAA, which is where it belongs: `TAA_SHARPEN` is 0 at this point.
-- The game's motion blur (start sequence, replays) samples the TAA output and resolves its result over it; the reload then holds the blurred TAA image.
-- CPU readbacks of the scene memory (the photo save) read guest memory, which keeps the game's own image (offset by the jitter, less than half a pixel).
+- GTAO's occlusion is applied in the final combine, after TAA, so TAA no longer averages the occlusion of the jittered depth: `gtao_temporal` filters it ([section 8](#8-the-occlusion-at-the-scene_color-point)).
+- The look's sharpening in the final combine follows TAA, where it belongs: `TAA_SHARPEN` is 0 and `FM4_LOOK_SHARPEN` keeps the look's value. At 2x this point is a little crisper than the final point.
+- The game's motion blur (start sequence, replays) samples the TAA output and resolves its result over it.
 - Bloom, exposure and depth of field see the anti-aliased scene.
 
-**Cost**: the same resolve at the scene size, the copy (4 bytes a pixel, 15 MB at 2x, about 0.03 ms) and the occlusion filter (about 0.05 ms at 2x). **Risk**: medium. The write-back depends on the texture cache's state between the copy and the game's fetch; a counter in the `post_pass_log_every` log (the guest fetches that bound the written texture, against reloads) makes a miss visible.
+**Cost**: +0.47 ms per race frame at 2x, which includes `gtao_temporal`, the write-back copies and the previous scene depth (section 12, step 7).
 
 ### 2.3 Comparison
 
-| | final (v1) | scene_color (v1.1) |
+| | final (default) | scene_color (`taa_point=1`) |
 |---|---|---|
-| Framework work | jitter, pass history, frame conditions | the same, plus the write-back (b), or (c) |
-| What TAA covers | everything before the HUD: scene, occlusion, bloom, depth of field, motion blur, grading | the scene; the occlusion needs its own filter; bloom, depth of field, motion blur and grading come after |
+| What TAA covers | everything before the HUD: scene, occlusion, bloom, depth of field, motion blur, grading | the scene; the occlusion has its own filter; bloom, depth of field, motion blur and grading come after |
 | HUD and side mirrors | after it, never in the history | after it, never in the history |
 | Sharpening | `TAA_SHARPEN` after the resolve; the look's off | the look's, in the final combine after TAA |
 | Color | display-referred, squared | gamma 2 scene, squared |
-| GPU at 2x (estimate) | 0.35 to 0.55 ms | 0.4 to 0.6 ms |
-| Risk | low | medium (texture cache state) |
+| Frozen-frame change between captures, 2x (0 to 255) | 0.6 to 1.9 | 0.5 to 2.7 |
+| GPU at 2x | +0.21 ms | +0.47 ms |
+| Depends on | nothing outside the framework | the write-back into the texture cache |
 | Upscalers | not usable: they need the scene before bloom | the point they need |
-
-### 2.4 Decision
-
-v1 runs at the final point. v1.1 moves TAA to scene_color once v1 is accepted, with an A/B of both points on the same frozen frames; the better one becomes the default. The write-back of v1.1 is needed for the upscalers anyway, so it is not wasted if the final point wins.
 
 ## 3. Jitter
 
 ### 3.1 The sequence
 
-- Halton base 2 for x and base 3 for y, indices 1 to N, minus 0.5: offsets between -0.5 and 0.5 host pixels, never exactly half a pixel. N is `[jitter] phases`, 8 by default; 16 is allowed for tests.
+- Halton base 2 for x and base 3 for y, indices 1 to N, minus 0.5: offsets between -0.5 and 0.5 host pixels, never exactly half a pixel. N is `[jitter] phases`, 8 in FM4's manifest.
 - In host pixels at every render scale: at 2x a host pixel is half a guest pixel.
 - The phase advances at the swap of every frame. Every draw and every tile of a frame uses the same offset.
 
 ### 3.2 Which draws
 
-`PostPasses::OnDraw` (called before the viewport is set up) decides per draw, and the command processor adds the offset to `ndc_offset` after `GetHostViewportInfo` and its cache, before `UpdateSystemConstantValues`. A draw is jittered when all of these hold:
+`PostPasses::DrawJitter` decides per draw, and the command processor adds the offset to `ndc_offset` after `GetHostViewportInfo` and its cache, before `UpdateSystemConstantValues`. A draw is jittered when all of these hold:
 
-1. Its depth buffer's EDRAM base is the scene depth base (`depth_group_.edram_base`, the test of the scene camera), and that base is known. No jitter until the first scene depth is resolved.
-2. Its depth or stencil test is on. Post chain draws with depth off are left out even if `RB_DEPTH_INFO` still names the scene base.
+1. Its depth buffer's EDRAM base is the scene depth base (the base resolved as the scene depth last), and that base is known.
+2. Its depth or stencil test is on, so post chain draws with depth off are left out.
 3. It is not a rectangle list and not a uniform draw (the clears of the render target cache).
-4. Its vertex shader is not in `[jitter] exclude`: screen-space overlays drawn into the scene tiles, for example the quad of the rear-view mirror panel of the hood and bumper cameras and the sun occlusion sprite, if step 1 finds that they need it.
-5. The jitter is armed: the `[jitter] if` holds, and the pass named by `[jitter] consumer` (`taa_resolve`) ran in the previous frame. So the garage, the showroom and menus with a scene depth but no camera, split screen (whose final image holds two views) and frames after TAA is switched off are never jittered without TAA.
+4. Its vertex shader is not in `[jitter] exclude`. FM4's manifest excludes none: the rear-view mirror and the rear view of the hood and bumper cameras draw on other depth buffers, and the sun glare does not flicker with the jitter ([section 3.6](#36-other-readers-of-the-scene)).
+5. The jitter is armed ([section 3.5](#35-arming-and-switching)).
 
-That leaves the shadow maps (their own depth buffers), the environment cube, the rear-view mirror (its own depth buffer, EDRAM base 80) and the rear view of the hood and bumper cameras (its own EDRAM, base 64), the post chain, the final combine and the HUD unjittered. Step 1 checks this with a new `REX_DRAW_LIST_TRACE` column, the offset of each draw.
+That leaves the shadow maps, the environment cube, the rear-view mirror (EDRAM base 80), the rear view of the hood and bumper cameras (base 64), the post chain, the final combine and the HUD unjittered. Two scene draws per frame also stay unjittered: a rectangle clear and the cockpit mask (24 indices, vertex shader `…2F76904F`, a uniform draw for the render target cache); the cockpit window edge shows no line or halo with TAA.
 
 ### 3.3 The offset
 
-- Δndc_x = 2 j_x / extent_x and Δndc_y = -2 j_y / extent_y, with (j_x, j_y) in host pixels (x right, y down) and the extent the host viewport (`ViewportInfo::xy_extent`), in both branches of `GetHostViewportInfo` (clipping on and off). The translated vertex shaders apply `ndc_offset` after the guest's transform, so no shader changes.
+- Δndc_x = 2 j_x / extent_x and Δndc_y = -2 j_y / extent_y, with (j_x, j_y) in host pixels (x right, y down) and the extent the host viewport (`ViewportInfo::xy_extent`), in both branches of `GetHostViewportInfo`. The translated vertex shaders apply `ndc_offset` after the guest's transform, so no shader changes.
 - The host pixels are those of the render target, which is the layout of the resolved scene textures. FM4's 180 degree rotation is in its projection, so in the final image the scene moves by -j.
-- Offsets below half a pixel keep every pixel center of a viewport-aligned quad covered. At 4x MSAA the outer samples of such a quad can fall outside it, which rule 3 and the seam check of step 1 cover.
+- Offsets below half a pixel keep every pixel center of a viewport-aligned quad covered; no seam opens at the tile boundaries (step 1).
 
 ### 3.4 Jitter-free motion vectors
 
 - The scene camera and the motion objects come from vertex shader constants and the viewport registers, which the jitter does not touch: the matrices stay unjittered.
-- `SceneConstants` gets `xe_scene_jitter` (two floats in host pixels, in place of `xe_motion_padding`): the content at host position p is the unjittered scene at p - `xe_scene_jitter`.
+- `SceneConstants` has `xe_scene_jitter` (two floats in host pixels): the content at host position p is the unjittered scene at p - `xe_scene_jitter`.
 - `xe_scene_view_position(center, w)` subtracts it: the view position is that of what the pixel shows. GTAO and the motion vectors get exact positions.
-- `xe_previous_view_host_position` keeps returning the previous frame's unjittered position: the history is unjittered.
-- [motion.hlsl](../../work/fm4-rex/passes/motion.hlsl): motion = previous - (center - `xe_scene_jitter`), the motion between unjittered positions. With a frozen camera it is zero at every phase.
-- The WARP test of step 1 renders its synthetic scene with jitter and compares the vectors with the unjittered ones.
+- `xe_previous_view_host_position` returns the previous frame's unjittered position: the history is unjittered.
+- [motion.hlsl](../../work/fm4-rex/passes/motion.hlsl): motion = previous - (center - `xe_scene_jitter`), the motion between unjittered positions; with a frozen camera it is zero at every phase.
 
-### 3.5 Switching it
+### 3.5 Arming and switching
 
-- Manifest `[jitter]`: `phases = 8`, `if = "TAA > 0 && TAA_JITTER > 0"`, `consumer = "taa_resolve"`, `exclude = [...]`.
-- So `shader_mod_set TAA=0`, a `defines:` step and `post_pass_variants="TAA=0;TAA=1"` switch the jitter together with TAA. `TAA_JITTER=0` keeps TAA without jitter, to see what the jitter adds.
-- Cvars: `post_pass_jitter` (`auto`: the manifest; `off`; or a number of phases, which also arms the jitter without the consumer, for step 1) and `post_pass_jitter_offset=x,y` (a fixed offset in every frame, for the seam check). There is no jitter without `post_pass_path`: not with `-Rov`, not with `-Look original`.
+- Manifest `[jitter]`: `phases = 8`, `if = "TAA > 0 && TAA_JITTER > 0"`, `consumer = ["taa_resolve", "taa_scene_resolve"]`.
+- A frame is jittered only after a frame in which a consumer ran and the scene camera's view was known. Without a known view every frame is a history cut and a jitter could not accumulate, so a frame without a camera gets the image without anti-aliasing, not a shaking one. The garage, the showroom and menus without a scene, split screen (whose second view gets no passes), and the frames after TAA is switched off are not jittered.
+- So `shader_mod_set TAA=0`, a `defines:` step and `post_pass_variants="TAA=0;TAA=1"` switch the jitter together with TAA. `TAA_JITTER=0` keeps TAA without the jitter.
+- Cvars: `post_pass_jitter` (`auto`, the manifest; `off`; or a number of phases, which jitters every frame after one with a scene, without a consumer, for checks) and `post_pass_jitter_offset=x,y` (a fixed offset in host pixels). There is no jitter without `post_pass_path`: not with `-Rov`, not with `-Look original`.
 
 ### 3.6 Other readers of the scene
 
 - Depth of field, soft particles, GTAO and the game's motion blur read the depth of their own frame, which matches its color.
-- **Sun glare**: the title's sun query counts the sprite's samples against the scene depth. With the jitter, a sun partly behind trees changes by a few edge samples per frame, and the glare could flicker. Step 1 compares the glare with the jitter on and off on a frozen frame; if it flickers, the sprite's vertex shader goes into `exclude`.
-- **Mirror panel**: its pixels have no history (mask R). A jittered panel would wobble by up to half a pixel, so its quad goes into `exclude`, and the resolve un-jitters no-history pixels anyway ([section 5.5](#55-output-and-sharpening)).
-- **Command processor**: a few compares per draw, and the system constants are marked dirty at the transitions between jittered and unjittered draws (shadow to scene to post chain). At 240 Hz the command processor sets the frame rate, so step 1 compares the race fps with the jitter on and off.
+- **Sun glare**: the title's sun query counts the sprite's samples against the scene depth. With the sun partly hidden, the count varies between frames by 1.6% of its mean with the jitter and 0.9% without; larger relative jumps occur only where the glare is invisible. The glare does not flicker.
+- **Mirror panel**: its pixels have no history (mask R), and the resolve's current sample is un-jittered ([section 7.5](#75-output-and-sharpening)), so the panel stays still and sharp.
+- **Command processor**: a few compares per draw; at 240 Hz its time per draw is the same with and without the jitter (1.84 to 1.94 µs).
 
-## 4. MSAA and tiling
+## 4. The scene camera
+
+The reprojection, the motion vectors, the disocclusion test and the history reset need the scene camera's view in every frame. It comes from three sources, in this priority ([passes.toml](../../work/fm4-rex/passes/passes.toml) `[scene] camera`):
+
+1. The road vertex shader `C81F8D92FF6529EB`: the game's own view inverse at c243 to c245.
+2. The car body vertex shader `8D05A46C3584CA9E` with its world matrix (`rows:0:4:8`): the view to world matrix is `matW * inverse(matWV)`, in double, within 1 mm of the view inverse 2.4 km from the origin (camera tests).
+3. A fallback layout, `*:world:128:140:243`, for any other vertex shader that reads all of c128 to c131, c140 to c142 and c243 to c245 (its float constant bitmap) and gives a rotation as its view: the layout of most environment shaders (156 of the 162 with their position at c128 in a 16-car race dump).
+
+In a frame, a draw of a source earlier in the list replaces the matrices of a later one, so the source is the same whatever the draw order. Every source counts only on a draw whose viewport is as wide as the scene, whose projection has the viewport's aspect, and whose projection equals the frame's when that is known; that leaves out the rear-view mirror's strip, which draws on the scene's depth buffer into a scene-wide viewport. Some tracks draw their road with other shaders (Tsukuba, Infineon, Road Atlanta, Rally di Positano), the cars give the view there, and the fallback covers frames with neither a car nor the road in view (Tsukuba's bumper camera in the lead). With these sources the view is known in every frame with a camera on all 26 environments of the TRACKS screen; the post pass log names the source (`view known from source 1`, `from the fallback`).
+
+## 5. MSAA and tiling
 
 | | `-Quality high` (default) | `-Quality xbox` | `-SingleTile` |
 |---|---|---|---|
 | Tiling | 0: three tiles, 4x MSAA | 1: two tiles, 2x MSAA | 2: one 720p tile, no MSAA |
 | TAA input | edges anti-aliased in each frame; TAA handles shading and specular aliasing, alpha-tested foliage and fences, thin wires and temporal shimmer | as `high`, coarser edges | aliased and jittered: the usual TAA input, and what DLSS and FSR expect |
 | Depth resolve | sample 0 of 4: depth, stencil, motion and mask at an edge belong to one sample, the color to the average | sample 0 of 2 | the pixel's own sample: color, depth, motion and mask agree |
-| GTAO | as now: slightly jagged edges, smoothed by TAA at the final point | as `high` | exact depth per pixel; the same cost (one 1280x720 depth resolve per frame, verified in `mvD`) |
-| Sharpness | softer: the 4-sample box plus the jitter's spread; needs more `TAA_SHARPEN` | between | sharper; more aliasing for the clip to absorb |
-| GPU (race, 1x) | 2.8 ms ([running](../running.md#-quality)) | 2.3 ms | lower: 13 against 17.5 ms on `-Rov`; not measured on RTV |
-| FXAA | none | none | the launcher's swap FXAA goes off while TAA is on: FXAA after TAA blurs the HUD and fights the history |
+| Without TAA at 2x | least aliasing | between | hard stepped wires, a ragged cable car outline |
+| With TAA at 2x | the three look nearly alike in 1:1 crops | | |
+| GPU with TAA, 2x, 240 Hz | 6.50 ms per frame, 149.0 fps | 4.40 ms, 206.6 fps (the `xbox` preset also drops the `high` features) | 5.54 ms, 173.3 fps |
+| FXAA | none | none | the launcher leaves the swap's FXAA out while TAA is on: FXAA after TAA blurs the HUD and fights the history |
 
-TAA needs no change for any of them. Step 4 validates `high` and `-SingleTile` at 2x (`xbox` for timing), and the pairing is decided in step 5 from the crops and the GPU time. The candidate is TAA with `-SingleTile`: one tile draws the scene once instead of in three tiles (the command processor sets the race frame rate at 240 Hz), and its color, depth, motion and mask agree per pixel. 4x MSAA with TAA is the fallback if the edges of `-SingleTile` stay visibly rougher, for instance in the frames after a history reset. Without TAA, `high` stays the default. The default tiling is already an open decision of the project owner ([status, next steps](../status/current.md#next-validation-steps)); TAA changes its trade-off, since the jagged edges of `-SingleTile` are what TAA is for, and `-SingleTile` is the tiling the upscalers will need.
+TAA needs no change for any of them. `pc` keeps `high`, the project owner's choice; with TAA the single tile is the cheaper candidate, and it is the tiling the upscalers will need.
 
-## 5. The resolve
+## 6. Reactive mask
 
-### 5.1 Color
+The project owner chose option (d) of [motion vectors, section 9](motion-vectors.md#open) on 19 October 2026, and option (c) later:
+
+- What FM4 draws on top of a surface while moving differently from it: tire smoke, dust and sparks; the picture in the cockpit's interior mirror; car glass, which is reactive (mask G).
+- Smoke and dust stay roughly where they were emitted, in world space, so the motion of the surface behind them is close, apart from parallax; sparks last a few frames. The clip limits the history to the colors of the current neighbourhood, so the worst case is a short trail of low contrast.
+- The interior mirror shows the road behind on a surface that moves with the interior: its picture lags by the clip's margin, and it is small and mostly low contrast.
+- (a), a color copy per tile before the first transparent draw, and (b), the transparent draws drawn a second time into a mask, would cost GPU time in every frame, and both need a rule for "transparent" that the blend state does not give (FM4 blends its opaque car parts too).
+- (c), step 8 of the plan, only for pixel shaders that visibly ghost: a shader mod writes the mask from the game's draw. That needs a UAV in the shader override contract (the post passes' pixel passes cannot write UAVs either), cleared every frame and written only by visible fragments (`[earlydepthstencil]`).
+
+In the checks so far nothing ghosted: close-up tire smoke in the chase cameras, other cars, the interior mirror's picture, car glass, the steering wheel and the hands, at both points. Step 8 is skipped until a case ghosts; the cases not yet observed are listed under [Current state](#current-state).
+
+## 7. The resolve
+
+### 7.1 Color
 
 - Decode: linear = stored². The scene is stored in gamma 2; at the final point gamma 2 stands in for the output curve.
 - Neighbourhood statistics and the clip in YCoCg of the linear values.
 - Blend weights scaled by 1 / (1 + luma) (Karis 2014), so bright sub-pixel highlights do not flicker.
 - Encode: the square root.
 
-### 5.2 Per pixel (`taa_resolve`)
+### 7.2 Per pixel (`taa_resolve`)
 
-1. Map the pixel to the scene pixel (final point only).
-2. Load the 3x3 color and depth neighbourhood (a groupshared tile of 10x10 for 8x8 threads).
-3. **Current sample**: the 3x3 colors weighted by a Blackman-Harris window of the distance between each neighbour's unjittered position (its center minus the jitter) and the pixel center. This un-jitters the current frame, so pixels without history do not wobble.
-4. **Box**: the mean and standard deviation of the 3x3 in YCoCg; the box is mean ± γσ (`TAA_CLIP_GAMMA`, 1.0), intersected with the 3x3 minimum and maximum.
+1. At the final point, map the pixel to the scene pixel (180 degrees).
+2. Load the 3x3 color and depth neighbourhood.
+3. **Current sample**: the 3x3 colors weighted by a Gaussian of the distance between each neighbour's unjittered position (its center minus the jitter) and the pixel center (close to a Blackman-Harris window). This un-jitters the current frame, so pixels without history do not wobble.
+4. **Box**: the mean and standard deviation of the 3x3 in YCoCg; the box is mean ± γσ (`TAA_CLIP_GAMMA`, 1.0; at most 0.75 on reactive pixels), intersected with the 3x3 minimum and maximum.
 5. **Motion**: that of the 3x3 neighbour nearest the camera (the largest stored depth, since Z is inverted), so the edges of a moving car move with the car.
 6. **History**: the previous history at the pixel center plus the motion, with a Catmull-Rom filter in five bilinear taps (`TAA_HISTORY_FILTER` 1; 0 is one bilinear tap).
-7. **Disocclusion** (`TAA_DISOCCLUSION` 1): the farthest previous scene depth of the 3x3 at the history position, against the nearest W of the 3x3 now. If even that was clearly nearer, the history belongs to another surface: reset. (As built in step 3; pixel against pixel, the jitter dropped the history of thin edges.)
+7. **Disocclusion** (`TAA_DISOCCLUSION` 1): the farthest previous scene depth of the 3x3 at the history position, against the nearest W of the 3x3 around the pixel now. If even that was clearly nearer (W below 0.9 times the nearest W now, minus 0.05), a solid surface hid what the pixel shows: no history. Comparing pixel against pixel dropped the history of thin edges, since the jitter moves which surface a depth sample hits.
 8. **Clip** the history toward the center of the box in YCoCg (a clip, not a clamp per channel, so the color does not shift along the box edge).
-9. **Blend factor** α, the weight of the current sample:
+9. **Blend factor** α, the weight of the current frame:
    - `TAA_BLEND` (0.1), raised to 1 / (n + 1) for a history of age n (kept in the history's alpha), so a reset converges in a few frames;
    - raised toward `TAA_BLEND_MOTION` (0.25) as the motion grows to `TAA_MOTION_PIXELS` (16 host pixels), against blur in fast motion;
-   - mask G (reactive): at least `TAA_REACTIVE` (0.5), with γ 0.75;
+   - mask G (reactive): at least `TAA_REACTIVE` (0.5);
    - mask R, a history position off the screen, a disocclusion, or no `xe_history_valid()`: 1, and the age restarts.
 10. Write the history: the linear color and the age (capped at 32).
 
-### 5.3 History
+### 7.3 History
 
-- `taa_history`: `R16G16B16A16_FLOAT`, linear, the age in alpha; the final size in v1 and the scene size in v1.1; two textures that the framework swaps (step 2). 8 bytes a pixel: 7.4 MB at 1x and 29.5 MB at 2x, twice.
+- `taa_history` (final size) and `taa_scene_history` (scene size): `R16G16B16A16_FLOAT`, linear, the age in alpha; two textures each that the framework swaps. 8 bytes a pixel: 7.4 MB at 1x and 29.5 MB at 2x, twice.
 - Not `R10G10B10A2` or `R11G11B10_FLOAT`: 10 bits, or a 6-bit mantissa, lose the small steps of a 0.1 blend (banding, and dark areas that never converge), and neither has room for the age.
-- `previous_depth` comes from the framework, which copies the scene depth at the scene_color point once a pass reads it: `R32_FLOAT`, 3.7 MB at 1x.
+- `previous_depth` comes from the framework, which copies the scene depth at the scene_color point while a pass that reads it is on: `R32_FLOAT`, 3.7 MB at 1x.
 
-### 5.4 Reset
+### 7.4 Reset
 
-- `xe_history_valid()` is false after a frame without a scene (menus, loading), after a camera cut beyond `[history]` (5 m, 30 degrees, a focal length change of 0.1), after a change of size, and (with step 2) when the history textures were not written in the previous frame, as after TAA is switched on. Then α is 1 and the age restarts.
-- Camera switches within those limits (hood to bumper) reproject correctly; the disocclusion test and the clip handle what was hidden. A change of the field of view (the hood camera widens with speed) is in the reprojection.
-- Frames without a scene at the final point (menus that draw the final combine): the passes do not run (a frame condition, step 2), the frame stays the game's, and the history is dropped.
+- `xe_history_valid()` is false after a frame without a scene (menus, loading), after a camera cut beyond `[history]` (5 m, 30 degrees, a focal length change of 0.1), after a frame without a known view, after a change of size, and when the history textures were not written in the previous frame (as after TAA is switched on). Then α is 1 and the age restarts.
+- Camera switches within those limits (hood to bumper) reproject; the disocclusion test and the clip handle what was hidden. The field of view widening with speed is in the reprojection.
+- Each camera change of a replay is one history cut frame, and the frame after it is valid again; a capture three frames after a cut shows nothing of the previous shot.
+- Frames without a scene at the final point (menus that draw the final combine): the passes do not run (`XE_SCENE`), the frame stays the game's, and the history is dropped.
 
-### 5.5 Output and sharpening
+### 7.5 Output and sharpening
 
-- `taa_output` reads the new history in a plus pattern, applies a contrast-adaptive sharpening (`TAA_SHARPEN`, 0 to 1) in display-referred values, encodes and draws into `final_color`.
+- `taa_output` reads the new history in a plus pattern, applies a contrast-adaptive sharpening (`TAA_SHARPEN`, 0 to 1) in display-referred values, encodes and writes it (into `final_color`, or at the scene_color point into `taa_scene_out` with the game's alpha).
 - The history never holds sharpened values, which would accumulate.
-- Pixels with α at 1 (mask R, the frame after a cut) are the un-jittered reconstruction of step 3 of 5.2, so the mirror panel and the frames after a cut do not wobble.
+- Pixels with α at 1 (mask R, the frame after a cut) are the un-jittered reconstruction of step 3 of section 7.2, so the mirror panel and the frames after a cut do not wobble.
+- `TAA_SHARPEN` 0 is clearly soft; 0.4 comes close to the sharpness of `pc` without TAA, without its stair steps; 0.6 is crisper.
 
-### 5.6 Debug views (`TAA_DEBUG`)
+### 7.6 Debug views (`TAA_DEBUG`)
 
-1. The history alone, reprojected, without the current frame: on a frozen camera with `TAA_JITTER=0` it must stay still; a drift means the pixel mapping is off.
-2. α as a color ramp: where the history is rejected.
-3. How far the clip moved the history: candidates for ghosting and flicker.
-4. Disocclusion and the masks.
+1. The history alone, reprojected, without the current frame (magenta where there is none): on a frozen camera with `TAA_JITTER=0` it stays still.
+2. α as a color ramp, blue 0 to red 1: where the history is rejected.
+3. How far the clip moved the history (orange, 8 times): candidates for ghosting and flicker.
+4. The reasons for no history over the darkened image: no motion known (mask R) red, reactive (mask G) green, disoccluded yellow, off the screen or no valid history blue.
 5. The un-jittered current frame alone.
 
 The views use no gray, which e2e counts as the clear color.
 
-## 6. Reactive mask
+## 8. The occlusion at the scene_color point
 
-The project owner chose option (d) of [motion vectors, section 9](motion-vectors.md#open) for v1, and option (c) later, on 19 October 2026, as the main session's discussion with them recommended:
+At the final point TAA averages GTAO's occlusion with the rest of the frame. At the scene_color point the occlusion is applied after TAA, in the final combine, so `gtao_temporal` and `gtao_temporal_out` ([gtao.hlsl](../../work/fm4-rex/passes/gtao.hlsl), at the scene_depth point after the motion vectors, while `TAA > 0 && TAA_POINT > 0 && GTAO_TEMPORAL > 0`) filter it over frames:
 
-- What FM4 draws on top of a surface while moving differently from it: tire smoke, dust and sparks; the picture in the cockpit's interior mirror; car glass, which is already reactive (mask G).
-- Smoke and dust stay roughly where they were emitted, in world space, so the motion of the surface behind them is close, apart from parallax. Sparks last a few frames. The clip limits the history to the colors of the current neighbourhood, so the worst case is a short trail of low contrast.
-- The interior mirror shows the road behind on a surface that moves with the interior: its picture lags by the clip's margin. It is small and mostly low contrast.
-- (a), a color copy per tile before the first transparent draw, and (b), the transparent draws drawn a second time into a mask, cost GPU time in every frame, and both need a rule for "transparent" that the blend state does not give (FM4 blends its opaque car parts too).
-- (c) later, only for the pixel shaders that visibly ghost in steps 3 and 7 (listed there by hash): a shader mod writes the mask from the game's draw. That needs a UAV in the shader override contract (the post passes' pixel passes cannot write UAVs either), cleared every frame and written only by visible fragments (`[earlydepthstencil]`).
+- The occlusion at the pixel's previous position (the motion vectors), from `gtao_history` (`R16G16_FLOAT`: occlusion and frames accumulated, `history = true`), clamped to the 3x3 range of the current occlusion.
+- No history where the motion is unknown (mask R), the previous position is off the screen, or the previous W there differs by more than 10% (plus 0.05) from the W now.
+- The weight of the current frame: `GTAO_TEMPORAL_BLEND` (0.15), raised to 1 / (n + 1) for a history of age n, at least 0.5 on reactive pixels.
+- `gtao_temporal_out` copies the result into `gtao_occlusion`, which the final combine mod reads.
 
-The ghosting cases of [section 8](#8-validation) test whether (d) holds.
+On frozen frames at 2x it made no measurable difference against `GTAO_TEMPORAL=0`; it has no WARP test.
 
-## 7. Knobs and presets
+## 9. Knobs, cvars and presets
 
 | Name | Kind | Default | Effect |
 |---|---|---|---|
-| `TAA` | param | 0 | 1 runs the TAA passes (and arms the jitter) |
-| `TAA_JITTER` | param | 1 | 0 keeps TAA without jitter |
+| `TAA` | param | 0 (1 with the `taa` knob) | 1 runs the TAA passes (and arms the jitter) |
+| `TAA_POINT` | define | 0 | 0 the final point, 1 the scene_color point (a recompile) |
+| `TAA_JITTER` | param | 1 | 0 keeps TAA without the jitter |
 | `TAA_BLEND` | param | 0.1 | weight of the current frame when still |
 | `TAA_BLEND_MOTION` | param | 0.25 | weight of the current frame at `TAA_MOTION_PIXELS` |
 | `TAA_MOTION_PIXELS` | param | 16.0 | motion in host pixels at which the weight reaches `TAA_BLEND_MOTION` |
 | `TAA_CLIP_GAMMA` | param | 1.0 | width of the variance box in standard deviations |
 | `TAA_REACTIVE` | param | 0.5 | minimum weight of the current frame on reactive pixels (mask G) |
-| `TAA_SHARPEN` | param | 0.4 | sharpening after the resolve (the `pc` look's value) |
-| `TAA_DEBUG` | param | 0 | debug views of section 5.6 |
+| `TAA_SHARPEN` | param | 0.4 | sharpening after the resolve (the launcher sets the look's `sharpen` at the final point, 0 at the scene_color point) |
+| `TAA_DEBUG` | param | 0 | debug views 1 to 5 (section 7.6) |
 | `TAA_HISTORY_FILTER` | define | 1 | 1 Catmull-Rom, 0 bilinear |
-| `TAA_DISOCCLUSION` | define | 1 | the depth test of step 7 |
+| `TAA_DISOCCLUSION` | define | 1 | the depth test of section 7.2 |
+| `GTAO_TEMPORAL` | param | 1 | at the scene_color point, the occlusion filter (section 8) |
+| `GTAO_TEMPORAL_BLEND` | param | 0.15 | its weight of the current frame when still |
+| `SCENE_PATTERN` | param | 0 | 1 writes a test pattern into the game's scene through the write-back (the S1 check) |
 | `[jitter]` | manifest | `phases = 8` | `phases`, `if`, `consumer`, `exclude` (section 3.5) |
 | `post_pass_jitter` | cvar | `auto` | `off`, or a number of phases |
 | `post_pass_jitter_offset` | cvar | empty | a fixed offset `x,y` in host pixels |
-| `taa` | look knob | not set | 1: `TAA=1`, the post passes on (as `ao` does), the look's `sharpen` moved into `TAA_SHARPEN`, no FXAA with `-SingleTile`, a line in the `-Info` overlay |
+| `post_pass_log_every` | cvar | 0 | every N-th scene: the camera and its view source, the history, the jitter, the write-back counts, the params |
+| `taa` | look knob | 1 in `pc` | 1: `TAA=1`, the post passes on (as `ao` does), the look's `sharpen` moved into `TAA_SHARPEN`, no FXAA with `-SingleTile`, an `-Info` line |
+| `taa_point` | look knob | 0 | with `taa`: 1 sets `TAA_POINT=1` and `TAA_SHARPEN=0` and keeps the look's sharpening |
 
-The params come from `shader_mod_defines` by name and change live with `shader_mod_set`, `defines:` steps and `post_pass_variants`. The manifest has 12 params today; these add 9, within the limit of 28.
+The params come from `shader_mod_defines` by name and change live with `shader_mod_set`, `defines:` steps and `post_pass_variants`; a define such as `TAA_POINT` recompiles the passes. The `-Info` overlay shows "Anti-aliasing: TAA before the HUD, sharpen 0.4, scene jittered", or with `taa_point=1` "Anti-aliasing: TAA before the post chain (scene_color), the look's sharpening, scene jittered".
 
-**Presets**: v1 was opt-in, `-Look "pc,taa=1"`, until step 5 gave the `pc` preset `taa=1` with the `high` tiling (19 October 2026; [progress](#step-5-the-camera-on-every-track-and-pc-with-taa-19-october-2026)). `original` never gets it.
+## 10. Validation
 
-## 8. Validation
+**Offline**, in every build (`Build.ps1 -Action build`):
 
-### Offline, in every step
+- `fm4_post_pass_camera_tests`: the Halton phases, the `ndc_offset` of the jitter at 1x to 3x, the draw rules, and the camera layouts with their view (also far from the origin, the rigid view check and the aspect check).
+- `fm4_post_pass_shader_tests` on WARP: the motion vectors with and without the jitter; the TAA passes over frames at both points: a still edge converges to its pixel coverage (mean error 0.083) and holds still, a box moving 4 pixels per frame leaves no trail, no history without `xe_history_valid()`, the weights under mask R, mask G and a settled history, the disocclusion drop, and a jittered thin line keeps its history. At the scene_color point the frames are rotated into the scene layout and the write-back texture is read back.
+- `cd outputs/FM4-build && python test_pipeline.py`: the `taa` and `taa_point` knobs, the presets, `-SingleTile` with TAA, the `-Info` lines, and the clear-gray test.
 
-- **CPU** (`fm4_post_pass_camera_tests` or a new jitter test): the Halton values; the offset of both branches of `GetHostViewportInfo` at 1x, 2x and 3x and with MSAA: a vertex at the viewport center moves by exactly j host pixels; the rules of section 3.2 on synthetic register files.
-- **WARP** (`fm4_post_pass_shader_tests`, extended in step 2 to run final point passes over a sequence of frames):
-  - the synthetic scene of the motion tests with the jitter: with a static camera the motion is zero at every phase; with the moving camera the vectors equal the unjittered ones within 0.02 pixels;
-  - convergence: a static edge rendered with point samples at the 8 phases converges to its coverage within 0.03 after 32 frames and then changes by less than 0.005 per frame;
-  - ghosting: a bright box moving 4 pixels per frame over a dark floor leaves no trail above 0.05 two frames after it passed;
-  - reset: without `xe_history_valid()` the output is the un-jittered current frame;
-  - masks: R gives the current frame, G a weight of at least `TAA_REACTIVE`;
-  - the final point mapping, on a synthetic scene rotated 180 degrees.
-- `cd outputs/FM4-build && python test_pipeline.py` for the launcher knob, and `outputs/FM4-source-control/check-staged-content.py` before each commit.
+**In the game** (BuildRoot `I:\FM4-build-usa`, USA, the development base; the Japan/Asia release through `--arg game_data_root` on the same binary), with the e2e harness ([e2e](../e2e/README.md)):
 
-### In the game
+- Visual checks at 2x (`--arg draw_resolution_scale_x=2 --arg draw_resolution_scale_y=2`) on full-size captures (`--keep-ppm`) and 1:1 crops; frozen frames by rewind (Y) on each camera; A/B in one run with `defines:` steps (`--shader-dev`), the captures matched to the steps through `runtime.log`.
+- Cost: `post_pass_variants="TAA=1;TAA=0"` with `post_pass_variant_ms=1000` and `REX_FRAME_GRAPH_EVERY=1`, the GPU time per frame of each second, frames within 80 ms of a switch left out, paired seconds compared; separate runs differ by more than TAA costs, since the AI races do not repeat.
+- Gates: `matrix.py --look` (the launcher's `pc` has TAA; `--look "pc,taa=0"` for a baseline without it).
+- The clear-gray check counts (102, 102, 102) only by what it covers more than the mean of the neutral grays 97 to 101 and 103 to 107, so asphalt smoothed by TAA, which hits 102 by chance, passes ([e2e](../e2e/README.md)).
+- `post_pass_log_every=<N>`: whether the view is known and from which source, history valid or cut, the jitter, and at the scene_color point the write-back counts.
 
-BuildRoot `I:\FM4-build-usa` (USA, the development base). Visual runs at 2x (2560x1440, `--arg draw_resolution_scale_x=2 --arg draw_resolution_scale_y=2`) at 60 Hz, judged on full-size captures (`--keep-ppm`) and 1:1 crops; 1x only for timing. Frozen frames: rewind (Y) on each camera, and the grid with no AI driver and the right stick held, so that runs that land in the same grid slot give the same frames. A/B in one run with `defines:` steps or `post_pass_variants`; captures matched to the steps through `runtime.log`. **Every run waits for the project owner's OK in the chat.** One game run at a time.
+## 11. Open items and later
 
-| Run | Step | Setup | Checks |
-|---|---|---|---|
-| J1 jitter | 1 | no TAA pass, `post_pass_jitter=8`, `MOTION_DEBUG=1`, rewind in the cockpit, hood, bumper and both chase cameras; then `post_pass_jitter_offset=0.45,0.45` against `off`; a draw list trace | motion white on the frozen cameras; no seams at the tile boundaries or the screen edges; which draws were jittered (shadow, environment, mirrors, post chain and HUD not); the sun glare as steady as without the jitter; race fps at 240 Hz with the jitter on and off |
-| T1 frozen A/B | 3 | `-Look "pc,taa=1"`, `TAA=0` and `TAA=1` steps on the frozen cameras and on the grid with the right stick held; `TAA_SHARPEN` 0, 0.25, 0.4 and 0.6 | 1:1 crops of car silhouettes, wires and fences, foliage, distant road lines, paint and chrome glints, the asphalt texture (sharpness lost), and the HUD edges |
-| T2 motion | 3 | an AI race at 2x and 60 Hz with the camera cycle, the start sequence (the game's motion blur), a career replay (camera cuts) | ghosting: tire smoke and dust, the interior mirror, the steering wheel and hands, car glass, wheels, the rear-view mirror panel, the HUD edges; the history reset at cuts; `TAA_DEBUG` 2 and 3 |
-| C1 cost | 3 | `REX_FRAME_GRAPH` every frame, `post_pass_variants="TAA=1;TAA=0"` every second, at 1x and 2x and 240 Hz | GPU time per race frame with and without TAA, frames within 80 ms of a switch left out, against the estimate of section 2.1 |
-| G1 perf | 4 | `perf` tier (photo at 240 Hz, 3 runs) with TAA, against `pc` without it on the same binary, bracketed | race fps, `frame_ms_p99` (the gate's limit: up to 20% more), `hitch_50ms_per_min` |
-| G2 smoke | 4 | `smoke` tier with TAA against the same binary without it | 3 of 3 cells, the same error keys, no clear-gray frames, photo save and load, the replay at 30 fps |
-| M1 tiling | 4 | T1 and C1 with `-Quality xbox` and `-SingleTile` (FXAA off) | crops and GPU time per tiling, for the pairing of step 5 |
-| R1 Japan/Asia | 4 | T2 in short, with `--arg "game_data_root=<Japan/Asia Disc 1>"` on the same binary | the goal reached, the same images and behavior |
-| S1 scene_color | 6, 7 | a debug pass that writes a pattern into the scene at scene_color; then T1, T2 and C1 at the scene_color point against the final point | the pattern in the final image, the bloom and the motion blur frames; the write-back counter; occlusion and bloom stability; cost |
-
-`matrix.py` has no `--look` today; step 4 adds one (passed to every cell), so the gates run with `taa=1` without spelling out every define.
-
-## 9. Steps
-
-Each step builds (`Build.ps1 -Action build` on `I:\FM4-build-usa`, offline), passes its CPU and WARP tests, and then waits for the project owner's OK for its game runs. Each step is a commit; verified steps land in local main. With `TAA` at 0 (the default), the build behaves as main: the jitter is only armed by the TAA pass.
-
-| # | Step | Size | Files | Verified by |
-|---|---|---|---|---|
-| 1 | **Jitter in the framework**: `[jitter]`, the draw rules, the per-frame Halton phase, `xe_scene_jitter` and the library's view position, the offset in the command processor, the cvars, the trace column; motion.hlsl's one line | M | `post_pass.h`, `post_pass.cpp`, `post_pass_layout.h`, `post_pass.hlsli`, `command_processor.cpp`, `motion.hlsl`, tests | CPU and WARP tests; J1 |
-| 2 | **Pass history and frame conditions**: `[textures.X] history = true` (two textures swapped at the swap, a binding of the previous one, part of `xe_history_valid()`), the built-in condition `XE_SCENE` for `if`; the WARP harness runs final point passes over frames | S to M | `post_pass.h`, `post_pass.cpp`, `post-pass-shader-tests.cpp`, [post-pass-framework.md](post-pass-framework.md) | WARP tests; no game run needed |
-| 3 | **TAA at the final point**: `taa.hlsl` (`taa_resolve`, `taa_output`, debug views), `passes.toml` (`[jitter]`, `taa_history`, params, passes) | M | `work/fm4-rex/passes`, tests | WARP tests; T1, T2, C1 |
-| 4 | **Launcher, harness and docs**: the `taa` knob, the post passes for `ao` or `taa`, the sharpening moved, no FXAA with TAA, the `-Info` line, `matrix.py --look`; [running](../running.md), [status](../status/current.md), [e2e](../e2e/README.md) | S | `pipeline.py`, `test_pipeline.py`, `e2e/matrix.py`, docs | `test_pipeline.py`; G1, G2, M1, R1 |
-| 5 | **Review with the project owner**: `pc` gets `taa=1` or TAA stays opt-in; the tiling pairing; `TAA_SHARPEN`; the shaders that ghost | none | `pipeline.py` `LOOK_PRESETS` if chosen | the crops and gates of steps 3 and 4 |
-| 6 | **Write-back at scene_color**: route (b) and its counter; route (c) if the guest's key differs | M | `post_pass.cpp`, `texture_cache.cpp` if (c) | S1 (pattern part) |
-| 7 | **TAA at scene_color**: the `TAA_POINT` define, `gtao_temporal`, the sharpening at this point, the A/B against the final point | M | `taa.hlsl`, `gtao.hlsl`, `passes.toml`, `pipeline.py` | WARP tests; S1 |
-| 8 | **Reactive mask (c)** for the shaders that ghost, if steps 3 and 7 find any: a separate plan | M to L | the override contract, look mods | per shader |
-
-Steps 1 and 2 touch the same framework files and go one after the other. Step 3 needs both. Steps 6 and 7 wait for step 5.
-
-## 10. Risks and open points
-
-- **Pixel mapping at the final point**: an off-by-half mapping would blur the history; `TAA_DEBUG=1` on a frozen frame shows it (step 3).
-- **Screen-space draws in the scene tiles**: the mirror panel and the sun sprite are known; any others appear in the step 1 trace and go into `exclude` if they must stay put.
-- **Sun glare** flicker with the jitter (section 3.6).
+- **Unobserved ghosting cases** (section 6): tire smoke from the cockpit camera, sparks, a full grid's smoke at the start, gravel dust. If one ghosts, step 8 writes a reactive mask for that shader.
+- **The scene_color point as the default** (section 2.2): needs a smoke gate with `taa_point=1`, the write-back counter on more tracks, career, replays and photo mode, and evidence that `gtao_temporal` helps.
+- **`-SingleTile`** with TAA as the default tiling (section 5). At 2x the runtime still fills the first row and column of 1x resolves, which leaves a duplicated host row and column at the edge of the screen ([GTAO design, M3](gtao-design.md#6-stages-and-verification)).
 - **Photo mode** keeps its own tiling (three tiles, 4x MSAA); its saved photo comes from guest memory, so it has no TAA at either point, only the jitter of under half a pixel.
-- **Split screen**: two views; the jitter is never armed there (the final point holds both views, and the second view gets no passes).
-- **Wheels**: spinning spokes have the body's motion; the clip keeps them from smearing, but they may flicker (a reactive mask later).
-- **Steering wheel and hands**: they take the interior shell's motion at an assumed W (`MOTION_INTERIOR_W`).
-- **`-SingleTile` at 2x**: the runtime still fills the first row and column of 1x resolves ([GTAO design, M3](gtao-design.md#6-stages-and-verification)), which leaves a duplicated host row and column at the edge of the screen; check it in the M1 crops.
-- **Command processor time at 240 Hz** (section 3.6).
+- **Split screen** is never jittered: the final point holds both views, and the second view gets no passes.
+- **Wheels** have the body's motion: the clip keeps spinning spokes from smearing, but they may flicker. **Steering wheel and hands** take the interior shell's motion at an assumed W (`MOTION_INTERIOR_W`).
+- **DLAA** (DLSS at the native scale, NVIDIA RTX only), or FSR in its native AA mode, beside this TAA: they take the same inputs (the jitter, the motion vectors, the depth, the reactive mask) and the scene_color write-back. Compare them with this TAA on the same frozen frames at 2x; this TAA stays the default for every GPU. The SDKs need a review in [sources and licensing](../sources-and-licensing.md) first.
+- **Upscalers** at a separate scale of the scene tiles, on the scene_color write-back ([motion vectors, section 6](motion-vectors.md#injection-point)). Upscaling itself gains little here: the race GPU time is about 3 ms at 1x and 6.5 ms at 2x at 60 Hz, and at 240 Hz the command processor sets the frame rate.
+- **GTAO with noise that changes every frame**, accumulated by TAA: the same quality at a lower `GTAO_QUALITY`.
 
-## 11. Later
+## 12. History
 
-- DLAA (DLSS at the native scale, NVIDIA RTX only) as an option beside this TAA, and possibly FSR in its native AA mode, once the scene_color write-back exists: they take the same inputs (the jitter, the motion vectors, the depth, the reactive mask). Compare them with this TAA on the same frozen frames at 2x; this TAA stays the default for every GPU. The SDKs need a review in [sources and licensing](../sources-and-licensing.md) first. Upscaling itself gains little here: the race GPU time is about 3 ms at 1x and 6 ms at 2x at 60 Hz, and at 240 Hz the command processor sets the frame rate.
-- Upscalers at a separate scale of the scene tiles, on the scene_color write-back ([motion vectors, section 6](motion-vectors.md#injection-point)).
-- GTAO with noise that changes every frame, accumulated by TAA: the same quality at a lower `GTAO_QUALITY`.
-- Reactive mask option (c) (section 6).
+The record of each step as it was built and checked, all on 19 October 2026; statements about defaults describe the state at that step, and the sections above describe the present. The plan was written against main `0a8bba5` and approved by the project owner the same day.
 
-## 12. Progress
+| # | Step | Status |
+|---|---|---|
+| 1 | Jitter in the framework | done |
+| 2 | Pass history and frame conditions | done |
+| 3 | TAA at the final point | done |
+| 4 | Launcher, harness and gates | done |
+| 5 | Review with the project owner: `pc` gets `taa=1`, the tiling, `TAA_SHARPEN`; the scene camera on every track | done |
+| 6 | Write-back at scene_color | done |
+| 7 | TAA at scene_color, A/B against the final point | done; the final point stays the default |
+| 8 | Reactive mask (c) for the shaders that ghost | conditional; skipped while none ghosts |
 
 ### Step 1: jitter (19 October 2026)
 
-Built as section 3 describes: `[jitter]` in the manifest ([post pass framework](post-pass-framework.md#jitter)), the header-only math of [post_pass_jitter.h](../../work/runtime/include/rex/graphics/d3d12/post_pass_jitter.h), `PostPasses::UpdateJitter` (the phase of the next frame, at the swap) and `PostPasses::DrawJitter` (the rules of section 3.2), the offset added to `ndc_offset` in `IssueDraw`, `xe_scene_jitter` in the scene constants and the library's view position, and the one line of [motion.hlsl](../../work/fm4-rex/passes/motion.hlsl). FM4's [passes.toml](../../work/fm4-rex/passes/passes.toml) has no `[jitter]` yet, so with the launcher's settings nothing is jittered and the build renders as main; step 3 adds the section with the TAA pass as its consumer.
+Built as section 3 describes: `[jitter]` in the manifest ([post pass framework](post-pass-framework.md#jitter)), the header-only math of [post_pass_jitter.h](../../work/runtime/include/rex/graphics/d3d12/post_pass_jitter.h), `PostPasses::UpdateJitter` (the phase of the next frame, at the swap) and `PostPasses::DrawJitter` (the rules of section 3.2), the offset added to `ndc_offset` in `IssueDraw`, `xe_scene_jitter` in the scene constants and the library's view position, and the one line of [motion.hlsl](../../work/fm4-rex/passes/motion.hlsl). FM4's [passes.toml](../../work/fm4-rex/passes/passes.toml) had no `[jitter]` yet, so with the launcher's settings nothing was jittered and the build rendered as main; step 3 added the section with the TAA pass as its consumer.
 
 **Offline**:
 
@@ -362,13 +374,13 @@ The sun glare could not be judged: no frozen camera had the sun partly behind an
 
 ### Step 2: pass history and frame conditions (19 October 2026)
 
-Built as section 9 describes ([post pass framework](post-pass-framework.md#texturesname)): a texture with `history = true` is two textures, written as `name` and read as `previous:name`, which trade places at the swap of a frame that wrote it; `xe_history_valid()` now also needs every history texture written in the previous frame at its present size; and `if` conditions know `XE_SCENE`, 1 in a frame whose scene points ran. `fm4_post_pass_shader_tests` runs the final point's passes over frames as the framework does (pixel passes into a synthetic `final_color` in screen orientation, history textures swapped at each frame's end, `XE_SCENE` 1): the motion debug view drawn over it with its alpha matches the slot view rotated 180 degrees within 0.5 of a 10-bit step. FM4's passes have no history texture yet, so nothing changes in the game; step 3 is the first user.
+Built as planned ([post pass framework](post-pass-framework.md#texturesname)): a texture with `history = true` is two textures, written as `name` and read as `previous:name`, which trade places at the swap of a frame that wrote it; `xe_history_valid()` now also needs every history texture written in the previous frame at its present size; and `if` conditions know `XE_SCENE`, 1 in a frame whose scene points ran. `fm4_post_pass_shader_tests` runs the final point's passes over frames as the framework does (pixel passes into a synthetic `final_color` in screen orientation, history textures swapped at each frame's end, `XE_SCENE` 1): the motion debug view drawn over it with its alpha matches the slot view rotated 180 degrees within 0.5 of a 10-bit step. FM4's passes had no history texture yet, so nothing changed in the game; step 3 was the first user.
 
 ### Step 3: TAA at the final point (19 October 2026)
 
-Built as sections 2.1 and 5 describe: [taa.hlsl](../../work/fm4-rex/passes/taa.hlsl) (`taa_resolve`, `taa_output`, debug views 1 to 5) and in [passes.toml](../../work/fm4-rex/passes/passes.toml) the params of section 7 (`TAA` 0 by default), `TAA_HISTORY_FILTER` and `TAA_DISOCCLUSION`, the textures `taa_history` (`R16G16B16A16_FLOAT`, final size, `history = true`) and `taa_debug`, the two passes before the motion debug view (`if = "TAA > 0 && XE_SCENE > 0"`), and `[jitter]` with `taa_resolve` as its consumer. The framework now copies the scene history (`previous_depth`) only while a pass that reads it is switched on, so with `TAA` at 0 nothing runs, nothing is copied and nothing is jittered: the build renders and costs as main.
+Built as sections 2.1 and 7 describe: [taa.hlsl](../../work/fm4-rex/passes/taa.hlsl) (`taa_resolve`, `taa_output`, debug views 1 to 5) and in [passes.toml](../../work/fm4-rex/passes/passes.toml) the params of section 9 (`TAA` 0 by default), `TAA_HISTORY_FILTER` and `TAA_DISOCCLUSION`, the textures `taa_history` (`R16G16B16A16_FLOAT`, final size, `history = true`) and `taa_debug`, the two passes before the motion debug view (`if = "TAA > 0 && XE_SCENE > 0"`), and `[jitter]` with `taa_resolve` as its consumer. The framework now copies the scene history (`previous_depth`) only while a pass that reads it is switched on, so with `TAA` at 0 nothing runs, nothing is copied and nothing is jittered: the build renders and costs as main.
 
-One change against section 5.2: the disocclusion test compares the farthest previous scene depth of the 3x3 at the history position with the nearest W of the 3x3 around the pixel now. Pixel against pixel (the first version), debug view 4 marked the thin edges of every frozen camera as disoccluded (wires, lattices, tree outlines, the cockpit window edge): the jitter moves which surface the depth sample hits, and a thin object can miss every sample of a frame.
+One change against the plan: the disocclusion test compares the farthest previous scene depth of the 3x3 at the history position with the nearest W of the 3x3 around the pixel now. Pixel against pixel (the first version), debug view 4 marked the thin edges of every frozen camera as disoccluded (wires, lattices, tree outlines, the cockpit window edge): the jitter moves which surface the depth sample hits, and a thin object can miss every sample of a frame.
 
 **Offline** (`fm4_post_pass_shader_tests`, the final point over frames on WARP): a still tilted edge over 40 jittered frames converges to its pixel coverage (mean error 0.083 in linear values over 408 edge pixels) and changes by at most 0.083 between the last two frames, where the input flips by 1.0; a white box moving 4 pixels per frame leaves no trail (0.000) and stays white (1.000); without `xe_history_valid()` the history is not used; the current frame's weight is 1 under mask R, 0.502 under mask G (`TAA_REACTIVE` 0.5) and 0.102 on a settled history (`TAA_BLEND` 0.1); a history behind a nearer previous surface is dropped, and one along a 0.6-pixel line moved by the jitter is kept.
 
@@ -382,7 +394,7 @@ One change against section 5.2: the disocclusion test compares the farthest prev
 
 ### Step 4: launcher, harness and gates (19 October 2026)
 
-- **Launcher** ([pipeline.py](../../outputs/FM4-build/pipeline.py)): the look knob `taa` (`-Look "pc,taa=1"`) sets the pass param `TAA=1`, turns on the post passes as `ao` does, moves the look's `sharpen` into `TAA_SHARPEN` (`FM4_LOOK_SHARPEN` 0), leaves out the FXAA of `-SingleTile` (`single_tile_settings`), and adds an `-Info` line ("Anti-aliasing: TAA before the HUD, sharpen 0.4, scene jittered"). `test_pipeline.py` covers it (`test_taa`). No preset sets it.
+- **Launcher** ([pipeline.py](../../outputs/FM4-build/pipeline.py)): the look knob `taa` (`-Look "pc,taa=1"`) sets the pass param `TAA=1`, turns on the post passes as `ao` does, moves the look's `sharpen` into `TAA_SHARPEN` (`FM4_LOOK_SHARPEN` 0), leaves out the FXAA of `-SingleTile` (`single_tile_settings`), and adds an `-Info` line ("Anti-aliasing: TAA before the HUD, sharpen 0.4, scene jittered"). `test_pipeline.py` covers it (`test_taa`). No preset set it then.
 - **Harness**: `matrix.py --look` gives every cell a look. The clear-gray check (`is_clear_gray` in [e2e.py](../../outputs/FM4-build/e2e/e2e.py)) now counts (102, 102, 102) only by what it covers more than the mean of the neutral grays 97-101 and 103-107, at least 1% of the capture: the T2 bumper capture with TAA-smoothed asphalt passes, while the same capture and two others with 1.7%, 3.3% or a third of the screen painted in the clear color are caught, as is the synthetic case of `test_clear_gray`.
 
 Gates on `I:\FM4-build-usa` (USA, the binary of step 3), results in `I:\FM4-build-usa\e2e`, outside the repository:
@@ -395,7 +407,7 @@ Gates on `I:\FM4-build-usa` (USA, the binary of step 3), results in `I:\FM4-buil
 | M1 tiling, cost | `photo`, 240 Hz, 2x, TAA on, one run each | `high` 149.0 fps, GPU 6.50 ms, p99 9.77 ms (2,418 draws per frame); single tile 173.3 fps, 5.54 ms, 8.89 ms (1,859); `xbox` 206.6 fps, 4.40 ms, 6.57 ms (2,101), but the `xbox` preset also drops the `high` features (soft particles, full-rate bloom, the full car shader). No hitches, no clear-gray frames, photo mode 30.0 fps. |
 | R1 Japan/Asia | T2 of step 3 with `--look "pc,taa=1"` and `--arg game_data_root=<Japan/Asia Disc 1>` on the same binary, 2x, 60 Hz | Goal reached, 60.0 fps, the same three error keys, no clear-gray frames; TAA and the jitter ran; menus, start sequence and race cameras render as with the USA discs. |
 
-**For step 5** (the project owner's): whether `pc` gets `taa=1`; the tiling to pair with it (the single tile with TAA looks close to `high` with TAA and costs about 1 ms less GPU time per frame at 2x); and `TAA_SHARPEN` (0.4 now).
+**For step 5** (the project owner's): whether `pc` gets `taa=1`; the tiling to pair with it (the single tile with TAA looks close to `high` with TAA and costs about 1 ms less GPU time per frame at 2x); and `TAA_SHARPEN` (0.4 then).
 
 ### Checks before step 5 (19 October 2026)
 
@@ -406,7 +418,7 @@ The project owner chose `taa=1` for `pc` with the `high` tiling and `TAA_SHARPEN
 | Sun glare facing the sun | `taasun-on`, `taasun-on2` and `taasun-off`: the Quick Race start sequence and camera cycle with `REX_OCCLUSION_SEGMENT_TRACE`, jitter on and off | Pass. The sun is in view about 78 to 89 s after the start, partly hidden (its occlusion count drops from 1,952 toward 0). The frame-to-frame variation of the count is 1.6% of its mean with jitter and 0.9% without; larger relative jumps occur only below about 60 samples, where the glare is invisible. No flicker, so the sun sprite needs no `[jitter]` exclude. |
 | Tire smoke close up | `taasmoke2`: Quick Race, no AI, `--shader-dev`, handbrake slides and wheelspin with `TAA` switched on and off per camera | Pass for the chase cameras: the smoke shows no trails or doubled edges with TAA, and the car's outline stays clean through it. The cockpit is not covered: the car ended against the wall and no smoke was in view. A first run (`taasmokecheck`) held throttle and brake at a standstill and raised no smoke. |
 | Replay with camera cuts, Bernese Alps | `taaqreplay`: Quick Race with AI, `--look "pc,taa=1"`, 60 s of the replay, `post_pass_log_every=1` | Pass. Every camera change in the replay logs one `history cut` frame and the history is valid again on the next frame (14 cuts in about 70 s; twice the view was unknown for 2 frames at a change, also a cut). A capture 3 frames after a cut shows no trace of the previous shot. |
-| Replay and race, Tsukuba Short Circuit | `taareplay`: the `career` scenario, `--look "pc,taa=1"`, `post_pass_log_every=1` | **Failed** on the binary of step 3; fixed in step 5. In every logged frame of the career race and its replay (6,464 frames) the scene camera's view is unknown, so every frame is a `history cut`: TAA never accumulates there, while the scene draws are still jittered. The result is a frame shifted by up to half a pixel each frame with no anti-aliasing. The view comes only from the road vertex shader `C81F8D92FF6529EB` (its view inverse at c243); Tsukuba's road presumably draws with another shader. The step 4 G2 `career` cell ran TAA in the same state. |
+| Replay and race, Tsukuba Short Circuit | `taareplay`: the `career` scenario, `--look "pc,taa=1"`, `post_pass_log_every=1` | **Failed** on the binary of step 3; fixed in step 5. In every logged frame of the career race and its replay (6,464 frames) the scene camera's view is unknown, so every frame is a `history cut`: TAA never accumulates there, while the scene draws are still jittered. The result is a frame shifted by up to half a pixel each frame with no anti-aliasing. The view comes only from the road vertex shader `C81F8D92FF6529EB` (its view inverse at c243); Tsukuba's road draws with other shaders (step 5). The step 4 G2 `career` cell ran TAA in the same state. |
 
 ### Step 5: the camera on every track, and `pc` with TAA (19 October 2026)
 
@@ -471,7 +483,7 @@ The capture statistics differ because the AI races do not repeat: the `photo_vie
 
 ### Step 6: the write-back at scene_color (19 October 2026)
 
-Route (b) of [section 2.2](#22-the-scene_color-point-v11): a texture with `write_back = true`, written at the scene_color point, is copied into the texture cache's host texture of the scene, which then stays loaded for the game's fetches ([post pass framework, the write-back](post-pass-framework.md#the-write-back)). A counter in the `post_pass_log_every` line shows what the guest bound. Route (c) is not needed.
+Route (b) of [section 2.2](#22-the-scene_color-point-option): a texture with `write_back = true`, written at the scene_color point, is copied into the texture cache's host texture of the scene, which then stays loaded for the game's fetches ([post pass framework, the write-back](post-pass-framework.md#the-write-back)). A counter in the `post_pass_log_every` line shows what the guest bound. Route (c) is not needed.
 
 - **The key**: the first run (`taas1`) wrote only the texture of the resolve's key. The final combine bound it 2 to 7 times per frame, but 41 to 670 other bindings per frame took a texture with the same address, size (1280x720 guest, pitch 40 blocks) and format (`k_2_10_10_10`) whose key had packed mips on. The copy now also goes into that texture; its data is the same (one mip).
 - **S1** (`taas1b`: Quick Race with the AI driver, `--look "pc,taa=0"`, `--shader-dev`, 2x, `SCENE_PATTERN=1` with a stretch of 0 in the race, a 60 s replay, `post_pass_log_every=30`): in all 263 logged frames no binding missed the write (other 0), with on average 183 bindings of the written textures per frame and 4 reloads (the next frame's resolve). The pattern (white and magenta squares in a green frame over the middle third of the scene) shows in the final image in the menus with a 3D scene, the start sequence, the race and the replay; the bloom glows around it in every phase and not in the frames without it; the motion blur of the start sequence smears its edge along the camera's motion, and the replay, whose motion blur resolves its result over the scene before the final combine, still shows it.

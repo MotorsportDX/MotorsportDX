@@ -2,18 +2,18 @@
 
 The runtime's post pass framework runs screen passes inside the guest frame. A pass is an entry point of an HLSL file plus a few lines in a manifest, instead of bespoke C++ in the command processor. The framework gives the passes the scene depth, its stencil and the scene color, the previous frame's scene color and depth, the scene camera, the reprojection of each moving object into the previous frame, and the outputs of earlier passes, and it exposes chosen outputs to the shader mods. GTAO, the motion vectors and TAA run on it (see [gtao-design.md](gtao-design.md), [motion-vectors.md](motion-vectors.md) and [taa.md](taa.md)).
 
-It is the common base for the planned rain screen effects, screen-space reflections, TAA and temporal upscalers: they all need new screen passes, and TAA and upscalers also need history and motion vectors. The [TAA v1 plan](taa.md) lists what TAA adds to the framework: jitter, pass-owned history textures, frame conditions, and later a write-back at the scene_color point. The motion of an object comes from the world matrices of the draws that write its ID into the stencil (`[motion]`), the way FM4's own motion blur reprojects each car.
+It is the common base for screen passes: GTAO, the motion vectors and [TAA](taa.md) run on it, and rain screen effects, screen-space reflections and temporal upscalers would too. For TAA it gained the jitter of the scene draws, pass-owned history textures, frame conditions (`XE_SCENE`) and a write-back at the scene_color point. The motion of an object comes from the world matrices of the draws that write its ID into the stencil (`[motion]`), the way FM4's own motion blur reprojects each car.
 
 For the current state see [status/current.md](../status/current.md).
 
 ## Summary
 
-- **Switch**: `post_pass_path=<directory>` holds `passes.toml` and the HLSL files it names. Empty: off, and the runtime does none of this. The launcher sets it to a copy of [work/fm4-rex/passes](../../work/fm4-rex/passes) whenever the look's `ao` knob is above 0 (every look but `original`), or with `--ao`.
+- **Switch**: `post_pass_path=<directory>` holds `passes.toml` and the HLSL files it names. Empty: off, and the runtime does none of this. The launcher sets it to a copy of [work/fm4-rex/passes](../../work/fm4-rex/passes) whenever the look's `ao` knob is above 0 (every look but `original`) or its `taa` knob is on (`pc`), or with `--ao`.
 - **Injection points**: `scene_depth` (the guest has resolved the last tile of its scene depth), `scene_color` (the last tile of its scene color), and `final` (after the final combine draws, before the HUD). A point whose passes are all switched off by their `if` does nothing.
-- **Inputs**: `scene_depth`, `scene_stencil`, `scene_color`, `previous_color`, `previous_depth`, `final_color`, and the textures of earlier passes. **Outputs**: textures of the manifest, at the scene's size or a scale of it, any of 18 formats; `final_color` can be drawn into.
+- **Inputs**: `scene_depth`, `scene_stencil`, `scene_color`, `previous_color`, `previous_depth`, `final_color`, and the textures of earlier passes. **Outputs**: textures of the manifest, at the scene's size or a scale of it, any of 18 formats; `final_color` can be drawn into; a texture with `write_back = true` replaces the scene that the game's post chain samples.
 - **Motion**: `[motion]` names the vertex shaders of the objects and where their world matrix is; per object slot (from the stencil reference of their draws) the passes get the reprojection into the previous frame's view and the object's origin (`xe_motion_*`), and an interior covered by a depth mask gets a slot of its own. FM4's `motion_vectors` pass writes the per-pixel motion and a mask from it.
 - **Passes**: compute (`cs_5_1`) or pixel (`ps_5_1`, a triangle over the render targets), compiled with FXC at the start against the embedded library [post_pass.hlsli](../../work/runtime/src/graphics/d3d12/post_pass.hlsli).
-- **Jitter**: `[jitter]` moves the scene draws by a sub-pixel Halton (2, 3) offset per frame, for temporal passes such as TAA, in frames after one in which its consumer pass ran with a known camera view (without one, every frame is a history cut and a jitter could not accumulate); the passes get the offset (`xe_scene_jitter`), and their view positions and the motion vectors are unjittered.
+- **Jitter**: `[jitter]` moves the scene draws by a sub-pixel Halton (2, 3) offset per frame, for temporal passes such as [TAA](taa.md), in frames after one in which a consumer pass ran with a known camera view (without one, every frame is a history cut and a jitter could not accumulate); the passes get the offset (`xe_scene_jitter`), and their view positions and the motion vectors are unjittered.
 - **Mods**: a texture with `slot = N` is bound for the shader mods at bindless view `kPostPassViewsStart + N`; mods read it with `xe_post_texture(N, uv)`. In FM4's manifest slot 0 is the occlusion, which `xe_post_ao(uv)` reads, slot 1 the motion vectors and slot 2 their mask.
 - **Reuse**: the shader overrides' FXC loader, DXBC cache (`shader_override_cache_path`), defines (`shader_mod_defines`, `shader_mod_set`, `shader_mod_defines.txt`) and hot reload (`shader_mod_hot_reload`).
 - **Path**: RTV with bindless resources only. The ROV path has neither shader mods nor post passes, by design.
@@ -69,14 +69,14 @@ The table of the objects and the camera of the previous frame are kept at every 
 
 ### [jitter]
 
-Sub-pixel jitter of the scene draws for temporal passes ([TAA v1](taa.md#3-jitter)). Without the section nothing is jittered.
+Sub-pixel jitter of the scene draws for temporal passes ([TAA](taa.md#3-jitter)). Without the section nothing is jittered.
 
 | Key | Meaning |
 | --- | --- |
 | `phases` | Length of the Halton (2, 3) sequence, 1 to 64 (default 8): phase n is (Halton(n + 1, 2) - 0.5, Halton(n + 1, 3) - 0.5) host pixels, between -0.5 and 0.5. |
 | `if` | Conditions as a pass's `if`, checked at the swap for the next frame. |
 | `consumer` | The pass, or a list of passes, whose run in a frame arms the jitter of the next frame (required): no frame is jittered unless a pass that undoes the jitter runs, in a frame whose camera view is known. FM4 lists the TAA resolve of both points. |
-| `exclude` | Vertex shader ucode hashes never jittered: screen-space draws inside the scene tiles. |
+| `exclude` | Vertex shader ucode hashes never jittered: screen-space draws inside the scene tiles. FM4 needs none. |
 
 A draw is jittered when its depth buffer's EDRAM base is the scene depth's (the scene camera's test, once a scene depth was resolved), it tests depth or stencil, it is neither a rectangle list nor a clear drawn as a uniform draw, and its vertex shader is not excluded. The shadow maps, the environment cube, the mirrors, the post chain and the HUD have other depth buffers or no depth test. The command processor adds the offset to the draw's `ndc_offset` after `GetHostViewportInfo`: 2 j / extent in X and -2 j / extent in Y for the host viewport's extent, so every tile of a frame moves alike. The offset is in host pixels of the render target, the layout of the resolved scene textures (FM4's scene is rotated 180 degrees, so its final image moves by -j). The math is header only ([post_pass_jitter.h](../../work/runtime/include/rex/graphics/d3d12/post_pass_jitter.h)).
 
@@ -170,7 +170,7 @@ What a temporal upscaler or TAA needs there, and what the framework gives:
 - **Output**: a pixel pass with `rtv = ["final_color"]` writes the result back before the HUD. A pass cannot read and write `final_color` at once: copy it into a texture first.
 - **Resolution**: the framework works at the render scale. An upscaler that renders below the output size needs the guest's render targets at a lower scale than the HUD, which the runtime does not support; within one scale, the point suits TAA and temporal supersampling.
 
-The [TAA v1 plan](taa.md#2-injection-point) starts TAA at this point and moves it to scene_color in a second stage.
+[TAA](taa.md#2-injection-point) runs at this point by default, and at the scene_color point as an option through the write-back below.
 
 ## The write-back
 
@@ -186,7 +186,7 @@ A texture fetch's key holds its packed mips: FM4 fetches the scene with them on,
 - `scene_color` is the `k_2_10_10_10` resolve of the 7e3 scene: 10-bit unorm in gamma 2.
 - The cockpit interior has no depth of its own: FM4 draws it and then covers it with a mask at the stored depth 1.0 (a draw of 24 indices whose vertex shader hash ends in `2F76904F`, viewport Z scale 0 and offset 1, no color write), so its W reads as the near plane. GTAO leaves it out; the motion vectors give it the interior's own matrix at an assumed distance ([motion vectors](motion-vectors.md#9-the-gaps-in-the-game-19-october-2026)). Under the rear-view mirror panel of the hood and bumper cameras the scene depth reads just below that value, within 1% of the near plane's W, and the motion vectors leave it out. The car body on the bumper and hood cameras moves with the camera, so the static world's reprojection does not hold for it: its own motion slot does (`xe_motion_*`). The side mirrors and the HUD are drawn after the scene, over `final_color`.
 - The scene stencil holds an object ID: 0 for the static scene, 7n for every draw of car n, 128 and 129 under shadows (see [motion vectors](motion-vectors.md#who-writes-the-stencil)).
-- The garage and the showroom have a scene depth but no camera from the manifest's vertex shaders, so their scene points do not run (one warning).
+- The garage and the showroom draw the car, so the car body camera source gives them a camera and their scene points run; a scene depth without any camera source in the frame logs one warning and runs no scene point.
 
 ## Limits
 
@@ -194,6 +194,7 @@ A texture fetch's key holds its packed mips: FM4 fetches the scene with them on,
 - The final point needs a single-sampled final render target.
 - The RTV path keeps a host occlusion query open between the guest's snapshots (the sun query). A pixel pass closes that segment before it draws and opens the next one after, so the guest never counts the pass's pixels.
 - Pixel passes cannot write UAVs.
+- The write-back needs a `k_2_10_10_10` scene (FM4's), which an `R10G10B10A2_UNORM` texture copies into.
 - New param names added by a hot reload are not live through `shader_mod_set` until a restart.
 
 ## Verification

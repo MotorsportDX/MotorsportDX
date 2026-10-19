@@ -316,6 +316,12 @@ Shader mod iteration (17 October; design and results in [shader-mod-iteration.md
     3 of 3 cells passed in both, with the same three error keys and no clear-gray frames. The race fps follow the draws per frame of each AI race.
   - The gap was "Not covered: wheel spin, particles, glass, the cockpit interior (a small wrong motion) and the rear-view mirror panel of the hood and bumper cameras (a large wrong motion), which need masks before TAA", with the next validation step "Finish the motion vector coverage before TAA".
 
+### 19 October 2026: TAA
+
+- TAA was built in seven steps on 19 October 2026; the dated results of each step are in [TAA, history](../analysis/taa.md#12-history).
+- Superseded state of the current status page, before TAA reached `pc`: "Its first step, the sub-pixel jitter of the scene draws (`[jitter]`, 19 October 2026), works in the game: on frozen cameras at 2x the motion vectors stay free of it, no seam opens at the tile boundaries, only the scene draws move, and the command processor time per draw is unchanged at 240 Hz; FM4's passes do not turn it on until the TAA pass exists."
+- Superseded next step 9 of the current status page, in its last form before TAA was documented as built: "Build TAA v1, then trace a replay and a 16-car grid", with the progress of steps 1 to 7 in one sentence; replays have since been traced for the camera and the history reset ([TAA, the scene camera](../analysis/taa.md#4-the-scene-camera)).
+
 ## 5. Superseded settings and decisions
 
 Each row gives the date of the change, the setting that was replaced, and what happened later. The current values are in [running](../running.md) and [current status](current.md).
