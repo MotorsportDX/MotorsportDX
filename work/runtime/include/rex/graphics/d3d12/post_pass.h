@@ -103,6 +103,9 @@ class PostPasses {
     uint32_t texture = UINT32_MAX;
     // A single mip, or -1 for all of them (SRVs) or mip 0.
     int32_t mip = -1;
+    // previous:<texture> of a history texture: the one written in the
+    // previous frame.
+    bool previous = false;
   };
   struct Condition {
     std::string name;
@@ -127,6 +130,9 @@ class PostPasses {
     bool final_size = false;
     int32_t slot = -1;
     bool clear = false;
+    // Two textures swapped at the swap of a frame that wrote it: the passes
+    // write this frame's and read the previous frame's as previous:<name>.
+    bool history = false;
     // Usage by the passes.
     bool uav = false, rtv = false;
   };
@@ -208,6 +214,8 @@ class PostPasses {
     std::array<uint32_t, kMaxMips> rtvs;
     uint32_t clear_uav = UINT32_MAX;
     bool written = false;
+    // The frame a pass last wrote it in.
+    uint64_t written_frame = UINT64_MAX;
     Texture() {
       srv_mips.fill(UINT32_MAX);
       uavs.fill(UINT32_MAX);
@@ -358,7 +366,14 @@ class PostPasses {
   void LogRun(int32_t variant_index);
 
   // Resources.
-  bool EnsureTexture(uint32_t index);
+  // The texture of a manifest index, or with previous its history texture's
+  // copy of the previous frame.
+  bool EnsureTexture(uint32_t index, bool previous = false);
+  // The size of a texture of the manifest at the current scene and final
+  // sizes (0 if unknown).
+  void TextureSize(const TextureDesc& desc, uint32_t& width, uint32_t& height) const;
+  // The previous frame's copies of the history textures are usable.
+  bool HistoryTexturesValid() const;
   void ReleaseTexture(Texture& texture, const TextureDesc* desc);
   void ReleaseTextures();
   bool EnsureHistory(History& history, ID3D12Resource* source,
@@ -403,6 +418,10 @@ class PostPasses {
   std::vector<PendingDescriptor> pending_descriptors_;
 
   std::vector<Texture> textures_;
+  // Per history texture of the manifest, the previous frame's, and whether it
+  // was written in the frame before this one.
+  std::vector<Texture> previous_textures_;
+  std::vector<bool> previous_texture_ready_;
   // Per param, the value in the pass constants (b1).
   std::array<uint32_t, post_pass::kMaxParams> param_values_ = {};
   bool params_valid_ = false;

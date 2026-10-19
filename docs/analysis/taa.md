@@ -359,3 +359,7 @@ Built as section 3 describes: `[jitter]` in the manifest ([post pass framework](
 The sun glare could not be judged: no frozen camera had the sun partly behind an object.
 
 **Open for step 3**: whether the cockpit mask should move with the jitter (its edge against the jittered interior and world, in the TAA crops of the cockpit camera), and the sun glare with the TAA pass on.
+
+### Step 2: pass history and frame conditions (19 October 2026)
+
+Built as section 9 describes ([post pass framework](post-pass-framework.md#texturesname)): a texture with `history = true` is two textures, written as `name` and read as `previous:name`, which trade places at the swap of a frame that wrote it; `xe_history_valid()` now also needs every history texture written in the previous frame at its present size; and `if` conditions know `XE_SCENE`, 1 in a frame whose scene points ran. `fm4_post_pass_shader_tests` runs the final point's passes over frames as the framework does (pixel passes into a synthetic `final_color` in screen orientation, history textures swapped at each frame's end, `XE_SCENE` 1): the motion debug view drawn over it with its alpha matches the slot view rotated 180 degrees within 0.5 of a 10-bit step. FM4's passes have no history texture yet, so nothing changes in the game; step 3 is the first user.

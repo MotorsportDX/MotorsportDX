@@ -21,7 +21,11 @@
 // The same scene rendered with the runtime's jitter (the content moved by a
 // sub-pixel offset, xe_scene_jitter) gives the motion between unjittered
 // positions: that of the reprojection with the camera moving, and none with a
-// still camera. Their debug views run, and the passes of the other points are
+// still camera. Their debug views run. The final point's passes run over
+// frames as the framework runs them: pixel passes draw into final_color (a
+// synthetic final image in screen orientation), and history textures swap at
+// the end of each frame; the motion debug view is checked there, drawn rotated
+// 180 degrees over the frame. The passes of the scene_color point are
 // compiled.
 //
 // usage: fm4_post_pass_shader_tests <post_pass.hlsli> <passes directory>
@@ -163,21 +167,29 @@ struct Texture {
   DXGI_FORMAT format = DXGI_FORMAT_UNKNOWN;
   uint32_t mips = 1;
   int slot = -1;
+  // history = true: previous holds the previous frame's (previous:<name>).
+  bool history = false;
   ComPtr<ID3D12Resource> resource;
   D3D12_RESOURCE_STATES state = D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE;
-  // Heap indices: all mips, each mip (SRV), each mip (UAV).
-  uint32_t srv = 0, srv_mips[8] = {}, uavs[8] = {};
+  // Heap indices: all mips, each mip (SRV), each mip (UAV); the render target
+  // view of mip 0 in the RTV heap.
+  uint32_t srv = 0, srv_mips[8] = {}, uavs[8] = {}, rtv = 0;
+  Texture* previous = nullptr;
 };
 struct Binding {
-  std::string texture;  // or scene_depth, scene_stencil
+  std::string texture;  // or scene_depth, scene_stencil, final_color, previous_depth
   int mip = -1;
+  // previous:<history texture>
+  bool previous = false;
 };
 struct Pass {
-  std::string name, shader, entry;
+  std::string name, shader, entry, point;
   std::vector<std::pair<std::string, std::string>> defines;
-  std::vector<Binding> srvs, uavs;
+  std::vector<Binding> srvs, uavs, rtvs;
   uint32_t group[2] = {8, 8};
-  std::string condition;
+  std::string condition, blend;
+  bool pixel = false;
+  ComPtr<ID3DBlob> code;
   ComPtr<ID3D12PipelineState> pipeline;
 };
 
@@ -238,6 +250,11 @@ bool ConditionHolds(const std::string& condition,
 
 Binding ParseBinding(const std::string& text) {
   Binding binding;
+  if (text.rfind("previous:", 0) == 0) {
+    binding.texture = text.substr(9);
+    binding.previous = true;
+    return binding;
+  }
   size_t colon = text.find(':');
   binding.texture = text.substr(0, colon);
   if (colon != std::string::npos) binding.mip = std::atoi(text.c_str() + colon + 1);
@@ -330,13 +347,16 @@ int main(int argc, char** argv) {
       Texture texture;
       texture.name = key.str();
       std::string format = fields["format"].value_or(std::string());
-      texture.format = format == "R32_FLOAT"        ? DXGI_FORMAT_R32_FLOAT
-                       : format == "R8_UNORM"       ? DXGI_FORMAT_R8_UNORM
-                       : format == "R16_FLOAT"      ? DXGI_FORMAT_R16_FLOAT
-                       : format == "R8G8_UNORM"     ? DXGI_FORMAT_R8G8_UNORM
-                       : format == "R16G16_FLOAT"   ? DXGI_FORMAT_R16G16_FLOAT
-                       : format == "R8G8B8A8_UNORM" ? DXGI_FORMAT_R8G8B8A8_UNORM
-                                                    : DXGI_FORMAT_UNKNOWN;
+      texture.format = format == "R32_FLOAT"            ? DXGI_FORMAT_R32_FLOAT
+                       : format == "R8_UNORM"           ? DXGI_FORMAT_R8_UNORM
+                       : format == "R16_FLOAT"          ? DXGI_FORMAT_R16_FLOAT
+                       : format == "R8G8_UNORM"         ? DXGI_FORMAT_R8G8_UNORM
+                       : format == "R16G16_FLOAT"       ? DXGI_FORMAT_R16G16_FLOAT
+                       : format == "R8G8B8A8_UNORM"     ? DXGI_FORMAT_R8G8B8A8_UNORM
+                       : format == "R10G10B10A2_UNORM"  ? DXGI_FORMAT_R10G10B10A2_UNORM
+                       : format == "R16G16B16A16_FLOAT" ? DXGI_FORMAT_R16G16B16A16_FLOAT
+                                                        : DXGI_FORMAT_UNKNOWN;
+      texture.history = fields["history"].value_or(false);
       texture.mips = uint32_t(Number(fields["mips"].node(), 1.0));
       texture.slot = int(Number(fields["slot"].node(), -1.0));
       if (texture.format == DXGI_FORMAT_UNKNOWN) {
@@ -370,7 +390,22 @@ int main(int argc, char** argv) {
         }
       }
       bool pixel = fields["type"].value_or(std::string("compute")) == "pixel";
-      if (fields["point"].value_or(std::string()) != "scene_depth") {
+      pass.pixel = pixel;
+      pass.point = fields["point"].value_or(std::string());
+      pass.blend = fields["blend"].value_or(std::string("none"));
+      if (pass.point != "scene_depth") {
+        for (auto [list, bindings] : {std::pair{"srv", &pass.srvs}, std::pair{"uav", &pass.uavs},
+                                      std::pair{"rtv", &pass.rtvs}}) {
+          if (const toml::array* names = fields[list].as_array()) {
+            for (const toml::node& name : *names) {
+              bindings->push_back(ParseBinding(name.value_or(std::string())));
+            }
+          }
+        }
+        if (const toml::array* group = fields["group"].as_array()) {
+          pass.group[0] = uint32_t(Number(group->get(0), 8.0));
+          pass.group[1] = uint32_t(Number(group->get(1), 8.0));
+        }
         compiled_only.push_back(std::move(pass));
         compiled_only_pixel.push_back(pixel);
         continue;
@@ -582,6 +617,7 @@ int main(int argc, char** argv) {
   for (size_t i = 0; i < compiled_only.size(); ++i) {
     ComPtr<ID3DBlob> code;
     if (!compile(compiled_only[i], compiled_only_pixel[i] ? "ps_5_1" : "cs_5_1", code)) return 1;
+    compiled_only[i].code = code;
     std::printf("ok   %s compiled\n", compiled_only[i].name.c_str());
   }
   for (Pass& pass : passes) {
@@ -599,7 +635,7 @@ int main(int argc, char** argv) {
   // Textures: the scene depth, those of the manifest, and the scene constants.
   D3D12_HEAP_PROPERTIES default_heap = {D3D12_HEAP_TYPE_DEFAULT};
   auto create_texture = [&](DXGI_FORMAT format, uint32_t mips, bool uav,
-                            D3D12_RESOURCE_STATES state) {
+                            D3D12_RESOURCE_STATES state, bool rtv = false) {
     D3D12_RESOURCE_DESC desc = {};
     desc.Dimension = D3D12_RESOURCE_DIMENSION_TEXTURE2D;
     desc.Width = kWidth;
@@ -609,6 +645,7 @@ int main(int argc, char** argv) {
     desc.Format = format;
     desc.SampleDesc.Count = 1;
     desc.Flags = uav ? D3D12_RESOURCE_FLAG_ALLOW_UNORDERED_ACCESS : D3D12_RESOURCE_FLAG_NONE;
+    if (rtv) desc.Flags |= D3D12_RESOURCE_FLAG_ALLOW_RENDER_TARGET;
     ComPtr<ID3D12Resource> resource;
     Succeeded(device->CreateCommittedResource(&default_heap, D3D12_HEAP_FLAG_NONE, &desc, state,
                                               nullptr, IID_PPV_ARGS(&resource)),
@@ -665,19 +702,52 @@ int main(int argc, char** argv) {
   const UINT jittered_depth_srv = srv(jittered_depth_texture.Get(), DXGI_FORMAT_R32_FLOAT, 0, 1);
   const UINT jittered_stencil_srv =
       srv(jittered_stencil_texture.Get(), DXGI_FORMAT_R8G8B8A8_UINT, 0, 1);
+  // Render target views: the textures' mip 0 and final_color.
+  ComPtr<ID3D12DescriptorHeap> rtv_heap;
+  D3D12_DESCRIPTOR_HEAP_DESC rtv_heap_desc = {D3D12_DESCRIPTOR_HEAP_TYPE_RTV, 64,
+                                              D3D12_DESCRIPTOR_HEAP_FLAG_NONE, 0};
+  if (!Succeeded(device->CreateDescriptorHeap(&rtv_heap_desc, IID_PPV_ARGS(&rtv_heap)), "RTV heap")) {
+    return 1;
+  }
+  UINT rtv_increment = device->GetDescriptorHandleIncrementSize(D3D12_DESCRIPTOR_HEAP_TYPE_RTV);
+  UINT next_rtv = 0;
+  auto rtv_cpu = [&](UINT i) {
+    D3D12_CPU_DESCRIPTOR_HANDLE h = rtv_heap->GetCPUDescriptorHandleForHeapStart();
+    h.ptr += SIZE_T(i) * rtv_increment;
+    return h;
+  };
+  auto make_rtv = [&](ID3D12Resource* resource, DXGI_FORMAT format) {
+    D3D12_RENDER_TARGET_VIEW_DESC desc = {};
+    desc.Format = format;
+    desc.ViewDimension = D3D12_RTV_DIMENSION_TEXTURE2D;
+    device->CreateRenderTargetView(resource, &desc, rtv_cpu(next_rtv));
+    return next_rtv++;
+  };
+  // The previous frame's copies of the history textures (std::list: stable).
+  std::list<Texture> previous_textures;
   for (Texture& texture : textures) {
+    if (!texture.history) continue;
+    Texture& previous = previous_textures.emplace_back(texture);
+    texture.previous = &previous;
+  }
+  auto create_views = [&](Texture& texture) {
     // As EnsureTexture: mips while the size allows.
     uint32_t mips = 1;
     while (mips < texture.mips && (std::max(kWidth, kHeight) >> mips)) ++mips;
     texture.mips = mips;
-    texture.resource =
-        create_texture(texture.format, mips, true, D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE);
+    texture.resource = create_texture(texture.format, mips, true,
+                                      D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE, true);
     texture.srv = srv(texture.resource.Get(), texture.format, 0, mips);
     for (uint32_t mip = 0; mip < mips; ++mip) {
       texture.srv_mips[mip] = mips > 1 ? srv(texture.resource.Get(), texture.format, mip, 1)
                                        : texture.srv;
       texture.uavs[mip] = uav(texture.resource.Get(), texture.format, mip);
     }
+    texture.rtv = make_rtv(texture.resource.Get(), texture.format);
+  };
+  for (Texture& texture : textures) {
+    create_views(texture);
+    if (texture.previous) create_views(*texture.previous);
   }
   Texture *occlusion_texture = nullptr, *motion_texture = nullptr;
   for (Texture& texture : textures) {
@@ -1243,6 +1313,352 @@ int main(int argc, char** argv) {
       if (std::abs(alpha - want_alpha) > 1) ++wrong_alpha;
     }
     Check(wrong_alpha == 0, "slot debug view: track, own and new object slots", wrong_alpha);
+  }
+
+  // ---------------------------------------------------------------------------
+  // The final point over frames, as the framework runs it. A frame runs the
+  // passes of the final point on final_color, a synthetic final image in
+  // screen orientation (FM4's final combine shows the scene rotated 180
+  // degrees); pixel passes draw one triangle over their render targets with
+  // xe_post_pass_vs; previous:<name> reads the previous frame's copy of a
+  // history texture, swapped at the end of each frame that wrote it; XE_SCENE
+  // is 1, the frame having a scene.
+  ComPtr<ID3DBlob> vertex_code;
+  {
+    const char vertex_source[] = "#include \"xe_post_pass.hlsli\"\n";
+    const D3D_SHADER_MACRO vertex_macros[] = {{"XE_POST_PASS_VERTEX_SHADER", "1"},
+                                              {nullptr, nullptr}};
+    Include include(library, directory);
+    ComPtr<ID3DBlob> messages;
+    if (!Succeeded(D3DCompile(vertex_source, sizeof(vertex_source) - 1, "xe_post_pass_vs",
+                              vertex_macros, &include, "xe_post_pass_vs", "vs_5_1",
+                              D3DCOMPILE_OPTIMIZATION_LEVEL3, 0, &vertex_code, &messages),
+                   "xe_post_pass_vs")) {
+      if (messages) std::printf("%s\n", static_cast<const char*>(messages->GetBufferPointer()));
+      return 1;
+    }
+  }
+  constexpr DXGI_FORMAT kFinalFormat = DXGI_FORMAT_R10G10B10A2_UNORM;
+  // final_color, and the previous frame's scene depth (previous_depth).
+  ComPtr<ID3D12Resource> final_texture = create_texture(
+      kFinalFormat, 1, false, D3D12_RESOURCE_STATE_COPY_DEST, true);
+  D3D12_RESOURCE_STATES final_state = D3D12_RESOURCE_STATE_COPY_DEST;
+  const UINT final_srv = srv(final_texture.Get(), kFinalFormat, 0, 1);
+  const UINT final_rtv = make_rtv(final_texture.Get(), kFinalFormat);
+  ComPtr<ID3D12Resource> previous_depth_texture =
+      create_texture(DXGI_FORMAT_R32_FLOAT, 1, false, D3D12_RESOURCE_STATE_COPY_DEST);
+  D3D12_RESOURCE_STATES previous_depth_state = D3D12_RESOURCE_STATE_COPY_DEST;
+  const UINT previous_depth_srv = srv(previous_depth_texture.Get(), DXGI_FORMAT_R32_FLOAT, 0, 1);
+  // Per frame: the final image (block 0), the scene and previous depth (blocks
+  // 1 and 2, R32F); a readback of two final images.
+  ComPtr<ID3D12Resource> frame_upload =
+      buffer(D3D12_HEAP_TYPE_UPLOAD, wide_block * 3, D3D12_RESOURCE_STATE_GENERIC_READ);
+  ComPtr<ID3D12Resource> final_readback =
+      buffer(D3D12_HEAP_TYPE_READBACK, wide_block * 2, D3D12_RESOURCE_STATE_COPY_DEST);
+  auto submit = [&]() {
+    if (!Succeeded(list->Close(), "command list")) return false;
+    ID3D12CommandList* frame_lists[] = {list.Get()};
+    queue->ExecuteCommandLists(1, frame_lists);
+    static UINT64 fence_value = 1;
+    queue->Signal(fence.Get(), ++fence_value);
+    fence->SetEventOnCompletion(fence_value, event);
+    WaitForSingleObject(event, INFINITE);
+    if (!Succeeded(device->GetDeviceRemovedReason(), "device")) return false;
+    allocator->Reset();
+    list->Reset(allocator.Get(), nullptr);
+    list->SetDescriptorHeaps(1, heaps);
+    return true;
+  };
+  allocator->Reset();
+  list->Reset(allocator.Get(), nullptr);
+  list->SetDescriptorHeaps(1, heaps);
+  // The inputs of a frame: depth and stencil of the scene (as uploaded above,
+  // the jittered scene or not) and the final image.
+  UINT frame_depth_srv = depth_srv, frame_stencil_srv = stencil_srv;
+  std::vector<std::string> written_this_frame;
+  auto find_previous = [&](const std::string& name) -> Texture* {
+    Texture* texture = find_texture(name);
+    return texture ? texture->previous : nullptr;
+  };
+  // Runs the final point's passes with the params of the manifest and set.
+  auto run_final = [&](const std::map<std::string, double>& set,
+                       D3D12_GPU_VIRTUAL_ADDRESS scene_constants) {
+    uint32_t constants[post_pass::kPassConstantCount] = {};
+    uint32_t* values = constants + sizeof(post_pass::PassHeader) / 4;
+    std::map<std::string, double> condition_values = {{"XE_SCENE", 1.0}};
+    for (const auto& define : defines) {
+      condition_values[define.first] = std::atof(define.second.c_str());
+    }
+    for (size_t i = 0; i < params.size(); ++i) {
+      double value = set.count(params[i].name) ? set.at(params[i].name) : params[i].value;
+      float clamped = std::clamp(float(value), float(params[i].min), float(params[i].max));
+      if (params[i].is_uint) {
+        values[i] = uint32_t(clamped);
+      } else {
+        std::memcpy(&values[i], &clamped, 4);
+      }
+      condition_values[params[i].name] = params[i].is_uint ? values[i] : clamped;
+    }
+    for (Pass& pass : compiled_only) {
+      if (pass.point != "final") continue;
+      if (!pass.condition.empty()) {
+        bool valid;
+        bool enabled = ConditionHolds(pass.condition, condition_values, valid);
+        if (!valid) {
+          std::printf("FAIL pass %s: condition %s\n", pass.name.c_str(), pass.condition.c_str());
+          ++failures;
+          return false;
+        }
+        if (!enabled) continue;
+      }
+      D3D12_GPU_DESCRIPTOR_HANDLE srvs[post_pass::kMaxSrvs], uavs[post_pass::kMaxUavs];
+      for (auto& handle : srvs) handle = gpu(frame_depth_srv);
+      for (size_t i = 0; i < pass.srvs.size(); ++i) {
+        const std::string& name = pass.srvs[i].texture;
+        if (name == "scene_depth") continue;
+        if (name == "scene_stencil") {
+          srvs[i] = gpu(frame_stencil_srv);
+        } else if (name == "final_color") {
+          transition(final_texture.Get(), final_state, D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE |
+                                                           D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE);
+          srvs[i] = gpu(final_srv);
+        } else if (name == "previous_depth") {
+          srvs[i] = gpu(previous_depth_srv);
+        } else {
+          Texture* texture = pass.srvs[i].previous ? find_previous(name) : find_texture(name);
+          if (!texture) {
+            std::printf("FAIL pass %s: no texture %s\n", pass.name.c_str(), name.c_str());
+            ++failures;
+            return false;
+          }
+          transition(texture->resource.Get(), texture->state,
+                     D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE |
+                         D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE);
+          srvs[i] = gpu(pass.srvs[i].mip < 0 ? texture->srv : texture->srv_mips[pass.srvs[i].mip]);
+        }
+      }
+      post_pass::PassHeader header = {{kWidth, kHeight}, {1.0f / kWidth, 1.0f / kHeight}};
+      std::memcpy(constants, &header, sizeof(header));
+      UINT constant_count = UINT(4 + std::max(params.size(), size_t(1)));
+      if (!pass.pixel) {
+        for (size_t i = 0; i < post_pass::kMaxUavs; ++i) {
+          const Binding& binding = pass.uavs[std::min(i, pass.uavs.size() - 1)];
+          Texture* texture = find_texture(binding.texture);
+          if (!texture) {
+            std::printf("FAIL pass %s: no texture %s\n", pass.name.c_str(), binding.texture.c_str());
+            ++failures;
+            return false;
+          }
+          transition(texture->resource.Get(), texture->state, D3D12_RESOURCE_STATE_UNORDERED_ACCESS);
+          uavs[i] = gpu(texture->uavs[std::max(binding.mip, 0)]);
+          if (texture->history) written_this_frame.push_back(texture->name);
+        }
+        if (!pass.pipeline) {
+          D3D12_COMPUTE_PIPELINE_STATE_DESC desc = {};
+          desc.pRootSignature = root_signature.Get();
+          desc.CS = {pass.code->GetBufferPointer(), pass.code->GetBufferSize()};
+          if (!Succeeded(device->CreateComputePipelineState(&desc, IID_PPV_ARGS(&pass.pipeline)),
+                         pass.name.c_str())) {
+            return false;
+          }
+        }
+        list->SetPipelineState(pass.pipeline.Get());
+        list->SetComputeRootSignature(root_signature.Get());
+        list->SetComputeRootConstantBufferView(post_pass::kRootSceneConstants, scene_constants);
+        list->SetComputeRoot32BitConstants(post_pass::kRootPassConstants, constant_count, constants,
+                                           0);
+        for (UINT i = 0; i < post_pass::kMaxSrvs; ++i) {
+          list->SetComputeRootDescriptorTable(post_pass::kRootSrvFirst + i, srvs[i]);
+        }
+        for (UINT i = 0; i < post_pass::kMaxUavs; ++i) {
+          list->SetComputeRootDescriptorTable(post_pass::kRootUavFirst + i, uavs[i]);
+        }
+        list->Dispatch((kWidth + pass.group[0] - 1) / pass.group[0],
+                       (kHeight + pass.group[1] - 1) / pass.group[1], 1);
+        continue;
+      }
+      // A pixel pass: its render targets, and the pipeline of PixelPipeline.
+      D3D12_CPU_DESCRIPTOR_HANDLE rtvs[post_pass::kMaxRenderTargets];
+      DXGI_FORMAT formats[post_pass::kMaxRenderTargets] = {};
+      for (size_t i = 0; i < pass.rtvs.size(); ++i) {
+        if (pass.rtvs[i].texture == "final_color") {
+          transition(final_texture.Get(), final_state, D3D12_RESOURCE_STATE_RENDER_TARGET);
+          rtvs[i] = rtv_cpu(final_rtv);
+          formats[i] = kFinalFormat;
+          continue;
+        }
+        Texture* texture = find_texture(pass.rtvs[i].texture);
+        if (!texture) {
+          std::printf("FAIL pass %s: no texture %s\n", pass.name.c_str(),
+                      pass.rtvs[i].texture.c_str());
+          ++failures;
+          return false;
+        }
+        transition(texture->resource.Get(), texture->state, D3D12_RESOURCE_STATE_RENDER_TARGET);
+        rtvs[i] = rtv_cpu(texture->rtv);
+        formats[i] = texture->format;
+        if (texture->history) written_this_frame.push_back(texture->name);
+      }
+      if (!pass.pipeline) {
+        D3D12_GRAPHICS_PIPELINE_STATE_DESC desc = {};
+        desc.pRootSignature = root_signature.Get();
+        desc.VS = {vertex_code->GetBufferPointer(), vertex_code->GetBufferSize()};
+        desc.PS = {pass.code->GetBufferPointer(), pass.code->GetBufferSize()};
+        for (size_t i = 0; i < pass.rtvs.size(); ++i) {
+          D3D12_RENDER_TARGET_BLEND_DESC& blend = desc.BlendState.RenderTarget[i];
+          blend.RenderTargetWriteMask = D3D12_COLOR_WRITE_ENABLE_ALL;
+          blend.BlendOpAlpha = blend.BlendOp = D3D12_BLEND_OP_ADD;
+          blend.BlendEnable = pass.blend != "none";
+          blend.SrcBlend = blend.SrcBlendAlpha = D3D12_BLEND_ONE;
+          blend.DestBlend = blend.DestBlendAlpha = D3D12_BLEND_ZERO;
+          if (pass.blend == "alpha") {
+            blend.SrcBlend = blend.SrcBlendAlpha = D3D12_BLEND_SRC_ALPHA;
+            blend.DestBlend = blend.DestBlendAlpha = D3D12_BLEND_INV_SRC_ALPHA;
+          } else if (pass.blend == "add") {
+            blend.DestBlend = blend.DestBlendAlpha = D3D12_BLEND_ONE;
+          } else if (pass.blend == "multiply") {
+            blend.SrcBlend = blend.SrcBlendAlpha = D3D12_BLEND_ZERO;
+            blend.DestBlend = D3D12_BLEND_SRC_COLOR;
+            blend.DestBlendAlpha = D3D12_BLEND_SRC_ALPHA;
+          }
+          desc.RTVFormats[i] = formats[i];
+        }
+        desc.SampleMask = UINT_MAX;
+        desc.RasterizerState.FillMode = D3D12_FILL_MODE_SOLID;
+        desc.RasterizerState.CullMode = D3D12_CULL_MODE_NONE;
+        desc.RasterizerState.DepthClipEnable = TRUE;
+        desc.PrimitiveTopologyType = D3D12_PRIMITIVE_TOPOLOGY_TYPE_TRIANGLE;
+        desc.NumRenderTargets = UINT(pass.rtvs.size());
+        desc.SampleDesc.Count = 1;
+        if (!Succeeded(device->CreateGraphicsPipelineState(&desc, IID_PPV_ARGS(&pass.pipeline)),
+                       pass.name.c_str())) {
+          return false;
+        }
+      }
+      list->SetPipelineState(pass.pipeline.Get());
+      list->SetGraphicsRootSignature(root_signature.Get());
+      list->SetGraphicsRootConstantBufferView(post_pass::kRootSceneConstants, scene_constants);
+      list->SetGraphicsRoot32BitConstants(post_pass::kRootPassConstants, constant_count, constants,
+                                          0);
+      for (UINT i = 0; i < post_pass::kMaxSrvs; ++i) {
+        list->SetGraphicsRootDescriptorTable(post_pass::kRootSrvFirst + i, srvs[i]);
+      }
+      for (UINT i = 0; i < post_pass::kMaxUavs; ++i) {
+        list->SetGraphicsRootDescriptorTable(post_pass::kRootUavFirst + i,
+                                             gpu(textures.front().uavs[0]));
+      }
+      list->OMSetRenderTargets(UINT(pass.rtvs.size()), rtvs, FALSE, nullptr);
+      D3D12_VIEWPORT viewport_rect = {0.0f, 0.0f, float(kWidth), float(kHeight), 0.0f, 1.0f};
+      D3D12_RECT scissor = {0, 0, LONG(kWidth), LONG(kHeight)};
+      list->RSSetViewports(1, &viewport_rect);
+      list->RSSetScissorRects(1, &scissor);
+      list->IASetPrimitiveTopology(D3D_PRIMITIVE_TOPOLOGY_TRIANGLELIST);
+      list->DrawInstanced(3, 1, 0, 0);
+    }
+    return true;
+  };
+  // The end of a frame: the history textures written in it become the
+  // previous frame's.
+  auto end_frame = [&]() {
+    for (Texture& texture : textures) {
+      if (!texture.history ||
+          std::find(written_this_frame.begin(), written_this_frame.end(), texture.name) ==
+              written_this_frame.end()) {
+        continue;
+      }
+      Texture* previous = texture.previous;
+      std::swap(texture.resource, previous->resource);
+      std::swap(texture.state, previous->state);
+      std::swap(texture.srv, previous->srv);
+      std::swap(texture.srv_mips, previous->srv_mips);
+      std::swap(texture.uavs, previous->uavs);
+      std::swap(texture.rtv, previous->rtv);
+    }
+    written_this_frame.clear();
+  };
+  // Uploads a final image (screen orientation, RGB 0 to 1 per pixel) into
+  // final_color, and optionally the scene depth into previous_depth.
+  auto upload_final = [&](const std::vector<float>& rgb) {
+    uint8_t* mapped = nullptr;
+    frame_upload->Map(0, nullptr, reinterpret_cast<void**>(&mapped));
+    for (uint32_t y = 0; y < kHeight; ++y) {
+      for (uint32_t x = 0; x < kWidth; ++x) {
+        const float* c = &rgb[(y * kWidth + x) * 3];
+        uint32_t packed = 3u << 30;
+        for (int k = 0; k < 3; ++k) {
+          packed |= uint32_t(std::lround(std::clamp(c[k], 0.0f, 1.0f) * 1023.0f)) << (10 * k);
+        }
+        std::memcpy(mapped + y * depth_pitch + x * 4, &packed, 4);
+      }
+    }
+    frame_upload->Unmap(0, nullptr);
+    transition(final_texture.Get(), final_state, D3D12_RESOURCE_STATE_COPY_DEST);
+    D3D12_TEXTURE_COPY_LOCATION dst = {final_texture.Get(),
+                                       D3D12_TEXTURE_COPY_TYPE_SUBRESOURCE_INDEX};
+    D3D12_TEXTURE_COPY_LOCATION src = {frame_upload.Get(),
+                                       D3D12_TEXTURE_COPY_TYPE_PLACED_FOOTPRINT};
+    src.PlacedFootprint.Footprint = {kFinalFormat, kWidth, kHeight, 1, depth_pitch};
+    list->CopyTextureRegion(&dst, 0, 0, 0, &src, nullptr);
+  };
+  // Copies final_color to readback block block; reads it as RGB 0 to 1.
+  auto copy_final = [&](int block) {
+    transition(final_texture.Get(), final_state, D3D12_RESOURCE_STATE_COPY_SOURCE);
+    D3D12_TEXTURE_COPY_LOCATION src = {final_texture.Get(),
+                                       D3D12_TEXTURE_COPY_TYPE_SUBRESOURCE_INDEX};
+    D3D12_TEXTURE_COPY_LOCATION dst = {final_readback.Get(),
+                                       D3D12_TEXTURE_COPY_TYPE_PLACED_FOOTPRINT};
+    dst.PlacedFootprint.Offset = UINT64(block) * wide_block;
+    dst.PlacedFootprint.Footprint = {kFinalFormat, kWidth, kHeight, 1, depth_pitch};
+    list->CopyTextureRegion(&dst, 0, 0, 0, &src, nullptr);
+  };
+  auto read_final = [&](int block) {
+    std::vector<float> rgb(kWidth * kHeight * 3);
+    uint8_t* mapped = nullptr;
+    D3D12_RANGE range = {SIZE_T(UINT64(block) * wide_block), SIZE_T(UINT64(block + 1) * wide_block)};
+    final_readback->Map(0, &range, reinterpret_cast<void**>(&mapped));
+    for (uint32_t y = 0; y < kHeight; ++y) {
+      for (uint32_t x = 0; x < kWidth; ++x) {
+        uint32_t packed;
+        std::memcpy(&packed, mapped + UINT64(block) * wide_block + y * depth_pitch + x * 4, 4);
+        for (int k = 0; k < 3; ++k) {
+          rgb[(y * kWidth + x) * 3 + k] = float((packed >> (10 * k)) & 1023u) / 1023.0f;
+        }
+      }
+    }
+    final_readback->Unmap(0, nullptr);
+    return rgb;
+  };
+
+  // The motion debug view over a final image of mid gray-blue: the slot view
+  // of the scene above (MOTION_DEBUG 3, left in motion_debug_color by its last
+  // run) drawn rotated 180 degrees and blended by its alpha.
+  {
+    std::vector<float> base_rgb(kWidth * kHeight * 3);
+    for (size_t i = 0; i < base_rgb.size(); i += 3) {
+      base_rgb[i] = 0.25f;
+      base_rgb[i + 1] = 0.5f;
+      base_rgb[i + 2] = 0.75f;
+    }
+    upload_final(base_rgb);
+    if (!run_final({{"MOTION_DEBUG", 3.0}}, constants_motion)) return 1;
+    copy_final(0);
+    end_frame();
+    if (!submit()) return 1;
+    std::vector<float> shown = read_final(0);
+    double worst = 0.0;
+    for (uint32_t y = 0; y < kHeight; ++y) {
+      for (uint32_t x = 0; x < kWidth; ++x) {
+        uint32_t scene_pixel = (kHeight - 1 - y) * kWidth + (kWidth - 1 - x);
+        double alpha = slot_view[scene_pixel * 4 + 3] / 255.0;
+        for (int k = 0; k < 3; ++k) {
+          double want = slot_view[scene_pixel * 4 + k] / 255.0 * alpha +
+                        base_rgb[(y * kWidth + x) * 3 + k] * (1.0 - alpha);
+          worst = std::fmax(worst, std::fabs(shown[(y * kWidth + x) * 3 + k] - want));
+        }
+      }
+    }
+    Check(worst < 2.0 / 1023.0 + 1.0 / 255.0,
+          "final point: the slot view drawn over final_color, rotated 180 degrees", worst * 1023.0);
   }
 
   // Averages of the occlusion (0..1) over pixels of a region.

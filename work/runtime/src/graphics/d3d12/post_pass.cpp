@@ -351,6 +351,8 @@ bool PostPasses::Initialize() {
   }
   manifest_ = std::move(manifest);
   textures_.assign(manifest_->textures.size(), Texture());
+  previous_textures_.assign(manifest_->textures.size(), Texture());
+  previous_texture_ready_.assign(manifest_->textures.size(), false);
   watched_.clear();
   for (const auto& file : manifest_->files) {
     ShaderOverrides::FileState state;
@@ -592,6 +594,11 @@ bool PostPasses::LoadManifest(Manifest& manifest) {
         }
       }
       texture.clear = (*fields)["clear"].value_or(false);
+      texture.history = (*fields)["history"].value_or(false);
+      if (texture.history && (texture.slot >= 0 || texture.clear)) {
+        return fail(fmt::format("texture {}: a history texture has no slot and is not cleared",
+                                texture.name));
+      }
       manifest.textures.push_back(texture);
     }
   }
@@ -627,7 +634,8 @@ bool PostPasses::LoadManifest(Manifest& manifest) {
       name.erase(std::remove_if(name.begin(), name.end(),
                                 [](char c) { return std::isspace(uint8_t(c)); }),
                  name.end());
-      bool known = find_param(name) != UINT32_MAX;
+      // XE_SCENE: 1 in a frame whose scene points ran (a scene with a camera).
+      bool known = find_param(name) != UINT32_MAX || name == "XE_SCENE";
       for (const auto& define : manifest.defines) known |= define.first == name;
       if (!known || !ParseNumber(term.substr(op_position + op_length), parsed.value)) {
         error = fmt::format("if '{}': {} is no param or define, or no number", text, name);
@@ -641,6 +649,12 @@ bool PostPasses::LoadManifest(Manifest& manifest) {
 
   // [[passes]]
   auto parse_binding = [&](const std::string& text, Binding& binding) {
+    // previous:<history texture>, all its mips.
+    if (text.rfind("previous:", 0) == 0) {
+      binding.texture = find_texture(text.substr(9));
+      binding.previous = true;
+      return binding.texture != UINT32_MAX && manifest.textures[binding.texture].history;
+    }
     std::string name = text;
     size_t colon = text.find(':');
     if (colon != std::string::npos) {
@@ -742,8 +756,12 @@ bool PostPasses::LoadManifest(Manifest& manifest) {
         if (output.builtin != Builtin::kNone && !final_write) {
           return pass_fail("only a pixel pass at the final point writes an input (final_color)");
         }
+        if (output.previous) {
+          return pass_fail("previous:<texture> is read only");
+        }
         for (const Binding& input : pass.srvs) {
-          if (input.builtin == output.builtin && input.texture == output.texture) {
+          if (input.builtin == output.builtin && input.texture == output.texture &&
+              !input.previous) {
             return pass_fail("a texture is both read and written");
           }
         }
@@ -992,6 +1010,8 @@ void PostPasses::Reload(const char* reason) {
   ReleaseTextures();
   manifest_ = std::move(manifest);
   textures_.assign(manifest_->textures.size(), Texture());
+  previous_textures_.assign(manifest_->textures.size(), Texture());
+  previous_texture_ready_.assign(manifest_->textures.size(), false);
   if (!manifest_->uses_previous_color) {
     ReleaseHistory(history_color_[0]);
     ReleaseHistory(history_color_[1]);
@@ -1760,8 +1780,17 @@ void PostPasses::FillSceneConstants(post_pass::SceneConstants& constants) const 
     // UpdateMotion ran at this frame's first point.
     if (motion_.frame == frame && motion_.valid) {
       constants.flags |= post_pass::kSceneFlagMotionValid;
-      if (previous_valid_ && previous_width_ == scene_width_ &&
-          previous_height_ == scene_height_) {
+      // The scene color and depth history if a pass reads it, and the
+      // previous frame's copies of the history textures.
+      const Manifest& manifest = *manifest_;
+      bool uses_scene_history = manifest.uses_previous_color || manifest.uses_previous_depth;
+      bool has_history_textures =
+          std::any_of(manifest.textures.begin(), manifest.textures.end(),
+                      [](const TextureDesc& texture) { return texture.history; });
+      bool scene_history = previous_valid_ && previous_width_ == scene_width_ &&
+                           previous_height_ == scene_height_;
+      if ((uses_scene_history || has_history_textures) &&
+          (!uses_scene_history || scene_history) && HistoryTexturesValid()) {
         constants.flags |= post_pass::kSceneFlagHistoryValid;
       }
       std::memcpy(constants.view_to_previous_view, motion_.view_to_previous_view[0],
@@ -1808,8 +1837,9 @@ void PostPasses::FillSceneConstants(post_pass::SceneConstants& constants) const 
 bool PostPasses::ConditionsHold(const std::vector<Condition>& conditions) const {
   const Manifest& manifest = *manifest_;
   bool enabled = true;
+  bool scene = scene_frame_ == command_processor_.GetCurrentFrame() && camera_.valid;
   for (const Condition& condition : conditions) {
-    double value = 0.0;
+    double value = condition.name == "XE_SCENE" && scene ? 1.0 : 0.0;
     for (size_t i = 0; i < manifest.params.size(); ++i) {
       if (manifest.params[i].name != condition.name) continue;
       if (manifest.params[i].is_uint) {
@@ -1966,7 +1996,8 @@ void PostPasses::RunPoint(Point point) {
 bool PostPasses::BindingSize(const Binding& binding, uint32_t& width, uint32_t& height) const {
   switch (binding.builtin) {
     case Builtin::kNone: {
-      const Texture& texture = textures_[binding.texture];
+      const Texture& texture =
+          (binding.previous ? previous_textures_ : textures_)[binding.texture];
       uint32_t mip = uint32_t(std::max(binding.mip, 0));
       width = std::max(texture.width >> mip, uint32_t(1));
       height = std::max(texture.height >> mip, uint32_t(1));
@@ -1998,8 +2029,9 @@ bool PostPasses::RunPass(PassDesc& pass, D3D12_GPU_VIRTUAL_ADDRESS scene_constan
     const Binding& binding = pass.srvs[i];
     switch (binding.builtin) {
       case Builtin::kNone: {
-        if (!EnsureTexture(binding.texture)) return false;
-        Texture& texture = textures_[binding.texture];
+        if (!EnsureTexture(binding.texture, binding.previous)) return false;
+        Texture& texture =
+            (binding.previous ? previous_textures_ : textures_)[binding.texture];
         Transition(texture.resource.Get(), texture.state, kShaderResource);
         // A texture too small for its mips has one, viewed by srv.
         srvs[i] = Gpu(binding.mip < 0 || texture.srv_mips[binding.mip] == UINT32_MAX
@@ -2072,6 +2104,7 @@ bool PostPasses::RunPass(PassDesc& pass, D3D12_GPU_VIRTUAL_ADDRESS scene_constan
       Transition(texture.resource.Get(), texture.state, D3D12_RESOURCE_STATE_UNORDERED_ACCESS);
       uavs[i] = Gpu(texture.uavs[std::max(binding.mip, 0)]);
       texture.written = true;
+      texture.written_frame = command_processor_.GetCurrentFrame();
     }
     for (size_t i = pass.uavs.size(); i < post_pass::kMaxUavs; ++i) {
       uavs[i] = uavs[0];
@@ -2112,6 +2145,7 @@ bool PostPasses::RunPass(PassDesc& pass, D3D12_GPU_VIRTUAL_ADDRESS scene_constan
     formats[i] = manifest.textures[binding.texture].format;
     rtvs[i] = LocalCpu(DescriptorKind::kRtv, texture.rtvs[std::max(binding.mip, 0)]);
     texture.written = true;
+    texture.written_frame = command_processor_.GetCurrentFrame();
   }
   ID3D12PipelineState* pipeline = PixelPipeline(pass, formats);
   if (!pipeline) {
@@ -2384,6 +2418,13 @@ void PostPasses::OnSwap() {
   }
   // This frame's scene becomes the history, or the history ends.
   uint64_t frame = command_processor_.GetCurrentFrame();
+  // A history texture written in this frame becomes the previous frame's.
+  for (size_t i = 0; manifest_ && i < textures_.size(); ++i) {
+    if (!manifest_->textures[i].history) continue;
+    bool written = textures_[i].written_frame == frame && textures_[i].resource;
+    if (written) std::swap(textures_[i], previous_textures_[i]);
+    previous_texture_ready_[i] = written;
+  }
   if (history_written_) {
     history_written_ = false;
     history_write_ ^= 1;
@@ -2431,16 +2472,39 @@ void PostPasses::OnSwap() {
 // ---------------------------------------------------------------------------
 // Resources.
 
-bool PostPasses::EnsureTexture(uint32_t index) {
-  const TextureDesc& desc = manifest_->textures[index];
-  Texture& texture = textures_[index];
+void PostPasses::TextureSize(const TextureDesc& desc, uint32_t& width, uint32_t& height) const {
   uint32_t base_width = desc.final_size ? final_width_ : scene_width_;
   uint32_t base_height = desc.final_size ? final_height_ : scene_height_;
-  if (!base_width || !base_height) {
+  width = height = 0;
+  if (base_width && base_height) {
+    width = std::max(uint32_t(std::lround(double(base_width) * desc.scale)), uint32_t(1));
+    height = std::max(uint32_t(std::lround(double(base_height) * desc.scale)), uint32_t(1));
+  }
+}
+
+bool PostPasses::HistoryTexturesValid() const {
+  for (size_t i = 0; i < previous_textures_.size(); ++i) {
+    const TextureDesc& desc = manifest_->textures[i];
+    if (!desc.history) continue;
+    uint32_t width, height;
+    TextureSize(desc, width, height);
+    const Texture& previous = previous_textures_[i];
+    if (!previous_texture_ready_[i] || !previous.resource || previous.width != width ||
+        previous.height != height) {
+      return false;
+    }
+  }
+  return true;
+}
+
+bool PostPasses::EnsureTexture(uint32_t index, bool previous) {
+  const TextureDesc& desc = manifest_->textures[index];
+  Texture& texture = previous ? previous_textures_[index] : textures_[index];
+  uint32_t width, height;
+  TextureSize(desc, width, height);
+  if (!width || !height) {
     return false;
   }
-  uint32_t width = std::max(uint32_t(std::lround(double(base_width) * desc.scale)), uint32_t(1));
-  uint32_t height = std::max(uint32_t(std::lround(double(base_height) * desc.scale)), uint32_t(1));
   if (texture.resource && texture.width == width && texture.height == height) {
     return true;
   }
@@ -2525,9 +2589,11 @@ bool PostPasses::EnsureTexture(uint32_t index) {
   }
   // The view shader mods read. Draws still in flight may read the new
   // texture, which is zeroed.
-  WriteSlotView(desc.slot, texture.resource.Get(), desc.format);
-  REXGPU_INFO("Post passes: texture {} {}x{}, {} mip{}", desc.name, width, height, mips,
-              mips == 1 ? "" : "s");
+  if (!previous) {
+    WriteSlotView(desc.slot, texture.resource.Get(), desc.format);
+  }
+  REXGPU_INFO("Post passes: texture {}{} {}x{}, {} mip{}", previous ? "previous:" : "", desc.name,
+              width, height, mips, mips == 1 ? "" : "s");
   return true;
 }
 
@@ -2561,8 +2627,11 @@ void PostPasses::ReleaseTextures() {
       WriteSlotView(desc->slot, nullptr, DXGI_FORMAT_R8_UNORM);
     }
     ReleaseTexture(textures_[i], desc);
+    if (i < previous_textures_.size()) ReleaseTexture(previous_textures_[i], desc);
   }
   textures_.clear();
+  previous_textures_.clear();
+  previous_texture_ready_.clear();
 }
 
 bool PostPasses::EnsureHistory(History& history, ID3D12Resource* source,

@@ -95,6 +95,7 @@ A draw is jittered when its depth buffer's EDRAM base is the scene depth's (the 
 | `size`, `scale` | `scene` (the scene depth's host size, default) or `final` (the final color's), times `scale` (above 0, at most 4). |
 | `slot` | 0 to 7: exposed to the shader mods (`xe_post_texture`). |
 | `clear` | Cleared to zero at the swap after every frame it was written in. |
+| `history` | Two textures: the passes write this frame's (`name`) and read the previous frame's (`previous:name`); at the swap of a frame that wrote it the two trade places. No `slot` and no `clear` (see [History](#history)). |
 
 Textures are created when a pass first writes them, zeroed, and recreated when their size changes. Their contents persist across frames unless `clear` is set.
 
@@ -107,12 +108,12 @@ Textures are created when a pass first writes them, zeroed, and recreated when t
 | `type` | `compute` (default) or `pixel`. |
 | `shader`, `entry` | The HLSL file in the directory and its entry point (`main` by default). |
 | `defines` | An inline table of defines for this pass, over those of the manifest. |
-| `srv` | Inputs, bound to t0, t1, ... (at most 8): a texture (`name` for all mips, `name:N` for one), or `scene_depth`, `scene_stencil`, `scene_color`, `previous_color`, `previous_depth`, `final_color`. `scene_stencil` is the stencil byte of the scene depth resolve: the same memory read as `k_8_8_8_8` through the texture cache, an `R8G8B8A8_UINT` view with the stencil in R (`Texture2D<uint>`), loaded only when a pass that reads it runs. |
+| `srv` | Inputs, bound to t0, t1, ... (at most 8): a texture (`name` for all mips, `name:N` for one, `previous:name` for the previous frame's copy of a history texture), or `scene_depth`, `scene_stencil`, `scene_color`, `previous_color`, `previous_depth`, `final_color`. `scene_stencil` is the stencil byte of the scene depth resolve: the same memory read as `k_8_8_8_8` through the texture cache, an `R8G8B8A8_UINT` view with the stencil in R (`Texture2D<uint>`), loaded only when a pass that reads it runs. |
 | `uav` | Compute outputs, bound to u0, u1, ... (at most 8): `name` or `name:N` (one mip). |
 | `rtv` | Pixel outputs, render targets 0-3: textures, or `final_color` (final point only). |
 | `group` | Pixels per thread group, `[x, y]` (default `[8, 8]`): the dispatch is the size divided by it, rounded up. |
 | `size` | The binding whose size is the pass size (`xe_pass_size`); by default the first output. |
-| `if` | `NAME OP NUMBER`, joined by `&&`, over params and defines (`==`, `!=`, `<`, `<=`, `>`, `>=`), checked every frame. |
+| `if` | `NAME OP NUMBER`, joined by `&&`, over params and defines (`==`, `!=`, `<`, `<=`, `>`, `>=`), checked every frame. `XE_SCENE` is 1 in a frame whose scene points ran (a scene with a camera), else 0: a final point pass with `XE_SCENE > 0` skips the menus that draw the final combine without a scene. |
 | `blend` | Pixel passes: `none` (default), `alpha`, `add` or `multiply`. |
 
 The manifest is checked when it is loaded: unknown textures and inputs, a texture both read and written by one pass, `scene_color` at `scene_depth`, `final_color` outside the final point, a compute pass without UAVs or a pixel pass without render targets, two textures in one slot, a cleared texture that no pass writes, and a `[jitter]` whose consumer is no pass are errors. Passes with the same shader, entry and defines share one binary.
@@ -136,12 +137,13 @@ with FXC `/O3` and the defines. The layouts are those of [post_pass_layout.h](..
 
 ## History
 
-Only when a pass reads `previous_color` or `previous_depth`, so GTAO alone costs nothing here.
+The scene color and depth are kept only when a pass reads `previous_color` or `previous_depth`, so GTAO alone costs nothing here. A pass keeps its own output across frames in a texture with `history = true`.
 
 - At the scene_color point, the scene color and the scene depth textures (as the texture cache loaded them) are copied (`CopyResource`) into one of two history textures each, of the same description.
 - At the swap, a frame that copied its history makes it the previous frame's, with its size. A frame without a complete scene (menus, loading) drops the history.
+- History textures: at the swap, one written in the frame becomes the previous frame's (`previous:name`) and the other is written next; one not written in the frame has no previous frame's copy until it is written again (after its passes were switched off, for instance).
 - The previous frame's camera and motion objects are kept at the swap of every frame with a scene, whether or not a pass reads the history textures.
-- `xe_motion_valid()` is true in a frame when the previous frame had a scene, both frames know the camera's view, and the camera did not cut (`[history]`): `xe_view_to_previous_view`, the previous camera and the motion matrices hold. `xe_history_valid()` adds that the previous frame copied its history at the same scene size.
+- `xe_motion_valid()` is true in a frame when the previous frame had a scene, both frames know the camera's view, and the camera did not cut (`[history]`): `xe_view_to_previous_view`, the previous camera and the motion matrices hold. `xe_history_valid()` adds that the previous frame copied its scene history at the same scene size (if a pass reads it) and wrote every history texture at its present size (if the manifest has any).
 - `xe_view_to_previous_view = inverse(previous view to world) * view to world`, so a view position of this frame maps to the previous frame's view position of the same world point; `post-pass-camera-tests.cpp` checks this.
 
 ## Iteration and diagnostics
@@ -162,7 +164,7 @@ What a temporal upscaler or TAA needs there, and what the framework gives:
 
 - **Pre-HUD color at render resolution**: `final_color`, read as a texture or drawn into.
 - **Depth**: `scene_depth` of the frame (complete; the final combine's own depth of field reads it too).
-- **History**: `previous_color` and `previous_depth` are the pre-post-chain scene. A TAA in the final point keeps its own output across frames in a texture of the manifest (textures persist unless `clear` is set), and uses `xe_history_valid()` and the reprojection constants.
+- **History**: `previous_color` and `previous_depth` are the pre-post-chain scene. A TAA in the final point keeps its own output across frames in a history texture (`history = true`, read as `previous:name`), and uses `xe_history_valid()` and the reprojection constants.
 - **Motion vectors**: FM4's `motion_vectors` texture (slot 1), written at scene_depth: previous minus current position in host pixels of the scene textures, in their layout, zero without `xe_motion_valid()`. A pass can also reproject a position itself (`xe_motion_previous_host_position`).
 - **Output**: a pixel pass with `rtv = ["final_color"]` writes the result back before the HUD. A pass cannot read and write `final_color` at once: copy it into a texture first.
 - **Resolution**: the framework works at the render scale. An upscaler that renders below the output size needs the guest's render targets at a lower scale than the HUD, which the runtime does not support; within one scale, the point suits TAA and temporal supersampling.
@@ -184,7 +186,6 @@ The [TAA v1 plan](taa.md#2-injection-point) starts TAA at this point and moves i
 - The RTV path keeps a host occlusion query open between the guest's snapshots (the sun query). A pixel pass closes that segment before it draws and opens the next one after, so the guest never counts the pass's pixels.
 - Pixel passes cannot write UAVs.
 - New param names added by a hot reload are not live through `shader_mod_set` until a restart.
-- No pass-owned double-buffered textures yet (a pass keeps its own history by writing a persistent texture after reading it in an earlier pass).
 
 ## Verification
 
@@ -218,4 +219,4 @@ The [TAA v1 plan](taa.md#2-injection-point) starts TAA at this point and moves i
 - [post_pass_layout.h](../../work/runtime/include/rex/graphics/d3d12/post_pass_layout.h), [post_pass.hlsli](../../work/runtime/src/graphics/d3d12/post_pass.hlsli): root signature and constant layouts, and the library.
 - [shader_override.cpp](../../work/runtime/src/graphics/d3d12/shader_override.cpp): `CompileProgram`, `GetDefine`, `SetPassNames`, the contract's `XE_POST_VIEWS`, and `xe_post_texture` in the override library.
 - [render_target_cache.cpp](../../work/runtime/src/graphics/d3d12/render_target_cache.cpp): `TransitionLastColorRenderTarget` for the final point.
-- Tests: `fm4_post_pass_camera_tests` ([post-pass-camera-tests.cpp](../../work/fm4-rex/tests/post-pass-camera-tests.cpp)), and `fm4_post_pass_shader_tests` ([post-pass-shader-tests.cpp](../../work/fm4-rex/tests/post-pass-shader-tests.cpp)), which runs the scene_depth passes of a manifest on WARP as the framework runs them (GTAO, and the motion vectors against a CPU reprojection with a stencil of object IDs) and compiles the passes of the other points.
+- Tests: `fm4_post_pass_camera_tests` ([post-pass-camera-tests.cpp](../../work/fm4-rex/tests/post-pass-camera-tests.cpp)), and `fm4_post_pass_shader_tests` ([post-pass-shader-tests.cpp](../../work/fm4-rex/tests/post-pass-shader-tests.cpp)), which runs the scene_depth passes of a manifest on WARP as the framework runs them (GTAO, and the motion vectors against a CPU reprojection with a stencil of object IDs, also jittered), runs the final point's passes over frames (pixel passes into a synthetic `final_color`, history textures swapped at each frame's end), and compiles the passes of the scene_color point.
