@@ -61,7 +61,7 @@ Without network access (Jev unreachable), `--scenario quickrace` drives the same
 | `--env NAME=value` | none | extra variable for the game process; repeatable |
 | `--steps` | none | JSON list of steps, or the preset `camera`; overrides `--scenario`, and after `--goal` runs once the goal is reached |
 | `--arg NAME=value` | none | extra or overriding `--cvar=value`; repeatable (`--arg=--readback_resolve=fast` also works) |
-| `--look` | launcher's (`pc`, with TAA since 19 October 2026) | look as `Build.ps1 -Look`, for example `original`, `pc,sharpen=0.6` or `pc,taa=0` |
+| `--look` | launcher's (`pc`, with TAA since 19 October 2026 and `cockpit_light=0.5,windshield=1` since 20 October 2026) | look as `Build.ps1 -Look`, for example `original`, `pc,sharpen=0.6` or `pc,taa=0` |
 | `--quality` | launcher's (`high`) | race render quality as `Build.ps1 -Quality`: `xbox`, `high` or `ultra` |
 | `--ao` | off | the runtime's ambient occlusion pass (the GTAO post pass, `post_pass_path`), as `pipeline.py --ao` |
 | `--tail` | 10 | seconds to keep running after the last step |

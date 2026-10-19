@@ -51,8 +51,8 @@ Running with no options gives this configuration:
 - **Shadows** use the title's shadow map for every camera. See
   [-ShadowWorkaround](#-shadowworkaround).
 - **Race quality** is `high`. See [-Quality](#-quality).
-- **Look** is the `pc` preset, with screen-space ambient occlusion and temporal
-  anti-aliasing. See [Look](#look).
+- **Look** is the `pc` preset, with screen-space ambient occlusion, temporal
+  anti-aliasing, the cockpit interior's shadow floor and the cockpit glass. See [Look](#look).
 - **Display** is `native`: borderless fullscreen on the primary monitor, with a render
   scale of 2x on 1080p, 1440p and 2560x1600 screens and 3x on 4K. See
   [-Display](#-display-and-render-scale).
@@ -272,7 +272,7 @@ preset, knobs, or both. A preset sets only its own knobs. Later items win, so
 
 | Preset | Settings |
 | --- | --- |
-| `pc` (default) | `tonemap=aces`, `saturation=1.1`, `bloom=0.7`, `sharpen=0.4`, `clearcoat=1`, `ao=0.6`, `sun=2`, `sky=0.7`, `taa=1` |
+| `pc` (default) | `tonemap=aces`, `saturation=1.1`, `bloom=0.7`, `sharpen=0.4`, `clearcoat=1`, `ao=0.6`, `sun=2`, `sky=0.7`, `taa=1`, `cockpit_light=0.5`, `windshield=1` |
 | `aces` | `tonemap=aces`, `clearcoat=1`, `ao=0.6`, `sun=2` |
 | `gt` | `tonemap=gt`, `clearcoat=1`, `ao=0.6`, `sun=2` |
 | `neutral` | `tonemap=neutral`, `clearcoat=1`, `ao=0.6`, `sun=2` |
@@ -320,7 +320,7 @@ and `-Look original`.
 | `ao` | number, `0` turns it off | Strength of the screen-space ambient occlusion. |
 | `taa` | `1` on (in `pc`), `0` off (the default of the other presets) | Temporal anti-aliasing before the HUD, with the scene jittered; the look's `sharpen` moves after it. See [Temporal anti-aliasing](#temporal-anti-aliasing). |
 | `taa_point` | `0` (default) or `1` | With `taa`: `1` runs TAA at the scene_color point, before the game's post chain, instead of before the HUD; the look's `sharpen` stays in the final combine. See [Temporal anti-aliasing](#temporal-anti-aliasing). |
-| `windshield` | number, 0 (off, default) to 2 | Glass on the windshield and side windows of the race cockpit camera, which the game leaves open: a light tint, a faint reflection of the dashboard, and glare and dust toward bright light. In no preset. See [Cockpit glass](#cockpit-glass). |
+| `windshield` | number, 0 (off) to 2; 1 in `pc` | Glass on the windshield and side windows of the race cockpit camera, which the game leaves open: a light tint, a faint reflection of the dashboard, and glare and dust toward bright light. See [Cockpit glass](#cockpit-glass). |
 | `sun` | number, `0` turns the glare off | Strength of the sun glare on the RTV path, the same at every MSAA level. Without it (`original`) the glare follows the counted samples. See [Sun glare](#sun-glare). |
 | `road_gloss` | multiplier, default 1 | Specular of the road surface. See [Track lighting](#track-lighting). |
 | `sky` | multiplier, default 1 | Brightness of the sky; the `sky_*` knobs above change its color. See [Track lighting](#track-lighting). |
@@ -339,11 +339,12 @@ it, and views away from the sun look the same; without the grain the sheen is an
 haze on Top Gear (see
 [look mod coverage](analysis/look-mod-coverage.md#the-sheen-on-top-gear-and-its-grain-18-october-2026)).
 Try `-Look "pc,road_specular=0,road_sheen=0.4"`.
-No preset sets `cockpit_light` yet. In an A/B at 2x on the Bernese Alps, `cockpit_light=0.5` took
-the gauges from 2 to 4 of 255 to 32 to 60 with the sun behind or beside the car and left the
-windows and the other cameras as they were (see
-[cockpit brightness](analysis/cockpit-brightness.md#the-cockpit_light-knob-19-october-2026)).
-Try `-Look "pc,cockpit_light=0.3"`.
+`pc` sets `cockpit_light=0.5` and `windshield=1` since 20 October 2026; `-Look "pc,cockpit_light=0,windshield=0"`
+is the `pc` look before them. In an A/B at 2x on the Bernese Alps on top of `pc` (nine frozen cockpit
+frames), `cockpit_light=0.5` took the gauges from 1 to 4 of 255 to 37 to 62 and the gloves from 2 to 8
+to 7 to 48 in four of the frames; in the other five the shaded faces were turned away from the sun
+and changed by less than 4. The windows and the other cameras stay as they
+were (see [cockpit brightness](analysis/cockpit-brightness.md#the-cockpit_light-knob-19-october-2026)).
 
 ### Sun glare
 
@@ -436,7 +437,7 @@ before it (the look's sharpening, no jitter).
 
 In the race cockpit camera FM4 draws no glass for the player's car, so the windshield and side
 windows look like open frames ([cockpit brightness](analysis/cockpit-brightness.md#windshield-and-side-windows)).
-`windshield=1` (`-Look "pc,windshield=1"`) adds a post pass that puts glass over the pixels that
+`windshield=1` (in `pc` since 20 October 2026; `-Look "pc,windshield=0"` turns it off) adds a post pass that puts glass over the pixels that
 see the world through the cockpit's windows ([windshield](analysis/windshield.md)): a light
 green-gray tint, a reflection of the dashboard (faint, since FM4's dashboards are dark), and a
 haze with dust and wiper arcs where bright sky or sun shows through. `windshield=2` doubles

@@ -522,8 +522,11 @@ LOOK_TRACK_KNOBS={'road_gloss':('RoadSpecular.RoadSpecular','RoadSpecular.RoadSp
 # road_specular=0,road_sheen=0.4 (with the grain) removes the bright sheet towards the sun on the
 # Bernese Alps and keeps the aggregate and skid marks on Top Gear, and waits for the project
 # owner's review of the crops. pc has TAA (taa=1, its sharpening after the resolve) since
-# 19 October 2026, with the high tiling: 'pc,taa=0' is the earlier pc.
-LOOK_PRESETS={'pc':'tonemap=aces,saturation=1.1,bloom=0.7,sharpen=0.4,clearcoat=1,ao=0.6,sun=2,sky=0.7,taa=1',
+# 19 October 2026, with the high tiling: 'pc,taa=0' is the earlier pc. pc has the cockpit
+# interior's shadow floor (cockpit_light=0.5) and the cockpit glass (windshield=1) since
+# 20 October 2026: 'pc,cockpit_light=0,windshield=0' is the pc before them.
+LOOK_PRESETS={'pc':'tonemap=aces,saturation=1.1,bloom=0.7,sharpen=0.4,clearcoat=1,ao=0.6,sun=2,sky=0.7,taa=1,'
+                    'cockpit_light=0.5,windshield=1',
               'aces':'tonemap=aces,clearcoat=1,ao=0.6,sun=2','gt':'tonemap=gt,clearcoat=1,ao=0.6,sun=2',
               'neutral':'tonemap=neutral,clearcoat=1,ao=0.6,sun=2','original':''}
 DEFAULT_LOOK='pc'

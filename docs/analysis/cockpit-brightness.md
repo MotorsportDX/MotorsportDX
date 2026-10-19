@@ -118,7 +118,7 @@ Proposal: a look knob for the interior's shadow floor, for example `cockpit_ligh
 
 ## The `cockpit_light` knob (19 October 2026)
 
-`-Look "...,cockpit_light=<0 to 1>"` raises the shadow floor of the interior and the driver ([`fm4-cockpit.hlsli`](../../work/fm4-rex/look/fm4-cockpit.hlsli); [running](../running.md#look)). The default 0 is the game's interior, and no preset sets it.
+`-Look "...,cockpit_light=<0 to 1>"` raises the shadow floor of the interior and the driver ([`fm4-cockpit.hlsli`](../../work/fm4-rex/look/fm4-cockpit.hlsli); [running](../running.md#look)). The default 0 is the game's interior; `pc` sets 0.5 since 20 October 2026 ([on top of pc](#in-the-pc-preset-20-october-2026)).
 
 - **Interior shaders with a floor constant** (38 hashes, the material atlas class `cockpit`): 21 with `MinCockpitShadow` and 17 with `MinShadowValue`, of the race, 16-car, split-screen, UI and `shaders_slod_v16` sets and the `cockpit_*` material shaders. Each ucode reads the constant's X in a `max` with the shadow term (after the track lightmap's `min`); the mod's `XE_HOOK_CONSTANT` makes that X at least the knob. Five of the material shaders are shared with the engine bay (`engine_*` sources), which the floor lifts as well.
 - **The driver** (six hashes without a floor constant): the body `30712480E0AB46E4` (default.xex) and the suit `89F06E34104DF40C` (WhiteFelt), `85CB5573E78162CB` (ApendagesSuede), `1891C4772E7E7617` (Sleeves), `A4ECA613BEDB4468` (Stitching) and `C5CF0F92A4F120F2` (logos). Their shadow term is `min` of the track lightmap's share, `saturate((L * L - c60.x) / (c60.y - c60.x))` (fetch 1 for the body, 10 for the suit), and one tap of the variance shadow map darkened to p^4 (the ucode squares the Chebyshev bound twice); the suit then takes a small literal floor. The mod raises the lightmap texel and the second moment of the shadow map texel (with the pixel's depth from the interpolator of the fetch's coordinate) so that each term is at least the knob, which equals a floor after the `min`.
@@ -160,6 +160,23 @@ The gloves stayed as they were in this run (hand patch unchanged in freezes 4 to
 
 Crops (1:1 at 2560x1440, not in the repository) are in `I:\FM4-build-pass\e2e\cockpit-light-report`.
 
+## In the pc Preset (20 October 2026)
+
+`pc` sets `cockpit_light=0.5` and `windshield=1` since 20 October 2026, at the project owner's request. Run `pc2-cockpit-ab` (`I:\FM4-build-pass`, the USA Disc 1 and profile, 2x, `-Look pc` with `--shader-dev`, nine cockpit freezes, live defines: the new `pc`, the earlier one, each knob alone):
+
+| Freeze | Earlier `pc`: gauges, hand, road | New `pc`: gauges, hand, road |
+|---|---|---|
+| 1, grid | 1.2, 6.9, 75.1 | 39.0, 43.3, 72.4 |
+| 2 | 3.6, 2.0, 112.2 | 58.0, 6.9, 109.7 |
+| 8 | 1.2, 8.0, 12.8 | 37.5, 17.2, 12.3 |
+| 9 | 3.4, 7.1, 80.0 | 61.8, 47.8, 76.1 |
+| 3 to 7 | 1.2 to 3.0, 14 to 62 | each value changes by less than 4 |
+
+- `cockpit_light` makes every change inside the car; the glass alone lowers the patches seen through the windows by 1 to 5 and leaves the interior as it is.
+- In freezes 3 to 7 the gauges and the gloves face away from the sun, so the floor (through N·L) lifts them little.
+- The 1:1 crops show readable gauges and white gloves, a light haze on the windows, and no artifacts.
+- The smoke gate of the new `pc` against the earlier one is in [current status](../status/current.md#pc-with-the-cockpit-knobs-20-october-2026).
+
 ## Windshield and Side Windows
 
 In the cockpit camera the windshield and the side windows look like open frames: no tint, reflection or glare on the view outside. The game does not draw them in that camera.
@@ -170,7 +187,7 @@ In the cockpit camera the windshield and the side windows look like open frames:
 - The magenta coverage shows the windows of the other cars, the reflection of them in the mirrors and the gauge glass, and nothing on the player's windshield or side windows. Hiding the glass changes no pixel outside the gauges, and the gauge glass is fully transparent (opacity view 0.1 of 255).
 - The executable has a title command line option `hidecockpitglass` (in the table with `engageaionstart`, read through `FM4_GAME_CMDLINE`) and a windshield reflection feature (`WindshieldReflection`, `ICarPresentationSetWindshieldReflectionTexture`, the pixel shader `7226D929481D4274` with `WindshieldReflectionScale`), whose shader is only in `shaders_slod_v16`, the car set of `UI_Showroom`. Neither was tested; the option most likely hides the gauge glass, the only cockpit glass the race draws.
 
-Verdict: game behavior, the same on both render paths. A visible windshield would be new work: a post pass in the cockpit camera that tints the world seen through the windows (the pixels that are not the interior: the player's stencil reference) and adds a faint reflection or glare, or a hook that makes the title draw its exterior glass in this camera, whose shader is made for views from outside. The post pass is prototyped as the look knob `windshield`, off by default and in no preset ([windshield](windshield.md)); the hook is not built.
+Verdict: game behavior, the same on both render paths. A visible windshield would be new work: a post pass in the cockpit camera that tints the world seen through the windows (the pixels that are not the interior: the player's stencil reference) and adds a faint reflection or glare, or a hook that makes the title draw its exterior glass in this camera, whose shader is made for views from outside. The post pass is the look knob `windshield`, 0 by default and 1 in `pc` since 20 October 2026 ([windshield](windshield.md)); the hook is not built.
 
 ## Related
 

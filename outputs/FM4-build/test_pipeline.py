@@ -130,7 +130,7 @@ class PipelineTests(unittest.TestCase):
             with self.assertRaises(RuntimeError):
                 pipeline.look_cvars(root,'pc,sun=-1')
             # Development: the repository files, every knob, hot reload and live knobs.
-            for look in ('pc,sharpen=0.6,taa=0','original'):
+            for look in ('pc,sharpen=0.6,taa=0,windshield=0','original'):
                 cvars=pipeline.look_cvars(root,look,shader_dev=True)
                 self.assertEqual(Path(cvars['shader_mod_path']),pipeline.LOOK_DIRECTORY)
                 defines=dict(define.split('=',1) for define in cvars['shader_mod_defines'].split(';'))
@@ -145,7 +145,7 @@ class PipelineTests(unittest.TestCase):
         with tempfile.TemporaryDirectory(prefix='fm4 passes test ') as directory:
             root=Path(directory)
             self.assertNotIn('post_pass_path',pipeline.look_cvars(root,'original'))
-            self.assertNotIn('post_pass_path',pipeline.look_cvars(root,'pc,ao=0,taa=0'))
+            self.assertNotIn('post_pass_path',pipeline.look_cvars(root,'pc,ao=0,taa=0,windshield=0'))
             # TAA alone also turns them on.
             self.assertIn('post_pass_path',pipeline.look_cvars(root,'pc,ao=0'))
             cvars=pipeline.look_cvars(root,'pc')
@@ -215,7 +215,7 @@ class PipelineTests(unittest.TestCase):
 
     def test_windshield(self):
         """The windshield knob: the pass param WINDSHIELD, the post passes on, off by default and
-        in every preset, and the overlay line."""
+        in pc only, and the overlay line."""
         with tempfile.TemporaryDirectory(prefix='fm4 windshield test ') as directory:
             root=Path(directory)
             def defines_of(look):
@@ -229,9 +229,10 @@ class PipelineTests(unittest.TestCase):
             cvars,defines=defines_of('aces,ao=0,windshield=0.5')
             self.assertEqual(defines['WINDSHIELD'],'0.5')
             self.assertEqual(Path(cvars['post_pass_path']),root/'passes')
+            # pc has it at 1 since 20 October 2026, the other presets not.
             for look in pipeline.LOOK_PRESETS:
-                self.assertNotIn('windshield',pipeline.look_knobs(look))
-            self.assertNotIn('WINDSHIELD',defines_of('pc')[1])
+                self.assertEqual(pipeline.look_knobs(look).get('windshield'),'1' if look=='pc' else None)
+            self.assertEqual(defines_of('pc')[1]['WINDSHIELD'],'1.0')
             self.assertNotIn('WINDSHIELD',defines_of('pc,windshield=0')[1])
             self.assertNotIn('post_pass_path',pipeline.look_cvars(root,'aces,ao=0,windshield=0'))
             for value in ('-1','2.5'):
@@ -240,8 +241,10 @@ class PipelineTests(unittest.TestCase):
             overlay=pipeline.info_overlay(pipeline.look_cvars(root,'pc,windshield=1'),{},
                                           'pc,windshield=1','high')
             self.assertIn('Cockpit glass: strength 1',overlay)
-            self.assertNotIn('Cockpit glass',pipeline.info_overlay(pipeline.look_cvars(root,'pc'),{},
-                                                                   'pc','high'))
+            self.assertIn('Cockpit glass: strength 1',pipeline.info_overlay(
+                pipeline.look_cvars(root,'pc'),{},'pc','high'))
+            self.assertNotIn('Cockpit glass',pipeline.info_overlay(
+                pipeline.look_cvars(root,'pc,windshield=0'),{},'pc,windshield=0','high'))
 
     def test_look_track_settings(self):
         with tempfile.TemporaryDirectory(prefix='fm4 look test ') as directory:
@@ -314,12 +317,15 @@ class PipelineTests(unittest.TestCase):
     def test_look_cockpit_knob(self):
         with tempfile.TemporaryDirectory(prefix='fm4 look test ') as directory:
             root=Path(directory)
-            # cockpit_light is a define of fm4-cockpit.hlsli: 0, the game's interior, by default
-            # and in every preset until its crops are reviewed.
+            # cockpit_light is a define of fm4-cockpit.hlsli: 0, the game's interior, by default;
+            # pc has 0.5 since 20 October 2026, the other presets not.
             defines=dict(define.split('=',1) for define in
                          pipeline.look_cvars(root,'pc,cockpit_light=0.3')['shader_mod_defines'].split(';'))
             self.assertEqual(defines['FM4_LOOK_COCKPIT_LIGHT'],'0.3')
-            self.assertNotIn('FM4_LOOK_COCKPIT_LIGHT',pipeline.look_cvars(root,'pc')['shader_mod_defines'])
+            self.assertIn('FM4_LOOK_COCKPIT_LIGHT=0.5',pipeline.look_cvars(root,'pc')['shader_mod_defines'])
+            for look in pipeline.LOOK_PRESETS:
+                if look!='pc':
+                    self.assertNotIn('cockpit_light',pipeline.look_knobs(look))
             self.assertEqual(pipeline.look_knob_defaults()['FM4_LOOK_COCKPIT_LIGHT'],'0.0')
 
     def test_new_clone_has_all_source_inputs(self):

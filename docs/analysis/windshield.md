@@ -1,6 +1,6 @@
 # Cockpit Windshield and Side Windows (19 and 20 October 2026)
 
-In the race cockpit camera FM4 draws no window glass for the player's car, so the windshield and the side windows look like open frames ([cockpit brightness](cockpit-brightness.md#windshield-and-side-windows)). This note designs a post pass that adds the glass on the RTV path, and records the prototype: `windshield.hlsl` in [work/fm4-rex/passes](../../work/fm4-rex/passes), behind the look knob `windshield`, off by default and in no preset.
+In the race cockpit camera FM4 draws no window glass for the player's car, so the windshield and the side windows look like open frames ([cockpit brightness](cockpit-brightness.md#windshield-and-side-windows)). This note designs a post pass that adds the glass on the RTV path, and records the prototype: `windshield.hlsl` in [work/fm4-rex/passes](../../work/fm4-rex/passes), behind the look knob `windshield`, 0 by default and 1 in the `pc` preset since 20 October 2026 ([on top of pc](cockpit-brightness.md#in-the-pc-preset-20-october-2026)).
 
 ## What the frame gives
 
@@ -80,6 +80,6 @@ BuildRoot `I:\FM4-build-pass` (game build of 19 October 2026, no runtime change:
 
 ## Open
 
-- The look of the effects is a first proposal and waits for the project owner's review of the crops; no preset has the knob.
+- The look of the effects is a first proposal; the project owner put `windshield=1` into `pc` on 20 October 2026.
 - The windshield and the side windows are told apart only by the view direction (for the wiper arcs); the reflection's mirror line is the dashboard's top edge in each column, which assumes a dark, nearly neutral dashboard.
 - Other cars, tracks, rain, night and the USA against the Japan/Asia release were not checked; convertibles with the roof open would get glass where there is none.
