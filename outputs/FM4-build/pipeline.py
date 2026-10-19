@@ -501,7 +501,10 @@ SUN_LIMIT=1200
 # taa_point=1 moves TAA to the scene_color point (TAA_POINT): before the game's post chain, its
 # output written back into the scene, with the occlusion's own temporal filter; the look's
 # sharpening then stays in the final combine, after TAA.
-LOOK_PASS_KNOBS=('taa','taa_point')
+# windshield above 0: the glass of the cockpit camera's windshield and side windows, which the
+# title does not draw there (work/fm4-rex/passes/windshield.hlsl, docs/analysis/windshield.md):
+# the strength of its tint, dashboard reflection, glare and dust (WINDSHIELD), up to 2.
+LOOK_PASS_KNOBS=('taa','taa_point','windshield')
 # Knobs that take a name instead of a number.
 LOOK_NAMES={'tonemap':{'filmic':0,'gt':1,'aces':2,'neutral':3}}
 # Knobs that edit the title's per-track lighting files instead of shaders (FM4_TRACK_SETTINGS,
@@ -590,6 +593,13 @@ def taa_scene_point(knobs):
         raise RuntimeError(f'taa_point is 0 (final) or 1 (scene_color), not {value!r}.')
     return value=='1'
 
+def windshield_strength(knobs):
+    """The windshield knob: 0 (off, the default) to 2."""
+    value=float(knobs.get('windshield','0'))
+    if not 0<=value<=2:
+        raise RuntimeError(f'windshield is a strength from 0 (off) to 2, not {knobs["windshield"]!r}.')
+    return value
+
 def look_defines(knobs):
     """The shader_mod_defines of look knobs: NAME=VALUE with the hlsli names and numbers, and
     with taa the pass params TAA and TAA_SHARPEN (the look's sharpening, which then is 0), or at
@@ -614,6 +624,8 @@ def look_defines(knobs):
         sharpen=float(knobs.get('sharpen','0'))
         defines=[d for d in defines if not d.startswith('FM4_LOOK_SHARPEN=')]
         defines+=['FM4_LOOK_SHARPEN=0.0','TAA=1',f'TAA_SHARPEN={sharpen!r}']
+    if windshield_strength(knobs)>0:
+        defines.append(f'WINDSHIELD={windshield_strength(knobs)!r}')
     return defines
 
 def look_track_settings(knobs):
@@ -657,8 +669,9 @@ def look_cvars(root,look,shader_dev=False):
     cvars.update({'shader_mod_path':directory,'shader_mod_defines':';'.join(defines)})
     if shader_dev:
         cvars.update(shader_mod_hot_reload='true',shader_mod_live_knobs='true')
-    # The ao and taa knobs need the runtime's post passes.
-    cvars.update(ao_cvars(root,float(knobs.get('ao','0'))>0 or taa_enabled(knobs),shader_dev))
+    # The ao, taa and windshield knobs need the runtime's post passes.
+    cvars.update(ao_cvars(root,float(knobs.get('ao','0'))>0 or taa_enabled(knobs)
+                          or windshield_strength(knobs)>0,shader_dev))
     return cvars
 
 def sun_cvars(strength):
@@ -771,6 +784,8 @@ def info_overlay(cvars,env,look,quality,display=None):
     elif dict(defines).get('TAA')=='1':
         lines.append(f"Anti-aliasing: TAA before the HUD, sharpen {float(dict(defines)['TAA_SHARPEN']):g}, "
                      'scene jittered')
+    if 'WINDSHIELD' in dict(defines):
+        lines.append(f"Cockpit glass: strength {float(dict(defines)['WINDSHIELD']):g}")
     if 'rtv_occlusion_awaited_scale' in cvars:
         strength=float(cvars['rtv_occlusion_awaited_scale'])
         lines.append(f'Sun glare: {strength:g}x per pixel, soft limit {cvars["rtv_occlusion_awaited_limit"]}'

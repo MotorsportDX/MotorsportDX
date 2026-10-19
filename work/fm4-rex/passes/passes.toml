@@ -2,7 +2,8 @@
 # screen passes that run inside the guest frame, written as HLSL files and this
 # manifest. See docs/analysis/post-pass-framework.md for the format,
 # docs/analysis/gtao-design.md for GTAO, docs/analysis/motion-vectors.md for
-# the motion vectors and docs/analysis/taa.md for TAA.
+# the motion vectors, docs/analysis/taa.md for TAA and docs/analysis/windshield.md
+# for the cockpit glass.
 
 [scene]
 # Vertex shaders that carry the scene camera: <ucode hash>:rows:<WVP>:<WV>
@@ -96,6 +97,25 @@ TAA_DISOCCLUSION = 1
 # written back into the game's scene; the occlusion then gets its own temporal
 # filter, gtao_temporal).
 TAA_POINT = 0
+# The cockpit glass (windshield.hlsl, WINDSHIELD above 0): the tint of the light
+# through it, its color, the dashboard's reflection and how far above the
+# dashboard's top edge it fades out (frame heights), how much the reflection is
+# squashed, the linear luma above which the interior below the window is taken
+# as lit from outside (the hood, seen through the glass), the glare of the light above the threshold (linear) spread over the
+# radius (frame heights), the dust that scatters it, the glare's color, and the
+# least share of the frame the interior covers in a cockpit frame.
+WINDSHIELD_TINT = 1.0
+WINDSHIELD_TINT_COLOR = "float3(0.88, 0.95, 0.93)"
+WINDSHIELD_REFLECTION = 0.12
+WINDSHIELD_REFLECTION_HEIGHT = 0.3
+WINDSHIELD_REFLECTION_SQUASH = 0.6
+WINDSHIELD_REFLECTION_HOOD = 0.03
+WINDSHIELD_GLARE = 0.15
+WINDSHIELD_GLARE_THRESHOLD = 0.45
+WINDSHIELD_GLARE_RADIUS = 0.2
+WINDSHIELD_DUST = 0.5
+WINDSHIELD_GLARE_COLOR = "float3(1.0, 0.95, 0.85)"
+WINDSHIELD_MIN_INTERIOR = 0.1
 
 # Run-time params, constants of every pass (b1); shader_mod_defines,
 # shader_mod_set and shader_mod_defines.txt override them by name, live.
@@ -155,6 +175,11 @@ TAA_DEBUG = { value = 0, min = 0, max = 5 }
 # and the weight of the current frame when still.
 GTAO_TEMPORAL = { value = 1, min = 0, max = 1 }
 GTAO_TEMPORAL_BLEND = { value = 0.15, min = 0.01, max = 1.0 }
+# The cockpit glass (windshield.hlsl): the strength of all its effects, 0 off
+# (the look's windshield knob), and its debug views: 1 the pixel kinds, 2 the
+# added light alone, 3 the dust.
+WINDSHIELD = { value = 0.0, min = 0.0, max = 2.0 }
+WINDSHIELD_DEBUG = { value = 0, min = 0, max = 3 }
 # 1 writes a test pattern into the game's scene at the scene_color point
 # (scene_pattern.hlsl, the S1 check of the write-back).
 SCENE_PATTERN = { value = 0, min = 0, max = 1 }
@@ -222,6 +247,39 @@ format = "R8G8B8A8_UNORM"
 [textures.taa_scene_out]
 format = "R10G10B10A2_UNORM"
 write_back = true
+
+# The cockpit glass (windshield.hlsl), in screen orientation: per block of 8x8
+# final pixels the mean color and share of its interior pixels and of its
+# window pixels, the kind of each final pixel (R window, G interior), the
+# interior's share of the frame (one texel), the light the glass adds, and the
+# composed frame.
+[textures.windshield_interior]
+format = "R16G16B16A16_FLOAT"
+size = "final"
+scale = 0.125
+
+[textures.windshield_window]
+format = "R16G16B16A16_FLOAT"
+size = "final"
+scale = 0.125
+
+[textures.windshield_kind]
+format = "R8G8_UNORM"
+size = "final"
+
+[textures.windshield_frame]
+format = "R32_FLOAT"
+size = "final"
+scale = 0.0001
+
+[textures.windshield_light]
+format = "R16G16B16A16_FLOAT"
+size = "final"
+scale = 0.125
+
+[textures.windshield_out]
+format = "R16G16B16A16_FLOAT"
+size = "final"
 
 # The occlusion accumulated over frames (gtao_temporal) and the frames in it.
 [textures.gtao_history]
@@ -336,6 +394,56 @@ shader = "taa.hlsl"
 entry = "taa_output"
 if = "TAA > 0 && TAA_POINT == 0 && XE_SCENE > 0"
 srv = ["taa_history", "taa_debug"]
+rtv = ["final_color"]
+
+# The cockpit glass at the final point, after TAA (the glass moves with the
+# camera, not with the world the motion vectors follow), before the HUD.
+[[passes]]
+name = "windshield_reduce"
+point = "final"
+shader = "windshield.hlsl"
+entry = "windshield_reduce"
+if = "WINDSHIELD > 0 && XE_SCENE > 0"
+srv = ["final_color", "scene_depth", "scene_stencil"]
+uav = ["windshield_interior", "windshield_window", "windshield_kind"]
+group = [1, 1]
+
+[[passes]]
+name = "windshield_frame"
+point = "final"
+shader = "windshield.hlsl"
+entry = "windshield_frame"
+if = "WINDSHIELD > 0 && XE_SCENE > 0"
+srv = ["windshield_interior"]
+uav = ["windshield_frame"]
+group = [1, 1]
+
+[[passes]]
+name = "windshield_light"
+point = "final"
+shader = "windshield.hlsl"
+entry = "windshield_light"
+if = "WINDSHIELD > 0 && XE_SCENE > 0"
+srv = ["windshield_interior", "windshield_window", "windshield_frame"]
+uav = ["windshield_light"]
+
+[[passes]]
+name = "windshield_compose"
+point = "final"
+shader = "windshield.hlsl"
+entry = "windshield_compose"
+if = "WINDSHIELD > 0 && XE_SCENE > 0"
+srv = ["final_color", "windshield_kind", "windshield_light", "windshield_frame"]
+uav = ["windshield_out"]
+
+[[passes]]
+name = "windshield_output"
+point = "final"
+type = "pixel"
+shader = "windshield.hlsl"
+entry = "windshield_output"
+if = "WINDSHIELD > 0 && XE_SCENE > 0"
+srv = ["windshield_out"]
 rtv = ["final_color"]
 
 # TAA at the scene_color point: the same resolve on the scene, its output

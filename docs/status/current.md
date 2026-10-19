@@ -35,6 +35,7 @@ The project is an experimental build. On the latest binary, the e2e harness chec
 | Shader mod cache, hot reload, live knobs | Checked with a smoke gate, the `perf` tier and one hot reload run | [Shader mod iteration](#automated-gates-17-october-2026), 17 October 2026 |
 | Motion vector sources (per-car stencil IDs, the game's motion blur matrices, scene depth with `-SingleTile`) | Verified in the game by traces | [Motion vector sources](#motion-vector-sources-18-october-2026), 18 October 2026 |
 | Motion vectors (per car, on the post pass framework) and their mask | Verified in the game: matrices against the game's, debug views at 2x (Japan/Asia and USA), GPU time, smoke gate against main; no reactive mask for particles | [Motion vectors](#motion-vectors-18-and-19-october-2026), 18 and 19 October 2026 |
+| Cockpit windshield glass (`windshield` look knob, off by default, in no preset) | Prototype checked in the game at 2x: only the cockpit camera's window pixels change, other cameras, mirrors and HUD byte-identical; +0.28 ms GPU at 2x; the look is not yet reviewed | [Cockpit windshield](#cockpit-windshield-19-and-20-october-2026), 19 and 20 October 2026 |
 | Post pass framework (GTAO on it, history, final point) | GTAO identical in the game, `perf` tier and smoke gate against main; history, the final point and hot reload checked with test manifests | [Post pass framework](#post-pass-framework-18-october-2026), 18 October 2026 |
 | Downloadable content: import, mount, a DLC car on a DLC track | Verified on the latest binary (8 DLC packages; `dlc` scenario) | [Content import](#content-import-17-october-2026), 17 October 2026 |
 | Split screen, Rivals, Hot Lap, Kinect, multiplayer/online, audio, DLC cars and tracks in game | Not validated | See [Current gaps](#current-gaps) |
@@ -63,6 +64,15 @@ The race phase of `photo` is 30 seconds of racing after 10 seconds of driving, w
 - In the game (`I:\FM4-build-pass`, USA discs, 2x, `-Look original` plus the knob, AI driver, frozen frames, live `defines:` 0, 0.15, 0.3, 0.5, 0; runs `cockpit-light` and `cockpit-light2`): at 0.5, with the sun behind or beside the car, the gauges go from 2 of 255 to 41 to 60, the gloves from 6 to 10 to 30 to 45 (white with their red logo), and at 0.3 both are readable. In the hood camera no pixel changes at 0.5, in the chase cameras only the driver seen through the rear window (0.04 to 0.06% of the pixels), and in the cockpit the road and sky patches change by at most 0.3 of 255. No artifacts in the 1:1 crops. With the sun ahead of the car the faces toward the driver get no N·L and nothing changes; the dashboard top and the wheel rim stay near black because their albedo is black (25 to 28 of 255 in direct sun).
 - A bit-coded trace (`cockpit-trace3`) found the shaders on screen: the gloves are the suit shaders WhiteFelt and ApendagesSuede (not the body shader `30712480E0AB46E4`), the dashboard top `327942867CAF7123`, the wheel rim `C7B414C46424E22F`.
 - Not run: a smoke gate, the GPU cost, other tracks and times of day, the split-screen and 16-car sets in the game, and `-Look pc` with the knob (the A/B used `-Look original`). The value for a preset waits for the project owner's review of the crops.
+
+### Cockpit windshield, 19 and 20 October 2026
+
+Details in [windshield](../analysis/windshield.md). The title draws no window glass for the player's car in the race cockpit camera; a post pass at the final point (`work/fm4-rex/passes/windshield.hlsl`, the look knob `windshield`, off by default and in no preset) adds a tint, a dashboard reflection, glare and dust over the pixels that see the world through the windows. BuildRoot `I:\FM4-build-pass` with the USA Disc 1 and profile, `e2e.py` at 2x, Quick Race on the Bernese Alps with the AI driver, frozen frames.
+
+- The pass finds the cockpit frames (the interior shell drew and covers at least 10% of the frame; 51% in the cockpit camera) and the window pixels from the scene depth and stencil; the debug view marks the windows, and the intro, 3-2-1, hood, bumper and chase cameras as no cockpit.
+- With TAA off, `WINDSHIELD` 1 against 0 in a cockpit freeze changes 99.2% of the window pixels and 0.51% of the interior pixels (the one-pixel soft rim); the HUD, the interior mirror and the side mirror do not change. Hood and far chase freezes are byte-identical with it on and off.
+- GPU time at 2x: +0.28 ms per frame in the cockpit camera.
+- Open: the project owner's review of the look; other cars and tracks, rain and night.
 
 ### Motion vectors, 18 and 19 October 2026
 

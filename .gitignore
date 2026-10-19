@@ -209,6 +209,7 @@
 !/work/fm4-rex/passes/motion.hlsl
 !/work/fm4-rex/passes/taa.hlsl
 !/work/fm4-rex/passes/scene_pattern.hlsl
+!/work/fm4-rex/passes/windshield.hlsl
 !/work/fm4-rex/passes/passes.toml
 !/work/fm4-rex/observe-frame.py
 !/work/fm4-rex/send-input.py

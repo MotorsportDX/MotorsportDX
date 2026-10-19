@@ -213,6 +213,36 @@ class PipelineTests(unittest.TestCase):
             self.assertNotIn('Anti-aliasing',pipeline.info_overlay(
                 pipeline.look_cvars(root,'pc,taa=0'),{},'pc,taa=0','high'))
 
+    def test_windshield(self):
+        """The windshield knob: the pass param WINDSHIELD, the post passes on, off by default and
+        in every preset, and the overlay line."""
+        with tempfile.TemporaryDirectory(prefix='fm4 windshield test ') as directory:
+            root=Path(directory)
+            def defines_of(look):
+                cvars=pipeline.look_cvars(root,look)
+                return cvars,dict(d.split('=',1) for d in cvars['shader_mod_defines'].split(';'))
+            cvars,defines=defines_of('pc,windshield=1')
+            self.assertEqual(defines['WINDSHIELD'],'1.0')
+            self.assertEqual(Path(cvars['post_pass_path']),root/'passes')
+            self.assertTrue((root/'passes/windshield.hlsl').is_file())
+            # Alone, it turns the post passes on too.
+            cvars,defines=defines_of('aces,ao=0,windshield=0.5')
+            self.assertEqual(defines['WINDSHIELD'],'0.5')
+            self.assertEqual(Path(cvars['post_pass_path']),root/'passes')
+            for look in pipeline.LOOK_PRESETS:
+                self.assertNotIn('windshield',pipeline.look_knobs(look))
+            self.assertNotIn('WINDSHIELD',defines_of('pc')[1])
+            self.assertNotIn('WINDSHIELD',defines_of('pc,windshield=0')[1])
+            self.assertNotIn('post_pass_path',pipeline.look_cvars(root,'aces,ao=0,windshield=0'))
+            for value in ('-1','2.5'):
+                with self.assertRaises(RuntimeError):
+                    pipeline.look_cvars(root,f'pc,windshield={value}')
+            overlay=pipeline.info_overlay(pipeline.look_cvars(root,'pc,windshield=1'),{},
+                                          'pc,windshield=1','high')
+            self.assertIn('Cockpit glass: strength 1',overlay)
+            self.assertNotIn('Cockpit glass',pipeline.info_overlay(pipeline.look_cvars(root,'pc'),{},
+                                                                   'pc','high'))
+
     def test_look_track_settings(self):
         with tempfile.TemporaryDirectory(prefix='fm4 look test ') as directory:
             root=Path(directory)

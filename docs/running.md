@@ -320,6 +320,7 @@ and `-Look original`.
 | `ao` | number, `0` turns it off | Strength of the screen-space ambient occlusion. |
 | `taa` | `1` on (in `pc`), `0` off (the default of the other presets) | Temporal anti-aliasing before the HUD, with the scene jittered; the look's `sharpen` moves after it. See [Temporal anti-aliasing](#temporal-anti-aliasing). |
 | `taa_point` | `0` (default) or `1` | With `taa`: `1` runs TAA at the scene_color point, before the game's post chain, instead of before the HUD; the look's `sharpen` stays in the final combine. See [Temporal anti-aliasing](#temporal-anti-aliasing). |
+| `windshield` | number, 0 (off, default) to 2 | Glass on the windshield and side windows of the race cockpit camera, which the game leaves open: a light tint, a faint reflection of the dashboard, and glare and dust toward bright light. In no preset. See [Cockpit glass](#cockpit-glass). |
 | `sun` | number, `0` turns the glare off | Strength of the sun glare on the RTV path, the same at every MSAA level. Without it (`original`) the glare follows the counted samples. See [Sun glare](#sun-glare). |
 | `road_gloss` | multiplier, default 1 | Specular of the road surface. See [Track lighting](#track-lighting). |
 | `sky` | multiplier, default 1 | Brightness of the sky; the `sky_*` knobs above change its color. See [Track lighting](#track-lighting). |
@@ -430,6 +431,24 @@ before it (the look's sharpening, no jitter).
 - The `-Info` overlay shows "Anti-aliasing: TAA before the HUD, sharpen 0.4, scene jittered".
 - RTV only, like the other post passes; not with `-Rov` or `-Look original`.
 - `taa_point=1` (`-Look "pc,taa_point=1"`) moves TAA to the scene_color point: it runs on the scene before the game's motion blur, bloom, exposure and final combine, and its output is written back into the game's scene, which those then sample. The occlusion gets its own temporal filter there (`GTAO_TEMPORAL`), and the look's `sharpen` stays in the final combine, after TAA. It costs about 0.47 ms of GPU time per race frame at 2x, and the `-Info` overlay shows "Anti-aliasing: TAA before the post chain (scene_color), the look's sharpening, scene jittered". `pc` keeps the final point; see [TAA, the comparison](analysis/taa.md#23-comparison).
+
+### Cockpit glass
+
+In the race cockpit camera FM4 draws no glass for the player's car, so the windshield and side
+windows look like open frames ([cockpit brightness](analysis/cockpit-brightness.md#windshield-and-side-windows)).
+`windshield=1` (`-Look "pc,windshield=1"`) adds a post pass that puts glass over the pixels that
+see the world through the cockpit's windows ([windshield](analysis/windshield.md)): a light
+green-gray tint, a reflection of the dashboard (faint, since FM4's dashboards are dark), and a
+haze with dust and wiper arcs where bright sky or sun shows through. `windshield=2` doubles
+every effect.
+
+- Only frames of the cockpit camera change. The chase, hood and bumper cameras, the 3-2-1
+  camera, the HUD, the side mirrors and the interior mirror stay as they are.
+- It runs before the HUD and after TAA. The `-Info` overlay shows "Cockpit glass: strength 1".
+- RTV only, like the other post passes; not with `-Rov`.
+- With `-ShaderDev`, `shader_mod_set WINDSHIELD=0` switches it off at once, `WINDSHIELD_DEBUG=1`
+  to `3` shows the debug views, and the `WINDSHIELD_*` defines of
+  [passes.toml](../work/fm4-rex/passes/passes.toml) tune each effect.
 
 ### Shader mod development
 

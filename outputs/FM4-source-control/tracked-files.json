@@ -85,6 +85,10 @@
       "provenance": "Project documentation; implementation plan for TAA on the post pass framework (design, steps and validation; no game content)"
     },
     {
+      "path": "docs/analysis/windshield.md",
+      "provenance": "Project documentation; design and prototype of the cockpit windshield post pass (detection, effects, verification; no game content)"
+    },
+    {
       "path": "docs/analysis/texture-replacement.md",
       "provenance": "Project documentation; design note on texture dumps and replacements keyed by content hash (design, hash, limits; no game content)"
     },
@@ -519,6 +523,10 @@
     {
       "path": "work/fm4-rex/passes/scene_pattern.hlsl",
       "provenance": "Original post pass of this project (a test pattern written back into the scene texture, the check of the scene_color write-back); no game shader code or original game function bodies"
+    },
+    {
+      "path": "work/fm4-rex/passes/windshield.hlsl",
+      "provenance": "Original post pass of this project (the cockpit camera's windshield and side window glass: tint, dashboard reflection, glare and dust over the window pixels found from the scene depth and stencil); no game shader code or original game function bodies"
     },
     {
       "path": "work/fm4-rex/passes/passes.toml",
