@@ -117,7 +117,10 @@ struct SceneConstants {
   // with no motion known.
   uint32_t motion_interior_slot;
   float motion_interior_depth;
-  uint32_t motion_padding[2];
+  // The jitter of this frame's scene draws in host pixels (x right, y down;
+  // post_pass_jitter.h): the content at host position p is the unjittered
+  // scene at p - jitter. Zero without jitter.
+  float jitter[2];
   // Per slot, view_to_previous_view of the object: the previous frame's view
   // position of a view position of this frame on that object, with
   // kSceneFlagMotionValid. Slot 0 is view_to_previous_view.

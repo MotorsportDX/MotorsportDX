@@ -1,6 +1,6 @@
 # TAA v1: implementation plan
 
-Plan for temporal anti-aliasing (TAA) at the existing render scale, built on the [post pass framework](post-pass-framework.md) and the [motion vectors](motion-vectors.md). Written on 19 October 2026 against main `0a8bba5`, and approved by the project owner the same day, including the staged injection point, the reactive mask route and TAA as an opt-in until step 5. Nothing in it is implemented yet. Upscalers (DLSS, FSR) are out of scope; they need a separate scale for the scene tiles ([motion vectors, section 6](motion-vectors.md#injection-point)).
+Plan for temporal anti-aliasing (TAA) at the existing render scale, built on the [post pass framework](post-pass-framework.md) and the [motion vectors](motion-vectors.md). Written on 19 October 2026 against main `0a8bba5`, and approved by the project owner the same day, including the staged injection point, the reactive mask route and TAA as an opt-in until step 5. Step 1, the jitter, is built and checked in the game ([section 12](#12-progress)); the TAA pass itself is not written yet. Upscalers (DLSS, FSR) are out of scope; they need a separate scale for the scene tiles ([motion vectors, section 6](motion-vectors.md#injection-point)).
 
 This note contains no game code, shaders or ucode. Hashes, registers and addresses are observations only.
 
@@ -336,3 +336,26 @@ Steps 1 and 2 touch the same framework files and go one after the other. Step 3 
 - Upscalers at a separate scale of the scene tiles, on the scene_color write-back ([motion vectors, section 6](motion-vectors.md#injection-point)).
 - GTAO with noise that changes every frame, accumulated by TAA: the same quality at a lower `GTAO_QUALITY`.
 - Reactive mask option (c) (section 6).
+
+## 12. Progress
+
+### Step 1: jitter (19 October 2026)
+
+Built as section 3 describes: `[jitter]` in the manifest ([post pass framework](post-pass-framework.md#jitter)), the header-only math of [post_pass_jitter.h](../../work/runtime/include/rex/graphics/d3d12/post_pass_jitter.h), `PostPasses::UpdateJitter` (the phase of the next frame, at the swap) and `PostPasses::DrawJitter` (the rules of section 3.2), the offset added to `ndc_offset` in `IssueDraw`, `xe_scene_jitter` in the scene constants and the library's view position, and the one line of [motion.hlsl](../../work/fm4-rex/passes/motion.hlsl). FM4's [passes.toml](../../work/fm4-rex/passes/passes.toml) has no `[jitter]` yet, so with the launcher's settings nothing is jittered and the build renders as main; step 3 adds the section with the TAA pass as its consumer.
+
+**Offline**:
+
+- `fm4_post_pass_camera_tests`: the 8 phases lie inside the pixel (mean -0.055 and 0.000 px, closest pair 0.167 px), the `ndc_offset` moves a vertex by the jitter within 3.4e-6 px for host viewports of 1x to 3x and of 8192 px, and the draw rules hold.
+- `fm4_post_pass_shader_tests`: the synthetic scene traced with the jitter of phase 3 (0.25, -0.389 px) gives the motion between unjittered positions within 0.41 of the allowed error (0.02 px plus 0.2% of the motion) with the moving camera and car, and none (0.003 of 0.02 px) with a still camera; uncorrected, both would be off by 0.46 px. The GTAO results are unchanged (open ground 0.000, wall corner 0.261, box contact 0.214).
+
+**In the game**: BuildRoot `I:\FM4-build-usa` (USA), this branch on main `da54de1`. Results stay in `I:\FM4-build-usa\e2e\taaj1mv`, `taaj1seam` (with `taaj1seam-drawlist.txt`), `taaj1cp-off`, `taaj1cp-8` and `taaj1cp-8b`, outside the repository. J1a and J1b used a test copy of the passes with `[jitter]` armed by the `motion_vectors` pass and a param `JITTER_TEST`, switched by `post_pass_variants="JITTER_TEST=1;JITTER_TEST=0"` every 3 s, at 2x and 60 Hz, a Quick Race with the AI driver and six race cameras each frozen for 13 s with Y (rewind).
+
+| Run | Check | Result |
+|---|---|---|
+| J1a `taaj1mv` | `MOTION_DEBUG=1` at `MOTION_DEBUG_PIXELS=1` (0.3 px of motion shows as color) | On every frozen camera the view stays white, jitter on and off alike: no colored pixel in the scene band, and the captures of a frozen frame are identical across the phases, while the log shows the jitter on (for example 0.375, 0.056 and 0.25, -0.389 px) in the on phases. The motion vectors carry no jitter. Goal reached, 60.0 fps. |
+| J1b `taaj1seam` | `MOTION_DEBUG=0`, `post_pass_jitter_offset=0.45,0.45`, `REX_DRAW_LIST_TRACE` every 450th frame | A frozen frame differs between the phases by a mean of 4.0 to 9.1 levels (an edge pattern over the whole scene, 1:1 crops) and repeats exactly within a phase. The rows of the tile boundaries (host rows 416 and 928 of the final image) differ 0.83 to 1.04 times as much as the rows around them in five of six frozen pairs; the sixth peaks at an object edge in one half of the row, not across it. No clear color at the screen edges. Draw trace: 17,965 draws jittered in 12 sampled frames, all on the scene depth (EDRAM base 1024) with a depth or stencil test; none of the draws on the other depth buffers (EDRAM bases 0, 64, 80, 224, 720 and 832: among them the rear-view mirror at 80 and the hood and bumper cameras' rear view at 64) and none without a depth or stencil test (the post chain, the final combine and the HUD). Two scene draws per frame stay unjittered: a 3-index rectangle clear (`…CDE1F688`), and the cockpit mask (`…2F76904F`, 24 indices, Z scale 0, no color write), which the render target cache takes as a uniform draw. |
+| J1d `taaj1cp-*` | `photo` at 240 Hz and 1x, `post_pass_jitter=off` and `8` (forced, every frame) | Race 214.7 fps (2,098 draws per frame) off, 201.1 (2,489) and 156.2 (3,223) on: the command processor's time per draw is 1.89 µs off and 1.84 and 1.94 µs on, the same within the run to run spread; p99 7.03, 7.21 and 8.68 ms; no hitches above 50 ms; the same three error keys; no clear-gray frames; photo mode 30.0 fps and the photo saved in all three. The log of the third shows the forced jitter on. |
+
+The sun glare could not be judged: no frozen camera had the sun partly behind an object.
+
+**Open for step 3**: whether the cockpit mask should move with the jitter (its edge against the jittered interior and world, in the TAA crops of the cockpit camera), and the sun glare with the TAA pass on.

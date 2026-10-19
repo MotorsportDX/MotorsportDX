@@ -18,7 +18,11 @@
 // motion known), and ground seen through car 1's glass (car 1's ID on ground
 // far from the box: the world's motion); with the motion mask (slot 2), also
 // in a frame without the interior, where the whole mask has no motion known.
-// Their debug views run, and the passes of the other points are compiled.
+// The same scene rendered with the runtime's jitter (the content moved by a
+// sub-pixel offset, xe_scene_jitter) gives the motion between unjittered
+// positions: that of the reprojection with the camera moving, and none with a
+// still camera. Their debug views run, and the passes of the other points are
+// compiled.
 //
 // usage: fm4_post_pass_shader_tests <post_pass.hlsli> <passes directory>
 //                                   [occlusion.pgm] [NAME=VALUE ...]
@@ -50,6 +54,7 @@
 #include <toml++/toml.hpp>
 
 #include <rex/graphics/d3d12/post_pass_camera.h>
+#include <rex/graphics/d3d12/post_pass_jitter.h>
 #include <rex/graphics/d3d12/post_pass_layout.h>
 
 using Microsoft::WRL::ComPtr;
@@ -411,52 +416,82 @@ int main(int argc, char** argv) {
   const float guest_per_host = 1280.0f / float(kWidth);
 
   // Stored depth per host pixel center (Direct3D 9 pixel centers: guest
-  // screen = (host + 0.5) * 2 - 0.5).
-  std::vector<float> depth(kWidth * kHeight);
-  std::vector<int> surface(kWidth * kHeight);
-  std::vector<double> hit_y(kWidth * kHeight), view_w(kWidth * kHeight);
-  std::vector<double> view_x(kWidth * kHeight), view_y(kWidth * kHeight);
-  // Object IDs: the box is car 1 (7), the wall car 2 (14), the ground beyond
-  // 10 m on the right is under a shadow (128), the rest is the track (0).
-  std::vector<uint32_t> stencil(kWidth * kHeight);
-  for (uint32_t y = 0; y < kHeight; ++y) {
-    for (uint32_t x = 0; x < kWidth; ++x) {
-      double gx = (x + 0.5) * guest_per_host - 0.5, gy = (y + 0.5) * guest_per_host - 0.5;
-      double ndc_x = (gx - viewport.x_offset) / viewport.x_scale;
-      double ndc_y = (gy - viewport.y_offset) / viewport.y_scale;
-      // View direction with z = 1 (P has no off-center terms here).
-      double dx = ndc_x / projection.m[0][0], dy = ndc_y / projection.m[1][1];
-      uint32_t i = y * kWidth + x;
-      double t = Trace(dx, dy, 1.0, hit_y[i], surface[i]);
-      double ndc_z = t > 0.0 ? q - q * near_z / t : 1.0;  // Sky at the far plane.
-      depth[i] = float(ndc_z * viewport.z_scale + viewport.z_offset);
-      view_w[i] = t > 0.0 ? t : far_z;
-      view_x[i] = view_w[i] * dx;
-      view_y[i] = view_w[i] * dy;
-      stencil[i] = surface[i] == 3   ? 7u
-                   : surface[i] == 2 ? 14u
-                   : surface[i] == 1 && view_w[i] > 10.0 && view_x[i] > 0.0 ? 128u
-                                                                              : 0u;
-      // In the sky band at the top: an interior of car 3 (21) under FM4's mask
-      // at the stored depth 1.0 on the left, the mask without an interior on
-      // the right, half of it at a W 0.5% beyond the near plane (within the 1%
-      // the pass takes as a mask, as the mirror panel of the hood and bumper
-      // cameras reads).
-      if (y >= 8 && y < 48 && ((x >= 20 && x < 140) || (x >= 480 && x < 600))) {
-        surface[i] = x < 140 ? 5 : 6;
-        stencil[i] = x < 140 ? 21u : 0u;
-        depth[i] = x < 540 ? 1.0f : 0.995f;
-        view_w[i] = near_z;
-        view_x[i] = near_z * dx;
-        view_y[i] = near_z * dy;
-      }
-      // Ground 11.5 to 13 m ahead with car 1's ID: the world through its glass.
-      if (surface[i] == 1 && view_w[i] > 11.5 && view_w[i] < 13.0 && view_x[i] > -1.0 &&
-          view_x[i] < 0.5) {
-        stencil[i] = 7u;
+  // screen = (host + 0.5) * 2 - 0.5), or with a jitter at the center less the
+  // jitter (the content at host position p is the unjittered scene at p -
+  // jitter, as the runtime's jitter moves the scene draws).
+  struct Scene {
+    std::vector<float> depth;
+    std::vector<int> surface;
+    std::vector<double> hit_y, view_w, view_x, view_y;
+    std::vector<uint32_t> stencil;
+  };
+  auto trace_scene = [&](double jitter_x, double jitter_y, Scene& scene) {
+    scene.depth.assign(kWidth * kHeight, 0.0f);
+    scene.surface.assign(kWidth * kHeight, 0);
+    for (auto* values : {&scene.hit_y, &scene.view_w, &scene.view_x, &scene.view_y}) {
+      values->assign(kWidth * kHeight, 0.0);
+    }
+    scene.stencil.assign(kWidth * kHeight, 0u);
+    std::vector<float>& depth = scene.depth;
+    std::vector<int>& surface = scene.surface;
+    std::vector<double> &hit_y = scene.hit_y, &view_w = scene.view_w;
+    std::vector<double> &view_x = scene.view_x, &view_y = scene.view_y;
+    // Object IDs: the box is car 1 (7), the wall car 2 (14), the ground beyond
+    // 10 m on the right is under a shadow (128), the rest is the track (0).
+    std::vector<uint32_t>& stencil = scene.stencil;
+    for (uint32_t y = 0; y < kHeight; ++y) {
+      for (uint32_t x = 0; x < kWidth; ++x) {
+        double gx = (x + 0.5 - jitter_x) * guest_per_host - 0.5,
+               gy = (y + 0.5 - jitter_y) * guest_per_host - 0.5;
+        double ndc_x = (gx - viewport.x_offset) / viewport.x_scale;
+        double ndc_y = (gy - viewport.y_offset) / viewport.y_scale;
+        // View direction with z = 1 (P has no off-center terms here).
+        double dx = ndc_x / projection.m[0][0], dy = ndc_y / projection.m[1][1];
+        uint32_t i = y * kWidth + x;
+        double t = Trace(dx, dy, 1.0, hit_y[i], surface[i]);
+        double ndc_z = t > 0.0 ? q - q * near_z / t : 1.0;  // Sky at the far plane.
+        depth[i] = float(ndc_z * viewport.z_scale + viewport.z_offset);
+        view_w[i] = t > 0.0 ? t : far_z;
+        view_x[i] = view_w[i] * dx;
+        view_y[i] = view_w[i] * dy;
+        stencil[i] = surface[i] == 3   ? 7u
+                     : surface[i] == 2 ? 14u
+                     : surface[i] == 1 && view_w[i] > 10.0 && view_x[i] > 0.0 ? 128u
+                                                                                : 0u;
+        // In the sky band at the top: an interior of car 3 (21) under FM4's mask
+        // at the stored depth 1.0 on the left, the mask without an interior on
+        // the right, half of it at a W 0.5% beyond the near plane (within the 1%
+        // the pass takes as a mask, as the mirror panel of the hood and bumper
+        // cameras reads).
+        if (y >= 8 && y < 48 && ((x >= 20 && x < 140) || (x >= 480 && x < 600))) {
+          surface[i] = x < 140 ? 5 : 6;
+          stencil[i] = x < 140 ? 21u : 0u;
+          depth[i] = x < 540 ? 1.0f : 0.995f;
+          view_w[i] = near_z;
+          view_x[i] = near_z * dx;
+          view_y[i] = near_z * dy;
+        }
+        // Ground 11.5 to 13 m ahead with car 1's ID: the world through its glass.
+        if (surface[i] == 1 && view_w[i] > 11.5 && view_w[i] < 13.0 && view_x[i] > -1.0 &&
+            view_x[i] < 0.5) {
+          stencil[i] = 7u;
+        }
       }
     }
-  }
+  };
+  Scene base;
+  trace_scene(0.0, 0.0, base);
+  std::vector<float>& depth = base.depth;
+  std::vector<int>& surface = base.surface;
+  std::vector<double> &hit_y = base.hit_y, &view_w = base.view_w;
+  std::vector<double> &view_x = base.view_x, &view_y = base.view_y;
+  std::vector<uint32_t>& stencil = base.stencil;
+  // The same scene jittered by the third phase of the runtime's sequence (a
+  // quarter pixel right, 0.39 up), as the jittered draws render it.
+  float jitter[2];
+  post_pass::JitterOffset(2, jitter);
+  Scene jittered;
+  trace_scene(jitter[0], jitter[1], jittered);
   // Car 1's origin, the center of the box.
   const double box_origin[3] = {-2.5, -1.0, 7.5};
 
@@ -586,6 +621,11 @@ int main(int argc, char** argv) {
   // R8G8B8A8_UINT view with the stencil in R.
   ComPtr<ID3D12Resource> stencil_texture =
       create_texture(DXGI_FORMAT_R8G8B8A8_UINT, 1, false, D3D12_RESOURCE_STATE_COPY_DEST);
+  // The jittered scene's.
+  ComPtr<ID3D12Resource> jittered_depth_texture =
+      create_texture(DXGI_FORMAT_R32_FLOAT, 1, false, D3D12_RESOURCE_STATE_COPY_DEST);
+  ComPtr<ID3D12Resource> jittered_stencil_texture =
+      create_texture(DXGI_FORMAT_R8G8B8A8_UINT, 1, false, D3D12_RESOURCE_STATE_COPY_DEST);
   ComPtr<ID3D12DescriptorHeap> heap;
   D3D12_DESCRIPTOR_HEAP_DESC heap_desc = {D3D12_DESCRIPTOR_HEAP_TYPE_CBV_SRV_UAV, 256,
                                           D3D12_DESCRIPTOR_HEAP_FLAG_SHADER_VISIBLE, 0};
@@ -622,6 +662,9 @@ int main(int argc, char** argv) {
   };
   const UINT depth_srv = srv(depth_texture.Get(), DXGI_FORMAT_R32_FLOAT, 0, 1);
   const UINT stencil_srv = srv(stencil_texture.Get(), DXGI_FORMAT_R8G8B8A8_UINT, 0, 1);
+  const UINT jittered_depth_srv = srv(jittered_depth_texture.Get(), DXGI_FORMAT_R32_FLOAT, 0, 1);
+  const UINT jittered_stencil_srv =
+      srv(jittered_stencil_texture.Get(), DXGI_FORMAT_R8G8B8A8_UINT, 0, 1);
   for (Texture& texture : textures) {
     // As EnsureTexture: mips while the size allows.
     uint32_t mips = 1;
@@ -677,25 +720,30 @@ int main(int argc, char** argv) {
               "buffer");
     return resource;
   };
+  // The depth and stencil of the scene, then of the jittered scene.
   ComPtr<ID3D12Resource> upload =
-      buffer(D3D12_HEAP_TYPE_UPLOAD, wide_block * 2, D3D12_RESOURCE_STATE_GENERIC_READ);
-  // Two sets of scene constants: with a valid previous frame, and without.
+      buffer(D3D12_HEAP_TYPE_UPLOAD, wide_block * 4, D3D12_RESOURCE_STATE_GENERIC_READ);
+  // Four sets of scene constants: with a valid previous frame, without, and
+  // with the jitter both with the moving camera and with a still one.
   const UINT64 constants_stride = (sizeof(post_pass::SceneConstants) + 255) & ~UINT64(255);
   ComPtr<ID3D12Resource> constants_buffer =
-      buffer(D3D12_HEAP_TYPE_UPLOAD, constants_stride * 2, D3D12_RESOURCE_STATE_GENERIC_READ);
+      buffer(D3D12_HEAP_TYPE_UPLOAD, constants_stride * 4, D3D12_RESOURCE_STATE_GENERIC_READ);
   ComPtr<ID3D12Resource> readback = buffer(
-      D3D12_HEAP_TYPE_READBACK, r8_block * 2 + wide_block * 5, D3D12_RESOURCE_STATE_COPY_DEST);
+      D3D12_HEAP_TYPE_READBACK, r8_block * 2 + wide_block * 7, D3D12_RESOURCE_STATE_COPY_DEST);
   if (failures) return 1;
   {
     uint8_t* mapped = nullptr;
     upload->Map(0, nullptr, reinterpret_cast<void**>(&mapped));
-    for (uint32_t y = 0; y < kHeight; ++y) {
-      std::memcpy(mapped + y * depth_pitch, &depth[y * kWidth], kWidth * 4);
-      for (uint32_t x = 0; x < kWidth; ++x) {
-        uint8_t* texel = mapped + wide_block + y * depth_pitch + x * 4;
-        texel[0] = uint8_t(stencil[y * kWidth + x]);
-        texel[1] = texel[2] = texel[3] = 0;
+    for (const Scene* traced : {&base, &jittered}) {
+      for (uint32_t y = 0; y < kHeight; ++y) {
+        std::memcpy(mapped + y * depth_pitch, &traced->depth[y * kWidth], kWidth * 4);
+        for (uint32_t x = 0; x < kWidth; ++x) {
+          uint8_t* texel = mapped + wide_block + y * depth_pitch + x * 4;
+          texel[0] = uint8_t(traced->stencil[y * kWidth + x]);
+          texel[1] = texel[2] = texel[3] = 0;
+        }
       }
+      mapped += wide_block * 2;
     }
     upload->Unmap(0, nullptr);
   }
@@ -772,15 +820,38 @@ int main(int argc, char** argv) {
       }
     }
   }
+  // The jittered scene with the same motion, and with a still camera and car:
+  // the identity in every slot and the same projection in both frames.
+  post_pass::SceneConstants scene_jittered = scene;
+  scene_jittered.jitter[0] = jitter[0];
+  scene_jittered.jitter[1] = jitter[1];
+  post_pass::SceneConstants scene_still = scene_jittered;
+  std::memset(scene_still.view_to_previous_view, 0, sizeof(scene_still.view_to_previous_view));
+  std::memset(scene_still.motion_view_to_previous_view, 0,
+              sizeof(scene_still.motion_view_to_previous_view));
+  for (int i = 0; i < 3; ++i) {
+    scene_still.view_to_previous_view[i][i] = 1.0f;
+    for (auto& rows : scene_still.motion_view_to_previous_view) rows[i][i] = 1.0f;
+  }
+  std::memcpy(scene_still.previous_xy_mul_add, scene_still.xy_mul_add,
+              sizeof(scene_still.xy_mul_add));
+  scene_still.previous_w_numerator = scene_still.w_numerator;
+  scene_still.previous_w_depth_mul = scene_still.w_depth_mul;
+  scene_still.previous_w_depth_add = scene_still.w_depth_add;
+  scene_still.previous_z_from_w = scene_still.z_from_w;
   {
     uint8_t* mapped = nullptr;
     constants_buffer->Map(0, nullptr, reinterpret_cast<void**>(&mapped));
     std::memcpy(mapped, &scene, sizeof(scene));
     std::memcpy(mapped + constants_stride, &scene_no_motion, sizeof(scene_no_motion));
+    std::memcpy(mapped + constants_stride * 2, &scene_jittered, sizeof(scene_jittered));
+    std::memcpy(mapped + constants_stride * 3, &scene_still, sizeof(scene_still));
     constants_buffer->Unmap(0, nullptr);
   }
   const D3D12_GPU_VIRTUAL_ADDRESS constants_motion = constants_buffer->GetGPUVirtualAddress();
   const D3D12_GPU_VIRTUAL_ADDRESS constants_no_motion = constants_motion + constants_stride;
+  const D3D12_GPU_VIRTUAL_ADDRESS constants_jittered = constants_motion + constants_stride * 2;
+  const D3D12_GPU_VIRTUAL_ADDRESS constants_still = constants_motion + constants_stride * 3;
 
   ComPtr<ID3D12CommandQueue> queue;
   ComPtr<ID3D12CommandAllocator> allocator;
@@ -803,6 +874,12 @@ int main(int argc, char** argv) {
   stencil_src.PlacedFootprint.Footprint = {DXGI_FORMAT_R8G8B8A8_UINT, kWidth, kHeight, 1,
                                            depth_pitch};
   list->CopyTextureRegion(&stencil_dst, 0, 0, 0, &stencil_src, nullptr);
+  depth_dst.pResource = jittered_depth_texture.Get();
+  depth_src.PlacedFootprint.Offset = wide_block * 2;
+  list->CopyTextureRegion(&depth_dst, 0, 0, 0, &depth_src, nullptr);
+  stencil_dst.pResource = jittered_stencil_texture.Get();
+  stencil_src.PlacedFootprint.Offset = wide_block * 3;
+  list->CopyTextureRegion(&stencil_dst, 0, 0, 0, &stencil_src, nullptr);
   auto transition = [&](ID3D12Resource* resource, D3D12_RESOURCE_STATES& state,
                         D3D12_RESOURCE_STATES after) {
     if (state == after) return;
@@ -816,6 +893,12 @@ int main(int argc, char** argv) {
   D3D12_RESOURCE_STATES stencil_state = D3D12_RESOURCE_STATE_COPY_DEST;
   transition(depth_texture.Get(), depth_state, D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE);
   transition(stencil_texture.Get(), stencil_state, D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE);
+  D3D12_RESOURCE_STATES jittered_depth_state = D3D12_RESOURCE_STATE_COPY_DEST;
+  D3D12_RESOURCE_STATES jittered_stencil_state = D3D12_RESOURCE_STATE_COPY_DEST;
+  transition(jittered_depth_texture.Get(), jittered_depth_state,
+             D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE);
+  transition(jittered_stencil_texture.Get(), jittered_stencil_state,
+             D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE);
   ID3D12DescriptorHeap* heaps[] = {heap.Get()};
   list->SetDescriptorHeaps(1, heaps);
 
@@ -830,10 +913,12 @@ int main(int argc, char** argv) {
     list->CopyTextureRegion(&dst, 0, 0, 0, &src, nullptr);
   };
   // Runs the point's passes with the params of the manifest and those of set,
-  // then copies the slot 0 texture to occlusion block occlusion_block and the
-  // slot 1 texture to wide block motion_block (none if negative).
+  // on the scene or the jittered scene, then copies the slot 0 texture to
+  // occlusion block occlusion_block and the slot 1 texture to wide block
+  // motion_block (none if negative).
   auto run_point = [&](const std::map<std::string, double>& set, int occlusion_block,
-                       int motion_block, D3D12_GPU_VIRTUAL_ADDRESS scene_constants) {
+                       int motion_block, D3D12_GPU_VIRTUAL_ADDRESS scene_constants,
+                       bool jittered_scene = false) {
     uint32_t constants[post_pass::kPassConstantCount] = {};
     post_pass::PassHeader header = {{kWidth, kHeight}, {1.0f / kWidth, 1.0f / kHeight}};
     std::memcpy(constants, &header, sizeof(header));
@@ -874,11 +959,11 @@ int main(int argc, char** argv) {
         if (!enabled) continue;
       }
       D3D12_GPU_DESCRIPTOR_HANDLE srvs[post_pass::kMaxSrvs], uavs[post_pass::kMaxUavs];
-      for (auto& handle : srvs) handle = gpu(depth_srv);
+      for (auto& handle : srvs) handle = gpu(jittered_scene ? jittered_depth_srv : depth_srv);
       for (size_t i = 0; i < pass.srvs.size(); ++i) {
         if (pass.srvs[i].texture == "scene_depth") continue;
         if (pass.srvs[i].texture == "scene_stencil") {
-          srvs[i] = gpu(stencil_srv);
+          srvs[i] = gpu(jittered_scene ? jittered_stencil_srv : stencil_srv);
           continue;
         }
         Texture* texture = find_texture(pass.srvs[i].texture);
@@ -945,6 +1030,9 @@ int main(int argc, char** argv) {
   run_point({}, -1, 1, constants_no_motion);
   copy_out(*motion_mask_texture, r8_block * 2 + wide_block * 4, DXGI_FORMAT_R8G8_UNORM,
            depth_pitch);
+  // The jittered scene, with the moving camera and with a still one.
+  run_point({}, -1, 5, constants_jittered, true);
+  run_point({}, -1, 6, constants_still, true);
   // The motion debug views run; the slot view (3) is read back.
   for (double view : {1.0, 2.0, 4.0, 5.0, 6.0, 3.0}) {
     run_point({{"MOTION_DEBUG", view}}, -1, -1, constants_motion);
@@ -969,9 +1057,10 @@ int main(int argc, char** argv) {
   std::vector<uint16_t> motion(kWidth * kHeight * 2), motion_none(kWidth * kHeight * 2);
   std::vector<uint8_t> slot_view(kWidth * kHeight * 4), mask(kWidth * kHeight * 2),
       mask_no_interior(kWidth * kHeight * 2);
+  std::vector<uint16_t> motion_jittered(kWidth * kHeight * 2), motion_still(kWidth * kHeight * 2);
   {
     uint8_t* mapped = nullptr;
-    D3D12_RANGE range = {0, SIZE_T(r8_block * 2 + wide_block * 5)};
+    D3D12_RANGE range = {0, SIZE_T(r8_block * 2 + wide_block * 7)};
     readback->Map(0, &range, reinterpret_cast<void**>(&mapped));
     for (uint32_t y = 0; y < kHeight; ++y) {
       std::memcpy(&occlusion[y * kWidth], mapped + y * r8_pitch, kWidth);
@@ -982,6 +1071,8 @@ int main(int argc, char** argv) {
       std::memcpy(&slot_view[y * kWidth * 4], wide + wide_block * 2, kWidth * 4);
       std::memcpy(&mask[y * kWidth * 2], wide + wide_block * 3, kWidth * 2);
       std::memcpy(&mask_no_interior[y * kWidth * 2], wide + wide_block * 4, kWidth * 2);
+      std::memcpy(&motion_jittered[y * kWidth * 2], wide + wide_block * 5, kWidth * 4);
+      std::memcpy(&motion_still[y * kWidth * 2], wide + wide_block * 6, kWidth * 4);
     }
     readback->Unmap(0, nullptr);
   }
@@ -1105,6 +1196,43 @@ int main(int argc, char** argv) {
   Check(box_object_motion > 2.0, "the box moves apart from the static world", box_object_motion);
   Check(nonzero_without_previous == 0, "no motion without a valid previous frame",
         nonzero_without_previous);
+
+  // The jittered scene: the motion of what each pixel shows, between the
+  // unjittered positions (the pixel center less the jitter, and the previous
+  // frame's); none with the camera and the car still. Without the jitter in
+  // the passes both would be off by the jitter, 0.46 px.
+  double worst_jittered = 0.0, worst_still = 0.0;
+  for (uint32_t y = 0; y < kHeight; ++y) {
+    for (uint32_t x = 0; x < kWidth; ++x) {
+      uint32_t i = y * kWidth + x;
+      const Scene& s = jittered;
+      bool box = s.surface[i] == 3, interior = s.surface[i] == 5, bare_mask = s.surface[i] == 6;
+      double scale = interior ? interior_w / s.view_w[i] : 1.0;
+      double view[4] = {s.view_x[i] * scale, s.view_y[i] * scale, s.view_w[i] * scale, 1.0},
+             previous[4];
+      Transform(box ? box_motion : interior ? interior_motion : world_motion, view, previous);
+      double ndc_x = (previous_projection.m[0][0] * previous[0] +
+                      previous_projection.m[0][2] * previous[2]) / previous[2];
+      double ndc_y = (previous_projection.m[1][1] * previous[1] +
+                      previous_projection.m[1][2] * previous[2]) / previous[2];
+      double gx = ndc_x * viewport.x_scale + viewport.x_offset;
+      double gy = ndc_y * viewport.y_scale + viewport.y_offset;
+      double want[2] = {(gx + 0.5) / guest_per_host - (x + 0.5 - jitter[0]),
+                        (gy + 0.5) / guest_per_host - (y + 0.5 - jitter[1])};
+      if (bare_mask) want[0] = want[1] = 0.0;
+      double got[2] = {half(motion_jittered[i * 2]), half(motion_jittered[i * 2 + 1])};
+      double allowed = 0.02 + 2.0e-3 * std::hypot(want[0], want[1]);
+      worst_jittered =
+          std::fmax(worst_jittered, std::hypot(got[0] - want[0], got[1] - want[1]) / allowed);
+      worst_still = std::fmax(worst_still, std::hypot(half(motion_still[i * 2]),
+                                                      half(motion_still[i * 2 + 1])) / 0.02);
+    }
+  }
+  std::printf("jitter %.4f %.4f px: worst motion error %.2f of the allowed, still %.2f\n",
+              jitter[0], jitter[1], worst_jittered, worst_still);
+  Check(worst_jittered <= 1.0, "motion of the jittered scene between unjittered positions",
+        worst_jittered);
+  Check(worst_still <= 1.0, "no motion of the jittered scene with a still camera", worst_still);
   if (motion_debug_texture) {
     // Slot view: the track transparent, car 1 its color at alpha 0.65, cars 2
     // and 3 (no own motion) striped at alpha 0.85.

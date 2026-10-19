@@ -25,6 +25,7 @@
 
 #include <rex/cvar.h>
 #include <rex/graphics/d3d12/command_processor.h>
+#include <rex/graphics/d3d12/post_pass_jitter.h>
 #include <rex/graphics/d3d12/render_target_cache.h>
 #include <rex/graphics/d3d12/texture_cache.h>
 #include <rex/graphics/pipeline/texture/info.h>
@@ -72,6 +73,16 @@ REXCVAR_DEFINE_STRING(post_pass_motion_check, "", "GPU/D3D12",
                       "hash>:<first constant>:<slots> separated by ';', 4 constants per matrix, "
                       "rows 0, 1 and 3 logged")
     .lifecycle(rex::cvar::Lifecycle::kRequiresRestart);
+
+REXCVAR_DEFINE_STRING(post_pass_jitter, "auto", "GPU/D3D12",
+                      "Sub-pixel jitter of the scene draws for temporal post passes: auto (as "
+                      "the manifest's [jitter] says), off, or a number of Halton (2, 3) phases, "
+                      "which jitters every frame after a scene whether or not a pass consumes it "
+                      "(diagnostics)");
+
+REXCVAR_DEFINE_STRING(post_pass_jitter_offset, "", "GPU/D3D12",
+                      "Diagnostic: a fixed jitter x,y in host pixels instead of the Halton "
+                      "sequence, in every frame the jitter is on (empty: the sequence)");
 
 namespace rex::graphics::d3d12 {
 
@@ -585,6 +596,49 @@ bool PostPasses::LoadManifest(Manifest& manifest) {
     }
   }
 
+  // NAME OP NUMBER [&& ...] over params and defines: a pass's if, [jitter] if.
+  auto parse_conditions = [&](const std::string& text, std::vector<Condition>& conditions,
+                              std::string& error) {
+    std::string rest = text;
+    while (!rest.empty()) {
+      size_t and_position = rest.find("&&");
+      std::string term = rest.substr(0, and_position);
+      rest = and_position == std::string::npos ? std::string() : rest.substr(and_position + 2);
+      static const std::pair<const char*, Condition::Op> kOps[] = {
+          {"==", Condition::Op::kEqual},        {"!=", Condition::Op::kNotEqual},
+          {"<=", Condition::Op::kLessEqual},    {">=", Condition::Op::kGreaterEqual},
+          {"<", Condition::Op::kLess},          {">", Condition::Op::kGreater}};
+      Condition parsed;
+      size_t op_position = std::string::npos, op_length = 0;
+      for (const auto& [op_text, op] : kOps) {
+        size_t found = term.find(op_text);
+        if (found != std::string::npos) {
+          op_position = found;
+          op_length = std::strlen(op_text);
+          parsed.op = op;
+          break;
+        }
+      }
+      if (op_position == std::string::npos) {
+        error = fmt::format("if '{}': NAME OP NUMBER [&& ...]", text);
+        return false;
+      }
+      std::string name = term.substr(0, op_position);
+      name.erase(std::remove_if(name.begin(), name.end(),
+                                [](char c) { return std::isspace(uint8_t(c)); }),
+                 name.end());
+      bool known = find_param(name) != UINT32_MAX;
+      for (const auto& define : manifest.defines) known |= define.first == name;
+      if (!known || !ParseNumber(term.substr(op_position + op_length), parsed.value)) {
+        error = fmt::format("if '{}': {} is no param or define, or no number", text, name);
+        return false;
+      }
+      parsed.name = name;
+      conditions.push_back(parsed);
+    }
+    return true;
+  };
+
   // [[passes]]
   auto parse_binding = [&](const std::string& text, Binding& binding) {
     std::string name = text;
@@ -741,42 +795,9 @@ bool PostPasses::LoadManifest(Manifest& manifest) {
         pass.size = pass.pixel ? pass.rtvs[0] : pass.uavs[0];
       }
       if (auto condition = (*fields)["if"].value<std::string>()) {
-        // NAME OP NUMBER [&& ...]
-        std::string rest = *condition;
-        while (!rest.empty()) {
-          size_t and_position = rest.find("&&");
-          std::string term = rest.substr(0, and_position);
-          rest = and_position == std::string::npos ? std::string() : rest.substr(and_position + 2);
-          static const std::pair<const char*, Condition::Op> kOps[] = {
-              {"==", Condition::Op::kEqual},        {"!=", Condition::Op::kNotEqual},
-              {"<=", Condition::Op::kLessEqual},    {">=", Condition::Op::kGreaterEqual},
-              {"<", Condition::Op::kLess},          {">", Condition::Op::kGreater}};
-          Condition parsed;
-          size_t op_position = std::string::npos, op_length = 0;
-          for (const auto& [op_text, op] : kOps) {
-            size_t found = term.find(op_text);
-            if (found != std::string::npos) {
-              op_position = found;
-              op_length = std::strlen(op_text);
-              parsed.op = op;
-              break;
-            }
-          }
-          if (op_position == std::string::npos) {
-            return pass_fail(fmt::format("if '{}': NAME OP NUMBER [&& ...]", *condition));
-          }
-          std::string name = term.substr(0, op_position);
-          name.erase(std::remove_if(name.begin(), name.end(),
-                                    [](char c) { return std::isspace(uint8_t(c)); }),
-                     name.end());
-          bool known = find_param(name) != UINT32_MAX;
-          for (const auto& define : manifest.defines) known |= define.first == name;
-          if (!known || !ParseNumber(term.substr(op_position + op_length), parsed.value)) {
-            return pass_fail(
-                fmt::format("if '{}': {} is no param or define, or no number", *condition, name));
-          }
-          parsed.name = name;
-          pass.conditions.push_back(parsed);
+        std::string error;
+        if (!parse_conditions(*condition, pass.conditions, error)) {
+          return pass_fail(error);
         }
       }
       std::string blend = (*fields)["blend"].value_or(std::string("none"));
@@ -801,6 +822,37 @@ bool PostPasses::LoadManifest(Manifest& manifest) {
   for (const TextureDesc& texture : manifest.textures) {
     if (texture.clear && !texture.uav && !texture.rtv) {
       return fail(fmt::format("texture {} is cleared but no pass writes it", texture.name));
+    }
+  }
+  // [jitter]
+  if (const toml::table* jitter = root["jitter"].as_table()) {
+    manifest.jitter = true;
+    double phases = 8.0;
+    NodeNumber((*jitter)["phases"].node(), phases);
+    if (!(phases >= 1.0 && phases <= double(post_pass::kMaxJitterPhases))) {
+      return fail(fmt::format("jitter: phases is 1 to {}", post_pass::kMaxJitterPhases));
+    }
+    manifest.jitter_phases = uint32_t(phases);
+    if (auto condition = (*jitter)["if"].value<std::string>()) {
+      std::string error;
+      if (!parse_conditions(*condition, manifest.jitter_conditions, error)) {
+        return fail("jitter: " + error);
+      }
+    }
+    // The pass whose run in a frame arms the jitter of the next one.
+    manifest.jitter_consumer = (*jitter)["consumer"].value_or(std::string());
+    bool consumer_found = false;
+    for (const PassDesc& pass : manifest.passes) {
+      consumer_found |= pass.name == manifest.jitter_consumer;
+    }
+    if (!consumer_found) {
+      return fail(fmt::format("jitter: consumer '{}' names no pass", manifest.jitter_consumer));
+    }
+    if (const toml::array* exclude = (*jitter)["exclude"].as_array()) {
+      for (const toml::node& node : *exclude) {
+        manifest.jitter_exclude.push_back(
+            std::strtoull(node.value_or(std::string()).c_str(), nullptr, 16));
+      }
     }
   }
   return true;
@@ -1696,6 +1748,10 @@ void PostPasses::FillSceneConstants(post_pass::SceneConstants& constants) const 
     constants.w_far = unpack.w_far;
     constants.focal[0] = unpack.pixels_per_unit_x / constants.guest_per_host[0];
     constants.focal[1] = unpack.pixels_per_unit_y / constants.guest_per_host[1];
+    if (jitter_active_) {
+      constants.jitter[0] = jitter_[0];
+      constants.jitter[1] = jitter_[1];
+    }
     bool view_known = camera_.view_frame == frame;
     if (view_known) {
       constants.flags |= post_pass::kSceneFlagViewKnown;
@@ -1749,10 +1805,10 @@ void PostPasses::FillSceneConstants(post_pass::SceneConstants& constants) const 
   }
 }
 
-bool PostPasses::PassEnabled(const PassDesc& pass) const {
+bool PostPasses::ConditionsHold(const std::vector<Condition>& conditions) const {
   const Manifest& manifest = *manifest_;
   bool enabled = true;
-  for (const Condition& condition : pass.conditions) {
+  for (const Condition& condition : conditions) {
     double value = 0.0;
     for (size_t i = 0; i < manifest.params.size(); ++i) {
       if (manifest.params[i].name != condition.name) continue;
@@ -1890,8 +1946,9 @@ void PostPasses::RunPoint(Point point) {
   std::memcpy(mapping, &constants, sizeof(constants));
 
   for (PassDesc& pass : manifest_->passes) {
-    if (pass.point == point && PassEnabled(pass)) {
-      RunPass(pass, constants_address);
+    if (pass.point == point && PassEnabled(pass) && RunPass(pass, constants_address) &&
+        pass.name == manifest.jitter_consumer) {
+      jitter_consumer_frame_ = frame;
     }
   }
   // Exposed textures as shader mods read them.
@@ -1926,7 +1983,7 @@ bool PostPasses::BindingSize(const Binding& binding, uint32_t& width, uint32_t& 
   }
 }
 
-void PostPasses::RunPass(PassDesc& pass, D3D12_GPU_VIRTUAL_ADDRESS scene_constants) {
+bool PostPasses::RunPass(PassDesc& pass, D3D12_GPU_VIRTUAL_ADDRESS scene_constants) {
   const Manifest& manifest = *manifest_;
   uint32_t read_index = history_write_ ^ 1;
   D3D12_GPU_DESCRIPTOR_HANDLE null_srv = command_processor_.GetSystemBindlessViewHandlePair(
@@ -1935,13 +1992,13 @@ void PostPasses::RunPass(PassDesc& pass, D3D12_GPU_VIRTUAL_ADDRESS scene_constan
   std::fill(std::begin(srvs), std::end(srvs), null_srv);
   // Make sure every texture written exists first (inputs may be sized like it).
   for (const Binding& output : pass.pixel ? pass.rtvs : pass.uavs) {
-    if (output.builtin == Builtin::kNone && !EnsureTexture(output.texture)) return;
+    if (output.builtin == Builtin::kNone && !EnsureTexture(output.texture)) return false;
   }
   for (size_t i = 0; i < pass.srvs.size(); ++i) {
     const Binding& binding = pass.srvs[i];
     switch (binding.builtin) {
       case Builtin::kNone: {
-        if (!EnsureTexture(binding.texture)) return;
+        if (!EnsureTexture(binding.texture)) return false;
         Texture& texture = textures_[binding.texture];
         Transition(texture.resource.Get(), texture.state, kShaderResource);
         // A texture too small for its mips has one, viewed by srv.
@@ -1951,7 +2008,7 @@ void PostPasses::RunPass(PassDesc& pass, D3D12_GPU_VIRTUAL_ADDRESS scene_constan
         break;
       }
       case Builtin::kSceneDepth:
-        if (!scene_depth_.resource) return;
+        if (!scene_depth_.resource) return false;
         srvs[i] = scene_depth_.srv;
         break;
       case Builtin::kSceneStencil:
@@ -1963,11 +2020,11 @@ void PostPasses::RunPass(PassDesc& pass, D3D12_GPU_VIRTUAL_ADDRESS scene_constan
             RequestExternal(depth_group_, ExternalKind::kStencil, scene_stencil_);
           }
         }
-        if (!scene_stencil_.resource) return;
+        if (!scene_stencil_.resource) return false;
         srvs[i] = scene_stencil_.srv;
         break;
       case Builtin::kSceneColor:
-        if (!scene_color_.resource) return;
+        if (!scene_color_.resource) return false;
         srvs[i] = scene_color_.srv;
         break;
       case Builtin::kPreviousColor:
@@ -1988,7 +2045,7 @@ void PostPasses::RunPass(PassDesc& pass, D3D12_GPU_VIRTUAL_ADDRESS scene_constan
         if (!final_color_.resource ||
             !command_processor_.render_target_cache_->TransitionLastColorRenderTarget(
                 0, kShaderResource, target)) {
-          return;
+          return false;
         }
         srvs[i] = final_color_.srv;
         break;
@@ -1997,7 +2054,7 @@ void PostPasses::RunPass(PassDesc& pass, D3D12_GPU_VIRTUAL_ADDRESS scene_constan
   }
   uint32_t width, height;
   if (!BindingSize(pass.size, width, height)) {
-    return;
+    return false;
   }
   post_pass::PassHeader header = {{width, height}, {1.0f / float(width), 1.0f / float(height)}};
   uint32_t constants[post_pass::kPassConstantCount] = {};
@@ -2033,7 +2090,7 @@ void PostPasses::RunPass(PassDesc& pass, D3D12_GPU_VIRTUAL_ADDRESS scene_constan
     }
     list.D3DDispatch((width + pass.group[0] - 1) / pass.group[0],
                      (height + pass.group[1] - 1) / pass.group[1], 1);
-    return;
+    return true;
   }
 
   std::array<DXGI_FORMAT, post_pass::kMaxRenderTargets> formats = {};
@@ -2044,7 +2101,7 @@ void PostPasses::RunPass(PassDesc& pass, D3D12_GPU_VIRTUAL_ADDRESS scene_constan
       D3D12RenderTargetCache::LastColorRenderTarget target;
       if (!command_processor_.render_target_cache_->TransitionLastColorRenderTarget(
               0, D3D12_RESOURCE_STATE_RENDER_TARGET, target)) {
-        return;
+        return false;
       }
       formats[i] = target.format;
       rtvs[i] = target.rtv;
@@ -2058,7 +2115,7 @@ void PostPasses::RunPass(PassDesc& pass, D3D12_GPU_VIRTUAL_ADDRESS scene_constan
   }
   ID3D12PipelineState* pipeline = PixelPipeline(pass, formats);
   if (!pipeline) {
-    return;
+    return false;
   }
   command_processor_.SubmitBarriers();
   command_processor_.SetExternalPipeline(pipeline);
@@ -2092,6 +2149,7 @@ void PostPasses::RunPass(PassDesc& pass, D3D12_GPU_VIRTUAL_ADDRESS scene_constan
   if (query_open) {
     command_processor_.OpenRTVOcclusionQuery();
   }
+  return true;
 }
 
 ID3D12PipelineState* PostPasses::PixelPipeline(
@@ -2210,7 +2268,7 @@ void PostPasses::LogRun(int32_t variant_index) {
       "0x{:08X}-0x{:08X} {}x{} (EDRAM {}), host {}x{}; camera Q {:.7g} Q*near {:.6g} (near "
       "{:.4g}), W(d=0) {:.4g} W(d=1) {:.4g}, far W {:.4g}, depth mul {:.6g} add {:.6g}, x {:.6g} "
       "{:.6g}, y {:.6g} {:.6g}, z/W {:.3g}, focal {:.1f} px (FOV x {:.1f} deg over {} px), origin "
-      "{}; history {}; motion {}; variant {}:{}",
+      "{}; history {}; motion {}; jitter {}; variant {}:{}",
       runs_ - 1, depth_group_.frame, SteadyMilliseconds(), camera_.frame,
       camera_.view_frame == command_processor_.GetCurrentFrame() ? "known" : "unknown",
       depth_group_.base, depth_group_.end, depth_group_.pitch, depth_group_.height,
@@ -2220,7 +2278,87 @@ void PostPasses::LogRun(int32_t variant_index) {
       unpack.y_add, unpack.z_from_w, unpack.pixels_per_unit_x, fov_x, depth_group_.pitch,
       camera_.guest_origin,
       previous_valid_ ? (IsCameraCut() ? "cut" : "valid") : "none", MotionSummary(),
+      jitter_active_ ? fmt::format("{:.4f},{:.4f}", jitter_[0], jitter_[1]) : std::string("off"),
       variant_index, params);
+}
+
+void PostPasses::UpdateJitter() {
+  jitter_active_ = false;
+  jitter_[0] = jitter_[1] = 0.0f;
+  if (!manifest_) {
+    return;
+  }
+  const Manifest& manifest = *manifest_;
+  uint64_t frame = command_processor_.GetCurrentFrame();
+  int32_t variant_index;
+  const std::string& mode = REXCVAR_GET(post_pass_jitter);
+  if (mode == "off" || IsSkipped(&variant_index)) {
+    return;
+  }
+  uint32_t phases = manifest.jitter_phases;
+  if (mode != "auto" && !mode.empty()) {
+    // A number of phases: every frame after one with a scene, without a consumer.
+    double forced;
+    if (!ParseNumber(mode, forced) ||
+        !(forced >= 1.0 && forced <= double(post_pass::kMaxJitterPhases))) {
+      if (!warned_jitter_) {
+        warned_jitter_ = true;
+        REXGPU_WARN("Post passes: post_pass_jitter={} is not auto, off or 1 to {} phases", mode,
+                    post_pass::kMaxJitterPhases);
+      }
+      return;
+    }
+    phases = uint32_t(forced);
+    if (scene_frame_ != frame) {
+      return;
+    }
+  } else {
+    // The manifest's: after a frame in which its consumer ran, while its if holds.
+    if (!manifest.jitter || jitter_consumer_frame_ != frame) {
+      return;
+    }
+    UpdateParams(variant_index);
+    if (!ConditionsHold(manifest.jitter_conditions)) {
+      return;
+    }
+  }
+  // x,y in host pixels, or the Halton (2, 3) sequence.
+  const std::string& offset = REXCVAR_GET(post_pass_jitter_offset);
+  size_t comma = offset.find(',');
+  double x, y;
+  if (!offset.empty() && comma != std::string::npos && ParseNumber(offset.substr(0, comma), x) &&
+      ParseNumber(offset.substr(comma + 1), y)) {
+    jitter_[0] = float(std::clamp(x, -0.5, 0.5));
+    jitter_[1] = float(std::clamp(y, -0.5, 0.5));
+  } else {
+    post_pass::JitterOffset(uint32_t(jitter_count_ % phases), jitter_);
+  }
+  ++jitter_count_;
+  jitter_active_ = true;
+}
+
+bool PostPasses::DrawJitter(const RegisterFile& regs, uint64_t vertex_shader_hash,
+                            const reg::RB_DEPTHCONTROL& depth_control, bool rectangle,
+                            float jitter_out[2]) const {
+  if (!jitter_active_ || !manifest_) {
+    return false;
+  }
+  post_pass::JitterDraw draw;
+  // The scene camera's test: the depth buffer resolved as the scene depth last.
+  const auto depth_info = regs.Get<reg::RB_DEPTH_INFO>();
+  draw.depth_base = depth_info.depth_base | depth_info.depth_base_bit_11 << 11;
+  draw.scene_depth_known = depth_group_.frame != UINT64_MAX;
+  draw.scene_depth_base = depth_group_.edram_base;
+  draw.depth_or_stencil = depth_control.z_enable || depth_control.stencil_enable;
+  draw.rectangle = rectangle;
+  const std::vector<uint64_t>& exclude = manifest_->jitter_exclude;
+  draw.excluded = std::find(exclude.begin(), exclude.end(), vertex_shader_hash) != exclude.end();
+  if (!post_pass::IsJitteredDraw(draw)) {
+    return false;
+  }
+  jitter_out[0] = jitter_[0];
+  jitter_out[1] = jitter_[1];
+  return true;
 }
 
 void PostPasses::OnSwap() {
@@ -2286,6 +2424,8 @@ void PostPasses::OnSwap() {
   if (hot_reload_) {
     PollFiles();
   }
+  // After a reload, so that the jitter follows the manifest in use.
+  UpdateJitter();
 }
 
 // ---------------------------------------------------------------------------

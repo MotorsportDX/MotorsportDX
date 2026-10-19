@@ -22,7 +22,9 @@
  * constants of the vertex shaders the manifest names; so do the world matrices
  * of the objects whose draws write an object ID into the stencil ([motion]),
  * from which the passes get each object's reprojection into the previous frame
- * (motion vectors).
+ * (motion vectors). With the manifest's [jitter], the draws of the scene are
+ * moved by a sub-pixel Halton (2, 3) sequence for temporal passes, in frames
+ * after one in which the consuming pass ran (post_pass_jitter.h).
  *
  * Params and defines come from shader_mod_defines by name, and shader_mod_set
  * changes them while running (params at once, defines with a recompile). With
@@ -71,8 +73,15 @@ class PostPasses {
   // scene depth and color, and runs the scene points when they are complete.
   void OnResolve(const RegisterFile& regs, uint32_t address, uint32_t length);
   // In the swap, in an open submission: clears the exposed outputs of the
-  // frame, keeps or drops the history, and reloads changed files.
+  // frame, keeps or drops the history, picks the next frame's jitter, and
+  // reloads changed files.
   void OnSwap();
+  // A draw after its host viewport is known: the jitter of the scene draws of
+  // this frame in host pixels (post_pass_jitter.h), if the draw is one of
+  // them. rectangle: a rectangle list or a clear (a uniform draw).
+  bool DrawJitter(const RegisterFile& regs, uint64_t vertex_shader_hash,
+                  const reg::RB_DEPTHCONTROL& depth_control, bool rectangle,
+                  float jitter_out[2]) const;
 
  private:
   enum class Point : uint32_t { kSceneDepth, kSceneColor, kFinal, kCount };
@@ -166,6 +175,14 @@ class PostPasses {
     float interior_depth = 1.0f;
     uint32_t motion_stencil_step = 1, motion_stencil_limit = 256;
     uint32_t motion_slot_count = 1;
+    // [jitter]: the scene draws are jittered in a frame after one in which the
+    // pass jitter_consumer ran, while jitter_conditions hold; jitter_exclude
+    // lists vertex shaders never jittered.
+    bool jitter = false;
+    uint32_t jitter_phases = 8;
+    std::vector<Condition> jitter_conditions;
+    std::string jitter_consumer;
+    std::vector<uint64_t> jitter_exclude;
     // Name and the value of the manifest.
     std::vector<std::pair<std::string, std::string>> defines;
     std::vector<ParamDesc> params;
@@ -325,13 +342,17 @@ class PostPasses {
   // Runs.
   bool IsSkipped(int32_t* variant_index_out);
   void UpdateParams(int32_t variant_index);
-  // The pass's conditions on the current params and defines.
-  bool PassEnabled(const PassDesc& pass) const;
+  // Conditions (a pass's if, [jitter] if) on the current params and defines.
+  bool ConditionsHold(const std::vector<Condition>& conditions) const;
+  bool PassEnabled(const PassDesc& pass) const { return ConditionsHold(pass.conditions); }
+  // At the swap: the jitter of the next frame.
+  void UpdateJitter();
   void FillSceneConstants(post_pass::SceneConstants& constants) const;
   void RunPoint(Point point);
   enum class ExternalKind { kColor, kDepth, kStencil };
   bool RequestExternal(const ResolveGroup& group, ExternalKind kind, External& out);
-  void RunPass(PassDesc& pass, D3D12_GPU_VIRTUAL_ADDRESS scene_constants);
+  // False if the pass did not dispatch or draw (an input or output missing).
+  bool RunPass(PassDesc& pass, D3D12_GPU_VIRTUAL_ADDRESS scene_constants);
   bool BindingSize(const Binding& binding, uint32_t& width, uint32_t& height) const;
   void CopyHistory();
   void LogRun(int32_t variant_index);
@@ -425,6 +446,15 @@ class PostPasses {
   // a scene (also without history textures).
   bool previous_scene_ = false;
   Camera previous_camera_;
+
+  // The jitter of this frame's scene draws (UpdateJitter at the previous
+  // swap), in host pixels; the phases counted so far; the last frame in which
+  // the manifest's jitter_consumer ran.
+  bool jitter_active_ = false;
+  float jitter_[2] = {};
+  uint64_t jitter_count_ = 0;
+  uint64_t jitter_consumer_frame_ = UINT64_MAX;
+  bool warned_jitter_ = false;
 
   // Motion objects by slot, of this frame and the previous one.
   std::array<MotionObject, post_pass::kMotionSlots> motion_objects_, previous_motion_objects_;

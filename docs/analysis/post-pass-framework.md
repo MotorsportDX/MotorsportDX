@@ -13,6 +13,7 @@ For the current state see [status/current.md](../status/current.md).
 - **Inputs**: `scene_depth`, `scene_stencil`, `scene_color`, `previous_color`, `previous_depth`, `final_color`, and the textures of earlier passes. **Outputs**: textures of the manifest, at the scene's size or a scale of it, any of 18 formats; `final_color` can be drawn into.
 - **Motion**: `[motion]` names the vertex shaders of the objects and where their world matrix is; per object slot (from the stencil reference of their draws) the passes get the reprojection into the previous frame's view and the object's origin (`xe_motion_*`), and an interior covered by a depth mask gets a slot of its own. FM4's `motion_vectors` pass writes the per-pixel motion and a mask from it.
 - **Passes**: compute (`cs_5_1`) or pixel (`ps_5_1`, a triangle over the render targets), compiled with FXC at the start against the embedded library [post_pass.hlsli](../../work/runtime/src/graphics/d3d12/post_pass.hlsli).
+- **Jitter**: `[jitter]` moves the scene draws by a sub-pixel Halton (2, 3) offset per frame, for temporal passes such as TAA, in frames after one in which its consumer pass ran; the passes get the offset (`xe_scene_jitter`), and their view positions and the motion vectors are unjittered.
 - **Mods**: a texture with `slot = N` is bound for the shader mods at bindless view `kPostPassViewsStart + N`; mods read it with `xe_post_texture(N, uv)`. In FM4's manifest slot 0 is the occlusion, which `xe_post_ao(uv)` reads, slot 1 the motion vectors and slot 2 their mask.
 - **Reuse**: the shader overrides' FXC loader, DXBC cache (`shader_override_cache_path`), defines (`shader_mod_defines`, `shader_mod_set`, `shader_mod_defines.txt`) and hot reload (`shader_mod_hot_reload`).
 - **Path**: RTV with bindless resources only. The ROV path has neither shader mods nor post passes, by design.
@@ -66,6 +67,19 @@ This is the point temporal upscalers and TAA need (pre-HUD color at render resol
 
 The table of the objects and the camera of the previous frame are kept at every swap of a frame with a scene. A slot holds its object's reprojection when the object drew in both frames with the same reference and did not jump (`cut_distance`), otherwise the static world's.
 
+### [jitter]
+
+Sub-pixel jitter of the scene draws for temporal passes ([TAA v1](taa.md#3-jitter)). Without the section nothing is jittered.
+
+| Key | Meaning |
+| --- | --- |
+| `phases` | Length of the Halton (2, 3) sequence, 1 to 64 (default 8): phase n is (Halton(n + 1, 2) - 0.5, Halton(n + 1, 3) - 0.5) host pixels, between -0.5 and 0.5. |
+| `if` | Conditions as a pass's `if`, checked at the swap for the next frame. |
+| `consumer` | The pass whose run in a frame arms the jitter of the next frame (required): no frame is jittered unless the pass that undoes the jitter runs. |
+| `exclude` | Vertex shader ucode hashes never jittered: screen-space draws inside the scene tiles. |
+
+A draw is jittered when its depth buffer's EDRAM base is the scene depth's (the scene camera's test, once a scene depth was resolved), it tests depth or stencil, it is neither a rectangle list nor a clear drawn as a uniform draw, and its vertex shader is not excluded. The shadow maps, the environment cube, the mirrors, the post chain and the HUD have other depth buffers or no depth test. The command processor adds the offset to the draw's `ndc_offset` after `GetHostViewportInfo`: 2 j / extent in X and -2 j / extent in Y for the host viewport's extent, so every tile of a frame moves alike. The offset is in host pixels of the render target, the layout of the resolved scene textures (FM4's scene is rotated 180 degrees, so its final image moves by -j). The math is header only ([post_pass_jitter.h](../../work/runtime/include/rex/graphics/d3d12/post_pass_jitter.h)).
+
 ### [defines] and [params]
 
 - **Defines** are compile-time: `NAME = value` in the manifest, overridden by `shader_mod_defines` (and `shader_mod_set`, `shader_mod_defines.txt`) by name. A changed value recompiles the passes at the next swap.
@@ -101,7 +115,7 @@ Textures are created when a pass first writes them, zeroed, and recreated when t
 | `if` | `NAME OP NUMBER`, joined by `&&`, over params and defines (`==`, `!=`, `<`, `<=`, `>`, `>=`), checked every frame. |
 | `blend` | Pixel passes: `none` (default), `alpha`, `add` or `multiply`. |
 
-The manifest is checked when it is loaded: unknown textures and inputs, a texture both read and written by one pass, `scene_color` at `scene_depth`, `final_color` outside the final point, a compute pass without UAVs or a pixel pass without render targets, two textures in one slot, and a cleared texture that no pass writes are errors. Passes with the same shader, entry and defines share one binary.
+The manifest is checked when it is loaded: unknown textures and inputs, a texture both read and written by one pass, `scene_color` at `scene_depth`, `final_color` outside the final point, a compute pass without UAVs or a pixel pass without render targets, two textures in one slot, a cleared texture that no pass writes, and a `[jitter]` whose consumer is no pass are errors. Passes with the same shader, entry and defines share one binary.
 
 ## The library
 
@@ -115,7 +129,7 @@ The manifest is checked when it is loaded: unknown textures and inputs, a textur
 
 with FXC `/O3` and the defines. The layouts are those of [post_pass_layout.h](../../work/runtime/include/rex/graphics/d3d12/post_pass_layout.h), which the WARP test includes too.
 
-- **b0, the scene** (`xe_scene_*`, `xe_previous_*`, `xe_final_*`, `xe_motion_*`): the camera's depth unpack (`xe_scene_w(d)`, `xe_scene_view_position(pixel, w)`, `xe_scene_is_sky(w)`), the scene size, guest pixels per host pixel and pixel origin, the focal length in host pixels, the frame and time, `xe_scene_view_to_world`, `xe_view_to_previous_view` and the previous frame's camera unpack (`xe_previous_host_position(view, w)` reprojects the static world, `xe_previous_view_host_position` any previous view position), the flags (`xe_history_valid()`, `xe_motion_valid()`, `XE_SCENE_VIEW_KNOWN`), at the final point the final color's size and its UV scale within its render target, and the motion: `xe_motion_slot(stencil)`, `xe_motion_slot_own(slot)`, the interior (`xe_motion_interior_slot`, `xe_motion_interior_depth`, `xe_motion_is_interior(slot, d)`), and per slot `xe_motion_view_to_previous_view[slot]` (`xe_motion_previous_host_position(slot, view, w)`) and `xe_motion_object_origin[slot]` (the object's origin in view space, w 1 if drawn). A root CBV of 2,304 bytes, written once per point.
+- **b0, the scene** (`xe_scene_*`, `xe_previous_*`, `xe_final_*`, `xe_motion_*`): the camera's depth unpack (`xe_scene_w(d)`, `xe_scene_view_position(pixel, w)`, `xe_scene_is_sky(w)`), the frame's jitter (`xe_scene_jitter`: the content at host position p is the unjittered scene at p - jitter; `xe_scene_view_position` gives the view position of what the pixel shows, and the previous frame's positions are unjittered), the scene size, guest pixels per host pixel and pixel origin, the focal length in host pixels, the frame and time, `xe_scene_view_to_world`, `xe_view_to_previous_view` and the previous frame's camera unpack (`xe_previous_host_position(view, w)` reprojects the static world, `xe_previous_view_host_position` any previous view position), the flags (`xe_history_valid()`, `xe_motion_valid()`, `XE_SCENE_VIEW_KNOWN`), at the final point the final color's size and its UV scale within its render target, and the motion: `xe_motion_slot(stencil)`, `xe_motion_slot_own(slot)`, the interior (`xe_motion_interior_slot`, `xe_motion_interior_depth`, `xe_motion_is_interior(slot, d)`), and per slot `xe_motion_view_to_previous_view[slot]` (`xe_motion_previous_host_position(slot, view, w)`) and `xe_motion_object_origin[slot]` (the object's origin in view space, w 1 if drawn). A root CBV of 2,304 bytes, written once per point.
 - **b1, the pass**: `xe_pass_size`, `xe_pass_inverse_size`, then the params. Root constants.
 - **Samplers**: `xe_linear_clamp` (bilinear within one mip), `xe_point_clamp`, `xe_trilinear_clamp`.
 - **Pixel passes**: `xe_post_pass_vs` draws one triangle; the pixel shader gets `XePostPassVertex` (`SV_Position` and `uv` 0-1 over the render targets).
@@ -137,6 +151,7 @@ Only when a pass reads `previous_color` or `previous_depth`, so GTAO alone costs
 - `post_pass_ab_ms=<N>`: no passes in every other period of N ms of the steady clock (the outputs stay cleared), to compare on and off in one scene.
 - `post_pass_variants="NAME=VALUE,NAME=VALUE;...;off"` with `post_pass_variant_ms=<N>`: param values cycled by the steady clock, to compare settings in one frozen frame.
 - `post_pass_log_every=<N>`: the scene depth, the camera, the history state, the motion objects (per slot the reference, the chosen source, the sources that drew and those whose matrix differs) and the params of every N-th scene (0: the first only). `post_pass_log_constants=<ps hash>:<constant>;...` logs pixel shader constants, to check the camera against the game's own depth linearization.
+- `post_pass_jitter=auto|off|<phases>`: `auto` (the default) jitters as `[jitter]` says; `off` never; a number of phases jitters every frame after one with a scene, without a consumer, for checks of the jitter itself. `post_pass_jitter_offset=x,y` replaces the sequence with a fixed offset in host pixels whenever the jitter is on (a seam check). Frames skipped by `post_pass_ab_ms` or an `off` variant are not jittered. The `post_pass_log_every` log names the jitter of the frame, and `REX_DRAW_LIST_TRACE` the offset of each draw ([traces](../e2e/traces.md#draw-traces)).
 - `post_pass_motion_check=<ps hash>:<first constant>:<slots>;...`: at every draw of that pixel shader (once per frame), its 4-constant matrices (rows 0, 1 and 3) next to the host's clip space reprojection of the same slots, previous projection * `xe_motion_view_to_previous_view[slot]` * inverse(projection). FM4: `4746CAD32EF168CF:0:17`, the motion blur ([motion vectors](motion-vectors.md#8-implementation-18-october-2026)).
 
 ## The final point and upscalers
@@ -199,6 +214,7 @@ The [TAA v1 plan](taa.md#2-injection-point) starts TAA at this point and moves i
 
 - [post_pass.h](../../work/runtime/include/rex/graphics/d3d12/post_pass.h), [post_pass.cpp](../../work/runtime/src/graphics/d3d12/post_pass.cpp): class `PostPasses`, created by the command processor when `post_pass_path` is set; hooks in `IssueDraw` (camera, final point), `IssueCopy` (before and after the resolve) and `IssueSwap`.
 - [post_pass_camera.h](../../work/runtime/include/rex/graphics/d3d12/post_pass_camera.h): the camera math (projection from the constants, depth unpack, view to world, the world matrix of an object and the reprojection of the static world and of objects into the previous view, in double), header only.
+- [post_pass_jitter.h](../../work/runtime/include/rex/graphics/d3d12/post_pass_jitter.h): the jitter's Halton phases, the rules for the draws it moves and its `ndc_offset`, header only; [command_processor.cpp](../../work/runtime/src/graphics/d3d12/command_processor.cpp) applies it in `IssueDraw` (`PostPasses::DrawJitter`).
 - [post_pass_layout.h](../../work/runtime/include/rex/graphics/d3d12/post_pass_layout.h), [post_pass.hlsli](../../work/runtime/src/graphics/d3d12/post_pass.hlsli): root signature and constant layouts, and the library.
 - [shader_override.cpp](../../work/runtime/src/graphics/d3d12/shader_override.cpp): `CompileProgram`, `GetDefine`, `SetPassNames`, the contract's `XE_POST_VIEWS`, and `xe_post_texture` in the override library.
 - [render_target_cache.cpp](../../work/runtime/src/graphics/d3d12/render_target_cache.cpp): `TransitionLastColorRenderTarget` for the final point.

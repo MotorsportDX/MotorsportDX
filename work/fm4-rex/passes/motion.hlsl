@@ -24,7 +24,8 @@
 // Entry points of passes.toml:
 //   motion_vectors     compute: depth and stencil -> motion (RG16F), the
 //                      previous frame's host pixel position of the surface
-//                      minus this frame's, in host pixels of the scene
+//                      minus this frame's, both without the scene jitter
+//                      (xe_scene_jitter), in host pixels of the scene
 //                      textures and in their layout (FM4's is rotated 180
 //                      degrees against the screen); zero without a valid
 //                      previous frame (xe_motion_valid(): the first frame, a
@@ -89,13 +90,16 @@ MotionPixel ClassifyPixel(uint2 pixel, float stored_depth, uint stencil) {
   return result;
 }
 
-// The motion of a host pixel of the scene at W on the object of a slot.
+// The motion of a host pixel of the scene at W on the object of a slot,
+// between unjittered positions: what the pixel shows lies at center -
+// xe_scene_jitter without the jitter, and the previous frame's position is
+// unjittered.
 float2 Motion(uint2 pixel, float w, uint slot) {
   float2 center = float2(pixel) + 0.5;
   float3 view = xe_scene_view_position(center, w);
   float previous_w;
   float2 previous = xe_motion_previous_host_position(slot, view, previous_w);
-  float2 motion = clamp(previous - center, -kOffscreen, kOffscreen);
+  float2 motion = clamp(previous - (center - xe_scene_jitter), -kOffscreen, kOffscreen);
   return previous_w > 1.0e-4 ? motion : kOffscreen;
 }
 

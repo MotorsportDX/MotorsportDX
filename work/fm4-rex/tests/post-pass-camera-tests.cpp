@@ -4,13 +4,18 @@
 // reconstructed from a stored depth, and the camera's view to world matrix and
 // the reprojection into the previous frame's view built from it (as
 // post_pass.cpp builds xe_view_to_previous_view), also for a moving car (the
-// motion matrices) and in the clip space form of FM4's motion blur. Synthetic
-// cameras only; prints the worst errors and returns 1 on failure.
+// motion matrices) and in the clip space form of FM4's motion blur. Also the
+// scene jitter (rex/graphics/d3d12/post_pass_jitter.h): the Halton (2, 3)
+// phases, the shift that its ndc_offset gives a vertex in host pixels, and
+// which draws it moves. Synthetic cameras only; prints the worst errors and
+// returns 1 on failure.
 
 #include <cmath>
+#include <cstdint>
 #include <cstdio>
 
 #include <rex/graphics/d3d12/post_pass_camera.h>
+#include <rex/graphics/d3d12/post_pass_jitter.h>
 
 namespace {
 
@@ -329,9 +334,81 @@ void TestRejectsOrthographic() {
         "orthographic rejected");
 }
 
+// The jitter: 8 phases inside the pixel, none on its edge, spread evenly; the
+// ndc_offset moving a vertex by exactly the jitter in host pixels for host
+// viewports of 1x, 2x and 3x (and of the huge viewport of draws without
+// clipping); and the draws the rules jitter.
+void TestJitter() {
+  Check(Halton(1, 2) == 0.5f && Halton(2, 2) == 0.25f && Halton(3, 2) == 0.75f &&
+            std::fabs(Halton(1, 3) - 1.0f / 3.0f) < 1.0e-7f &&
+            std::fabs(Halton(4, 3) - 4.0f / 9.0f) < 1.0e-7f,
+        "Halton sequence");
+  double mean[2] = {}, closest = 1.0;
+  float offsets[8][2];
+  for (uint32_t phase = 0; phase < 8; ++phase) {
+    JitterOffset(phase, offsets[phase]);
+    for (int k = 0; k < 2; ++k) {
+      Check(offsets[phase][k] > -0.5f && offsets[phase][k] < 0.5f, "jitter inside the pixel");
+      mean[k] += offsets[phase][k] / 8.0;
+    }
+    for (uint32_t other = 0; other < phase; ++other) {
+      closest = std::fmin(closest, std::hypot(offsets[phase][0] - offsets[other][0],
+                                              offsets[phase][1] - offsets[other][1]));
+    }
+  }
+  std::printf("jitter: 8 phases, mean %.4f %.4f, closest pair %.4f px\n", mean[0], mean[1],
+              closest);
+  Check(std::fabs(mean[0]) < 0.06 && std::fabs(mean[1]) < 0.06, "jitter phases centered");
+  Check(closest > 0.15, "jitter phases spread");
+
+  // A vertex at clip (x, y, z, w): host pixel = offset + (ndc * scale + ndc
+  // offset + 1) / 2 * extent along X, and (1 - ...) / 2 * extent along Y.
+  double worst = 0.0;
+  const uint32_t extents[][2] = {{1280, 720}, {2560, 1440}, {3840, 2160}, {8192, 8192}};
+  for (const auto& extent : extents) {
+    for (uint32_t phase = 0; phase < 8; ++phase) {
+      const float ndc_scale[2] = {0.75f, -1.25f}, base_offset[3] = {0.0125f, -0.03f, 0.5f};
+      float ndc_offset[3] = {base_offset[0], base_offset[1], base_offset[2]};
+      AddJitterToNdcOffset(offsets[phase], extent, ndc_offset);
+      Check(ndc_offset[2] == base_offset[2], "jitter leaves Z alone");
+      const double clip[2] = {0.3, -0.6}, w = 7.5;
+      for (int k = 0; k < 2; ++k) {
+        double before = (clip[k] * ndc_scale[k] + base_offset[k] * w) / w;
+        double after = (clip[k] * ndc_scale[k] + ndc_offset[k] * w) / w;
+        double pixels = (after - before) * 0.5 * extent[k] * (k ? -1.0 : 1.0);
+        worst = std::fmax(worst, std::fabs(pixels - offsets[phase][k]));
+      }
+    }
+  }
+  std::printf("jitter: worst vertex shift error %.2e px\n", worst);
+  Check(worst < 2.0e-3, "jitter moves a vertex by the jitter in host pixels");
+
+  JitterDraw scene;
+  scene.depth_base = scene.scene_depth_base = 1024;
+  scene.scene_depth_known = true;
+  scene.depth_or_stencil = true;
+  Check(IsJitteredDraw(scene), "a scene draw is jittered");
+  JitterDraw draw = scene;
+  draw.scene_depth_known = false;
+  Check(!IsJitteredDraw(draw), "nothing jittered before the scene depth is known");
+  draw = scene;
+  draw.depth_base = 80;  // The rear-view mirror's depth buffer.
+  Check(!IsJitteredDraw(draw), "another depth buffer is not jittered");
+  draw = scene;
+  draw.depth_or_stencil = false;  // A post chain draw with the scene's depth named.
+  Check(!IsJitteredDraw(draw), "a draw without depth or stencil test is not jittered");
+  draw = scene;
+  draw.rectangle = true;
+  Check(!IsJitteredDraw(draw), "rectangles and clears are not jittered");
+  draw = scene;
+  draw.excluded = true;
+  Check(!IsJitteredDraw(draw), "excluded vertex shaders are not jittered");
+}
+
 }  // namespace
 
 int main() {
+  TestJitter();
   TestCamera("left-handed", false);
   TestCamera("right-handed", true);
   TestReprojection(false);

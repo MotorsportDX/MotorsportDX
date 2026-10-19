@@ -78,7 +78,12 @@ cbuffer xe_post_pass_scene : register(b0) {
   // depth is negative without the manifest's [motion] interior.
   uint xe_motion_interior_slot;
   float xe_motion_interior_depth;
-  uint2 xe_motion_padding;
+  // The jitter of this frame's scene draws in host pixels of the scene (x
+  // right, y down): the content at host position p is the unjittered scene at
+  // p - xe_scene_jitter. xe_scene_view_position takes it into account; the
+  // previous frame's positions (xe_previous_*) are unjittered. Zero without
+  // jitter.
+  float2 xe_scene_jitter;
   // Per slot, the previous frame's view position of a view position on that
   // object; slot 0, the static world, is xe_view_to_previous_view, and slot
   // XE_MOTION_INTERIOR_SLOT the interior's.
@@ -126,9 +131,10 @@ float xe_scene_w(float stored_depth) {
   return (w > 0.0 && w < xe_scene_w_far) ? w : xe_scene_w_far;
 }
 
-// The view position of a host pixel position of the scene at W.
+// The view position of what a host pixel position of the scene shows, at W:
+// with the jitter, the unjittered position host_pixel_center - xe_scene_jitter.
 float3 xe_scene_view_position(float2 host_pixel_center, float w) {
-  float2 guest = xe_scene_guest_position(host_pixel_center);
+  float2 guest = xe_scene_guest_position(host_pixel_center - xe_scene_jitter);
   return float3(w * (guest * xe_scene_xy_mul_add.xz + xe_scene_xy_mul_add.yw),
                 w * xe_scene_z_from_w);
 }
@@ -136,7 +142,7 @@ float3 xe_scene_view_position(float2 host_pixel_center, float w) {
 bool xe_scene_is_sky(float w) { return w >= xe_scene_w_far * 0.999; }
 
 // The host pixel position of the scene of a view position of the previous
-// frame, and its W then.
+// frame, and its W then; unjittered.
 float2 xe_previous_view_host_position(float3 previous_view_position, out float previous_w) {
   previous_w = previous_view_position.z / xe_previous_z_from_w;
   float2 guest = (previous_view_position.xy / previous_w - xe_previous_xy_mul_add.yw) /
