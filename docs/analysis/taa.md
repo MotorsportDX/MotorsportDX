@@ -396,3 +396,20 @@ Gates on `I:\FM4-build-usa` (USA, the binary of step 3), results in `I:\FM4-buil
 | R1 Japan/Asia | T2 of step 3 with `--look "pc,taa=1"` and `--arg game_data_root=<Japan/Asia Disc 1>` on the same binary, 2x, 60 Hz | Goal reached, 60.0 fps, the same three error keys, no clear-gray frames; TAA and the jitter ran; menus, start sequence and race cameras render as with the USA discs. |
 
 **For step 5** (the project owner's): whether `pc` gets `taa=1`; the tiling to pair with it (the single tile with TAA looks close to `high` with TAA and costs about 1 ms less GPU time per frame at 2x); and `TAA_SHARPEN` (0.4 now).
+
+### Checks before step 5 (19 October 2026)
+
+The project owner chose `taa=1` for `pc` with the `high` tiling and `TAA_SHARPEN` 0.4, provided three remaining cases pass at 2x. One does not, so `pc` is unchanged. Runs on `I:\FM4-build-usa` (the binary of step 3), results in `I:\FM4-build-usa\e2e`:
+
+| Case | Run | Result |
+|---|---|---|
+| Sun glare facing the sun | `taasun-on`, `taasun-on2` and `taasun-off`: the Quick Race start sequence and camera cycle with `REX_OCCLUSION_SEGMENT_TRACE`, jitter on and off | Pass. The sun is in view about 78 to 89 s after the start, partly hidden (its occlusion count drops from 1,952 toward 0). The frame-to-frame variation of the count is 1.6% of its mean with jitter and 0.9% without; larger relative jumps occur only below about 60 samples, where the glare is invisible. No flicker, so the sun sprite needs no `[jitter]` exclude. |
+| Tire smoke close up | `taasmoke2`: Quick Race, no AI, `--shader-dev`, handbrake slides and wheelspin with `TAA` switched on and off per camera | Pass for the chase cameras: the smoke shows no trails or doubled edges with TAA, and the car's outline stays clean through it. The cockpit is not covered: the car ended against the wall and no smoke was in view. A first run (`taasmokecheck`) held throttle and brake at a standstill and raised no smoke. |
+| Replay with camera cuts, Bernese Alps | `taaqreplay`: Quick Race with AI, `--look "pc,taa=1"`, 60 s of the replay, `post_pass_log_every=1` | Pass. Every camera change in the replay logs one `history cut` frame and the history is valid again on the next frame (14 cuts in about 70 s; twice the view was unknown for 2 frames at a change, also a cut). A capture 3 frames after a cut shows no trace of the previous shot. |
+| Replay and race, Tsukuba Short Circuit | `taareplay`: the `career` scenario, `--look "pc,taa=1"`, `post_pass_log_every=1` | **Fail.** In every logged frame of the career race and its replay (6,464 frames) the scene camera's view is unknown, so every frame is a `history cut`: TAA never accumulates there, while the scene draws are still jittered. The result is a frame shifted by up to half a pixel each frame with no anti-aliasing. The view comes only from the road vertex shader `C81F8D92FF6529EB` (its view inverse at c243); Tsukuba's road presumably draws with another shader. The step 4 G2 `career` cell ran TAA in the same state. |
+
+Proposed fix, before `pc` gets `taa=1`:
+
+1. Take the view from a source that every race frame has. The car body vertex shader `8D05A46C3584CA9E` carries `matWVP` (c0), `matWV` (c4) and `matW` (c8), so the view to world matrix is `inverse(matWV) * matW` (row vectors) for any car on any track. Alternatively, add the view inverse of each track's road shader (for example `5E33CD06E3AF5B04`, the second road shader in [motion vectors](motion-vectors.md)).
+2. Jitter only while the history can accumulate: arm `[jitter]` only after a frame with a known view, so that a missing camera degrades TAA to the frame without anti-aliasing instead of a shaking one.
+3. Check the view state on more tracks (a Quick Race per environment, `post_pass_log_every`), then rerun the Tsukuba career race and replay.
