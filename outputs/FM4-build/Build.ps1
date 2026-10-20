@@ -1,5 +1,5 @@
 param(
-    [ValidateSet('doctor','setup','generate','build','all','run','warmcache','profbuild')][string]$Action = 'doctor',
+    [ValidateSet('doctor','setup','generate','build','all','run','warmcache','profbuild','export')][string]$Action = 'doctor',
     [string]$Disc1,
     [string]$Disc2,
     [string[]]$Content,
@@ -8,6 +8,7 @@ param(
     [string]$Python = 'python',
     [ValidateRange(1,64)][int]$Jobs = 4,
     [string]$Flavor,
+    [string]$Out,
     [switch]$SingleTile,
     [switch]$Msaa,
     [switch]$FixedVblank,
@@ -41,6 +42,7 @@ if ($Disc2) { $arguments += @('--disc2', $Disc2) }
 foreach ($path in $Content) { $arguments += @('--content', $path) }
 if ($BuildRoot) { $arguments += @('--build-root', $BuildRoot) }
 if ($Flavor) { $arguments += @('--flavor', $Flavor) }
+if ($Out) { $arguments += @('--out', $Out) }
 if ($SingleTile) { $arguments += @('--single-tile') }
 if ($Msaa) { $arguments += @('--msaa') }
 if ($FixedVblank) { $arguments += @('--fixed-vblank') }

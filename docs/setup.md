@@ -155,11 +155,12 @@ powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\outputs\FM4-build\Buil
 | `doctor` | Checks the prerequisites. Makes no changes. |
 | `setup` | Stage 1: builds and installs the runtime. |
 | `generate` | Stage 2: generates the project from the discs. Requires `-Disc1`, optionally `-Disc2` and `-Content`. |
-| `build` | Stage 3: builds the game executables, modules and runtime. |
+| `build` | Stage 3: builds the game executables, modules and runtime, and the GUI launcher. |
 | `all` | `setup`, then `generate`, then `build`. Does not launch the game. |
 | `run` | Launches the game. See [running.md](running.md). |
 | `warmcache` | Fills the shader cache by running the e2e Quick Race timeline once. See [running.md](running.md). |
 | `profbuild` | Builds `game-build-prof`, a copy with line tables and PDBs for profiling. Run `build` first. |
+| `export` | Copies the game and the GUI launcher into the `-Out` folder, to run on another computer. Run `build` first. See [running.md](running.md#export-to-another-computer). |
 
 The stages can also run separately:
 
@@ -181,6 +182,7 @@ The stages can also run separately:
 | `-Disc2` | Extracted Disc 2 root. Optional. |
 | `-Content` | Content package files or directories (DLC). Optional, one or more, read by `generate`, `all` and `run`. See [Downloadable content](#downloadable-content). |
 | `-Flavor` | Compiler experiment for `build`, for example `thinlto,v3`. See [Build flavors](#build-flavors). |
+| `-Out` | The folder of `export`, outside the BuildRoot and the repository. |
 
 ## Stages
 
@@ -226,13 +228,19 @@ runtime edits need only this stage. It then:
   and the shader-mod CPU tests (no GPU needed; see the
   [post pass framework](analysis/post-pass-framework.md));
 - writes `build-result.json`, which lists the SHA-256 hashes of the artifacts and
-  records `gameplay_verified: false`.
+  records `gameplay_verified: false`;
+- builds the [GUI launcher](running.md#gui-launcher), `game-buildm4_launcher.exe`,
+  from [work/fm4-launcher](../work/fm4-launcher) with the runtime's SDL3, Dear ImGui
+  and JSON header, writes its tables to `launcher.json` and copies the look mods and
+  post passes into `look` and `passes`;
+- runs the launcher tests, which compare the launcher's launch plans and its Disc and
+  content checks with those of `pipeline.py`. A flavor build skips the launcher.
 
 ### Rebuilding after edits
 
 - After editing `work/fm4-rex`, run `generate` and then `build` to refresh the
   private project.
-- After editing `work/runtime`, `build` is enough.
+- After editing `work/runtime` or `work/fm4-launcher`, `build` is enough.
 - A `BuildRoot` created before the runtime fork (one that contains `sdk-source`) is
   rejected. Choose a new `BuildRoot`.
 
@@ -275,11 +283,15 @@ FM4-build/
 ├── user-data/        # Profiles, saves, imported Disc 2 and DLC content
 ├── cache/            # Game and shader cache (shader-overrides/: compiled look mods)
 ├── logs/             # Logs for setup, generate, build and startup
+├── launcher-build/   # GUI launcher build and its test cases
+├── look/  passes/    # Look mods and post passes the launchers run
 ├── e2e/              # e2e run output (captures, logs, summary.json)
 ├── snapshots/        # game-build copies used by the matrix.py gates
 ├── loaded-image.bin  # Private image of your executable
 ├── local.json        # Local Disc and content paths, and the release
 ├── content-packages.txt # Packages the last run imports, written by the launcher
+├── launcher.json     # Tables of the GUI launcher, written by build
+├── launcher-settings.json # The GUI launcher's Discs, profiles, looks and bindings
 └── build-result.json # Artifact hashes and build result
 ```
 
@@ -350,5 +362,11 @@ repository.
 - **`Build artifact changed` at launch:** the artifacts no longer match
   `build-result.json`. Run `build` again. Do not mix runtime or GPU plugin files from
   different builds; `run` checks the artifact hashes.
+- **`Launcher tests failed`:** the GUI launcher's port of the launch rules differs from
+  `pipeline.py`. The log lists each difference (`logs\launcher-tests.log` and
+  `launcher-build	estsesult.json`). Change `work/fm4-launcher/src/plan.cpp` to match.
+- **The GUI launcher does not start on another computer:** install the Visual C++
+  2015-2022 x64 redistributable. A missing `MSVCP140_ATOMIC_WAIT.dll` means an older
+  one is installed.
 - **PowerShell blocks the script:** use the process-only execution policy shown in
   [Commands](#commands).

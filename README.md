@@ -84,6 +84,14 @@ Generated source, binaries, and logs stay in `BuildRoot`. Do not commit or uploa
 
 By default the game runs in full screen on the primary monitor (`-Display native`), at `high` quality, with the `aces` look (`pc` is its earlier name). That look adds the project's post-processing, car paint clearcoat, screen-space ambient occlusion, TAA, a lighter cockpit interior and cockpit window glass; `gt` and `neutral` have the same mods with another tone curve. With TAA, races render one tile without MSAA. `-Look original` returns the FM4 look with TAA only, and `-Look "original,taa=0"` the unmodified picture. Quick Race holds a steady 60 fps on the development computer. Frequently used options include `-FrameRate 120` (30 to 240), `-Quality xbox|high|ultra`, `-Supersample`, and `-Info`, which shows a settings overlay that F2 toggles. The launcher reads the disc locations saved during `generate`. Discs are read from their input locations, and the game directory is not written to. Old saves are not copied automatically. Run options, look knobs, keyboard and controller controls, and data directories are described in [docs/running.md](docs/running.md).
 
+`build` also builds a GUI launcher, `BuildRoot\game-build\fm4_launcher.exe`, which offers the same options, profiles, look sliders, key bindings, and Disc and content checks, and starts the game without Python or Visual Studio. To play on another computer, export the build and copy the folder there:
+
+```powershell
+.\outputs\FM4-build\Build.ps1 -Action export @common -Out 'E:\FM4-portable'
+```
+
+The other computer needs the Visual C++ 2015-2022 x64 redistributable, a Direct3D 12 GPU, and your extracted discs. See [GUI launcher](docs/running.md#gui-launcher) and [Export](docs/running.md#export-to-another-computer).
+
 ## Testing
 
 The end-to-end harness, [`e2e.py`](outputs/FM4-build/e2e/e2e.py), runs the game from `BuildRoot` with a diagnostic controller, records captures and per-second performance traces, and writes `summary.json`. Its scenarios cover Quick Race, photo save and load, career races, and career races through to the reward. They follow fixed timelines and check the screen with Windows OCR. [`matrix.py`](outputs/FM4-build/e2e/matrix.py) runs them as tiered gates (smoke, perf, full, and career) on a copy of the build. The harness needs no network access. See the [e2e overview](docs/e2e/README.md) for usage, gates, and scenarios.

@@ -375,6 +375,9 @@ def build_game(root,fxc,jobs,flavor=()):
     artifacts = ['fm4_rex.exe','fm4_rex_XMediaFacade_default.dll','fm4_rex_SpeechFacade_default.dll','rexruntime.dll','rexgpu-xenos.dll']
     report = {'artifacts':{name:digest(build/name) for name in artifacts},'gameplay_verified':False}
     (root/f'build-result{suffix}.json').write_text(json.dumps(report,indent=2))
+    if not flavor:
+        build_launcher(root,jobs)
+        launcher_tests(root)
     print('Build and instruction tests passed. Run with Build.ps1 -Action run using the same -BuildRoot.')
 
 def post_pass_tests(root,jobs):
@@ -719,15 +722,16 @@ def primary_monitor():
     return width,height,dpi_x.value/96
 
 def display_settings(display=DEFAULT_DISPLAY,fullscreen=False,supersample=False,
-                     resolution_scale=None):
+                     resolution_scale=None,monitor=None):
     """Cvars of -Display and a description. native: borderless fullscreen on the primary
     monitor; 720p, 1080p, 1440p, 4k: a window of that many pixels, or fullscreen with
     -Fullscreen or when it does not fit the monitor. The render scale is the smallest whole
     multiple of 1280x720 that covers the 16:9 picture of that screen (720p 1x, 1080p and 1440p
     2x, 4k 3x; a 2560x1600 monitor 2x), one more with -Supersample (up to 4x), or
     -ResolutionScale. The presenter fits the picture to the window, averaging the render
-    over each screen pixel when it is larger (present_area_downscale)."""
-    monitor_width,monitor_height,dpi=primary_monitor()
+    over each screen pixel when it is larger (present_area_downscale). monitor: (width, height,
+    DPI scale) instead of the primary monitor's."""
+    monitor_width,monitor_height,dpi=monitor or primary_monitor()
     if display=='native':
         width,height,fullscreen=monitor_width,monitor_height,True
     else:
@@ -876,7 +880,37 @@ def launch(root,single_tile=False,fixed_vblank=False,frame_rate=None,rov=False,
     for name,expected in report['artifacts'].items():
         if digest(root/'game-build'/name)!=expected:
             raise RuntimeError(f'Build artifact changed: {name}. Rebuild first.')
-    env = {k:v for k,v in os.environ.items() if not k.startswith('FM4_')}
+    # Disc 2 and the -Content packages: imported into user-data once, then kept there.
+    packages=validate_content(disc2,state.get('content'))
+    manifest=write_content_manifest(root,packages) if packages else None
+    if packages:
+        print(f'Content packages: {len(packages)}')
+    cvars,plan_env,description=launch_plan(
+        root,disc1,single_tile=single_tile,fixed_vblank=fixed_vblank,frame_rate=frame_rate,rov=rov,
+        resolution_scale=resolution_scale,full_rate_mirror=full_rate_mirror,look=look,
+        shadow_workaround=shadow_workaround,quality=quality,display=display,fullscreen=fullscreen,
+        supersample=supersample,info=info,ao=ao,shader_dev=shader_dev,texture_dump=texture_dump,
+        texture_replace=texture_replace,msaa=msaa,content_manifest=manifest)
+    print(description)
+    if texture_dump:
+        print(f'Texture dump: {cvars["texture_dump_path"]}')
+    if texture_replace:
+        print(f'Texture replacements: {cvars["texture_replace_path"]}')
+    env={k:v for k,v in os.environ.items() if not k.startswith('FM4_')}
+    env.update(plan_env)
+    args=[root/'game-build/fm4_rex.exe']+[f'--{k}={v}' for k,v in cvars.items()]
+    run(args,cwd=root,env=env,log=root/'logs/play.log')
+
+def launch_plan(root,disc1,single_tile=False,fixed_vblank=False,frame_rate=None,rov=False,
+                resolution_scale=None,full_rate_mirror=False,look=None,shadow_workaround=False,
+                quality=None,display=DEFAULT_DISPLAY,fullscreen=False,supersample=False,info=False,
+                ao=False,shader_dev=False,texture_dump=None,texture_replace=None,msaa=False,
+                content_manifest=None,monitor=None):
+    """The cvars, the FM4_ environment and the display description of a run of the options of
+    launch. The GUI launcher (work/fm4-launcher, plan.cpp) ports this function; launcher_tests
+    compares the two. monitor: the primary monitor's (width, height, DPI scale) instead of the
+    real one."""
+    env={}
     env.update(launch_env())
     if full_rate_mirror:
         env['FM4_HALF_RATE_MIRROR']='0'
@@ -901,9 +935,8 @@ def launch(root,single_tile=False,fixed_vblank=False,frame_rate=None,rov=False,
         # instead of 2.5, for comparisons when the host render target path misbehaves.
         cvars.pop('edram_single_rt_no_wrap')
         cvars.update({'render_target_path_d3d12':'rov','rov_occlusion_async':'all'})
-    screen,description=display_settings(display,fullscreen,supersample,resolution_scale)
+    screen,description=display_settings(display,fullscreen,supersample,resolution_scale,monitor)
     cvars.update(screen)
-    print(description)
     if frame_rate:
         # The display refresh the title sees and the FrameRate of its race scenarios
         # (60). The guest vblank runs at 60 Hz, and at this rate only while a race
@@ -922,24 +955,157 @@ def launch(root,single_tile=False,fixed_vblank=False,frame_rate=None,rov=False,
     # Texture dumps and replacements by content hash (docs/analysis/texture-replacement.md).
     if texture_dump:
         cvars['texture_dump_path']=Path(texture_dump).resolve()
-        print(f'Texture dump: {cvars["texture_dump_path"]}')
     if texture_replace:
         if not Path(texture_replace).is_dir():
             raise ValueError(f'-TextureReplace is not a directory: {texture_replace}')
         cvars['texture_replace_path']=Path(texture_replace).resolve()
-        print(f'Texture replacements: {cvars["texture_replace_path"]}')
-    # Disc 2 and the -Content packages: imported into user-data once, then kept there.
-    packages=validate_content(disc2,state.get('content'))
-    if packages:
-        env['FM4_CONTENT_MANIFEST']=str(write_content_manifest(root,packages))
-        print(f'Content packages: {len(packages)}')
+    if content_manifest:
+        env['FM4_CONTENT_MANIFEST']=str(content_manifest)
     # The settings overlay: F2 in game, shown at start with -Info.
     env['FM4_INFO']=info_overlay(cvars,env,look,DEFAULT_QUALITY if quality is None else quality,
                                  description)
     if info:
         env['FM4_INFO_SHOW']='1'
-    args=[root/'game-build/fm4_rex.exe']+[f'--{k}={v}' for k,v in cvars.items()]
-    run(args,cwd=root,env=env,log=root/'logs/play.log')
+    return cvars,env,description
+
+# The GUI launcher (work/fm4-launcher, docs/running.md#gui-launcher): fm4_launcher.exe beside
+# fm4_rex.exe, and launcher.json, the launcher's tables, beside game-build. The tables come from
+# this file, so the launcher has no rules of its own beyond launch_plan's.
+LAUNCHER_DIRECTORY=REPO/'work/fm4-launcher'
+LAUNCHER_ROOT,LAUNCHER_DISC1='<ROOT>','<DISC1>'
+
+def launcher_data():
+    """launcher.json: the tables of launch_plan, with the placeholders <ROOT> (the BuildRoot or
+    export folder) and <DISC1> in the cvars that hold paths."""
+    root=Path(LAUNCHER_ROOT)
+    cvars=launch_cvars(root,LAUNCHER_DISC1,root/'logs/runtime.log')
+    defaults={knob:value for knob,define in LOOK_KNOBS.items()
+              for name,value in look_knob_defaults().items() if name==define}
+    return {'cvars':{name:str(value) for name,value in cvars.items()},'env':launch_env(),
+            'look':{'knobs':LOOK_KNOBS,'runtime_knobs':list(LOOK_RUNTIME_KNOBS),
+                    'pass_knobs':list(LOOK_PASS_KNOBS),'track_knobs':LOOK_TRACK_KNOBS,
+                    'names':LOOK_NAMES,'presets':LOOK_PRESETS,'aliases':LOOK_ALIASES,
+                    'default':DEFAULT_LOOK,'defaults':defaults},
+            'sun_limit':SUN_LIMIT,
+            'quality':{'presets':QUALITY_PRESETS,'default':DEFAULT_QUALITY},
+            'displays':{name:list(size) for name,size in DISPLAYS.items()},
+            'default_display':DEFAULT_DISPLAY,'max_resolution_scale':MAX_RESOLUTION_SCALE,
+            'gtao':passes_settings(PASSES_DIRECTORY,{}),
+            'releases':{name:{'media_id':info['media_id'],'executables':info['executables']}
+                        for name,info in RELEASES.items()},
+            'content':{'title_id':TITLE_ID,'content_type':MARKETPLACE_CONTENT,
+                       'magics':[magic.decode() for magic in STFS_MAGICS],
+                       'content_type_offset':CONTENT_TYPE_OFFSET,'title_id_offset':TITLE_ID_OFFSET}}
+
+def stage_launcher_files(directory):
+    """launcher.json, and the look mods and post passes that launch copies before each run, into
+    directory (the BuildRoot or an export folder): the launcher runs them from there."""
+    directory=Path(directory)
+    (directory/'launcher.json').write_text(json.dumps(launcher_data(),indent=1),encoding='utf-8')
+    for name,source,suffixes in (('look',LOOK_DIRECTORY,('.hlsli',)),
+                                 ('passes',PASSES_DIRECTORY,('.toml','.hlsl','.hlsli'))):
+        shutil.rmtree(directory/name,ignore_errors=True)
+        (directory/name).mkdir()
+        for path in source.iterdir():
+            if path.suffix in suffixes:
+                shutil.copyfile(path,directory/name/path.name)
+
+def build_launcher(root,jobs):
+    """fm4_launcher.exe (work/fm4-launcher) against the installed runtime's SDL3 and the runtime
+    source's Dear ImGui and JSON header, into game-build; its files into the BuildRoot."""
+    build=root/'launcher-build'
+    run(['cmake','-S',LAUNCHER_DIRECTORY,'-B',build,'-G','Ninja','-DCMAKE_BUILD_TYPE=Release',
+         '-DCMAKE_CXX_COMPILER=clang++','-DCMAKE_C_COMPILER=clang',
+         '-DCMAKE_CXX_FLAGS=-march=x86-64-v2','-DCMAKE_C_FLAGS=-march=x86-64-v2',
+         f'-DCMAKE_PREFIX_PATH={root/"runtime-install"}',
+         f'-DFM4_THIRDPARTY={root/"runtime-source/thirdparty"}'],log=root/'logs/launcher-configure.log')
+    run(['cmake','--build',build,'--parallel',jobs],log=root/'logs/launcher-build.log')
+    shutil.copyfile(build/'fm4_launcher.exe',root/'game-build/fm4_launcher.exe')
+    stage_launcher_files(root)
+
+# Options of the launcher tests: each with each monitor (width, height, DPI scale).
+LAUNCHER_TEST_MONITORS=((2560,1600,1.5),(1920,1080,1.0),(3840,2160,2.0),(1280,800,1.25))
+def launcher_test_options(root):
+    return [{},
+            {'look':'gt','quality':'ultra','frame_rate':120,'display':'1080p'},
+            {'look':'original,taa=0','single_tile':True},
+            {'look':'original','msaa':True,'display':'720p','fullscreen':True},
+            {'rov':True,'fixed_vblank':True,'full_rate_mirror':True,'shadow_workaround':True,'info':True},
+            {'look':'aces,foliage_hue=-60,sky=1.2,road_gloss=0.5,sun=0,tonemap=filmic,taa_point=1',
+             'supersample':True},
+            {'look':'neutral,windshield=2,ao=0','resolution_scale':3,'display':'4k'},
+            {'look':'original,taa=0,sharpen=0.5','ao':True,'texture_dump':str(root/'logs'),
+             'texture_replace':str(root/'cache')},
+            {'look':'pc,clearcoat=0,sky=1,exposure=1e-05','quality':'xbox','display':'1440p'},
+            {'look':'original,taa=0,sun=2.5','msaa':True,'frame_rate':240,'supersample':True}]
+
+def launcher_tests(root):
+    """Compares fm4_launcher.exe's port of launch_plan, disc check and content search with this
+    file's: the plans of launcher_test_options on each test monitor, and the discs and content
+    of local.json."""
+    cases=[]
+    disc1=r'C:\FM4 test\Disc 1'
+    manifest=root/'content-packages.txt'
+    for options in launcher_test_options(root):
+        for monitor in LAUNCHER_TEST_MONITORS:
+            cvars,env,description=launch_plan(root,disc1,content_manifest=manifest,monitor=monitor,
+                                              **options)
+            cases.append({'options':options,'monitor':list(monitor),
+                          'expected':{'cvars':{k:str(v) for k,v in cvars.items()},'env':env,
+                                      'description':description}})
+    state=json.loads((root/'local.json').read_text())
+    discs={'disc1':state['disc1'],'disc2':state['disc2'],'content':state.get('content') or [],
+           'release':disc_release(Path(state['disc1'])),
+           'packages':[str(path) for path in validate_content(Path(state['disc2']) if state['disc2'] else None,
+                                                              state.get('content'))]}
+    work=root/'launcher-build/tests'
+    work.mkdir(parents=True,exist_ok=True)
+    (work/'cases.json').write_text(json.dumps({'root':str(root),'disc1':disc1,
+                                               'manifest':str(manifest),'plans':cases,
+                                               'discs':discs},indent=1),encoding='utf-8')
+    (work/'result.json').unlink(missing_ok=True)
+    run([root/'game-build/fm4_launcher.exe','--test',work/'cases.json',work/'result.json'],
+        cwd=root,log=root/'logs/launcher-tests.log')
+    result=json.loads((work/'result.json').read_text(encoding='utf-8'))
+    if result.get('failures'):
+        raise RuntimeError('Launcher tests failed:\n'+'\n'.join(result['failures'][:20]))
+    print(f'Launcher tests passed: {result["plans"]} plans, discs and {len(discs["packages"])} content packages.')
+
+def export(root,out,jobs):
+    """A folder that runs the game with fm4_launcher.exe alone (docs/running.md#export): the
+    launcher, game-build's executable, modules and runtime, the look mods, the post passes, the
+    shader cache and launcher.json. Not user-data: the profile, saves and imported content stay,
+    and the launcher of the folder imports Disc 2 and the content packages on its first run.
+    The Disc and content paths of local.json become the launcher's first settings."""
+    report=json.loads((root/'build-result.json').read_text())
+    game=root/'game-build'
+    for name,expected in report['artifacts'].items():
+        if digest(game/name)!=expected:
+            raise RuntimeError(f'Build artifact changed: {name}. Rebuild first.')
+    if not (game/'fm4_launcher.exe').is_file():
+        raise RuntimeError('Run build first: game-build has no fm4_launcher.exe.')
+    out=Path(out).resolve()
+    if out==root or root in out.parents or out in root.parents or out==REPO or REPO in out.parents \
+            or out in REPO.parents:
+        raise ValueError('The export folder must be outside the BuildRoot and the repository.')
+    if out.exists() and any(out.iterdir()) and not (out/'launcher.json').is_file():
+        raise ValueError(f'{out} is not empty and is not an earlier export.')
+    (out/'game-build').mkdir(parents=True,exist_ok=True)
+    for name in report['artifacts']:
+        shutil.copyfile(game/name,out/'game-build'/name)
+    shutil.copyfile(game/'fm4_launcher.exe',out/'fm4_launcher.exe')
+    shutil.copyfile(root/'build-result.json',out/'build-result.json')
+    stage_launcher_files(out)
+    if (root/'cache').is_dir():
+        shutil.copytree(root/'cache',out/'cache',dirs_exist_ok=True)
+    settings=out/'launcher-settings.json'
+    if not settings.is_file():
+        state=json.loads((root/'local.json').read_text())
+        settings.write_text(json.dumps({'disc1':state['disc1'],'disc2':state['disc2'] or '',
+                                        'content':state.get('content') or []},indent=1),
+                            encoding='utf-8')
+    print(f'Exported to {out}. Run fm4_launcher.exe there; it imports Disc 2 and the content '
+          'packages on its first run.')
 
 def warm_cache(root):
     """Fills BuildRoot/cache with the shaders and pipelines of the menus and a Quick Race by
@@ -986,7 +1152,7 @@ def launch_cvars(root,disc1,log_file):
 def main():
     parser=argparse.ArgumentParser(description=__doc__)
     parser.add_argument('action',choices=['doctor','setup','generate','build','all','run','warmcache',
-                                          'profbuild'])
+                                          'profbuild','export'])
     parser.add_argument('--build-root',type=Path,default=REPO/'work/portable-fm4')
     parser.add_argument('--disc1',type=Path)
     parser.add_argument('--disc2',type=Path)
@@ -994,6 +1160,8 @@ def main():
                         help='generate, all, run: an FM4 content package (DLC) or a directory searched '
                              'for them; repeatable. Saved in local.json and imported at the next run')
     parser.add_argument('--jobs',type=int,default=4)
+    parser.add_argument('--out',type=Path,
+                        help='export: the folder to export the game and its GUI launcher to')
     parser.add_argument('--single-tile',action='store_true',
                         help='run: races without MSAA and predicated tiling also with a look without '
                              'TAA, then with FXAA (a look with TAA, every preset, has one tile anyway)')
@@ -1076,6 +1244,10 @@ def main():
                                      args.shader_dev,args.texture_dump,args.texture_replace,args.msaa)
     if args.action=='warmcache': warm_cache(root)
     if args.action=='profbuild': build_profiling(root,fxc,args.jobs)
+    if args.action=='export':
+        if not args.out:
+            raise ValueError('export needs --out (Build.ps1 -Out), the folder to export to.')
+        export(root,args.out,args.jobs)
 
 if __name__=='__main__':
     try: main()

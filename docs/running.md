@@ -2,7 +2,9 @@
 
 This guide covers launching a finished build with `Build.ps1 -Action run`: what
 the launcher checks and sets up, its options, the look knobs, the controls and the
-data directories. Build the game first; see [setup.md](setup.md).
+data directories. The same options are in the [GUI launcher](#gui-launcher), which
+also runs the game on a computer without the build tools after an
+[export](#export-to-another-computer). Build the game first; see [setup.md](setup.md).
 
 Performance numbers in this file describe the launcher defaults, and the option
 details keep the measurements that explain each option. Measurements that depend on
@@ -36,6 +38,80 @@ The launcher then:
 
 The game window runs fullscreen on the primary monitor by default. Use Alt+Enter to
 switch to a window (see [Controls](#controls)).
+
+## GUI launcher
+
+`build` builds `fm4_launcher.exe` into `BuildRoot\game-build`, beside the game. It is
+a window with the options of `Build.ps1 -Action run` that starts the game itself: it
+needs neither Python nor Visual Studio nor the repository, so it also runs from an
+[export](#export-to-another-computer) on another computer. Start it by double-clicking
+`fm4_launcher.exe`. `fm4_launcher.exe --play` presses Play at once with the active
+profile, for a desktop shortcut.
+
+The launch rules stay in [pipeline.py](../outputs/FM4-build/pipeline.py): `build`
+writes their tables (the runtime settings, the look presets and knobs, the quality
+presets, the releases and the content package checks) into `BuildRoot\launcher.json`,
+and the launcher's code ([work/fm4-launcher](../work/fm4-launcher)) is a port of
+`launch_plan`. Every `build` compares the two: the launcher tests compute the cvars,
+the environment and the display description of ten sets of options on four monitor
+sizes with both, and check the Discs and content packages of `local.json` with both.
+A difference fails the build.
+
+| Page | Contents |
+| --- | --- |
+| Display | Screen (`-Display`), fullscreen, render scale, supersample, race frame rate, race quality, one tile with TAA or the MSAA tiles (`-Msaa`), the full-rate mirror and the settings overlay. The display and render scale that the options give are shown below them. |
+| Look | The preset (`aces`, `gt`, `neutral`, `original`, `original` without TAA, or a saved look), the tone curve, TAA, and a slider for each [look knob](#look) in five groups: picture, lighting, car, sky and foliage, road. A changed knob is marked and has a Reset button. **Save as look** keeps the current value under a name. The `-Look` value is shown and can be edited. |
+| Controls | The keyboard bindings of the controller (the runtime's `keybind_*` settings). **Set** waits for a key; several keys are separated by commas, modifiers are written as `Shift+Up`. Unknown key names are marked and block Play. A connected controller needs no setup. |
+| Game data | Disc 1 and Disc 2, checked as `generate` checks them, the downloadable content folders and files, and the content packages found, with their import state. **Remove import** deletes an imported package from the user data (see [Data directories](#data-directories)). The texture pack is the `-TextureReplace` folder. |
+| Advanced | Fixed vblank, the shadow workaround, `-SingleTile`, `--ao`, `-Rov`, the texture dump folder, the user data folder, and buttons that open the logs and the user data and copy the command line. |
+
+A **profile** is one set of run options; the Discs, content, saved looks and key
+bindings are shared by all profiles. The launcher saves its settings in
+`launcher-settings.json` beside `launcher.json` when Play is pressed and when it closes.
+In a BuildRoot it starts with the Disc and content paths of `local.json`.
+
+When Play is pressed, the launcher checks the Discs and content, the key bindings and
+the options, compares the build artifacts with `build-result.json` once per session,
+writes `content-packages.txt`, and starts `game-buildm4_rex.exe` with the logs in
+`logs\play.log` and `logsuntime.log`, as `run` does. It hides while the game runs
+and shows again when the game exits. If the game exits with an error, a banner shows
+the exit code and the time it ran, with buttons that open both logs.
+
+Not in the launcher: `-ShaderDev`, `warmcache`, the build flavors and the e2e
+harness, which need the repository. The look mods and post passes that the launcher
+uses are the copies in `BuildRoot\look` and `BuildRoot\passes` that `build` makes;
+after editing `work/fm4-rex/look` or `work/fm4-rex/passes`, run `build` or use
+`Build.ps1 -Action run`.
+
+### Export to another computer
+
+`export` copies what the launcher needs into a folder outside the BuildRoot and the
+repository:
+
+```powershell
+.\outputs\FM4-build\Build.ps1 -Action export -BuildRoot 'D:\FM4-build' -LLVMRoot 'C:\Program Files\LLVM' -Python 'C:\Python311\python.exe' -Out 'E:\FM4-portable'
+```
+
+The folder holds `fm4_launcher.exe`, `game-build` (the executable, the two modules and
+the runtime DLLs of `build-result.json`), `look`, `passes`, the shader cache (`cache`),
+`launcher.json`, `build-result.json`, and a first `launcher-settings.json` with the
+Disc and content paths of `local.json`. It does not hold `user-data`: profiles, saves
+and imported content stay on the build computer. `export` checks the artifact hashes
+first, and refuses a folder that is not empty unless it is an earlier export, which it
+updates and whose `launcher-settings.json` it keeps.
+
+On the other computer:
+
+1. Install the Microsoft Visual C++ 2015-2022 Redistributable (x64), recent enough
+   to have `MSVCP140_ATOMIC_WAIT.dll`. The GPU must support Direct3D 12.
+2. Copy the export folder and your extracted discs to it.
+3. Start `fm4_launcher.exe`, set Disc 1, Disc 2 and the content on the Game data page,
+   and press Play. The first Play imports Disc 2 and the content packages into
+   `user-data` in the export folder; it needs free space of about the size of the
+   packages.
+
+The export contains executables built from your discs. Keep it for your own
+computers; do not publish it.
 
 ## Launcher defaults
 
@@ -597,7 +673,9 @@ directory can be deleted at any time. The run details are written to
 
 ## Data directories
 
-Everything the launcher writes is under `BuildRoot`. The full layout is in
+Everything the launcher writes is under `BuildRoot`, or under the export folder for
+the GUI launcher of an [export](#export-to-another-computer), which has the same
+`user-data`, `cache` and `logs` directories. The full layout is in
 [BuildRoot layout](setup.md#buildroot-layout).
 
 - **Profile:** each run uses a new local profile in `BuildRoot\user-data`. Saves from

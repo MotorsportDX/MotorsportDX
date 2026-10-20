@@ -5,6 +5,8 @@
 !/outputs/FM4-build/
 !/outputs/FM4-source-control/
 !/work/fm4-rex/
+!/work/fm4-launcher/
+!/work/fm4-launcher/src/
 # Runtime fork (ReXGlue SDK, D3D12 only): every file is listed in tracked-files.json.
 !/work/runtime/
 !/work/runtime/**
@@ -62,6 +64,17 @@
 !/outputs/FM4-source-control/third-party-notices/ReXGlue-LICENSE.txt
 !/outputs/FM4-source-control/tracked-files.json
 !/work/fm4-rex/CMakeLists.txt
+!/work/fm4-launcher/CMakeLists.txt
+!/work/fm4-launcher/src/app.cpp
+!/work/fm4-launcher/src/discs.cpp
+!/work/fm4-launcher/src/discs.h
+!/work/fm4-launcher/src/plan.cpp
+!/work/fm4-launcher/src/plan.h
+!/work/fm4-launcher/src/runner.cpp
+!/work/fm4-launcher/src/runner.h
+!/work/fm4-launcher/src/settings.cpp
+!/work/fm4-launcher/src/settings.h
+!/work/fm4-launcher/src/tests.cpp
 !/work/fm4-rex/look/fm4-car.hlsli
 !/work/fm4-rex/look/fm4-cockpit.hlsli
 !/work/fm4-rex/look/fm4-look.hlsli

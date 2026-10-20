@@ -293,6 +293,50 @@
       "provenance": "Repository inventory/configuration"
     },
     {
+      "path": "work/fm4-launcher/CMakeLists.txt",
+      "provenance": "Original GUI launcher source (port of the pipeline.py launch rules, SDL3 and Dear ImGui front end); no game content"
+    },
+    {
+      "path": "work/fm4-launcher/src/app.cpp",
+      "provenance": "Original GUI launcher source (port of the pipeline.py launch rules, SDL3 and Dear ImGui front end); no game content"
+    },
+    {
+      "path": "work/fm4-launcher/src/discs.cpp",
+      "provenance": "Original GUI launcher source (port of the pipeline.py launch rules, SDL3 and Dear ImGui front end); no game content"
+    },
+    {
+      "path": "work/fm4-launcher/src/discs.h",
+      "provenance": "Original GUI launcher source (port of the pipeline.py launch rules, SDL3 and Dear ImGui front end); no game content"
+    },
+    {
+      "path": "work/fm4-launcher/src/plan.cpp",
+      "provenance": "Original GUI launcher source (port of the pipeline.py launch rules, SDL3 and Dear ImGui front end); no game content"
+    },
+    {
+      "path": "work/fm4-launcher/src/plan.h",
+      "provenance": "Original GUI launcher source (port of the pipeline.py launch rules, SDL3 and Dear ImGui front end); no game content"
+    },
+    {
+      "path": "work/fm4-launcher/src/runner.cpp",
+      "provenance": "Original GUI launcher source (port of the pipeline.py launch rules, SDL3 and Dear ImGui front end); no game content"
+    },
+    {
+      "path": "work/fm4-launcher/src/runner.h",
+      "provenance": "Original GUI launcher source (port of the pipeline.py launch rules, SDL3 and Dear ImGui front end); no game content"
+    },
+    {
+      "path": "work/fm4-launcher/src/settings.cpp",
+      "provenance": "Original GUI launcher source (port of the pipeline.py launch rules, SDL3 and Dear ImGui front end); no game content"
+    },
+    {
+      "path": "work/fm4-launcher/src/settings.h",
+      "provenance": "Original GUI launcher source (port of the pipeline.py launch rules, SDL3 and Dear ImGui front end); no game content"
+    },
+    {
+      "path": "work/fm4-launcher/src/tests.cpp",
+      "provenance": "Original GUI launcher source (port of the pipeline.py launch rules, SDL3 and Dear ImGui front end); no game content"
+    },
+    {
       "path": "work/fm4-rex/CMakeLists.txt",
       "provenance": "Development build glue or diagnostic tooling"
     },
