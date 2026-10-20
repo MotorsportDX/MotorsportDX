@@ -73,7 +73,7 @@ How to judge a cell:
 | overall fps FAIL only | the overall fps mixes the race with the 30 fps photo mode, replay or menus, so phase lengths move it | judge performance by the phases, not by the overall value |
 | capture statistics WARN only (luma, black or saturated share, histogram) | races are not deterministic | look at the captures; on its own this is not a regression. `photo_view` often warns here |
 
-Expected values on the current build: photo mode and replay run at 30 fps by design, the `photo_view` menu at about 57 fps, and the 240 Hz race phase at 1x at a little over 200 fps with a p99 of about 5-7 ms. The authoritative numbers are under "Current performance" in [docs/status/current.md](../../../docs/status/current.md); check them there before calling a value normal.
+Expected values on the current build: photo mode runs at 30 fps by design, the replay at the race rate up to about 100 fps at 240 Hz and 1x (30 before 20 October 2026; `--env FM4_FULL_RATE=` for a baseline of that time), the `photo_view` menu at about 57 fps, and the 240 Hz race phase at 1x at a little over 200 fps with a p99 of about 5-7 ms. The authoritative numbers are under "Current performance" in [docs/status/current.md](../../../docs/status/current.md); check them there before calling a value normal.
 
 Noise: single runs vary by 10-20% in fps, and a hot laptop drifts (53.4 then 48.8 fps half an hour apart on the same binary). A performance claim needs `--repeat 3` (or the `perf` tier) and a baseline measured close in time. One smoke run proves that the scenarios still work, not that performance changed.
 

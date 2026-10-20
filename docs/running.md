@@ -99,7 +99,7 @@ takes a value.
 
 | Option | Default | Description |
 | --- | --- | --- |
-| `-FrameRate 30-240` | 60 | Race frame rate. Values above 60 lift the race limit; menus, replays and photo mode keep their own timing. |
+| `-FrameRate 30-240` | 60 | Race frame rate, also for replays and the 3-2-1 countdown. Values above 60 lift the race limit; menus, post-race and photo mode keep their own timing. |
 | `-Display native\|720p\|1080p\|1440p\|4k` | `native` | Screen and render size. `native` is borderless fullscreen on the primary monitor. Other values are a window of that size. |
 | `-Fullscreen` | off | Fullscreen with the `-Display` size and its render scale. |
 | `-Supersample` | off | Render one scale above the screen (up to 4x), then average the result down to the screen. |
@@ -128,8 +128,24 @@ switch in `Build.ps1`. It runs the GTAO pass without a look applying it; see
 `-FrameRate 120` lifts the 60 fps limit of races. The title sees a 120 Hz display,
 the `FrameRate` of its race render scenarios becomes 120, and the title scales its
 time step (race clock against wall time 1.001). The guest vblank stays at 60 Hz in
-menus, countdown, post-race, replays and photo mode (30 fps, as on the Xbox 360). It
-runs at 120 Hz only while a race scenario sets the frame rate (`fm4-vblank-rate.cpp`).
+menus, post-race and photo mode (30 fps, as on the Xbox 360). It runs at 120 Hz only
+while a race scenario sets the frame rate (`fm4-vblank-rate.cpp`).
+
+Since 20 October 2026 replays and the 3-2-1 countdown run at the race frame rate too
+(`FM4_FULL_RATE=replay,countdown` in the launcher environment), instead of the title's
+30: 60 fps without `-FrameRate`, 240 at `-FrameRate 240`. The replay scenarios get the
+race rate in their file; the countdown shares its scenario with the post-race, so its
+rate is set when the countdown is pushed after the pre-race, and put back for the
+post-race. The title presents both every second vblank whatever their frame rate, so
+while one of them runs the guest vblank goes to twice the race rate, at most 240 Hz:
+60 fps at the default (vblank 120 Hz), up to 120 fps at `-FrameRate 120` or more. The
+replay and countdown clocks follow wall time at every rate (replay clock against wall
+time 1.00 at 30, 60 and 240), so only the motion gets smoother. The post-race screens
+and photo mode keep 30.
+
+Measured on 20 October 2026 (`career` scenario, Tsukuba, AI driver): at 1x the replay ran
+at 59.7 fps by default and 94.7 to 101.6 fps at 240 Hz (30 before), the countdown at 60 and
+90 to 115 fps (30 before); at 2x the replay ran at 59.2 and 94.4 fps.
 
 Measured with Quick Race, three runs: 118 to 120 fps, frame p99 8.8 to 9.8 ms, and
 every frame fully rendered. At 240, races run at 220 to 235 fps (p99 5.3 to 6.2 ms).
@@ -236,10 +252,12 @@ instead of waiting for the next one. Measured with Quick Race on `-Rov`, three r
 interleaved for each setting: the same average fps (52.5 against 52.7), frame p95 of
 23 ms instead of 33 ms, frame p99 of 26 ms instead of 35 ms, and unchanged game speed.
 
-Scenarios that render at 30 fps (countdown, post-race, replays and photo mode) keep
+Scenarios that render at 30 fps (post-race and photo mode) keep
 the fixed grid either way. Their render thread waits for the vblanks itself. With
 `vblank_vrr`, one long frame left every later vblank forced or late: the career replay
-at `-ResolutionScale 2` stayed at 23 fps instead of 30.
+at `-ResolutionScale 2` stayed at 23 fps instead of 30. The countdown and replays, at the
+race rate since 20 October 2026, keep `vblank_vrr`: at 2x the replay recovered at once from
+a 165 ms hitch and held 59.2 fps by default.
 
 #### -FullRateMirror
 
@@ -424,7 +442,8 @@ before it (the look's sharpening, no jitter).
 
 - The scene draws are jittered only while the camera moves and the frames come at 45 fps or
   more (since 20 October 2026): rewind, pause, photo mode, a still camera and the 30 fps
-  countdown, post-race and replays get a still picture instead of a shimmering one. The pass
+  post-race get a still picture instead of a shimmering one; replays and the countdown, at the
+  race frame rate since 20 October 2026, are jittered while their camera moves. The pass
   params `TAA_JITTER_MOTION` (0.5 host pixels per frame) and `TAA_JITTER_RATE` (45) set the
   thresholds and change live with `-ShaderDev`; both at 0 jitter every frame
   ([TAA, arming](analysis/taa.md#35-arming-and-switching)).

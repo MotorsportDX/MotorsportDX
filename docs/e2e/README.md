@@ -177,7 +177,7 @@ The harness uses the launcher environment (`pipeline.launch_env`):
 Frame rates above 60 (`Build.ps1 -FrameRate <n>` sets both of these):
 
 - `--arg=--video_mode_refresh_rate=<n>` changes the refresh rate reported to the game.
-- `--env FM4_FRAME_RATE=<n>` replaces the FrameRate 60 of the race render scenarios (countdown, post-race, replays and photo mode keep 30).
+- `--env FM4_FRAME_RATE=<n>` replaces the FrameRate 60 of the race render scenarios. Replays and the 3-2-1 countdown follow the race frame rate since 20 October 2026 (`FM4_FULL_RATE=replay,countdown` from `pipeline.launch_env`; post-race and photo mode keep 30); `--env FM4_FULL_RATE=` gives the title's 30 for comparisons with older baselines.
 
 The guest vblank then runs at 60 Hz, and at `<n>` Hz only while a race scenario sets the frame rate (`fm4-vblank-rate.cpp`). `--arg=--vblank_rate=<hz>` sets a fixed startup vblank rate (without `FM4_FRAME_RATE`). The vblank diagnostics are in [experiments.md](experiments.md).
 

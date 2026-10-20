@@ -774,6 +774,9 @@ def info_overlay(cvars,env,look,quality,display=None):
     mirror='half rate' if env.get('FM4_HALF_RATE_MIRROR')=='1' else 'every frame'
     path=cvars.get('render_target_path_d3d12','rtv').upper()
     lines.append(f'Races: {rate} fps, {pacing}; mirror {mirror}; {path} render targets')
+    full=[name for name in ('replay','countdown') if name in env.get('FM4_FULL_RATE','')]
+    if full:
+        lines.append(f"{' and '.join(full).capitalize()}: {rate} fps (post-race and photo mode 30)")
     if 'post_pass_path' in cvars:
         strength=dict(defines).get('FM4_LOOK_AO')
         applied=f'strength {float(strength):g}' if strength else 'pass only (no look applies it)'
@@ -926,8 +929,10 @@ def warm_cache(root):
 
 def launch_env():
     """Launcher environment, shared with e2e/e2e.py: the rear-view mirror rendered every other
-    frame in every race (the title does that for 12 and 16 cars)."""
-    return {'FM4_HALF_RATE_MIRROR':'1'}
+    frame in every race (the title does that for 12 and 16 cars), and replays and the 3-2-1
+    countdown at the race frame rate instead of 30 (FM4_FULL_RATE, fm4-render-overrides.cpp and
+    fm4-vblank-rate.cpp; post-race and photo mode keep 30)."""
+    return {'FM4_HALF_RATE_MIRROR':'1','FM4_FULL_RATE':'replay,countdown'}
 
 def launch_cvars(root,disc1,log_file):
     """Launcher cvars, shared with e2e/e2e.py. New performance defaults go here once they pass e2e."""

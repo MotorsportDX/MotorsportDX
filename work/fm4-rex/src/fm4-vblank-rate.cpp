@@ -16,6 +16,20 @@
 // FM4_VBLANK_SWITCH=0 keeps the vblank rate fixed; FM4_VBLANK_TRACE=1 prints
 // every push and pop.
 //
+// FM4_FULL_RATE containing "countdown" runs the 3-2-1 countdown at the race
+// frame rate (FM4_FRAME_RATE, or 60) instead of 30. The countdown and the
+// post-race push the same N_321_and_PostRace scenario (one file, one settings
+// object), so the push of that scenario sets the FrameRate control of the
+// settings to the race rate when the scenario popped last was not a race (the
+// countdown follows the pre-race; the post-race follows the race) and back to
+// its own value otherwise. Split screen keeps its own. FM4_FULL_RATE containing
+// "replay" marks the N-Car replay scenarios, whose FrameRate
+// fm4-render-overrides.cpp raises. The title presents the countdown and the
+// replays every second vblank whatever their FrameRate, so while one of them is
+// on top the guest vblank runs at twice the race rate, at most 240 Hz: 120 Hz
+// at the title's 60 (60 fps), 240 Hz at 120 or more (up to 120 fps). Their
+// clocks follow wall time, and vblank_vrr stays on for them.
+//
 // Scenarios below 60 (30: two vblanks per frame) also hold vblank_vrr to the
 // fixed grid: their render thread waits for the vblanks itself, which the
 // vsync thread cannot see, and after one long frame (a 200 ms hitch in the
@@ -26,12 +40,14 @@
 #include <rex/hook.h>
 #include <rex/memory.h>
 #include <rex/runtime.h>
+#include <algorithm>
 #include <cstdint>
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
 #include <mutex>
 #include <string>
+#include <unordered_map>
 #include <vector>
 
 namespace {
@@ -46,8 +62,16 @@ rex::Runtime* runtime = nullptr;
 uint32_t race_rate = 0;  // 0: switching off
 bool vrr_half_rate = false;
 bool trace = false;
+uint32_t countdown_rate = 0;  // 0: the countdown keeps the title's rate
+bool full_replay = false;     // the replays run at the race rate
+uint32_t full_vblank = 0;     // vblank while the countdown or a replay is on top
+bool switching = false;       // the vblank rate follows the scenarios
 std::mutex mutex;
 std::vector<uint32_t> frame_rates;  // per pushed scenario, bottom first
+std::vector<std::string> names;     // per pushed scenario, bottom first
+std::vector<char> fulls;  // per pushed scenario: the countdown or a replay at the race rate
+std::string last_popped;
+std::unordered_map<uint32_t, uint32_t> own_frame_rates;  // settings address: its FrameRate
 double current_rate = 0.0;
 
 uint32_t Load(const uint8_t* base, uint32_t address) {
@@ -65,16 +89,20 @@ std::string Name(const uint8_t* base, uint32_t settings) {
 // With the mutex held.
 void Apply(const char* event, const std::string& name) {
   uint32_t frame_rate = kDefaultFrameRate;
-  for (auto it = frame_rates.rbegin(); it != frame_rates.rend(); ++it) {
-    if (*it != kDefaultFrameRate) {
-      frame_rate = *it;
+  bool full = false;
+  for (size_t i = frame_rates.size(); i-- > 0;) {
+    if (fulls[i] || frame_rates[i] != kDefaultFrameRate) {
+      frame_rate = frame_rates[i];
+      full = fulls[i] != 0;
       break;
     }
   }
-  const double rate = frame_rate > kDefaultFrameRate ? race_rate : kDefaultFrameRate;
+  const double rate = full                                           ? full_vblank
+                      : frame_rate > kDefaultFrameRate && race_rate ? race_rate
+                                                                     : kDefaultFrameRate;
   auto* gpu = static_cast<rex::graphics::GraphicsSystem*>(runtime->graphics_system());
   if (gpu) gpu->SetVblankVrrPaused(!vrr_half_rate && frame_rate < kDefaultFrameRate);
-  if (race_rate && gpu && rate != current_rate) {
+  if (switching && gpu && rate != current_rate) {
     gpu->SetVblankRate(rate);
     current_rate = rate;
   }
@@ -93,14 +121,24 @@ void FM4InstallVblankRate(rex::Runtime* rt) {
   vrr_half_rate = half_rate && std::strcmp(half_rate, "1") == 0;
   runtime = rt;
   const unsigned long rate = frame_rate ? std::strtoul(frame_rate, nullptr, 10) : 0;
-  if (rate <= kDefaultFrameRate || (enabled && std::strcmp(enabled, "0") == 0)) return;
+  const uint32_t target =
+      rate > kDefaultFrameRate ? static_cast<uint32_t>(rate) : kDefaultFrameRate;
+  const char* full_rate = std::getenv("FM4_FULL_RATE");
+  if (full_rate && std::strstr(full_rate, "countdown")) countdown_rate = target;
+  full_replay = full_rate && std::strstr(full_rate, "replay");
+  if (countdown_rate || full_replay) full_vblank = std::min(2 * target, std::max(target, 240u));
+  if (rate <= kDefaultFrameRate && !full_vblank) return;
+  if (enabled && std::strcmp(enabled, "0") == 0) return;
   auto* gpu = static_cast<rex::graphics::GraphicsSystem*>(rt->graphics_system());
   if (!gpu) return;
-  race_rate = static_cast<uint32_t>(rate);
+  race_rate = rate > kDefaultFrameRate ? static_cast<uint32_t>(rate) : 0;
+  switching = true;
   current_rate = kDefaultFrameRate;
   gpu->SetVblankRate(current_rate);
-  std::fprintf(stderr, "FM4 vblank: 60 Hz, %u Hz while a race scenario sets the frame rate\n",
-               race_rate);
+  std::fprintf(stderr,
+               "FM4 vblank: 60 Hz, %u Hz while a race scenario sets the frame rate, %u Hz in "
+               "the countdown and replays\n",
+               race_rate ? race_rate : kDefaultFrameRate, full_vblank ? full_vblank : 60u);
 }
 
 // CRenderThreadLink::PushDynamicRenderSettings(this + 8,
@@ -110,9 +148,23 @@ REX_HOOK_RAW(sub_82442600) {
   {
     const uint32_t settings = Load(base, ctx.r4.u32);
     const bool valid = settings && Load(base, settings) == kSettingsVtable;
+    const std::string name = valid ? Name(base, settings) : "?";
     std::lock_guard lock(mutex);
+    bool countdown = false;
+    if (valid && countdown_rate && name.ends_with("_321_and_PostRace") &&
+        !name.starts_with("Splitscreen")) {
+      const uint32_t own =
+          own_frame_rates.try_emplace(settings, Load(base, settings + kSettingsFrameRate))
+              .first->second;
+      countdown = !last_popped.ends_with("_Race");
+      rex::memory::store_and_swap<uint32_t>(const_cast<uint8_t*>(base) + settings +
+                                                kSettingsFrameRate,
+                                            countdown ? countdown_rate : own);
+    }
     frame_rates.push_back(valid ? Load(base, settings + kSettingsFrameRate) : kDefaultFrameRate);
-    Apply("push", valid ? Name(base, settings) : "?");
+    names.push_back(name);
+    fulls.push_back(countdown || (full_replay && name.find("-Car_Replay") != std::string::npos));
+    Apply("push", name);
   }
   __imp__sub_82442600(ctx, base);
 }
@@ -123,7 +175,12 @@ REX_HOOK_RAW(sub_82438A38) {
   {
     std::lock_guard lock(mutex);
     if (!frame_rates.empty()) frame_rates.pop_back();
-    Apply("pop", "");
+    if (!fulls.empty()) fulls.pop_back();
+    if (!names.empty()) {
+      last_popped = names.back();
+      names.pop_back();
+    }
+    Apply("pop", last_popped);
   }
   __imp__sub_82438A38(ctx, base);
 }

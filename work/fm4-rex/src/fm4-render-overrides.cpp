@@ -30,6 +30,11 @@
 // FM4_FRAME_RATE=<frames per second> replaces the FrameRate value 60 of the race
 // scenarios; countdown, post-race, replays and photo mode keep 30
 // (fm4-vblank-rate.cpp raises the guest vblank rate only for races).
+// FM4_FULL_RATE=<list of replay, countdown> lifts those 30 fps scenarios to the
+// race frame rate (FM4_FRAME_RATE, or the title's 60 without it): replay
+// replaces the FrameRate 30 of the N-Car replay scenarios here; countdown is
+// done when the scenario is pushed (fm4-vblank-rate.cpp), because the countdown
+// and the post-race share one scenario file. Post-race and photo mode keep 30.
 // FM4_HALF_RATE_MIRROR=0 or 1 sets HalfRateMirror in the race scenarios: the
 // title renders the rear-view mirror every other frame with 1, which it uses
 // for 12 and 16 car races only (1 and 8 car races render it every frame).
@@ -99,6 +104,10 @@ void FM4MountRenderOverrides(rex::Runtime* runtime) {
   const bool frame_rate_override =
       frame_rate && *frame_rate &&
       std::string(frame_rate).find_first_not_of("0123456789") == std::string::npos;
+  const char* full_rate = std::getenv("FM4_FULL_RATE");
+  const bool full_rate_replay =
+      full_rate && std::string(full_rate).find("replay") != std::string::npos;
+  const std::string full_rate_value = frame_rate_override ? frame_rate : "60";
   const char* half_rate_mirror = std::getenv("FM4_HALF_RATE_MIRROR");
   const bool mirror_override = half_rate_mirror &&
                                (half_rate_mirror[0] == '0' || half_rate_mirror[0] == '1') &&
@@ -106,7 +115,7 @@ void FM4MountRenderOverrides(rex::Runtime* runtime) {
   const char* race_settings_env = std::getenv("FM4_RACE_SETTINGS");
   const std::string race_settings = race_settings_env ? race_settings_env : "";
   if (!shadow_workaround && !tiling_override && !frame_rate_override && !mirror_override &&
-      race_settings.empty())
+      !full_rate_replay && race_settings.empty())
     return;
   const auto source = runtime->game_data_root() / "media" / "RenderScenarios";
   const auto destination = runtime->cache_root() / "fm4-render-overrides";
@@ -140,6 +149,18 @@ void FM4MountRenderOverrides(rex::Runtime* runtime) {
         if (xml.compare(value, end - value, "60") != 0) continue;
         xml.replace(value, end - value, frame_rate);
         ++changed;
+      }
+    }
+    if (full_rate_replay && name.find("-Car_Replay") != std::string::npos) {
+      constexpr char kFrameRate[] = "<FrameRate value=\"";
+      const size_t at = xml.find(kFrameRate);
+      if (at != std::string::npos) {
+        const size_t value = at + sizeof(kFrameRate) - 1;
+        const size_t end = xml.find('"', value);
+        if (end != std::string::npos && xml.compare(value, end - value, "30") == 0) {
+          xml.replace(value, end - value, full_rate_value);
+          ++changed;
+        }
       }
     }
     if (race && mirror_override) {
@@ -193,10 +214,12 @@ void FM4MountRenderOverrides(rex::Runtime* runtime) {
     throw std::runtime_error("Render scenario override path validation failed");
   std::fprintf(stderr,
                "FM4 render scenario overrides (shadow workaround %d, tiling %s, frame rate %s, "
-               "half rate mirror %s, race settings %s): %u changes; UI/global unchanged; "
-               "source=%s\n",
+               "replays %s, half rate mirror %s, race settings %s): %u changes; UI/global "
+               "unchanged; source=%s\n",
                int(shadow_workaround), tiling_override ? tiling : "-",
-               frame_rate_override ? frame_rate : "-", mirror_override ? half_rate_mirror : "-",
+               frame_rate_override ? frame_rate : "-",
+               full_rate_replay ? full_rate_value.c_str() : "-",
+               mirror_override ? half_rate_mirror : "-",
                race_settings.empty() ? "-" : race_settings.c_str(), changed,
                source_device_path.c_str());
 }

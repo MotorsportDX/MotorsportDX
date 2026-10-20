@@ -329,6 +329,18 @@ class PipelineTests(unittest.TestCase):
                     self.assertNotIn('cockpit_light',pipeline.look_knobs(look))
             self.assertEqual(pipeline.look_knob_defaults()['FM4_LOOK_COCKPIT_LIGHT'],'0.0')
 
+    def test_full_rate(self):
+        """Replays and the countdown run at the race frame rate (FM4_FULL_RATE), shared with
+        e2e.py, and the overlay says so; without the variable the line is gone."""
+        env=pipeline.launch_env()
+        self.assertEqual(env['FM4_FULL_RATE'],'replay,countdown')
+        with tempfile.TemporaryDirectory(prefix='fm4 full rate test ') as directory:
+            cvars=pipeline.look_cvars(Path(directory),'original')
+            overlay=pipeline.info_overlay(cvars,{**env,'FM4_FRAME_RATE':'240'},'original','high')
+            self.assertIn('Replay and countdown: 240 fps (post-race and photo mode 30)',overlay)
+            overlay=pipeline.info_overlay(cvars,{'FM4_FULL_RATE':''},'original','high')
+            self.assertNotIn('Replay and countdown',overlay)
+
     def test_new_clone_has_all_source_inputs(self):
         for name in ('rexglue.cmake','guard-generated.py','dump-image.cpp','switch-recipes.json'):
             self.assertTrue((pipeline.HERE/name).is_file(),name)
