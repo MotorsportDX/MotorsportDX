@@ -89,7 +89,8 @@ Details in [windshield](../analysis/windshield.md). The title draws no window gl
 - The pass finds the cockpit frames (the interior shell drew and covers at least 10% of the frame; 51% in the cockpit camera) and the window pixels from the scene depth and stencil; the debug view marks the windows, and the intro, 3-2-1, hood, bumper and chase cameras as no cockpit.
 - With TAA off, `WINDSHIELD` 1 against 0 in a cockpit freeze changes 99.2% of the window pixels and 0.51% of the interior pixels (the one-pixel soft rim); the HUD, the interior mirror and the side mirror do not change. Hood and far chase freezes are byte-identical with it on and off.
 - GPU time at 2x: +0.28 ms per frame in the cockpit camera.
-- Open: the project owner's review of the look; other cars and tracks, rain and night.
+- Glare and dust are stronger since 20 October 2026 (`WINDSHIELD_GLARE` 0.3, threshold 0.3, radius 0.25, `WINDSHIELD_DUST` 1.0): with the first values they were hardly visible at strength 1. The project owner chose this set from an A/B of three in four frozen cockpit frames at 2x (`windshield-glare`).
+- Open: other cars and tracks, rain and night.
 
 ### Motion vectors, 18 and 19 October 2026
 

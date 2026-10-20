@@ -101,19 +101,21 @@ TAA_POINT = 0
 # through it, its color, the dashboard's reflection and how far above the
 # dashboard's top edge it fades out (frame heights), how much the reflection is
 # squashed, the linear luma above which the interior below the window is taken
-# as lit from outside (the hood, seen through the glass), the glare of the light above the threshold (linear) spread over the
-# radius (frame heights), the dust that scatters it, the glare's color, and the
-# least share of the frame the interior covers in a cockpit frame.
+# as lit from outside (the hood, seen through the glass), the glare of the light
+# above the threshold (linear) spread over the radius (frame heights), the dust
+# that scatters it, the glare's color, and the least share of the frame the
+# interior covers in a cockpit frame. Glare and dust: the middle of three sets
+# of an A/B at 2x on 20 October 2026 (docs/analysis/windshield.md).
 WINDSHIELD_TINT = 1.0
 WINDSHIELD_TINT_COLOR = "float3(0.88, 0.95, 0.93)"
 WINDSHIELD_REFLECTION = 0.12
 WINDSHIELD_REFLECTION_HEIGHT = 0.3
 WINDSHIELD_REFLECTION_SQUASH = 0.6
 WINDSHIELD_REFLECTION_HOOD = 0.03
-WINDSHIELD_GLARE = 0.15
-WINDSHIELD_GLARE_THRESHOLD = 0.45
-WINDSHIELD_GLARE_RADIUS = 0.2
-WINDSHIELD_DUST = 0.5
+WINDSHIELD_GLARE = 0.3
+WINDSHIELD_GLARE_THRESHOLD = 0.3
+WINDSHIELD_GLARE_RADIUS = 0.25
+WINDSHIELD_DUST = 1.0
 WINDSHIELD_GLARE_COLOR = "float3(1.0, 0.95, 0.85)"
 WINDSHIELD_MIN_INTERIOR = 0.1
 
