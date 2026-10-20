@@ -125,6 +125,7 @@ The next validation priorities are a second computer, Disc 2 car races on the la
 | [docs/analysis/motion-vectors.md](docs/analysis/motion-vectors.md) | Per-pixel motion vectors for TAA and upscalers: the game's motion blur reprojection, its stencil object IDs, and the host-built per-car pass |
 | [docs/analysis/hdr-output.md](docs/analysis/hdr-output.md) | Design note for HDR10 output: where the frame loses its range, the measured highlight range, options and the recommended design |
 | [docs/analysis/cp-draw-offload.md](docs/analysis/cp-draw-offload.md) | Feasibility of moving draw work off the command processor thread: where the time goes, per-draw workers, a PM4 front end and back end split, cheaper per-draw savings, measurements and recommendation |
+| [docs/analysis/fsr-plan.md](docs/analysis/fsr-plan.md) | Plan for AMD FSR 3.1 beside TAA: version and license, build, the runtime integration at the scene_color point, upscaling later, validation and stages (not built) |
 | [docs/analysis/taa.md](docs/analysis/taa.md) | TAA at the existing render scale, in every look preset: current state, injection points, jitter, the scene camera, tiling, the resolve, knobs, validation and history |
 | [docs/analysis/texture-replacement.md](docs/analysis/texture-replacement.md) | Texture dumps and replacements keyed by a content hash: the hash, the DDS formats, and what is not covered |
 | [docs/analysis/b4-shader-research.md](docs/analysis/b4-shader-research.md) | Research on the editable shader path (HLSL through FXC, with overrides per hash) |

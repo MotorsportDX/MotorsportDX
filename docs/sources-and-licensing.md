@@ -43,6 +43,23 @@ Research notes:
 - [Visual style of FM4](analysis/visual-style.md): whether the look comes from shader code in the game or from parameters in the track assets.
 - [B4 shader research](analysis/b4-shader-research.md): the editable shader path (HLSL compiled through FXC, with overrides per hash).
 
+## Candidate third-party code: AMD FSR
+
+No FSR code or binary is in the repository. Reviewed on 20 October 2026 as a candidate for an anti-aliasing or upscaling post pass beside the project's own TAA ([TAA, open items](analysis/taa.md#11-open-items-and-later)):
+
+| Version | Form | License | On the development GPU (RTX 5070 Ti Laptop) |
+|---|---|---|---|
+| FSR 2.x ([FidelityFX-FSR2](https://github.com/GPUOpen-Effects/FidelityFX-FSR2)) | Source (HLSL and C++) | MIT, checked in its `LICENSE.txt`; the only condition is that the notice "Copyright (c) 2022-2023 Advanced Micro Devices, Inc." and the permission text stay with the code | Runs; not vendor specific |
+| FSR 3.1 ([FidelityFX SDK](https://github.com/GPUOpen-LibrariesAndSDKs/FidelityFX-SDK) 1.1.x) | Source, released with SDK 1.1 | MIT according to the SDK's README; the `LICENSE.txt` of the SDK itself was not read yet | Runs; needs Shader Model 6.2 |
+| FSR 4.0.2 (FidelityFX SDK 2.0) | Pre-built, signed DLLs only (`amd_fidelityfx_loader.dll` and `amd_fidelityfx_upscaler.dll`), which AMD requires; no source of the neural model | The redistribution terms of the DLLs are not stated on [AMD's SDK 2.0 page](https://gpuopen.com/learn/amd-fidelityfx-sdk-2-0/); press reports of an MIT license do not clearly cover the DLLs or the model | Does not run: FSR 4 needs a Radeon RX 9000 or newer, and the API falls back to FSR 3.1.5 elsewhere |
+
+Conclusions:
+
+- FSR 3.1 built from source is the usable candidate (for example its native AA mode on the single tile). Before any of it enters the repository: read the SDK's `LICENSE.txt`, add the AMD notice under `outputs/FM4-source-control/third-party-notices`, whitelist the files in `.gitignore` with review entries in `tracked-files.json`, and check that MIT code fits beside the runtime's license.
+- FSR 4 is not planned: it would mean redistributing AMD binaries on undocumented terms, and it does not run on the development computer.
+- DLSS (DLAA) needs its own review of NVIDIA's SDK license; not reviewed yet.
+- The plan for adding FSR 3.1 is in [FSR plan](analysis/fsr-plan.md).
+
 ## Inventory and the pre-commit check
 
 - The root `.gitignore` denies everything by default and re-includes only individually reviewed paths.
