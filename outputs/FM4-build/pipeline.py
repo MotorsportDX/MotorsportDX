@@ -783,10 +783,10 @@ def info_overlay(cvars,env,look,quality,display=None):
                      f'{quality}')
     if dict(defines).get('TAA')=='1' and dict(defines).get('TAA_POINT')=='1':
         lines.append("Anti-aliasing: TAA before the post chain (scene_color), the look's sharpening, "
-                     'scene jittered')
+                     'scene jittered while the camera moves')
     elif dict(defines).get('TAA')=='1':
         lines.append(f"Anti-aliasing: TAA before the HUD, sharpen {float(dict(defines)['TAA_SHARPEN']):g}, "
-                     'scene jittered')
+                     'scene jittered while the camera moves')
     if 'WINDSHIELD' in dict(defines):
         lines.append(f"Cockpit glass: strength {float(dict(defines)['WINDSHIELD']):g}")
     if 'rtv_occlusion_awaited_scale' in cvars:

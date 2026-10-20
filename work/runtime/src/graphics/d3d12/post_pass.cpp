@@ -903,6 +903,36 @@ bool PostPasses::LoadManifest(Manifest& manifest) {
             std::strtoull(node.value_or(std::string()).c_str(), nullptr, 16));
       }
     }
+    // Only while the camera moves and the frames come fast enough: a number, or
+    // a float param that changes live.
+    auto threshold = [&](const char* key, double& value, uint32_t& param) {
+      const toml::node* node = (*jitter)[key].node();
+      if (!node) return true;
+      if (const auto* name = node->as_string()) {
+        param = find_param(name->get());
+        if (param == UINT32_MAX || manifest.params[param].is_uint) {
+          return fail(fmt::format("jitter: {} '{}' names no float param", key, name->get()));
+        }
+        return true;
+      }
+      if (!NodeNumber(node, value)) {
+        return fail(fmt::format("jitter: {} is a number or a param name", key));
+      }
+      return true;
+    };
+    if (!threshold("min_motion", manifest.jitter_min_motion, manifest.jitter_min_motion_param) ||
+        !threshold("min_frame_rate", manifest.jitter_min_frame_rate,
+                   manifest.jitter_min_frame_rate_param)) {
+      return false;
+    }
+    double distance = manifest.jitter_motion_distance, hold = manifest.jitter_motion_hold;
+    NodeNumber((*jitter)["motion_distance"].node(), distance);
+    NodeNumber((*jitter)["motion_hold"].node(), hold);
+    if (!(distance > 0.0) || !(hold >= 1.0 && hold <= 1024.0)) {
+      return fail("jitter: motion_distance is above 0, motion_hold 1 to 1024 frames");
+    }
+    manifest.jitter_motion_distance = distance;
+    manifest.jitter_motion_hold = uint32_t(hold);
   }
   return true;
 }
@@ -1723,6 +1753,12 @@ void PostPasses::UpdateMotion() {
   }
   motion_.valid = true;
   motion_.slots_own = 1;
+  if (depth_group_.pitch && depth_group_.height) {
+    motion_.camera_pixels = post_pass::CameraMotionPixels(
+        world_reprojection, camera_.unpack, previous_camera_.unpack, double(depth_group_.pitch),
+        double(depth_group_.height), double(scene_width_) / double(depth_group_.pitch),
+        double(scene_height_) / double(depth_group_.height), manifest_->jitter_motion_distance);
+  }
   for (uint32_t slot = 0; slot < post_pass::kMotionSlots; ++slot) {
     post_pass::MatrixD reprojection = world_reprojection;
     if (slot == post_pass::kMotionInteriorSlot) {
@@ -2464,7 +2500,7 @@ void PostPasses::LogRun(int32_t variant_index) {
       "0x{:08X}-0x{:08X} {}x{} (EDRAM {}), host {}x{}; camera Q {:.7g} Q*near {:.6g} (near "
       "{:.4g}), W(d=0) {:.4g} W(d=1) {:.4g}, far W {:.4g}, depth mul {:.6g} add {:.6g}, x {:.6g} "
       "{:.6g}, y {:.6g} {:.6g}, z/W {:.3g}, focal {:.1f} px (FOV x {:.1f} deg over {} px), origin "
-      "{}; history {}; motion {}; jitter {}{}; variant {}:{}",
+      "{}; history {}; motion {}; jitter {} (camera {}, {:.1f} fps){}; variant {}:{}",
       runs_ - 1, depth_group_.frame, SteadyMilliseconds(), camera_.frame,
       camera_.view_frame == command_processor_.GetCurrentFrame() ? "known" : "unknown",
       camera_.view_frame != command_processor_.GetCurrentFrame() ? std::string()
@@ -2479,7 +2515,10 @@ void PostPasses::LogRun(int32_t variant_index) {
       camera_.guest_origin,
       previous_valid_ ? (IsCameraCut() ? "cut" : "valid") : "none", MotionSummary(),
       jitter_active_ ? fmt::format("{:.4f},{:.4f}", jitter_[0], jitter_[1]) : std::string("off"),
-      WriteBackSummary(), variant_index, params);
+      motion_.frame == command_processor_.GetCurrentFrame() && motion_.valid
+          ? fmt::format("{:.3f} px", motion_.camera_pixels)
+          : std::string("unknown"),
+      jitter_gate_.FrameRate(), WriteBackSummary(), variant_index, params);
 }
 
 std::string PostPasses::WriteBackSummary() const {
@@ -2499,17 +2538,50 @@ std::string PostPasses::WriteBackSummary() const {
   return summary;
 }
 
+double PostPasses::ParamValue(uint32_t index) const {
+  if (manifest_->params[index].is_uint) {
+    return double(param_values_[index]);
+  }
+  float value;
+  std::memcpy(&value, &param_values_[index], sizeof(value));
+  return value;
+}
+
+post_pass::JitterGateSettings PostPasses::JitterSettings() const {
+  const Manifest& manifest = *manifest_;
+  post_pass::JitterGateSettings settings;
+  settings.min_motion = manifest.jitter_min_motion_param != UINT32_MAX
+                            ? ParamValue(manifest.jitter_min_motion_param)
+                            : manifest.jitter_min_motion;
+  settings.min_frame_rate = manifest.jitter_min_frame_rate_param != UINT32_MAX
+                                ? ParamValue(manifest.jitter_min_frame_rate_param)
+                                : manifest.jitter_min_frame_rate;
+  settings.hold = manifest.jitter_motion_hold;
+  return settings;
+}
+
 void PostPasses::UpdateJitter() {
   jitter_active_ = false;
   jitter_[0] = jitter_[1] = 0.0f;
+  // The frame time and the camera's motion of every frame, for the gate.
+  auto now = std::chrono::steady_clock::now();
+  double frame_seconds = last_swap_time_ != std::chrono::steady_clock::time_point()
+                             ? std::chrono::duration<double>(now - last_swap_time_).count()
+                             : 0.0;
+  last_swap_time_ = now;
   if (!manifest_) {
     return;
   }
   const Manifest& manifest = *manifest_;
   uint64_t frame = command_processor_.GetCurrentFrame();
   int32_t variant_index;
+  bool skipped = IsSkipped(&variant_index);
+  UpdateParams(variant_index);
+  const post_pass::JitterGateSettings settings = JitterSettings();
+  jitter_gate_.EndFrame(motion_.frame == frame && motion_.valid ? motion_.camera_pixels : -1.0,
+                        frame_seconds, settings);
   const std::string& mode = REXCVAR_GET(post_pass_jitter);
-  if (mode == "off" || IsSkipped(&variant_index)) {
+  if (mode == "off" || skipped) {
     return;
   }
   uint32_t phases = manifest.jitter_phases;
@@ -2532,13 +2604,13 @@ void PostPasses::UpdateJitter() {
   } else {
     // The manifest's: after a frame in which its consumer ran with a known view
     // (every frame without one is a history cut, so a jitter could not
-    // accumulate), while its if holds.
+    // accumulate), while its if holds, the camera moves and the frames come
+    // fast enough (JitterGate).
     if (!manifest.jitter || jitter_consumer_frame_ != frame || !previous_scene_ ||
         !previous_camera_.view_known) {
       return;
     }
-    UpdateParams(variant_index);
-    if (!ConditionsHold(manifest.jitter_conditions)) {
+    if (!ConditionsHold(manifest.jitter_conditions) || !jitter_gate_.Armed(settings)) {
       return;
     }
   }

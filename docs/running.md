@@ -318,7 +318,7 @@ and `-Look original`.
 | `road_debug` | 0 to 7 | Debug views of the lit road `ROAD_BLND_2`: 1 the highlight's share of the light, 2 without the highlight, 3 the highlight alone, 4 which light the diffuse takes, 5 the parts of the specular amount. With `road_sheen` above 0, on every lit road shader: 6 the image times the sheen's grain, 7 the sheen alone. See [look mod coverage](analysis/look-mod-coverage.md#road-surface-18-october-2026). |
 | `cockpit_light` | number, 0 to 1 | The least share of the sun's direct light that the cockpit interior and the driver keep in the car's own shadow (`fm4-cockpit.hlsli`), in every car shader set: it raises the floor of their shadow term, which the game sets to 0. In the sun the shaded gauges, cluster and gloves become readable while the exposure, the windows and the bloom stay as they are. Faces turned away from the sun and the black dashboard top and wheel rim stay dark. See [cockpit brightness](analysis/cockpit-brightness.md). |
 | `ao` | number, `0` turns it off | Strength of the screen-space ambient occlusion. |
-| `taa` | `1` on (in `pc`), `0` off (the default of the other presets) | Temporal anti-aliasing before the HUD, with the scene jittered; the look's `sharpen` moves after it. See [Temporal anti-aliasing](#temporal-anti-aliasing). |
+| `taa` | `1` on (in `pc`), `0` off (the default of the other presets) | Temporal anti-aliasing before the HUD, with the scene jittered while the camera moves; the look's `sharpen` moves after it. See [Temporal anti-aliasing](#temporal-anti-aliasing). |
 | `taa_point` | `0` (default) or `1` | With `taa`: `1` runs TAA at the scene_color point, before the game's post chain, instead of before the HUD; the look's `sharpen` stays in the final combine. See [Temporal anti-aliasing](#temporal-anti-aliasing). |
 | `windshield` | number, 0 (off) to 2; 1 in `pc` | Glass on the windshield and side windows of the race cockpit camera, which the game leaves open: a light tint, a faint reflection of the dashboard, and glare and dust toward bright light. See [Cockpit glass](#cockpit-glass). |
 | `sun` | number, `0` turns the glare off | Strength of the sun glare on the RTV path, the same at every MSAA level. Without it (`original`) the glare follows the counted samples. See [Sun glare](#sun-glare). |
@@ -422,6 +422,12 @@ shimmering. The HUD and the side mirrors are drawn after it and stay sharp. The 
 sets it since 19 October 2026, with the `high` tiling; `-Look "pc,taa=0"` is the `pc` look
 before it (the look's sharpening, no jitter).
 
+- The scene draws are jittered only while the camera moves and the frames come at 45 fps or
+  more (since 20 October 2026): rewind, pause, photo mode, a still camera and the 30 fps
+  countdown, post-race and replays get a still picture instead of a shimmering one. The pass
+  params `TAA_JITTER_MOTION` (0.5 host pixels per frame) and `TAA_JITTER_RATE` (45) set the
+  thresholds and change live with `-ShaderDev`; both at 0 jitter every frame
+  ([TAA, arming](analysis/taa.md#35-arming-and-switching)).
 - The look's `sharpen` (0.4 in `pc`) is applied after TAA instead of before it (the pass param
   `TAA_SHARPEN`), since sharpening the jittered frame would sharpen the jitter. TAA without
   sharpening is visibly softer; 0.4 comes close to `pc` without its stair steps.
@@ -429,9 +435,10 @@ before it (the look's sharpening, no jitter).
 - It costs about 0.1 ms of GPU time per race frame at 1x and 0.15 to 0.2 ms at 2x.
 - `shader_mod_set TAA=0` switches it off at once with `-ShaderDev`; `TAA_DEBUG=1` to `5` shows
   the debug views ([TAA, debug views](analysis/taa.md#76-debug-views-taa_debug)).
-- The `-Info` overlay shows "Anti-aliasing: TAA before the HUD, sharpen 0.4, scene jittered".
+- The `-Info` overlay shows "Anti-aliasing: TAA before the HUD, sharpen 0.4, scene jittered
+  while the camera moves".
 - RTV only, like the other post passes; not with `-Rov` or `-Look original`.
-- `taa_point=1` (`-Look "pc,taa_point=1"`) moves TAA to the scene_color point: it runs on the scene before the game's motion blur, bloom, exposure and final combine, and its output is written back into the game's scene, which those then sample. The occlusion gets its own temporal filter there (`GTAO_TEMPORAL`), and the look's `sharpen` stays in the final combine, after TAA. It costs about 0.47 ms of GPU time per race frame at 2x, and the `-Info` overlay shows "Anti-aliasing: TAA before the post chain (scene_color), the look's sharpening, scene jittered". `pc` keeps the final point; see [TAA, the comparison](analysis/taa.md#23-comparison).
+- `taa_point=1` (`-Look "pc,taa_point=1"`) moves TAA to the scene_color point: it runs on the scene before the game's motion blur, bloom, exposure and final combine, and its output is written back into the game's scene, which those then sample. The occlusion gets its own temporal filter there (`GTAO_TEMPORAL`), and the look's `sharpen` stays in the final combine, after TAA. It costs about 0.47 ms of GPU time per race frame at 2x, and the `-Info` overlay shows "Anti-aliasing: TAA before the post chain (scene_color), the look's sharpening, scene jittered while the camera moves". `pc` keeps the final point; see [TAA, the comparison](analysis/taa.md#23-comparison).
 
 ### Cockpit glass
 

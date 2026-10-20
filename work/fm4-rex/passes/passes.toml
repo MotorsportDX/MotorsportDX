@@ -155,6 +155,14 @@ MOTION_OBJECT_RADIUS = { value = 3.0, min = 0.1 }
 TAA = { value = 0, min = 0, max = 1 }
 # 0 keeps TAA without the jitter.
 TAA_JITTER = { value = 1, min = 0, max = 1 }
+# The jitter only while it pays ([jitter]): while the scene camera moves by at
+# least TAA_JITTER_MOTION host pixels per frame (the static world at 10 m), and
+# at TAA_JITTER_RATE frames per second or more. On a still camera, in rewind,
+# pause and photo mode, and in the 30 fps countdown, replays and post-race,
+# TAA's clip keeps a residue of every phase and the picture shimmers. 0 turns
+# either test off (the jitter of every frame, as before 20 October 2026).
+TAA_JITTER_MOTION = { value = 0.5, min = 0.0 }
+TAA_JITTER_RATE = { value = 45.0, min = 0.0 }
 # The weight of the current frame when still, and at TAA_MOTION_PIXELS of
 # motion (host pixels).
 TAA_BLEND = { value = 0.1, min = 0.01, max = 1.0 }
@@ -499,8 +507,15 @@ srv = ["scene_color"]
 rtv = ["scene_written"]
 
 # The scene draws move by a sub-pixel Halton (2, 3) offset per frame while TAA
-# runs, in frames after one in which taa_resolve or taa_scene_resolve ran.
+# runs, in frames after one in which taa_resolve or taa_scene_resolve ran, while
+# the scene camera moved by TAA_JITTER_MOTION host pixels (the static world at
+# motion_distance meters) in one of the last motion_hold frames and the median
+# frame rate is TAA_JITTER_RATE or more.
 [jitter]
 phases = 8
 if = "TAA > 0 && TAA_JITTER > 0"
 consumer = ["taa_resolve", "taa_scene_resolve"]
+min_motion = "TAA_JITTER_MOTION"
+min_frame_rate = "TAA_JITTER_RATE"
+motion_distance = 10.0
+motion_hold = 8

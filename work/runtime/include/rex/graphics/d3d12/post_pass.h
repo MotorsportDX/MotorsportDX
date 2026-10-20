@@ -24,7 +24,8 @@
  * from which the passes get each object's reprojection into the previous frame
  * (motion vectors). With the manifest's [jitter], the draws of the scene are
  * moved by a sub-pixel Halton (2, 3) sequence for temporal passes, in frames
- * after one in which the consuming pass ran (post_pass_jitter.h).
+ * after one in which the consuming pass ran, while the scene camera moves and
+ * the frames come fast enough (post_pass_jitter.h).
  *
  * Params and defines come from shader_mod_defines by name, and shader_mod_set
  * changes them while running (params at once, defines with a recompile). With
@@ -45,6 +46,7 @@
 #include <vector>
 
 #include <rex/graphics/d3d12/post_pass_camera.h>
+#include <rex/graphics/d3d12/post_pass_jitter.h>
 #include <rex/graphics/d3d12/post_pass_layout.h>
 #include <rex/graphics/d3d12/shader_override.h>
 #include <rex/graphics/pipeline/texture/cache.h>
@@ -201,6 +203,14 @@ class PostPasses {
     std::vector<Condition> jitter_conditions;
     std::vector<std::string> jitter_consumers;
     std::vector<uint64_t> jitter_exclude;
+    // [jitter] min_motion and min_frame_rate: a number, or the param of that
+    // name (its index, else UINT32_MAX); the camera's motion is measured at
+    // clip W = jitter_motion_distance and held for jitter_motion_hold frames
+    // (post_pass::JitterGate).
+    double jitter_min_motion = 0.0, jitter_min_frame_rate = 0.0;
+    uint32_t jitter_min_motion_param = UINT32_MAX, jitter_min_frame_rate_param = UINT32_MAX;
+    double jitter_motion_distance = 10.0;
+    uint32_t jitter_motion_hold = 8;
     // Name and the value of the manifest.
     std::vector<std::pair<std::string, std::string>> defines;
     std::vector<ParamDesc> params;
@@ -277,6 +287,9 @@ class PostPasses {
     uint32_t interior_slot = post_pass::kMotionNoInterior;
     // Per slot, the view position of the object's origin, w 1 if drawn.
     float object_origin[post_pass::kMotionSlots][4] = {};
+    // With valid: the scene camera's motion in host pixels
+    // (post_pass::CameraMotionPixels), for the jitter.
+    double camera_pixels = -1.0;
   };
   // post_pass_motion_check: a guest pixel shader holding its own reprojection
   // matrices, logged next to the host's.
@@ -377,6 +390,10 @@ class PostPasses {
   bool PassEnabled(const PassDesc& pass) const { return ConditionsHold(pass.conditions); }
   // At the swap: the jitter of the next frame.
   void UpdateJitter();
+  // The settings of the jitter gate from the manifest and the current params.
+  post_pass::JitterGateSettings JitterSettings() const;
+  // A param's current value (param_values_).
+  double ParamValue(uint32_t index) const;
   void FillSceneConstants(post_pass::SceneConstants& constants) const;
   void RunPoint(Point point);
   enum class ExternalKind { kColor, kDepth, kStencil };
@@ -501,6 +518,10 @@ class PostPasses {
   uint64_t jitter_count_ = 0;
   uint64_t jitter_consumer_frame_ = UINT64_MAX;
   bool warned_jitter_ = false;
+  // The camera motion and frame times that arm the jitter, and the time of the
+  // last swap.
+  post_pass::JitterGate jitter_gate_;
+  std::chrono::steady_clock::time_point last_swap_time_ = {};
 
   // Motion objects by slot, of this frame and the previous one.
   std::array<MotionObject, post_pass::kMotionSlots> motion_objects_, previous_motion_objects_;

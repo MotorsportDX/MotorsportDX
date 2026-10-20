@@ -1890,6 +1890,51 @@ int main(int argc, char** argv) {
             coverage_error);
       Check(change < 0.1 && change * 5.0 < input_change, "taa: a still edge holds still", change);
 
+      // 1b. The jitter stops, as the runtime's gate stops it on a still camera:
+      //     over 100 frames without it, the history settles to a still picture
+      //     (the last two frames alike), and to the one of a history that never
+      //     saw the jitter, so no offset of the last phase stays in it.
+      auto still_edge = [&]() {
+        Frame frame = new_frame();
+        for (uint32_t y = 0; y < kHeight; ++y) {
+          for (uint32_t x = 0; x < kWidth; ++x) {
+            float value = edge(x + 0.5, y + 0.5);
+            for (int k = 0; k < 3; ++k) frame.rgb[(y * kWidth + x) * 3 + k] = value;
+          }
+        }
+        return frame;
+      };
+      for (uint32_t index = 0; index < 100 && ok; ++index) {
+        ok = run_taa(still_edge(), taa_on, index == 98 ? 0 : index == 99 ? 1 : -1);
+      }
+      // The same frames from a new history: where the clip holds the history
+      // off the current frame, both settle toward the same point.
+      for (uint32_t index = 0; index < 100 && ok; ++index) {
+        Frame frame = still_edge();
+        frame.history_valid = index > 0;
+        ok = run_taa(frame, taa_on, index == 99 ? 2 : -1);
+      }
+      if (!ok) return 1;
+      std::vector<float> settled98 = read_taa(0), settled = read_taa(1), unjittered = read_taa(2);
+      double settle_change = 0.0, settle_offset = 0.0, settle_mean = 0.0;
+      for (size_t i = 0; i < settled.size(); ++i) {
+        settle_change = std::fmax(settle_change, std::fabs(settled[i] - settled98[i]));
+        settle_offset = std::fmax(settle_offset, std::fabs(settled[i] - unjittered[i]));
+        settle_mean += std::fabs(settled[i] - unjittered[i]) / double(settled.size());
+      }
+      std::printf("taa (%s): the jitter stopped, 100 frames: largest change between the last two "
+                  "frames %.4f; difference from a history without the jitter: largest %.4f, mean "
+                  "%.6f\n",
+                  point_name, settle_change, settle_offset, settle_mean);
+      Check(settle_change < 0.5 / 1023.0, "taa: the history settles once the jitter stops",
+            settle_change * 1023.0);
+      // Both histories stop where a frame's step rounds away in the 16-bit
+      // float history: within half its step over TAA_BLEND of the same point,
+      // from either side, which at the edge's bright pixels is up to 3 of 1023
+      // in display values (under one of 255).
+      Check(settle_offset < 4.0 / 1023.0 && settle_mean < 0.05 / 1023.0,
+            "taa: no offset of the last jitter phase stays", settle_offset * 1023.0);
+
       // 2. A white box 40 pixels wide moving 4 pixels to the right per frame
       //    over a dark ground, nearer than it: no trail behind it, and the box
       //    stays white.

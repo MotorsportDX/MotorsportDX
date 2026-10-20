@@ -22,6 +22,7 @@ timeline
     17 October : Clearcoat, display options and settings overlay, Alt+Enter, GTAO ambient occlusion, generic content import (DLC), shader mod cache and hot reload
     18 October : ROV occlusion divisor removed, sun query samples measured per MSAA level : Glass, chrome and rim look mods (false color, A/B at 2x, smoke gate), look mods compiled against real contracts : Track lighting knobs road_gloss and sky (TrackSettings copies, 2x sweep) : USA release support (clean build, smoke gate with dlc) : Post pass framework, GTAO on it with identical output : Motion vector sources checked in the game (per-car stencil IDs, the game's blur matrices) : Per-car motion vectors on the post pass framework (CPU and WARP tests)
     19 October : Motion vectors checked in the game (the game's blur matrices, debug views at 2x, GPU time, smoke gate) : Motion vector gaps: cockpit interior, glass, mirror panel, motion mask : Cockpit light look knob (interior shadow floor)
+    20 October : pc with the cockpit knobs : TAA jitter only while the camera moves (still pictures no longer shimmer)
 ```
 
 | Date | Milestone |
@@ -326,6 +327,11 @@ Shader mod iteration (17 October; design and results in [shader-mod-iteration.md
 
 - The near-black cockpit interior on the Bernese Alps was traced to the game's lighting ([cockpit brightness](../analysis/cockpit-brightness.md)), and the shadow floor knob `cockpit_light` was built the same day. Superseded part of the Display gap of the current status page: "A shadow floor look knob is proposed and not built; a cockpit exposure of +2 stops blows out the windows."
 
+### 20 October 2026: TAA jitter on still pictures
+
+- The project owner saw the image shake outside the moving race. The measurement and the fix, the jitter only while the camera moves and at 45 fps or more, are in [TAA, the jitter gate](../analysis/taa.md#the-jitter-gate-20-october-2026).
+- Superseded gap of the current status page: "Still pictures shimmer with TAA's jitter (20 October 2026): in menu scenes, the 3-2-1 countdown, pause, rewind, photo mode and replays the image shakes, while races in motion look right. Two captures of one frozen frame at 2x differ in 12.6 to 21.3% of the pixels by more than 4 of 255 with `pc`, and are byte-identical with `TAA_JITTER=0` or `TAA=0`; the glass and the motion blur play no part. Not fixed; see [TAA open items](../analysis/taa.md#11-open-items-and-later)."
+
 ## 5. Superseded settings and decisions
 
 Each row gives the date of the change, the setting that was replaced, and what happened later. The current values are in [running](../running.md) and [current status](current.md).
@@ -364,6 +370,7 @@ Each row gives the date of the change, the setting that was replaced, and what h
 | 18 Oct 2026 | AO through `post_pass_path` (a copy of `work/fm4-rex/passes` in `BuildRoot\passes`); the camera vertex shaders and the 0.75 m radius are in `passes.toml` | `post_ao=true`, `post_ao_camera` and `post_ao_radius=0.75` | None recorded |
 | 18 Oct 2026 | `generate` accepts the executables of the Japan/Asia or the USA release (`RELEASES` in `pipeline.py`) and records the release in `local.json` | The Japan/Asia executables only (`XEX_HASHES`) | None recorded |
 | 19 Oct 2026 | `pc` without TAA; TAA opt-in with `-Look "pc,taa=1"`. The check before step 5 failed on Tsukuba Short Circuit: the scene camera's view came only from the road vertex shader, so on Tsukuba every frame was a history cut while the scene jittered (the step 4 G2 `career` cell ran in that state) | `pc` with `taa=1` and the `high` tiling, after the view sources of the car body and the fallback layout and the jitter armed only after a frame with a known view ([TAA progress, step 5](../analysis/taa.md#step-5-the-camera-on-every-track-and-pc-with-taa-19-october-2026)) | `-Look "pc,taa=0"` is the earlier `pc` |
+| 20 Oct 2026 | TAA's jitter armed only while the scene camera moves (`TAA_JITTER_MOTION` 0.5 host pixels per frame, held 8 frames) and at 45 fps or more (`TAA_JITTER_RATE`) | The jitter of every frame after one in which TAA ran with a known camera view | None recorded |
 
 ## 6. Corrections and qualifications of earlier entries
 

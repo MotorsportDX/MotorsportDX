@@ -6,9 +6,9 @@
 // post_pass.cpp builds xe_view_to_previous_view), also for a moving car (the
 // motion matrices) and in the clip space form of FM4's motion blur. Also the
 // scene jitter (rex/graphics/d3d12/post_pass_jitter.h): the Halton (2, 3)
-// phases, the shift that its ndc_offset gives a vertex in host pixels, and
-// which draws it moves. Synthetic cameras only; prints the worst errors and
-// returns 1 on failure.
+// phases, the shift that its ndc_offset gives a vertex in host pixels, which
+// draws it moves, the camera motion that arms it and its gate. Synthetic
+// cameras only; prints the worst errors and returns 1 on failure.
 
 #include <cmath>
 #include <cstdint>
@@ -448,6 +448,120 @@ void TestJitter() {
   Check(!IsJitteredDraw(draw), "excluded vertex shaders are not jittered");
 }
 
+// The camera's motion in host pixels (CameraMotionPixels) against the same
+// points projected through both frames' matrices: none for a still camera, a
+// turn, a move forward with the focal length widening (as with speed), and the
+// host pixels of a 2x scene. Then the gate: armed while the camera moves and
+// for its hold after, never at 30 fps, a single long frame ignored, and with
+// both thresholds at 0 armed in every frame, as before the gate.
+void TestJitterGate(bool right_handed) {
+  const double pi = 3.14159265358979;
+  const Viewport viewport = {640.0f, 640.0f, -360.0f, 360.0f, -1.0f, 1.0f};
+  Matrix projection = Perspective(50.0 * pi / 180.0, 16.0 / 9.0, 0.25, 8000.0, 0.0, right_handed);
+  Matrix wider = Perspective(51.0 * pi / 180.0, 16.0 / 9.0, 0.25, 8000.0, 0.0, right_handed);
+  const double distance = 10.0;
+  // The largest pixel move of the points at W = distance through the 3x3 grid,
+  // with the matrices: world = inverse(view) * view position, then the
+  // previous projection and viewport.
+  auto expected = [&](const Matrix& view, const Matrix& previous_view,
+                      const Matrix& previous_projection, const Unpack& unpack, double scale) {
+    Matrix view_to_world;
+    Invert(view, view_to_world);
+    double largest = 0.0;
+    for (int iy = 0; iy < 3; ++iy) {
+      for (int ix = 0; ix < 3; ++ix) {
+        float x = float(640.0 * ix), y = float(360.0 * iy);
+        double view_position[4] = {distance * (x * unpack.x_mul + unpack.x_add),
+                                   distance * (y * unpack.y_mul + unpack.y_add),
+                                   distance * unpack.z_from_w, 1.0};
+        double world[4], before[4], clip[4];
+        Transform(view_to_world, view_position, world);
+        Transform(previous_view, world, before);
+        Transform(previous_projection, before, clip);
+        double px = clip[0] / clip[3] * viewport.x_scale + viewport.x_offset;
+        double py = clip[1] / clip[3] * viewport.y_scale + viewport.y_offset;
+        largest = std::fmax(largest, std::hypot(px - x, py - y) * scale);
+      }
+    }
+    return largest;
+  };
+  Unpack unpack, wider_unpack;
+  Check(UnpackFromProjection(projection, viewport, unpack) &&
+            UnpackFromProjection(wider, viewport, wider_unpack),
+        "gate: unpack constants");
+  Matrix view = LookAt({10.0, 2.0, -30.0}, {0.0, 1.0, 0.0}, {0.0, 1.0, 0.0}, right_handed);
+  struct Case {
+    const char* name;
+    Matrix previous_view;
+    bool widened;
+    double scale;
+    bool still;
+  };
+  // A turn of 0.2 degrees about the eye, and a move of 0.1 m forward (24 m/s at
+  // 240 fps) while the field of view widens by a degree.
+  const double turn = 0.2 * pi / 180.0;
+  Vec3 forward = Normalize(Sub({0.0, 1.0, 0.0}, {10.0, 2.0, -30.0}));
+  Vec3 turned_target = {10.0 - 10.0 * std::cos(turn) + 30.0 * std::sin(turn), 1.0,
+                        -30.0 + 10.0 * std::sin(turn) + 30.0 * std::cos(turn)};
+  Matrix turned = LookAt({10.0, 2.0, -30.0}, turned_target, {0.0, 1.0, 0.0}, right_handed);
+  Matrix behind = LookAt({10.0 - 0.1 * forward.x, 2.0 - 0.1 * forward.y, -30.0 - 0.1 * forward.z},
+                         {0.0, 1.0, 0.0}, {0.0, 1.0, 0.0}, right_handed);
+  const Case cases[] = {
+      {"still", view, false, 1.0, true},
+      {"turn", turned, false, 1.0, false},
+      {"forward", behind, true, 1.0, false},
+      {"turn at 2x", turned, false, 2.0, false},
+  };
+  for (const Case& test : cases) {
+    Matrix view_to_world, previous_view_to_world;
+    MatrixD reprojection;
+    bool ok = Invert(view, view_to_world) && Invert(test.previous_view, previous_view_to_world) &&
+              ViewToPreviousView(ToDouble(view_to_world), ToDouble(previous_view_to_world),
+                                 nullptr, nullptr, reprojection);
+    const Unpack& previous = test.widened ? wider_unpack : unpack;
+    double motion = ok ? CameraMotionPixels(reprojection, unpack, previous, 1280.0, 720.0,
+                                            test.scale, test.scale, distance)
+                       : -1.0;
+    double reference =
+        expected(view, test.previous_view, test.widened ? wider : projection, unpack, test.scale);
+    std::printf("%s gate, %s: camera motion %.4f px (matrices %.4f px)\n",
+                right_handed ? "right-handed" : "left-handed", test.name, motion, reference);
+    // The matrices are float: 0.01 px and 0.1% of the motion.
+    Check(ok && std::fabs(motion - reference) < 1.0e-2 + 1.0e-3 * reference,
+          "gate: camera motion in host pixels");
+    Check(test.still ? motion < 1.0e-6 : motion > 1.0, "gate: no motion of a still camera only");
+  }
+
+  JitterGateSettings settings;
+  settings.min_motion = 0.5;
+  settings.hold = 8;
+  settings.min_frame_rate = 45.0;
+  JitterGate gate;
+  Check(!gate.Armed(settings), "gate: not armed before a frame");
+  for (int i = 0; i < 10; ++i) gate.EndFrame(2.0, 1.0 / 240.0, settings);
+  Check(gate.Armed(settings) && std::fabs(gate.FrameRate() - 240.0) < 1.0e-6,
+        "gate: armed on a moving camera at 240 fps");
+  int still_armed = 0;
+  for (int i = 0; i < 12; ++i) {
+    gate.EndFrame(i % 2 ? 0.1 : -1.0, 1.0 / 240.0, settings);
+    still_armed += gate.Armed(settings);
+  }
+  Check(still_armed == 7 && !gate.Armed(settings),
+        "gate: held for 8 frames after the camera stops, unknown motion as still");
+  gate.EndFrame(0.6, 1.0 / 240.0, settings);
+  Check(gate.Armed(settings), "gate: armed again when the camera moves");
+  for (int i = 0; i < 8; ++i) gate.EndFrame(3.0, 1.0 / 30.0, settings);
+  Check(!gate.Armed(settings) && std::fabs(gate.FrameRate() - 30.0) < 1.0e-6,
+        "gate: never at 30 fps");
+  for (int i = 0; i < 8; ++i) gate.EndFrame(3.0, i == 3 ? 0.2 : 1.0 / 60.0, settings);
+  Check(gate.Armed(settings) && std::fabs(gate.FrameRate() - 60.0) < 1.0e-6,
+        "gate: a single long frame does not change the frame rate");
+  JitterGateSettings always;
+  JitterGate fresh;
+  fresh.EndFrame(-1.0, 0.0, always);
+  Check(fresh.Armed(always), "gate: thresholds at 0 arm every frame");
+}
+
 }  // namespace
 
 int main() {
@@ -459,6 +573,8 @@ int main() {
   TestObjectReprojection(false);
   TestObjectReprojection(true);
   TestRejectsOrthographic();
+  TestJitterGate(false);
+  TestJitterGate(true);
   std::printf(failures ? "post pass camera tests: %d failed\n" : "post pass camera tests: passed\n",
               failures);
   return failures ? 1 : 0;

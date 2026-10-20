@@ -208,7 +208,8 @@ class PipelineTests(unittest.TestCase):
             self.assertEqual(pipeline.single_tile_settings('pc,taa=1'),({'FM4_TILING_SCENARIO':'2'},{}))
             cvars=pipeline.look_cvars(root,'pc,taa=1')
             overlay=pipeline.info_overlay(cvars,{'FM4_TILING_SCENARIO':'2'},'pc,taa=1','high')
-            self.assertIn('Anti-aliasing: TAA before the HUD, sharpen 0.4, scene jittered',overlay)
+            self.assertIn('Anti-aliasing: TAA before the HUD, sharpen 0.4, scene jittered while the '
+                          'camera moves',overlay)
             self.assertIn('Quality: high, single tile|',overlay)
             self.assertNotIn('Anti-aliasing',pipeline.info_overlay(
                 pipeline.look_cvars(root,'pc,taa=0'),{},'pc,taa=0','high'))

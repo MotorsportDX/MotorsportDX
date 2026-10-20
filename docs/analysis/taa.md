@@ -1,12 +1,12 @@
 # TAA
 
-Temporal anti-aliasing (TAA) at the existing render scale, built on the [post pass framework](post-pass-framework.md) and the [motion vectors](motion-vectors.md). The scene draws are jittered by a sub-pixel offset each frame, and a post pass accumulates the frames along the motion vectors. This note describes what is built, how it works, and what was measured; [section 12](#12-history) keeps the dated record of each step. Upscalers (DLSS, FSR) are not part of it; they need a separate scale for the scene tiles ([motion vectors, section 6](motion-vectors.md#injection-point)).
+Temporal anti-aliasing (TAA) at the existing render scale, built on the [post pass framework](post-pass-framework.md) and the [motion vectors](motion-vectors.md). The scene draws are jittered by a sub-pixel offset each frame while the camera moves, and a post pass accumulates the frames along the motion vectors. This note describes what is built, how it works, and what was measured; [section 12](#12-history) keeps the dated record of each step. Upscalers (DLSS, FSR) are not part of it; they need a separate scale for the scene tiles ([motion vectors, section 6](motion-vectors.md#injection-point)).
 
 This note contains no game code, shaders or ucode. Hashes, registers and addresses are observations only.
 
 ## Current state
 
-Built on 19 October 2026 in seven steps ([section 12](#12-history)): the jitter in the framework, pass-owned history textures and frame conditions, TAA at the final point, the launcher knob and harness changes, the scene camera on every track with `pc` using TAA, the write-back at the scene_color point, and TAA at the scene_color point as an option.
+Built on 19 October 2026 in seven steps ([section 12](#12-history)): the jitter in the framework, pass-owned history textures and frame conditions, TAA at the final point, the launcher knob and harness changes, the scene camera on every track with `pc` using TAA, the write-back at the scene_color point, and TAA at the scene_color point as an option. On 20 October 2026 the jitter became conditional: only while the scene camera moves and the frames come at 45 fps or more ([section 3.5](#35-arming-and-switching)), so still pictures no longer shimmer.
 
 **Defaults**: the `pc` look has `taa=1` ([running](../running.md#temporal-anti-aliasing)): TAA at the final point, before the HUD, with the `high` tiling (three tiles, 4x MSAA) and the look's sharpening of 0.4 moved after the resolve (`TAA_SHARPEN` 0.4, `FM4_LOOK_SHARPEN` 0). The other presets (`aces`, `gt`, `neutral`) have no TAA unless `taa=1` is added; `original` never has it.
 
@@ -25,21 +25,26 @@ The knobs, cvars and debug views are in [section 9](#9-knobs-cvars-and-presets).
 | GPU time per race frame, final point | +0.10 ms at 1x and +0.15 ms at 2x in separate runs (step 3); +0.21 ms at 2x with TAA switched every second in one run (step 7) |
 | GPU time per race frame, scene_color point | +0.47 ms at 2x with TAA switched every second in one run (step 7) |
 | Smoke gate, `pc` with TAA against `pc,taa=0` | 3 of 3 cells; `career` PASS (race 207.1 against 199.3 fps), `photo` and `photo_view` WARN on capture statistics only (step 5) |
+| Smoke gate, the jitter gate against the jitter of every frame | 3 of 3 cells; `career` and `photo_view` PASS, `photo` WARN on capture statistics only (the jitter gate, 20 October 2026) |
 | Perf gate, TAA against no TAA | 3 of 3 runs, WARN on capture statistics only; `frame_ms_p99` 7.42 against 7.88 ms, no hitches above 50 ms (step 4) |
 | The scene camera | known in every frame with a camera on all 26 environments of the TRACKS screen, in the Tsukuba career race and in replays (step 5) |
-| WARP tests | convergence, no trail behind a moving box, reset, masks, disocclusion, at both points (steps 3 and 7) |
+| WARP tests | convergence, no trail behind a moving box, reset, masks, disocclusion, at both points (steps 3 and 7); the history settles once the jitter stops (the jitter gate) |
+| Still pictures, 2x | consecutive captures of rewind freezes and the photo mode live view byte-identical, as with `TAA_JITTER=0`; 8.7 to 21.6% of the pixels changed by more than 4 of 255 with the jitter of every frame (the jitter gate, 20 October 2026) |
+| Jitter in motion | on in every logged frame of moving races at 60 and 240 Hz; off in menus with a 3D scene, the intro, the countdown, pause, rewind, photo mode and replays (the jitter gate) |
 | Japan/Asia release | the same behavior on the same binary (step 4) |
 
-**Decisions of the project owner** (all 19 October 2026):
+**Decisions of the project owner** (19 and 20 October 2026):
 
 - The plan approved: TAA at the existing render scale, the final point first and the scene_color point second, opt-in until reviewed.
 - The reactive mask: option (d) of [motion vectors, section 9](motion-vectors.md#open) (no particle or interior mirror mask), and option (c) later, only for shaders that visibly ghost ([section 6](#6-reactive-mask)).
 - `pc` gets `taa=1` with the `high` tiling and `TAA_SHARPEN` 0.4.
 - `pc` keeps the final point; the scene_color point stays an option.
+- 20 October 2026: still pictures must not shimmer; the jitter runs only while the camera moves, rather than not at all. Forcing the 30 fps scenarios to the race frame rate was rejected (it would not stop the shimmer of still frames and changes the title's own timing).
 
 **Open**:
 
 - Not observed yet: tire smoke from the cockpit camera, sparks of a collision, the heavy smoke of a full grid at the start, gravel dust. Ghosting there would make step 8 (a reactive mask written by a shader mod for that shader) necessary; step 8 is conditional and skipped for now.
+- The jitter gate's thresholds (`TAA_JITTER_MOTION` 0.5, `TAA_JITTER_RATE` 45) await the project owner's review in play; the gate is not checked at 120 Hz or at the scene_color point.
 - Before the scene_color point could be the default: a smoke gate with `taa_point=1`; the write-back counter on more tracks, in career, replays and photo mode; and a check that `gtao_temporal` helps (it made no measurable difference on frozen frames).
 - `-SingleTile` as the default tiling with TAA (the single tile with TAA looks close to `high` with TAA at 2x and costs about 1 ms less GPU time per frame); the project owner kept `high`.
 - DLAA, or FSR in its native AA mode, beside this TAA; upscalers at a separate scale ([section 11](#11-open-items-and-later)).
@@ -124,7 +129,8 @@ What changes at this point:
 | HUD and side mirrors | after it, never in the history | after it, never in the history |
 | Sharpening | `TAA_SHARPEN` after the resolve; the look's off | the look's, in the final combine after TAA |
 | Color | display-referred, squared | gamma 2 scene, squared |
-| Frozen-frame change between captures, 2x (0 to 255) | 0.6 to 1.9 | 0.5 to 2.7 |
+| Frozen-frame change between captures, 2x (0 to 255), with the jitter of every frame (step 7) | 0.6 to 1.9 | 0.5 to 2.7 |
+| The same with the jitter gate | 0 (byte-identical) | not measured; the same gate |
 | GPU at 2x | +0.21 ms | +0.47 ms |
 | Depends on | nothing outside the framework | the write-back into the texture cache |
 | Upscalers | not usable: they need the scene before bloom | the point they need |
@@ -165,10 +171,16 @@ That leaves the shadow maps, the environment cube, the rear-view mirror (EDRAM b
 
 ### 3.5 Arming and switching
 
-- Manifest `[jitter]`: `phases = 8`, `if = "TAA > 0 && TAA_JITTER > 0"`, `consumer = ["taa_resolve", "taa_scene_resolve"]`.
+- Manifest `[jitter]`: `phases = 8`, `if = "TAA > 0 && TAA_JITTER > 0"`, `consumer = ["taa_resolve", "taa_scene_resolve"]`, `min_motion = "TAA_JITTER_MOTION"`, `min_frame_rate = "TAA_JITTER_RATE"`, `motion_distance = 10.0`, `motion_hold = 8` ([post pass framework](post-pass-framework.md#jitter)).
+- **Only while the jitter pays** (since 20 October 2026). On a still camera the eight phases do not average out: the color clip limits the history to the 3x3 of each phase's frame, so a residue of every phase stays, on every edge and on the asphalt grain, and the picture shimmers; at 30 fps the eight phases repeat 3.75 times a second, which reads as shaking ([section 12, the jitter gate](#the-jitter-gate-20-october-2026)). So a frame is jittered only while the scene camera moves and the frames come fast enough:
+  - The camera's motion of a frame is the largest move, in host pixels, of the static world at 10 m (`motion_distance`) seen through the center, the corners and the edge midpoints of the scene, between the previous frame and this one: the reprojection of the motion vectors (`xe_view_to_previous_view`) with both frames' projections, so a turn, a move and a change of the focal length all count, and the jitter does not (the matrices are unjittered). A frame without it (a camera cut, no view) counts as still.
+  - The next frame is jittered when that motion reached `TAA_JITTER_MOTION` host pixels in one of the last 8 frames (`motion_hold`, so a camera near the threshold does not switch it every frame) and the median of the last 8 frame times gives `TAA_JITTER_RATE` frames per second or more (a single long frame does not move the median).
+  - Rewind, pause, photo mode and a still camera are not jittered, nor are the 30 fps countdown, post-race, replays and photo mode, whatever their camera does. Races in motion are.
+  - When the jitter stops, the history converges to the unjittered frame at the rate of `TAA_BLEND` and then holds still: the current sample is the frame reconstructed at its unjittered position in every frame (section 7.2), so no offset of the last phase stays (WARP test).
+  - `TAA_JITTER_MOTION=0` and `TAA_JITTER_RATE=0` jitter every frame, as before 20 October 2026. The `post_pass_log_every` log shows the camera's motion and the frame rate the gate sees: `jitter off (camera 0.000 px, 30.0 fps)`.
 - A frame is jittered only after a frame in which a consumer ran and the scene camera's view was known. Without a known view every frame is a history cut and a jitter could not accumulate, so a frame without a camera gets the image without anti-aliasing, not a shaking one. The garage, the showroom and menus without a scene, split screen (whose second view gets no passes), and the frames after TAA is switched off are not jittered.
 - So `shader_mod_set TAA=0`, a `defines:` step and `post_pass_variants="TAA=0;TAA=1"` switch the jitter together with TAA. `TAA_JITTER=0` keeps TAA without the jitter.
-- Cvars: `post_pass_jitter` (`auto`, the manifest; `off`; or a number of phases, which jitters every frame after one with a scene, without a consumer, for checks) and `post_pass_jitter_offset=x,y` (a fixed offset in host pixels). There is no jitter without `post_pass_path`: not with `-Rov`, not with `-Look original`.
+- Cvars: `post_pass_jitter` (`auto`, the manifest; `off`; or a number of phases, which jitters every frame after one with a scene, without a consumer and without the gate, for checks) and `post_pass_jitter_offset=x,y` (a fixed offset in host pixels). There is no jitter without `post_pass_path`: not with `-Rov`, not with `-Look original`.
 
 ### 3.6 Other readers of the scene
 
@@ -287,6 +299,8 @@ On frozen frames at 2x it made no measurable difference against `GTAO_TEMPORAL=0
 | `TAA` | param | 0 (1 with the `taa` knob) | 1 runs the TAA passes (and arms the jitter) |
 | `TAA_POINT` | define | 0 | 0 the final point, 1 the scene_color point (a recompile) |
 | `TAA_JITTER` | param | 1 | 0 keeps TAA without the jitter |
+| `TAA_JITTER_MOTION` | param | 0.5 | the scene camera's motion in host pixels per frame (the static world at 10 m) that arms the jitter, held for 8 frames; 0 jitters a still camera too (section 3.5) |
+| `TAA_JITTER_RATE` | param | 45.0 | the frame rate the jitter needs (the median of the last 8 frames); 0: any |
 | `TAA_BLEND` | param | 0.1 | weight of the current frame when still |
 | `TAA_BLEND_MOTION` | param | 0.25 | weight of the current frame at `TAA_MOTION_PIXELS` |
 | `TAA_MOTION_PIXELS` | param | 16.0 | motion in host pixels at which the weight reaches `TAA_BLEND_MOTION` |
@@ -299,7 +313,7 @@ On frozen frames at 2x it made no measurable difference against `GTAO_TEMPORAL=0
 | `GTAO_TEMPORAL` | param | 1 | at the scene_color point, the occlusion filter (section 8) |
 | `GTAO_TEMPORAL_BLEND` | param | 0.15 | its weight of the current frame when still |
 | `SCENE_PATTERN` | param | 0 | 1 writes a test pattern into the game's scene through the write-back (the S1 check) |
-| `[jitter]` | manifest | `phases = 8` | `phases`, `if`, `consumer`, `exclude` (section 3.5) |
+| `[jitter]` | manifest | `phases = 8` | `phases`, `if`, `consumer`, `exclude`, `min_motion`, `min_frame_rate`, `motion_distance`, `motion_hold` (section 3.5) |
 | `post_pass_jitter` | cvar | `auto` | `off`, or a number of phases |
 | `post_pass_jitter_offset` | cvar | empty | a fixed offset `x,y` in host pixels |
 | `post_pass_log_every` | cvar | 0 | every N-th scene: the camera and its view source, the history, the jitter, the write-back counts, the params |
@@ -312,8 +326,8 @@ The params come from `shader_mod_defines` by name and change live with `shader_m
 
 **Offline**, in every build (`Build.ps1 -Action build`):
 
-- `fm4_post_pass_camera_tests`: the Halton phases, the `ndc_offset` of the jitter at 1x to 3x, the draw rules, and the camera layouts with their view (also far from the origin, the rigid view check and the aspect check).
-- `fm4_post_pass_shader_tests` on WARP: the motion vectors with and without the jitter; the TAA passes over frames at both points: a still edge converges to its pixel coverage (mean error 0.083) and holds still, a box moving 4 pixels per frame leaves no trail, no history without `xe_history_valid()`, the weights under mask R, mask G and a settled history, the disocclusion drop, and a jittered thin line keeps its history. At the scene_color point the frames are rotated into the scene layout and the write-back texture is read back.
+- `fm4_post_pass_camera_tests`: the Halton phases, the `ndc_offset` of the jitter at 1x to 3x, the draw rules, the camera's motion that arms the jitter (against the same points projected through both frames' matrices: a still camera, a turn, a move forward with a wider field of view, 2x) and the gate (held for 8 frames, never at 30 fps, a single long frame ignored, both thresholds at 0 jitter every frame), and the camera layouts with their view (also far from the origin, the rigid view check and the aspect check).
+- `fm4_post_pass_shader_tests` on WARP: the motion vectors with and without the jitter; the TAA passes over frames at both points: a still edge converges to its pixel coverage (mean error 0.083) and holds still, a box moving 4 pixels per frame leaves no trail, no history without `xe_history_valid()`, the weights under mask R, mask G and a settled history, the disocclusion drop, and a jittered thin line keeps its history; once the jitter stops, the still edge settles in 100 frames to a picture that no longer changes and matches a history that never saw the jitter (largest difference 3 of 1023, mean 0.003, the rounding of the 16-bit float history). At the scene_color point the frames are rotated into the scene layout and the write-back texture is read back.
 - `cd outputs/FM4-build && python test_pipeline.py`: the `taa` and `taa_point` knobs, the presets, `-SingleTile` with TAA, the `-Info` lines, and the clear-gray test.
 
 **In the game** (BuildRoot `I:\FM4-build-usa`, USA, the development base; the Japan/Asia release through `--arg game_data_root` on the same binary), with the e2e harness ([e2e](../e2e/README.md)):
@@ -322,11 +336,11 @@ The params come from `shader_mod_defines` by name and change live with `shader_m
 - Cost: `post_pass_variants="TAA=1;TAA=0"` with `post_pass_variant_ms=1000` and `REX_FRAME_GRAPH_EVERY=1`, the GPU time per frame of each second, frames within 80 ms of a switch left out, paired seconds compared; separate runs differ by more than TAA costs, since the AI races do not repeat.
 - Gates: `matrix.py --look` (the launcher's `pc` has TAA; `--look "pc,taa=0"` for a baseline without it).
 - The clear-gray check counts (102, 102, 102) only by what it covers more than the mean of the neutral grays 97 to 101 and 103 to 107, so asphalt smoothed by TAA, which hits 102 by chance, passes ([e2e](../e2e/README.md)).
-- `post_pass_log_every=<N>`: whether the view is known and from which source, history valid or cut, the jitter, and at the scene_color point the write-back counts.
+- `post_pass_log_every=<N>`: whether the view is known and from which source, history valid or cut, the jitter with the camera's motion and the frame rate of the gate, and at the scene_color point the write-back counts.
+- Still pictures: consecutive captures of a frozen frame (rewind, photo mode) compared pixel by pixel, with the jitter of every frame (`TAA_JITTER_MOTION=0 TAA_JITTER_RATE=0`) and the gate switched live by `defines:` steps ([section 12, the jitter gate](#the-jitter-gate-20-october-2026)).
 
 ## 11. Open items and later
 
-- **Still pictures shimmer with the jitter** (20 October 2026). The project owner sees the image shake outside the moving race: in menu scenes, the 3-2-1 countdown, the pause menu, rewind, photo mode and replays (30 fps scenarios or a still camera). Measured at 2x on the Bernese Alps (`I:\FM4-build-pass\e2e\pc2-wobble`, `-Look pc` with `--shader-dev`, two rewind freezes and the photo mode live view, the params switched live): two captures of one frozen frame, 2 s apart, differ in 12.6 to 21.3% of the pixels by more than 4 levels (maximum 111 to 207 of 255) with `pc`, on every edge and on the asphalt grain; with `TAA_JITTER=0` or `TAA=0` they are byte-identical, `TAA_BLEND=0.05` leaves 10.9 to 12.7%, and `WINDSHIELD=0` changes nothing. The shimmer is the residue of the eight jitter phases that the 0.1 blend and the color clip do not average out; at 30 fps the eight phases repeat 3.75 times a second, which reads as shaking. A fix needs the jitter only where it pays: while the scene camera moves, or not at all in 30 fps scenarios and still frames (the jitter's arming in `[jitter]` and `PostPasses::DrawJitter`).
 - **Unobserved ghosting cases** (section 6): tire smoke from the cockpit camera, sparks, a full grid's smoke at the start, gravel dust. If one ghosts, step 8 writes a reactive mask for that shader.
 - **The scene_color point as the default** (section 2.2): needs a smoke gate with `taa_point=1`, the write-back counter on more tracks, career, replays and photo mode, and evidence that `gtao_temporal` helps.
 - **`-SingleTile`** with TAA as the default tiling (section 5). At 2x the runtime still fills the first row and column of 1x resolves, which leaves a duplicated host row and column at the edge of the screen ([GTAO design, M3](gtao-design.md#6-stages-and-verification)).
@@ -339,7 +353,7 @@ The params come from `shader_mod_defines` by name and change live with `shader_m
 
 ## 12. History
 
-The record of each step as it was built and checked, all on 19 October 2026; statements about defaults describe the state at that step, and the sections above describe the present. The plan was written against main `0a8bba5` and approved by the project owner the same day.
+The record of each step as it was built and checked, on 19 October 2026 and the jitter gate on 20 October 2026; statements about defaults describe the state at that step, and the sections above describe the present. The plan was written against main `0a8bba5` and approved by the project owner the same day.
 
 | # | Step | Status |
 |---|---|---|
@@ -351,6 +365,7 @@ The record of each step as it was built and checked, all on 19 October 2026; sta
 | 6 | Write-back at scene_color | done |
 | 7 | TAA at scene_color, A/B against the final point | done; the final point stays the default |
 | 8 | Reactive mask (c) for the shaders that ghost | conditional; skipped while none ghosts |
+| - | The jitter gate (20 October 2026): the jitter only while the camera moves | done |
 
 ### Step 1: jitter (19 October 2026)
 
@@ -502,3 +517,38 @@ Route (b) of [section 2.2](#22-the-scene_color-point-option): a texture with `wr
 - **C1, cost** (`taa7c1v-*`, `photo` at 240 Hz, `REX_FRAME_GRAPH_EVERY=1`, `post_pass_variants="TAA=1;TAA=0"` switched every second, frames within 80 ms of a switch left out, the median of 43 to 45 pairs of seconds): TAA costs 0.21 ms of GPU time per race frame at the final point and 0.47 ms at the scene_color point, which adds `gtao_temporal`, the two write-back copies and the previous scene depth. Separate runs (`taa7c1-*`) differ by more than that from the race alone (2,248 to 2,943 draws per frame).
 
 **Decision** (the project owner, 19 October 2026): `pc` keeps the final point; the scene_color point stays an option. Before it could become the default: a smoke gate with `taa_point=1`, the write-back counter on more tracks, career, replays and photo mode, and a check that `gtao_temporal` helps.
+
+### The jitter gate (20 October 2026)
+
+**The problem** (measured before the change, BuildRoot `I:\FM4-build-pass` with the USA Disc 1 and profile, run `pc2-wobble`, `-Look pc` with `--shader-dev` at 2x and 60 Hz, Quick Race on the Bernese Alps, two rewind freezes and the photo mode live view, the params switched live): the project owner saw the image shake outside the moving race, in menu scenes, the 3-2-1 countdown, pause, rewind, photo mode and replays. Two captures of one frozen frame, 2 s apart, differed in 12.6 to 21.3% of the pixels by more than 4 levels (maximum 111 to 207 of 255), on every edge and on the asphalt grain; with `TAA_JITTER=0` or `TAA=0` they were byte-identical, `TAA_BLEND=0.05` left 10.9 to 12.7%, and `WINDSHIELD=0` changed nothing. The eight phases leave a residue that the 0.1 blend and the color clip do not average out on a still picture; at 30 fps the phases repeat 3.75 times a second. The WARP test of step 3 shows the same residue: a still edge under the jitter changes by 0.083 between frames.
+
+**Built**: the gate of [section 3.5](#35-arming-and-switching). In the runtime, `CameraMotionPixels` and `JitterGate` in [post_pass_jitter.h](../../work/runtime/include/rex/graphics/d3d12/post_pass_jitter.h) (header only), the camera's motion computed with the world reprojection in `UpdateMotion`, and the gate updated at every swap in `PostPasses::UpdateJitter`; in the manifest, `[jitter]` `min_motion = "TAA_JITTER_MOTION"` (0.5), `min_frame_rate = "TAA_JITTER_RATE"` (45), `motion_distance = 10.0`, `motion_hold = 8`. The TAA passes are unchanged. The `-Info` line reads "scene jittered while the camera moves". With both params at 0 the jitter is that of every frame, as before.
+
+**Offline**: `fm4_post_pass_camera_tests` checks the camera's motion against the same points projected through both frames' matrices (a still camera 0.000 px; a turn of 0.2 degrees 4.700 px at 1x and 9.400 px at 2x; 0.1 m forward with the field of view a degree wider 23.531 px) and the gate's rules. `fm4_post_pass_shader_tests` runs 100 frames without the jitter after the 40 jittered frames of the still edge, at both points: the last two frames are identical, and the picture matches that of a history that never saw the jitter within 3 of 1023 (mean 0.003 of 1023): both histories stop where a frame's step rounds away in the 16-bit float history, from either side.
+
+**In the game** (BuildRoot `I:\FM4-build-pass`, rebuilt from this change, USA Disc 1 and profile, `--shader-dev`, `--keep-ppm`, 2x, AI driver, `post_pass_log_every`; the old behavior is `TAA_JITTER_MOTION=0 TAA_JITTER_RATE=0` on the same binary, switched live by `defines:` steps; consecutive captures 2.1 s apart compared pixel by pixel):
+
+| Run | Scene | Jitter of every frame | The gate |
+|---|---|---|---|
+| `jg-freeze` (Quick Race, Bernese Alps, 60 Hz) | rewind freeze 1 (cockpit, the glass arches) | 8.7 to 9.6% of the pixels above 4 levels, maximum 186 to 196 | byte-identical, and byte-identical to `TAA_JITTER=0` |
+| | rewind freeze 2 (cockpit, the bridge) | 16.7 to 18.4%, maximum 175 to 180 | byte-identical, and to `TAA_JITTER=0` |
+| | photo mode live view (30 fps) | 12.8 to 21.6%, maximum 90 to 124 | byte-identical, and to `TAA_JITTER=0` |
+| | race in motion (60 fps) | jitter on | jitter on in 112 of 115 logged frames: the 3 others are the first second at the start, the car not yet moving (0.000 to 0.015 px) |
+| | menus with a 3D scene, among them the pre-race menu with the car (30 fps, 0.1 to 1.5 px per frame), the intro and the countdown "3" (30 fps, up to 33 px), the countdown "1" (60 fps, 0.01 px) | | jitter off in all 148 logged frames before the race |
+| `jg-career` (career race, Tsukuba, 240 Hz) | race in motion (about 127 fps at 2x) | jitter on | jitter on in all 190 logged frames, 2.4 to 81 px per frame |
+| | intro and countdown (30 fps, up to 14.7 px), the countdown "1" (240 Hz, 0 to 0.06 px) | | jitter off |
+| | pause menu (0 px) | | jitter off in 65 logged frames |
+| | post-race and replay (30 fps, 0.4 to 770 px per frame) | jitter on | jitter off |
+
+- When the jitter stopped (the gate after 8 s of the jitter of every frame in rewind freeze 1, at 60 fps), a capture 1.1 s later differed from `TAA_JITTER=0` in 0.95% of the pixels by 1 or 2 levels, and the next, 3.2 s later, was byte-identical to it: the history settles, and no offset of the last phase stays.
+- In 1:1 crops of the moving race at 2x (the cable car, its wires and the pylon lattice) the gate's frames show the same continuous wires as the jitter of every frame; frozen frames without the jitter show the edges of the 4x MSAA frame, reconstructed by TAA and sharpened by `TAA_SHARPEN`.
+- The same error keys as before (three), no clear-gray frames, goal reached in both runs.
+
+**Smoke gate** on the same binary, `smoke` tier, 240 Hz, 1x, the BuildRoot's own discs and profile: `jgnew` (this change) against `jgold` (the same binary with the manifest of local main `bb7e45a`, whose `[jitter]` has no gate). 3 of 3 cells in both, the same three error keys, no clear-gray frames.
+
+| Cell | The gate (`jgnew`) | The jitter of every frame (`jgold`) | Verdict |
+|---|---|---|---|
+| `photo` | race 182.1 fps, p99 8.51 ms, GPU 3.33 ms; photo mode 29.95 fps | race 185.6 fps, p99 8.67 ms, GPU 3.36 ms; photo mode 29.94 fps | WARN: capture statistics only (black share 5.0 points apart; the AI races do not repeat) |
+| `photo_view` | 56.92 fps | 56.95 fps | PASS |
+| `career` | race 194.7 fps, p99 8.72 ms, GPU 3.29 ms; replay 29.98 fps | race 165.2 fps, p99 9.83 ms, GPU 3.38 ms; replay 29.98 fps | PASS |
+
