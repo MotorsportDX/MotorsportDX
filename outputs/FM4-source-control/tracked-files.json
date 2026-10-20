@@ -77,6 +77,10 @@
       "provenance": "Project documentation; design note on the runtime post pass framework (manifest, injection points, history, verification; no game content)"
     },
     {
+      "path": "docs/analysis/hdr-output.md",
+      "provenance": "Project documentation; design note on HDR10 output (summarized observations and measurements: hashes, formats, measured ranges, no game content)"
+    },
+    {
       "path": "docs/analysis/motion-vectors.md",
       "provenance": "Project documentation; research and design note on motion vector sources (summarized observations: hashes, registers, constant and element names, no game content)"
     },

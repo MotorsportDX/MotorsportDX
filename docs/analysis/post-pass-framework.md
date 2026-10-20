@@ -176,6 +176,8 @@ What a temporal upscaler or TAA needs there, and what the framework gives:
 
 [TAA](taa.md#2-injection-point) runs at this point by default, and at the scene_color point as an option through the write-back below.
 
+HDR output needs two more pieces from the framework, a texture that shader mods can write and a point at the swap: see [HDR output](hdr-output.md#5-required-pieces-and-effort).
+
 ## The write-back
 
 A pass at the scene_color point can replace the scene that the game's post chain samples: it writes a texture with `write_back = true`, and after the point (and after the copy of `previous_color`, which keeps the game's scene) the framework copies that texture into the texture cache's host texture of the scene (`D3D12TextureCache::WriteResolvedTexture`). That texture stays loaded, so the game's next fetches of the scene memory bind the copy until the next resolve to that memory or a CPU write replaces it; guest memory keeps the game's own scene (CPU readbacks such as the photo save read it). The scene must be `k_2_10_10_10` (or its `AS_16_16_16_16` view), which the `R10G10B10A2` texture copies into.

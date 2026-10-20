@@ -19,6 +19,9 @@
 //   FM4_LOOK_AO_DEBUG     0, 1   1: the final combine shaders show the runtime's post_ao
 //                                texture as it is (xe_post_ao; post_ao_debug picks its
 //                                view) instead of the scene (0: off)
+//   FM4_LOOK_HDR_PROBE    0, 1   1: the final combine shaders write a diagnostic image of
+//                                the scene's highlight range for the HDR output design
+//                                (docs/analysis/hdr-output.md) instead of the scene (0: off)
 
 #ifndef FM4_LOOK_SHARPEN
 #define FM4_LOOK_SHARPEN 0.0
@@ -49,6 +52,9 @@
 #endif
 #ifndef FM4_LOOK_AO_DEBUG
 #define FM4_LOOK_AO_DEBUG 0.0
+#endif
+#ifndef FM4_LOOK_HDR_PROBE
+#define FM4_LOOK_HDR_PROBE 0.0
 #endif
 
 #ifdef XE_TEXTURE0_2D_U
@@ -110,6 +116,12 @@ static float fm4_white_filmic = 1.0;
 static float2 fm4_scene_uv = 0.0;
 // Their exposure, 2 to the power of interpolator 1 W (fm4_combine_input).
 static float fm4_exposure_scale = 1.0;
+// For FM4_LOOK_HDR_PROBE: the scene and bloom fetches (gamma 2) and the exposed
+// scene values at which the game's curve gives middle gray and white.
+static float3 fm4_probe_scene = 0.0;
+static float3 fm4_probe_bloom = 0.0;
+static float fm4_probe_gray = 1.0;
+static float fm4_probe_white = 1.0;
 
 // Ambient occlusion of the runtime's post_ao pass on the scene (gamma 2) at the
 // pixel. The scene does not separate ambient light from sunlight, so it fades
@@ -209,10 +221,16 @@ float4 fm4_combine_fetch(uint fetch, float4 value, float4 coord, float4 filmic_a
 #ifdef XE_TEXTURE0_2D_U
   if (fetch == 0u) {
     fm4_scene_uv = coord.xy;
+    if (FM4_LOOK_HDR_PROBE != 0.0) {
+      fm4_probe_scene = value.rgb;
+      fm4_probe_gray = fm4_filmic_inverse((0.18 * fm4_white_filmic).xxx, filmic_ab, filmic_cdef).x;
+      fm4_probe_white = fm4_filmic_inverse(fm4_white_filmic.xxx, filmic_ab, filmic_cdef).x;
+    }
     return fm4_ambient_occlusion(fm4_sharpen_scene(value, coord.xy), coord.xy);
   }
 #endif
   if (fetch == 2u) {
+    fm4_probe_bloom = value.rgb;
     return fm4_bloom(value);
   }
 #ifdef XE_TEXTURE7_3D_U
@@ -239,6 +257,36 @@ void fm4_combine_input(inout XePixel p) {
   fm4_exposure_scale = exp2(p.r[1].w);
 }
 
+// FM4_LOOK_HDR_PROBE. Stops are log2 of an exposed scene value over the one the
+// game's curve maps to middle gray (pre-LUT 0.18). By the scene coordinate:
+// x < 0.05, a calibration ramp of 17 gray steps along y (n / 16), so a capture
+// can undo the gamma ramp; x < 0.1, constants as gray: y < 1/3 the stops of the
+// scene's resolve clip (a scene value of 1, without bloom), y < 2/3 the stops of
+// the curve's white, else log2 of the exposure, each as (stops + 8) / 16; the
+// rest: R the pixel's brightest channel in stops ((stops + 8) / 16), G 1 where
+// the scene fetch is clipped at 1, B 1 where the value is at 98% of the curve's white
+// or more.
+float3 fm4_hdr_probe() {
+  float2 uv = fm4_scene_uv;
+  float gray = max(fm4_probe_gray, 1.0e-6);
+  if (uv.x < 0.05) {
+    return (floor(saturate(uv.y) * 16.999) / 16.0).xxx;
+  }
+  if (uv.x < 0.1) {
+    float stops = uv.y < 1.0 / 3.0 ? log2(fm4_exposure_scale / gray) :
+                  uv.y < 2.0 / 3.0 ? log2(fm4_probe_white / gray) : log2(fm4_exposure_scale);
+    return saturate((stops + 8.0) / 16.0).xxx;
+  }
+  float3 x = (fm4_probe_scene * fm4_probe_scene + fm4_probe_bloom * fm4_probe_bloom) *
+             fm4_exposure_scale;
+  float peak = max(x.r, max(x.g, x.b));
+  float stops = log2(max(peak, 1.0e-6) / gray);
+  float clipped = max(fm4_probe_scene.r, max(fm4_probe_scene.g, fm4_probe_scene.b)) >=
+                  1.0 - 1.0 / 2048.0 ? 1.0 : 0.0;
+  float white = peak >= 0.98 * fm4_probe_white ? 1.0 : 0.0;
+  return float3(saturate((stops + 8.0) / 16.0), clipped, white);
+}
+
 // Saturation and contrast of the final image (gamma 2, 0...1).
 void fm4_grade(inout XePixel p) {
   float3 color = p.color[0].rgb;
@@ -253,6 +301,9 @@ void fm4_grade(inout XePixel p) {
   }
   if (FM4_LOOK_AO_DEBUG != 0.0) {
     color = xe_post_ao(fm4_scene_uv).xxx;
+  }
+  if (FM4_LOOK_HDR_PROBE != 0.0) {
+    color = fm4_hdr_probe();
   }
   p.color[0].rgb = color;
 }
