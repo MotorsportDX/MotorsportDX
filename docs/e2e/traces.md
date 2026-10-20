@@ -123,7 +123,7 @@ The inventory is used to plan a native renderer.
 python outputs\FM4-build\e2e\pm4_writers.py <BuildRoot>\project\generated\default <BuildRoot>\runtime-source\include\rex\graphics\xenos.h out.json
 ```
 
-The scan misses headers whose packet count is computed at run time (SET_CONSTANT) and predicated headers (bit 0 set). The scene draws are predicated `DRAW_INDX` packets (`0xC0032201`, `0xC0012201`); their writers (`sub_82311080`, `sub_8233AC60`, `sub_8234D278`, `sub_8234DAE8`, see [Ghidra render path](../analysis/ghidra-render-path.md)) are in the list only through the `SET_BIN_MASK_LO` header they also write, and carry that label.
+The scan misses headers whose packet count is computed at run time (SET_CONSTANT). It finds predicated headers (bit 0 set) and reports them with a `(pred)` suffix. The scene draws are predicated `DRAW_INDX` packets (`0xC0032201`, `0xC0012201`), so their writers (`sub_82311080`, `sub_8233AC60`, `sub_8234D278`, `sub_8234DAE8`, see [Ghidra render path](../analysis/ghidra-render-path.md)) carry `DRAW_INDX(pred)` in the trace, next to the `SET_BIN_MASK_LO` header they also write.
 
 ## Frame graph (REX_FRAME_GRAPH)
 
