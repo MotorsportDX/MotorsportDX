@@ -75,11 +75,11 @@ At the project owner's request: every look preset has TAA, and races render one 
 
   | Scene | Before the history fix | Final |
   |---|---|---|
-  | Rewind freeze, cockpit camera | 12 to 16% | 0.11 to 0.18%; with `TAA_STILL=0` (no jitter) 0.01% |
+  | Rewind freeze, cockpit camera | 12 to 16% | 0.11 to 0.18%, 0.06% with the cockpit glass accumulated; with `TAA_STILL=0` (no jitter) 0.01% |
   | Rewind freeze, chase camera | 25 to 31% | 0.01 to 0.04% once settled |
   | Pause menu | 1.9 to 2.5% | 0.00% (at most 1 or 2 of 255) |
 
-  What still changes in the cockpit is the cockpit glass, drawn after TAA from the jittered depth (its dust over a sunlit road and its rim), and the HUD prompt. In 1:1 crops the accumulated still frame has smooth edges where the frame without the jitter shows the steps of one tile without MSAA. A flag that moves in the freeze, which has no motion vectors, is averaged into a smear. `TAA_STILL_FRAMES` 64 and 1,024 changed little against 256.
+  The cockpit glass, drawn after TAA from the jittered depth, accumulates the light it adds on a still camera since a later change the same day ([windshield](../analysis/windshield.md#results)): the cockpit freeze then changes in 0.06% of the pixels with the glass, the same as without it, against 0.09 to 0.17% before. What still changes are features thinner than a pixel (the dashboard's grilles, the hood's edge), which the jitter hits in some phases only, so the clip cuts them back in the others, and the HUD prompt. In 1:1 crops the accumulated still frame has smooth edges where the frame without the jitter shows the steps of one tile without MSAA. A flag that moves in the freeze, which has no motion vectors, is averaged into a smear. `TAA_STILL_FRAMES` 64 and 1,024 changed little against 256.
 - **Smoke gates** at 240 Hz and 1x on `I:\FM4-build-pass` (Japan/Asia, launcher defaults): `stnew` (one tile) against `stmsaa` (`-Msaa`), the same binary without the asynchronous swap, then `stmerge`, the branch on top of the asynchronous swap, against `stnew`. 3 of 3 cells in each, the same three error keys, no clear-gray frames; the photo saves and loads in color.
 
   | Cell | `stmsaa` (tiles) | `stnew` (one tile) | `stmerge` (one tile, asynchronous swap) |

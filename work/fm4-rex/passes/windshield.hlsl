@@ -40,7 +40,9 @@
 //   windshield_compose  compute, the final size: final_color with the glass
 //                       over the window pixels (alpha -1 elsewhere, and in
 //                       every pixel of a frame that is not the cockpit
-//                       camera's), or a debug view (WINDSHIELD_DEBUG)
+//                       camera's), or a debug view (WINDSHIELD_DEBUG); on a
+//                       still camera the light the glass adds is the mean of
+//                       the frames since it stopped (windshield_history)
 //   windshield_output   pixel: draws it into final_color, the rest discarded
 //                       (those pixels keep their value bit for bit)
 //
@@ -278,7 +280,34 @@ Texture2D<float4> compose_final : register(t0);
 Texture2D<float2> compose_kind : register(t1);
 Texture2D<float4> compose_light : register(t2);
 Texture2D<float> compose_frame : register(t3);
+// previous:windshield_history: the light the glass added (linear) and its age.
+Texture2D<float4> compose_previous : register(t4);
 RWTexture2D<float4> compose_out : register(u0);
+RWTexture2D<float4> compose_history_out : register(u1);
+
+// The glass's light of this frame (linear, the composed color less the input)
+// into windshield_history, and the light to add: on a still camera
+// (xe_camera_still(), TAA's step 8) the mean of the frames since it stopped,
+// up to TAA_STILL_FRAMES, since the window mask and the glare come from the
+// jittered depth and stencil after TAA, and the rim, the glare and the dust
+// would shimmer on a still picture; otherwise this frame's.
+float3 WindshieldAccumulate(int2 pixel, float3 added) {
+  bool still = xe_camera_still() && xe_history_valid() && WINDSHIELD_DEBUG == 0u;
+  float4 previous = still ? compose_previous.Load(int3(pixel, 0)) : 0.0;
+  float age = still ? previous.a : 0.0;
+  float3 result = still ? lerp(previous.rgb, added, 1.0 / (min(age, TAA_STILL_FRAMES) + 1.0))
+                        : added;
+  compose_history_out[pixel] = float4(result, still ? min(age + 1.0, TAA_STILL_FRAMES) : 1.0);
+  return result;
+}
+
+// compose_out from final_color and the glass's light; alpha -1 leaves the pixel
+// as it is, bit for bit.
+void WindshieldWrite(int2 pixel, float4 final, float3 added) {
+  compose_out[pixel] = any(added != 0.0)
+                           ? float4(WindshieldDisplay(WindshieldLinear(final.rgb) + added), final.a)
+                           : float4(final.rgb, -1.0);
+}
 
 float WindshieldHash(float2 p) {
   float3 q = frac(float3(p.xyx) * 0.1031);
@@ -340,6 +369,7 @@ void windshield_compose(uint3 id : SV_DispatchThreadID) {
   int2 pixel = int2(id.xy);
   bool cockpit = WindshieldCockpit(compose_frame.Load(int3(0, 0, 0)));
   if (!cockpit && WINDSHIELD_DEBUG != 1u) {
+    compose_history_out[pixel] = float4(0.0, 0.0, 0.0, 1.0);
     compose_out[id.xy] = float4(0.0, 0.0, 0.0, -1.0);
     return;
   }
@@ -365,13 +395,19 @@ void windshield_compose(uint3 id : SV_DispatchThreadID) {
     if (all(id.xy < uint2(96, 6))) {
       color = cockpit ? float3(0.0, 1.0, 0.0) : float3(1.0, 0.0, 0.0);
     }
+    compose_history_out[pixel] = float4(0.0, 0.0, 0.0, 1.0);
     compose_out[id.xy] = float4(color, final.a);
     return;
   }
   if (!cockpit || coverage <= 0.0) {
-    // Left as it is, or dark behind debug views 2 and 3.
-    bool dark = WINDSHIELD_DEBUG > 1u && cockpit;
-    compose_out[id.xy] = dark ? float4(0.02, 0.0, 0.04, final.a) : float4(final.rgb, -1.0);
+    // Dark behind debug views 2 and 3; otherwise no glass in this frame, but on
+    // a still camera the light of earlier frames may still be there (the rim).
+    if (WINDSHIELD_DEBUG > 1u && cockpit) {
+      compose_history_out[pixel] = float4(0.0, 0.0, 0.0, 1.0);
+      compose_out[id.xy] = float4(0.02, 0.0, 0.04, final.a);
+    } else {
+      WindshieldWrite(pixel, final, WindshieldAccumulate(pixel, 0.0));
+    }
     return;
   }
   // The light of the 1/8 textures, smoothed by four bilinear taps.
@@ -392,12 +428,14 @@ void windshield_compose(uint3 id : SV_DispatchThreadID) {
   // Screen-like: added light fades toward white, it never clips harder.
   float3 glass = tinted + added * (1.0 - tinted);
   float3 color = lerp(linear_color, glass, coverage);
-  if (WINDSHIELD_DEBUG == 2u) {
-    color = saturate(added * 4.0 * coverage) + float3(0.02, 0.0, 0.04);
-  } else if (WINDSHIELD_DEBUG == 3u) {
-    color = lerp(float3(0.02, 0.0, 0.04), 1.0, dust * coverage);
+  if (WINDSHIELD_DEBUG == 2u || WINDSHIELD_DEBUG == 3u) {
+    color = WINDSHIELD_DEBUG == 2u ? saturate(added * 4.0 * coverage) + float3(0.02, 0.0, 0.04)
+                                   : lerp(float3(0.02, 0.0, 0.04), 1.0, dust * coverage);
+    compose_history_out[pixel] = float4(0.0, 0.0, 0.0, 1.0);
+    compose_out[id.xy] = float4(WindshieldDisplay(color), final.a);
+    return;
   }
-  compose_out[id.xy] = float4(WindshieldDisplay(color), final.a);
+  WindshieldWrite(pixel, final, WindshieldAccumulate(pixel, color - linear_color));
 }
 
 // ---------------------------------------------------------------------------

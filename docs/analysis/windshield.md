@@ -21,6 +21,7 @@ The post pass framework ([post pass framework](post-pass-framework.md)) already 
 At the final point, after TAA and before the HUD:
 
 - After TAA, because the glass moves with the camera while the motion vectors follow the world behind it: in the TAA history a reflection or dust would smear. The window mask is taken from the jittered scene depth and stencil, so its edges are softened over the 3x3 around each pixel.
+- On a still camera (since 20 October 2026, when a still camera is jittered again and TAA accumulates its phases) the jitter still moved the rim, the glare and the dust from frame to frame. There `windshield_compose` accumulates the light the glass adds (linear: the composed color less `final_color`) in the history texture `windshield_history`, as TAA's step 11: the mean of the frames since the camera stopped, up to `TAA_STILL_FRAMES`. In motion the light of the frame is used as before, so the glass has no lag when the camera starts or stops.
 - At the final point the image is display referred (after the exposure and the tone curve). The glass works on the squared values (about linear). At the scene_color point (before the game's post chain, through the write-back), the glare would bloom with the rest of the scene and the tint would pass through the exposure. That is a later option; the final point keeps the effect independent of the look's tone curve.
 
 ## The effects
@@ -80,6 +81,8 @@ BuildRoot `I:\FM4-build-pass` (game build of 19 October 2026, no runtime change:
 - `fm4_post_pass_shader_tests` passes with the new manifest (the glass off, as by default). With `WINDSHIELD=1` it also runs the glass in every frame of its TAA tests on WARP, which takes too long to finish; it was stopped.
 
 - **Glare and dust strength** (`windshield-glare`, 20 October 2026). The project owner found them hardly visible at strength 1 with the first values (`WINDSHIELD_GLARE` 0.15, threshold 0.45, radius 0.2, `WINDSHIELD_DUST` 0.5): only the brightest sky passed the threshold, and the haze over it barely changes a pixel that is already bright. In the same frozen frames two stronger sets were compared: v1 (glare 0.3, threshold 0.3, radius 0.25, dust 1.0) shows a light haze and the wipers' arcs as dust over the cars and the road ahead toward bright sky and snow; v2 (glare 0.5, threshold 0.2, radius 0.3, dust 1.5) a thick milky patch over dark cars. The project owner chose v1, the defaults since 20 October 2026.
+
+- **The still camera's accumulation** (`ck-diag`, `ck-ws`, 20 October 2026; BuildRoot `I:\FM4-build-pass`, USA Disc 1, 2x, a cockpit rewind freeze with one tile and TAA, `WINDSHIELD` switched live): before the accumulation, consecutive captures 2.1 s apart changed in 0.09 to 0.17% of the pixels by more than 4 of 255 with the glass and 0.06 to 0.07% without it, the difference on the windows' rim and the dust; with it, 0.06% with the glass once settled, the same as without it (0.05 to 0.06%), while the glass still changes the window pixels (26.8% of the frame against the glass off). Every frame in which the glass ran had `windshield_history` ready. A smoke gate at 240 Hz and 1x (`stws` against `stmerge`) passed 3 of 3 cells (`career` PASS, `photo` and `photo_view` WARN on capture statistics only).
 
 ## Open
 

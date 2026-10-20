@@ -304,6 +304,15 @@ scale = 0.125
 format = "R16G16B16A16_FLOAT"
 size = "final"
 
+# The light the glass adds (linear, the composed color less final_color) and
+# its age, accumulated on a still camera: the window mask and the glare come
+# from the jittered scene depth and stencil, after TAA (previous:
+# windshield_history in windshield_compose).
+[textures.windshield_history]
+format = "R16G16B16A16_FLOAT"
+size = "final"
+history = true
+
 # The occlusion accumulated over frames (gtao_temporal) and the frames in it.
 [textures.gtao_history]
 format = "R16G16_FLOAT"
@@ -456,8 +465,9 @@ point = "final"
 shader = "windshield.hlsl"
 entry = "windshield_compose"
 if = "WINDSHIELD > 0 && XE_SCENE > 0"
-srv = ["final_color", "windshield_kind", "windshield_light", "windshield_frame"]
-uav = ["windshield_out"]
+srv = ["final_color", "windshield_kind", "windshield_light", "windshield_frame",
+       "previous:windshield_history"]
+uav = ["windshield_out", "windshield_history"]
 
 [[passes]]
 name = "windshield_output"
