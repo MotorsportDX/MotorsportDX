@@ -78,7 +78,8 @@ The launcher uses these runtime settings (set in `launch_cvars` in
 - Guest memory that the CPU wrote is uploaded to the GPU once, not every frame
   (`clear_memory_page_state=false`).
 - Command lists are recorded and executed on a thread of their own
-  (`d3d12_submit_thread=true`). The copies of resolve readbacks into guest memory run
+  (`d3d12_submit_thread=true`), and the swap does not wait for that thread
+  (`d3d12_submit_thread_async_swap=true`). The copies of resolve readbacks into guest memory run
   on their own thread too (`d3d12_readback_publish_thread=true`).
 - Occlusion reports are published at once from the previous frame's samples
   (`rov_occlusion_async=previous`). Resolve readbacks do not wait for the GPU

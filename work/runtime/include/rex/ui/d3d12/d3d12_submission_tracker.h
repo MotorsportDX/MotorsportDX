@@ -75,6 +75,16 @@ class D3D12SubmissionTracker {
   // enqueued, can be used to retry enqueueing the signal.
   bool TrySignalEnqueueing();
 
+  // Deferred signaling, for submissions enqueued on the queue later by another
+  // thread: ReserveSubmission increments the current submission index without
+  // signaling and returns the reserved index, and SignalReservedSubmission
+  // enqueues its signal, which may be done on another thread, in the order of
+  // reservation. The client must make sure all reserved signals are enqueued
+  // before calling anything else that may enqueue a signal or await
+  // submissions (NextSubmission, AwaitSubmissionCompletion, Shutdown).
+  UINT64 ReserveSubmission() { return submission_current_++; }
+  bool SignalReservedSubmission(UINT64 submission_index);
+
  private:
   UINT64 submission_current_ = 1;
   UINT64 submission_signal_queued_ = 0;

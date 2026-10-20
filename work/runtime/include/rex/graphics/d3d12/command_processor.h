@@ -24,6 +24,7 @@
 #include <unordered_map>
 #include <utility>
 #include <fstream>
+#include <functional>
 #include <vector>
 
 #include <rex/assert.h>
@@ -576,12 +577,17 @@ class D3D12CommandProcessor : public CommandProcessor {
 
   // d3d12_submit_thread: non-swap submissions are replayed into command_list_
   // and executed by a worker thread in submission order, which also signals
-  // submission_fence_. Swap submissions and shutdown flush the worker first,
-  // because the presenter signals its own fence right after the swap.
+  // submission_fence_. Swap submissions flush the worker first, because the
+  // presenter signals its own fence and paints right after the swap, unless
+  // d3d12_submit_thread_async_swap is enabled: then the swap submission is a
+  // job too, followed by callback jobs that signal the presenter's fence and
+  // present the new image on the worker. Shutdown drains the worker.
   struct SubmitJob {
     std::unique_ptr<DeferredCommandList> list;
-    ID3D12CommandAllocator* allocator;
-    uint64_t submission;
+    ID3D12CommandAllocator* allocator = nullptr;
+    uint64_t submission = 0;
+    // Without a list: called on the worker after the earlier jobs.
+    std::function<void()> callback;
   };
   std::thread submit_thread_;
   std::mutex submit_mutex_;
@@ -591,7 +597,9 @@ class D3D12CommandProcessor : public CommandProcessor {
   std::vector<std::unique_ptr<DeferredCommandList>> submit_free_lists_;
   bool submit_busy_ = false;
   bool submit_shutdown_ = false;
+  bool submit_async_swap_ = false;
   void SubmitThreadMain();
+  void EnqueueSubmitCallback(std::function<void()> callback);
   void FlushSubmitThread();
   void ShutdownSubmitThread();
 

@@ -696,15 +696,17 @@ def summarize(perf, measure):
         result['occlusion_samples_median'] = {k: median([p['occlusion_samples'][k] for p in steady])
                                               for k in steady[0]['occlusion_samples']}
     if 'submit_thread' in steady[0]:
-        # Submit thread wall time (busy = record + execute + list reset) and the command
-        # processor's drain of it before the swap submission (flush_wait, inside cpu_ms submit).
-        submit = lambda p, k: p['submit_thread'][k]
+        # Submit thread wall time (busy = record + execute + list reset + callbacks; callbacks
+        # are the presenter's signal and the present with d3d12_submit_thread_async_swap) and
+        # the command processor's drain of it before the swap submission (flush_wait, inside
+        # cpu_ms submit). Older traces lack the callback fields.
+        submit = lambda p, k: p['submit_thread'].get(k, 0)
         result['submit_thread_ms_per_s_median'] = {
             k: median([per_s(p, submit(p, k)) for p in steady])
-            for k in ('busy_ms', 'record_ms', 'execute_ms', 'flush_wait_ms')}
+            for k in ('busy_ms', 'record_ms', 'execute_ms', 'callback_ms', 'flush_wait_ms')}
         result['submit_thread_counts_per_s_median'] = {
             k: median([per_s(p, submit(p, k)) for p in steady])
-            for k in ('jobs', 'flushes', 'flushes_blocked', 'flush_jobs')}
+            for k in ('jobs', 'callbacks', 'flushes', 'flushes_blocked', 'flush_jobs')}
         result['submit_flush_wait_ms_per_frame_median'] = median(
             [submit(p, 'flush_wait_ms') / max(1, len(p.get('frame_ms', []))) for p in steady])
     gpu = [p['gpu'] for p in steady if p.get('gpu', {}).get('frames')]

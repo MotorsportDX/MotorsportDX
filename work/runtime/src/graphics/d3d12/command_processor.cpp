@@ -113,6 +113,12 @@ REXCVAR_DEFINE_BOOL(d3d12_submit_thread, false, "GPU/D3D12",
                     "D3D12 recording cost off the command processor thread")
     .lifecycle(rex::cvar::Lifecycle::kRequiresRestart);
 
+REXCVAR_DEFINE_BOOL(d3d12_submit_thread_async_swap, false, "GPU/D3D12",
+                    "With d3d12_submit_thread: submit the swap through the submit thread too, "
+                    "and signal the presenter and present the frame on that thread after it, "
+                    "instead of waiting for the thread to drain at every swap")
+    .lifecycle(rex::cvar::Lifecycle::kRequiresRestart);
+
 REXCVAR_DEFINE_INT32(d3d12_submit_draw_interval, 0, "GPU/D3D12",
                      "With d3d12_submit_thread: end the submission before a draw once it holds "
                      "this many draws, so the submit thread replays the frame while it is "
@@ -1895,6 +1901,7 @@ bool D3D12CommandProcessor::SetupContext() {
 
   if (REXCVAR_GET(d3d12_submit_thread)) {
     submit_shutdown_ = false;
+    submit_async_swap_ = REXCVAR_GET(d3d12_submit_thread_async_swap);
     submit_thread_ = std::thread([this]() { SubmitThreadMain(); });
   }
   if (REXCVAR_GET(d3d12_readback_publish_thread)) {
@@ -3125,12 +3132,39 @@ void D3D12CommandProcessor::IssueSwap(uint32_t frontbuffer_ptr, uint32_t frontbu
   uint32_t display_width = std::max(uint32_t(1), uint32_t(video_mode.display_width));
   uint32_t display_height = std::max(uint32_t(1), uint32_t(video_mode.display_height));
 
+  // With d3d12_submit_thread_async_swap, the frame is presented on the submit
+  // thread after the swap submission.
+  ui::Presenter::GuestOutputPaintDeferrer paint_deferrer;
+  if (submit_async_swap_) {
+    paint_deferrer = [this](std::function<void()> present) {
+      EnqueueSubmitCallback(std::move(present));
+    };
+  }
   presenter->RefreshGuestOutput(
       guest_output_width, guest_output_height, display_width, display_height,
       [this, &swap_texture_srv_desc, frontbuffer_format, swap_texture_resource, guest_output_width,
        guest_output_height](ui::Presenter::GuestOutputRefreshContext& context) -> bool {
         const ui::d3d12::D3D12Provider& provider = GetD3D12Provider();
         ID3D12Device* device = provider.GetDevice();
+
+        // With d3d12_submit_thread_async_swap, whichever way this returns,
+        // submit the swap as a submit thread job, and let the presenter signal
+        // its fence on that thread after it.
+        std::function<void()> submitted_callback;
+        if (submit_async_swap_) {
+          submitted_callback =
+              static_cast<ui::d3d12::D3D12Presenter::D3D12GuestOutputRefreshContext&>(context)
+                  .TakeSubmittedCallback();
+        }
+        struct SubmittedCallbackGuard {
+          std::function<void()> on_exit;
+          ~SubmittedCallbackGuard() { on_exit(); }
+        } submitted_callback_guard{[this, &submitted_callback]() {
+          if (submitted_callback) {
+            EndSubmission(true);
+            EnqueueSubmitCallback(std::move(submitted_callback));
+          }
+        }};
 
         SwapPostEffect swap_post_effect = GetActualSwapPostEffect();
         bool use_fxaa = swap_post_effect == SwapPostEffect::kFxaa ||
@@ -3389,7 +3423,8 @@ void D3D12CommandProcessor::IssueSwap(uint32_t frontbuffer_ptr, uint32_t frontbu
         SubmitBarriers();
         EndSubmission(true);
         return true;
-      });
+      },
+      paint_deferrer);
 
   // End the frame even if did not present for any reason (the image refresher
   // was not called), to prevent leaking per-frame resources.
@@ -5058,7 +5093,7 @@ bool D3D12CommandProcessor::EndSubmission(bool is_swap) {
     // happens between Xenia submissions.
     ID3D12CommandAllocator* command_allocator =
         command_allocator_writable_first_->command_allocator;
-    const bool on_submit_thread = submit_thread_.joinable() && !is_swap;
+    const bool on_submit_thread = submit_thread_.joinable() && (!is_swap || submit_async_swap_);
     if (on_submit_thread) {
       SubmitJob job;
       {
@@ -6842,6 +6877,20 @@ void D3D12CommandProcessor::SubmitThreadMain() {
     submit_jobs_.pop_front();
     submit_busy_ = true;
     lock.unlock();
+    if (!job.list) {
+      const uint64_t perf_start = perf_trace::ZoneStart();
+      job.callback();
+      job.callback = nullptr;
+      if (perf_start) {
+        perf_trace::AddSubmitThreadCallback(perf_start, perf_trace::Now());
+      }
+      lock.lock();
+      submit_busy_ = false;
+      if (submit_jobs_.empty()) {
+        submit_done_cond_.notify_all();
+      }
+      continue;
+    }
     // The allocator is only reused after this submission's fence value, which
     // is signaled below, so it is free to reset here.
     const uint64_t perf_start = perf_trace::ZoneStart();
@@ -6865,6 +6914,16 @@ void D3D12CommandProcessor::SubmitThreadMain() {
       submit_done_cond_.notify_all();
     }
   }
+}
+
+void D3D12CommandProcessor::EnqueueSubmitCallback(std::function<void()> callback) {
+  SubmitJob job;
+  job.callback = std::move(callback);
+  {
+    std::lock_guard<std::mutex> lock(submit_mutex_);
+    submit_jobs_.push_back(std::move(job));
+  }
+  submit_request_cond_.notify_one();
 }
 
 void D3D12CommandProcessor::FlushSubmitThread() {

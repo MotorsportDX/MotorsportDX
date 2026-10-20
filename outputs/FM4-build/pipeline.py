@@ -951,9 +951,9 @@ def launch_cvars(root,disc1,log_file):
             # FM4 writes guest memory only through watched pages (REX_STALE_PAGE_TRACE finds no
             # stale data), so CPU-uploaded pages need not be re-uploaded every frame; command lists
             # are recorded and executed, and resolve readbacks copied into guest memory, off the
-            # command processor thread.
+            # command processor thread, and the swap does not wait for that thread to drain.
             'clear_memory_page_state':'false','d3d12_submit_thread':'true',
-            'd3d12_readback_publish_thread':'true',
+            'd3d12_submit_thread_async_swap':'true','d3d12_readback_publish_thread':'true',
             'input_backend':'sdl','mnk_mode':'true','mnk_mouse':'false',
             'keybind_right_trigger':'W','keybind_left_trigger':'S',
             'keybind_lstick_left':'A','keybind_lstick_right':'D',

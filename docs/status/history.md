@@ -22,7 +22,7 @@ timeline
     17 October : Clearcoat, display options and settings overlay, Alt+Enter, GTAO ambient occlusion, generic content import (DLC), shader mod cache and hot reload
     18 October : ROV occlusion divisor removed, sun query samples measured per MSAA level : Glass, chrome and rim look mods (false color, A/B at 2x, smoke gate), look mods compiled against real contracts : Track lighting knobs road_gloss and sky (TrackSettings copies, 2x sweep) : USA release support (clean build, smoke gate with dlc) : Post pass framework, GTAO on it with identical output : Motion vector sources checked in the game (per-car stencil IDs, the game's blur matrices) : Per-car motion vectors on the post pass framework (CPU and WARP tests)
     19 October : Motion vectors checked in the game (the game's blur matrices, debug views at 2x, GPU time, smoke gate) : Motion vector gaps: cockpit interior, glass, mirror panel, motion mask : Cockpit light look knob (interior shadow floor)
-    20 October : pc with the cockpit knobs : TAA jitter only while the camera moves (still pictures no longer shimmer) : pc facing the sun (clear coat limit, road sheen, glass, chrome and rims) : AO in the garage, Autovista and the career home
+    20 October : pc with the cockpit knobs : TAA jitter only while the camera moves (still pictures no longer shimmer) : pc facing the sun (clear coat limit, road sheen, glass, chrome and rims) : AO in the garage, Autovista and the career home : Asynchronous swap (the swap no longer waits for the submit thread)
 ```
 
 | Date | Milestone |
@@ -340,6 +340,14 @@ Shader mod iteration (17 October; design and results in [shader-mod-iteration.md
   - Launcher defaults: "Glass, chrome and rims: Off in every preset (A/B at 2x on 18 October 2026; the sun highlights are not yet checked)", and the clear coat at `clearcoat_glint` 4.
   - Next validation steps 5 ("Choose the road look") and 6 ("Finish the glass, chrome and rim check"), apart from the split-screen set, which stays open.
 - AO was found running in the garage's full-screen car views, Autovista and the career home since the camera fallback of 19 October 2026 ([GTAO design](../analysis/gtao-design.md#6-stages-and-verification)). Superseded statements: the Display gap "AO is not in the cockpit interior, garage or showroom" and the open issue "AO is missing in the cockpit interior (the depth range is compressed there) and in the garage and showroom (no camera vertex-shader constants)"; the cockpit interior part stays.
+
+### 20 October 2026: asynchronous swap
+
+- `d3d12_submit_thread_async_swap` sends the swap through the submit thread and orders the presenter's signal and presentation after it; the launcher turns it on ([current status, asynchronous swap](current.md#asynchronous-swap-20-october-2026)). Superseded statements of the current status page:
+  - Current performance, 240 Hz: "Of the command processor frame, 0.35-0.6 ms is the swap waiting for the submit thread to replay the last frame body, while that thread is only about 25% busy."
+  - Performance gap: "At 240 Hz, the race is limited by the command processor (pacing, swap synchronization with the submit thread, and cost per draw). The swap synchronization is a serialization of 0.35-0.6 ms per frame, not a saturated submit thread; removing it needs an asynchronous swap submission ordered before the presenter's commands. At 2x with AO, it is limited by the GPU (about 162 fps)."
+  - Conclusion of "Submit thread at the swap": "Removing all of it (0.35-0.6 ms of a 5-6.5 ms command processor frame, up to about 10% fps where the race is command processor bound) needs the swap submission to go through the submit thread without the command processor waiting, with the presenter's guest output signal and its paint ordered after that submission on the queue."
+  - Launcher defaults, submit thread: "`d3d12_submit_thread=true`" without the asynchronous swap.
 
 ## 5. Superseded settings and decisions
 

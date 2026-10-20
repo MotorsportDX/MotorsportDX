@@ -64,6 +64,7 @@ D3D12Presenter::~D3D12Presenter() {
   // From most likely the latest to most likely the earliest to be signaled, so
   // just one sleep will likely be needed.
   paint_context_.AwaitSwapChainUsageCompletion();
+  AwaitGuestOutputRefresherSignal(guest_output_refresher_signal_reserved_);
   guest_output_resource_refresher_submission_tracker_.Shutdown();
   ui_submission_tracker_.Shutdown();
 #if defined(REX_HAS_FIDELITYFX_RUNTIME) && REX_HAS_FIDELITYFX_RUNTIME
@@ -212,12 +213,14 @@ Surface::TypeFlags D3D12Presenter::GetSupportedSurfaceTypes() const {
 
 bool D3D12Presenter::CaptureGuestOutput(RawImage& image_out) {
   Microsoft::WRL::ComPtr<ID3D12Resource> guest_output_resource;
+  UINT64 guest_output_refresher_submission = 0;
   {
     uint32_t guest_output_mailbox_index;
     std::unique_lock<std::mutex> guest_output_consumer_lock(
         ConsumeGuestOutput(guest_output_mailbox_index, nullptr, nullptr));
     if (guest_output_mailbox_index != UINT32_MAX) {
       guest_output_resource = guest_output_resources_[guest_output_mailbox_index].second;
+      guest_output_refresher_submission = guest_output_resources_[guest_output_mailbox_index].first;
     }
     // Incremented the reference count of the guest output resource - safe to
     // leave the consumer critical section now.
@@ -225,6 +228,7 @@ bool D3D12Presenter::CaptureGuestOutput(RawImage& image_out) {
   if (!guest_output_resource) {
     return false;
   }
+  AwaitGuestOutputRefresherSignal(guest_output_refresher_submission);
 
   ID3D12Device* device = provider_.GetDevice();
 
@@ -508,6 +512,7 @@ bool D3D12Presenter::RefreshGuestOutputImpl(
         guest_output_resource_current_desc.Height != frontbuffer_height) {
       // Main target painting has its own reference to the textures for reading
       // in its own submission tracker timeline, safe to release here.
+      AwaitGuestOutputRefresherSignal(guest_output_refresher_signal_reserved_);
       guest_output_resource_refresher_submission_tracker_.AwaitSubmissionCompletion(
           guest_output_resource_ref.first);
       guest_output_resource_ref.second.Reset();
@@ -537,15 +542,45 @@ bool D3D12Presenter::RefreshGuestOutputImpl(
     }
   }
   D3D12GuestOutputRefreshContext context(is_8bpc_out_ref, guest_output_resource_ref.second.Get());
-  bool refresher_succeeded = refresher(context);
   // Even if the refresher has returned false, it still might have submitted
   // some commands referencing the resource. It's better to put an excessive
   // signal and wait slightly longer, for nothing important, while shutting down
   // than to destroy the resource while it's still in use.
-  guest_output_resource_ref.first =
-      guest_output_resource_refresher_submission_tracker_.GetCurrentSubmission();
-  guest_output_resource_refresher_submission_tracker_.NextSubmission();
+  const UINT64 submission = guest_output_resource_refresher_submission_tracker_.ReserveSubmission();
+  context.submitted_callback_ = [this, submission]() { SignalGuestOutputRefresher(submission); };
+  bool refresher_succeeded = refresher(context);
+  guest_output_resource_ref.first = submission;
+  if (context.submitted_callback_) {
+    // Submitted synchronously. Keep the fence values monotonic after an
+    // earlier asynchronous refresh.
+    AwaitGuestOutputRefresherSignal(guest_output_refresher_signal_reserved_);
+    SignalGuestOutputRefresher(submission);
+  }
+  guest_output_refresher_signal_reserved_ = submission;
   return refresher_succeeded;
+}
+
+void D3D12Presenter::SignalGuestOutputRefresher(UINT64 submission) {
+  if (!guest_output_resource_refresher_submission_tracker_.SignalReservedSubmission(submission)) {
+    REXLOG_ERROR("D3D12Presenter: Failed to signal the guest output refresher fence");
+  }
+  {
+    std::lock_guard<std::mutex> lock(guest_output_refresher_signal_mutex_);
+    guest_output_refresher_signal_enqueued_ =
+        std::max(guest_output_refresher_signal_enqueued_, submission);
+  }
+  guest_output_refresher_signal_cond_.notify_all();
+}
+
+bool D3D12Presenter::IsGuestOutputRefresherSignalEnqueued(UINT64 submission) {
+  std::lock_guard<std::mutex> lock(guest_output_refresher_signal_mutex_);
+  return guest_output_refresher_signal_enqueued_ >= submission;
+}
+
+void D3D12Presenter::AwaitGuestOutputRefresherSignal(UINT64 submission) {
+  std::unique_lock<std::mutex> lock(guest_output_refresher_signal_mutex_);
+  guest_output_refresher_signal_cond_.wait(
+      lock, [this, submission]() { return guest_output_refresher_signal_enqueued_ >= submission; });
 }
 
 void D3D12Presenter::PaintContext::DestroySwapChain() {
@@ -563,6 +598,35 @@ void D3D12Presenter::PaintContext::DestroySwapChain() {
 }
 
 Presenter::PaintResult D3D12Presenter::PaintAndPresentImpl(bool execute_ui_drawers) {
+  // Take the guest output first: its paint must not be submitted before the
+  // refresher work that wrote it.
+  GuestOutputProperties guest_output_properties;
+  GuestOutputPaintConfig guest_output_paint_config;
+  Microsoft::WRL::ComPtr<ID3D12Resource> guest_output_resource;
+  UINT64 guest_output_refresher_submission = 0;
+  {
+    uint32_t guest_output_mailbox_index;
+    std::unique_lock<std::mutex> guest_output_consumer_lock(ConsumeGuestOutput(
+        guest_output_mailbox_index, &guest_output_properties, &guest_output_paint_config));
+    if (guest_output_mailbox_index != UINT32_MAX) {
+      guest_output_resource = guest_output_resources_[guest_output_mailbox_index].second;
+      guest_output_refresher_submission = guest_output_resources_[guest_output_mailbox_index].first;
+    }
+    // Incremented the reference count of the guest output resource - safe to
+    // leave the consumer critical section now as everything here either will be
+    // using the new reference or is exclusively owned by main target painting
+    // (and multiple threads can't paint the main target at the same time).
+  }
+  if (guest_output_resource &&
+      !IsGuestOutputRefresherSignalEnqueued(guest_output_refresher_submission)) {
+    if (is_in_deferred_guest_output_paint()) {
+      // A newer image whose work this thread submits later: its own deferred
+      // presentation follows that.
+      return PaintResult::kNotPresented;
+    }
+    AwaitGuestOutputRefresherSignal(guest_output_refresher_submission);
+  }
+
   // Begin the command list with the command allocator not currently potentially
   // used on the GPU.
   UINT64 current_paint_submission = paint_context_.paint_submission_tracker.GetCurrentSubmission();
@@ -592,22 +656,6 @@ Presenter::PaintResult D3D12Presenter::PaintAndPresentImpl(bool execute_ui_drawe
   const float kBackBufferClearColor[] = {0.0f, 0.0f, 0.0f, 1.0f};
 
   // Draw the guest output.
-
-  GuestOutputProperties guest_output_properties;
-  GuestOutputPaintConfig guest_output_paint_config;
-  Microsoft::WRL::ComPtr<ID3D12Resource> guest_output_resource;
-  {
-    uint32_t guest_output_mailbox_index;
-    std::unique_lock<std::mutex> guest_output_consumer_lock(ConsumeGuestOutput(
-        guest_output_mailbox_index, &guest_output_properties, &guest_output_paint_config));
-    if (guest_output_mailbox_index != UINT32_MAX) {
-      guest_output_resource = guest_output_resources_[guest_output_mailbox_index].second;
-    }
-    // Incremented the reference count of the guest output resource - safe to
-    // leave the consumer critical section now as everything here either will be
-    // using the new reference or is exclusively owned by main target painting
-    // (and multiple threads can't paint the main target at the same time).
-  }
 
   if (guest_output_resource) {
     GuestOutputPaintFlow guest_output_flow = GetGuestOutputPaintFlow(

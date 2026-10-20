@@ -549,7 +549,8 @@ void Presenter::PaintFromUIThread(bool force_paint) {
 bool Presenter::RefreshGuestOutput(
     uint32_t frontbuffer_width, uint32_t frontbuffer_height, uint32_t display_aspect_ratio_x,
     uint32_t display_aspect_ratio_y,
-    std::function<bool(GuestOutputRefreshContext& context)> refresher) {
+    std::function<bool(GuestOutputRefreshContext& context)> refresher,
+    const GuestOutputPaintDeferrer& paint_deferrer) {
   GuestOutputProperties& writable_properties =
       guest_output_properties_[guest_output_mailbox_writable_];
   writable_properties.frontbuffer_width = frontbuffer_width;
@@ -615,6 +616,16 @@ bool Presenter::RefreshGuestOutput(
   }
 
   // Trigger the presentation on the host.
+  if (paint_deferrer) {
+    paint_deferrer([this]() { PresentRefreshedGuestOutput(true); });
+  } else {
+    PresentRefreshedGuestOutput(false);
+  }
+
+  return is_active;
+}
+
+void Presenter::PresentRefreshedGuestOutput(bool deferred) {
   PaintResult paint_result = PaintResult::kNotPresented;
   {
     std::lock_guard<std::mutex> paint_mode_mutex_lock(paint_mode_mutex_);
@@ -629,7 +640,9 @@ bool Presenter::RefreshGuestOutput(
       case PaintMode::kGuestOutputThreadImmediately:
         // Both painting and window paint requesting are accessible.
         if (surface_paint_connection_state_ == SurfacePaintConnectionState::kConnectedPaintable) {
+          is_in_deferred_guest_output_paint_ = deferred;
           paint_result = PaintAndPresent(false);
+          is_in_deferred_guest_output_paint_ = false;
           if (surface_paint_connection_state_ == SurfacePaintConnectionState::kConnectedOutdated) {
             RequestPaintOrConnectionRecoveryViaWindow(true);
           }
@@ -646,8 +659,6 @@ bool Presenter::RefreshGuestOutput(
       host_gpu_loss_callback_(false, false);
     }
   }
-
-  return is_active;
 }
 
 void Presenter::SetGuestOutputPaintConfigFromUIThread(const GuestOutputPaintConfig& new_config) {

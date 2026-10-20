@@ -355,9 +355,16 @@ class Presenter {
   // returned true. The callback must submit all updating work to the host GPU
   // before successfully returning, and also signal all the GPU synchronization
   // primitives required by the GuestOutputRefreshContext implementation.
+  // A refresher that submits its work to the host GPU queue later, on another
+  // thread, passes a paint deferrer: it receives the presentation of the new
+  // image (painting it in the guest output thread mode, or requesting a UI
+  // thread paint) and must run it on that thread after the refresher's work has
+  // been submitted.
+  using GuestOutputPaintDeferrer = std::function<void(std::function<void()> present)>;
   bool RefreshGuestOutput(uint32_t frontbuffer_width, uint32_t frontbuffer_height,
                           uint32_t display_aspect_ratio_x, uint32_t display_aspect_ratio_y,
-                          std::function<bool(GuestOutputRefreshContext& context)> refresher);
+                          std::function<bool(GuestOutputRefreshContext& context)> refresher,
+                          const GuestOutputPaintDeferrer& paint_deferrer = nullptr);
   // The implementation must be callable from any thread, including from
   // multiple at the same time, and it should acquire the latest guest output
   // image via ConsumeGuestOutput.
@@ -720,6 +727,14 @@ class Presenter {
   // Call via PaintAndPresent.
   virtual PaintResult PaintAndPresentImpl(bool execute_ui_drawers) = 0;
 
+  // Whether PaintAndPresentImpl is called from a presentation deferred by a
+  // GuestOutputPaintDeferrer, on the thread that submits the refresher's work.
+  // That thread may not have submitted the work of the image now ready yet
+  // (submitted before that image's own deferred presentation), so the
+  // implementation must not wait for it there, but may skip the paint: the
+  // presentation of that image follows.
+  bool is_in_deferred_guest_output_paint() const { return is_in_deferred_guest_output_paint_; }
+
   // For calling from the painting implementations if requested.
   void ExecuteUIDrawersFromUIThread(UIDrawContext& ui_draw_context);
 
@@ -848,6 +863,11 @@ class Presenter {
   // kPresentedSuboptimal rather than kNotPresentedConnectionOutdated, the image
   // has been successfully sent to the OS presentation at least.
   PaintResult PaintAndPresent(bool execute_ui_drawers);
+
+  // The presentation part of RefreshGuestOutput, after the new image has been
+  // made the ready one: paints it in the guest output thread mode, or requests
+  // a UI thread paint.
+  void PresentRefreshedGuestOutput(bool deferred);
 
   void HandleUIDrawersChangeFromUIThread(bool drawers_were_empty);
 
@@ -997,6 +1017,8 @@ class Presenter {
   // deferred and be handled by the tail of PaintFromUIThread for consistency
   // with what PaintFromUIThread does internally.
   bool is_in_ui_thread_paint_ = false;
+  // Set during a deferred presentation, with paint_mode_mutex_ locked.
+  bool is_in_deferred_guest_output_paint_ = false;
   bool request_guest_output_paint_after_current_ui_thread_paint_;
   bool request_ui_paint_after_current_ui_thread_paint_;
 

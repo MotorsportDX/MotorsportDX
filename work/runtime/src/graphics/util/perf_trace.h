@@ -179,15 +179,23 @@ inline void CountVblank(uint32_t kind) {
 
 // Submit thread (its own thread): jobs finished, and wall time per job in
 // total (busy), replaying the deferred command list (record) and Close +
-// ExecuteCommandLists + Signal (execute).
-inline std::atomic<uint32_t> submit_thread_jobs{0};
-inline std::atomic<uint64_t> submit_thread_ns[3]{};  // Busy, record, execute.
+// ExecuteCommandLists + Signal (execute). Callbacks (with
+// d3d12_submit_thread_async_swap: the presenter's fence signal and the
+// presentation of the frame) are counted separately and are part of busy.
+inline std::atomic<uint32_t> submit_thread_jobs{0}, submit_thread_callbacks{0};
+inline std::atomic<uint64_t> submit_thread_ns[4]{};  // Busy, record, execute, callback.
 inline void AddSubmitThreadJob(uint64_t start, uint64_t recorded, uint64_t executed,
                                uint64_t end) {
   submit_thread_jobs.fetch_add(1, std::memory_order_relaxed);
   submit_thread_ns[0].fetch_add(end - start, std::memory_order_relaxed);
   submit_thread_ns[1].fetch_add(recorded - start, std::memory_order_relaxed);
   submit_thread_ns[2].fetch_add(executed - recorded, std::memory_order_relaxed);
+}
+
+inline void AddSubmitThreadCallback(uint64_t start, uint64_t end) {
+  submit_thread_callbacks.fetch_add(1, std::memory_order_relaxed);
+  submit_thread_ns[0].fetch_add(end - start, std::memory_order_relaxed);
+  submit_thread_ns[3].fetch_add(end - start, std::memory_order_relaxed);
 }
 
 inline void AddSubmitFlush(uint64_t start, uint32_t pending_jobs) {
@@ -372,6 +380,10 @@ inline void OnSwap() {
                 << ns_ms(submit_thread_ns[1].exchange(0, std::memory_order_relaxed))
                 << ",\"execute_ms\":"
                 << ns_ms(submit_thread_ns[2].exchange(0, std::memory_order_relaxed))
+                << ",\"callbacks\":"
+                << submit_thread_callbacks.exchange(0, std::memory_order_relaxed)
+                << ",\"callback_ms\":"
+                << ns_ms(submit_thread_ns[3].exchange(0, std::memory_order_relaxed))
                 << ",\"flushes\":" << state->submit_flushes
                 << ",\"flushes_blocked\":" << state->submit_flushes_blocked
                 << ",\"flush_jobs\":" << state->submit_flush_jobs

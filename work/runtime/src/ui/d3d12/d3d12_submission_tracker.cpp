@@ -115,4 +115,15 @@ bool D3D12SubmissionTracker::TrySignalEnqueueing() {
   return true;
 }
 
+bool D3D12SubmissionTracker::SignalReservedSubmission(UINT64 submission_index) {
+  if (!queue_ || !fence_) {
+    return false;
+  }
+  if (FAILED(queue_->Signal(fence_.Get(), submission_index))) {
+    return false;
+  }
+  submission_signal_queued_ = submission_index;
+  return true;
+}
+
 }  // namespace rex::ui::d3d12

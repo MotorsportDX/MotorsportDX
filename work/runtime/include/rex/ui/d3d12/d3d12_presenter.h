@@ -12,7 +12,10 @@
 #pragma once
 
 #include <array>
+#include <condition_variable>
+#include <functional>
 #include <memory>
+#include <mutex>
 #include <utility>
 
 #include <rex/math.h>
@@ -65,8 +68,19 @@ class D3D12Presenter final : public Presenter {
     // to kGuestOutputInternalState before finishing.
     ID3D12Resource* resource_uav_capable() const { return resource_.Get(); }
 
+    // For a refresher that submits its work to the direct queue later, on
+    // another thread: takes the function that the submitting thread must call
+    // right after submitting the work, in submission order, also if the
+    // refresher fails. If not taken, the work is assumed to be on the queue
+    // when the refresher returns.
+    std::function<void()> TakeSubmittedCallback() {
+      return std::exchange(submitted_callback_, nullptr);
+    }
+
    private:
+    friend class D3D12Presenter;
     Microsoft::WRL::ComPtr<ID3D12Resource> resource_;
+    std::function<void()> submitted_callback_;
   };
 
   static std::unique_ptr<D3D12Presenter> Create(HostGpuLossCallback host_gpu_loss_callback,
@@ -301,6 +315,23 @@ class D3D12Presenter final : public Presenter {
   // paint_context_.guest_output_resource_paint_refs references taken from
   // guest_output_resources_).
   D3D12SubmissionTracker guest_output_resource_refresher_submission_tracker_;
+  // Refresher submission tracker signals are enqueued in the order of the
+  // refreshes, but with a refresher that submits asynchronously (see
+  // D3D12GuestOutputRefreshContext::TakeSubmittedCallback), by the thread that
+  // submits its work, later. Painting and capturing, which are submitted to the
+  // same queue, must not be submitted before the work that wrote the guest
+  // output, so they wait on the CPU until its signal has been enqueued (a
+  // deferred paint on the submitting thread skips the image instead). The
+  // guest output thread uses the tracker otherwise only while no asynchronous
+  // signal is pending.
+  void SignalGuestOutputRefresher(UINT64 submission);
+  bool IsGuestOutputRefresherSignalEnqueued(UINT64 submission);
+  void AwaitGuestOutputRefresherSignal(UINT64 submission);
+  std::mutex guest_output_refresher_signal_mutex_;
+  std::condition_variable guest_output_refresher_signal_cond_;
+  UINT64 guest_output_refresher_signal_enqueued_ = 0;
+  // The last refresher submission index reserved (guest output thread only).
+  UINT64 guest_output_refresher_signal_reserved_ = 0;
 
   // UI submission tracker with the submission index that can be given to UI
   // drawers (accessible from the UI thread only, at any time).
