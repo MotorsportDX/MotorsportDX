@@ -52,7 +52,8 @@ Running with no options gives this configuration:
   [-ShadowWorkaround](#-shadowworkaround).
 - **Race quality** is `high`. See [-Quality](#-quality).
 - **Look** is the `pc` preset, with screen-space ambient occlusion, temporal
-  anti-aliasing, the cockpit interior's shadow floor and the cockpit glass. See [Look](#look).
+  anti-aliasing, the cockpit interior's shadow floor, the cockpit glass, the road sheen and the
+  glass, chrome and rim mods. See [Look](#look).
 - **Display** is `native`: borderless fullscreen on the primary monitor, with a render
   scale of 2x on 1080p, 1440p and 2560x1600 screens and 3x on 4K. See
   [-Display](#-display-and-render-scale).
@@ -290,7 +291,7 @@ preset, knobs, or both. A preset sets only its own knobs. Later items win, so
 
 | Preset | Settings |
 | --- | --- |
-| `pc` (default) | `tonemap=aces`, `saturation=1.1`, `bloom=0.7`, `sharpen=0.4`, `clearcoat=1`, `ao=0.6`, `sun=2`, `sky=0.7`, `taa=1`, `cockpit_light=0.5`, `windshield=1` |
+| `pc` (default) | `tonemap=aces`, `saturation=1.1`, `bloom=0.7`, `sharpen=0.4`, `clearcoat=1`, `clearcoat_glint=1`, `ao=0.6`, `sun=2`, `sky=0.7`, `taa=1`, `cockpit_light=0.5`, `windshield=1`, `road_specular=0`, `road_sheen=0.4`, `glass=1`, `chrome=1`, `rims=1` |
 | `aces` | `tonemap=aces`, `clearcoat=1`, `ao=0.6`, `sun=2` |
 | `gt` | `tonemap=gt`, `clearcoat=1`, `ao=0.6`, `sun=2` |
 | `neutral` | `tonemap=neutral`, `clearcoat=1`, `ao=0.6`, `sun=2` |
@@ -311,7 +312,7 @@ and `-Look original`.
 | `motion_blur` | number | Motion blur, in all four motion blur shaders. Photo mode's blur, which the player sets, changes only when this is set. |
 | `clearcoat` | number | Clear coat of the car body paint (`fm4-paint.hlsli`) in every car shader set: races, 16-car races, split screen, garage and showroom. In the showroom it adds only the reflection of the studio cube. |
 | `clearcoat_roughness` | number, default 0.3 | Roughness of the clear coat. |
-| `clearcoat_glint` | number, default 4 | Glint of the clear coat; also the limit of the glass, chrome and rim highlights. |
+| `clearcoat_glint` | number, default 4; 1 in `pc` | Soft limit of the clear coat's sun highlight, in units of the sun's diffuse light; also the limit of the glass, chrome and rim highlights. At 4 the hood turns into a white blob towards the sun. |
 | `flakes` | number | Flakes in the car paint. |
 | `flake_scale` | number, default 1200 | Scale of the paint flakes. |
 | `glass` | number | Windows and lamp covers (`fm4-car.hlsli`) in races, 16-car races, split screen and the garage: the environment's reflection at grazing angles and a sharp sun highlight, with the game's transparency kept. |
@@ -343,20 +344,21 @@ and `-Look original`.
 | `road_gloss` | multiplier, default 1 | Specular of the road surface. See [Track lighting](#track-lighting). |
 | `sky` | multiplier, default 1 | Brightness of the sky; the `sky_*` knobs above change its color. See [Track lighting](#track-lighting). |
 
-No preset sets `glass`, `chrome` or `rims` yet: an A/B at 2x showed them right, but their sun
-highlights are not yet checked (see [look mod coverage](analysis/look-mod-coverage.md#in-game-checks-18-october-2026)).
-No preset sets the `sky_*` or `foliage_*` knobs either: in an A/B at 2x on the Bernese Alps
+`pc` sets `clearcoat_glint=1`, `road_specular=0`, `road_sheen=0.4`, `glass=1`, `chrome=1` and
+`rims=1` since 20 October 2026, after an A/B at 2x with the camera turned toward the sun on the
+Bernese Alps grid; `-Look "pc,clearcoat_glint=4,road_specular=1,road_sheen=0,glass=0,chrome=0,rims=0"`
+is the `pc` look before them. At `clearcoat_glint=4` the hood and roof turned into a white blob
+toward the sun, at 1 the highlight keeps its shape. The road knobs turn the bright sheet on sunlit
+asphalt toward the sun into a glare with the aggregate showing through it (with the default
+`road_sheen_grain=1`; without the grain the sheen is an even, milky haze on Top Gear), and views
+away from the sun look the same. The glass, chrome and rim mods add a little reflection to the
+windows at grazing angles and showed no bloom blob toward the sun (see
+[look mod coverage](analysis/look-mod-coverage.md#facing-the-sun-and-the-pc-preset-20-october-2026)).
+No preset sets the `sky_*` or `foliage_*` knobs: in an A/B at 2x on the Bernese Alps
 and Maple Valley, `sky_saturation=1.15,sky_contrast=0.3,sky_horizon=0.5` gave a slightly deeper
 blue sky, and `foliage_saturation=1.15` was barely visible (see
 [look mod coverage](analysis/look-mod-coverage.md#in-game-checks-sky-and-vegetation-18-october-2026)).
 For autumn colors try `-Look "pc,foliage_hue=-45"`.
-No preset sets the `road_*` knobs yet. In A/B runs at 2x on the Bernese Alps and Top Gear,
-`road_specular=0,road_sheen=0.4` (with the default `road_sheen_grain=1`) turns the bright sheet on
-sunlit asphalt toward the sun into a glare with the aggregate and the skid marks showing through
-it, and views away from the sun look the same; without the grain the sheen is an even, milky
-haze on Top Gear (see
-[look mod coverage](analysis/look-mod-coverage.md#the-sheen-on-top-gear-and-its-grain-18-october-2026)).
-Try `-Look "pc,road_specular=0,road_sheen=0.4"`.
 `pc` sets `cockpit_light=0.5` and `windshield=1` since 20 October 2026; `-Look "pc,cockpit_light=0,windshield=0"`
 is the `pc` look before them. In an A/B at 2x on the Bernese Alps on top of `pc` (nine frozen cockpit
 frames), `cockpit_light=0.5` took the gauges from 1 to 4 of 255 to 37 to 62 and the gloves from 2 to 8
@@ -409,7 +411,9 @@ and `road_sheen` (see [Look](#look)) act on the whole highlight. See
 `work/fm4-rex/passes` in `BuildRoot\passes`; see the
 [post pass framework](analysis/post-pass-framework.md)), whose GTAO pass works on the
 scene depth (see [GTAO design](analysis/gtao-design.md)) with a radius of 0.75 m. The
-final combine shaders darken the scene by the occlusion, less on bright pixels.
+final combine shaders darken the scene by the occlusion, less on bright pixels. It covers
+races, replays, photo mode, the full-screen car views of the garage, Autovista and the career
+home; not the cockpit interior, and not the small car view of the car select screen.
 `pipeline.py --ao` (and `e2e.py --ao`) runs the pass without a look applying it. With
 `-ShaderDev` the passes load from `work/fm4-rex/passes` itself and reload when a file
 there is saved; `shader_mod_set GTAO_RADIUS=1` in the console changes a pass param at

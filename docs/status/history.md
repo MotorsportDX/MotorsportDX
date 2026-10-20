@@ -22,7 +22,7 @@ timeline
     17 October : Clearcoat, display options and settings overlay, Alt+Enter, GTAO ambient occlusion, generic content import (DLC), shader mod cache and hot reload
     18 October : ROV occlusion divisor removed, sun query samples measured per MSAA level : Glass, chrome and rim look mods (false color, A/B at 2x, smoke gate), look mods compiled against real contracts : Track lighting knobs road_gloss and sky (TrackSettings copies, 2x sweep) : USA release support (clean build, smoke gate with dlc) : Post pass framework, GTAO on it with identical output : Motion vector sources checked in the game (per-car stencil IDs, the game's blur matrices) : Per-car motion vectors on the post pass framework (CPU and WARP tests)
     19 October : Motion vectors checked in the game (the game's blur matrices, debug views at 2x, GPU time, smoke gate) : Motion vector gaps: cockpit interior, glass, mirror panel, motion mask : Cockpit light look knob (interior shadow floor)
-    20 October : pc with the cockpit knobs : TAA jitter only while the camera moves (still pictures no longer shimmer)
+    20 October : pc with the cockpit knobs : TAA jitter only while the camera moves (still pictures no longer shimmer) : pc facing the sun (clear coat limit, road sheen, glass, chrome and rims) : AO in the garage, Autovista and the career home
 ```
 
 | Date | Milestone |
@@ -332,6 +332,15 @@ Shader mod iteration (17 October; design and results in [shader-mod-iteration.md
 - The project owner saw the image shake outside the moving race. The measurement and the fix, the jitter only while the camera moves and at 45 fps or more, are in [TAA, the jitter gate](../analysis/taa.md#the-jitter-gate-20-october-2026).
 - Superseded gap of the current status page: "Still pictures shimmer with TAA's jitter (20 October 2026): in menu scenes, the 3-2-1 countdown, pause, rewind, photo mode and replays the image shakes, while races in motion look right. Two captures of one frozen frame at 2x differ in 12.6 to 21.3% of the pixels by more than 4 of 255 with `pc`, and are byte-identical with `TAA_JITTER=0` or `TAA=0`; the glass and the motion blur play no part. Not fixed; see [TAA open items](../analysis/taa.md#11-open-items-and-later)."
 
+### 20 October 2026: pc facing the sun, and AO outside races
+
+- The glass, chrome and rim mods and the road candidate were checked with the camera turned toward the sun on the Bernese Alps grid, and the clear coat's limit was found too high ([look mod coverage, facing the sun](../analysis/look-mod-coverage.md#facing-the-sun-and-the-pc-preset-20-october-2026)); the project owner put all of it into `pc`. Superseded statements of the current status page:
+  - Display gap: "The glass, chrome and rim mods (`-Look glass`, `chrome`, `rims`; 31 hashes of the race, 16-car, split-screen and garage car shader sets) are in no preset. The in-game A/B at 2x covered one track and time of day: a sun highlight on glass or chrome, the split-screen set and the chrome rims on screen were not seen."
+  - Display gap: "The road surface mods (`-Look road_*`; 25 hashes ...) are in no preset. ... The candidate waits for the project owner's review of the crops."
+  - Launcher defaults: "Glass, chrome and rims: Off in every preset (A/B at 2x on 18 October 2026; the sun highlights are not yet checked)", and the clear coat at `clearcoat_glint` 4.
+  - Next validation steps 5 ("Choose the road look") and 6 ("Finish the glass, chrome and rim check"), apart from the split-screen set, which stays open.
+- AO was found running in the garage's full-screen car views, Autovista and the career home since the camera fallback of 19 October 2026 ([GTAO design](../analysis/gtao-design.md#6-stages-and-verification)). Superseded statements: the Display gap "AO is not in the cockpit interior, garage or showroom" and the open issue "AO is missing in the cockpit interior (the depth range is compressed there) and in the garage and showroom (no camera vertex-shader constants)"; the cockpit interior part stays.
+
 ## 5. Superseded settings and decisions
 
 Each row gives the date of the change, the setting that was replaced, and what happened later. The current values are in [running](../running.md) and [current status](current.md).
@@ -362,7 +371,7 @@ Each row gives the date of the change, the setting that was replaced, and what h
 | 16 Oct 2026 | Gate tiers smoke, perf, full and career. The matrix runs on a copy of the build in `<BuildRoot>\snapshots\<name>` | Matrix of three refresh rates, four scenarios and three runs (about 113 minutes) | None recorded |
 | 17 Oct 2026 | `-Display native` default (borderless fullscreen on the primary monitor) | `-Display 720p` default: 1x in a 1280x720 window, as stated in the earlier build guide | None recorded |
 | 17 Oct 2026 | Presenter area downscale (`guest_output_area.ps.hlsl`, `present_area_downscale`, on by default) | One bilinear tap per screen pixel | None recorded |
-| 17 Oct 2026 | Clearcoat setting A in presets pc, aces, gt and neutral. Flakes are not used in any preset | No clearcoat (the original look) | The `flakes` knob remains, unused |
+| 17 Oct 2026 | Clearcoat setting A in presets pc, aces, gt and neutral. Flakes are not used in any preset | No clearcoat (the original look) | The `flakes` knob remains, unused. 20 Oct: `pc` limits the highlight to `clearcoat_glint=1` |
 | 17 Oct 2026 | GTAO `ao=0.6` (radius 0.75 m) in presets pc, aces, gt and neutral | No AO | The original look keeps no AO |
 | 18 Oct 2026 | Launcher without `rov_occlusion_awaited_report_divisor` (runtime default 1) | Divisor 2 on the ROV path since 13 October | None recorded |
 | 18 Oct 2026 | Look knob `sun=2` in presets pc, aces, gt and neutral (RTV sun glare per pixel, soft limit 1,200) | Counted host samples (glare grows with the MSAA level) | None recorded |
@@ -370,6 +379,7 @@ Each row gives the date of the change, the setting that was replaced, and what h
 | 18 Oct 2026 | AO through `post_pass_path` (a copy of `work/fm4-rex/passes` in `BuildRoot\passes`); the camera vertex shaders and the 0.75 m radius are in `passes.toml` | `post_ao=true`, `post_ao_camera` and `post_ao_radius=0.75` | None recorded |
 | 18 Oct 2026 | `generate` accepts the executables of the Japan/Asia or the USA release (`RELEASES` in `pipeline.py`) and records the release in `local.json` | The Japan/Asia executables only (`XEX_HASHES`) | None recorded |
 | 19 Oct 2026 | `pc` without TAA; TAA opt-in with `-Look "pc,taa=1"`. The check before step 5 failed on Tsukuba Short Circuit: the scene camera's view came only from the road vertex shader, so on Tsukuba every frame was a history cut while the scene jittered (the step 4 G2 `career` cell ran in that state) | `pc` with `taa=1` and the `high` tiling, after the view sources of the car body and the fallback layout and the jitter armed only after a frame with a known view ([TAA progress, step 5](../analysis/taa.md#step-5-the-camera-on-every-track-and-pc-with-taa-19-october-2026)) | `-Look "pc,taa=0"` is the earlier `pc` |
+| 20 Oct 2026 | `pc` with `clearcoat_glint=1`, `road_specular=0`, `road_sheen=0.4`, `glass=1`, `chrome=1` and `rims=1` | `clearcoat_glint` 4 (the hood a white blob toward the sun), the game's road highlight, no glass, chrome or rim mods | None recorded |
 | 20 Oct 2026 | TAA's jitter armed only while the scene camera moves (`TAA_JITTER_MOTION` 0.5 host pixels per frame, held 8 frames) and at 45 fps or more (`TAA_JITTER_RATE`) | The jitter of every frame after one in which TAA ran with a known camera view | None recorded |
 
 ## 6. Corrections and qualifications of earlier entries

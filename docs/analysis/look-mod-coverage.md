@@ -1,6 +1,6 @@
 # Look Mod Coverage (17 October 2026)
 
-Look mods are keyed by the ucode hash of a pixel shader. A mode or track that draws the same role with a different ucode gets the original shader without any warning. This note lists, per track and per mode, which final combine, motion blur and car paint hashes occur, and the mods added on 17 October 2026 for the ones that had none. The car glass, chrome and rims, which got mods on 18 October 2026, are in [their own section](#glass-chrome-and-rims-18-october-2026), and so are the sky and vegetation of the tracks ([Sky and Vegetation](#sky-and-vegetation-18-october-2026)) and the road surface ([Road Surface](#road-surface-18-october-2026)). It contains hashes, technique names and constant names only, no shader code.
+Look mods are keyed by the ucode hash of a pixel shader. A mode or track that draws the same role with a different ucode gets the original shader without any warning. This note lists, per track and per mode, which final combine, motion blur and car paint hashes occur, and the mods added on 17 October 2026 for the ones that had none. The car glass, chrome and rims, which got mods on 18 October 2026, are in [their own section](#glass-chrome-and-rims-18-october-2026), and so are the sky and vegetation of the tracks ([Sky and Vegetation](#sky-and-vegetation-18-october-2026)) and the road surface ([Road Surface](#road-surface-18-october-2026)). The check facing the sun that put the glass, chrome, rim and road mods into `pc` is in [Facing the Sun](#facing-the-sun-and-the-pc-preset-20-october-2026). It contains hashes, technique names and constant names only, no shader code.
 
 ## Method
 
@@ -156,7 +156,7 @@ Read from the ucode dumps of the runs below (`dump_shaders`, `I:\FM4-archive\FM4
 
 Every knob defaults to the original look. `fm4-car.hlsli` takes the shared helpers of `fm4-paint.hlsli` (`FM4_PAINT_HELPERS_ONLY` leaves out the body paint functions, which read constants that these shaders lack). The variance shadow of `fm4_paint_shadow` is split out as `fm4_variance_shadow`; the body paint mods compile to the same DXBC as before.
 
-**The `pc` preset**: unchanged. No preset sets `glass`, `chrome` or `rims`. The in-game checks below show them right where they were seen, but not yet a sun highlight on glass or chrome (none of the scenes faced the sun), the split-screen set, or another track and time of day. The glass highlight scales with the game's `SpecularAmount`, whose values have not been read, so a sun-facing scene is the open risk of a bloom blob.
+**The `pc` preset** (18 October 2026): unchanged. No preset set `glass`, `chrome` or `rims`. The in-game checks below show them right where they were seen, but not yet a sun highlight on glass or chrome (none of the scenes faced the sun), the split-screen set, or another track and time of day. The glass highlight scales with the game's `SpecularAmount`, whose values have not been read, so a sun-facing scene was the open risk of a bloom blob. The sun-facing check followed on 20 October 2026, and `pc` has the three mods since then ([Facing the Sun](#facing-the-sun-and-the-pc-preset-20-october-2026)).
 
 ### Verification Without the Game
 
@@ -398,9 +398,27 @@ These checks left the `pc` preset unchanged: `road_specular=0,road_sheen=1` remo
 - Away from the sun (Top Gear cameras 3 to 5, Alps race cameras 1, 2, 3 and 5), the lower part of the frame changes by at most 1.5 of 255 between `pc` and every setting. On the fourth Alps race camera, which looks along the road towards the sun, the game's sparkle gives way to a slightly darker road (68.5 to 61.7 at `road_sheen=0.4`). The lines, edges and shoulders meet the road without a seam in every view.
 - The Alps grid slot and the Top Gear camera positions change from run to run (the grid slot is random, and the AI race differs), so the first Top Gear numbers and these come from different frames.
 
-**The `pc` preset**: unchanged until the project owner has seen the crops. The candidate is `-Look "pc,road_specular=0,road_sheen=0.4"` (grain 1 is the default).
+**The `pc` preset** (18 October 2026): unchanged until the project owner has seen the crops. The candidate was `-Look "pc,road_specular=0,road_sheen=0.4"` (grain 1 is the default). The project owner chose it on 20 October 2026 ([Facing the Sun](#facing-the-sun-and-the-pc-preset-20-october-2026)).
 
 Not checked: Indianapolis and Infineon (`2AD313C93939CC4E`), Crown Jewel (`B456A6A80C358BE8`, which got the color offset of `E2DECBB50FE1F549` but not its weight), other times of day, replays and photo mode, and the cost of the grain's five extra fetches (with `road_sheen` above 0) at 2x.
+
+## Facing the Sun and the pc Preset (20 October 2026)
+
+The glass, chrome and rim mods waited for a scene facing the sun, and the road candidate for the project owner's review. Both were checked in one setup, which also found that the clear coat of `pc` turns the hood into a white blob towards the sun.
+
+**Setup.** BuildRoot `I:\FM4-build-usa` (USA, game build of 20 October 2026, 12:14), `e2e.py` at 2x (2560x1440) with `--shader-dev` and `--keep-ppm`, 240 Hz, `--profile copy`, without the AI driver: a Quick Race on the Bernese Alps whose car stays on the grid, the near chase camera (three Backs from the cockpit camera), the right stick held in seven directions (none, right, left, down, up, down-right, down-left), and the knobs switched live by `defines:` steps on top of `pc` (runs `sun-alps` and `sun-hood`). The other cars drive off, so captures of one state differ where the crowd, the cars and the cable car move: 1.4 to 4.4% of a frame by more than 4 of 255. With the stick right, the camera looks at the side of the car with the sunlit asphalt beyond it; with the stick down-right, at its front left, with the sun reflected on the hood.
+
+| Check | Result (crop at 2x, 1:1) |
+|---|---|
+| Road, `road_specular=0,road_sheen=0.4` against `pc` (stick right, 900x560 at (1660,860)) | The white sheet turns into asphalt with its aggregate and a softer glare; mean luma 127.2 to 95.6, pixels at 230 or more 4.2 to 0.9%. Wavy streaks along the track show through the glare, presumably the rubber on the grid. Views away from the sun look the same. |
+| `glass=1,chrome=1,rims=1` against `pc` (stick down-right, 1000x600 at (760,640)) | The windshield and side windows reflect a little more of the environment, and the rim edges change: 5.4% of the crop by more than 4 (81% of them brighter), against 1.4 to 1.6% between captures of one state, mostly the crowd. No highlight blob on glass or chrome. From the front (stick down) 0.04% of the car crop changes, against 0.01%. |
+| `clearcoat_glint` (stick down-right, hood 640x300 at (700,720)) | `pc` (glint 4): the hood and the roof are a white blob, 8.8% of the hood crop at 250 or more. `clearcoat=0`: no blob (0.0%), and the game's paint with its own tone curve (`clearcoat=0`, filmic, saturation 1, bloom 1, no sharpening) 0.2%. Glint 2: 4.5%, a large white area. Glint 1: 1.5%, a highlight that keeps the hood's shape. |
+
+The clear coat setting A of 17 October 2026 had been chosen from race A/B runs in which no camera faced the sun. `clearcoat_glint` is a soft limit in units of the sun's diffuse light, so it only changes highlights above it; it also limits the glass, chrome and rim highlights.
+
+**The `pc` preset**: since 20 October 2026, at the project owner's choice from these crops, `pc` has `clearcoat_glint=1`, `road_specular=0`, `road_sheen=0.4`, `glass=1`, `chrome=1` and `rims=1`; `-Look "pc,clearcoat_glint=4,road_specular=1,road_sheen=0,glass=0,chrome=0,rims=0"` is the `pc` before them. The smoke gate is in [current status](../status/current.md#pc-facing-the-sun-20-october-2026).
+
+Not checked: other tracks and times of day, the split-screen set, the cockpit camera toward the sun with the new knobs, and the chrome rim shaders on screen.
 
 ## Related
 

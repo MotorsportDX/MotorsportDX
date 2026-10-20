@@ -13,7 +13,7 @@ Sources: `REX_FRAME_GRAPH` traces of the race in BuildRoot (see [setup.md](../se
 - **Injection point**: the framework's `scene_depth` point, right after the resolve of the last depth tile (`IssueCopy`), before the whole post chain. Four compute passes (depth prefilter, GTAO, denoise once or twice) produce an R8 occlusion texture, which is cleared again on swap.
 - **Use**: mods read `xe_post_ao(uv)` (the framework's slot 0, `xe_post_texture(0, uv)`). The FinalCombine mod ([fm4-look.hlsli](../../work/fm4-rex/look/fm4-look.hlsli)) darkens the scene before tonemapping, less strongly on bright pixels.
 - **Default**: off in the runtime (`post_pass_path` empty). The launcher sets `post_pass_path` to a copy of `work/fm4-rex/passes` through the look knob `-Look ao=<strength>`. The presets pc, aces, gt and neutral use `ao=0.6` with a radius of 0.75 m (M4). `original` and `ao=0` run without the pass. See [running.md](../running.md).
-- **v1 limits**: bloom and auto-exposure do not see AO. Menus without AO (no scene depth), the garage and the showroom do not get it either (they do not draw the camera VS, M1), and neither does the cockpit interior (depth range compressed, M3-M4). Races, replays and photo mode get AO. Only the RTV path can use it (the override shader acts as a consumer and needs host render targets).
+- **v1 limits**: bloom and auto-exposure do not see AO. Menus without a scene depth do not get it, and neither does the cockpit interior (depth range compressed, M3-M4). Races, replays and photo mode get AO, and since the post pass framework's camera fallback (19 October 2026, checked on 20 October 2026) also Autovista, the career home and the garage's full-screen car views; the small car view of the car select screen does not (its scene depth is narrower than `min_width`). Only the RTV path can use it (the override shader acts as a consumer and needs host render targets).
 
 ## Where the pass runs
 
@@ -191,10 +191,13 @@ Stages that run the game begin only after the owner confirms the GPU is free.
 - The mods compile to the same DXBC (204 fingerprints of `fm4_shader_mod_tests`), since the slot of `xe_post_ao` kept its bindless index.
 - GPU time (perf tier, photo at 240 Hz, 1x, three runs each): race GPU 3.02, 3.24 and 2.91 ms per frame on main, 3.04, 3.10 and 3.09 ms with the framework, at 2,347, 3,454 and 1,970 against 2,392, 2,920 and 2,763 draws per frame; the closest pair (2,347 and 2,392 draws) is 3.02 against 3.04 ms. The dispatches are the same five (and the same clear), so the pass costs what it did; the race fps follows the draws per frame, as before.
 
+**Garage, Autovista and the career home**: checked 20 October 2026. The post pass framework's camera fallback (`*:world:128:140:243` in `passes.toml`, 19 October 2026, added for the TAA camera on tracks without the road vertex shader) also gives these scenes a camera, so GTAO runs there and the final combine `30B67D8B86C37587` applies it. BuildRoot `I:\FM4-build-usa`, `e2e.py` at 2x with `--shader-dev`, look `pc`, `FM4_LOOK_AO_DEBUG` and `FM4_LOOK_AO` switched live (runs `sun-alps`, `ao-ui`, `ao-autovista`, `ao-home`):
+- The debug view shows an occlusion in the garage's full-screen car view (the paint and car view of Quick Race, footer FREE LOOK), in the pre-race intro, in Autovista (the Ferrari 458 in the studio) and in the career home (HomeSpace, the Ford Ka in the mountains). The small car view of the car select screen shows the scene without an occlusion: its scene depth is narrower than `min_width`.
+- Autovista's camera rests, so captures of one state are byte-identical (0.0% of pixels differ). `FM4_LOOK_AO` 0.6 against 0 changes 8.5% of the frame (at most 67 of 255), 1 against 0 11.0% (at most 150): the wheel wells, the brake disc and caliper behind the spokes, the front intakes and the contact with the floor get darker; the brake disc behind the spokes turns almost black at 0.6. The career home camera moves, so it was not compared pair by pair.
+
 **Later**:
 - AO in the cockpit interior: the interior is drawn with a compressed depth range (W close to constant at about 0.024 m), so the interior viewport's `ZSCALE`/`ZOFFSET` must be captured separately.
-- Garage and showroom: an additional camera VS (M1).
-- Option B for menus and the showroom.
+- Option B for menus without a scene depth.
 - AO before bloom (the first consumer in the post chain).
 - Ambient-only AO through a sun-visibility mask from the material shaders (host MRT).
 - Specular occlusion for clearcoat. This needs AO before the scene pass, so the previous frame's AO is reprojected.
