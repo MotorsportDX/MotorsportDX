@@ -81,6 +81,10 @@
       "provenance": "Project documentation; feasibility analysis of moving command processor draw work to other threads (measured zone times and counts, code structure; no game content)"
     },
     {
+      "path": "docs/analysis/ghidra-render-path.md",
+      "provenance": "Project documentation; static analysis of the title's render path and of draws a patch can cut (function addresses, setting IDs and offsets, measured draw counts, Ghidra setup; no decompiled code or game content)"
+    },
+    {
       "path": "docs/analysis/hdr-output.md",
       "provenance": "Project documentation; design note on HDR10 output (summarized observations and measurements: hashes, formats, measured ranges, no game content)"
     },
