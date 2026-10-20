@@ -695,6 +695,18 @@ def summarize(perf, measure):
         # Mean passing samples per occlusion interval as reported to the game.
         result['occlusion_samples_median'] = {k: median([p['occlusion_samples'][k] for p in steady])
                                               for k in steady[0]['occlusion_samples']}
+    if 'submit_thread' in steady[0]:
+        # Submit thread wall time (busy = record + execute + list reset) and the command
+        # processor's drain of it before the swap submission (flush_wait, inside cpu_ms submit).
+        submit = lambda p, k: p['submit_thread'][k]
+        result['submit_thread_ms_per_s_median'] = {
+            k: median([per_s(p, submit(p, k)) for p in steady])
+            for k in ('busy_ms', 'record_ms', 'execute_ms', 'flush_wait_ms')}
+        result['submit_thread_counts_per_s_median'] = {
+            k: median([per_s(p, submit(p, k)) for p in steady])
+            for k in ('jobs', 'flushes', 'flushes_blocked', 'flush_jobs')}
+        result['submit_flush_wait_ms_per_frame_median'] = median(
+            [submit(p, 'flush_wait_ms') / max(1, len(p.get('frame_ms', []))) for p in steady])
     gpu = [p['gpu'] for p in steady if p.get('gpu', {}).get('frames')]
     if gpu:
         # GPU time per frame from timestamps: busy (submissions), resolves, first-to-last span.
@@ -927,7 +939,9 @@ def run_once(options, out):
 
 
 PHASE_KEYS = ('fps_mean', 'fps_median', 'frame_ms_p50', 'frame_ms_p95', 'frame_ms_p99', 'hitch_50ms_per_min',
-              'cp_busy_ms_per_s_median', 'draws_per_s_median', 'gpu_frame_ms_median')
+              'cp_busy_ms_per_s_median', 'draws_per_s_median', 'gpu_frame_ms_median',
+              'submit_flush_wait_ms_per_frame_median')
+PHASE_NESTED_KEYS = ('submit_thread_ms_per_s_median', 'submit_thread_counts_per_s_median')
 
 
 def aggregate(runs):
@@ -958,19 +972,28 @@ def aggregate(runs):
         'counts_per_frame_median': nested('counts_per_frame_median'),
         'cpu_ms_per_s_median': nested('cpu_ms_per_s_median'),
         'occlusion_samples_median': nested('occlusion_samples_median'),
+        'submit_thread_ms_per_s_median': nested('submit_thread_ms_per_s_median'),
+        'submit_thread_counts_per_s_median': nested('submit_thread_counts_per_s_median'),
         'final_captures': [r['final_capture'] for r in runs],
         'clear_gray_frames': sum(len(r.get('clear_gray_frames', [])) for r in runs),
         'errors': errors,
         'top_errors': sorted(errors.items(), key=lambda kv: -kv[1])[:10],
     }
     for key in ('fps_mean', 'frame_ms_p50', 'frame_ms_p95', 'frame_ms_p99', 'hitch_50ms_per_min', 'hitch_100ms_per_min',
-                'gpu_frame_ms_median', 'gpu_resolve_ms_median', 'gpu_span_ms_median'):
+                'gpu_frame_ms_median', 'gpu_resolve_ms_median', 'gpu_span_ms_median',
+                'submit_flush_wait_ms_per_frame_median'):
         summary[key] = median(pick(key))
     phase_names = list(dict.fromkeys(name for r in ok for name in (r.get('phases') or {})))
     summary['phases'] = {name: {key: median([r['phases'][name][key] for r in ok
                                              if r['phases'].get(name, {}).get(key) is not None])
                                 for key in PHASE_KEYS}
                          for name in phase_names}
+    for name, phase in summary['phases'].items():
+        runs_in = [r['phases'][name] for r in ok if name in (r.get('phases') or {})]
+        for key in PHASE_NESTED_KEYS:
+            values = [p[key] for p in runs_in if key in p]
+            if values:
+                phase[key] = {k: median([v[k] for v in values]) for k in values[0]}
     return summary
 
 

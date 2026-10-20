@@ -83,6 +83,12 @@ struct State {
   // to the guest (after any divisor), to compare paths and calibrate.
   double occlusion_samples[2]{};  // Unawaited, awaited.
   uint32_t occlusion_intervals[2]{};
+  // Command processor draining the submit thread before a synchronous
+  // submission (the swap): calls, calls that blocked, jobs still queued or
+  // running at the call, and wall time spent. Counted as busy, not as a wait,
+  // so cp_busy stays comparable with traces that lack it.
+  uint32_t submit_flushes = 0, submit_flushes_blocked = 0, submit_flush_jobs = 0;
+  uint64_t submit_flush_ticks = 0;
 };
 
 // Every resolve destination seen in the run, rewritten as JSON next to the
@@ -169,6 +175,30 @@ inline void CountInvalidation(uint64_t bytes) {
 inline std::atomic<uint32_t> vblanks[3]{};
 inline void CountVblank(uint32_t kind) {
   if (Get()) vblanks[kind].fetch_add(1, std::memory_order_relaxed);
+}
+
+// Submit thread (its own thread): jobs finished, and wall time per job in
+// total (busy), replaying the deferred command list (record) and Close +
+// ExecuteCommandLists + Signal (execute).
+inline std::atomic<uint32_t> submit_thread_jobs{0};
+inline std::atomic<uint64_t> submit_thread_ns[3]{};  // Busy, record, execute.
+inline void AddSubmitThreadJob(uint64_t start, uint64_t recorded, uint64_t executed,
+                               uint64_t end) {
+  submit_thread_jobs.fetch_add(1, std::memory_order_relaxed);
+  submit_thread_ns[0].fetch_add(end - start, std::memory_order_relaxed);
+  submit_thread_ns[1].fetch_add(recorded - start, std::memory_order_relaxed);
+  submit_thread_ns[2].fetch_add(executed - recorded, std::memory_order_relaxed);
+}
+
+inline void AddSubmitFlush(uint64_t start, uint32_t pending_jobs) {
+  State* state = Get();
+  if (!state) return;
+  ++state->submit_flushes;
+  if (pending_jobs) {
+    ++state->submit_flushes_blocked;
+    state->submit_flush_jobs += pending_jobs;
+  }
+  state->submit_flush_ticks += Now() - start;
 }
 
 inline void CountUpload(uint64_t bytes) {
@@ -334,6 +364,18 @@ inline void OnSwap() {
                 << ",\"frame_ms\":" << state->gpu_busy_ms / gpu_frames
                 << ",\"resolve_ms\":" << state->gpu_resolve_ms / gpu_frames
                 << ",\"span_ms\":" << state->gpu_span_ms / gpu_frames;
+  const auto ns_ms = [](uint64_t ns) { return double(ns) / 1e6; };
+  state->output << "},\"submit_thread\":{\"jobs\":"
+                << submit_thread_jobs.exchange(0, std::memory_order_relaxed) << ",\"busy_ms\":"
+                << ns_ms(submit_thread_ns[0].exchange(0, std::memory_order_relaxed))
+                << ",\"record_ms\":"
+                << ns_ms(submit_thread_ns[1].exchange(0, std::memory_order_relaxed))
+                << ",\"execute_ms\":"
+                << ns_ms(submit_thread_ns[2].exchange(0, std::memory_order_relaxed))
+                << ",\"flushes\":" << state->submit_flushes
+                << ",\"flushes_blocked\":" << state->submit_flushes_blocked
+                << ",\"flush_jobs\":" << state->submit_flush_jobs
+                << ",\"flush_wait_ms\":" << ms(state->submit_flush_ticks);
   // Every frame duration in the window, for run-wide percentiles and hitches.
   state->output << "},\"frame_ms\":[";
   for (size_t i = 0; i < state->frame_ms.size(); ++i) {

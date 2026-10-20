@@ -16,6 +16,7 @@ Pass them with `--arg NAME=value` (runtime cvars) or `--env NAME=value` (environ
 | `--env FM4_SHADOW_WORKAROUND=1` | Skips the shadow-map pass outside the cockpit in races (`Build.ps1 -ShadowWorkaround`). The workaround is off by default. |
 | `--env FM4_TILING_SCENARIO=<n>` | Replaces the TilingScenario value 0 or 1 of the race scenarios. The title uses 1 (two predicated tiles with 2x MSAA) for 8 to 16 car races and 0 (more tiles) for pre-race, replays and 1 car races. 2 is the title's UI value: one 720p tile without MSAA. Split screen (4) and photo mode keep their own values. |
 | `--env FM4_STREAMING_FALLBACK=0` | Turns off the streaming fix, which is always on by default, for comparisons. |
+| `--arg d3d12_submit_draw_interval=<n>` | With the submit thread, ends the submission before a draw once it holds `n` draws, so the submit thread replays the frame while it is recorded and the swap waits only for the last part. Default `0` (off). Measured in [status/current.md](../status/current.md#current-performance). |
 | `--arg rtv_occlusion_debug=noqueries` | RTV occlusion snapshots report 0 samples without host queries. |
 | `--arg rtv_occlusion_debug=fake` | Host queries still run, but awaited intervals report N samples, with N from `query_occlusion_fake_sample_count`. |
 

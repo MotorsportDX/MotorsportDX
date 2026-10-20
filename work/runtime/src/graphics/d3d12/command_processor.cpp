@@ -113,6 +113,12 @@ REXCVAR_DEFINE_BOOL(d3d12_submit_thread, false, "GPU/D3D12",
                     "D3D12 recording cost off the command processor thread")
     .lifecycle(rex::cvar::Lifecycle::kRequiresRestart);
 
+REXCVAR_DEFINE_INT32(d3d12_submit_draw_interval, 0, "GPU/D3D12",
+                     "With d3d12_submit_thread: end the submission before a draw once it holds "
+                     "this many draws, so the submit thread replays the frame while it is "
+                     "recorded and the swap waits for a short tail only (0: off)")
+    .lifecycle(rex::cvar::Lifecycle::kHotReload);
+
 REXCVAR_DEFINE_BOOL(d3d12_readback_publish_thread, false, "GPU/D3D12",
                     "Copy resolve readbacks (readback_resolve=fast/some) into guest memory on a "
                     "separate thread, in order. The first data of a resolve destination is "
@@ -3413,6 +3419,13 @@ bool D3D12CommandProcessor::IssueDraw(xenos::PrimitiveType primitive_type, uint3
 #endif  // XE_GPU_FINE_GRAINED_DRAW_SCOPES
   perf_trace::CountDraw();
   perf_trace::ZoneScope perf_zone(perf_trace::Zone::kDraw);
+  if (submission_open_ && submit_thread_.joinable()) {
+    const int32_t interval = REXCVAR_GET(d3d12_submit_draw_interval);
+    if (interval > 0 && ++submission_draws_ >= uint32_t(interval) &&
+        CanEndSubmissionImmediately()) {
+      EndSubmission(false);
+    }
+  }
 
   ID3D12Device* device = GetD3D12Provider().GetDevice();
   const RegisterFile& regs = *register_file_;
@@ -4878,6 +4891,7 @@ bool D3D12CommandProcessor::BeginSubmission(bool is_guest_command) {
   const bool opening_submission = !submission_open_;
   if (!submission_open_) {
     submission_open_ = true;
+    submission_draws_ = 0;
 
     // Start a new deferred command list - will submit it to the real one in the
     // end of the submission (when async pipeline creation requests are
@@ -6830,14 +6844,20 @@ void D3D12CommandProcessor::SubmitThreadMain() {
     lock.unlock();
     // The allocator is only reused after this submission's fence value, which
     // is signaled below, so it is free to reset here.
+    const uint64_t perf_start = perf_trace::ZoneStart();
     job.allocator->Reset();
     command_list_->Reset(job.allocator, nullptr);
     job.list->Execute(command_list_, command_list_1_);
+    const uint64_t perf_recorded = perf_start ? perf_trace::Now() : 0;
     command_list_->Close();
     ID3D12CommandList* execute_command_lists[] = {command_list_};
     direct_queue->ExecuteCommandLists(1, execute_command_lists);
     direct_queue->Signal(submission_fence_, job.submission);
+    const uint64_t perf_executed = perf_start ? perf_trace::Now() : 0;
     job.list->Reset();
+    if (perf_start) {
+      perf_trace::AddSubmitThreadJob(perf_start, perf_recorded, perf_executed, perf_trace::Now());
+    }
     lock.lock();
     submit_free_lists_.push_back(std::move(job.list));
     submit_busy_ = false;
@@ -6849,8 +6869,11 @@ void D3D12CommandProcessor::SubmitThreadMain() {
 
 void D3D12CommandProcessor::FlushSubmitThread() {
   if (!submit_thread_.joinable()) return;
+  const uint64_t perf_start = perf_trace::ZoneStart();
   std::unique_lock<std::mutex> lock(submit_mutex_);
+  const uint32_t pending_jobs = uint32_t(submit_jobs_.size()) + (submit_busy_ ? 1 : 0);
   submit_done_cond_.wait(lock, [this]() { return submit_jobs_.empty() && !submit_busy_; });
+  if (perf_start) perf_trace::AddSubmitFlush(perf_start, pending_jobs);
 }
 
 void D3D12CommandProcessor::ReadbackPublishThreadMain() {

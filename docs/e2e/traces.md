@@ -54,6 +54,9 @@ Each line (one window) has:
   - `upload_ranges` (shared memory uploads).
   - `pipeline_draws_waited`, `pipeline_draws_dropped`, and `submissions`.
 - `cpu_ms`: command-processor time per zone, inclusive (`draw` contains the `draw_*` zones): `draw`, `draw_primitives`, `draw_render_targets`, `draw_pipeline`, `draw_textures`, `draw_bindings`, `draw_vertex_buffers`, `copy`, `submit`, `swap`, `shared_memory_lock`, `shared_memory_upload` (split into `shared_memory_copy` and `shared_memory_protect`), `submit_record` and `submit_execute`.
+- `submit_thread`: the `d3d12_submit_thread` replay thread and its drain at the swap:
+  - `jobs`: submissions the thread finished; `busy_ms`: its wall time per job in total, split into `record_ms` (replaying the deferred command list) and `execute_ms` (`Close`, `ExecuteCommandLists` and `Signal`).
+  - `flushes`, `flushes_blocked`, `flush_jobs`, `flush_wait_ms`: the command processor waiting for the thread to drain before a synchronous submission (the swap): calls, calls that found work queued or running, the jobs they found, and the wall time. This wait lies inside the `submit` and `swap` zones and is counted as busy, not in `wait_ms`, so `cp_busy` stays comparable with older traces.
 - `gpu`: GPU timestamps of the frames in the window (`frames`, busy time, `resolve_ms`, `span_ms`).
 - `occlusion_samples`: mean passing samples per occlusion interval, `unawaited` and `awaited`.
 

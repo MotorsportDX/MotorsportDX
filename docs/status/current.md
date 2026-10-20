@@ -61,6 +61,24 @@ The race phase of `photo` is 30 seconds of racing after 10 seconds of driving, w
 
 BuildRoots on 20 October 2026: `I:\FM4-build-usa` (USA discs, the development base) and `I:\FM4-build-pass` (Japan/Asia discs, for side builds). `I:\FM4-build2`, `I:\FM4-build-iter` and `I:\FM4-build-gtao` were removed that day; the runs, shader dumps, inventories, gate logs, material atlas and shader storage that the docs cite were moved first to `I:\FM4-archive\<BuildRoot>` with the same relative paths, and the docs point there. Results named with a bare BuildRoot of those three describe where a run was made.
 
+### Submit thread at the swap, 20 October 2026
+
+BuildRoot `I:\FM4-build-usa` (USA), runtime of `cacb57c` with the submit thread trace (`submit_thread` in `perf.jsonl`, see [traces.md](../e2e/traces.md)). Launcher defaults (look `pc`), 240 Hz, 1x, AI driver. Gates `sflp` (perf, 3 runs) and `sflc` (`career`, 1 run); then `sdi0p`, `sdi400p` and `sdi200p` (perf, 3 runs each) on one binary with `d3d12_submit_draw_interval` 0, 400 and 200. Every cell passed 3 of 3 (1 of 1 for `career`).
+
+- At the swap the command processor drains the submit thread before it records the swap list itself, so the presenter's commands follow the frame on the queue. In the race this wait (`flush_wait`) is 87-96 ms/s, 0.58-0.61 ms per frame (`sflp` at about 3,050 draws per frame, 155.8 fps; `sflc` at 165.2 fps), and 0.35-0.38 ms per frame at about 2,100-2,700 draws (`sdi0p`). It is most of the `submit` and `swap` zones and is counted as busy. In the replay it is 2.1 ms/s.
+- The submit thread is not saturated: it is busy 230-280 ms/s in the race (replay of the deferred lists 175-235, `Close` and `ExecuteCommandLists` 36-47) at 5-6 submissions per frame. Almost every swap finds exactly one job in flight (`flush_jobs` equals `flushes_blocked`): the frame body submitted at the end of the primary buffer just before the swap. The wait is a serialization, not a backlog.
+- `d3d12_submit_draw_interval` (default 0) ends the submission every n draws so that the thread replays the frame while it is recorded:
+
+  | Interval | Race fps (3 runs) | Draws per frame | Swap wait per frame | `swap` zone per frame | CP busy per draw | Submissions per frame | GPU per frame |
+  |---|---|---|---|---|---|---|---|
+  | 0 | 194.4, 193.9, 192.7 | 2,109, 2,098, 2,682 | 0.35-0.38 ms | 0.48-0.53 ms | 1.87-2.22 us | 5.9-6.4 | 3.24-3.27 ms |
+  | 400 | 194.1, 223.2, 190.8 | 2,699, 2,020, 2,768 | 0.09-0.16 ms | 0.23-0.31 ms | 1.81-1.84 us | 8.4-10.0 | 3.13-3.35 ms |
+  | 200 | 148.8, 186.5, 209.2 | 3,353, 2,721, 2,169 | 0.07-0.17 ms | 0.22-0.36 ms | 1.88-1.96 us | 13.5-19.4 | 3.30-3.71 ms |
+
+  At the same load (about 2,700 draws per frame) 400 lowers the command processor time per draw by 2-3% (5.02 to 4.94-5.02 ms per frame): the swap saves about 0.2 ms, the extra submissions cost back part of it in the draw zone. 200 costs more than it saves (draw zone +6% per draw, GPU +0.3 ms per frame). The race fps differences are within the spread of the races (2,000 to 3,350 draws per frame). The interval stays 0.
+- Conclusion: the swap wait is removable, but splitting submissions removes only part of it at a cost. Removing all of it (0.35-0.6 ms of a 5-6.5 ms command processor frame, up to about 10% fps where the race is command processor bound) needs the swap submission to go through the submit thread without the command processor waiting, with the presenter's guest output signal and its paint ordered after that submission on the queue.
+- Not covered: 60 and 120 Hz, 2x (where the GPU limits and extra submissions would cost GPU time), other tracks.
+
 ### pc facing the sun, 20 October 2026
 
 Details in [look mod coverage, facing the sun](../analysis/look-mod-coverage.md#facing-the-sun-and-the-pc-preset-20-october-2026). BuildRoot `I:\FM4-build-usa` (USA, game build of 20 October 2026, 12:14). `e2e.py` at 2x with `--shader-dev`, a Quick Race on the Bernese Alps whose car stays on the grid without the AI driver, the near chase camera turned with the right stick in seven directions, the knobs switched live (runs `sun-alps`, `sun-hood`).
@@ -386,7 +404,7 @@ Notes on the defaults:
 These numbers are baselines, not targets.
 
 - **Quick Race**: 60.0 fps (p99 17.1 ms), 118-120 fps at 120 Hz (p99 8.8-9.8 ms), and 224-235 fps at 240 Hz (p99 5.3-6.2 ms). All three are from the 16 October 2026 matrix.
-- **240 Hz**: the race is limited by the command processor thread at 1x. GPU time is about 2.8 ms per frame without AO and 3.01 ms with AO.
+- **240 Hz**: the race is limited by the command processor thread at 1x. GPU time is about 2.8 ms per frame without AO and 3.01 ms with AO. Of the command processor frame, 0.35-0.6 ms is the swap waiting for the submit thread to replay the last frame body, while that thread is only about 25% busy ([submit thread at the swap](#submit-thread-at-the-swap-20-october-2026)).
 - **2x with AO**: about 162 fps, limited by the GPU (6.09 ms per frame).
 - **Track driving at 120 Hz**: the last track fps measurement (15 October 2026, before the final command processor changes that day) was 100-106 fps with 2,800-3,000 draws per frame. After those changes, command processor time per frame fell from 8.6-8.9 ms to 4.6 ms at 2,400-2,800 draws, but no track fps figure was recorded. The 16 October matrix measures Quick Race only, so 120 fps on track is not yet shown.
 - **Refresh-rate scaling**: the race clock runs at 1.001 times the wall clock at high refresh rates. The game scales its time step, so it does not run faster.
@@ -442,7 +460,7 @@ Everything still open, grouped by area.
 
 ### Performance
 
-- At 240 Hz, the race is limited by the command processor (pacing, swap synchronization with the submit thread, and cost per draw). At 2x with AO, it is limited by the GPU (about 162 fps).
+- At 240 Hz, the race is limited by the command processor (pacing, swap synchronization with the submit thread, and cost per draw). The swap synchronization is a serialization of 0.35-0.6 ms per frame, not a saturated submit thread; removing it needs an asynchronous swap submission ordered before the presenter's commands. At 2x with AO, it is limited by the GPU (about 162 fps).
 - The race clock does not run faster above 60 Hz (ratio 1.001). But lap time and handling are not yet compared between 60 and 240 fps.
 
 ### Gameplay coverage

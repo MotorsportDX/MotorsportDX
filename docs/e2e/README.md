@@ -244,6 +244,7 @@ The statistics come from the steady part of the perf trace: without `--measure`,
 | `readbacks_per_s_median`, `draws_per_s_median` | resolve readbacks and draws per second |
 | `cpu_ms_per_s_median` | command-processor time per zone, per second |
 | `occlusion_samples_median` | mean passing samples per occlusion interval, unawaited and awaited |
+| `submit_thread_ms_per_s_median`, `submit_thread_counts_per_s_median`, `submit_flush_wait_ms_per_frame_median` | submit thread time (`busy_ms`, `record_ms`, `execute_ms`) and the swap's drain of it (`flush_wait_ms`) per second, its counts per second, and the drain per frame (see [traces.md](traces.md)) |
 | `gpu_frame_ms_median`, `gpu_resolve_ms_median`, `gpu_span_ms_median` | GPU time per frame from timestamps: busy time, resolves, and the first-to-last span |
 | `counts_per_s_median`, `counts_per_frame_median` | event counts per second and per frame (see [traces.md](traces.md)) |
 | `phases` | the statistics above per phase, for the phases the scenario marks |
