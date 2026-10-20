@@ -6,15 +6,16 @@ This note contains no game code, shaders or ucode. Hashes, registers and address
 
 ## Current state
 
-Built on 19 October 2026 in seven steps ([section 12](#12-history)): the jitter in the framework, pass-owned history textures and frame conditions, TAA at the final point, the launcher knob and harness changes, the scene camera on every track with `pc` using TAA, the write-back at the scene_color point, and TAA at the scene_color point as an option. On 20 October 2026 the jitter became conditional: only while the scene camera moves and the frames come at 45 fps or more ([section 3.5](#35-arming-and-switching)), so still pictures no longer shimmer.
+Built on 19 October 2026 in seven steps ([section 12](#12-history)): the jitter in the framework, pass-owned history textures and frame conditions, TAA at the final point, the launcher knob and harness changes, the scene camera on every track with `pc` using TAA, the write-back at the scene_color point, and TAA at the scene_color point as an option. On 20 October 2026 the jitter became conditional: only while the scene camera moves and the frames come at 45 fps or more ([section 3.5](#35-arming-and-switching)). Later that day every look preset got TAA and races one tile without MSAA with it ([section 5](#5-msaa-and-tiling)), a still camera got the jitter back with an accumulation of its phases (section 7.2, step 11), and a framework defect was found and fixed that had left both points without a history since step 7 ([section 12, the history defect](#the-history-defect-19-to-20-october-2026)).
 
-**Defaults**: the `pc` look has `taa=1` ([running](../running.md#temporal-anti-aliasing)): TAA at the final point, before the HUD, with the `high` tiling (three tiles, 4x MSAA) and the look's sharpening of 0.4 moved after the resolve (`TAA_SHARPEN` 0.4, `FM4_LOOK_SHARPEN` 0). The other presets (`aces`, `gt`, `neutral`) have no TAA unless `taa=1` is added; `original` never has it.
+**Defaults** (since 20 October 2026): every look preset has `taa=1` ([running](../running.md#temporal-anti-aliasing)): `aces` (the default, the earlier `pc`, which is now its alias), `gt`, `neutral` and `original` (the game's look with TAA and no shader mod). TAA runs at the final point, before the HUD, with the look's sharpening of 0.4 moved after the resolve (`TAA_SHARPEN` 0.4, `FM4_LOOK_SHARPEN` 0; `original` has none), and races render one tile without MSAA at every `-Quality` (`pipeline.auto_single_tile`). The jitter runs while the camera moves at 45 fps or more and on a still camera, whose still pixels accumulate the phases.
 
 **Options**:
 
-- `-Look "pc,taa=0"`: `pc` without TAA (the look's own sharpening, no jitter).
-- `-Look "pc,taa_point=1"`: TAA at the scene_color point, before the game's post chain, with the occlusion's own temporal filter and the look's sharpening in the final combine ([section 2.2](#22-the-scene_color-point-option)).
-- `-SingleTile` with TAA: one 720p tile without MSAA; the launcher leaves out the swap's FXAA while TAA is on ([section 5](#5-msaa-and-tiling)).
+- `-Look "aces,taa=0"`: without TAA (the look's own sharpening, no jitter, and the tiles and MSAA of `-Quality`); `-Look "original,taa=0"` is the game's picture, the reference against `-Rov`.
+- `-Msaa`: TAA on the tiles and MSAA of `-Quality` (the `high` tiling: three tiles, 4x MSAA).
+- `-Look "aces,taa_point=1"`: TAA at the scene_color point, before the game's post chain, with the occlusion's own temporal filter and the look's sharpening in the final combine ([section 2.2](#22-the-scene_color-point-option)).
+- `TAA_STILL=0` (a pass param): no jitter on a still camera, the gate's first version.
 
 The knobs, cvars and debug views are in [section 9](#9-knobs-cvars-and-presets).
 
@@ -29,7 +30,7 @@ The knobs, cvars and debug views are in [section 9](#9-knobs-cvars-and-presets).
 | Perf gate, TAA against no TAA | 3 of 3 runs, WARN on capture statistics only; `frame_ms_p99` 7.42 against 7.88 ms, no hitches above 50 ms (step 4) |
 | The scene camera | known in every frame with a camera on all 26 environments of the TRACKS screen, in the Tsukuba career race and in replays (step 5) |
 | WARP tests | convergence, no trail behind a moving box, reset, masks, disocclusion, at both points (steps 3 and 7); the history settles once the jitter stops (the jitter gate) |
-| Still pictures, 2x | consecutive captures of rewind freezes and the photo mode live view byte-identical, as with `TAA_JITTER=0`; 8.7 to 21.6% of the pixels changed by more than 4 of 255 with the jitter of every frame (the jitter gate, 20 October 2026) |
+| Still pictures, 2x | with one tile and the still camera's accumulation, consecutive captures 2.1 s apart change in 0.11 to 0.18% of the pixels by more than 4 of 255 in a cockpit rewind freeze (the cockpit glass after TAA), 0.01 to 0.04% in a chase camera freeze and 0.00% in the pause menu; edges smooth in 1:1 crops where the unjittered tile shows steps ([section 12](#still-accumulation-and-one-tile-20-october-2026)) |
 | Jitter in motion | on in every logged frame of moving races at 60 and 240 Hz; off in menus with a 3D scene, the intro, the countdown, pause, rewind, photo mode and replays (the jitter gate) |
 | Japan/Asia release | the same behavior on the same binary (step 4) |
 
@@ -37,16 +38,17 @@ The knobs, cvars and debug views are in [section 9](#9-knobs-cvars-and-presets).
 
 - The plan approved: TAA at the existing render scale, the final point first and the scene_color point second, opt-in until reviewed.
 - The reactive mask: option (d) of [motion vectors, section 9](motion-vectors.md#open) (no particle or interior mirror mask), and option (c) later, only for shaders that visibly ghost ([section 6](#6-reactive-mask)).
-- `pc` gets `taa=1` with the `high` tiling and `TAA_SHARPEN` 0.4.
+- `pc` gets `taa=1` with the `high` tiling and `TAA_SHARPEN` 0.4 (19 October 2026); on 20 October 2026 every preset gets TAA, with one tile without MSAA at every quality, `-Rov` keeping 4x MSAA.
 - `pc` keeps the final point; the scene_color point stays an option.
-- 20 October 2026: still pictures must not shimmer; the jitter runs only while the camera moves, rather than not at all. Forcing the 30 fps scenarios to the race frame rate was rejected (it would not stop the shimmer of still frames and changes the title's own timing).
+- 20 October 2026: still pictures must not shimmer; the jitter runs only while the camera moves, rather than not at all. Forcing the 30 fps scenarios to the race frame rate was rejected (it would not stop the shimmer of still frames and changes the title's own timing). With one tile without MSAA, a still camera gets the jitter back with the accumulation of its phases, chosen over the jitter of every frame and over leaving still pictures without anti-aliasing.
 
 **Open**:
 
 - Not observed yet: tire smoke from the cockpit camera, sparks of a collision, the heavy smoke of a full grid at the start, gravel dust. Ghosting there would make step 8 (a reactive mask written by a shader mod for that shader) necessary; step 8 is conditional and skipped for now.
 - The jitter gate's thresholds (`TAA_JITTER_MOTION` 0.5, `TAA_JITTER_RATE` 45) await the project owner's review in play; the gate is not checked at 120 Hz or at the scene_color point.
+- TAA in motion with its history and one tile is not checked yet at 2x: thin wires, fences and lattices without MSAA; nor the countdown, a replay with a still camera and the photo mode live view with the still camera's accumulation.
+- On a still camera, what moves without motion vectors (a waving flag) is averaged into a smear, and the cockpit glass, drawn after TAA from the jittered depth, keeps a small shimmer of its dust and rim.
 - Before the scene_color point could be the default: a smoke gate with `taa_point=1`; the write-back counter on more tracks, in career, replays and photo mode; and a check that `gtao_temporal` helps (it made no measurable difference on frozen frames).
-- `-SingleTile` as the default tiling with TAA (the single tile with TAA looks close to `high` with TAA at 2x and costs about 1 ms less GPU time per frame); the project owner kept `high`.
 - DLAA, or FSR in its native AA mode, beside this TAA; upscalers at a separate scale ([section 11](#11-open-items-and-later)).
 
 ```mermaid
@@ -171,16 +173,17 @@ That leaves the shadow maps, the environment cube, the rear-view mirror (EDRAM b
 
 ### 3.5 Arming and switching
 
-- Manifest `[jitter]`: `phases = 8`, `if = "TAA > 0 && TAA_JITTER > 0"`, `consumer = ["taa_resolve", "taa_scene_resolve"]`, `min_motion = "TAA_JITTER_MOTION"`, `min_frame_rate = "TAA_JITTER_RATE"`, `motion_distance = 10.0`, `motion_hold = 8` ([post pass framework](post-pass-framework.md#jitter)).
+- Manifest `[jitter]`: `phases = 8`, `if = "TAA > 0 && TAA_JITTER > 0"`, `consumer = ["taa_resolve", "taa_scene_resolve"]`, `min_motion = "TAA_JITTER_MOTION"`, `min_frame_rate = "TAA_JITTER_RATE"`, `still = "TAA_STILL"`, `motion_distance = 10.0`, `motion_hold = 8` ([post pass framework](post-pass-framework.md#jitter)).
 - **Only while the jitter pays** (since 20 October 2026). On a still camera the eight phases do not average out: the color clip limits the history to the 3x3 of each phase's frame, so a residue of every phase stays, on every edge and on the asphalt grain, and the picture shimmers; at 30 fps the eight phases repeat 3.75 times a second, which reads as shaking ([section 12, the jitter gate](#the-jitter-gate-20-october-2026)). So a frame is jittered only while the scene camera moves and the frames come fast enough:
   - The camera's motion of a frame is the largest move, in host pixels, of the static world at 10 m (`motion_distance`) seen through the center, the corners and the edge midpoints of the scene, between the previous frame and this one: the reprojection of the motion vectors (`xe_view_to_previous_view`) with both frames' projections, so a turn, a move and a change of the focal length all count, and the jitter does not (the matrices are unjittered). A frame without it (a camera cut, no view) counts as still.
   - The next frame is jittered when that motion reached `TAA_JITTER_MOTION` host pixels in one of the last 8 frames (`motion_hold`, so a camera near the threshold does not switch it every frame) and the median of the last 8 frame times gives `TAA_JITTER_RATE` frames per second or more (a single long frame does not move the median).
-  - Rewind, pause, photo mode and a still camera are not jittered, nor are the post-race screens and photo mode at 30 fps, whatever their camera does. Races in motion are, and since 20 October 2026 so are the countdown and replays, which run at the race frame rate (60 fps or more, [running](../running.md#-framerate)).
-  - When the jitter stops, the history converges to the unjittered frame at the rate of `TAA_BLEND` and then holds still: the current sample is the frame reconstructed at its unjittered position in every frame (section 7.2), so no offset of the last phase stays (WARP test).
-  - `TAA_JITTER_MOTION=0` and `TAA_JITTER_RATE=0` jitter every frame, as before 20 October 2026. The `post_pass_log_every` log shows the camera's motion and the frame rate the gate sees: `jitter off (camera 0.000 px, 30.0 fps)`.
+  - Races in motion are jittered, and since 20 October 2026 so are the countdown and replays while their camera moves, which run at the race frame rate (60 fps or more, [running](../running.md#-framerate)). A camera that moves at under 45 fps (the 30 fps post-race) is not.
+  - **A still camera** (`still`, `TAA_STILL` 1, the second version of the gate, 20 October 2026): once the camera has moved less than `TAA_JITTER_MOTION` for `motion_hold` frames, and its motion in the last frame is known (not a cut), the jitter is armed again at any frame rate, and the runtime sets `kSceneFlagCameraStill` in the scene constants (`xe_camera_still()`); TAA then accumulates the phases of the still pixels (section 7.2, step 11) into a still, anti-aliased picture. This covers rewind, pause, photo mode, the countdown on its still camera and a still replay camera. It came with the one tile without MSAA as the default tiling (section 5), where a still picture without the jitter has no anti-aliasing at all. `TAA_STILL=0` is the first version of the gate: no jitter on a still camera, which then shows the unjittered frame (`JitterGate::Still`, [post_pass_jitter.h](../../work/runtime/include/rex/graphics/d3d12/post_pass_jitter.h)).
+  - When the jitter stops (`TAA_STILL=0`, or a camera moving at under 45 fps), the history converges to the unjittered frame at the rate of `TAA_BLEND` and then holds still: the current sample is the frame reconstructed at its unjittered position in every frame (section 7.2), so no offset of the last phase stays (WARP test).
+  - `TAA_JITTER_MOTION=0` and `TAA_JITTER_RATE=0` jitter every frame, as before 20 October 2026. The `post_pass_log_every` log shows the camera's motion and the frame rate the gate sees: `jitter off (camera 0.000 px, 30.0 fps)`, or with the still camera's jitter `jitter 0.2500,-0.1667 still (camera 0.000 px, 60.0 fps)`.
 - A frame is jittered only after a frame in which a consumer ran and the scene camera's view was known. Without a known view every frame is a history cut and a jitter could not accumulate, so a frame without a camera gets the image without anti-aliasing, not a shaking one. The garage, the showroom and menus without a scene, split screen (whose second view gets no passes), and the frames after TAA is switched off are not jittered.
 - So `shader_mod_set TAA=0`, a `defines:` step and `post_pass_variants="TAA=0;TAA=1"` switch the jitter together with TAA. `TAA_JITTER=0` keeps TAA without the jitter.
-- Cvars: `post_pass_jitter` (`auto`, the manifest; `off`; or a number of phases, which jitters every frame after one with a scene, without a consumer and without the gate, for checks) and `post_pass_jitter_offset=x,y` (a fixed offset in host pixels). There is no jitter without `post_pass_path`: not with `-Rov`, not with `-Look original`.
+- Cvars: `post_pass_jitter` (`auto`, the manifest; `off`; or a number of phases, which jitters every frame after one with a scene, without a consumer and without the gate, for checks) and `post_pass_jitter_offset=x,y` (a fixed offset in host pixels). There is no jitter without `post_pass_path`: not with `-Rov`, not with `-Look "original,taa=0"`.
 
 ### 3.6 Other readers of the scene
 
@@ -211,7 +214,7 @@ In a frame, a draw of a source earlier in the list replaces the matrices of a la
 | GPU with TAA, 2x, 240 Hz | 6.50 ms per frame, 149.0 fps | 4.40 ms, 206.6 fps (the `xbox` preset also drops the `high` features) | 5.54 ms, 173.3 fps |
 | FXAA | none | none | the launcher leaves the swap's FXAA out while TAA is on: FXAA after TAA blurs the HUD and fights the history |
 
-TAA needs no change for any of them. `pc` keeps `high`, the project owner's choice; with TAA the single tile is the cheaper candidate, and it is the tiling the upscalers will need.
+TAA needs no change for any of them. The single tile is the default with TAA since 20 October 2026 (the project owner's choice; `pc` had kept `high` on 19 October 2026): it is the cheaper one, its input is the usual TAA input, and it is the tiling the upscalers will need. Without MSAA a still picture has no anti-aliasing unless the jitter runs, so the still camera's jitter and its accumulation came with it (section 3.5, section 7.2 step 11). The comparison above was made on 19 October 2026 before the history defect of step 7 (section 12), with a working history.
 
 ## 6. Reactive mask
 
@@ -250,6 +253,11 @@ In the checks so far nothing ghosted: close-up tire smoke in the chase cameras, 
    - mask G (reactive): at least `TAA_REACTIVE` (0.5);
    - mask R, a history position off the screen, a disocclusion, or no `xe_history_valid()`: 1, and the age restarts.
 10. Write the history: the linear color and the age (capped at 32).
+11. **A still camera** (since 20 October 2026; `xe_camera_still()`, the runtime's `[jitter] still` with `TAA_STILL` 1, section 3.5): a pixel whose motion is at most `TAA_STILL_PIXELS` (0.05 host pixels) accumulates the phases instead of following the picture, also where it is reactive (car glass) or its motion is unknown (the masks of the interior, the mirror panel), since nothing on the screen moves; it keeps a usable history there:
+    - the blend factor is 1 / (n + 1) for a history of age n, without the `TAA_BLEND` floor, and the age is capped at `TAA_STILL_FRAMES` (256): the history is the mean of the frames since the camera stopped, down to a weight of 1 / 257 for the current frame;
+    - the clip box is the minimum and maximum of the 5x5 around the pixel in YCoCg instead of the 3x3's box of standard deviations: with the jitter a sample moves by up to half a pixel, so samples within two pixels can reach the 3x3 of step 3, and any smaller box cuts the history back to one phase's samples. A box of the 3x3 alone left the pixels next to an edge, which the reconstruction of step 3 lights in some phases and not in others, jumping between 0 and a small value, and gamma 2 enlarges such steps near black (8.7 of 255 between frames on WARP);
+    - the reactive minimum `TAA_REACTIVE` does not apply;
+    - a moving car in front of a still camera keeps steps 4 to 9.
 
 ### 7.3 History
 
@@ -278,6 +286,7 @@ In the checks so far nothing ghosted: close-up tire smoke in the chase cameras, 
 3. How far the clip moved the history (orange, 8 times): candidates for ghosting and flicker.
 4. The reasons for no history over the darkened image: no motion known (mask R) red, reactive (mask G) green, disoccluded yellow, off the screen or no valid history blue.
 5. The un-jittered current frame alone.
+6. Where a still camera's phases accumulate (step 11): cyan over the darkened image.
 
 The views use no gray, which e2e counts as the clear color.
 
@@ -301,13 +310,16 @@ On frozen frames at 2x it made no measurable difference against `GTAO_TEMPORAL=0
 | `TAA_JITTER` | param | 1 | 0 keeps TAA without the jitter |
 | `TAA_JITTER_MOTION` | param | 0.5 | the scene camera's motion in host pixels per frame (the static world at 10 m) that arms the jitter, held for 8 frames; 0 jitters a still camera too (section 3.5) |
 | `TAA_JITTER_RATE` | param | 45.0 | the frame rate the jitter needs (the median of the last 8 frames); 0: any |
+| `TAA_STILL` | param | 1.0 | 1: the jitter also on a still camera (still for 8 frames, any frame rate), whose still pixels accumulate the phases (step 8 of section 7.2); 0: no jitter there |
+| `TAA_STILL_FRAMES` | param | 256.0 | frames a still pixel accumulates at most: the weight of the current frame falls to 1 / (`TAA_STILL_FRAMES` + 1) |
+| `TAA_STILL_PIXELS` | param | 0.05 | the motion in host pixels below which a pixel counts as still |
 | `TAA_BLEND` | param | 0.1 | weight of the current frame when still |
 | `TAA_BLEND_MOTION` | param | 0.25 | weight of the current frame at `TAA_MOTION_PIXELS` |
 | `TAA_MOTION_PIXELS` | param | 16.0 | motion in host pixels at which the weight reaches `TAA_BLEND_MOTION` |
 | `TAA_CLIP_GAMMA` | param | 1.0 | width of the variance box in standard deviations |
 | `TAA_REACTIVE` | param | 0.5 | minimum weight of the current frame on reactive pixels (mask G) |
 | `TAA_SHARPEN` | param | 0.4 | sharpening after the resolve (the launcher sets the look's `sharpen` at the final point, 0 at the scene_color point) |
-| `TAA_DEBUG` | param | 0 | debug views 1 to 5 (section 7.6) |
+| `TAA_DEBUG` | param | 0 | debug views 1 to 6 (section 7.6) |
 | `TAA_HISTORY_FILTER` | define | 1 | 1 Catmull-Rom, 0 bilinear |
 | `TAA_DISOCCLUSION` | define | 1 | the depth test of section 7.2 |
 | `GTAO_TEMPORAL` | param | 1 | at the scene_color point, the occlusion filter (section 8) |
@@ -551,4 +563,24 @@ Route (b) of [section 2.2](#22-the-scene_color-point-option): a texture with `wr
 | `photo` | race 182.1 fps, p99 8.51 ms, GPU 3.33 ms; photo mode 29.95 fps | race 185.6 fps, p99 8.67 ms, GPU 3.36 ms; photo mode 29.94 fps | WARN: capture statistics only (black share 5.0 points apart; the AI races do not repeat) |
 | `photo_view` | 56.92 fps | 56.95 fps | PASS |
 | `career` | race 194.7 fps, p99 8.72 ms, GPU 3.29 ms; replay 29.98 fps | race 165.2 fps, p99 9.83 ms, GPU 3.38 ms; replay 29.98 fps | PASS |
+
+
+### The history defect (19 to 20 October 2026)
+
+From step 7 (commit `2da1b1c`, 19 October 2026, 20:25) until 20 October 2026, neither point of TAA had a history in the game, and neither had `gtao_temporal`. Step 7 added two history textures to the manifest, `taa_scene_history` and `gtao_history`, which only the scene_color point writes. `PostPasses::HistoryTexturesValid` required every history texture of the manifest to have been written in the previous frame, so with TAA at the final point (the default) the two were never ready, `kSceneFlagHistoryValid` was never set and `xe_history_valid()` was false in every frame; at the scene_color point `taa_history` was never ready in the same way. TAA then showed in every frame the un-jittered reconstruction of step 3 of section 7.2 (a 3x3 filter of the jittered frame) with α at 1.
+
+- **Found** with the still camera's accumulation (run `st-diag`, 2x, a rewind freeze): debug view 6 showed no accumulating pixel, view 4 the whole frame blue (no valid history) while the motion vectors were still (`MOTION_DEBUG=1` white), and a log of the history textures (`post_pass_log_every`, since then part of the line: `history valid (gtao_history not ready unread ..., taa_history ready ...)`) showed the two unwritten textures.
+- **Fixed** in `HistoryTexturesValid`: only the history textures that an enabled pass reads as `previous:<name>` count (`HistoryTexturesReadThisFrame`).
+- **What it changes in the record**: the visual checks of steps 3 to 5 and section 5 (before step 7) ran with a working history. The jitter gate's analysis (20 October 2026) ran without one: the shimmer of still pictures with the jitter of every frame was the reconstruction of each jittered frame without any history, not only the clip's residue, and `TAA_BLEND=0.05` could not change it. That `gtao_temporal` made no measurable difference on frozen frames (step 7) has the same cause. The WARP tests did not see it: they set the scene flags themselves.
+- The AA of moving races in that time came from the 4x MSAA of the `high` tiling; the jitter made no difference to it but a sub-pixel wobble.
+
+### Still accumulation and one tile (20 October 2026)
+
+The project owner chose one tile without MSAA for every preset with TAA and, for still pictures, the accumulation of the jitter's phases (rather than the jitter of every frame or no anti-aliasing on still pictures). Built: the presets and the tiling in the launcher ([running](../running.md#-singletile-and--msaa)), the gate's `still` (section 3.5), step 11 of section 7.2, no jitter after the frame's final combine (`JitterDraw::after_final`), and 40 post pass params. Runs on `I:\FM4-build-pass` with the USA Disc 1, 2x, `--shader-dev`, Quick Race on the Bernese Alps with the AI driver, the params switched live by `defines:` steps; consecutive captures 2.1 s apart compared pixel by pixel.
+
+- `st-still`: the accumulation showed no effect (12 to 16% of the pixels above 4 levels in a cockpit freeze, 25 to 31% in a chase freeze); `st-diag` found the history defect above.
+- `st-still2`, with the history fixed: 0.3 to 0.4% (cockpit freeze), 0.2 to 0.25% (chase freeze), about 2% in the pause menu: the menu's draws test the scene's depth buffer and were jittered, and car glass and the interior's mask edges kept the usual blend.
+- `st-still3`, without the jitter after the final combine and with reactive and unknown pixels accumulated: pause 0.00% (at most 3 of 255), chase freeze 0.02 to 0.05% once settled, cockpit freeze 0.40 to 0.48%; a map of the changes put them on the cockpit glass's dust over the sunlit road and on the gloves' edges, where the jitter moved the 3x3's depth between the interior and the world and set off the disocclusion test.
+- `st-still4`, without the disocclusion test on a still pixel: cockpit freeze 0.11 to 0.18%, chase freeze 0.01 to 0.04%, pause 0.00% (at most 2 of 255); `TAA_STILL=0` gives 0.01%, 0.00% and 0.00% (no jitter: the unjittered tile). `TAA_STILL_FRAMES` 64 and 1,024 changed 0.12 to 0.30% against 0.11 to 0.18% at 256. In 1:1 crops the accumulated freeze has smooth edges on the car, the lane line and the railings where the frame without the jitter shows the steps of one tile; a waving flag is smeared.
+- Smoke gates at 240 Hz and 1x: in [current status](../status/current.md#one-tile-with-taa-the-presets-and-taas-history-20-october-2026).
 

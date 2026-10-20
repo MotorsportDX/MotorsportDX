@@ -111,7 +111,24 @@ class PipelineTests(unittest.TestCase):
             for name in [*pipeline.LOOK_KNOBS.values(),'FM4_LOOK_AO_DEBUG']:
                 self.assertIn(name,defaults)
                 float(defaults[name])
-            self.assertEqual(pipeline.look_cvars(root,'original'),{})
+            self.assertEqual(pipeline.look_cvars(root,'original,taa=0'),{})
+            # original: the game's shaders with TAA, the post passes and their params only.
+            cvars=pipeline.look_cvars(root,'original')
+            self.assertNotIn('shader_mod_path',cvars)
+            self.assertEqual(cvars['shader_mod_defines'],'TAA=1;TAA_SHARPEN=0.0')
+            self.assertEqual(Path(cvars['post_pass_path']),root/'passes')
+            # pc is aces under its earlier name.
+            self.assertEqual(pipeline.look_knobs('pc'),pipeline.look_knobs('aces'))
+            self.assertEqual(pipeline.DEFAULT_LOOK,'aces')
+            # aces, gt and neutral share their mods and differ in the tone curve only.
+            mods={look:{k:v for k,v in pipeline.look_knobs(look).items() if k!='tonemap'}
+                  for look in ('aces','gt','neutral')}
+            self.assertEqual(mods['aces'],mods['gt'])
+            self.assertEqual(mods['aces'],mods['neutral'])
+            self.assertEqual([pipeline.look_knobs(look)['tonemap'] for look in ('aces','gt','neutral')],
+                             ['aces','gt','neutral'])
+            with self.assertRaises(RuntimeError):
+                pipeline.look_knobs('filmic')
             cvars=pipeline.look_cvars(root,'pc,sharpen=0.6,taa=0')
             self.assertEqual(Path(cvars['shader_mod_path']),root/'look')
             defines=dict(define.split('=',1) for define in cvars['shader_mod_defines'].split(';'))
@@ -123,14 +140,14 @@ class PipelineTests(unittest.TestCase):
             self.assertNotIn('sun',''.join(defines).lower())
             self.assertEqual(cvars['rtv_occlusion_awaited_scale'],'2')
             self.assertEqual(cvars['rtv_occlusion_awaited_limit'],str(pipeline.SUN_LIMIT))
-            self.assertEqual(pipeline.look_cvars(root,'original,sun=1.5'),
+            self.assertEqual(pipeline.look_cvars(root,'original,taa=0,sun=1.5'),
                              {'rtv_occlusion_awaited_scale':'1.5',
                               'rtv_occlusion_awaited_limit':str(pipeline.SUN_LIMIT)})
             self.assertEqual(pipeline.look_cvars(root,'pc,sun=0')['rtv_occlusion_awaited_scale'],'0')
             with self.assertRaises(RuntimeError):
                 pipeline.look_cvars(root,'pc,sun=-1')
             # Development: the repository files, every knob, hot reload and live knobs.
-            for look in ('pc,sharpen=0.6,taa=0,windshield=0','original'):
+            for look in ('pc,sharpen=0.6,taa=0,windshield=0','original,taa=0'):
                 cvars=pipeline.look_cvars(root,look,shader_dev=True)
                 self.assertEqual(Path(cvars['shader_mod_path']),pipeline.LOOK_DIRECTORY)
                 defines=dict(define.split('=',1) for define in cvars['shader_mod_defines'].split(';'))
@@ -144,7 +161,7 @@ class PipelineTests(unittest.TestCase):
         shader_dev the directory itself; the overlay reads GTAO's radius and quality from it."""
         with tempfile.TemporaryDirectory(prefix='fm4 passes test ') as directory:
             root=Path(directory)
-            self.assertNotIn('post_pass_path',pipeline.look_cvars(root,'original'))
+            self.assertNotIn('post_pass_path',pipeline.look_cvars(root,'original,taa=0'))
             self.assertNotIn('post_pass_path',pipeline.look_cvars(root,'pc,ao=0,taa=0,windshield=0'))
             # TAA alone also turns them on.
             self.assertIn('post_pass_path',pipeline.look_cvars(root,'pc,ao=0'))
@@ -156,7 +173,7 @@ class PipelineTests(unittest.TestCase):
             self.assertEqual(pipeline.ao_cvars(root,False),{})
             self.assertEqual(pipeline.look_cvars(root,'pc',shader_dev=True)['post_pass_path'],
                              pipeline.PASSES_DIRECTORY)
-            self.assertNotIn('post_pass_path',pipeline.look_cvars(root,'original',shader_dev=True))
+            self.assertNotIn('post_pass_path',pipeline.look_cvars(root,'original,taa=0',shader_dev=True))
             settings=pipeline.passes_settings(root/'passes',{})
             self.assertEqual(settings,{'GTAO_RADIUS':0.75,'GTAO_QUALITY':2.0})
             self.assertEqual(pipeline.passes_settings(root/'passes',{'GTAO_RADIUS':'1'})['GTAO_RADIUS'],
@@ -181,12 +198,14 @@ class PipelineTests(unittest.TestCase):
             self.assertTrue((root/'passes/taa.hlsl').is_file())
             self.assertEqual(defines_of('pc,sharpen=0.6,taa=1')[1]['TAA_SHARPEN'],'0.6')
             # Without the sharpening knob or the ao knob: no sharpening, the passes still on.
-            cvars,defines=defines_of('aces,ao=0,taa=1')
+            cvars,defines=defines_of('aces,sharpen=0,ao=0,taa=1')
             self.assertEqual(defines['TAA_SHARPEN'],'0.0')
             self.assertEqual(Path(cvars['post_pass_path']),root/'passes')
-            # pc has TAA; taa=0 gives the look's own sharpening back.
+            # Every preset has TAA; taa=0 gives the look's own sharpening back.
+            for look in pipeline.LOOK_PRESETS:
+                self.assertTrue(pipeline.taa_enabled(pipeline.look_knobs(look)),look)
             self.assertEqual(defines_of('pc')[1],defines_of('pc,taa=1')[1])
-            for look in ('pc,taa=0','aces,sharpen=0.4'):
+            for look in ('pc,taa=0','gt,taa=0'):
                 self.assertNotIn('TAA',defines_of(look)[1])
                 self.assertEqual(defines_of(look)[1]['FM4_LOOK_SHARPEN'],'0.4')
             with self.assertRaises(RuntimeError):
@@ -214,9 +233,23 @@ class PipelineTests(unittest.TestCase):
             self.assertNotIn('Anti-aliasing',pipeline.info_overlay(
                 pipeline.look_cvars(root,'pc,taa=0'),{},'pc,taa=0','high'))
 
+    def test_auto_single_tile(self):
+        """Races render one tile without MSAA when the look has TAA, every preset, at every
+        quality; -Rov, -Msaa and a look without TAA keep the tiles of the quality."""
+        for look in pipeline.LOOK_PRESETS:
+            self.assertTrue(pipeline.auto_single_tile(look),look)
+        self.assertTrue(pipeline.auto_single_tile('pc'))
+        self.assertFalse(pipeline.auto_single_tile('aces',rov=True))
+        self.assertFalse(pipeline.auto_single_tile('aces',msaa=True))
+        for look in ('aces,taa=0','original,taa=0'):
+            self.assertFalse(pipeline.auto_single_tile(look),look)
+        for quality in pipeline.QUALITY_PRESETS:
+            self.assertNotIn('TilingScenario',pipeline.race_settings(quality,True))
+        self.assertIn('TilingScenario=0',pipeline.race_settings('ultra'))
+
     def test_windshield(self):
         """The windshield knob: the pass param WINDSHIELD, the post passes on, off by default and
-        in pc only, and the overlay line."""
+        in every preset but original, and the overlay line."""
         with tempfile.TemporaryDirectory(prefix='fm4 windshield test ') as directory:
             root=Path(directory)
             def defines_of(look):
@@ -230,12 +263,13 @@ class PipelineTests(unittest.TestCase):
             cvars,defines=defines_of('aces,ao=0,windshield=0.5')
             self.assertEqual(defines['WINDSHIELD'],'0.5')
             self.assertEqual(Path(cvars['post_pass_path']),root/'passes')
-            # pc has it at 1 since 20 October 2026, the other presets not.
+            # pc has it at 1 since 20 October 2026, aces, gt and neutral since 20 October 2026.
             for look in pipeline.LOOK_PRESETS:
-                self.assertEqual(pipeline.look_knobs(look).get('windshield'),'1' if look=='pc' else None)
+                self.assertEqual(pipeline.look_knobs(look).get('windshield'),
+                                 None if look=='original' else '1')
             self.assertEqual(defines_of('pc')[1]['WINDSHIELD'],'1.0')
             self.assertNotIn('WINDSHIELD',defines_of('pc,windshield=0')[1])
-            self.assertNotIn('post_pass_path',pipeline.look_cvars(root,'aces,ao=0,windshield=0'))
+            self.assertNotIn('post_pass_path',pipeline.look_cvars(root,'aces,ao=0,taa=0,windshield=0'))
             for value in ('-1','2.5'):
                 with self.assertRaises(RuntimeError):
                     pipeline.look_cvars(root,f'pc,windshield={value}')
@@ -254,15 +288,17 @@ class PipelineTests(unittest.TestCase):
             self.assertEqual(pipeline.look_track_settings(knobs),
                              'RoadSpecular.RoadSpecular*=0.5;RoadSpecular.RoadSpecular2*=0.5;'
                              'skyScale.value*=0.8')
-            # pc has sky 0.7 (the 2x sweep of 18 October 2026); the other presets keep the sky.
-            self.assertEqual(pipeline.look_track_settings(pipeline.look_knobs('pc')),'skyScale.value*=0.7')
-            self.assertEqual(pipeline.look_track_settings(pipeline.look_knobs('aces')),'')
+            # The presets have sky 0.7 (the 2x sweep of 18 October 2026, pc's since then, aces, gt
+            # and neutral since 20 October 2026); original keeps the sky.
+            for look in ('pc','aces','gt','neutral'):
+                self.assertEqual(pipeline.look_track_settings(pipeline.look_knobs(look)),'skyScale.value*=0.7')
+            self.assertEqual(pipeline.look_track_settings(pipeline.look_knobs('original')),'')
             # A knob at 1 edits nothing, so the files are not copied at all.
             self.assertEqual(pipeline.look_track_settings(pipeline.look_knobs('pc,sky=1')),'')
             # Track knobs are not shader defines, and alone they need no shader mods.
             cvars=pipeline.look_cvars(root,'pc,road_gloss=0.5')
             self.assertNotIn('road_gloss',cvars['shader_mod_defines'])
-            self.assertEqual(pipeline.look_cvars(root,'original,sky=0.8'),{})
+            self.assertEqual(pipeline.look_cvars(root,'original,taa=0,sky=0.8'),{})
             with self.assertRaises(RuntimeError):
                 pipeline.look_track_settings({'sky':'-1'})
             overlay=pipeline.info_overlay({},{'FM4_TRACK_SETTINGS':pipeline.look_track_settings(knobs)},
@@ -319,14 +355,15 @@ class PipelineTests(unittest.TestCase):
         with tempfile.TemporaryDirectory(prefix='fm4 look test ') as directory:
             root=Path(directory)
             # cockpit_light is a define of fm4-cockpit.hlsli: 0, the game's interior, by default;
-            # pc has 0.5 since 20 October 2026, the other presets not.
+            # pc has 0.5 since 20 October 2026, aces, gt and neutral since 20 October 2026.
             defines=dict(define.split('=',1) for define in
                          pipeline.look_cvars(root,'pc,cockpit_light=0.3')['shader_mod_defines'].split(';'))
             self.assertEqual(defines['FM4_LOOK_COCKPIT_LIGHT'],'0.3')
             self.assertIn('FM4_LOOK_COCKPIT_LIGHT=0.5',pipeline.look_cvars(root,'pc')['shader_mod_defines'])
+            # aces, gt and neutral too since 20 October 2026; original not.
             for look in pipeline.LOOK_PRESETS:
-                if look!='pc':
-                    self.assertNotIn('cockpit_light',pipeline.look_knobs(look))
+                self.assertEqual(pipeline.look_knobs(look).get('cockpit_light'),
+                                 None if look=='original' else '0.5')
             self.assertEqual(pipeline.look_knob_defaults()['FM4_LOOK_COCKPIT_LIGHT'],'0.0')
 
     def test_full_rate(self):

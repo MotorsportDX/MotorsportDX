@@ -1720,6 +1720,8 @@ int main(int argc, char** argv) {
         std::vector<uint8_t> mask;
         float jitter[2] = {};
         bool history_valid = true;
+        // The runtime jitters a still camera ([jitter] still).
+        bool camera_still = false;
       };
       auto new_frame = [&]() {
         Frame frame;
@@ -1745,7 +1747,8 @@ int main(int argc, char** argv) {
         constants.jitter[0] = frame.jitter[0];
         constants.jitter[1] = frame.jitter[1];
         constants.flags = post_pass::kSceneFlagViewKnown | post_pass::kSceneFlagMotionValid |
-                          (frame.history_valid ? post_pass::kSceneFlagHistoryValid : 0u);
+                          (frame.history_valid ? post_pass::kSceneFlagHistoryValid : 0u) |
+                          (frame.camera_still ? post_pass::kSceneFlagCameraStill : 0u);
         std::memcpy(constants.previous_xy_mul_add, constants.xy_mul_add,
                     sizeof(constants.xy_mul_add));
         constants.previous_w_numerator = constants.w_numerator;
@@ -1843,7 +1846,7 @@ int main(int argc, char** argv) {
       std::vector<float> previous_input;
       double input_change = 0.0;
       bool ok = true;
-      for (uint32_t index = 0; index < 40 && ok; ++index) {
+      auto jittered_edge = [&](uint32_t index) {
         Frame frame = new_frame();
         jitter_of(index, frame.jitter);
         frame.history_valid = index > 0;
@@ -1854,6 +1857,35 @@ int main(int argc, char** argv) {
             for (int k = 0; k < 3; ++k) frame.rgb[(y * kWidth + x) * 3 + k] = value;
           }
         }
+        return frame;
+      };
+      // The mean |linear - coverage| over the edge pixels of out, and the largest
+      // change from before.
+      auto edge_error = [&](const std::vector<float>& before, const std::vector<float>& out,
+                            double& change) {
+        double error = 0.0;
+        int pixels = 0;
+        change = 0.0;
+        for (uint32_t y = 2; y + 2 < kHeight; ++y) {
+          for (uint32_t x = 2; x + 2 < kWidth; ++x) {
+            double coverage = 0.0;
+            for (int sy = 0; sy < 8; ++sy) {
+              for (int sx = 0; sx < 8; ++sx) {
+                coverage += edge(x + (sx + 0.5) / 8.0, y + (sy + 0.5) / 8.0);
+              }
+            }
+            coverage /= 64.0;
+            uint32_t i = (y * kWidth + x) * 3;
+            change = std::fmax(change, std::fabs(out[i] - before[i]));
+            if (coverage <= 0.0 || coverage >= 1.0) continue;
+            error += std::fabs(out[i] * out[i] - coverage);
+            ++pixels;
+          }
+        }
+        return error / std::max(pixels, 1);
+      };
+      for (uint32_t index = 0; index < 40 && ok; ++index) {
+        Frame frame = jittered_edge(index);
         if (!previous_input.empty()) {
           for (size_t i = 0; i < frame.rgb.size(); ++i) {
             input_change = std::fmax(input_change, std::fabs(frame.rgb[i] - previous_input[i]));
@@ -1889,6 +1921,29 @@ int main(int argc, char** argv) {
       Check(coverage_error < 0.1, "taa: a still edge converges to its pixel coverage",
             coverage_error);
       Check(change < 0.1 && change * 5.0 < input_change, "taa: a still edge holds still", change);
+
+      // 1a. The same edge on a still camera that the runtime keeps jittering
+      //     ([jitter] still, kSceneFlagCameraStill): the phases accumulate
+      //     (taa.hlsl step 8) into the mean of the current frames, which are
+      //     the same filtered samples as in 1, and over 300 frames (past
+      //     TAA_STILL_FRAMES, 256) the edge holds far stiller than with the
+      //     usual blend: under 1 of 255 between frames, also where the edge
+      //     only just reaches a pixel and gamma 2 enlarges a small linear step.
+      for (uint32_t index = 0; index < 300 && ok; ++index) {
+        Frame frame = jittered_edge(index);
+        frame.camera_still = true;
+        ok = run_taa(frame, taa_on, index == 298 ? 0 : index == 299 ? 1 : -1);
+      }
+      if (!ok) return 1;
+      double still_change = 0.0;
+      double still_error = edge_error(read_taa(0), read_taa(1), still_change);
+      std::printf("taa (%s): still camera, phases accumulated over 300 frames: mean |linear - "
+                  "coverage| %.3f, largest change between the last two frames %.4f (%.1f of 255)\n",
+                  point_name, still_error, still_change, still_change * 255.0);
+      Check(still_error < coverage_error + 0.01,
+            "taa: a still camera's edge converges to its pixel coverage", still_error);
+      Check(still_change < 1.0 / 255.0 && still_change * 20.0 < change,
+            "taa: a still camera's edge holds still", still_change * 255.0);
 
       // 1b. The jitter stops, as the runtime's gate stops it on a still camera:
       //     over 100 frames without it, the history settles to a still picture

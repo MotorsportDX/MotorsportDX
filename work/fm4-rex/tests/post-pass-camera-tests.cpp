@@ -446,6 +446,9 @@ void TestJitter() {
   draw = scene;
   draw.excluded = true;
   Check(!IsJitteredDraw(draw), "excluded vertex shaders are not jittered");
+  draw = scene;
+  draw.after_final = true;  // The pause menu tests the scene's depth buffer.
+  Check(!IsJitteredDraw(draw), "draws after the frame's final combine are not jittered");
 }
 
 // The camera's motion in host pixels (CameraMotionPixels) against the same
@@ -560,6 +563,36 @@ void TestJitterGate(bool right_handed) {
   JitterGate fresh;
   fresh.EndFrame(-1.0, 0.0, always);
   Check(fresh.Armed(always), "gate: thresholds at 0 arm every frame");
+
+  // With still: also on a camera still for hold frames, at any frame rate, and
+  // marked still (the consumer accumulates); not right after a cut.
+  JitterGateSettings with_still = settings;
+  with_still.still = true;
+  JitterGate still_gate;
+  for (int i = 0; i < 10; ++i) still_gate.EndFrame(2.0, 1.0 / 240.0, with_still);
+  Check(still_gate.Armed(with_still) && !still_gate.Still(with_still),
+        "gate: still: a moving camera is armed, not still");
+  int armed = 0, still = 0;
+  for (int i = 0; i < 12; ++i) {
+    still_gate.EndFrame(0.1, 1.0 / 240.0, with_still);
+    armed += still_gate.Armed(with_still);
+    still += still_gate.Still(with_still);
+  }
+  Check(armed == 12 && still == 5,
+        "gate: still: armed throughout, still from the camera's 8th still frame");
+  for (int i = 0; i < 8; ++i) still_gate.EndFrame(0.0, 1.0 / 30.0, with_still);
+  Check(still_gate.Armed(with_still) && still_gate.Still(with_still),
+        "gate: still: armed on a still camera at 30 fps");
+  still_gate.EndFrame(-1.0, 1.0 / 30.0, with_still);
+  Check(!still_gate.Armed(with_still) && !still_gate.Still(with_still),
+        "gate: still: not right after a cut");
+  still_gate.EndFrame(0.0, 1.0 / 30.0, with_still);
+  Check(still_gate.Still(with_still), "gate: still: again in the frame after the cut");
+  for (int i = 0; i < 8; ++i) still_gate.EndFrame(3.0, 1.0 / 30.0, with_still);
+  Check(!still_gate.Armed(with_still), "gate: still: a moving camera at 30 fps stays off");
+  JitterGateSettings still_always = always;
+  still_always.still = true;
+  Check(!fresh.Still(still_always), "gate: still: never with min_motion 0 (every frame jittered)");
 }
 
 }  // namespace

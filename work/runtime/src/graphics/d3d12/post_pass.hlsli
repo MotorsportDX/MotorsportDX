@@ -96,6 +96,7 @@ cbuffer xe_post_pass_scene : register(b0) {
 #define XE_SCENE_HISTORY_VALID 1u
 #define XE_SCENE_VIEW_KNOWN 2u
 #define XE_SCENE_MOTION_VALID 4u
+#define XE_SCENE_CAMERA_STILL 8u
 
 // post_pass_layout.h PassHeader, then the params of the manifest.
 cbuffer xe_post_pass_constants : register(b1) {
@@ -116,6 +117,10 @@ bool xe_history_valid() { return (xe_scene_flags & XE_SCENE_HISTORY_VALID) != 0u
 // not cut: the reprojection (xe_previous_host_position) and the motion matrices
 // hold.
 bool xe_motion_valid() { return (xe_scene_flags & XE_SCENE_MOTION_VALID) != 0u; }
+
+// The scene is jittered on a still camera ([jitter] still): a temporal pass may
+// accumulate the phases where nothing moves instead of following the picture.
+bool xe_camera_still() { return (xe_scene_flags & XE_SCENE_CAMERA_STILL) != 0u; }
 
 // The guest screen position of a host pixel position of the scene.
 float2 xe_scene_guest_position(float2 host_pixel_center) {

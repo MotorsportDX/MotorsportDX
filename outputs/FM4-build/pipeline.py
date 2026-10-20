@@ -513,24 +513,25 @@ LOOK_NAMES={'tonemap':{'filmic':0,'gt':1,'aces':2,'neutral':3}}
 # RoadSpecular); sky scales skyScale, the brightness constant of the sky shaders (SkyScale).
 LOOK_TRACK_KNOBS={'road_gloss':('RoadSpecular.RoadSpecular','RoadSpecular.RoadSpecular2'),
                   'sky':('skyScale.value',)}
-# Named looks; a -Look value may mix them with knobs ('pc,sharpen=0.6': later items win).
-# Every look but original has the car paint clear coat and ambient occlusion; original runs
-# without any shader mod. No preset has the sky_* or foliage_* knobs: their A/B at 2x of
-# 18 October 2026 showed only a slightly deeper sky (docs/analysis/look-mod-coverage.md).
-# pc has TAA (taa=1, its sharpening after the resolve) since 19 October 2026, with the high
-# tiling: 'pc,taa=0' is the earlier pc. pc has the cockpit interior's shadow floor
-# (cockpit_light=0.5) and the cockpit glass (windshield=1) since 20 October 2026:
-# 'pc,cockpit_light=0,windshield=0' is the pc before them. Since the sun-facing A/B of the same
-# day pc also limits the clear coat's sun highlight to 1 (clearcoat_glint, 4 before: the hood
-# turned into a white blob towards the sun), replaces the road's sun highlight with the grained
-# sheen (road_specular=0,road_sheen=0.4) and has the glass, chrome and rim mods:
-# 'pc,clearcoat_glint=4,road_specular=1,road_sheen=0,glass=0,chrome=0,rims=0' is the pc before them.
-LOOK_PRESETS={'pc':'tonemap=aces,saturation=1.1,bloom=0.7,sharpen=0.4,clearcoat=1,clearcoat_glint=1,'
-                    'ao=0.6,sun=2,sky=0.7,taa=1,cockpit_light=0.5,windshield=1,'
-                    'road_specular=0,road_sheen=0.4,glass=1,chrome=1,rims=1',
-              'aces':'tonemap=aces,clearcoat=1,ao=0.6,sun=2','gt':'tonemap=gt,clearcoat=1,ao=0.6,sun=2',
-              'neutral':'tonemap=neutral,clearcoat=1,ao=0.6,sun=2','original':''}
-DEFAULT_LOOK='pc'
+# Named looks; a -Look value may mix them with knobs ('aces,sharpen=0.6': later items win).
+# aces, gt and neutral differ only in the tone curve and share the mods of the earlier pc preset
+# (since 20 October 2026; before, aces, gt and neutral had only the clear coat, ambient
+# occlusion and the sun knob): the color grade, the clear coat with its sun highlight limited
+# to 1 (clearcoat_glint), ambient occlusion, the sun glare, the sky brightness, TAA (taa=1, its
+# sharpening after the resolve), the cockpit interior's shadow floor (cockpit_light), the
+# cockpit glass (windshield), the road's grained sheen instead of its sun highlight
+# (road_specular=0,road_sheen=0.4) and the glass, chrome and rim mods. pc is aces under its
+# earlier name (LOOK_ALIASES). original is the game's own picture with TAA and no shader mod;
+# 'original,taa=0' is the game's picture as the title draws it, the reference against -Rov.
+# No preset has the sky_* or foliage_* knobs: their A/B at 2x of 18 October 2026 showed only a
+# slightly deeper sky (docs/analysis/look-mod-coverage.md). Every preset has TAA, so races
+# render one tile without MSAA with them (auto_single_tile).
+_LOOK_MODS=('saturation=1.1,bloom=0.7,sharpen=0.4,clearcoat=1,clearcoat_glint=1,ao=0.6,sun=2,sky=0.7,'
+            'taa=1,cockpit_light=0.5,windshield=1,road_specular=0,road_sheen=0.4,glass=1,chrome=1,rims=1')
+LOOK_PRESETS={'aces':'tonemap=aces,'+_LOOK_MODS,'gt':'tonemap=gt,'+_LOOK_MODS,
+              'neutral':'tonemap=neutral,'+_LOOK_MODS,'original':'taa=1'}
+LOOK_ALIASES={'pc':'aces'}
+DEFAULT_LOOK='aces'
 
 # Render quality of races (FM4_RACE_SETTINGS, fm4-render-overrides.cpp: controls of the race
 # render scenarios). xbox keeps the title's own. high gives races what its replays and photo
@@ -547,7 +548,8 @@ QUALITY_PRESETS={'xbox':[],'high':_HIGH,
 DEFAULT_QUALITY='high'
 
 def race_settings(quality,single_tile=False):
-    """FM4_RACE_SETTINGS of a quality preset; -SingleTile keeps its own tiling scenario."""
+    """FM4_RACE_SETTINGS of a quality preset; one tile (-SingleTile, auto_single_tile) keeps its
+    own tiling scenario."""
     if quality not in QUALITY_PRESETS:
         raise RuntimeError(f'Unknown quality {quality!r}; use {", ".join(QUALITY_PRESETS)}.')
     return ';'.join(s for s in QUALITY_PRESETS[quality]
@@ -568,13 +570,15 @@ def look_knob_defaults():
     return defaults
 
 def look_knobs(look):
-    """The knobs of a -Look value: 'pc', 'sharpen=0.5,bloom=0.8,tonemap=aces' or both (later
+    """The knobs of a -Look value: 'aces', 'sharpen=0.5,bloom=0.8,tonemap=aces' or both (later
     items win), launcher names (LOOK_KNOBS) to their values."""
     knobs={}
     for item in filter(None,(part.strip() for part in look.split(','))):
         if '=' not in item:
+            item=LOOK_ALIASES.get(item,item)
             if item not in LOOK_PRESETS:
-                raise RuntimeError(f'Unknown look {item!r}; use {", ".join(LOOK_PRESETS)} or knobs.')
+                raise RuntimeError(f'Unknown look {item!r}; use {", ".join((*LOOK_PRESETS,*LOOK_ALIASES))} '
+                                   'or knobs.')
             if item=='original':
                 knobs.clear()
             knobs.update(part.split('=',1) for part in filter(None,LOOK_PRESETS[item].split(',')))
@@ -647,17 +651,24 @@ def look_track_settings(knobs):
 
 def look_cvars(root,look,shader_dev=False):
     """Cvars of the look mods (work/fm4-rex/look/fm4-look.hlsli): copies them to BuildRoot/look
-    and passes the knobs of the look (look_knobs; knobs left out keep the original look). None
-    of them ('original'): no mods at all.
+    and passes the knobs of the look (look_knobs; knobs left out keep the original look). Only
+    post pass knobs ('original': TAA): the post passes and their params without the look mods;
+    none ('original,taa=0'): no mods at all.
     shader_dev (docs/analysis/shader-mod-iteration.md): the mods load from work/fm4-rex/look
     itself and hot reload when a file there changes, and every knob of the files is a live knob
     (the ones left out at their defaults), which shader_mod_set changes in the console (`)."""
     # The track lighting knobs are not shader knobs (look_track_settings).
     knobs={name:value for name,value in look_knobs(look).items() if name not in LOOK_TRACK_KNOBS}
     cvars=sun_cvars(knobs.get('sun'))
-    if not any(name not in LOOK_RUNTIME_KNOBS for name in knobs) and not shader_dev:
-        return cvars
+    mods=shader_dev or any(name not in LOOK_RUNTIME_KNOBS and name not in LOOK_PASS_KNOBS for name in knobs)
     defines=look_defines(knobs)
+    if not mods:
+        # The post pass params reach the passes through shader_mod_defines without the mods.
+        defines=[define for define in defines if not define.startswith('FM4_LOOK_')]
+        if defines:
+            cvars['shader_mod_defines']=';'.join(defines)
+        cvars.update(ao_cvars(root,taa_enabled(knobs) or windshield_strength(knobs)>0))
+        return cvars
     if shader_dev:
         directory=LOOK_DIRECTORY
         given={define.split('=',1)[0] for define in defines}
@@ -787,10 +798,10 @@ def info_overlay(cvars,env,look,quality,display=None):
                      f'{quality}')
     if dict(defines).get('TAA')=='1' and dict(defines).get('TAA_POINT')=='1':
         lines.append("Anti-aliasing: TAA before the post chain (scene_color), the look's sharpening, "
-                     'scene jittered while the camera moves')
+                     'scene jittered while the camera moves, a still one accumulated')
     elif dict(defines).get('TAA')=='1':
         lines.append(f"Anti-aliasing: TAA before the HUD, sharpen {float(dict(defines)['TAA_SHARPEN']):g}, "
-                     'scene jittered while the camera moves')
+                     'scene jittered while the camera moves, a still one accumulated')
     if 'WINDSHIELD' in dict(defines):
         lines.append(f"Cockpit glass: strength {float(dict(defines)['WINDSHIELD']):g}")
     if 'rtv_occlusion_awaited_scale' in cvars:
@@ -840,16 +851,25 @@ def save_content(root,content):
     (root/'local.json').write_text(json.dumps(state,indent=2),encoding='utf-8')
 
 def single_tile_settings(look):
-    """-SingleTile: races render 720p in one tile without MSAA (the title's UI tiling scenario),
-    without predicated tiling, and FXAA on the swap unless the look has TAA, which anti-aliases
-    the tile itself (FXAA after it would blur the HUD and fight it). Environment and cvars."""
+    """One tile (-SingleTile, auto_single_tile): races render 720p in one tile without MSAA (the
+    title's UI tiling scenario), without predicated tiling, and FXAA on the swap unless the look
+    has TAA, which anti-aliases the tile itself (FXAA after it would blur the HUD and fight it).
+    Environment and cvars."""
     return ({'FM4_TILING_SCENARIO':'2'},
             {} if taa_enabled(look_knobs(look)) else {'swap_post_effect':'fxaa'})
+
+def auto_single_tile(look,rov=False,msaa=False):
+    """Races render one tile without MSAA whenever the look has TAA (every preset, since 21
+    October 2026), at every -Quality: TAA anti-aliases the tile, and its input is then one sample
+    per pixel, with depth, motion and mask of the same sample as the color (docs/analysis/taa.md,
+    section 5). -Rov, which runs no post passes, and -Msaa keep the tiles and MSAA of -Quality,
+    and so does a look without TAA."""
+    return taa_enabled(look_knobs(look)) and not rov and not msaa
 
 def launch(root,single_tile=False,fixed_vblank=False,frame_rate=None,rov=False,
            resolution_scale=None,full_rate_mirror=False,look=None,shadow_workaround=False,
            quality=None,display=DEFAULT_DISPLAY,fullscreen=False,supersample=False,info=False,
-           ao=False,shader_dev=False,texture_dump=None,texture_replace=None):
+           ao=False,shader_dev=False,texture_dump=None,texture_replace=None,msaa=False):
     state = json.loads((root/'local.json').read_text())
     disc1,disc2 = validate_discs(state['disc1'],state['disc2'])
     report=json.loads((root/'build-result.json').read_text())
@@ -864,11 +884,12 @@ def launch(root,single_tile=False,fixed_vblank=False,frame_rate=None,rov=False,
         # Skips the shadow map pass outside the cockpit in races, as split screen does: the
         # xenia-canary/game-patches#398 workaround, no longer needed on this runtime.
         env['FM4_SHADOW_WORKAROUND']='1'
+    look=DEFAULT_LOOK if look is None else look
+    single_tile=single_tile or auto_single_tile(look,rov,msaa)
     settings=race_settings(DEFAULT_QUALITY if quality is None else quality,single_tile)
     if settings:
         env['FM4_RACE_SETTINGS']=settings
     cvars=launch_cvars(root,disc1,root/'logs/runtime.log')
-    look=DEFAULT_LOOK if look is None else look
     if single_tile:
         tiling_env,tiling_cvars=single_tile_settings(look)
         env.update(tiling_env)
@@ -892,7 +913,7 @@ def launch(root,single_tile=False,fixed_vblank=False,frame_rate=None,rov=False,
         cvars['video_mode_refresh_rate']=str(frame_rate)
         env['FM4_FRAME_RATE']=str(frame_rate)
     # Shader mods on the game's post-processing (tone curve, sharpening, bloom, exposure,
-    # contrast, saturation, vignette, motion blur): the pc look unless -Look says otherwise.
+    # contrast, saturation, vignette, motion blur): the aces look unless -Look says otherwise.
     cvars.update(look_cvars(root,look,shader_dev))
     track_settings=look_track_settings(look_knobs(look))
     if track_settings:
@@ -974,7 +995,10 @@ def main():
                              'for them; repeatable. Saved in local.json and imported at the next run')
     parser.add_argument('--jobs',type=int,default=4)
     parser.add_argument('--single-tile',action='store_true',
-                        help='run: races without MSAA and predicated tiling, with FXAA (faster)')
+                        help='run: races without MSAA and predicated tiling also with a look without '
+                             'TAA, then with FXAA (a look with TAA, every preset, has one tile anyway)')
+    parser.add_argument('--msaa',action='store_true',
+                        help='run: races keep the tiles and MSAA of --quality with a look that has TAA')
     parser.add_argument('--fixed-vblank',action='store_true',
                         help='run: hold every swap to the fixed 60 Hz vblank grid (vblank_vrr=false)')
     parser.add_argument('--frame-rate',type=int,choices=range(30,241),metavar='30-240',
@@ -1004,14 +1028,14 @@ def main():
                         help='run: the slower pixel shader interlock render target path instead of RTV')
     parser.add_argument('--look',
                         help='run: post-processing look, a preset ('+', '.join(LOOK_PRESETS)+
-                             '; default '+DEFAULT_LOOK+') and/or knobs, for example '
-                             '"pc,sharpen=0.6" (knobs: '+
+                             '; pc is aces; default '+DEFAULT_LOOK+') and/or knobs, for example '
+                             '"aces,sharpen=0.6" (knobs: '+
                              ', '.join((*LOOK_KNOBS,*LOOK_RUNTIME_KNOBS,*LOOK_TRACK_KNOBS,*LOOK_PASS_KNOBS))+
                              '; work/fm4-rex/look/fm4-look.hlsli)')
     parser.add_argument('--ao',action='store_true',
                         help="run: the runtime's screen-space ambient occlusion pass (the GTAO post pass) "
                              'even without the ao look knob, which also applies it (on in every '
-                             'look but original)')
+                             'preset but original)')
     parser.add_argument('--shader-dev',action='store_true',
                         help='run: shader mod development: the look mods load from work/fm4-rex/look '
                              'and hot reload when a file there is saved, and every look knob is a '
@@ -1049,7 +1073,7 @@ def main():
                                      args.resolution_scale,args.full_rate_mirror,args.look,
                                      args.shadow_workaround,args.quality,args.display,
                                      args.fullscreen,args.supersample,args.info,args.ao,
-                                     args.shader_dev,args.texture_dump,args.texture_replace)
+                                     args.shader_dev,args.texture_dump,args.texture_replace,args.msaa)
     if args.action=='warmcache': warm_cache(root)
     if args.action=='profbuild': build_profiling(root,fxc,args.jobs)
 

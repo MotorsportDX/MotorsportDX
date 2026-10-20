@@ -101,8 +101,11 @@ def main():
                         help='drive with the harness input instead of the AI driver (engageaionstart)')
     parser.add_argument('--env', action='append', default=[], help='extra NAME=value for every cell')
     parser.add_argument('--arg', action='append', default=[], help='extra --cvar=value for every cell')
-    parser.add_argument('--look', help="look of every cell as Build.ps1 -Look (default: the launcher's, pc), "
-                                       'for example "pc,taa=1"')
+    parser.add_argument('--look', help="look of every cell as Build.ps1 -Look (default: the launcher's, aces), "
+                                       'for example "aces,taa=0"')
+    parser.add_argument('--msaa', action='store_true',
+                        help='every cell keeps the tiles and MSAA of the quality with a look that has TAA '
+                             '(Build.ps1 -Msaa)')
     options = parser.parse_args()
     root = options.build_root.resolve()
     scenarios, rates, repeat = TIERS[options.tier]
@@ -121,6 +124,8 @@ def main():
     extra = [f'--env={e}' for e in env] + [f'--arg={a}' for a in options.arg]
     if options.look:
         extra += ['--look', options.look]
+    if options.msaa:
+        extra += ['--msaa']
     log = root / 'e2e' / f'{options.name}.log'
     log.parent.mkdir(parents=True, exist_ok=True)
     started, results = time.time(), []

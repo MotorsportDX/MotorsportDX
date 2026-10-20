@@ -209,6 +209,10 @@ class PostPasses {
     // (post_pass::JitterGate).
     double jitter_min_motion = 0.0, jitter_min_frame_rate = 0.0;
     uint32_t jitter_min_motion_param = UINT32_MAX, jitter_min_frame_rate_param = UINT32_MAX;
+    // [jitter] still: above 0, the jitter also on a still camera, whose frames
+    // the consumers accumulate (kSceneFlagCameraStill); a number or a param.
+    double jitter_still = 0.0;
+    uint32_t jitter_still_param = UINT32_MAX;
     double jitter_motion_distance = 10.0;
     uint32_t jitter_motion_hold = 8;
     // Name and the value of the manifest.
@@ -418,6 +422,9 @@ class PostPasses {
   void TextureSize(const TextureDesc& desc, uint32_t& width, uint32_t& height) const;
   // The previous frame's copies of the history textures are usable.
   bool HistoryTexturesValid() const;
+  std::string HistoryTexturesSummary() const;
+  // An enabled pass reads history texture texture as previous:<name>.
+  bool HistoryTexturesReadThisFrame(size_t texture) const;
   void ReleaseTexture(Texture& texture, const TextureDesc* desc);
   void ReleaseTextures();
   bool EnsureHistory(History& history, ID3D12Resource* source,
@@ -514,6 +521,8 @@ class PostPasses {
   // swap), in host pixels; the phases counted so far; the last frame in which
   // a pass of the manifest's jitter_consumers ran.
   bool jitter_active_ = false;
+  // The jitter is on because the camera is still (JitterGate::Still).
+  bool jitter_still_ = false;
   float jitter_[2] = {};
   uint64_t jitter_count_ = 0;
   uint64_t jitter_consumer_frame_ = UINT64_MAX;

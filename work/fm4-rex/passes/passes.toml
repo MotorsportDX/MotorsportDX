@@ -159,12 +159,25 @@ TAA = { value = 0, min = 0, max = 1 }
 TAA_JITTER = { value = 1, min = 0, max = 1 }
 # The jitter only while it pays ([jitter]): while the scene camera moves by at
 # least TAA_JITTER_MOTION host pixels per frame (the static world at 10 m), and
-# at TAA_JITTER_RATE frames per second or more. On a still camera, in rewind,
-# pause and photo mode, and in the 30 fps countdown, replays and post-race,
-# TAA's clip keeps a residue of every phase and the picture shimmers. 0 turns
-# either test off (the jitter of every frame, as before 20 October 2026).
+# at TAA_JITTER_RATE frames per second or more. With the usual blend, on a
+# still camera (rewind, pause, photo mode) and at 30 fps (post-race), TAA's
+# clip keeps a residue of every phase and the picture shimmers. 0 turns either
+# test off (the jitter of every frame, as before 20 October 2026).
 TAA_JITTER_MOTION = { value = 0.5, min = 0.0 }
 TAA_JITTER_RATE = { value = 45.0, min = 0.0 }
+# 1: the jitter also on a still camera, once it moved less than
+# TAA_JITTER_MOTION for 8 frames, at any frame rate, and TAA accumulates the
+# phases there (since 20 October 2026): pixels that move less than
+# TAA_STILL_PIXELS (host pixels), also reactive ones and those without known
+# motion, keep their history and blend the current frame with
+# 1 / (frames accumulated + 1), down to
+# 1 / TAA_STILL_FRAMES, and clip the history to the 5x5's minimum and maximum
+# instead of the 3x3's box of standard deviations, so the phases average out
+# into a still, anti-aliased picture. 0: no jitter on a still camera, as from
+# the gate's first version of 20 October 2026.
+TAA_STILL = { value = 1.0, min = 0.0, max = 1.0 }
+TAA_STILL_FRAMES = { value = 256.0, min = 2.0, max = 1024.0 }
+TAA_STILL_PIXELS = { value = 0.05, min = 0.0 }
 # The weight of the current frame when still, and at TAA_MOTION_PIXELS of
 # motion (host pixels).
 TAA_BLEND = { value = 0.1, min = 0.01, max = 1.0 }
@@ -179,8 +192,8 @@ TAA_REACTIVE = { value = 0.5, min = 0.0, max = 1.0 }
 TAA_SHARPEN = { value = 0.4, min = 0.0, max = 1.0 }
 # Drawn instead of the image (taa.hlsl): 0 off, 1 the history alone, 2 the
 # weight of the current frame, 3 the clip, 4 why there is no history, 5 the
-# current frame without the jitter.
-TAA_DEBUG = { value = 0, min = 0, max = 5 }
+# current frame without the jitter, 6 where a still camera's phases accumulate.
+TAA_DEBUG = { value = 0, min = 0, max = 6 }
 # With TAA at the scene_color point: the occlusion accumulated over frames (1)
 # and the weight of the current frame when still.
 GTAO_TEMPORAL = { value = 1, min = 0, max = 1 }
@@ -512,12 +525,14 @@ rtv = ["scene_written"]
 # runs, in frames after one in which taa_resolve or taa_scene_resolve ran, while
 # the scene camera moved by TAA_JITTER_MOTION host pixels (the static world at
 # motion_distance meters) in one of the last motion_hold frames and the median
-# frame rate is TAA_JITTER_RATE or more.
+# frame rate is TAA_JITTER_RATE or more, and with TAA_STILL once it has not
+# for motion_hold frames (xe_camera_still()).
 [jitter]
 phases = 8
 if = "TAA > 0 && TAA_JITTER > 0"
 consumer = ["taa_resolve", "taa_scene_resolve"]
 min_motion = "TAA_JITTER_MOTION"
 min_frame_rate = "TAA_JITTER_RATE"
+still = "TAA_STILL"
 motion_distance = 10.0
 motion_hold = 8

@@ -8,7 +8,8 @@
  * translated vertex shaders' ndc_offset: the content at host position p is the
  * unjittered scene at p - jitter (SceneConstants::jitter). The jitter is armed
  * only while it pays (JitterGate): while the scene camera moves, at a frame
- * rate at which its phases cycle faster than the eye follows. See
+ * rate at which its phases cycle faster than the eye follows, and if asked on a
+ * still camera, whose frames the consumer accumulates. See
  * docs/analysis/taa.md.
  */
 
@@ -58,11 +59,15 @@ struct JitterDraw {
   bool rectangle = false;
   // Its vertex shader is in the manifest's [jitter] exclude.
   bool excluded = false;
+  // The frame's final combine has been drawn: what follows is the HUD and the
+  // menus, which may test the scene's depth buffer too (FM4's pause menu does)
+  // but are drawn after the final point, where no pass takes the jitter out.
+  bool after_final = false;
 };
 
 inline bool IsJitteredDraw(const JitterDraw& draw) {
   return draw.scene_depth_known && draw.depth_base == draw.scene_depth_base &&
-         draw.depth_or_stencil && !draw.rectangle && !draw.excluded;
+         draw.depth_or_stencil && !draw.rectangle && !draw.excluded && !draw.after_final;
 }
 
 // Adds the jitter (host pixels, x right, y down) to the ndc_offset of a draw
@@ -110,11 +115,14 @@ inline double CameraMotionPixels(const MatrixD& view_to_previous_view, const Unp
   return largest;
 }
 
-// When the jitter pays. Its phases average out only while the history follows
-// a moving picture: on a still camera TAA's color clip keeps a residue of each
-// phase, and the picture shimmers, most visibly at 30 fps, where 8 phases
-// repeat 3.75 times a second. So the jitter is armed while the scene camera
-// moves and the frames come fast enough (docs/analysis/taa.md, section 3.5).
+// When the jitter pays. Its phases average out with TAA's usual blend only
+// while the history follows a moving picture: on a still camera TAA's color
+// clip keeps a residue of each phase, and the picture shimmers, most visibly at
+// 30 fps, where 8 phases repeat 3.75 times a second. So the jitter is armed
+// while the scene camera moves and the frames come fast enough; with still, also
+// once the camera has been still for hold frames, at any frame rate, for a
+// consumer that then accumulates the phases instead (kSceneFlagCameraStill;
+// docs/analysis/taa.md, section 3.5).
 struct JitterGateSettings {
   // The camera motion in host pixels per frame (CameraMotionPixels) that arms
   // the jitter; 0 or less: a still camera too.
@@ -124,6 +132,8 @@ struct JitterGateSettings {
   uint32_t hold = 8;
   // The frame rate the jitter needs (JitterGate::FrameRate); 0 or less: any.
   double min_frame_rate = 0.0;
+  // The jitter also on a still camera (JitterGate::Still).
+  bool still = false;
 };
 
 class JitterGate {
@@ -161,11 +171,18 @@ class JitterGate {
     return median > 0.0 ? 1.0 / median : 0.0;
   }
 
+  // The camera has been still for hold frames, its motion in the last frame is
+  // known (not a cut), and settings.still asks for the jitter there.
+  bool Still(const JitterGateSettings& settings) const {
+    return settings.still && settings.min_motion > 0.0 && frames_still_ >= settings.hold &&
+           motion_ >= 0.0;
+  }
+
   // The next frame may be jittered.
   bool Armed(const JitterGateSettings& settings) const {
     bool moving = settings.min_motion <= 0.0 || frames_still_ < settings.hold;
     bool fast = settings.min_frame_rate <= 0.0 || FrameRate() >= settings.min_frame_rate;
-    return moving && fast;
+    return (moving && fast) || Still(settings);
   }
 
   // The last frame's motion (negative if unknown), and the frames since the

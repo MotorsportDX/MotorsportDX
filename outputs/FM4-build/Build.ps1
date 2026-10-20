@@ -9,6 +9,7 @@ param(
     [ValidateRange(1,64)][int]$Jobs = 4,
     [string]$Flavor,
     [switch]$SingleTile,
+    [switch]$Msaa,
     [switch]$FixedVblank,
     [switch]$Rov,
     [switch]$FullRateMirror,
@@ -41,6 +42,7 @@ foreach ($path in $Content) { $arguments += @('--content', $path) }
 if ($BuildRoot) { $arguments += @('--build-root', $BuildRoot) }
 if ($Flavor) { $arguments += @('--flavor', $Flavor) }
 if ($SingleTile) { $arguments += @('--single-tile') }
+if ($Msaa) { $arguments += @('--msaa') }
 if ($FixedVblank) { $arguments += @('--fixed-vblank') }
 if ($Rov) { $arguments += @('--rov') }
 if ($FullRateMirror) { $arguments += @('--full-rate-mirror') }

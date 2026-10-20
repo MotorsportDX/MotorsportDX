@@ -50,10 +50,11 @@ Running with no options gives this configuration:
   [-FullRateMirror](#-fullratemirror).
 - **Shadows** use the title's shadow map for every camera. See
   [-ShadowWorkaround](#-shadowworkaround).
-- **Race quality** is `high`. See [-Quality](#-quality).
-- **Look** is the `pc` preset, with screen-space ambient occlusion, temporal
-  anti-aliasing, the cockpit interior's shadow floor, the cockpit glass, the road sheen and the
-  glass, chrome and rim mods. See [Look](#look).
+- **Race quality** is `high`, rendered in one tile without MSAA because the look has TAA. See
+  [-Quality](#-quality) and [-SingleTile and -Msaa](#-singletile-and--msaa).
+- **Look** is the `aces` preset (`pc` is its earlier name), with screen-space ambient occlusion,
+  temporal anti-aliasing, the cockpit interior's shadow floor, the cockpit glass, the road sheen
+  and the glass, chrome and rim mods. See [Look](#look).
 - **Display** is `native`: borderless fullscreen on the primary monitor, with a render
   scale of 2x on 1080p, 1440p and 2560x1600 screens and 3x on 4K. See
   [-Display](#-display-and-render-scale).
@@ -61,10 +62,14 @@ Running with no options gives this configuration:
   memory settings described in [Render path and frame pacing](#render-path-and-frame-pacing).
 
 Performance on the defaults: Quick Race holds 60 fps on the development computer.
-The GPU time per race frame with the defaults (`high` quality, `pc` look with
-ambient occlusion) is about 3.0 ms at 1x (1280x720) and about 6.1 ms at 2x, measured
-before `pc` had TAA, which adds about 0.1 ms at 1x and 0.15 ms at 2x. The 2x
-scale is the one that `native` uses on 1080p, 1440p and 2560x1600 screens.
+The GPU time per race frame with `high` quality in its three 4x MSAA tiles and the `pc` look
+with ambient occlusion was about 3.0 ms at 1x (1280x720) and about 6.1 ms at 2x, measured
+before `pc` had TAA, which adds about 0.1 ms at 1x and 0.15 ms at 2x. With TAA the one tile
+cost about 1 ms less GPU time at 2x (19 October 2026). At 1x and 240 Hz the one tile takes
+0.5 to 0.6 ms less GPU time and a fifth to a quarter fewer draws per race frame than the
+tiles: races ran at 230.7 to 236.9 fps against 200.5 to 218.1 fps with `-Msaa` (20 October
+2026, [current status](status/current.md#one-tile-with-taa-the-presets-and-taas-history-20-october-2026)).
+The 2x scale is the one that `native` uses on 1080p, 1440p and 2560x1600 screens.
 
 ### Render path and frame pacing
 
@@ -107,13 +112,14 @@ takes a value.
 | `-Supersample` | off | Render one scale above the screen (up to 4x), then average the result down to the screen. |
 | `-ResolutionScale 1-4` | from `-Display` | Render at this multiple of 1280x720. Overrides the render scale of `-Display`. |
 | `-Quality xbox\|high\|ultra` | `high` | Render quality of races. |
-| `-Look <preset/knobs>` | `pc` | Post-processing look and car paint. See [Look](#look). |
+| `-Look <preset/knobs>` | `aces` | Post-processing look and car paint. See [Look](#look). |
 | `-ShaderDev` | off | Shader mod development: the look mods reload when a file in `work/fm4-rex/look` is saved, and the knobs change live. See [Shader mod development](#shader-mod-development). |
 | `-TextureDump <dir>` | off | Write each new game texture once as `<hash>.dds` to this directory. See [Texture replacement](#texture-replacement). |
 | `-TextureReplace <dir>` | off | Use `<hash>.dds` files from this directory instead of the game textures with that hash. See [Texture replacement](#texture-replacement). |
 | `-Info` | off | Show the settings overlay at start. F2 toggles it in any run. |
 | `-Rov` | off | Use the earlier pixel shader interlock render target path, for comparisons. |
-| `-SingleTile` | off | Render races as one 720p tile without MSAA, with FXAA on the swap. |
+| `-SingleTile` | with TAA | Render races as one 720p tile without MSAA also with a look without TAA, then with FXAA on the swap. A look with TAA (every preset) renders one tile anyway. |
+| `-Msaa` | off | Keep the tiles and MSAA of `-Quality` with a look that has TAA. |
 | `-FixedVblank` | off | Hold every swap to the fixed 60 Hz vblank grid. |
 | `-FullRateMirror` | off | Render the rear-view mirror in every frame of every race. |
 | `-ShadowWorkaround` | off | Render the shadow map only with the cockpit camera, as the old Xenia workaround did. |
@@ -203,6 +209,11 @@ and Bowling scenarios, not to split screen.
 - `ultra` also keeps every car at its top LOD (`CarKeepLOD0`, as 1-car races do) and
   renders the mirror every frame, with up to 11 cars.
 
+With a look that has TAA (every preset, since 20 October 2026) races at every quality render
+one tile without MSAA instead of the tiles above, and TAA anti-aliases it; the other settings
+of the quality stay. `-Msaa` keeps the tiles, and so do `-Rov` and a look without TAA (see
+[-SingleTile and -Msaa](#-singletile-and--msaa)). The measurements below are of the tiles.
+
 Measured at 240 Hz in the 12-car race phase of the photo scenario: `xbox` 219 to 224
 fps in three runs (GPU 2.3 ms a frame). `high` 178 to 225 fps in four runs, 201 on
 average (GPU 2.8 ms), because the three tiles execute 4,500 to 8,300 draws a frame
@@ -236,15 +247,25 @@ turns off the shader overrides ("Shader overrides need bindless resources and ho
 render targets" in the log), so every look mod and the AO are gone and the picture is
 the title's own. Compare the default path against `-Rov` with `-Look original`.
 
-#### -SingleTile
+#### -SingleTile and -Msaa
 
-Renders races as one 720p tile without MSAA. This is the title's own UI tiling
-scenario, selected through the render scenario override. The swap applies FXAA, unless the look
-has `taa=1` (see [Temporal anti-aliasing](#temporal-anti-aliasing)).
-Measured with Quick Race on `-Rov`: 58.6 fps instead of 54.3, frame p95 20 ms instead of
-33 ms, GPU 13 ms instead of 17.5 ms. Edges are visibly more jagged than with MSAA (2x
-with `-Quality xbox`, 4x with the default `high`): thin cables break up. Photo mode and
-split screen keep their own settings.
+Races render one 720p tile without MSAA whenever the look has TAA (`taa=1`, every preset since
+20 October 2026), on the RTV path, at every `-Quality`. This is the title's own UI tiling
+scenario, selected through the render scenario override (`FM4_TILING_SCENARIO=2`; the pre-race,
+countdown, race, post-race and replay scenarios of the N-Car, Autocross and Bowling races).
+TAA anti-aliases the tile, and its input is then one sample per pixel, with the depth, motion
+and mask of the same sample as the color ([TAA, MSAA and tiling](analysis/taa.md#5-msaa-and-tiling)).
+Photo mode and split screen keep their own settings.
+
+- `-Msaa` keeps the tiles and MSAA of `-Quality` with TAA (for comparisons).
+- `-Rov` and a look without TAA (for example `-Look "original,taa=0"`) keep them too.
+- `-SingleTile` renders one tile also with a look without TAA, and then the swap applies FXAA.
+  Measured with Quick Race on `-Rov`: 58.6 fps instead of 54.3, frame p95 20 ms instead of
+  33 ms, GPU 13 ms instead of 17.5 ms. Without TAA, edges are visibly more jagged than with
+  MSAA (2x with `-Quality xbox`, 4x with `high`): thin cables break up.
+- Measured with TAA at 2x and 240 Hz (19 October 2026, one run each): GPU 5.54 ms a race frame
+  and 173.3 fps in one tile against 6.50 ms and 149.0 fps in the three 4x MSAA tiles of `high`;
+  in 1:1 crops the two look nearly alike.
 
 #### -FixedVblank
 
@@ -288,15 +309,19 @@ generates from the game's post-processing shaders, car shaders (body paint,
 glass, chrome, rims and the cockpit interior) and track shaders (sky, trees, bushes, grass and the road surface;
 `work/fm4-rex/look`; see [Shader overrides](e2e/experiments.md)). `-Look` takes a
 preset, knobs, or both. A preset sets only its own knobs. Later items win, so
-`-Look "pc,sharpen=0.6"` uses the `pc` preset with sharpening at 0.6.
+`-Look "aces,sharpen=0.6"` uses the `aces` preset with sharpening at 0.6.
 
 | Preset | Settings |
 | --- | --- |
-| `pc` (default) | `tonemap=aces`, `saturation=1.1`, `bloom=0.7`, `sharpen=0.4`, `clearcoat=1`, `clearcoat_glint=1`, `ao=0.6`, `sun=2`, `sky=0.7`, `taa=1`, `cockpit_light=0.5`, `windshield=1`, `road_specular=0`, `road_sheen=0.4`, `glass=1`, `chrome=1`, `rims=1` |
-| `aces` | `tonemap=aces`, `clearcoat=1`, `ao=0.6`, `sun=2` |
-| `gt` | `tonemap=gt`, `clearcoat=1`, `ao=0.6`, `sun=2` |
-| `neutral` | `tonemap=neutral`, `clearcoat=1`, `ao=0.6`, `sun=2` |
-| `original` | No mods: the game's own look. Clears the knobs given before it in the same value. |
+| `aces` (default) | `tonemap=aces`, `saturation=1.1`, `bloom=0.7`, `sharpen=0.4`, `clearcoat=1`, `clearcoat_glint=1`, `ao=0.6`, `sun=2`, `sky=0.7`, `taa=1`, `cockpit_light=0.5`, `windshield=1`, `road_specular=0`, `road_sheen=0.4`, `glass=1`, `chrome=1`, `rims=1` |
+| `gt` | the same with `tonemap=gt` (Hajime Uchimura's curve: a long linear middle, so midtone colors stay closest to the game's) |
+| `neutral` | the same with `tonemap=neutral` (Khronos PBR Neutral: linear up to 0.76, then only the brightest channel compressed) |
+| `original` | The game's own look with TAA (`taa=1`) and no shader mod. Clears the knobs given before it in the same value. `-Look "original,taa=0"` is the game's picture without any change. |
+| `pc` | The earlier name of `aces`. |
+
+Since 20 October 2026 `aces`, `gt` and `neutral` share the mods that `pc` had; before, they had
+only the tone curve, `clearcoat=1`, `ao=0.6` and `sun=2`. Every preset has TAA, so races render
+one tile without MSAA ([-SingleTile and -Msaa](#-singletile-and--msaa)).
 
 Knobs that are not set keep the original look. Examples: `-Look "aces,clearcoat=0,ao=0"`
 and `-Look original`.
@@ -338,9 +363,9 @@ and `-Look original`.
 | `road_debug` | 0 to 7 | Debug views of the lit road `ROAD_BLND_2`: 1 the highlight's share of the light, 2 without the highlight, 3 the highlight alone, 4 which light the diffuse takes, 5 the parts of the specular amount. With `road_sheen` above 0, on every lit road shader: 6 the image times the sheen's grain, 7 the sheen alone. See [look mod coverage](analysis/look-mod-coverage.md#road-surface-18-october-2026). |
 | `cockpit_light` | number, 0 to 1 | The least share of the sun's direct light that the cockpit interior and the driver keep in the car's own shadow (`fm4-cockpit.hlsli`), in every car shader set: it raises the floor of their shadow term, which the game sets to 0. In the sun the shaded gauges, cluster and gloves become readable while the exposure, the windows and the bloom stay as they are. Faces turned away from the sun and the black dashboard top and wheel rim stay dark. See [cockpit brightness](analysis/cockpit-brightness.md). |
 | `ao` | number, `0` turns it off | Strength of the screen-space ambient occlusion. |
-| `taa` | `1` on (in `pc`), `0` off (the default of the other presets) | Temporal anti-aliasing before the HUD, with the scene jittered while the camera moves; the look's `sharpen` moves after it. See [Temporal anti-aliasing](#temporal-anti-aliasing). |
+| `taa` | `1` on (in every preset), `0` off | Temporal anti-aliasing before the HUD, with the scene jittered while the camera moves and on a still camera, whose frames it accumulates; the look's `sharpen` moves after it, and races render one tile without MSAA. See [Temporal anti-aliasing](#temporal-anti-aliasing). |
 | `taa_point` | `0` (default) or `1` | With `taa`: `1` runs TAA at the scene_color point, before the game's post chain, instead of before the HUD; the look's `sharpen` stays in the final combine. See [Temporal anti-aliasing](#temporal-anti-aliasing). |
-| `windshield` | number, 0 (off) to 2; 1 in `pc` | Glass on the windshield and side windows of the race cockpit camera, which the game leaves open: a light tint, a faint reflection of the dashboard, and glare and dust toward bright light. See [Cockpit glass](#cockpit-glass). |
+| `windshield` | number, 0 (off) to 2; 1 in `aces`, `gt` and `neutral` | Glass on the windshield and side windows of the race cockpit camera, which the game leaves open: a light tint, a faint reflection of the dashboard, and glare and dust toward bright light. See [Cockpit glass](#cockpit-glass). |
 | `sun` | number, `0` turns the glare off | Strength of the sun glare on the RTV path, the same at every MSAA level. Without it (`original`) the glare follows the counted samples. See [Sun glare](#sun-glare). |
 | `road_gloss` | multiplier, default 1 | Specular of the road surface. See [Track lighting](#track-lighting). |
 | `sky` | multiplier, default 1 | Brightness of the sky; the `sky_*` knobs above change its color. See [Track lighting](#track-lighting). |
@@ -441,34 +466,40 @@ FXC when they are first drawn. For the six measured, this took 0.15 to 1.4 s eac
 `taa=1` turns on the TAA post pass ([TAA](analysis/taa.md)): the scene draws move by a
 sub-pixel offset each frame, and the frames before the HUD are accumulated along the motion
 vectors, so wires, fences, lattices, distant road lines and shading glints stop stepping and
-shimmering. The HUD and the side mirrors are drawn after it and stay sharp. The `pc` preset
-sets it since 19 October 2026, with the `high` tiling; `-Look "pc,taa=0"` is the `pc` look
-before it (the look's sharpening, no jitter).
+shimmering. The HUD and the side mirrors are drawn after it and stay sharp. `pc` had it since
+19 October 2026, and every preset since 20 October 2026; with it races render one tile
+without MSAA ([-SingleTile and -Msaa](#-singletile-and--msaa)). `-Look "aces,taa=0"` is the look
+without it (the look's sharpening, no jitter, the tiles and MSAA of `-Quality`).
 
-- The scene draws are jittered only while the camera moves and the frames come at 45 fps or
-  more (since 20 October 2026): rewind, pause, photo mode, a still camera and the 30 fps
-  post-race get a still picture instead of a shimmering one; replays and the countdown, at the
-  race frame rate since 20 October 2026, are jittered while their camera moves. The pass
-  params `TAA_JITTER_MOTION` (0.5 host pixels per frame) and `TAA_JITTER_RATE` (45) set the
-  thresholds and change live with `-ShaderDev`; both at 0 jitter every frame
+- The scene draws are jittered while the camera moves and the frames come at 45 fps or more,
+  and on a still camera at any frame rate (since 20 October 2026): there TAA accumulates the
+  jitter's phases where nothing moves, so rewind, pause, photo mode and a still replay or
+  countdown camera get a still, anti-aliased picture instead of a shimmering one. A camera
+  that moves at under 45 fps (the 30 fps post-race) is not jittered. The pass params
+  `TAA_JITTER_MOTION` (0.5 host pixels per frame) and `TAA_JITTER_RATE` (45) set the
+  thresholds, `TAA_STILL` (1) the accumulation on a still camera and `TAA_STILL_FRAMES` (256)
+  how many frames it averages; they change live with `-ShaderDev`. `TAA_JITTER_MOTION` and
+  `TAA_JITTER_RATE` at 0 jitter every frame, `TAA_STILL=0` turns the still camera's jitter off
   ([TAA, arming](analysis/taa.md#35-arming-and-switching)).
-- The look's `sharpen` (0.4 in `pc`) is applied after TAA instead of before it (the pass param
+- The look's `sharpen` (0.4 in the presets) is applied after TAA instead of before it (the pass param
   `TAA_SHARPEN`), since sharpening the jittered frame would sharpen the jitter. TAA without
-  sharpening is visibly softer; 0.4 comes close to `pc` without its stair steps.
-- With `-SingleTile` the swap's FXAA is left out: TAA anti-aliases the single tile itself.
+  sharpening is visibly softer; 0.4 comes close to the look without TAA, without its stair
+  steps. `original` has TAA without sharpening.
+- In the single tile the swap's FXAA is left out: TAA anti-aliases the tile itself.
 - It costs about 0.1 ms of GPU time per race frame at 1x and 0.15 to 0.2 ms at 2x.
-- `shader_mod_set TAA=0` switches it off at once with `-ShaderDev`; `TAA_DEBUG=1` to `5` shows
-  the debug views ([TAA, debug views](analysis/taa.md#76-debug-views-taa_debug)).
+- `shader_mod_set TAA=0` switches it off at once with `-ShaderDev` (the tiling stays until the
+  next race); `TAA_DEBUG=1` to `6` shows the debug views
+  ([TAA, debug views](analysis/taa.md#76-debug-views-taa_debug)).
 - The `-Info` overlay shows "Anti-aliasing: TAA before the HUD, sharpen 0.4, scene jittered
-  while the camera moves".
-- RTV only, like the other post passes; not with `-Rov` or `-Look original`.
-- `taa_point=1` (`-Look "pc,taa_point=1"`) moves TAA to the scene_color point: it runs on the scene before the game's motion blur, bloom, exposure and final combine, and its output is written back into the game's scene, which those then sample. The occlusion gets its own temporal filter there (`GTAO_TEMPORAL`), and the look's `sharpen` stays in the final combine, after TAA. It costs about 0.47 ms of GPU time per race frame at 2x, and the `-Info` overlay shows "Anti-aliasing: TAA before the post chain (scene_color), the look's sharpening, scene jittered while the camera moves". `pc` keeps the final point; see [TAA, the comparison](analysis/taa.md#23-comparison).
+  while the camera moves, a still one accumulated".
+- RTV only, like the other post passes; not with `-Rov` or `-Look "original,taa=0"`.
+- `taa_point=1` (`-Look "aces,taa_point=1"`) moves TAA to the scene_color point: it runs on the scene before the game's motion blur, bloom, exposure and final combine, and its output is written back into the game's scene, which those then sample. The occlusion gets its own temporal filter there (`GTAO_TEMPORAL`), and the look's `sharpen` stays in the final combine, after TAA. It costs about 0.47 ms of GPU time per race frame at 2x, and the `-Info` overlay shows "Anti-aliasing: TAA before the post chain (scene_color), the look's sharpening, scene jittered while the camera moves". The presets keep the final point; see [TAA, the comparison](analysis/taa.md#23-comparison).
 
 ### Cockpit glass
 
 In the race cockpit camera FM4 draws no glass for the player's car, so the windshield and side
 windows look like open frames ([cockpit brightness](analysis/cockpit-brightness.md#windshield-and-side-windows)).
-`windshield=1` (in `pc` since 20 October 2026; `-Look "pc,windshield=0"` turns it off) adds a post pass that puts glass over the pixels that
+`windshield=1` (in `pc` and then `aces`, `gt` and `neutral` since 20 October 2026; `-Look "aces,windshield=0"` turns it off) adds a post pass that puts glass over the pixels that
 see the world through the cockpit's windows ([windshield](analysis/windshield.md)): a light
 green-gray tint, a reflection of the dashboard (faint, since FM4's dashboards are dark), and a
 haze with dust and wiper arcs where bright sky or sun shows through. `windshield=2` doubles

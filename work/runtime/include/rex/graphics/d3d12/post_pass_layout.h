@@ -17,8 +17,10 @@ namespace rex::graphics::d3d12::post_pass {
 constexpr uint32_t kMaxSrvs = 8;
 constexpr uint32_t kMaxUavs = 8;
 constexpr uint32_t kMaxRenderTargets = 4;
-// Run-time params of a pass set (b1 after the pass header), 4 bytes each.
-constexpr uint32_t kMaxParams = 28;
+// Run-time params of a pass set (b1 after the pass header), 4 bytes each. The
+// root signature holds 2 DWORDs for b0, 4 + kMaxParams for b1 and one per SRV and
+// UAV table: 62 of the 64 DWORDs Direct3D 12 allows.
+constexpr uint32_t kMaxParams = 40;
 // Object slots of the motion vectors (the manifest's [motion]): slot 0 is the
 // static world, which moves with the camera only. The last slot holds the
 // interior ([motion] interior), so stencil slots stop one below it.
@@ -45,6 +47,8 @@ struct PassHeader {
 };
 constexpr uint32_t kPassConstantCount =
     uint32_t(sizeof(PassHeader) / sizeof(uint32_t)) + kMaxParams;
+static_assert(2 + kPassConstantCount + kMaxSrvs + kMaxUavs <= 64,
+              "the root signature is 64 DWORDs at most");
 
 // SceneConstants::flags.
 // The previous frame's history (scene color, scene depth, camera) is usable.
@@ -55,6 +59,9 @@ constexpr uint32_t kSceneFlagViewKnown = 1u << 1;
 // not cut: view_to_previous_view, the previous camera and the motion matrices
 // are valid (the history textures need kSceneFlagHistoryValid too).
 constexpr uint32_t kSceneFlagMotionValid = 1u << 2;
+// The scene draws are jittered because the camera is still ([jitter] still,
+// post_pass::JitterGate::Still): a consumer accumulates the phases.
+constexpr uint32_t kSceneFlagCameraStill = 1u << 3;
 
 // b0 (xe_scene_*, xe_previous_*, xe_final_*), in 16-byte rows like an HLSL
 // cbuffer.

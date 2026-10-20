@@ -44,6 +44,16 @@
 //    G, a tighter box there), all of it without a usable history (no
 //    xe_history_valid(), motion_mask R, off the screen, disoccluded); colors
 //    weighted by 1 / (1 + luma) so bright sub-pixel highlights do not flicker.
+// 8. On a still camera (xe_camera_still(): [jitter] still, TAA_STILL), a pixel
+//    that moves less than TAA_STILL_PIXELS accumulates the jitter's phases
+//    instead, also where its motion is unknown or it is reactive (nothing
+//    moves): it keeps a usable history, the weight of the current
+//    frame is 1 / (frames accumulated + 1), down to 1 / (TAA_STILL_FRAMES + 1),
+//    and the clip box is the minimum and maximum of the 5x5, which holds every
+//    sample that any phase brings into the 3x3 of step 1 (the box of standard
+//    deviations, or the 3x3 alone, cuts the history back to one phase's samples
+//    and the still picture shimmers, most where an edge only just reaches a
+//    pixel, since gamma 2 enlarges small linear steps near black).
 //
 // Debug views (TAA_DEBUG, shown by taa_output instead of the image):
 //   1 the history alone, moved by the motion (a frozen camera with TAA_JITTER
@@ -54,6 +64,7 @@
 //     (mask G) green, disoccluded yellow, off the screen or no valid history
 //     blue, over the image darkened
 //   5 the current frame without the jitter alone
+//   6 where the phases accumulate (step 8): cyan, over the image darkened
 // Colors are never the clear gray, which e2e counts as missing geometry.
 
 #ifndef TAA_SCENE
@@ -69,7 +80,8 @@ static const bool kSceneRotated = TAA_SCENE == 0;
 #else
 #define TAA_SIZE xe_final_size
 #endif
-// Frames of history at most (the alpha of taa_history).
+// Frames of history at most (the alpha of taa_history); on a still camera
+// TAA_STILL_FRAMES.
 static const float kMaxAge = 32.0;
 
 // The stored values are gamma 2: squared, they are about linear.
@@ -196,10 +208,17 @@ void taa_resolve(uint3 id : SV_DispatchThreadID) {
   float2 position = float2(pixel) + 0.5 + motion;
   bool on_screen = all(position >= 0.0) && all(position <= float2(TAA_SIZE));
   bool known = mask.x < 0.5;
-  bool usable = xe_history_valid() && on_screen && known;
+  // Step 8: a pixel that does not move on a still camera. Nothing on the screen
+  // moves then, so it keeps its history also without known motion (the masks
+  // of the interior, the mirror panel) and as reactive (car glass).
+  bool still = xe_camera_still() && length(motion) <= TAA_STILL_PIXELS;
+  bool usable = xe_history_valid() && on_screen && (known || still);
   bool disoccluded = false;
 #if TAA_DISOCCLUSION
-  if (usable) {
+  // Not on a still pixel of a still camera: nothing can uncover it, and the
+  // jitter moves the depth of the 3x3 between the near interior and the world
+  // at their edges, which would drop the history there again and again.
+  if (usable && !still) {
     // The farthest previous scene depth of the 3x3 where the history is,
     // against the nearest W of the 3x3 around the pixel now: when even that
     // was clearly nearer than anything here, a solid surface hid what the
@@ -223,19 +242,37 @@ void taa_resolve(uint3 id : SV_DispatchThreadID) {
 #endif
   float4 history = usable ? TaaHistory(position) : 0.0;
   float age = usable ? taa_previous.Load(int3(clamp(int2(position), 0, last), 0)).a : 0.0;
+  // The phases of a still pixel accumulate. With the jitter a sample moves by
+  // up to half a pixel, so the samples within two pixels can reach the 3x3
+  // that the current frame is built from: the box is their minimum and maximum.
+  if (still) {
+    box_min = box_low;
+    box_max = box_high;
+    [unroll] for (int ry = -2; ry <= 2; ++ry) {
+      [unroll] for (int rx = -2; rx <= 2; ++rx) {
+        if (abs(rx) < 2 && abs(ry) < 2) continue;
+        int2 ring = clamp(pixel + int2(rx, ry), 0, last);
+        float3 ycocg = TaaToYCoCg(TaaLinear(taa_final.Load(int3(ring, 0)).rgb));
+        box_min = min(box_min, ycocg);
+        box_max = max(box_max, ycocg);
+      }
+    }
+  }
   float3 history_ycocg = TaaToYCoCg(history.rgb);
   float3 clipped = TaaFromYCoCg(TaaClip(history_ycocg, box_min, box_max));
 
   float speed = saturate(length(motion) / TAA_MOTION_PIXELS);
-  float alpha = max(max(TAA_BLEND, 1.0 / (age + 1.0)),
-                    lerp(TAA_BLEND, TAA_BLEND_MOTION, speed));
-  if (reactive) alpha = max(alpha, TAA_REACTIVE);
+  float alpha = still ? 1.0 / (min(age, TAA_STILL_FRAMES) + 1.0)
+                      : max(max(TAA_BLEND, 1.0 / (age + 1.0)),
+                            lerp(TAA_BLEND, TAA_BLEND_MOTION, speed));
+  if (reactive && !still) alpha = max(alpha, TAA_REACTIVE);
   if (!usable) alpha = 1.0;
   float current_weight = alpha / (1.0 + TaaLuma(current));
   float history_weight = (1.0 - alpha) / (1.0 + TaaLuma(clipped));
   float3 result = (current * current_weight + clipped * history_weight) /
                   max(current_weight + history_weight, 1.0e-6);
-  taa_history_out[pixel] = float4(result, usable ? min(age + 1.0, kMaxAge) : 1.0);
+  taa_history_out[pixel] =
+      float4(result, usable ? min(age + 1.0, still ? TAA_STILL_FRAMES : kMaxAge) : 1.0);
 
   if (TAA_DEBUG > 0u) {
     float3 color;
@@ -258,6 +295,8 @@ void taa_resolve(uint3 id : SV_DispatchThreadID) {
       } else if (reactive) {
         color = float3(0.1, 1.0, 0.2);
       }
+    } else if (TAA_DEBUG == 6u) {
+      color = still && usable ? float3(0.1, 0.9, 1.0) : TaaDisplay(current) * 0.35;
     } else {
       color = TaaDisplay(current);
     }

@@ -27,7 +27,7 @@ These rules apply to every AI agent working in this repository.
 ## Render target paths
 
 - Shader mods (`work/fm4-rex/look`, the shader override path) and the GTAO ambient occlusion target the host render target path (RTV) with bindless resources only. Do not port them to the ROV path (`-Rov`, `render_target_path_d3d12=rov`), and do not add title-specific corrections to it (such as the removed occlusion sample divisor).
-- ROV is the uncorrected reference for the EDRAM emulation: it renders the title's own output. That `-Rov` runs without mods and AO is by design, not an implementation gap. Compare RTV against `-Rov` with `-Look original`.
+- ROV is the uncorrected reference for the EDRAM emulation: it renders the title's own output. That `-Rov` runs without mods and AO is by design, not an implementation gap. Compare RTV against `-Rov` with `-Look "original,taa=0"` (no mods, no TAA, and the tiles and MSAA of `-Quality`; `-Look original` has TAA and one tile).
 
 ## Repository rules
 

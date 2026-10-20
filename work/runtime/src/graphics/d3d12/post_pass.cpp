@@ -903,8 +903,8 @@ bool PostPasses::LoadManifest(Manifest& manifest) {
             std::strtoull(node.value_or(std::string()).c_str(), nullptr, 16));
       }
     }
-    // Only while the camera moves and the frames come fast enough: a number, or
-    // a float param that changes live.
+    // While the camera moves and the frames come fast enough, and with still
+    // on a still camera: a number, or a float param that changes live.
     auto threshold = [&](const char* key, double& value, uint32_t& param) {
       const toml::node* node = (*jitter)[key].node();
       if (!node) return true;
@@ -922,7 +922,8 @@ bool PostPasses::LoadManifest(Manifest& manifest) {
     };
     if (!threshold("min_motion", manifest.jitter_min_motion, manifest.jitter_min_motion_param) ||
         !threshold("min_frame_rate", manifest.jitter_min_frame_rate,
-                   manifest.jitter_min_frame_rate_param)) {
+                   manifest.jitter_min_frame_rate_param) ||
+        !threshold("still", manifest.jitter_still, manifest.jitter_still_param)) {
       return false;
     }
     double distance = manifest.jitter_motion_distance, hold = manifest.jitter_motion_hold;
@@ -1968,6 +1969,9 @@ void PostPasses::FillSceneConstants(post_pass::SceneConstants& constants) const 
     if (jitter_active_) {
       constants.jitter[0] = jitter_[0];
       constants.jitter[1] = jitter_[1];
+      if (jitter_still_) {
+        constants.flags |= post_pass::kSceneFlagCameraStill;
+      }
     }
     bool view_known = camera_.view_frame == frame;
     if (view_known) {
@@ -2513,8 +2517,12 @@ void PostPasses::LogRun(int32_t variant_index) {
       unpack.w_depth_mul, unpack.w_depth_add, unpack.x_mul, unpack.x_add, unpack.y_mul,
       unpack.y_add, unpack.z_from_w, unpack.pixels_per_unit_x, fov_x, depth_group_.pitch,
       camera_.guest_origin,
-      previous_valid_ ? (IsCameraCut() ? "cut" : "valid") : "none", MotionSummary(),
-      jitter_active_ ? fmt::format("{:.4f},{:.4f}", jitter_[0], jitter_[1]) : std::string("off"),
+      std::string(previous_valid_ ? (IsCameraCut() ? "cut" : "valid") : "none") +
+          HistoryTexturesSummary(),
+      MotionSummary(),
+      jitter_active_ ? fmt::format("{:.4f},{:.4f}{}", jitter_[0], jitter_[1],
+                                   jitter_still_ ? " still" : "")
+                     : std::string("off"),
       motion_.frame == command_processor_.GetCurrentFrame() && motion_.valid
           ? fmt::format("{:.3f} px", motion_.camera_pixels)
           : std::string("unknown"),
@@ -2557,11 +2565,15 @@ post_pass::JitterGateSettings PostPasses::JitterSettings() const {
                                 ? ParamValue(manifest.jitter_min_frame_rate_param)
                                 : manifest.jitter_min_frame_rate;
   settings.hold = manifest.jitter_motion_hold;
+  settings.still = (manifest.jitter_still_param != UINT32_MAX
+                        ? double(ParamValue(manifest.jitter_still_param))
+                        : manifest.jitter_still) > 0.0;
   return settings;
 }
 
 void PostPasses::UpdateJitter() {
   jitter_active_ = false;
+  jitter_still_ = false;
   jitter_[0] = jitter_[1] = 0.0f;
   // The frame time and the camera's motion of every frame, for the gate.
   auto now = std::chrono::steady_clock::now();
@@ -2605,7 +2617,7 @@ void PostPasses::UpdateJitter() {
     // The manifest's: after a frame in which its consumer ran with a known view
     // (every frame without one is a history cut, so a jitter could not
     // accumulate), while its if holds, the camera moves and the frames come
-    // fast enough (JitterGate).
+    // fast enough, or with still the camera is still (JitterGate).
     if (!manifest.jitter || jitter_consumer_frame_ != frame || !previous_scene_ ||
         !previous_camera_.view_known) {
       return;
@@ -2613,6 +2625,7 @@ void PostPasses::UpdateJitter() {
     if (!ConditionsHold(manifest.jitter_conditions) || !jitter_gate_.Armed(settings)) {
       return;
     }
+    jitter_still_ = jitter_gate_.Still(settings);
   }
   // x,y in host pixels, or the Halton (2, 3) sequence.
   const std::string& offset = REXCVAR_GET(post_pass_jitter_offset);
@@ -2645,6 +2658,7 @@ bool PostPasses::DrawJitter(const RegisterFile& regs, uint64_t vertex_shader_has
   draw.rectangle = rectangle;
   const std::vector<uint64_t>& exclude = manifest_->jitter_exclude;
   draw.excluded = std::find(exclude.begin(), exclude.end(), vertex_shader_hash) != exclude.end();
+  draw.after_final = final_frame_ == command_processor_.GetCurrentFrame();
   if (!post_pass::IsJitteredDraw(draw)) {
     return false;
   }
@@ -2740,10 +2754,41 @@ void PostPasses::TextureSize(const TextureDesc& desc, uint32_t& width, uint32_t&
   }
 }
 
-bool PostPasses::HistoryTexturesValid() const {
-  for (size_t i = 0; i < previous_textures_.size(); ++i) {
+std::string PostPasses::HistoryTexturesSummary() const {
+  // The history textures of the manifest: whether the previous frame wrote each,
+  // and its size against the one this frame needs.
+  std::string summary;
+  for (size_t i = 0; manifest_ && i < previous_textures_.size(); ++i) {
     const TextureDesc& desc = manifest_->textures[i];
     if (!desc.history) continue;
+    uint32_t width, height;
+    TextureSize(desc, width, height);
+    const Texture& previous = previous_textures_[i];
+    summary += fmt::format("{}{} {}{} {}x{}/{}x{}", summary.empty() ? " (" : ", ", desc.name,
+                           previous_texture_ready_[i] ? "ready" : "not ready",
+                           HistoryTexturesReadThisFrame(i) ? "" : " unread", previous.width,
+                           previous.height, width, height);
+  }
+  return summary.empty() ? summary : summary + ")";
+}
+
+bool PostPasses::HistoryTexturesReadThisFrame(size_t texture) const {
+  for (const PassDesc& pass : manifest_->passes) {
+    if (!PassEnabled(pass)) continue;
+    for (const Binding& binding : pass.srvs) {
+      if (binding.previous && binding.texture == texture) return true;
+    }
+  }
+  return false;
+}
+
+bool PostPasses::HistoryTexturesValid() const {
+  // Only the history textures that an enabled pass reads as previous:<name>:
+  // the others (taa_scene_history and gtao_history with TAA at the final point)
+  // are never written, and with them no pass had a history at all.
+  for (size_t i = 0; i < previous_textures_.size(); ++i) {
+    const TextureDesc& desc = manifest_->textures[i];
+    if (!desc.history || !HistoryTexturesReadThisFrame(i)) continue;
     uint32_t width, height;
     TextureSize(desc, width, height);
     const Texture& previous = previous_textures_[i];

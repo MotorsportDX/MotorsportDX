@@ -798,16 +798,23 @@ def run_once(options, out):
     for item in options.arg:
         key, value = item.lstrip('-').split('=', 1)
         args[key] = value
-    command = [str(root / options.game_build / 'fm4_rex.exe')] + [f'--{k}={v}' for k, v in args.items()]
     env = {k: v for k, v in os.environ.items() if not k.startswith(('FM4_', 'REX_'))}
     env.update(pipeline.launch_env())
     env.update(FM4_CAPTURE_DIR=str(capture),
                FM4_TEST_INPUT_FILE=str(input_file), REX_PERF_TRACE_FILE=str(out / 'perf.jsonl'))
-    # The launcher's race render quality; --env FM4_TILING_SCENARIO keeps its tiling scenario.
-    settings = pipeline.race_settings(options.quality or pipeline.DEFAULT_QUALITY,
-                                      any(item.startswith('FM4_TILING_SCENARIO=') for item in options.env))
+    # The launcher's race render quality and tiling: one tile when the look has TAA on RTV
+    # (--msaa keeps the tiles); --env FM4_TILING_SCENARIO keeps its tiling scenario.
+    tiling_given = any(item.startswith('FM4_TILING_SCENARIO=') for item in options.env)
+    single_tile = not tiling_given and pipeline.auto_single_tile(
+        look, args.get('render_target_path_d3d12') == 'rov', options.msaa)
+    if single_tile:
+        tiling_env, tiling_cvars = pipeline.single_tile_settings(look)
+        env.update(tiling_env)
+        args.update({k: v for k, v in tiling_cvars.items() if k not in args})
+    settings = pipeline.race_settings(options.quality or pipeline.DEFAULT_QUALITY, tiling_given or single_tile)
     if settings:
         env['FM4_RACE_SETTINGS'] = settings
+    command = [str(root / options.game_build / 'fm4_rex.exe')] + [f'--{k}={v}' for k, v in args.items()]
     # The look's track lighting knobs (road_gloss, sky).
     track_settings = pipeline.look_track_settings(pipeline.look_knobs(look))
     if track_settings:
@@ -1030,10 +1037,13 @@ def main():
     parser.add_argument('--env', action='append', default=[], help='extra NAME=value for the game process')
     parser.add_argument('--steps', help='JSON list of steps or a preset name (camera), overrides --scenario')
     parser.add_argument('--arg', action='append', default=[], help='extra/override --cvar=value')
-    parser.add_argument('--look', help='look like Build.ps1 -Look (default: the launcher\'s, pc), '
-                                       'e.g. "original" or "pc,sharpen=0.6"')
+    parser.add_argument('--look', help='look like Build.ps1 -Look (default: the launcher\'s, aces), '
+                                       'e.g. "original" or "aces,sharpen=0.6"')
     parser.add_argument('--quality', help='race render quality like Build.ps1 -Quality '
                                           '(default: the launcher\'s), e.g. xbox')
+    parser.add_argument('--msaa', action='store_true',
+                        help='keep the tiles and MSAA of --quality with a look that has TAA, like '
+                             'Build.ps1 -Msaa (default: one tile, as the launcher)')
     parser.add_argument('--ao', action='store_true',
                         help="the runtime's ambient occlusion pass (the GTAO post pass) like pipeline.py --ao, "
                              'also without the ao look knob (which turns it on and applies it)')
