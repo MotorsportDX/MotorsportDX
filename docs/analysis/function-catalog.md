@@ -54,16 +54,16 @@ Output: `I:\FM4-re\out\catalog\functions.tsv`, `functions-xmedia.tsv`, `function
 | Category | Functions | Share |
 |---|---|---|
 | Real name | 3,167 | 6.4% |
-| Class-scoped name | 15,617 | 31.5% |
+| Class-scoped name | 15,623 | 31.5% |
 | Role (trivial, initializer, shared virtual) | 7,652 | 15.4% |
-| String hint only | 2,438 | 4.9% |
-| Module (and subsystem) only | 20,742 | 41.8% |
+| String hint only | 2,434 | 4.9% |
+| Module (and subsystem) only | 20,740 | 41.8% |
 
-Every function has a module. By the confidence of the module: 11,302 at 0.8 or more (source path, library strings, RTTI class, manual), 30,953 at 0.7 to 0.75 (kernel imports, the initializer region, a run between two functions of one module), 7,361 below 0.7 (link order and call-graph votes). Game code is 28,370 functions; 18,019 of them (64%) have a class.
+Every function has a module. By the confidence of the module: 11,319 at 0.8 or more (source path, library strings, RTTI class, manual), 30,929 at 0.7 to 0.75 (kernel imports, the initializer region, a run between two functions of one module), 7,368 below 0.7 (link order and call-graph votes). Game code is 28,362 functions; 18,021 of them (64%) have a class.
 
 | Module | Functions | Real | Class-scoped | Role | Hint | Module only |
 |---|---|---|---|---|---|---|
-| Forza game | 28,370 | 2,851 | 14,616 | 1,758 | 1,113 | 8,032 |
+| Forza game | 28,362 | 2,848 | 14,621 | 1,758 | 1,109 | 8,026 |
 | Static initializers | 5,278 | 0 | 4 | 5,274 | 0 | 0 |
 | Xls web services | 2,408 | 56 | 107 | 119 | 256 | 1,870 |
 | XDK media (ASF/WMA) | 2,334 | 1 | 2 | 32 | 18 | 2,281 |
@@ -77,7 +77,7 @@ Every function has a module. By the confidence of the module: 11,302 at 0.8 or m
 | libpng (with libjpeg) | 593 | 0 | 1 | 18 | 62 | 512 |
 | STL | 553 | 59 | 379 | 22 | 3 | 90 |
 | XDK XAM/XAPI | 536 | 7 | 1 | 47 | 21 | 460 |
-| XDK D3D | 353 | 56 | 18 | 10 | 16 | 253 |
+| XDK D3D | 361 | 59 | 19 | 10 | 16 | 257 |
 | MSVC CRT | 341 | 9 | 0 | 10 | 9 | 313 |
 | XDK xgraphics (shader compiler) | 283 | 0 | 0 | 23 | 104 | 156 |
 | R1Font | 191 | 3 | 53 | 8 | 31 | 96 |
@@ -86,9 +86,9 @@ Every function has a module. By the confidence of the module: 11,302 at 0.8 or m
 | XDK XeCrypt | 100 | 0 | 0 | 1 | 0 | 99 |
 | Other (unidentified XDK, XNet, RAD, xcompress, Vorbis) | 129 | 1 | 1 | 0 | 11 | 116 |
 
-Game subsystems (functions): UI 8,595; rendering 7,167; other 2,938; network and online 2,174; IO and resources 1,508; audio 1,258; cars and simulation 1,203; core and scripting 724; camera 494; AI 410; gameplay and progression 365; database 341; photo and video 266; livery and paint 265; memory 251; replay and ghosts 244; input and Kinect 101; track 66.
+Game subsystems (functions): UI 8,596; rendering 7,165; other 2,934; network and online 2,174; IO and resources 1,508; audio 1,257; cars and simulation 1,201; core and scripting 724; camera 494; AI 410; gameplay and progression 365; database 341; photo and video 266; livery and paint 265; memory 251; replay and ghosts 244; input and Kinect 101; track 66.
 
-The figures are from the export after the VMX128 patch: the call graph is complete for the vector methods, which moved 199 functions at `0x8279F0B8`–`0x827AC340` and `0x82C6`–`0x82C7` from XDK XAM/XAPI to XDK audio (two of them call the XAudio imports). Together with the fixed visiting order, the subsystem of 1,003 game functions changed.
+The figures are from the export after the VMX128 patch: the call graph is complete for the vector methods, which moved 199 functions at `0x8279F0B8`–`0x827AC340` and `0x82C6`–`0x82C7` from XDK XAM/XAPI to XDK audio (two of them call the XAudio imports). Together with the fixed visiting order and the second manual pass, the subsystem of 1,009 game functions changed.
 
 ### Facades
 
@@ -129,7 +129,7 @@ Names that were derived independently agree with the manual analysis of the rend
 
 ## Rendering subsystem: manual pass
 
-Started 20 October 2026: functions read in their decompiled code and named in `names-manual.tsv` with a confidence (1.0 checked, 0.5 to 0.85 inferred from the code). 514 manual names so far, 330 of them inferred (172 of those in the Rendering subsystem); the rest are the utilities, containers and the XDK D3D layer that the render path calls. Worklists: the direct-call tree of the render thread frame and the presentation methods (`worklist.py`, 645 functions, 563 without a real name before the pass), then the unnamed non-trivial vtable slots of the presentation classes (206). The second pass (car draw path and crowd, after the VMX128 patch) walks the recompiler's call graph (`worklist2.py`) from `CCarPresentation` slot 88 and the `CCrowdPresentation` slots: 56 names, and 6 functions that the first pass had named after the PM4 packets they write (`WritePM4_SET_BIN_MASK_LO` and similar) renamed to the D3D calls they are.
+Started 20 October 2026: functions read in their decompiled code and named in `names-manual.tsv` with a confidence (1.0 checked, 0.5 to 0.85 inferred from the code). 539 manual names so far, 356 of them inferred (193 of those in the Rendering subsystem); the rest are the utilities, containers and the XDK D3D layer that the render path calls. Worklists: the direct-call tree of the render thread frame and the presentation methods (`worklist.py`, 645 functions, 563 without a real name before the pass), then the unnamed non-trivial vtable slots of the presentation classes (206). The second pass (after the VMX128 patch) walks the recompiler's call graph (`worklist2.py`) from `CCarPresentation` slot 88, the `CCrowdPresentation` and `ShadowMapGenerator_Unified` slots and `CRenderThread::EndRenderModeInternal`: 81 names and 8 renames: 7 functions that the first pass had named after the PM4 packets they write (`WritePM4_SET_BIN_MASK_LO` and similar) are the D3D calls listed below, and `CRenderEngine::DrawTwoPassScreenEffect` `sub_822C1A40` is the shadow blur (`DrawShadowBlur`, techniques `ShadowBlurGrayscaleInterleaved1` and `ShadowBlur2`).
 
 What the pass established, by function:
 
@@ -147,12 +147,14 @@ What the pass established, by function:
 | Recorded command buffers (second pass) | `D3DDevice_BeginCommandBuffer` `sub_826E23E8` (takes the tile rectangles), `EndCommandBuffer` `sub_826E4050`, `D3DCommandBuffer_CreateClone` `sub_826E2350` (copies the recording into a buffer of its own), `RunCommandBuffer` `sub_82310818` (flushes the dirty state, sets the bin select and writes an `INDIRECT_BUFFER` through `sub_822DADA8`), `CRenderEngine::RunCommandBuffer` `sub_82310FC8` (queues the buffer when the calling thread records into a growable command buffer group, otherwise runs it on the device) |
 | Car draw path (second pass) | `CCarPresentation` slot 88 `sub_823414C0` → `RenderWithLod` `sub_823352F8` (LOD from `ComputeLodFromDistance` `sub_82302B98`, clamped by the `CarFocusLODMinMax` or `CarNonFocusLODMinMax` setting, stored by `CCarModel::SetLod` `sub_82353CE8`) → `DrawCar` `sub_823134A8`. Each car part (63 slots, `CCarModel::DrawPart` `sub_82902500`) is recorded once per view slot (up to 16), part and LOD (6) into a command buffer by `RecordCommandBuffers` `sub_8294D100`, either directly or queued as a `CCommandBufferRequestData` by `RequestCommandBuffers` `sub_82353D10`. Every frame replays them: `GetPartCommandBuffer` `sub_82310400` reads the table, `RunPartCommandBuffer` `sub_823104D0` and `CCarModel::RunPartCommandBuffer` `sub_82310368` (sets the part's transform constants first) run them, `DrawSortedParts` `sub_82311638` runs parts 42 to 62 sorted by view distance (`qsort` `sub_822C4A60`), `DrawWheels` `sub_82317600` handles four per-car objects (parts 23 to 26, probably the wheels). `DrawCar` brackets some part lists with `SetPredication`. |
 | Crowd (second pass) | `CCrowdPresentation::Render` (slot 8, `sub_8294F5D8`) returns unless `CrowdDraw` is set. `BuildVisibleGroups` `sub_8294A4C8` keeps the crowd groups in the view and marks each as model (near) or sprite (beyond the `CrowdSpriteDistScale` distance). Then `DrawModels` `sub_8294E768` (needs `CrowdLoadModels` and `CrowdDrawModels`; LOD buckets from `GetLodCounts` `sub_82948BC8` and `SelectModelLods` `sub_8294E138`; models recorded by `RecordModelCommandBuffers` `sub_82946C00`; one `RunCommandBuffer` per visible model), `DrawSprites` `sub_82947980` (`CrowdDrawSprites`; one quad-list draw per group with members left as sprites) and `DrawShadows` `sub_82946788` (`CrowdDrawShadows`; one quad-list draw per model group). |
+| Shadow maps (second pass) | `CPresentationView::SetupShadowsAndScene` `sub_823548C8` skips the shadow maps when `SkipShadowMapUnlessCockpit` is set and the view is not the cockpit. Otherwise `CPresentationView::RenderShadowMaps` `sub_823795E8` sets the cascade distances from the focus car and calls slot 11 of the generator, `ShadowMapGenerator_Unified::RenderShadowMaps` `sub_823680D8` (through the shared executor thunk `sub_8243B088`). It fits the three cascades with `FitCascade` (slot 7, `sub_82367C08`: cascade 0 around the focus car, cascades 1 and 2 around the other cars from `CollectCarCasters` `sub_822E0068`), then renders cascades 1 and 2 into one target and cascade 0 into another: `BeginCascade` (slot 3, `sub_82360F98`), `SetCascadeTarget` `sub_82375118` (target, viewport, clear), `RenderCascadeCasters` (slot 5, `sub_82366798`: the cars through `BuildCarRenderList` `sub_823416D0` in cascades 0 and 1, the collidables in cascades 1 and 2 when `CollidableShadows` is set), `ResolveCascade` `sub_823829E0` once per target, and `EndShadowMaps` (slot 4, `sub_82370178`). Afterwards `SetupShadowsAndScene` blurs a shadow texture with `CRenderEngine::DrawShadowBlur` `sub_822C1A40` and rebuilds its mip chain. `BindForReceivers` `sub_823683E8` binds the maps (samplers 11 to 13) and their matrices for the car shaders. |
+| Post effects (second pass) | `CRenderThread::EndRenderModeInternal` `sub_822D78F0` ends the scene with `RenderMotionBlur` `sub_8287B308` (technique `PPMotionBlurDepthReplay`, under the render thread flag at +0xBD8; `EnableMotionBlurInternal` and `EnableDepthOfFieldInternal` write the bytes beside it, +0xBD9 and +0xBD7; in races it runs only with cinematic cameras, see [motion vectors](motion-vectors.md)) and `RenderBloom` `sub_8237CC08`: two `DownSample16X` passes `sub_82879048`, `DownSampleBiased` `sub_82878D68`, `MultiSampleAndAccumulate` `sub_82878E80`, then `BloomExtractBlurAndCombine` `sub_82879160` (`Add_HotExtract`, `GaussianBlurAccumX` and `Y`, `Add5Textures_UVScale`). With `HalfRateBloom` the chain goes through a recorded command buffer: it is recorded again only when the bloom parameters change (`sub_822A77D8` compares them) and is inserted with `D3DDevice_InsertAsyncCommandBufferCall` `sub_823712F8`; how this halves the rate is not read yet. Photo mode accumulates frames with `AccumulateWeightedFrame` `sub_8287A4F0` and `ExtractWeightedFrame` `sub_8287A6A0`. |
 
 The render methods decompile since the VMX128 patch; their vector arithmetic is in the `VMX128:` comments.
 
 ## Limits
 
-- Real names exist only where the binary carries them: RTTI classes, deferred call records, strings, data tables. 42% of `default.xex` (8,032 game functions and most library internals) has a module and, for game code, a subsystem, but no name.
+- Real names exist only where the binary carries them: RTTI classes, deferred call records, strings, data tables. 42% of `default.xex` (8,026 game functions and most library internals) has a module and, for game code, a subsystem, but no name.
 - Library internals (SQLite, zlib, libpng, FMOD, Granny) are recognized at module level. Their function names could be matched against the public sources by hand; that was not done.
 - Link order is approximate: link-time code generation interleaves game and library code, so module boundaries between two libraries can be off by a few functions. The evidence column says which rule decided.
 - The VMX128 patch keeps control flow, not vector arithmetic: the decompiled C of a VMX128 function shows no vector results. Read those in the `VMX128:` comments or in the recompiler's generated C++. A VMX128 language module for Ghidra would remove this limit.
@@ -160,6 +162,6 @@ The render methods decompile since the VMX128 patch; their vector arithmetic is 
 
 ## Next steps
 
-1. Name the remaining game functions subsystem by subsystem, continuing in rendering (7,167) with the post effects and the shadow maps (`ShadowMapGenerator_Unified` slots, `sub_823548C8`), by reading their decompiled code; add the verified names to `names-manual.tsv` and rerun the catalog.
+1. Name the remaining game functions subsystem by subsystem, continuing in rendering (7,165) with the track presentation, the particles and the mirror renderer, by reading their decompiled code; add the verified names to `names-manual.tsv` and rerun the catalog.
 2. Match library internals to their public sources where it matters (zlib, libpng, SQLite).
 3. Use the catalog names in hook comments in `work/fm4-rex/src`.
