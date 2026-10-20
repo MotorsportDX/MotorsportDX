@@ -524,8 +524,16 @@ class PostPasses {
   // The jitter is on because the camera is still (JitterGate::Still).
   bool jitter_still_ = false;
   float jitter_[2] = {};
+  // The phase of jitter_ and the number of phases (0 with a fixed offset).
+  uint32_t jitter_phase_ = 0;
+  uint32_t jitter_phases_ = 0;
   uint64_t jitter_count_ = 0;
   uint64_t jitter_consumer_frame_ = UINT64_MAX;
+  // The last frame in which a consumer of the jitter ran on a still camera
+  // with a valid history, and the frames in a row up to it (SceneConstants
+  // still_frames of the next frame).
+  uint64_t still_consumer_frame_ = UINT64_MAX;
+  uint32_t still_frames_ = 0;
   bool warned_jitter_ = false;
   // The camera motion and frame times that arm the jitter, and the time of the
   // last swap.

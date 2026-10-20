@@ -128,6 +128,16 @@ struct SceneConstants {
   // post_pass_jitter.h): the content at host position p is the unjittered
   // scene at p - jitter. Zero without jitter.
   float jitter[2];
+  // The jitter's phase in this frame (0 to jitter_phases - 1) and the number of
+  // phases; jitter_phases is 0 without the jitter or with a fixed offset
+  // (post_pass_jitter_offset).
+  uint32_t jitter_phase;
+  uint32_t jitter_phases;
+  // With kSceneFlagCameraStill: the frames in a row before this one in which a
+  // consumer of the jitter ran on a still camera with a valid history (each of
+  // them one phase on from the one before); else 0.
+  uint32_t still_frames;
+  uint32_t padding0;
   // Per slot, view_to_previous_view of the object: the previous frame's view
   // position of a view position of this frame on that object, with
   // kSceneFlagMotionValid. Slot 0 is view_to_previous_view.
@@ -136,7 +146,7 @@ struct SceneConstants {
   // the object was drawn, else 0).
   float motion_object_origin[kMotionSlots][4];
 };
-static_assert(sizeof(SceneConstants) == (16 + 4 * kMotionSlots) * 16,
-              "SceneConstants is 16 cbuffer rows and 4 per motion slot");
+static_assert(sizeof(SceneConstants) == (17 + 4 * kMotionSlots) * 16,
+              "SceneConstants is 17 cbuffer rows and 4 per motion slot");
 
 }  // namespace rex::graphics::d3d12::post_pass

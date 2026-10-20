@@ -355,6 +355,8 @@ int main(int argc, char** argv) {
                        : format == "R8G8B8A8_UNORM"     ? DXGI_FORMAT_R8G8B8A8_UNORM
                        : format == "R10G10B10A2_UNORM"  ? DXGI_FORMAT_R10G10B10A2_UNORM
                        : format == "R16G16B16A16_FLOAT" ? DXGI_FORMAT_R16G16B16A16_FLOAT
+                       : format == "R8_UINT"            ? DXGI_FORMAT_R8_UINT
+                       : format == "R32G32_UINT"        ? DXGI_FORMAT_R32G32_UINT
                                                         : DXGI_FORMAT_UNKNOWN;
       texture.history = fields["history"].value_or(false);
       texture.mips = uint32_t(Number(fields["mips"].node(), 1.0));
@@ -1722,6 +1724,9 @@ int main(int argc, char** argv) {
         bool history_valid = true;
         // The runtime jitters a still camera ([jitter] still).
         bool camera_still = false;
+        // The jitter's phase and phases (0: none known), and the still frames
+        // with a valid history before this one (SceneConstants still_frames).
+        uint32_t phase = 0, phases = 0, still_frames = 0;
       };
       auto new_frame = [&]() {
         Frame frame;
@@ -1746,6 +1751,9 @@ int main(int argc, char** argv) {
         constants.final_uv_scale[0] = constants.final_uv_scale[1] = 1.0f;
         constants.jitter[0] = frame.jitter[0];
         constants.jitter[1] = frame.jitter[1];
+        constants.jitter_phase = frame.phase;
+        constants.jitter_phases = frame.phases;
+        constants.still_frames = frame.camera_still ? frame.still_frames : 0u;
         constants.flags = post_pass::kSceneFlagViewKnown | post_pass::kSceneFlagMotionValid |
                           (frame.history_valid ? post_pass::kSceneFlagHistoryValid : 0u) |
                           (frame.camera_still ? post_pass::kSceneFlagCameraStill : 0u);
@@ -1831,6 +1839,15 @@ int main(int argc, char** argv) {
       };
       auto jitter_of = [](uint32_t index, float out[2]) {
         post_pass::JitterOffset(index % 8, out);
+      };
+      // A frame of a still camera's run as the runtime numbers it: frame 0
+      // without a history, its phase, and the still frames with one before it.
+      auto still_run = [](Frame& frame, uint32_t index) {
+        frame.camera_still = true;
+        frame.history_valid = index > 0;
+        frame.phase = index % 8;
+        frame.phases = 8;
+        frame.still_frames = index > 1 ? index - 1 : 0;
       };
       // A tilted edge: white where x cos + y sin > c in final pixels.
       const double edge_angle = 0.3;
@@ -1931,7 +1948,7 @@ int main(int argc, char** argv) {
       //     only just reaches a pixel and gamma 2 enlarges a small linear step.
       for (uint32_t index = 0; index < 300 && ok; ++index) {
         Frame frame = jittered_edge(index);
-        frame.camera_still = true;
+        still_run(frame, index);
         ok = run_taa(frame, taa_on, index == 298 ? 0 : index == 299 ? 1 : -1);
       }
       if (!ok) return 1;
@@ -1989,6 +2006,127 @@ int main(int argc, char** argv) {
       // in display values (under one of 255).
       Check(settle_offset < 4.0 / 1023.0 && settle_mean < 0.05 / 1023.0,
             "taa: no offset of the last jitter phase stays", settle_offset * 1023.0);
+
+      // 1c. Lines thinner than a pixel on a still camera (a grille, the edge
+      //     of a hood, a seam): a white horizontal and a red vertical line a
+      //     quarter of a pixel wide on a blue gray, which the samples of 2 of
+      //     the 8 phases hit and those of the others miss within the whole 5x5. Without the phases
+      //     (TAA_STILL_PHASES 0) the clip cuts them out of the history in
+      //     those phases, so they shimmer and fade to nearly nothing; with them
+      //     (taa.hlsl step 9) they hold still and keep their light: less than
+      //     the quarter they cover, since step 7 weights a bright current
+      //     frame less.
+      auto thin_lines = [&](uint32_t index) {
+        Frame frame = new_frame();
+        jitter_of(index, frame.jitter);
+        still_run(frame, index);
+        for (uint32_t y = 0; y < kHeight; ++y) {
+          for (uint32_t x = 0; x < kWidth; ++x) {
+            double sx = x + 0.5 + frame.jitter[0], sy = y + 0.5 + frame.jitter[1];
+            bool white = sy >= 180.3 && sy < 180.55 && sx > 40.0 && sx < 280.0;
+            bool red = sx >= 420.3 && sx < 420.55 && sy > 60.0 && sy < 300.0;
+            const float ground[3] = {0.1f, 0.15f, 0.25f}, red_color[3] = {1.0f, 0.15f, 0.1f};
+            for (int k = 0; k < 3; ++k) {
+              frame.rgb[(y * kWidth + x) * 3 + k] = white ? 1.0f : red ? red_color[k] : ground[k];
+            }
+          }
+        }
+        return frame;
+      };
+      // The largest change between two outputs around the lines (any
+      // channel), and the light of the lines (linear red above the ground's)
+      // per pixel along them, against the quarter they cover.
+      auto line_stats = [&](const std::vector<float>& before, const std::vector<float>& out,
+                            double& light) {
+        double change = 0.0, horizontal = 0.0, vertical = 0.0;
+        for (uint32_t y = 175; y <= 185; ++y) {
+          for (uint32_t x = 60; x < 260; ++x) {
+            uint32_t i = (y * kWidth + x) * 3;
+            for (int k = 0; k < 3; ++k) {
+              change = std::fmax(change, std::fabs(out[i + k] - before[i + k]));
+            }
+            horizontal += (double(out[i]) * out[i] - 0.01) / (200.0 * 0.99);
+          }
+        }
+        for (uint32_t y = 80; y < 280; ++y) {
+          for (uint32_t x = 415; x <= 425; ++x) {
+            uint32_t i = (y * kWidth + x) * 3;
+            for (int k = 0; k < 3; ++k) {
+              change = std::fmax(change, std::fabs(out[i + k] - before[i + k]));
+            }
+            vertical += (double(out[i]) * out[i] - 0.01) / (200.0 * 0.99);
+          }
+        }
+        light = 0.5 * (horizontal + vertical);
+        return change;
+      };
+      double thin_change[2] = {}, thin_light[2] = {};
+      for (int with_phases = 0; with_phases < 2 && ok; ++with_phases) {
+        std::map<std::string, double> set = taa_on;
+        set["TAA_STILL_PHASES"] = with_phases;
+        for (uint32_t index = 0; index < 300 && ok; ++index) {
+          ok = run_taa(thin_lines(index), set, index == 298 ? 0 : index == 299 ? 1 : -1);
+        }
+        if (!ok) return 1;
+        thin_change[with_phases] = line_stats(read_taa(0), read_taa(1), thin_light[with_phases]);
+      }
+      std::printf("taa (%s): lines a quarter of a pixel wide on a still camera, 300 frames: "
+                  "largest change between the last two frames %.4f (%.1f of 255) without the "
+                  "phases, %.4f (%.1f of 255) with them; light along them %.3f and %.3f (0.25 "
+                  "covered)\n",
+                  point_name, thin_change[0], thin_change[0] * 255.0, thin_change[1],
+                  thin_change[1] * 255.0, thin_light[0], thin_light[1]);
+      if (!scene_point) {
+        Check(thin_change[1] < 1.0 / 255.0 && thin_change[1] * 3.0 < thin_change[0],
+              "taa: lines thinner than a pixel hold still on a still camera",
+              thin_change[1] * 255.0);
+        Check(thin_light[1] > 0.1 && thin_light[1] < 0.3 && thin_light[1] > 10.0 * thin_light[0],
+              "taa: lines thinner than a pixel keep their light", thin_light[1]);
+      }
+
+      // 1d. Stripes that move on a still camera without motion of their own (a
+      //     flag in the wind: FM4 gives it none), 0.7 pixels per frame: with
+      //     the phases they changed since a cycle ago and blend as on a moving
+      //     camera and lag as much as TAA without motion vectors does; without
+      //     them the still accumulation smears them toward their mean.
+      auto stripes = [&](uint32_t index) {
+        Frame frame = new_frame();
+        jitter_of(index, frame.jitter);
+        still_run(frame, index);
+        for (uint32_t y = 100; y < 260; ++y) {
+          for (uint32_t x = 100; x < 300; ++x) {
+            double sx = x + 0.5 + frame.jitter[0] - 0.7 * index;
+            float value = float(0.5 + 0.45 * std::sin(sx * 2.0 * 3.14159265358979 / 12.0));
+            for (int k = 0; k < 3; ++k) frame.rgb[(y * kWidth + x) * 3 + k] = value;
+          }
+        }
+        return frame;
+      };
+      double stripe_error[2] = {};
+      for (int with_phases = 0; with_phases < 2 && ok; ++with_phases) {
+        std::map<std::string, double> set = taa_on;
+        set["TAA_STILL_PHASES"] = with_phases;
+        for (uint32_t index = 0; index < 120 && ok; ++index) {
+          ok = run_taa(stripes(index), set, index == 119 ? 0 : -1);
+        }
+        if (!ok) return 1;
+        std::vector<float> out = read_taa(0);
+        for (uint32_t y = 110; y < 250; ++y) {
+          for (uint32_t x = 110; x < 290; ++x) {
+            double sx = x + 0.5 - 0.7 * 119;
+            double expected = 0.5 + 0.45 * std::sin(sx * 2.0 * 3.14159265358979 / 12.0);
+            stripe_error[with_phases] +=
+                std::fabs(out[(y * kWidth + x) * 3] - expected) / (140.0 * 180.0);
+          }
+        }
+      }
+      std::printf("taa (%s): stripes moving on a still camera, 120 frames: mean |output - "
+                  "unjittered| %.3f without the phases, %.3f with them\n",
+                  point_name, stripe_error[0], stripe_error[1]);
+      if (!scene_point) {
+        Check(stripe_error[1] < 0.1 && stripe_error[1] * 2.0 < stripe_error[0],
+              "taa: what moves on a still camera does not smear", stripe_error[1]);
+      }
 
       // 2. A white box 40 pixels wide moving 4 pixels to the right per frame
       //    over a dark ground, nearer than it: no trail behind it, and the box

@@ -178,6 +178,17 @@ TAA_JITTER_RATE = { value = 45.0, min = 0.0 }
 TAA_STILL = { value = 1.0, min = 0.0, max = 1.0 }
 TAA_STILL_FRAMES = { value = 256.0, min = 2.0, max = 1024.0 }
 TAA_STILL_PIXELS = { value = 0.05, min = 0.0 }
+# 1: on a still camera, the luma of each phase's current frame (taa_phases),
+# against the same phase a cycle ago (the same samples): a pixel within
+# TAA_STILL_CHANGE levels of 255 (gamma 2) for a whole cycle keeps its history
+# unclipped, its luma held within that of every phase and of the 5x5, so a
+# detail thinner than a pixel, which some phases miss, and a color that some
+# phases' 5x5 lacks no longer shimmer; one that changed within the cycle (a
+# flag, an animated texture) blends as on a moving camera instead of smearing
+# over the frames (since 20 October 2026). 0: the clip of step 8 alone,
+# everything still accumulated.
+TAA_STILL_PHASES = { value = 1.0, min = 0.0, max = 1.0 }
+TAA_STILL_CHANGE = { value = 2.0, min = 0.0, max = 255.0 }
 # The weight of the current frame when still, and at TAA_MOTION_PIXELS of
 # motion (host pixels).
 TAA_BLEND = { value = 0.1, min = 0.01, max = 1.0 }
@@ -192,8 +203,10 @@ TAA_REACTIVE = { value = 0.5, min = 0.0, max = 1.0 }
 TAA_SHARPEN = { value = 0.4, min = 0.0, max = 1.0 }
 # Drawn instead of the image (taa.hlsl): 0 off, 1 the history alone, 2 the
 # weight of the current frame, 3 the clip, 4 why there is no history, 5 the
-# current frame without the jitter, 6 where a still camera's phases accumulate.
-TAA_DEBUG = { value = 0, min = 0, max = 6 }
+# current frame without the jitter, 6 where a still camera's phases accumulate,
+# 7 the change of a still camera's phases (green none in the last cycle, red
+# changed, blue before a whole cycle).
+TAA_DEBUG = { value = 0, min = 0, max = 7 }
 # With TAA at the scene_color point: the occlusion accumulated over frames (1)
 # and the weight of the current frame when still.
 GTAO_TEMPORAL = { value = 1, min = 0, max = 1 }
@@ -257,6 +270,20 @@ history = true
 [textures.taa_debug]
 format = "R8G8B8A8_UNORM"
 size = "final"
+
+# On a still camera (TAA_STILL_PHASES): per phase the luma of the current
+# frame, 8 bits each (square root, levels of 255; phases 0 to 3 in R, 4 to 7
+# in G), and the frames since the pixel last changed against the same phase a
+# cycle ago (255: none seen).
+[textures.taa_phases]
+format = "R32G32_UINT"
+size = "final"
+history = true
+
+[textures.taa_unchanged]
+format = "R8_UINT"
+size = "final"
+history = true
 
 # The same at the scene_color point (TAA_POINT 1): the scene's size and
 # layout, and the output written back into the game's scene.
@@ -415,8 +442,8 @@ shader = "taa.hlsl"
 entry = "taa_resolve"
 if = "TAA > 0 && TAA_POINT == 0 && XE_SCENE > 0"
 srv = ["final_color", "scene_depth", "motion_vectors", "motion_mask", "previous:taa_history",
-       "previous_depth"]
-uav = ["taa_history", "taa_debug"]
+       "previous_depth", "previous:taa_phases", "previous:taa_unchanged"]
+uav = ["taa_history", "taa_debug", "taa_phases", "taa_unchanged"]
 
 [[passes]]
 name = "taa_output"

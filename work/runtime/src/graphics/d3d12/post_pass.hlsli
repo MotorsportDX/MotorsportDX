@@ -84,6 +84,16 @@ cbuffer xe_post_pass_scene : register(b0) {
   // previous frame's positions (xe_previous_*) are unjittered. Zero without
   // jitter.
   float2 xe_scene_jitter;
+  // The jitter's phase in this frame (0 to xe_scene_jitter_phases - 1), and the
+  // number of phases: 0 without the jitter or with a fixed offset. The phase
+  // repeats every xe_scene_jitter_phases frames of a jitter that runs on.
+  uint xe_scene_jitter_phase;
+  uint xe_scene_jitter_phases;
+  // With xe_camera_still(): the frames in a row before this one in which a
+  // consumer of the jitter ran on a still camera with a valid history, each one
+  // phase on from the one before; else 0.
+  uint xe_scene_still_frames;
+  uint xe_scene_padding0;
   // Per slot, the previous frame's view position of a view position on that
   // object; slot 0, the static world, is xe_view_to_previous_view, and slot
   // XE_MOTION_INTERIOR_SLOT the interior's.

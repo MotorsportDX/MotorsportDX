@@ -54,6 +54,21 @@
 //    deviations, or the 3x3 alone, cuts the history back to one phase's samples
 //    and the still picture shimmers, most where an edge only just reaches a
 //    pixel, since gamma 2 enlarges small linear steps near black).
+// 9. The phases of a still camera (TAA_STILL_PHASES, at the final point): the
+//    luma of the current frame of the last xe_scene_jitter_phases frames, one
+//    per phase (taa_phases). Once the camera has been still for a whole cycle,
+//    the current frame against the one of the same phase a cycle ago (the same
+//    samples) tells what changes from what only the jitter moves. A pixel that
+//    stayed within TAA_STILL_CHANGE levels for a whole cycle (taa_unchanged
+//    counts the frames) keeps step 8, but its history is not clipped to the
+//    box: its luma is held within that of every phase and of the 5x5, and its
+//    color is left alone. A detail thinner than a pixel, which the samples of
+//    some phases miss within the whole 5x5, was else clipped out of the history
+//    in those phases and back in the others, and shimmered; so did a color that
+//    one phase's 5x5 lacks (a red seam, a lit edge), since the clip moves luma
+//    and color together. A pixel that changed in the last cycle (a flag in the
+//    wind, an animated texture) blends as on a moving camera, so it does not
+//    smear over the frames.
 //
 // Debug views (TAA_DEBUG, shown by taa_output instead of the image):
 //   1 the history alone, moved by the motion (a frozen camera with TAA_JITTER
@@ -65,6 +80,8 @@
 //     blue, over the image darkened
 //   5 the current frame without the jitter alone
 //   6 where the phases accumulate (step 8): cyan, over the image darkened
+//   7 the phases (step 9): green unchanged since a cycle ago, red changed, blue
+//     a still pixel before a whole still cycle, over the image darkened
 // Colors are never the clear gray, which e2e counts as missing geometry.
 
 #ifndef TAA_SCENE
@@ -114,6 +131,22 @@ Texture2D<float4> taa_previous : register(t4);
 Texture2D<float> taa_previous_depth : register(t5);
 RWTexture2D<float4> taa_history_out : register(u0);
 RWTexture2D<unorm float4> taa_debug_out : register(u1);
+#if TAA_SCENE == 0
+// Step 9: per phase the square root of the current frame's luma in levels of
+// 255, 8 bits each from the lowest (phases 0 to 3 in x, 4 to 7 in y), and the
+// frames since the pixel last changed (255 for none seen).
+Texture2D<uint2> taa_previous_phases : register(t6);
+Texture2D<uint> taa_previous_unchanged : register(t7);
+RWTexture2D<uint2> taa_phases_out : register(u2);
+RWTexture2D<uint> taa_unchanged_out : register(u3);
+#endif
+// The phases that step 9 keeps.
+static const uint kPhaseSlots = 8u;
+
+// The level of phase i in the packed phases.
+uint TaaPhaseLevel(uint2 packed, uint i) {
+  return ((i < 4u ? packed.x : packed.y) >> ((i & 3u) * 8u)) & 0xFFu;
+}
 
 // The previous history at an input position (pixel centers at + 0.5).
 float4 TaaHistory(float2 position) {
@@ -242,10 +275,56 @@ void taa_resolve(uint3 id : SV_DispatchThreadID) {
 #endif
   float4 history = usable ? TaaHistory(position) : 0.0;
   float age = usable ? taa_previous.Load(int3(clamp(int2(position), 0, last), 0)).a : 0.0;
+  // Step 9: the luma of every phase's current frame where the pixel has not
+  // changed for a whole cycle (phases_known), and whether it changed within
+  // the last cycle (changed).
+  float phase_low = 0.0, phase_high = 0.0;
+  bool phases_known = false, tested = false, changed = false;
+#if TAA_SCENE == 0
+  uint phases = xe_scene_jitter_phases;
+  if (xe_camera_still() && TAA_STILL_PHASES > 0.0 && phases >= 2u && phases <= kPhaseSlots) {
+    uint phase = xe_scene_jitter_phase;
+    uint2 packed = taa_previous_phases.Load(int3(pixel, 0));
+    uint level = uint(round(sqrt(saturate(TaaToYCoCg(current).x)) * 255.0));
+    uint cycle_ago = TaaPhaseLevel(packed, phase);
+    uint shift = (phase & 3u) * 8u;
+    if (phase < 4u) {
+      packed.x = (packed.x & ~(0xFFu << shift)) | (level << shift);
+    } else {
+      packed.y = (packed.y & ~(0xFFu << shift)) | (level << shift);
+    }
+    taa_phases_out[pixel] = packed;
+    // Every phase written on this still camera: the one of this phase a cycle
+    // ago saw the same samples.
+    uint unchanged = 255u;
+    tested = still && xe_history_valid() && xe_scene_still_frames >= phases;
+    if (tested) {
+      bool differs = abs(int(level) - int(cycle_ago)) > int(TAA_STILL_CHANGE);
+      unchanged = differs ? 0u : min(taa_previous_unchanged.Load(int3(pixel, 0)) + 1u, 255u);
+      changed = unchanged < phases;
+      phases_known = !changed;
+      if (phases_known) {
+        uint low = 255u, high = 0u;
+        [unroll] for (uint i = 0u; i < kPhaseSlots; ++i) {
+          if (i < phases) {
+            low = min(low, TaaPhaseLevel(packed, i));
+            high = max(high, TaaPhaseLevel(packed, i));
+          }
+        }
+        // Half a level of rounding either way.
+        phase_low = max(float(low) - 0.5, 0.0) / 255.0;
+        phase_high = (float(high) + 0.5) / 255.0;
+      }
+    }
+    taa_unchanged_out[pixel] = unchanged;
+  }
+#endif
+  // A still pixel that changed within the last cycle blends as a moving one.
+  bool accumulate = still && !changed;
   // The phases of a still pixel accumulate. With the jitter a sample moves by
   // up to half a pixel, so the samples within two pixels can reach the 3x3
   // that the current frame is built from: the box is their minimum and maximum.
-  if (still) {
+  if (accumulate) {
     box_min = box_low;
     box_max = box_high;
     [unroll] for (int ry = -2; ry <= 2; ++ry) {
@@ -259,20 +338,29 @@ void taa_resolve(uint3 id : SV_DispatchThreadID) {
     }
   }
   float3 history_ycocg = TaaToYCoCg(history.rgb);
-  float3 clipped = TaaFromYCoCg(TaaClip(history_ycocg, box_min, box_max));
+  float3 clipped;
+  if (phases_known) {
+    // Step 9: the luma within that of every phase's current frame and of the
+    // 5x5, the color unclipped.
+    history_ycocg.x = clamp(history_ycocg.x, min(box_min.x, phase_low * phase_low),
+                            max(box_max.x, phase_high * phase_high));
+    clipped = TaaFromYCoCg(history_ycocg);
+  } else {
+    clipped = TaaFromYCoCg(TaaClip(history_ycocg, box_min, box_max));
+  }
 
   float speed = saturate(length(motion) / TAA_MOTION_PIXELS);
-  float alpha = still ? 1.0 / (min(age, TAA_STILL_FRAMES) + 1.0)
-                      : max(max(TAA_BLEND, 1.0 / (age + 1.0)),
-                            lerp(TAA_BLEND, TAA_BLEND_MOTION, speed));
-  if (reactive && !still) alpha = max(alpha, TAA_REACTIVE);
+  float alpha = accumulate ? 1.0 / (min(age, TAA_STILL_FRAMES) + 1.0)
+                           : max(max(TAA_BLEND, 1.0 / (age + 1.0)),
+                                 lerp(TAA_BLEND, TAA_BLEND_MOTION, speed));
+  if (reactive && !accumulate) alpha = max(alpha, TAA_REACTIVE);
   if (!usable) alpha = 1.0;
   float current_weight = alpha / (1.0 + TaaLuma(current));
   float history_weight = (1.0 - alpha) / (1.0 + TaaLuma(clipped));
   float3 result = (current * current_weight + clipped * history_weight) /
                   max(current_weight + history_weight, 1.0e-6);
   taa_history_out[pixel] =
-      float4(result, usable ? min(age + 1.0, still ? TAA_STILL_FRAMES : kMaxAge) : 1.0);
+      float4(result, usable ? min(age + 1.0, accumulate ? TAA_STILL_FRAMES : kMaxAge) : 1.0);
 
   if (TAA_DEBUG > 0u) {
     float3 color;
@@ -297,6 +385,13 @@ void taa_resolve(uint3 id : SV_DispatchThreadID) {
       }
     } else if (TAA_DEBUG == 6u) {
       color = still && usable ? float3(0.1, 0.9, 1.0) : TaaDisplay(current) * 0.35;
+    } else if (TAA_DEBUG == 7u) {
+      color = TaaDisplay(current) * 0.35;
+      if (tested) {
+        color = changed ? float3(1.0, 0.15, 0.1) : float3(0.1, 0.9, 0.2);
+      } else if (still) {
+        color = float3(0.1, 0.3, 1.0);
+      }
     } else {
       color = TaaDisplay(current);
     }

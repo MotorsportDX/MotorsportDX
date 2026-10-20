@@ -556,7 +556,11 @@ without it (the look's sharpening, no jitter, the tiles and MSAA of `-Quality`).
   thresholds, `TAA_STILL` (1) the accumulation on a still camera and `TAA_STILL_FRAMES` (256)
   how many frames it averages; they change live with `-ShaderDev`. `TAA_JITTER_MOTION` and
   `TAA_JITTER_RATE` at 0 jitter every frame, `TAA_STILL=0` turns the still camera's jitter off
-  ([TAA, arming](analysis/taa.md#35-arming-and-switching)).
+  ([TAA, arming](analysis/taa.md#35-arming-and-switching)). On a still camera TAA also
+  compares each pixel with the same jitter phase a cycle ago (`TAA_STILL_PHASES`, 1): what
+  did not change keeps its thin details and colored edges still, and what changed (a flag in
+  the wind) blends as in motion instead of smearing; `TAA_STILL_CHANGE` (2 levels of 255) is
+  the threshold ([TAA, step 12](analysis/taa.md#72-per-pixel-taa_resolve)).
 - The look's `sharpen` (0.4 in the presets) is applied after TAA instead of before it (the pass param
   `TAA_SHARPEN`), since sharpening the jittered frame would sharpen the jitter. TAA without
   sharpening is visibly softer; 0.4 comes close to the look without TAA, without its stair
@@ -564,7 +568,7 @@ without it (the look's sharpening, no jitter, the tiles and MSAA of `-Quality`).
 - In the single tile the swap's FXAA is left out: TAA anti-aliases the tile itself.
 - It costs about 0.1 ms of GPU time per race frame at 1x and 0.15 to 0.2 ms at 2x.
 - `shader_mod_set TAA=0` switches it off at once with `-ShaderDev` (the tiling stays until the
-  next race); `TAA_DEBUG=1` to `6` shows the debug views
+  next race); `TAA_DEBUG=1` to `7` shows the debug views
   ([TAA, debug views](analysis/taa.md#76-debug-views-taa_debug)).
 - The `-Info` overlay shows "Anti-aliasing: TAA before the HUD, sharpen 0.4, scene jittered
   while the camera moves, a still one accumulated".

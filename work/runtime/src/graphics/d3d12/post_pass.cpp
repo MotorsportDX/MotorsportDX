@@ -1969,8 +1969,11 @@ void PostPasses::FillSceneConstants(post_pass::SceneConstants& constants) const 
     if (jitter_active_) {
       constants.jitter[0] = jitter_[0];
       constants.jitter[1] = jitter_[1];
+      constants.jitter_phase = jitter_phase_;
+      constants.jitter_phases = jitter_phases_;
       if (jitter_still_) {
         constants.flags |= post_pass::kSceneFlagCameraStill;
+        constants.still_frames = still_frames_;
       }
     }
     bool view_known = camera_.view_frame == frame;
@@ -2181,6 +2184,11 @@ void PostPasses::RunPoint(Point point) {
         std::find(manifest.jitter_consumers.begin(), manifest.jitter_consumers.end(),
                   pass.name) != manifest.jitter_consumers.end()) {
       jitter_consumer_frame_ = frame;
+      const uint32_t still_valid =
+          post_pass::kSceneFlagCameraStill | post_pass::kSceneFlagHistoryValid;
+      if ((constants.flags & still_valid) == still_valid) {
+        still_consumer_frame_ = frame;
+      }
     }
   }
   // Exposed textures as shader mods read them.
@@ -2521,7 +2529,8 @@ void PostPasses::LogRun(int32_t variant_index) {
           HistoryTexturesSummary(),
       MotionSummary(),
       jitter_active_ ? fmt::format("{:.4f},{:.4f}{}", jitter_[0], jitter_[1],
-                                   jitter_still_ ? " still" : "")
+                                   jitter_still_ ? fmt::format(" after {} still", still_frames_)
+                                                 : std::string())
                      : std::string("off"),
       motion_.frame == command_processor_.GetCurrentFrame() && motion_.valid
           ? fmt::format("{:.3f} px", motion_.camera_pixels)
@@ -2575,6 +2584,7 @@ void PostPasses::UpdateJitter() {
   jitter_active_ = false;
   jitter_still_ = false;
   jitter_[0] = jitter_[1] = 0.0f;
+  jitter_phases_ = 0;
   // The frame time and the camera's motion of every frame, for the gate.
   auto now = std::chrono::steady_clock::now();
   double frame_seconds = last_swap_time_ != std::chrono::steady_clock::time_point()
@@ -2586,6 +2596,8 @@ void PostPasses::UpdateJitter() {
   }
   const Manifest& manifest = *manifest_;
   uint64_t frame = command_processor_.GetCurrentFrame();
+  // The still frames in a row: each one jittered at the next phase.
+  still_frames_ = still_consumer_frame_ == frame ? still_frames_ + 1 : 0;
   int32_t variant_index;
   bool skipped = IsSkipped(&variant_index);
   UpdateParams(variant_index);
@@ -2636,7 +2648,9 @@ void PostPasses::UpdateJitter() {
     jitter_[0] = float(std::clamp(x, -0.5, 0.5));
     jitter_[1] = float(std::clamp(y, -0.5, 0.5));
   } else {
-    post_pass::JitterOffset(uint32_t(jitter_count_ % phases), jitter_);
+    jitter_phase_ = uint32_t(jitter_count_ % phases);
+    jitter_phases_ = phases;
+    post_pass::JitterOffset(jitter_phase_, jitter_);
   }
   ++jitter_count_;
   jitter_active_ = true;
