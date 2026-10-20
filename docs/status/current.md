@@ -57,6 +57,8 @@ The project is an experimental build. On the latest binary, the e2e harness chec
 
 The race phase of `photo` is 30 seconds of racing after 10 seconds of driving, with 12 cars. `career` is a World Tour race with quit, replay and continue.
 
+BuildRoots on 20 October 2026: `I:\FM4-build-usa` (USA discs, the development base) and `I:\FM4-build-pass` (Japan/Asia discs, for side builds). `I:\FM4-build2`, `I:\FM4-build-iter` and `I:\FM4-build-gtao` were removed that day; the runs, shader dumps, inventories, gate logs, material atlas and shader storage that the docs cite were moved first to `I:\FM4-archive\<BuildRoot>` with the same relative paths, and the docs point there. Results named with a bare BuildRoot of those three describe where a run was made.
+
 ### Cockpit light look knob, 19 October 2026
 
 - Built: `-Look "...,cockpit_light=<0 to 1>"` ([cockpit brightness](../analysis/cockpit-brightness.md#the-cockpit_light-knob-19-october-2026), [running](../running.md#look)); 0 by default, 0.5 in `pc` since 20 October 2026. 44 shader mods: the floor constant (`MinCockpitShadow`, `MinShadowValue`) of 38 interior shaders of every car shader set, and the shadow map and lightmap texels of the driver's body and suit (six hashes). RTV only.

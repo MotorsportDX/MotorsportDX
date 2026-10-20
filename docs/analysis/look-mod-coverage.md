@@ -129,7 +129,7 @@ Hashes with a mod, and the ones left without, per set (the 16-car and split-scre
 
 ### Inputs
 
-Read from the ucode dumps of the runs below (`dump_shaders`, `I:\FM4-build-iter\e2e\cov-*-dump`) and from the containers, compared with `B85EF04779ABD438`:
+Read from the ucode dumps of the runs below (`dump_shaders`, `I:\FM4-archive\FM4-build-iter\e2e\cov-*-dump`) and from the containers, compared with `B85EF04779ABD438`:
 
 - **Interpolators**: as the body paint. 1 the world normal, 2 the world position (eye `c59`), 3 the shadow map coordinate, 4 XY the track lightmap UV (fetch 10). The windows of `shaders_v16` and `shaders_ui_v16` take the UV of the 2D background map (fetch 1, bool 133) from 4 ZW. Glass reads its damage or lights textures at interpolator 0.
 - **Environment cubes**, gamma 2 (squared):
@@ -228,7 +228,7 @@ All of them hook the texture fetch of fetch 0 and change the texel's color, so t
 ### Verification Without the Game
 
 - `fm4_shader_mod_tests` (68 mods): 1,306 checks pass. With the defines of the `pc` look, which leave these knobs at their defaults, the 15 new mods compile to the DXBC of the library without a mod (fingerprint `9F4285BB9A8C0E9A`, 1,283 instruction slots); with every knob away from the original, each mod's DXBC changes. The look files have 28 knobs of the 32 live knob slots. With live knobs the new mods take 1,353 to 1,357 slots.
-- `override_fxc.py --stub` against the real contracts: all 15 contracts of the 14 hashes in `I:\FM4-build-iter\e2e\cov-ab-16car-dump`, and the contracts of the false color run `I:\FM4-build2\e2e\nat-fc-alps-dump` (50 contracts of 39 modded hashes, among them `2FABDDDB86C5AA15`), compile with and without the seven knobs moved, and every new mod's DXBC changes with them. The stub override now fetches every 2D texture of the contract through `XE_HOOK_TFETCH`, as a generated override does; before, it fetched nothing, so a mod that only hooks a fetch could not change its DXBC.
+- `override_fxc.py --stub` against the real contracts: all 15 contracts of the 14 hashes in `I:\FM4-archive\FM4-build-iter\e2e\cov-ab-16car-dump`, and the contracts of the false color run `I:\FM4-archive\FM4-build2\e2e\nat-fc-alps-dump` (50 contracts of 39 modded hashes, among them `2FABDDDB86C5AA15`), compile with and without the seven knobs moved, and every new mod's DXBC changes with them. The stub override now fetches every 2D texture of the contract through `XE_HOOK_TFETCH`, as a generated override does; before, it fetched nothing, so a mod that only hooks a fetch could not change its DXBC.
 
 ### In-Game Checks: Sky and Vegetation (18 October 2026)
 
@@ -306,7 +306,7 @@ Left without a mod:
 
 ### Inputs
 
-Read from the ucode dumps of `I:\FM4-build-iter\e2e\cov-ab-16car-dump` (all hashes above but four, which only the runs below translated) with a symbolic listing of each shader, and the literal constants from the containers (`c255` = (1, 0, 0, 0) in `5E33CD06E3AF5B04`; other shaders keep 0 and 1 in other components). `5E33CD06E3AF5B04`:
+Read from the ucode dumps of `I:\FM4-archive\FM4-build-iter\e2e\cov-ab-16car-dump` (all hashes above but four, which only the runs below translated) with a symbolic listing of each shader, and the literal constants from the containers (`c255` = (1, 0, 0, 0) in `5E33CD06E3AF5B04`; other shaders keep 0 and 1 in other components). `5E33CD06E3AF5B04`:
 
 - Interpolator 0 the normal, 1 the direction to the eye, 2 X the fog, 2 ZW and 4 ZW the cascade selection of the shadow map, 3 XY, 3 ZW and 4 XY its three taps, 5 XY the UV of the asphalt, 6 XY the UV of the blend value and the lightmap.
 - The asphalt color: the texel of `Blend_B` (fetch 0) times `c0` blended to the texel plus `c2` by the blend value (`Blend_Value`, fetch 1, Y).

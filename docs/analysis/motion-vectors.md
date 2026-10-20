@@ -12,7 +12,7 @@ Offline sources:
 - the `REX_GPU_INVENTORY` of a Quick Race on the Bernese Alps (`I:\FM4-build2`, 16,200 frames): render state per shader pair, including `RB_DEPTHCONTROL`;
 - the `REX_FRAME_GRAPH` traces of GTAO M3 (`I:\FM4-build-gtao`: `m3-1x`, `m3-2x`, `m3b-2x`, every fifth frame, 4x MSAA, three tiles). The q-high traces named in the GTAO design are no longer on disk; the M3 traces show the same pattern;
 - the GTAO M1 run `m1b` (`I:\FM4-build-gtao`), which logged the motion blur constant `c69` with `post_ao_log_constants`, and its screen captures;
-- the material atlas (`I:\FM4-build2\atlas`) for the constant tables of the car and track vertex shaders;
+- the material atlas (`I:\FM4-archive\FM4-build2\atlas`) for the constant tables of the car and track vertex shaders;
 - the user's disc: `Media\Camera`, `Media\RenderScenarios`, `Media\tracks\<track>\TrackSettings*.xml` and class names in default.xex;
 - the runtime and integration code: `post_ao_camera.h` and `post_ao.cpp` (since 18 October 2026 [post_pass_camera.h](../../work/runtime/include/rex/graphics/d3d12/post_pass_camera.h) and [post_pass.cpp](../../work/runtime/src/graphics/d3d12/post_pass.cpp), the [post pass framework](post-pass-framework.md)), [command_processor.cpp](../../work/runtime/src/graphics/d3d12/command_processor.cpp), [fm4-render-overrides.cpp](../../work/fm4-rex/src/fm4-render-overrides.cpp) and [fm4-track-settings.h](../../work/fm4-rex/src/fm4-track-settings.h).
 
