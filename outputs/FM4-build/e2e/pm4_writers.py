@@ -2,7 +2,8 @@
 
 usage: pm4_writers.py <generated dir> <xenos.h> <out.json>
 A type-3 header is 0xC0000000 | (count - 1) << 16 | opcode << 8, built by
-lis rX,0xC0nn followed by ori rY,rX,opcode<<8. Addresses and opcode names only.
+lis rX,0xC0nn followed by ori rY,rX,opcode<<8. Bit 0 is the predicate bit; predicated
+packets are reported as "<opcode>(pred)". Addresses and opcode names only.
 """
 import json, re, sys
 from collections import defaultdict
@@ -35,8 +36,9 @@ for f in sorted(root.glob('*.cpp')):
         m = ori_re.search(line)
         if m and m.group(2) in lis:
             hi, lo = lis[m.group(2)], int(m.group(3))
-            if -16384 <= hi <= -16384 + 0x3F and lo & 0xFF == 0 and (lo >> 8) in opcodes:
-                packets[func][opcodes[lo >> 8]].add(hi + 16384 + 1)
+            if -16384 <= hi <= -16384 + 0x3F and lo & 0xFE == 0 and (lo >> 8) in opcodes:
+                name = opcodes[lo >> 8] + ('(pred)' if lo & 1 else '')
+                packets[func][name].add(hi + 16384 + 1)
             continue
         m = call_re.search(line)
         if m:
