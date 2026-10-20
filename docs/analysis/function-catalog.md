@@ -124,6 +124,25 @@ The linker places game code first and the static libraries after it, with link-t
 
 Names that were derived independently agree with the manual analysis of the render path: `CPresentation::RenderMirror` (`sub_828D19E0`), `CPresentationDeferred::RenderMirror` (`sub_82437618`), `CRenderThread::PushDynamicRenderSettingsInternal` (`sub_8243F9E0`) and its queue side (`sub_82442600`, the hook in `fm4-vblank-rate.cpp`). The deferred layer named `sub_822EDDC8` as `CPresentationView::PreRender`, which corrects "view render" in the render path note.
 
+## Rendering subsystem: manual pass
+
+Started 20 October 2026: functions read in their decompiled code and named in `names-manual.tsv` with a confidence (1.0 checked, 0.5 to 0.85 inferred from the code). 454 manual names so far, 266 of them inferred, 125 in the Rendering subsystem; the rest are the utilities, containers and the XDK D3D layer that the render path calls. Worklists: the direct-call tree of the render thread frame and the presentation methods (`worklist.py`, 645 functions, 563 without a real name before the pass), then the unnamed non-trivial vtable slots of the presentation classes (206).
+
+What the pass established, by function:
+
+| Area | Functions |
+|---|---|
+| Per-draw state flush of the D3D layer (the PM4 the CP translates for every draw) | `sub_826F6E18` `D3DDevice_FlushDirtyState` writes the dirty register groups (`0x2000`, `0x2100`, `0x2180`, `0x2200`, `0x2280`) through `sub_823114F8`, the fetch constants through `sub_8230FA40` (6 dwords each, base `0x4800`) and the vertex and pixel float constants through `sub_82310E78` (`0x4000`, `0x4400`) |
+| Device state setters | `D3DDevice_SetTexture` `sub_8233A9A8`, `SetStreamSource` `sub_823445A0`, `SetRenderTarget` `sub_823563B8`, `SetDepthStencilSurface` `sub_822D9968`, `SetVertexShader` `sub_82351A00`, `SetPixelShader` `sub_82351BD0`, `SetViewport` `sub_822FEAA8`, `SetScissorRect` `sub_822FF050`, `SetShaderGPRAllocation` `sub_822BA060`, `Clear` `sub_8236D840` |
+| Command buffer | `BeginCommand` `sub_823913D0`, overflow `sub_822FEF08`, kick `sub_822FED80`, ring allocation `sub_8234D738`, indirect buffer submission `sub_826E4848`, `BlockUntilIdle` `sub_826E4D20` |
+| Predicated tiling | `D3DDevice_BeginTiling` `sub_82371B80`, `EndTiling` `sub_8236FA20` (one resolve per tile under a bin mask), `CTileBuffer::SetScenario` `sub_82883948`, `Begin` `sub_82882600`, `BeginTiling` `sub_823813B0`, `End` `sub_82376F38`; the tiling scenario table at `0x82D883C8` (stride `0x4D0`, tile count at +8, tile rectangles at +0x18) |
+| Render targets of the presentation | mirror 384x128 `CPresentation::CreateMirrorRenderTargets` `sub_828CE598`, environment map faces `sub_828D2050` and cube targets `sub_828D1080`, shadow targets `sub_828D4398`, scene targets `sub_828D15B0` |
+| Track | `CTrackPresentation::ComputeVisibility` `sub_82925860` (clears the visible lists, three culling passes, then adds the visible groups), `AddVisibleGroup` `sub_82921F20`, `AddVisibleObject` `sub_82921E30`, `CheckTrackReady` `sub_822F9070` |
+| Shadows | `ShadowMapGenerator_Unified::Configure` `sub_82945230` (singleton at `0x82E01504`, three cascades released by `sub_828832D0`) |
+| Runtime support | memory (`Memory::CHeapManager`, heap ids per thread through `CScopedHeapOverride`), timers (`CTimer`), FXL effects (`FXLEffect::GetParameterHandle`, `SetFloat`, `CommitParameters`), screen quads (`CRenderEngine::DrawScreenQuad` `sub_8233A3A0`) |
+
+Most presentation methods that render (for example the car and track render slots) use VMX128 and are truncated in Ghidra; their names wait for a reading of the recompiler's C++.
+
 ## Limits
 
 - Real names exist only where the binary carries them: RTTI classes, deferred call records, strings, data tables. 43% of `default.xex` (8,660 game functions and most library internals) has a module and, for game code, a subsystem, but no name.
