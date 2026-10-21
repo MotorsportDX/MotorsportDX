@@ -21,6 +21,7 @@
 #include <rex/logging.h>
 #include <rex/memory.h>
 #include <rex/system/native_checks.h>
+#include <rex/system/native_records.h>
 
 #include "util/perf_trace.h"
 #include "util/pm4_decode.h"
@@ -112,8 +113,10 @@ void CommandProcessor::HostCheckTake(uint32_t address) {
       }
       state.capturing = true;
       state.begin = address;
-      // A converted writer's range in the stream is its two-dword marker.
-      state.end = address + uint32_t((entry.marker ? 2 : entry.dwords.size()) * sizeof(uint32_t));
+      // A converted writer's range in the stream is its marker.
+      state.end = address + uint32_t((entry.marker ? system::native_records::kMarkerDwords
+                                                   : entry.dwords.size()) *
+                                      sizeof(uint32_t));
       state.decoded =
           pm4_decode::Decode(entry.dwords.data(), entry.dwords.size(), bin_select_, bin_mask_);
       state.entry = std::move(entry);

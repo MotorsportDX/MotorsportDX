@@ -2,10 +2,10 @@
 // docs/analysis/d3d-hle.md (section 14.9). The hooks are in
 // fm4-guest-hooks.cpp. While the GPU plugin enables the records
 // (host_render_native with host_render_thread, rex/system/native_records.h), a
-// dirty state writer builds its register writes from its arguments, writes a
-// two-dword NOP marker at the device's write pointer instead of its PM4, and
-// stores the record under the marker's guest physical address; the host render
-// thread applies it at the marker. The original body runs instead while the
+// dirty state writer builds its register writes from its arguments into a
+// slot of the record pool, publishes it, and writes a three-dword NOP marker
+// holding the record's sequence at the device's write pointer instead of its
+// PM4; the host render thread applies the record at the marker. The original body runs instead while the
 // device records a command buffer (that PM4 is replayed later) or when the
 // segment has no room for the marker.
 //
@@ -39,8 +39,6 @@ void Store32(uint8_t* base, uint32_t address, uint32_t value) {
 uint32_t Physical(uint32_t address) {
   return (address & 0x1FFFFFFF) + ((((address >> 20) + 0x200) & 0x1000));
 }
-
-std::atomic<uint64_t> sequence{0};
 
 // Register writes of a dirty mask (the most significant bit first): each set
 // bit i writes `per_bit` registers from first + per_bit * i, read from source
@@ -86,9 +84,12 @@ bool NativeConvert(NativeWriter writer, PPCContext& ctx, uint8_t* base, PPCFunc*
   const uint32_t pointer = Load32(base, device + 48);
   const uint32_t end = Load32(base, device + 52);
   // The writers write while the next dword is below the segment end.
-  if (pointer + 8 >= end) return false;
+  const uint32_t marker_bytes = records::kMarkerDwords * 4;
+  if (pointer + marker_bytes >= end) return false;
 
-  records::Record record;
+  uint64_t record_sequence = 0;
+  records::Slot& slot = records::Begin(&record_sequence);
+  records::Record& record = slot.record;
   const uint64_t mask = ctx.r4.u64;
   uint32_t address = 0;
   switch (writer) {
@@ -113,7 +114,6 @@ bool NativeConvert(NativeWriter writer, PPCContext& ctx, uint8_t* base, PPCFunc*
     } break;
   }
   record.writer = address;
-  record.sequence = sequence.fetch_add(1, std::memory_order_relaxed);
 
   // The PM4 for the check: the original body into the scratch segment.
   const bool check = NativeCheckEnabled();
@@ -128,7 +128,7 @@ bool NativeConvert(NativeWriter writer, PPCContext& ctx, uint8_t* base, PPCFunc*
       Store32(base, device + 52, end);
       rex::system::native_checks::Entry entry;
       entry.writer = address;
-      entry.sequence = record.sequence;
+      entry.sequence = record_sequence;
       entry.marker = true;
       if (written > scratch && written - scratch < kScratchBytes) {
         entry.dwords.resize((written - scratch) / 4);
@@ -138,13 +138,15 @@ bool NativeConvert(NativeWriter writer, PPCContext& ctx, uint8_t* base, PPCFunc*
     }
   }
 
-  // The checked range of an outer writer ends before the marker and goes on
-  // after it.
+  // The record is published before its marker exists, and the marker carries
+  // its sequence, which names its slot. The checked range of an outer writer
+  // ends before the marker and goes on after it.
   NativeCheckSplitPre(base);
+  records::Publish(slot, record_sequence);
   Store32(base, pointer + 4, records::kMarkerHeader);
   Store32(base, pointer + 8, records::kMarkerTag);
-  Store32(base, device + 48, pointer + 8);
-  records::Put(Physical(pointer + 4), std::move(record));
+  Store32(base, pointer + 12, uint32_t(record_sequence));
+  Store32(base, device + 48, pointer + marker_bytes);
   NativeCheckSplitPost(base);
   return true;
 }

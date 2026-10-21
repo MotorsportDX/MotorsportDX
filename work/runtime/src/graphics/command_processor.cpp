@@ -878,7 +878,7 @@ void CommandProcessor::ExecutePacket(uint32_t ptr, uint32_t count) {
 }
 
 bool CommandProcessor::ExecutePacket(memory::RingBuffer* reader) {
-  if (host_check_ || host_records_) {
+  if (host_check_) {
     HostBeforePacket(reader);
   }
   const uint32_t packet = reader->ReadAndSwap<uint32_t>();
@@ -1221,11 +1221,12 @@ bool CommandProcessor::ExecutePacketType3_NOP(memory::RingBuffer* reader, uint32
                                               uint32_t count) {
   // skip N 32-bit words to get to the next packet
   // No-op, ignore some data.
-  if (host_records_ && count == 1) {
-    // A marker of a converted writer whose record HostBeforePacket did not apply.
-    const uint32_t data = reader->ReadAndSwap<uint32_t>();
-    if (data == system::native_records::kMarkerTag) {
-      HostRecordMissing();
+  if (host_records_ && count == system::native_records::kMarkerDwords - 1) {
+    // A converted writer's marker: apply its record.
+    const uint32_t tag = reader->ReadAndSwap<uint32_t>();
+    const uint32_t sequence = reader->ReadAndSwap<uint32_t>();
+    if (tag == system::native_records::kMarkerTag) {
+      HostApplyMarker(sequence);
     }
     return true;
   }

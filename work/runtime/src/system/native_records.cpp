@@ -1,29 +1,36 @@
 #include <rex/system/native_records.h>
 
-#include <atomic>
-
-#include <rex/system/address_table.h>
+#include <memory>
 
 namespace rex::system::native_records {
 namespace {
-AddressTable<std::shared_ptr<const Record>> table;
 std::atomic<bool> enabled{false};
+std::atomic<uint64_t> next_sequence{0};
+std::unique_ptr<Slot[]> slots;
 }  // namespace
 
-void SetEnabled(bool value) { enabled.store(value, std::memory_order_relaxed); }
-
-bool Enabled() { return enabled.load(std::memory_order_relaxed); }
-
-void Put(uint32_t marker_address, Record&& record) {
-  table.Put(marker_address, std::make_shared<const Record>(std::move(record)));
+void SetEnabled(bool value) {
+  if (value && !slots) {
+    slots = std::make_unique<Slot[]>(kSlots);
+  }
+  enabled.store(value, std::memory_order_release);
 }
 
-bool MayHave(uint32_t marker_address) { return table.MayHave(marker_address); }
+bool Enabled() { return enabled.load(std::memory_order_acquire); }
 
-std::shared_ptr<const Record> Find(uint32_t marker_address) {
-  std::shared_ptr<const Record> record;
-  table.Find(marker_address, &record);
-  return record;
+Slot& Begin(uint64_t* sequence) {
+  *sequence = next_sequence.fetch_add(1, std::memory_order_relaxed);
+  Slot& slot = slots[*sequence & (kSlots - 1)];
+  slot.sequence.store(kWriting, std::memory_order_relaxed);
+  slot.record.runs.clear();
+  slot.record.values.clear();
+  return slot;
 }
+
+void Publish(Slot& slot, uint64_t sequence) {
+  slot.sequence.store(sequence, std::memory_order_release);
+}
+
+Slot& SlotOf(uint32_t sequence) { return slots[sequence & (kSlots - 1)]; }
 
 }  // namespace rex::system::native_records

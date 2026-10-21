@@ -874,16 +874,16 @@ def auto_single_tile(look,rov=False,msaa=False):
 
 def native_cvars(single_tile,rov=False):
     """Cvars of -Native: stage N1 of the native path, the host render thread fed by a record
-    queue (docs/analysis/d3d-hle.md, section 14). It covers races in one tile; the tiles and MSAA
-    of -Quality stay on the PM4 RTV path until stage N3, and -Rov, the uncorrected reference, is
-    never combined with it."""
+    queue, with the converted PM4 writers leaving records (docs/analysis/d3d-hle.md, section
+    14). It covers races in one tile; the tiles and MSAA of -Quality stay on the PM4 RTV path
+    until stage N3, and -Rov, the uncorrected reference, is never combined with it."""
     if rov:
         raise ValueError('-Native runs on the host render target path (RTV); it cannot be combined with -Rov.')
     if not single_tile:
         print('-Native: races keep the tiles of -Quality here, so the PM4 RTV path runs instead '
               '(the native path covers one tile until stage N3).')
         return {}
-    return {'host_render_thread':'true'}
+    return {'host_render_thread':'true','host_render_native':'true'}
 
 def launch(root,single_tile=False,fixed_vblank=False,frame_rate=None,rov=False,
            resolution_scale=None,full_rate_mirror=False,look=None,shadow_workaround=False,

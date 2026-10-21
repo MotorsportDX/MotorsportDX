@@ -156,17 +156,17 @@ class CommandProcessor {
   // render thread, called from the packet loop while host_check_ is set.
   struct HostCheckState;
   void InitializeHostCheck();
-  // Before each packet while host_check_ or host_records_ is set: ends a
-  // checked range, applies a converted writer's record at its marker
-  // (host_render_records.cpp), takes a checked range.
+  // Before each packet while host_check_ is set: ends a checked range and
+  // takes the next one.
   void HostBeforePacket(const memory::RingBuffer* reader);
   void HostCheckFinishAt(uint32_t address);
   void HostCheckTake(uint32_t address);
   // host_render_native (host_render_records.cpp): the records of converted
   // writers (rex/system/native_records.h).
   void InitializeHostRecords();
-  void HostApplyRecord(uint32_t address);
-  void HostRecordMissing();
+  // A marker (the NOP handler): applies the record of its sequence.
+  void HostApplyMarker(uint32_t sequence);
+  void HostRecordMissing(uint32_t sequence, uint64_t stored);
   void HostCheckType3(uint32_t opcode, bool runs);
   void HostCheckDraw(uint32_t initiator, uint32_t dma_base, uint32_t dma_size);
   void HostCheckFinish();
@@ -313,10 +313,6 @@ class CommandProcessor {
   std::unique_ptr<HostRenderQueue> host_render_queue_;
   bool host_check_ = false;
   bool host_records_ = false;
-  // The guest physical address of the packet being executed, while
-  // host_records_ is set, and the marker whose record was applied last.
-  uint32_t host_packet_address_ = 0;
-  uint32_t host_record_applied_ = UINT32_MAX;
   // The packet being executed lies in the range the check compares.
   bool host_check_in_range_ = false;
   std::shared_ptr<HostCheckState> host_check_state_;  // shared_ptr: an incomplete type here.

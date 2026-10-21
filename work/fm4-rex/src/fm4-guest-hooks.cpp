@@ -12,13 +12,29 @@
 using namespace fm4::hooks;
 
 // A PM4 writer that only fm4-d3d-trace.cpp counts.
-#define FM4_TRACED_HOOK(address)                                    REX_EXTERN(__imp__sub_##address);                                 REX_HOOK_RAW(sub_##address) {                                       D3DTraceCount(0x##address, ctx);                                  __imp__sub_##address(ctx, base);                                }
+#define FM4_TRACED_HOOK(address)     \
+  REX_EXTERN(__imp__sub_##address);  \
+  REX_HOOK_RAW(sub_##address) {      \
+    D3DTraceCount(0x##address, ctx); \
+    __imp__sub_##address(ctx, base); \
+  }
 
 // A PM4 writer of the identity check (fm4-native-check.cpp).
-#define FM4_CHECKED_HOOK(address)                                   REX_EXTERN(__imp__sub_##address);                                 REX_HOOK_RAW(sub_##address) {                                       NativeCheckPre(0x##address, base);                                __imp__sub_##address(ctx, base);                                  NativeCheckPost(base);                                          }
+#define FM4_CHECKED_HOOK(address)      \
+  REX_EXTERN(__imp__sub_##address);    \
+  REX_HOOK_RAW(sub_##address) {        \
+    NativeCheckPre(0x##address, base); \
+    __imp__sub_##address(ctx, base);   \
+    NativeCheckPost(base);             \
+  }
 
 // An entry point that only the N0 thread trace observes.
-#define FM4_THREAD_HOOK(address, entry)                             REX_EXTERN(__imp__sub_##address);                                 REX_HOOK_RAW(sub_##address) {                                       N0Thread(N0Entry::entry);                                         __imp__sub_##address(ctx, base);                                }
+#define FM4_THREAD_HOOK(address, entry) \
+  REX_EXTERN(__imp__sub_##address);     \
+  REX_HOOK_RAW(sub_##address) {         \
+    N0Thread(N0Entry::entry);           \
+    __imp__sub_##address(ctx, base);    \
+  }
 
 // PM4 writers of the static scan (fm4-d3d-trace.cpp), in address order.
 FM4_TRACED_HOOK(822A7E08)
@@ -150,7 +166,14 @@ REX_HOOK_RAW(sub_82370370) {  // DRAW_INDX_2 writer (clears, screen passes)
 // Dirty state writers of D3DDevice_FlushDirtyState, RunCommandBuffer and
 // EndCommandBuffer (the identity check only).
 // Converted by fm4-native-records.cpp while the runtime enables the records.
-#define FM4_CONVERTED_HOOK(address, writer)                         REX_EXTERN(__imp__sub_##address);                                 REX_HOOK_RAW(sub_##address) {                                       if (NativeConvert(NativeWriter::writer, ctx, base, __imp__sub_##address)) return;                                                                   NativeCheckPre(0x##address, base);                                __imp__sub_##address(ctx, base);                                  NativeCheckPost(base);                                          }
+#define FM4_CONVERTED_HOOK(address, writer)                                           \
+  REX_EXTERN(__imp__sub_##address);                                                   \
+  REX_HOOK_RAW(sub_##address) {                                                       \
+    if (NativeConvert(NativeWriter::writer, ctx, base, __imp__sub_##address)) return; \
+    NativeCheckPre(0x##address, base);                                                \
+    __imp__sub_##address(ctx, base);                                                  \
+    NativeCheckPost(base);                                                            \
+  }
 FM4_CONVERTED_HOOK(823114F8, kRegisters)      // WriteDirtyRegisters
 FM4_CONVERTED_HOOK(82310E78, kFloatConstants)  // WriteDirtyFloatConstants
 FM4_CONVERTED_HOOK(8230FA40, kFetchConstants)  // WriteDirtyFetchConstants

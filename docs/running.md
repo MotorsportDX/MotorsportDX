@@ -344,8 +344,15 @@ path, and the render targets stay on RTV.
   never waits for the queue. Calls (`CallInThread`) are not bounded.
 - The host render thread executes consecutive spans of the ring as one, as the
   command processor thread executes every kick since its last batch.
+- `host_render_native=true` (the second increment of the native producers,
+  [D3D-level HLE, 14.9](analysis/d3d-hle.md#149-increment-3-design-the-dirty-writers-as-records))
+  converts the title's dirty state writers: they leave a three-dword marker and a
+  record of their register writes instead of their PM4, and the host render
+  thread applies the record at the marker.
 - The perf trace adds `render_thread_busy_ms`, `queue_depth_mean`,
-  `queue_depth_max` and `host_render` (records and merged spans) to each window.
+  `queue_depth_max` and `host_render` (records and merged spans, and with
+  `host_render_native` the records applied, their registers and markers reached
+  without a record) to each window.
 
 #### -SingleTile and -Msaa
 

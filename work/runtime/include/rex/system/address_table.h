@@ -55,17 +55,6 @@ class AddressTable {
     return true;
   }
 
-  // Copies the entry of an address and leaves it in the table.
-  bool Find(uint32_t address, T* value) {
-    if (!MayHave(address)) return false;
-    Shard& shard = ShardOf(address);
-    std::lock_guard<std::mutex> lock(shard.mutex);
-    auto it = shard.entries.find(address);
-    if (it == shard.entries.end()) return false;
-    *value = it->second;
-    return true;
-  }
-
   bool Allocated() const { return filter_.load(std::memory_order_relaxed) != nullptr; }
 
  private:
