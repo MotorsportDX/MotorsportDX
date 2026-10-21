@@ -171,6 +171,7 @@ bool CommandProcessor::Initialize() {
   const bool host_render_thread = HostRenderThreadEnabled();
   if (host_render_thread) {
     CreateHostRenderQueue();
+    InitializeHostCheck();
   }
   worker_thread_ = system::object_ref<system::XHostThread>(
       new system::XHostThread(kernel_state_, 128 * 1024, 0, [this, host_render_thread]() {
@@ -867,6 +868,9 @@ void CommandProcessor::ExecutePacket(uint32_t ptr, uint32_t count) {
 }
 
 bool CommandProcessor::ExecutePacket(memory::RingBuffer* reader) {
+  if (host_check_) {
+    HostCheckBeforePacket(reader);
+  }
   const uint32_t packet = reader->ReadAndSwap<uint32_t>();
   const uint32_t packet_type = packet >> 30;
   if (packet == 0) {
@@ -1001,6 +1005,9 @@ bool CommandProcessor::ExecutePacketType3(memory::RingBuffer* reader, uint32_t p
   if (packet & 1) {
     bool any_pass = (bin_select_ & bin_mask_) != 0;
     if (!any_pass || opcode == PM4_XE_SWAP) {
+      if (host_check_in_range_) {
+        HostCheckType3(opcode, false);
+      }
       pm4_stats::CountType3(opcode, true);
       perf_trace::Increment(perf_trace::Count::kPredicatedSkipped);
       if (opcode == PM4_DRAW_INDX || opcode == PM4_DRAW_INDX_2) ++perf_trace::segment_draws[0];
@@ -1008,6 +1015,9 @@ bool CommandProcessor::ExecutePacketType3(memory::RingBuffer* reader, uint32_t p
       return true;
     }
     perf_trace::Increment(perf_trace::Count::kPredicatedRun);
+  }
+  if (host_check_in_range_) {
+    HostCheckType3(opcode, true);
   }
   pm4_stats::CountType3(opcode, false);
 
@@ -1777,6 +1787,14 @@ bool CommandProcessor::ExecutePacketType3Draw(memory::RingBuffer* reader, uint32
   // Skip to the next command, for example, if there are immediate indexes that
   // we don't support yet.
   reader->AdvanceRead(count_remaining * sizeof(uint32_t));
+
+  if (host_check_in_range_) {
+    // The draw as the registers hold it now (the DMA registers only for an
+    // indexed draw).
+    HostCheckDraw(vgt_draw_initiator.value,
+                  is_indexed ? register_file_->values[XE_GPU_REG_VGT_DMA_BASE] : 0,
+                  is_indexed ? register_file_->values[XE_GPU_REG_VGT_DMA_SIZE] : 0);
+  }
 
   if (draw_succeeded) {
     auto viz_query = register_file_->Get<reg::PA_SC_VIZ_QUERY>();

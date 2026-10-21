@@ -185,6 +185,10 @@
       "provenance": "Original test tooling for this project; no game content or original game function bodies"
     },
     {
+      "path": "outputs/FM4-build/e2e/coverage.py",
+      "provenance": "Original test tooling for this project; no game content or original game function bodies"
+    },
+    {
       "path": "outputs/FM4-build/e2e/parity.py",
       "provenance": "Original test tooling for this project; no game content or original game function bodies"
     },
@@ -999,6 +1003,10 @@
     {
       "path": "work/fm4-rex/src/fm4-n0-trace.cpp",
       "provenance": "Original diagnostic integration source: stage N0 counters of the D3D layer; guest addresses, structure offsets and PM4 opcodes only, no game function bodies"
+    },
+    {
+      "path": "work/fm4-rex/src/fm4-native-check.cpp",
+      "provenance": "Original diagnostic integration source: the producer side of the identity check of the native path; guest addresses and structure offsets only, no game function bodies"
     },
     {
       "path": "work/fm4-rex/src/fm4-dev-features.cpp",
@@ -4471,6 +4479,22 @@
     },
     {
       "path": "work/runtime/src/graphics/host_render_thread.cpp",
+      "provenance": "runtime-fork"
+    },
+    {
+      "path": "work/runtime/include/rex/system/native_checks.h",
+      "provenance": "runtime-fork"
+    },
+    {
+      "path": "work/runtime/src/system/native_checks.cpp",
+      "provenance": "runtime-fork"
+    },
+    {
+      "path": "work/runtime/src/graphics/util/pm4_decode.h",
+      "provenance": "runtime-fork"
+    },
+    {
+      "path": "work/runtime/src/graphics/host_render_check.cpp",
       "provenance": "runtime-fork"
     }
   ]

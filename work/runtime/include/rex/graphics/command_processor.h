@@ -152,6 +152,14 @@ class CommandProcessor {
   static bool HostRenderThreadEnabled();
   void CreateHostRenderQueue();
   void HostRenderThreadMain();
+  // host_render_check (host_render_check.cpp): the identity check of the host
+  // render thread, called from the packet loop while host_check_ is set.
+  struct HostCheckState;
+  void InitializeHostCheck();
+  void HostCheckBeforePacket(const memory::RingBuffer* reader);
+  void HostCheckType3(uint32_t opcode, bool runs);
+  void HostCheckDraw(uint32_t initiator, uint32_t dma_base, uint32_t dma_size);
+  void HostCheckFinish();
   virtual bool SetupContext() = 0;
   virtual void ShutdownContext() = 0;
 
@@ -290,6 +298,10 @@ class CommandProcessor {
   std::queue<std::function<void()>> pending_fns_;
   // Set with host_render_thread: the records the host render thread consumes.
   std::unique_ptr<HostRenderQueue> host_render_queue_;
+  bool host_check_ = false;
+  // The packet being executed lies in the range the check compares.
+  bool host_check_in_range_ = false;
+  std::shared_ptr<HostCheckState> host_check_state_;  // shared_ptr: an incomplete type here.
 
   // MicroEngine binary from PM4_ME_INIT
   std::vector<uint32_t> me_bin_;

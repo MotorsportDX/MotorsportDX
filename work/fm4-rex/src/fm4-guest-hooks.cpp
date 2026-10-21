@@ -14,6 +14,9 @@ using namespace fm4::hooks;
 // A PM4 writer that only fm4-d3d-trace.cpp counts.
 #define FM4_TRACED_HOOK(address)                                    REX_EXTERN(__imp__sub_##address);                                 REX_HOOK_RAW(sub_##address) {                                       D3DTraceCount(0x##address, ctx);                                  __imp__sub_##address(ctx, base);                                }
 
+// A PM4 writer of the identity check (fm4-native-check.cpp).
+#define FM4_CHECKED_HOOK(address)                                   REX_EXTERN(__imp__sub_##address);                                 REX_HOOK_RAW(sub_##address) {                                       NativeCheckPre(0x##address, base);                                __imp__sub_##address(ctx, base);                                  NativeCheckPost(base);                                          }
+
 // An entry point that only the N0 thread trace observes.
 #define FM4_THREAD_HOOK(address, entry)                             REX_EXTERN(__imp__sub_##address);                                 REX_HOOK_RAW(sub_##address) {                                       N0Thread(N0Entry::entry);                                         __imp__sub_##address(ctx, base);                                }
 
@@ -41,7 +44,7 @@ FM4_TRACED_HOOK(82348DC8)
 FM4_TRACED_HOOK(823619B0)
 FM4_TRACED_HOOK(82361D40)
 FM4_TRACED_HOOK(8236F6F8)
-FM4_TRACED_HOOK(82370370)
+// sub_82370370: below.
 FM4_TRACED_HOOK(823712F8)
 FM4_TRACED_HOOK(82374660)
 // sub_8237FA28: below.
@@ -102,13 +105,17 @@ REX_EXTERN(__imp__sub_82311080);
 REX_HOOK_RAW(sub_82311080) {  // D3DDevice_DrawIndexedVertices
   D3DTraceCount(0x82311080, ctx);
   N0Thread(N0Entry::kDrawIndexedVertices);
+  NativeCheckPre(0x82311080, base);
   __imp__sub_82311080(ctx, base);
+  NativeCheckPost(base);
 }
 REX_EXTERN(__imp__sub_8233AC60);
 REX_HOOK_RAW(sub_8233AC60) {  // D3DDevice_DrawVertices
   D3DTraceCount(0x8233AC60, ctx);
   N0Thread(N0Entry::kDrawVertices);
+  NativeCheckPre(0x8233AC60, base);
   __imp__sub_8233AC60(ctx, base);
+  NativeCheckPost(base);
 }
 REX_EXTERN(__imp__sub_8234D278);
 REX_HOOK_RAW(sub_8234D278) {  // D3DDevice_BeginVertices
@@ -126,9 +133,26 @@ REX_EXTERN(__imp__sub_823436B8);
 REX_HOOK_RAW(sub_823436B8) {  // Draw flush of the shaders: IM_LOAD, LOAD_ALU_CONSTANT
   D3DTraceCount(0x823436B8, ctx);
   N0FlushPre(ctx, base);
+  NativeCheckDevice(ctx.r3.u32);
+  NativeCheckPre(0x823436B8, base);
   __imp__sub_823436B8(ctx, base);
+  NativeCheckPost(base);
   N0FlushPost(base);
 }
+REX_EXTERN(__imp__sub_82370370);
+REX_HOOK_RAW(sub_82370370) {  // DRAW_INDX_2 writer (clears, screen passes)
+  D3DTraceCount(0x82370370, ctx);
+  NativeCheckPre(0x82370370, base);
+  __imp__sub_82370370(ctx, base);
+  NativeCheckPost(base);
+}
+
+// Dirty state writers of D3DDevice_FlushDirtyState, RunCommandBuffer and
+// EndCommandBuffer (the identity check only).
+FM4_CHECKED_HOOK(823114F8)  // WriteDirtyRegisters
+FM4_CHECKED_HOOK(82310E78)  // WriteDirtyFloatConstants
+FM4_CHECKED_HOOK(8230FA40)  // WriteDirtyFetchConstants
+FM4_CHECKED_HOOK(82379530)  // D3DDevice_WriteRegistersChunked
 REX_EXTERN(__imp__sub_8237FA28);
 REX_HOOK_RAW(sub_8237FA28) {  // D3DDevice_Swap
   D3DTraceCount(0x8237FA28, ctx);
@@ -149,7 +173,6 @@ FM4_THREAD_HOOK(822FF050, kSetScissorRect)
 FM4_THREAD_HOOK(823445A0, kSetStreamSource)
 FM4_THREAD_HOOK(8236D840, kClear)
 FM4_THREAD_HOOK(822E2120, kResolve)
-FM4_THREAD_HOOK(822B95D8, kDrawVerticesUP)
 FM4_THREAD_HOOK(82310FC8, kQueueCommandBuffer)
 FM4_THREAD_HOOK(8294D100, kRecordCommandBuffers)
 FM4_THREAD_HOOK(82371B80, kBeginTiling)
@@ -157,6 +180,14 @@ FM4_THREAD_HOOK(8236FA20, kEndTiling)
 FM4_THREAD_HOOK(826ED978, kTileStreamInterpreter)
 FM4_THREAD_HOOK(826EDCE8, kTileStreamDrain)
 FM4_THREAD_HOOK(826EDFA8, kTileStreamWorker)
+
+REX_EXTERN(__imp__sub_822B95D8);
+REX_HOOK_RAW(sub_822B95D8) {  // D3DDevice_DrawVerticesUP
+  N0Thread(N0Entry::kDrawVerticesUP);
+  NativeCheckPre(0x822B95D8, base);
+  __imp__sub_822B95D8(ctx, base);
+  NativeCheckPost(base);
+}
 
 // Recorded command buffers.
 REX_EXTERN(__imp__sub_826E23E8);
@@ -199,7 +230,9 @@ REX_HOOK_RAW(sub_8234D738) {  // AllocateRingSpace
 REX_EXTERN(__imp__sub_822FEF08);
 REX_HOOK_RAW(sub_822FEF08) {  // Segment overflow of the inline writers
   N0OverflowPre(ctx, base);
+  NativeCheckOverflowPre(base);
   __imp__sub_822FEF08(ctx, base);
+  NativeCheckOverflowPost(base);
   N0OverflowPost(ctx, base);
 }
 

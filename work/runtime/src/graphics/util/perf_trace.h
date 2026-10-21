@@ -7,6 +7,7 @@
 #include <atomic>
 #include <chrono>
 #include <cstdint>
+#include <cstdio>
 #include <cstdlib>
 #include <fstream>
 #include <intrin.h>
@@ -235,6 +236,14 @@ inline void CountVblank(uint32_t kind) {
 // into the last record because the queue was full; guest threads).
 inline std::atomic<bool> host_render{false};
 inline std::atomic<uint32_t> host_merged_spans{0};
+// The identity check (host_render_check): ranges compared by writer (host
+// render thread only), mismatches, ranges never compared (overwritten before
+// they were reached, or left before their end) and ranges changed on purpose
+// (host_render_check_perturb).
+inline std::atomic<bool> host_check{false};
+inline std::map<uint32_t, uint64_t> host_checks;
+inline std::atomic<uint64_t> host_check_mismatches{0}, host_check_unmatched{0},
+    host_check_perturbed{0};
 inline void CountHostMergedSpan() {
   if (Get()) host_merged_spans.fetch_add(1, std::memory_order_relaxed);
 }
@@ -481,6 +490,23 @@ inline void OnSwap() {
                   << ",\"queue_depth_max\":" << state->host_depth_max
                   << ",\"host_render\":{\"records\":" << state->host_records
                   << ",\"merged_spans\":" << host_merged_spans.exchange(0, std::memory_order_relaxed);
+    if (host_check.load(std::memory_order_relaxed)) {
+      state->output << ",\"checks\":{";
+      bool first_writer = true;
+      for (const auto& [writer, count] : host_checks) {
+        char name[16];
+        std::snprintf(name, sizeof(name), "%08X", writer);
+        state->output << (first_writer ? "" : ",") << '"' << name << "\":" << count;
+        first_writer = false;
+      }
+      host_checks.clear();
+      state->output << "},\"check_mismatches\":"
+                    << host_check_mismatches.exchange(0, std::memory_order_relaxed)
+                    << ",\"check_unmatched\":"
+                    << host_check_unmatched.exchange(0, std::memory_order_relaxed)
+                    << ",\"check_perturbed\":"
+                    << host_check_perturbed.exchange(0, std::memory_order_relaxed);
+    }
   }
   // Every frame duration in the window, for run-wide percentiles and hitches.
   state->output << "},\"frame_ms\":[";

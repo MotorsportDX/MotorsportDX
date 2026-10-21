@@ -22,6 +22,7 @@ set(REXSYSTEM_SOURCES
     xmodule.cpp
     guest_path.cpp
     pm4_emissions.cpp
+    native_checks.cpp
 
     # Utilities
     util/object_table.cpp

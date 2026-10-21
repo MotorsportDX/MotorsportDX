@@ -45,6 +45,7 @@
 !/outputs/FM4-build/e2e/pm4_writers.py
 !/outputs/FM4-build/e2e/frame_diff.py
 !/outputs/FM4-build/e2e/parity.py
+!/outputs/FM4-build/e2e/coverage.py
 !/outputs/FM4-build/e2e/test_e2e_tools.py
 !/outputs/FM4-build/e2e/e2e.py
 !/outputs/FM4-build/e2e/jev.py
@@ -250,6 +251,7 @@
 !/work/fm4-rex/src/fm4-guest-hooks.cpp
 !/work/fm4-rex/src/fm4-guest-hooks.h
 !/work/fm4-rex/src/fm4-n0-trace.cpp
+!/work/fm4-rex/src/fm4-native-check.cpp
 !/work/fm4-rex/src/fm4-stream-trace.cpp
 !/work/fm4-rex/src/fm4-streaming-fixes.cpp
 !/work/fm4-rex/src/fm4-vblank-rate.cpp

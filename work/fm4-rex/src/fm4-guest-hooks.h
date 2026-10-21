@@ -76,4 +76,13 @@ void N0OverflowPost(const PPCContext& ctx, uint8_t* base);
 uint64_t N0ZoneStart();
 void N0RenderFrameEnd(uint64_t start);
 
+// fm4-native-check.cpp (FM4_NATIVE_CHECK): the producer side of the identity
+// check of the native path. Pre and post calls bracket a PM4 writer's original
+// body; the device comes from the draw flush.
+void NativeCheckDevice(uint32_t address);
+void NativeCheckPre(uint32_t writer, uint8_t* base);
+void NativeCheckPost(uint8_t* base);
+void NativeCheckOverflowPre(uint8_t* base);
+void NativeCheckOverflowPost(uint8_t* base);
+
 }  // namespace fm4::hooks

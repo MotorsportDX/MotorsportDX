@@ -19,6 +19,7 @@ set(REXGPU_XENOS_SOURCES
     graphics_system.cpp
     command_processor.cpp
     host_render_thread.cpp
+    host_render_check.cpp
     util/draw_extent_estimator.cpp
     util/draw.cpp
     packet_disassembler.cpp

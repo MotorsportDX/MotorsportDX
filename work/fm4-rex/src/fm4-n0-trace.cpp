@@ -21,7 +21,10 @@
 //   RunCommandBuffer calls on the other object kind (type 10);
 // - "render": calls of the render thread's frame sub_822DB318 that called
 //   Swap, with their total and longest time, and the calls without a Swap (the
-//   loop also calls it while it has nothing to present) with their total time.
+//   loop also calls it while it has nothing to present) with their total time;
+// - "alloc": the ring allocations and segment overflows of the second, as in
+//   the summary's table, "<allocator>:<return address>": [calls, dwords], only
+//   those that occurred (coverage.py sums them by phase).
 // <file>.summary is rewritten every 5 seconds with the cumulative tables: the
 // number of replays each recording had before it was recorded again (or by the
 // end), a histogram of the replays of buffers never seen ending and the 16 most
@@ -135,6 +138,7 @@ struct Trace {
   std::unordered_map<uint32_t, uint64_t> last_hash;  // Buffer -> PM4 hash (keycheck).
   std::map<uint64_t, uint64_t> lifetime_replays;  // Replays per closed recording -> recordings.
   std::map<uint64_t, std::pair<uint64_t, uint64_t>> allocations;  // allocator << 32 | lr.
+  std::map<uint64_t, std::pair<uint64_t, uint64_t>> window_allocations;  // This second's.
   std::vector<ThreadCalls*> threads;
   std::atomic<uint32_t> render_tid{0};
 };
@@ -160,10 +164,20 @@ Trace* GetTrace() {
           return static_cast<unsigned long long>(v.exchange(0, std::memory_order_relaxed));
         };
         size_t distinct;
+        std::string alloc;
         {
           std::lock_guard<std::mutex> lock(t.mutex);
           distinct = t.window_buffers.size();
           t.window_buffers.clear();
+          for (const auto& [key, value] : t.window_allocations) {
+            char item[96];
+            std::snprintf(item, sizeof(item), "%s\"%s:%08X\":[%llu,%llu]", alloc.empty() ? "" : ",",
+                          kAllocatorNames[key >> 32], uint32_t(key),
+                          static_cast<unsigned long long>(value.first),
+                          static_cast<unsigned long long>(value.second));
+            alloc += item;
+          }
+          t.window_allocations.clear();
         }
         char line[1024];
         std::snprintf(
@@ -197,8 +211,13 @@ Trace* GetTrace() {
             take(t.render_calls), double(take(t.render_ns)) / 1e6,
             double(take(t.render_max_ns)) / 1e6, take(t.render_idle_calls),
             double(take(t.render_idle_ns)) / 1e6);
+        // The ring allocations and overflows of this second by allocator and
+        // return address (the coverage log by phase, d3d-hle.md section 14.7).
+        std::string text = line;
+        text.resize(text.size() - 2);  // The closing brace and the newline.
+        text += ",\"alloc\":{" + alloc + "}}\n";
         if (std::FILE* file = std::fopen(t.path.c_str(), "ab")) {
-          std::fputs(line, file);
+          std::fputs(text.c_str(), file);
           std::fclose(file);
         }
         if (second % 5 == 0) WriteSummary(t, seconds);
@@ -552,9 +571,13 @@ void N0RingAllocation(uint32_t allocator, const PPCContext& ctx) {
   Trace* trace = GetTrace();
   if (!trace) return;
   std::lock_guard<std::mutex> lock(trace->mutex);
-  auto& entry = trace->allocations[uint64_t(allocator) << 32 | uint32_t(ctx.lr)];
-  ++entry.first;
-  entry.second += allocator < 2 ? ctx.r4.u32 : 0;
+  const uint64_t key = uint64_t(allocator) << 32 | uint32_t(ctx.lr);
+  const uint64_t dwords = allocator < 2 ? ctx.r4.u32 : 0;
+  for (auto* table : {&trace->allocations, &trace->window_allocations}) {
+    auto& entry = (*table)[key];
+    ++entry.first;
+    entry.second += dwords;
+  }
 }
 
 void N0FlushPre(const PPCContext& ctx, uint8_t* base) {
