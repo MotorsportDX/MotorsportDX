@@ -88,6 +88,24 @@ class FrameDiffTests(unittest.TestCase):
                                              regions=[(0, 0.85, 1, 1)])
         self.assertEqual(stats['above'], 0)
 
+    def test_bad_input(self):
+        with self.assertRaises(Exception):
+            frame_diff.parse_region('0.5,0,0.2,1')
+        write_ppm(self.root / 'a.ppm', image())
+        (self.root / 'b.ppm').write_bytes(b'P6\n%d %d\n255\n' % (W, H) + bytes(image())[:100])
+        with self.assertRaises(SystemExit):
+            frame_diff.compare_images(self.root / 'a.ppm', self.root / 'b.ppm')
+        run = make_run(self.root, 'r', [image(), image()])
+        with self.assertRaises(SystemExit):
+            frame_diff.frame_diff(run, run, phase='race')
+
+    def test_crops_at_high_level(self):
+        write_ppm(self.root / 'a.ppm', image())
+        write_ppm(self.root / 'b.ppm', image(140, (0, 0, 16, 16, 200)))
+        report = frame_diff.frame_diff(self.root / 'a.ppm', self.root / 'b.ppm', level=64,
+                                       out=self.root / 'out', crops=1, crop_size=32)
+        self.assertEqual(len(report['crops']), 1)
+
     def test_run_directory_uses_last_capture_and_stability(self):
         a = make_run(self.root, 'a', [image(90), image(), image()])
         b = make_run(self.root, 'b', [image(), image(), image(100, (0, 0, 8, 8, 0))])
@@ -107,7 +125,7 @@ class ParityTests(unittest.TestCase):
         self.tmp.cleanup()
 
     def test_pass(self):
-        code, report = gate(self.base, make_run(self.root, 'c', [image(), image()], draws=1005))
+        code, report = gate(self.base, make_run(self.root, 'c', [image(), image()], draws=1015))
         self.assertEqual((code, report['verdict']), (0, 'PASS'))
 
     def test_draws_and_predication_fail(self):
@@ -195,12 +213,18 @@ class SummaryTests(unittest.TestCase):
             run = Path(tmp)
             perf = [dict(self.window(), t=float(t), draws=1000 * t) for t in range(1, 11)]
             (run / 'perf.jsonl').write_text(''.join(json.dumps(p) + '\n' for p in perf))
-            # An older run: phases come from the timeline marks against the windows' times.
-            timeline = [[4.5, 'phase:freeze'], [8.5, 'phase:end']]
-            (run / 'summary.json').write_text(json.dumps({'timeline': timeline}))
+            # A run with phase windows gets its phases recomputed.
+            (run / 'summary.json').write_text(json.dumps({'phase_windows': {'freeze': [4, 8]}}))
             summary = e2e.resummarize(run, 0)
-            self.assertEqual(summary['phase_windows'], {'freeze': [4, 8]})
             self.assertEqual(summary['phases']['freeze']['draws_per_frame_mean'], 130)
+            # An older run keeps its stored phases: its timeline and the windows' t have
+            # different origins.
+            stored = {'freeze': {'fps_mean': 1.0}}
+            (run / 'summary.json').write_text(json.dumps(
+                {'timeline': [[4.5, 'phase:freeze'], [8.5, 'phase:end']], 'phases': stored}))
+            summary = e2e.resummarize(run, 0)
+            self.assertEqual(summary['phases'], stored)
+            self.assertNotIn('phase_windows', summary)
 
     def test_guest_render_from_n0_trace(self):
         self.assertEqual(e2e.steady_by_phase([('race', 1000.0), ('freeze', 5000.0)], 9000.0),
@@ -218,6 +242,13 @@ class SummaryTests(unittest.TestCase):
             self.assertEqual(summary['phases']['race']['guest_render_thread_ms_per_frame_median'], 4)
             self.assertEqual(summary['phases']['freeze']['guest_render_thread_ms_per_frame_median'], 2)
             self.assertEqual(summary['guest_render_thread_source'], 'n0_trace')
+            # The title appends: a later run reads only its own lines.
+            offset = path.stat().st_size
+            with open(path, 'a') as file:
+                file.write(json.dumps({'steady_ms': 20000.0, 'render': {'calls': 10, 'ms': 90.0}}) + '\n')
+            summary = {'n0_trace': str(path), 'n0_trace_offset': offset}
+            e2e.guest_render_from_n0(summary)
+            self.assertEqual(summary['guest_render_thread_ms_per_frame_median'], 9)
             # A value from the perf trace wins.
             summary = {'n0_trace': str(path), 'guest_render_thread_ms_per_frame_median': 7}
             e2e.guest_render_from_n0(summary)

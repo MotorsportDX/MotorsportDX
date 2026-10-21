@@ -852,11 +852,14 @@ def run_once(options, out):
         args['user_data_root'] = str(prepare_profile(source, root, out))
     freeze = options.scenario == 'freeze' and not options.steps
     look = (FREEZE_LOOK if freeze else pipeline.DEFAULT_LOOK) if options.look is None else options.look
-    args.update({k: str(v) for k, v in pipeline.look_cvars(root, look, options.shader_dev).items()})
+    look_args = {k: str(v) for k, v in pipeline.look_cvars(root, look, options.shader_dev).items()}
+    args.update(look_args)
     args.update({k: str(v) for k, v in pipeline.ao_cvars(root, options.ao, options.shader_dev).items()})
     if freeze:
-        # After the look (whose sun knob sets the awaited scale), before the --arg items.
-        args.update(FREEZE_ARGS)
+        # Before the --arg items; a --look given for the run keeps what it sets (its sun knob
+        # sets the awaited scale and limit).
+        args.update({k: v for k, v in FREEZE_ARGS.items()
+                     if options.look is None or k not in look_args})
     for item in options.arg:
         key, value = item.lstrip('-').split('=', 1)
         args[key] = value
@@ -898,6 +901,9 @@ def run_once(options, out):
     if ai_driving:
         steps = without_driving_input(steps)
 
+    n0_trace = env.get('FM4_N0_TRACE') and str(root / env['FM4_N0_TRACE'])
+    # The title appends to the trace, so this run's lines start at its present size.
+    n0_offset = os.path.getsize(n0_trace) if n0_trace and os.path.isfile(n0_trace) else 0
     stderr = open(out / 'stderr.log', 'w', encoding='utf-8', errors='replace')
     started = time.time()
     process = subprocess.Popen(command, cwd=root, env=env, stdout=stderr, stderr=subprocess.STDOUT)
@@ -998,16 +1004,14 @@ def run_once(options, out):
     # Each phase covers the perf windows from its mark to the next mark.
     phase_windows = windows_by_phase(phases, len(perf))
     phase_stats = {name: summarize(perf[start:end], end - start) for name, (start, end) in phase_windows.items()}
-    n0_trace = env.get('FM4_N0_TRACE') and str(root / env['FM4_N0_TRACE'])
+    exe = root / options.game_build / 'fm4_rex.exe'
     summary = {
         'crashed': crashed, 'goal': options.goal, 'scenario': None if options.steps else options.scenario,
         'goal_reached': goal_reached, 'failed_step': failed_step, 'args': options.arg, 'profile': options.profile,
         'look': look,
         # The binary the run used: a baseline variance or a parity verdict holds for one binary.
-        'binary': {'path': str(Path(options.game_build) / 'fm4_rex.exe'),
-                   'sha256': pipeline.digest(root / options.game_build / 'fm4_rex.exe'),
-                   'mtime': time.strftime('%Y-%m-%d %H:%M:%S', time.localtime(
-                       (root / options.game_build / 'fm4_rex.exe').stat().st_mtime))},
+        'binary': {'path': str(exe), 'sha256': pipeline.digest(exe),
+                   'mtime': time.strftime('%Y-%m-%d %H:%M:%S', time.localtime(exe.stat().st_mtime))},
         'seconds': round(time.time() - started, 1), 'timeline': timeline,
         'frames_captured': len(frames), 'perf_windows': len(perf),
         **summarize(perf, options.measure),
@@ -1015,13 +1019,13 @@ def run_once(options, out):
         'phase_windows': phase_windows,
         'phase_frames': phase_frames,
         'phase_steady_ms': phase_steady_ms,
-        'n0_trace': n0_trace,
+        'n0_trace': n0_trace, 'n0_trace_offset': n0_offset,
         'final_capture': final_stats,
         'clear_gray_frames': clear_gray_frames,
         'errors': errors,
         'top_errors': sorted(errors.items(), key=lambda kv: -kv[1])[:10],
     }
-    guest_render_from_n0(summary)
+    guest_render_from_n0(summary, options.measure)
     (out / 'summary.json').write_text(json.dumps(summary, indent=2))
     return summary
 
@@ -1051,6 +1055,7 @@ def aggregate(runs):
                  for r in runs],
         'crashed': next((r['crashed'] for r in runs if r['crashed']), None),
         'goal': runs[0]['goal'], 'scenario': runs[0].get('scenario'), 'args': runs[0]['args'],
+        'look': runs[0].get('look'), 'binary': runs[0].get('binary'),
         'failed_steps': [r.get('failed_step') for r in runs],
         'goal_reached': None if runs[0]['goal_reached'] is None else all(r['goal_reached'] for r in runs),
         'fps_median': median(pick('fps_median')),
@@ -1111,26 +1116,31 @@ def steady_by_phase(marks, end):
 
 
 def n0_render_ms(lines):
-    """Median over n0.jsonl lines of the guest render thread's time per presented frame."""
+    """Median over n0.jsonl seconds of render.ms / render.calls: the guest render thread's
+    time per call of its frame function that presented a frame (calls without a Swap left out)."""
     values = [l['render']['ms'] / l['render']['calls'] for l in lines
               if (l.get('render') or {}).get('calls')]
     return round(statistics.median(values), 2) if values else None
 
 
-def guest_render_from_n0(summary):
+def guest_render_from_n0(summary, measure=0):
     """guest_render_thread_ms_per_frame_median of the run and its phases from the D3D layer
-    trace (FM4_N0_TRACE, docs/e2e/traces.md) when the perf trace has none. A line covers the
-    second before its steady_ms; a phase takes the lines inside it."""
+    trace (FM4_N0_TRACE, docs/e2e/traces.md) when the perf trace has none. Only the run's own
+    lines count (from n0_trace_offset; the title appends). A line covers the second before its
+    steady_ms; a phase takes the lines inside it, the run the steady part as summarize does."""
     path = summary.get('n0_trace')
     if not path or not Path(path).is_file():
         return
-    lines = [json.loads(l) for l in Path(path).read_text().splitlines() if l.strip()]
+    with open(path, 'rb') as file:
+        file.seek(summary.get('n0_trace_offset', 0))
+        lines = [json.loads(l) for l in file.read().decode().splitlines() if l.strip()]
     def put(target, value):
         key = 'guest_render_thread_ms_per_frame_median'
         if value is not None and (key not in target or target.get('guest_render_thread_source') == 'n0_trace'):
             target[key] = value
             target['guest_render_thread_source'] = 'n0_trace'
-    put(summary, n0_render_ms(lines[len(lines) // 3:] if len(lines) > 6 else lines))
+    put(summary, n0_render_ms(lines[-measure:] if measure else
+                              (lines[len(lines) // 3:] if len(lines) > 6 else lines)))
     for name, (start, end) in (summary.get('phase_steady_ms') or {}).items():
         if name in (summary.get('phases') or {}):
             put(summary['phases'][name], n0_render_ms(
@@ -1139,22 +1149,18 @@ def guest_render_from_n0(summary):
 
 def resummarize(out, measure):
     """Refreshes perf statistics of finished runs, e.g. after new summary fields were added.
-    Phases are recomputed from phase_windows, or for older runs from the phase marks of the
-    timeline against the perf windows' times (both count from the launch)."""
+    Phases are recomputed from phase_windows; runs written before phase_windows keep their
+    stored phases (their timeline counts from the launch, the perf windows' t from the perf
+    trace's start, a few seconds later)."""
     def refresh(directory):
         summary = json.loads((directory / 'summary.json').read_text())
         perf = [json.loads(line) for line in (directory / 'perf.jsonl').read_text().splitlines()]
         summary.update(summarize(perf, measure))
         windows = summary.get('phase_windows')
-        if windows is None and summary.get('timeline'):
-            marks = [(step[1][6:], sum(1 for p in perf if p.get('t', 0) <= step[0]))
-                     for step in summary['timeline'] if str(step[1]).startswith('phase:')]
-            windows = windows_by_phase(marks, len(perf))
         if windows is not None:
-            summary['phase_windows'] = windows
             summary['phases'] = {name: summarize(perf[start:end], end - start)
                                  for name, (start, end) in windows.items()}
-        guest_render_from_n0(summary)
+        guest_render_from_n0(summary, measure)
         (directory / 'summary.json').write_text(json.dumps(summary, indent=2))
         return summary
     runs = sorted(out.glob('run[0-9]*'), key=lambda d: int(d.name[3:]))

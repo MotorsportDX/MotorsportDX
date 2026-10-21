@@ -91,7 +91,7 @@ def crop_panel(a, b, diff, width, rect, level, gap=4):
         start = line * width + x
         rows += a[start * 3:(start + w) * 3] + white + b[start * 3:(start + w) * 3] + white
         for v in diff[start:start + w]:
-            rows += bytes((255, min(255, 128 + v * 2), 0)) if v > level else bytes((v * 8,) * 3)
+            rows += bytes((255, min(255, 128 + v * 2), 0)) if v > level else bytes((min(255, v * 8),) * 3)
     return 3 * w + 2 * gap, h, bytes(rows)
 
 
@@ -101,6 +101,9 @@ def compare_images(a_path, b_path, level=LEVEL, regions=()):
     wb, hb, b = e2e.read_ppm(Path(b_path))
     if (wa, ha) != (wb, hb):
         raise SystemExit(f'size differs: {a_path} {wa}x{ha}, {b_path} {wb}x{hb}')
+    for path, data in ((a_path, a), (b_path, b)):
+        if len(data) < wa * ha * 3:
+            raise SystemExit(f'{path} is cut short: {len(data)} of {wa * ha * 3} bytes of pixels')
     a, b = a[:wa * ha * 3], b[:wb * hb * 3]
     diff = mask_regions(pixel_diff(a, b), wa, ha, regions)
     pixels = wa * ha
@@ -130,13 +133,18 @@ def write_crops(out, stem, data, width, height, level, count, size):
 
 
 def phase_ppms(run, phase):
-    """The PPM captures of a phase of a run, in order (all captures without phase_frames)."""
+    """The PPM captures of a phase of a run, in order (all captures for a run written before
+    phase_frames, or without a summary)."""
     run = Path(run)
     capture = run / 'capture'
     names = None
     summary = run / 'summary.json'
     if summary.is_file():
-        names = (json.loads(summary.read_text()).get('phase_frames') or {}).get(phase)
+        phase_frames = json.loads(summary.read_text()).get('phase_frames')
+        if phase_frames is not None:
+            if phase not in phase_frames:
+                raise SystemExit(f'{run} has no phase {phase!r} (it reached {sorted(phase_frames)})')
+            names = phase_frames[phase]
     frames = [capture / f'{n}.ppm' for n in names] if names is not None else sorted(capture.glob('frame-*.ppm'))
     frames = [f for f in frames if f.is_file()]
     if not frames:
@@ -155,9 +163,14 @@ def resolve(path, phase):
 
 
 def parse_region(text):
-    values = [float(v) for v in text.split(',')]
-    if len(values) != 4 or not all(0 <= v <= 1 for v in values):
-        raise argparse.ArgumentTypeError('a region is x0,y0,x1,y1 as fractions of the frame')
+    try:
+        values = [float(v) for v in text.split(',')]
+    except ValueError:
+        values = []
+    if (len(values) != 4 or not all(0 <= v <= 1 for v in values)
+            or values[0] >= values[2] or values[1] >= values[3]):
+        raise argparse.ArgumentTypeError('a region is x0,y0,x1,y1 as fractions of the frame, '
+                                         'with x0 < x1 and y0 < y1')
     return tuple(values)
 
 
