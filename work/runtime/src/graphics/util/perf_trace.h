@@ -111,6 +111,9 @@ struct State {
   uint64_t split_tsc[size_t(Split::kCount)]{};
   uint32_t split_packets[size_t(Split::kCount)]{};
   uint64_t window_tsc = 0;
+  // Host render thread (host_render_thread): records taken, and the sum and
+  // maximum of the queue depth when each was taken.
+  uint64_t host_records = 0, host_depth_sum = 0, host_depth_max = 0;
 };
 
 // Every resolve destination seen in the run, rewritten as JSON next to the
@@ -222,6 +225,25 @@ inline void CountInvalidation(uint64_t bytes) {
 inline std::atomic<uint32_t> vblanks[3]{};
 inline void CountVblank(uint32_t kind) {
   if (Get()) vblanks[kind].fetch_add(1, std::memory_order_relaxed);
+}
+
+// Host render thread (host_render_thread, stage N1 of docs/analysis/d3d-hle.md):
+// set when it replaces the command processor thread, so that the windows carry
+// render_thread_busy_ms (the thread's wall time not spent waiting, the same
+// measure as cp_busy), queue_depth_mean and queue_depth_max (the records queued
+// when each was taken) and host_records and host_merged_spans (PM4 spans merged
+// into the last record because the queue was full; guest threads).
+inline std::atomic<bool> host_render{false};
+inline std::atomic<uint32_t> host_merged_spans{0};
+inline void CountHostMergedSpan() {
+  if (Get()) host_merged_spans.fetch_add(1, std::memory_order_relaxed);
+}
+inline void CountHostRecord(uint64_t depth) {
+  State* state = Get();
+  if (!state) return;
+  ++state->host_records;
+  state->host_depth_sum += depth;
+  state->host_depth_max = depth > state->host_depth_max ? depth : state->host_depth_max;
 }
 
 // Submit thread (its own thread): jobs finished, and wall time per job in
@@ -448,6 +470,17 @@ inline void OnSwap() {
     for (size_t i = 0; i < size_t(Split::kCount); ++i) {
       state->output << (i ? "," : "") << '"' << kSplitNames[i] << "\":" << state->split_packets[i];
     }
+  }
+  if (host_render.load(std::memory_order_relaxed)) {
+    uint64_t wait_ticks = 0;
+    for (uint64_t ticks : state->wait_ticks) wait_ticks += ticks;
+    // The top-level names are the backend-neutral ones of e2e.py.
+    state->output << "},\"render_thread_busy_ms\":"
+                  << ms(elapsed > wait_ticks ? elapsed - wait_ticks : 0) << ",\"queue_depth_mean\":"
+                  << (state->host_records ? double(state->host_depth_sum) / state->host_records : 0.0)
+                  << ",\"queue_depth_max\":" << state->host_depth_max
+                  << ",\"host_render\":{\"records\":" << state->host_records
+                  << ",\"merged_spans\":" << host_merged_spans.exchange(0, std::memory_order_relaxed);
   }
   // Every frame duration in the window, for run-wide percentiles and hitches.
   state->output << "},\"frame_ms\":[";

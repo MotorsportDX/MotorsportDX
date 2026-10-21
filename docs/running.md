@@ -73,7 +73,8 @@ In a BuildRoot it starts with the Disc and content paths of `local.json`.
 When Play is pressed, the launcher checks the Discs and content, the key bindings and
 the options, compares the build artifacts with `build-result.json` once per session,
 writes `content-packages.txt`, and starts `game-buildm4_rex.exe` with the logs in
-`logs\play.log` and `logsuntime.log`, as `run` does. It hides while the game runs
+`logs\play.log` and `logs
+untime.log`, as `run` does. It hides while the game runs
 and shows again when the game exits. If the game exits with an error, a banner shows
 the exit code and the time it ran, with buttons that open both logs.
 
@@ -194,6 +195,7 @@ takes a value.
 | `-TextureReplace <dir>` | off | Use `<hash>.dds` files from this directory instead of the game textures with that hash. See [Texture replacement](#texture-replacement). |
 | `-Info` | off | Show the settings overlay at start. F2 toggles it in any run. |
 | `-Rov` | off | Use the earlier pixel shader interlock render target path, for comparisons. |
+| `-Native` | off | Stage N1 of the native path: a host render thread consumes the guest's commands from a record queue instead of the command processor thread. Races in one tile only. See [-Native](#-native). |
 | `-SingleTile` | with TAA | Render races as one 720p tile without MSAA also with a look without TAA, then with FXAA on the swap. A look with TAA (every preset) renders one tile anyway. |
 | `-Msaa` | off | Keep the tiles and MSAA of `-Quality` with a look that has TAA. |
 | `-FixedVblank` | off | Hold every swap to the fixed 60 Hz vblank grid. |
@@ -322,6 +324,27 @@ Shader mods and ambient occlusion are RTV only, by design: with `-Rov` the runti
 turns off the shader overrides ("Shader overrides need bindless resources and host
 render targets" in the log), so every look mod and the AO are gone and the picture is
 the title's own. Compare the default path against `-Rov` with `-Look original`.
+
+#### -Native
+
+Runs the first increment of stage N1 of the native port
+([D3D-level HLE, section 14](analysis/d3d-hle.md#14-stage-n1-design-21-october-2026)):
+`host_render_thread=true`. A host render thread ("GPU Host Render") takes the
+place of the command processor thread ("GPU Commands"). The guest's kicks of the
+ring write pointer become records in a bounded queue, and the host render thread
+executes them in order, waiting on the queue instead of spinning. Every PM4 writer
+of the title is still on the fallback, so the PM4 is the same as on the default
+path, and the render targets stay on RTV.
+
+- Races must render in one tile (a look with TAA, every preset, or `-SingleTile`).
+  With `-Msaa` or a look without TAA the tiles stay on the PM4 RTV path, and the
+  launcher says so.
+- `-Native` with `-Rov` is refused: `-Rov` stays the uncorrected reference.
+- `host_render_queue_capacity` (default 256) is the queue length above which a new
+  span of the ring merges into the last record, so the guest never waits for the
+  queue.
+- The perf trace adds `render_thread_busy_ms`, `queue_depth_mean`,
+  `queue_depth_max` and `host_render` (records and merged spans) to each window.
 
 #### -SingleTile and -Msaa
 

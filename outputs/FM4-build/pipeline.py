@@ -789,6 +789,8 @@ def info_overlay(cvars,env,look,quality,display=None):
     pacing='VRR pacing' if cvars.get('vblank_vrr')=='true' else 'fixed vblank grid'
     mirror='half rate' if env.get('FM4_HALF_RATE_MIRROR')=='1' else 'every frame'
     path=cvars.get('render_target_path_d3d12','rtv').upper()
+    if cvars.get('host_render_thread')=='true':
+        path+=' (host render thread)'
     lines.append(f'Races: {rate} fps, {pacing}; mirror {mirror}; {path} render targets')
     full=[name for name in ('replay','countdown') if name in env.get('FM4_FULL_RATE','')]
     if full:
@@ -870,10 +872,24 @@ def auto_single_tile(look,rov=False,msaa=False):
     and so does a look without TAA."""
     return taa_enabled(look_knobs(look)) and not rov and not msaa
 
+def native_cvars(single_tile,rov=False):
+    """Cvars of -Native: stage N1 of the native path, the host render thread fed by a record
+    queue (docs/analysis/d3d-hle.md, section 14). It covers races in one tile; the tiles and MSAA
+    of -Quality stay on the PM4 RTV path until stage N3, and -Rov, the uncorrected reference, is
+    never combined with it."""
+    if rov:
+        raise ValueError('-Native runs on the host render target path (RTV); it cannot be combined with -Rov.')
+    if not single_tile:
+        print('-Native: races keep the tiles of -Quality here, so the PM4 RTV path runs instead '
+              '(the native path covers one tile until stage N3).')
+        return {}
+    return {'host_render_thread':'true'}
+
 def launch(root,single_tile=False,fixed_vblank=False,frame_rate=None,rov=False,
            resolution_scale=None,full_rate_mirror=False,look=None,shadow_workaround=False,
            quality=None,display=DEFAULT_DISPLAY,fullscreen=False,supersample=False,info=False,
-           ao=False,shader_dev=False,texture_dump=None,texture_replace=None,msaa=False):
+           ao=False,shader_dev=False,texture_dump=None,texture_replace=None,msaa=False,
+           native=False):
     state = json.loads((root/'local.json').read_text())
     disc1,disc2 = validate_discs(state['disc1'],state['disc2'])
     report=json.loads((root/'build-result.json').read_text())
@@ -890,7 +906,7 @@ def launch(root,single_tile=False,fixed_vblank=False,frame_rate=None,rov=False,
         resolution_scale=resolution_scale,full_rate_mirror=full_rate_mirror,look=look,
         shadow_workaround=shadow_workaround,quality=quality,display=display,fullscreen=fullscreen,
         supersample=supersample,info=info,ao=ao,shader_dev=shader_dev,texture_dump=texture_dump,
-        texture_replace=texture_replace,msaa=msaa,content_manifest=manifest)
+        texture_replace=texture_replace,msaa=msaa,content_manifest=manifest,native=native)
     print(description)
     if texture_dump:
         print(f'Texture dump: {cvars["texture_dump_path"]}')
@@ -905,7 +921,7 @@ def launch_plan(root,disc1,single_tile=False,fixed_vblank=False,frame_rate=None,
                 resolution_scale=None,full_rate_mirror=False,look=None,shadow_workaround=False,
                 quality=None,display=DEFAULT_DISPLAY,fullscreen=False,supersample=False,info=False,
                 ao=False,shader_dev=False,texture_dump=None,texture_replace=None,msaa=False,
-                content_manifest=None,monitor=None):
+                content_manifest=None,monitor=None,native=False):
     """The cvars, the FM4_ environment and the display description of a run of the options of
     launch. The GUI launcher (work/fm4-launcher, plan.cpp) ports this function; launcher_tests
     compares the two. monitor: the primary monitor's (width, height, DPI scale) instead of the
@@ -935,6 +951,8 @@ def launch_plan(root,disc1,single_tile=False,fixed_vblank=False,frame_rate=None,
         # instead of 2.5, for comparisons when the host render target path misbehaves.
         cvars.pop('edram_single_rt_no_wrap')
         cvars.update({'render_target_path_d3d12':'rov','rov_occlusion_async':'all'})
+    if native:
+        cvars.update(native_cvars(single_tile,rov))
     screen,description=display_settings(display,fullscreen,supersample,resolution_scale,monitor)
     cvars.update(screen)
     if frame_rate:
@@ -1194,6 +1212,9 @@ def main():
                         help='run: no shadow map outside the cockpit in races (the old Xenia workaround)')
     parser.add_argument('--rov',action='store_true',
                         help='run: the slower pixel shader interlock render target path instead of RTV')
+    parser.add_argument('--native',action='store_true',
+                        help='run: stage N1 of the native path, the host render thread instead of the '
+                             'command processor thread (one tile only; docs/analysis/d3d-hle.md)')
     parser.add_argument('--look',
                         help='run: post-processing look, a preset ('+', '.join(LOOK_PRESETS)+
                              '; pc is aces; default '+DEFAULT_LOOK+') and/or knobs, for example '
@@ -1241,7 +1262,8 @@ def main():
                                      args.resolution_scale,args.full_rate_mirror,args.look,
                                      args.shadow_workaround,args.quality,args.display,
                                      args.fullscreen,args.supersample,args.info,args.ao,
-                                     args.shader_dev,args.texture_dump,args.texture_replace,args.msaa)
+                                     args.shader_dev,args.texture_dump,args.texture_replace,args.msaa,
+                                     args.native)
     if args.action=='warmcache': warm_cache(root)
     if args.action=='profbuild': build_profiling(root,fxc,args.jobs)
     if args.action=='export':

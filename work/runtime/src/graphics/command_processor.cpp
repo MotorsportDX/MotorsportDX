@@ -32,6 +32,7 @@
 #include <rex/graphics/command_processor.h>
 #include <rex/graphics/flags.h>
 #include <rex/graphics/graphics_system.h>
+#include <rex/graphics/host_render_queue.h>
 #include <rex/graphics/pipeline/texture/info.h>
 #include <rex/graphics/sampler_info.h>
 #include <rex/graphics/xenos.h>
@@ -167,12 +168,20 @@ bool CommandProcessor::Initialize() {
   }
 
   worker_running_ = true;
+  const bool host_render_thread = HostRenderThreadEnabled();
+  if (host_render_thread) {
+    CreateHostRenderQueue();
+  }
   worker_thread_ = system::object_ref<system::XHostThread>(
-      new system::XHostThread(kernel_state_, 128 * 1024, 0, [this]() {
-        WorkerThreadMain();
+      new system::XHostThread(kernel_state_, 128 * 1024, 0, [this, host_render_thread]() {
+        if (host_render_thread) {
+          HostRenderThreadMain();
+        } else {
+          WorkerThreadMain();
+        }
         return 0;
       }));
-  worker_thread_->set_name("GPU Commands");
+  worker_thread_->set_name(host_render_thread ? "GPU Host Render" : "GPU Commands");
   worker_thread_->Create();
 
   return true;
@@ -182,6 +191,9 @@ void CommandProcessor::Shutdown() {
   worker_running_ = false;
   write_ptr_index_event_->Set();
   wait_reg_mem_event_->Set();
+  if (host_render_queue_) {
+    host_render_queue_->Wake();
+  }
   worker_thread_->Wait(0, 0, 0, nullptr);
   worker_thread_.reset();
 }
@@ -190,6 +202,14 @@ void CommandProcessor::InitializeShaderStorage(const std::filesystem::path& cach
                                                uint32_t title_id, bool blocking) {}
 
 void CommandProcessor::CallInThread(std::function<void()> fn) {
+  if (host_render_queue_) {
+    if (system::XThread::IsInThread(worker_thread_.get())) {
+      fn();
+    } else {
+      host_render_queue_->PushCall(std::move(fn));
+    }
+    return;
+  }
   if (pending_fns_.empty() && system::XThread::IsInThread(worker_thread_.get())) {
     fn();
   } else {
@@ -352,6 +372,9 @@ void CommandProcessor::InitializeRingBuffer(uint32_t ptr, uint32_t size_log2) {
   read_ptr_index_ = 0;
   primary_buffer_ptr_ = ptr;
   primary_buffer_size_ = uint32_t(1) << (size_log2 + 3);
+  if (host_render_queue_) {
+    host_render_queue_->ResetRing(0);
+  }
 }
 
 void CommandProcessor::EnableReadPointerWriteBack(uint32_t ptr, uint32_t block_size_log2) {
@@ -366,6 +389,12 @@ void CommandProcessor::EnableReadPointerWriteBack(uint32_t ptr, uint32_t block_s
 
 void CommandProcessor::UpdateWritePointer(uint32_t value) {
   write_ptr_index_ = value;
+  if (host_render_queue_) {
+    if (value != 0xBAADF00D) {
+      host_render_queue_->PushPm4Span(value);
+    }
+    return;
+  }
   write_ptr_index_event_->Set();
 }
 

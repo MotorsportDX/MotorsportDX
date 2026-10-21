@@ -37,6 +37,7 @@ class ByteStream;
 namespace rex::graphics {
 
 class GraphicsSystem;
+class HostRenderQueue;
 class Shader;
 
 enum class ReadbackResolveMode {
@@ -145,6 +146,12 @@ class CommandProcessor {
   };
 
   void WorkerThreadMain();
+  // host_render_thread (host_render_thread.cpp): the host render thread of
+  // stage N1 of the native path in place of WorkerThreadMain, fed by
+  // host_render_queue_ instead of polling the write pointer.
+  static bool HostRenderThreadEnabled();
+  void CreateHostRenderQueue();
+  void HostRenderThreadMain();
   virtual bool SetupContext() = 0;
   virtual void ShutdownContext() = 0;
 
@@ -281,6 +288,8 @@ class CommandProcessor {
   system::object_ref<system::XHostThread> worker_thread_;
 
   std::queue<std::function<void()>> pending_fns_;
+  // Set with host_render_thread: the records the host render thread consumes.
+  std::unique_ptr<HostRenderQueue> host_render_queue_;
 
   // MicroEngine binary from PM4_ME_INIT
   std::vector<uint32_t> me_bin_;

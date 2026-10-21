@@ -4464,6 +4464,14 @@
     {
       "path": "work/fm4-rex/tests/texture-replacement-tests.cpp",
       "provenance": "Synthetic tests/oracle; no game input data"
+    },
+    {
+      "path": "work/runtime/include/rex/graphics/host_render_queue.h",
+      "provenance": "runtime-fork"
+    },
+    {
+      "path": "work/runtime/src/graphics/host_render_thread.cpp",
+      "provenance": "runtime-fork"
     }
   ]
 }

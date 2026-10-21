@@ -13,6 +13,7 @@ param(
     [switch]$Msaa,
     [switch]$FixedVblank,
     [switch]$Rov,
+    [switch]$Native,
     [switch]$FullRateMirror,
     [switch]$ShadowWorkaround,
     [ValidateSet('native','720p','1080p','1440p','4k')][string]$Display,
@@ -47,6 +48,7 @@ if ($SingleTile) { $arguments += @('--single-tile') }
 if ($Msaa) { $arguments += @('--msaa') }
 if ($FixedVblank) { $arguments += @('--fixed-vblank') }
 if ($Rov) { $arguments += @('--rov') }
+if ($Native) { $arguments += @('--native') }
 if ($FullRateMirror) { $arguments += @('--full-rate-mirror') }
 if ($ShadowWorkaround) { $arguments += @('--shadow-workaround') }
 if ($Display) { $arguments += @('--display', $Display) }

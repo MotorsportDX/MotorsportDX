@@ -64,6 +64,7 @@ Each line (one window) has:
   - `flushes`, `flushes_blocked`, `flush_jobs`, `flush_wait_ms`: the command processor waiting for the thread to drain before a synchronous submission (the swap): calls, calls that found work queued or running, the jobs they found, and the wall time. This wait lies inside the `submit` and `swap` zones and is counted as busy, not in `wait_ms`, so `cp_busy` stays comparable with older traces.
 - `gpu`: GPU timestamps of the frames in the window (`frames`, busy time, `resolve_ms`, `span_ms`).
 - `occlusion_samples`: mean passing samples per occlusion interval, `unawaited` and `awaited`.
+- With `host_render_thread` (`-Native`, [running](../running.md#-native)) only: `render_thread_busy_ms` (the host render thread's wall time not spent waiting, the same measure as `cp_busy`), `queue_depth_mean` and `queue_depth_max` (the records queued when each record was taken), and `host_render` with `records` (records taken) and `merged_spans` (spans of the ring merged into the last record because the queue was full). The waits of `wait_ms` are then the host render thread's; `guest_idle` is its wait on the empty queue.
 
 Compare stall times as well as FPS: FPS varies with what happens in a race. Group seconds by draws per frame to compare runs at the same load (a car facing a wall draws a third as much). `summary.json` has the medians of these per run (see [README](README.md#reading-summaryjson)).
 
