@@ -559,7 +559,7 @@ In increment 3 the dirty writers' records become native (register deltas read fr
 
 ### 14.8 Increment 2 results, 21 and 22 October 2026
 
-On `I:\FM4-build-usa` (USA release), commit `adb9c61` (`fm4_rex.exe` SHA-256 `f3e2ae8574f0ffa54a0aea0940806818ed2a2be6386880496d2738d9f2bec8d1`, `rexgpu-xenos.dll` `826205d716040999ac2512daf0613b51656ba7ce20e4164bec879490b1a8b1b6`, `rexruntime.dll` `b57464c77c3009a172784e5c4f85a041bdcd4a2b0d3e466935ac2a6f42450a7f`), the host render thread, the launcher defaults at 240 Hz and 1x, the title's AI driving.
+On `I:\FM4-build-usa` (USA release), commit `1bf8233` (`fm4_rex.exe` SHA-256 `f3e2ae8574f0ffa54a0aea0940806818ed2a2be6386880496d2738d9f2bec8d1`, `rexgpu-xenos.dll` `826205d716040999ac2512daf0613b51656ba7ce20e4164bec879490b1a8b1b6`, `rexruntime.dll` `b57464c77c3009a172784e5c4f85a041bdcd4a2b0d3e466935ac2a6f42450a7f`), the host render thread, the launcher defaults at 240 Hz and 1x, the title's AI driving.
 
 | Run | Setting | Ranges compared | Mismatches | Other |
 |---|---|---|---|---|
