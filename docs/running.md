@@ -339,7 +339,7 @@ path, and the render targets stay on RTV.
   With `-Msaa` or a look without TAA the tiles stay on the PM4 RTV path, and the
   launcher says so.
 - `-Native` with `-Rov` is refused: `-Rov` stays the uncorrected reference.
-- `host_render_queue_capacity` (default 256) is the queue length above which a new
+- `host_render_queue_capacity` (default 256) is the queue length at which a new
   span of the ring merges into the last record when that is a span, so the guest
   never waits for the queue. Calls (`CallInThread`) are not bounded.
 - The host render thread executes consecutive spans of the ring as one, as the

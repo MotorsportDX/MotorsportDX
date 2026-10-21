@@ -381,6 +381,12 @@ The race times are the last race clock read before the rewind showed.
 - The same scene on the USA data (`I:\FM4-build-usa`, `snapshots\n0main`, local main of 21 October 2026, `34662eb1...`, run `fz-n0` with `FM4_N0_TRACE`): 3,270.94 draws and 9,141.46 predicated run packets per frame, 21.81% of the pixels against `fz2-rtv-a`. Its guest render thread took 16.0 ms per presented frame in the frozen phase at 60 fps, nearly the whole frame interval: at 60 Hz the zone measures the frame pacing more than the work.
 - Without the seed (on the build of `snapshots\n0val` on `I:\FM4-build-usa`, `7e50a9fc...`) two RTV runs differed in 54.92% of the pixels and by 7.3% in draws per frame: other opponents and another grid slot.
 
+### 21 October 2026: the N0 baseline at 240 Hz
+
+Superseded the same day as the current 240 Hz baseline by the RTV perf gate of the host render thread (`n1rtvp2`, [current status](current.md#host-render-thread-stage-n1-21-october-2026)).
+
+Three `photo` runs without counters (`n0-p1x`) on `I:\FM4-build-usa`, on build 3 of the N0 measurements (`8d987f5` with the counters, all off; [D3D-level HLE, 13.1](../analysis/d3d-hle.md#131-runs)), with the launcher defaults at 240 Hz and 1x: the race ran at 196.6 to 220.0 fps (median of the runs 217.5), p99 6.91 ms, command processor busy 803 ms/s and GPU 2.89 ms per frame (medians of the three runs), 1,546 to 2,065 draws per frame. The races of the smoke gates of 20 October 2026 (other binaries, one run each) had 217.5 to 225.9 fps. The later `n1rtvp2` runs, on another build at about the same draw load (1,517 to 1,981 draws per frame), ran at 226.5 to 237.5 fps; the difference between the two builds is not explained.
+
 ## 5. Superseded settings and decisions
 
 Each row gives the date of the change, the setting that was replaced, and what happened later. The current values are in [running](../running.md) and [current status](current.md).
