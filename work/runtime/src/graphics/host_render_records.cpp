@@ -60,6 +60,7 @@ void CommandProcessor::HostApplyMarker(uint32_t sequence) {
   }
   ++perf_trace::host_records_applied;
   perf_trace::host_record_registers += offset;
+  perf_trace::host_records_empty += record.runs.empty();
 }
 
 void CommandProcessor::HostRecordMissing(uint32_t sequence, uint64_t stored) {

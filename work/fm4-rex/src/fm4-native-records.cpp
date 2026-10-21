@@ -74,6 +74,21 @@ uint32_t Scratch() {
   }
   return scratch;
 }
+// The last marker this thread wrote. A converted call on the same device whose
+// write pointer is still at the end of that marker (nothing written since)
+// joins its record instead of writing a marker of its own: the joined record
+// is published in a new slot and the marker's sequence dword rewritten. This
+// assumes that the guest does not kick the segment between two such calls (the
+// dirty writers run back to back in D3DDevice_FlushDirtyState, and the ring
+// allocators and the overflow, which kick, write PM4 and so end the joining);
+// a marker executed before its record was joined would show as a register
+// mismatch of the identity check.
+struct LastMarker {
+  uint32_t device = 0;
+  uint32_t pointer = 0;  // The write pointer before the marker.
+  uint64_t sequence = 0;
+};
+thread_local LastMarker last_marker;
 }  // namespace
 
 bool NativeConvert(NativeWriter writer, PPCContext& ctx, uint8_t* base, PPCFunc* original) {
@@ -87,9 +102,18 @@ bool NativeConvert(NativeWriter writer, PPCContext& ctx, uint8_t* base, PPCFunc*
   const uint32_t marker_bytes = records::kMarkerDwords * 4;
   if (pointer + marker_bytes >= end) return false;
 
+  const bool join = last_marker.device == device &&
+                    last_marker.pointer + marker_bytes == pointer &&
+                    records::SlotOf(uint32_t(last_marker.sequence))
+                            .sequence.load(std::memory_order_acquire) == last_marker.sequence;
   uint64_t record_sequence = 0;
   records::Slot& slot = records::Begin(&record_sequence);
   records::Record& record = slot.record;
+  if (join) {
+    const records::Record& joined = records::SlotOf(uint32_t(last_marker.sequence)).record;
+    record.runs = joined.runs;
+    record.values = joined.values;
+  }
   const uint64_t mask = ctx.r4.u64;
   uint32_t address = 0;
   switch (writer) {
@@ -126,15 +150,21 @@ bool NativeConvert(NativeWriter writer, PPCContext& ctx, uint8_t* base, PPCFunc*
       const uint32_t written = Load32(base, device + 48);
       Store32(base, device + 48, pointer);
       Store32(base, device + 52, end);
+      // A joining call adds its PM4 to the marker's copy.
+      const uint32_t marker = join ? last_marker.pointer : pointer;
       rex::system::native_checks::Entry entry;
+      if (!join || !rex::system::native_checks::Take(Physical(marker + 4), &entry)) {
+        entry = {};
+      }
       entry.writer = address;
       entry.sequence = record_sequence;
       entry.marker = true;
       if (written > scratch && written - scratch < kScratchBytes) {
-        entry.dwords.resize((written - scratch) / 4);
-        std::memcpy(entry.dwords.data(), Host(base, scratch + 4), entry.dwords.size() * 4);
+        const size_t at = entry.dwords.size();
+        entry.dwords.resize(at + (written - scratch) / 4);
+        std::memcpy(entry.dwords.data() + at, Host(base, scratch + 4), (written - scratch));
       }
-      rex::system::native_checks::Record(Physical(pointer + 4), std::move(entry));
+      rex::system::native_checks::Record(Physical(marker + 4), std::move(entry));
     }
   }
 
@@ -143,10 +173,17 @@ bool NativeConvert(NativeWriter writer, PPCContext& ctx, uint8_t* base, PPCFunc*
   // ends before the marker and goes on after it.
   NativeCheckSplitPre(base);
   records::Publish(slot, record_sequence);
-  Store32(base, pointer + 4, records::kMarkerHeader);
-  Store32(base, pointer + 8, records::kMarkerTag);
-  Store32(base, pointer + 12, uint32_t(record_sequence));
-  Store32(base, device + 48, pointer + marker_bytes);
+  if (join) {
+    Store32(base, last_marker.pointer + 12, uint32_t(record_sequence));
+  } else {
+    Store32(base, pointer + 4, records::kMarkerHeader);
+    Store32(base, pointer + 8, records::kMarkerTag);
+    Store32(base, pointer + 12, uint32_t(record_sequence));
+    Store32(base, device + 48, pointer + marker_bytes);
+    last_marker.device = device;
+    last_marker.pointer = pointer;
+  }
+  last_marker.sequence = record_sequence;
   NativeCheckSplitPost(base);
   return true;
 }

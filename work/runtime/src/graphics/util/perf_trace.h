@@ -247,7 +247,7 @@ enum class HostCheckReason : uint32_t { kBytes, kRegisters, kType3, kDraws, kCou
 // the registers they wrote (host render thread only), markers reached without a
 // record.
 inline std::atomic<bool> host_records{false};
-inline uint64_t host_records_applied = 0, host_record_registers = 0;
+inline uint64_t host_records_applied = 0, host_record_registers = 0, host_records_empty = 0;
 inline std::atomic<uint64_t> host_markers_missing{0};
 inline std::atomic<bool> host_check{false};
 inline std::map<uint32_t, uint64_t> host_checks;
@@ -506,7 +506,8 @@ inline void OnSwap() {
                     << ",\"record_registers\":" << host_record_registers
                     << ",\"markers_missing\":"
                     << host_markers_missing.exchange(0, std::memory_order_relaxed);
-      host_records_applied = host_record_registers = 0;
+      state->output << ",\"records_empty\":" << host_records_empty;
+      host_records_applied = host_record_registers = host_records_empty = 0;
     }
     if (host_check.load(std::memory_order_relaxed)) {
       state->output << ",\"checks\":{";
