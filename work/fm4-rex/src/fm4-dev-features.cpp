@@ -39,8 +39,11 @@ void TraceCaller(PPCContext& ctx, uint8_t* base, const char* what) {
 // a race), scheduled by the main loop (sub_822F7A00) as the task sub_826D0018.
 // The race itself is described by the race settings (sub_822DEC50: +444 of the
 // object at 0x82DC36FC). FM4_TRACE_RACE_SETUP=<file> also dumps them there.
+void FM4FixedSeedSessionStart(uint8_t* base);
+
 REX_EXTERN(__imp__sub_826CFA68);
 REX_HOOK_RAW(sub_826CFA68) {
+  FM4FixedSeedSessionStart(base);
   static const char* const dump = std::getenv("FM4_TRACE_RACE_SETUP");
   if (dump) {
     const uint32_t app = ctx.r3.u32;

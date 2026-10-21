@@ -51,6 +51,21 @@ Race setup trace:
 - `--env FM4_TRACE_RACE_SETUP=1` prints the guest return addresses of each race's player driver creation (the main loop state that loads a race, for finding the code behind a game mode), every car's driver setup and the pending session type.
 - `--env FM4_TRACE_RACE_SETUP=<file>` also appends 4 KB of the race settings (`sub_822DEC50`) to that file when a session starts.
 
+### Fixed seed for the race setup
+
+`--env FM4_FIXED_SEED=<n>` (decimal, or hex with `0x`) makes a race start the same way in every run: a Quick Race gets the same opponent cars and the same grid, including the player's slot. It is off by default and changes nothing without the variable. Source: [`fm4-fixed-seed.cpp`](../../work/fm4-rex/src/fm4-fixed-seed.cpp).
+
+What it pins:
+
+- The opponent cars. The title picks them with SQL (`SELECT ... FROM Drivable_Data_Car ... ORDER BY RANDOM() LIMIT %d`, `sub_824885C0`), and SQLite's `random()` draws from its RC4 generator, which it keys once from the platform's randomness. With the switch, the generator is keyed from the seed at the start of each opponent query, so the query always returns the same cars. The grid follows from the cars, so the player's slot repeats too.
+- The AI drivers' random state. Each AI driver (`sub_82A92FF0`) seeds it from the tick count when the race is set up. With the switch, the n-th driver of a race gets a seed derived from the seed and n.
+
+The title's other random states (the ANSI C generator `state * 1103515245 + 12345`) start from a constant (12345678) and repeat on their own.
+
+What still varies: anything that follows wall time or host timing, for example the cable cars and the crowd, and the number of frames between steps of the harness (menu timing, the moment of the rewind).
+
+`--env FM4_TRACE_RNG=1` prints the guest random draws: each caller's first draws of the ANSI C generator (`sub_828C8910`, `sub_828C8930`, `sub_828C89A8`, `sub_82303E60`, `sub_823866D0`) with the state address and value, each `sqlite3_randomness` call (`sub_82BCED10`) with the generator state, the opponent queries, and a summary of the callers at each session start.
+
 ## Shader overrides (phase B4)
 
 Shader overrides replace the DXBC translation of a guest pixel shader with HLSL that you write. Research notes are in [b4-shader-research.md](../analysis/b4-shader-research.md).
