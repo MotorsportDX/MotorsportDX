@@ -235,7 +235,7 @@ On RTV today the shader override path replaces a pixel shader per hash with HLSL
 The native path creates the pipelines and binds the resources itself, so a native shader contract (stage N5) can add:
 
 - replacement shaders that declare their own resources per pass (the scene depth, the GTAO result, higher-resolution shadow maps, lookup tables, new textures) and their own constant buffers;
-- vertex shader overrides, keyed by the hash taken where `IM_LOAD` is written (2.6), for example for a widescreen projection;
+- vertex shader overrides, keyed by the hash taken where `IM_LOAD` is written (2.6), or at replay for `IM_LOAD`s inside recordings (13.3), for example for a widescreen projection;
 - behaviour per pass: the same game shader can be treated differently in the scene, the mirror or the shadow pass;
 - new passes at D3D-level points (after the opaque geometry, before the transparent geometry, before the HUD), with Shader Model 6 and compute shaders (DXC is needed, as in the [FSR plan](fsr-plan.md));
 - an offline translation of every game shader to HLSL and DXIL on the user's machine, as XenosRecomp does for Unleashed Recompiled, so that no shader compiles during play and any shader can be edited.
@@ -302,13 +302,15 @@ The measurement part of stage N0 (section 9). The frozen-frame A/B harness and t
 
 All runs are on `I:\FM4-build-usa` (USA release) with the counters of [traces](../e2e/traces.md#d3d-layer-counters-fm4_n0_trace) (`FM4_N0_TRACE`, `FM4_N0_KEYCHECK`, `REX_PM4_STATS`, `REX_CP_SPLIT`), the launcher defaults (look `pc`, quality `high`, one tile with TAA, the asynchronous swap), 240 Hz and 1x unless stated, the title's AI driving. The `career` scenario covers a menu (Career, World Tour, the event screens), a race (Tsukuba Short Circuit, Ford Ka, 40 s) and a replay (30 s); its phases are the steady part as `e2e.py` measures them, the menu is the windows from PLAY CAREER to START RACE.
 
-| Run | Settings | Code |
+| Run | Settings | Build |
 |---|---|---|
-| `n0-career-c` | `FM4_N0_TRACE`, `REX_PM4_STATS` | `4e32b17` |
-| `n0-msaa-b` | the same with `-Msaa` (three predicated tiles, 4x MSAA) | `4e32b17` |
-| `n0-key`, `n0-key-msaa` | `FM4_N0_KEYCHECK` and `REX_LATE_WRITE_TRACE`, one tile and `-Msaa` | `9b46523` |
-| `n0-key2` | `FM4_N0_KEYCHECK` with the checks of copies and of later executions | `b3ef3bc` |
-| `n0-p1x`, `n0-p1x-split`, `n0-p2x-split` | `photo`, three runs each: no counters; `REX_CP_SPLIT=1`; `REX_CP_SPLIT=1` at 2x | `b3ef3bc` |
+| `n0-career-c` | `FM4_N0_TRACE`, `REX_PM4_STATS` | 1 |
+| `n0-msaa-b` | the same with `-Msaa` (three predicated tiles, 4x MSAA) | 1 |
+| `n0-key`, `n0-key-msaa` | `FM4_N0_KEYCHECK` and `REX_LATE_WRITE_TRACE`, one tile and `-Msaa` | 2 |
+| `n0-key2` | `FM4_N0_KEYCHECK` with the checks of copies and of later executions | 3 |
+| `n0-p1x`, `n0-p1x-split`, `n0-p2x-split` | `photo`, three runs each: no counters; `REX_CP_SPLIT=1`; `REX_CP_SPLIT=1` at 2x | 3 |
+
+The three builds are `8d987f5` with the counters as they grew that day: build 1 without the content links of 13.2, build 2 with them, build 3 also with the copy and first-execution checks of 13.3 (the counters as committed); the other code is the same in all three.
 
 The counters cost frame rate (the `career` race ran at 195.5 fps with `FM4_N0_TRACE` and 153.6 fps with `FM4_N0_KEYCHECK`), so the fps of the counter runs are not performance figures; those come from the `n0-p*` runs. Earlier runs of the same day (`n0-career`, `n0-career-b`, `n0-msaa`) are superseded: their counters were incomplete, and `n0-msaa` crashed in a summary writer that read freed guest memory (fixed before `n0-career-c`).
 
