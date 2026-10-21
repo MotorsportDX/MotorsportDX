@@ -1,6 +1,7 @@
-// Fixed seed for the race setup (FM4_FIXED_SEED=<n>, off by default): a Quick
-// Race then starts the same way in every run, with the same opponent cars and
-// grid. Two guest random sources make a race setup differ between runs:
+// Fixed seed for the race setup (FM4_FIXED_SEED=<n>, decimal or 0x hex, off by
+// default): the first Quick Race of each process then starts the same way, with
+// the same opponent cars and grid. Two guest random sources make a race setup
+// differ between runs:
 //   - The opponent cars: the title picks them with SQL (SELECT ... FROM
 //     Drivable_Data_Car ... ORDER BY RANDOM() LIMIT %d, sub_824885C0). SQLite's
 //     random() draws from its RC4 generator (state at 0x82E67848: isInit, i, j,
@@ -8,10 +9,12 @@
 //     cars (the player's slot too). With the switch, the generator is keyed
 //     from the seed at the start of each opponent query.
 //   - The AI drivers: each AI driver (sub_82A92FF0) seeds its random state
-//     (driver+124, a copy at +128) from the tick count (sub_8234BD70). With the
+//     (driver+124, a copy at +128) from sub_8234BD70, which returns
+//     [[0x820008E8]+16], presumably the tick count (not verified). With the
 //     switch, the n-th driver of a race gets a seed derived from the seed and n.
 // The title's other random states (the ANSI C LCG: state * 1103515245 + 12345)
-// start from the constant 12345678 and need no change.
+// start from the constant 12345678 once per process and are not reseeded, so a
+// later race in the same process may draw from other states.
 //
 // Diagnostic (FM4_TRACE_RNG=1): the first draws of each caller of the LCG
 // functions (sub_828C8910 next, sub_828C8930 int range, sub_828C89A8 vector,
@@ -20,6 +23,7 @@
 // the LCG callers at each session start.
 #include <rex/hook.h>
 #include <rex/memory.h>
+#include <cctype>
 #include <cstdint>
 #include <cstdio>
 #include <cstdlib>
@@ -38,9 +42,12 @@ std::optional<uint64_t> FixedSeed() {
   static const std::optional<uint64_t> seed = []() -> std::optional<uint64_t> {
     const char* value = std::getenv("FM4_FIXED_SEED");
     if (!value || !*value) return std::nullopt;
+    // Decimal, or hex with 0x (base 0 would read a leading 0 as octal).
+    const bool hex = value[0] == '0' && (value[1] == 'x' || value[1] == 'X');
+    const char* digits = hex ? value + 2 : value;
     char* end = nullptr;
-    const uint64_t seed = std::strtoull(value, &end, 0);
-    if (*end) {
+    const uint64_t seed = std::strtoull(digits, &end, hex ? 16 : 10);
+    if (!std::isxdigit(static_cast<unsigned char>(*digits)) || *end) {
       std::fprintf(stderr, "FM4 fixed seed: ignoring FM4_FIXED_SEED=%s (not a number)\n", value);
       return std::nullopt;
     }

@@ -16,9 +16,9 @@ The quickrace scenario was run on 21 October 2026 in I:\FM4-build-pass with fm4_
 | by 99 s | Pre-race menu (START RACE, STARTING GRID, ...) |
 | 120.2 s | The harness's next A press. It comes after a fixed 40 s wait, so it lands about 20 s after the pre-race menu shows |
 | 128.6 s | START RACE |
-| 142.5 s | LAPS on the HUD. This time comes from the freeze scenario's seed-a run of the same day |
+| (142.5 s) | LAPS on the HUD. Not from this run: it comes from the freeze scenario's seed-a run of the same day |
 
-The menus take about 52 s of the roughly 140 s from launch to LAPS. A direct launch could save at most that time. Boot to the title takes about 20 s, and the title plus the main menu take about 8 s more.
+The menus, from the main menu to GO RACE, take about 52 s. Launch to LAPS took 142.5 s in the freeze scenario's seed-a run, not the run in the table. A direct launch from the main menu could save at most the 52 s; the boot to the title (about 24 s) and the title plus main menu (about 4 s more) are not in that bound.
 
 ## What GO RACE does
 
@@ -38,7 +38,7 @@ The menus take about 52 s of the roughly 140 s from launch to LAPS. A direct lau
 ## What a direct launch needs
 
 1. **The current event**, `*(0x82DC36E8)`, set up as the Quick Race the menus build.
-   - It holds the mode at +16 and the track at +256 to +276; `sub_824D35D8` reads +276 and compares it with the track kinds.
+   - Its layout is read from the code only, not from a dump: the mode accessor `sub_82516590` returns `*(0x82DC36E8)+16`, and `sub_824D35D8` reads +16 as the mode and +256 to +276 for the track (it compares the word at +276 with the track kinds). The trace dumped `*(0x82DC36D8)` instead, another object.
    - The free play screens fill it. No setter for it is known yet.
 2. **The player's car.**
    - The builder takes it from the game object: `sub_822CA4A0(*(0x82DC36FC))`, then virtual +104.
@@ -66,7 +66,7 @@ After that come the implementation and the checks of the UI flow after the race:
 
 The total is about 2 to 3 days. The risk is that the scene stack rejects a jump from the main menu, or that the race needs state left behind by the car select screen, such as the loaded car model.
 
-The saving is at most about 52 s per run.
+The saving is at most about 52 s per run: the menu span only, not the boot or the title.
 
 ## Cheaper options
 
