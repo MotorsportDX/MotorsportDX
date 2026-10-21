@@ -358,6 +358,11 @@ bool CommandProcessor::Restore(::rex::stream::ByteStream* stream) {
   read_ptr_update_freq_ = stream->Read<uint32_t>();
   read_ptr_writeback_ptr_ = stream->Read<uint32_t>();
   write_ptr_index_.store(stream->Read<uint32_t>());
+  if (host_render_queue_) {
+    // The restored commands from the read index to the write index.
+    host_render_queue_->ResetRing(read_ptr_index_);
+    host_render_queue_->PushPm4Span(write_ptr_index_.load());
+  }
 
   return true;
 }

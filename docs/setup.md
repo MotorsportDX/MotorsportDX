@@ -229,7 +229,7 @@ runtime edits need only this stage. It then:
   [post pass framework](analysis/post-pass-framework.md));
 - writes `build-result.json`, which lists the SHA-256 hashes of the artifacts and
   records `gameplay_verified: false`;
-- builds the [GUI launcher](running.md#gui-launcher), `game-buildm4_launcher.exe`,
+- builds the [GUI launcher](running.md#gui-launcher), `game-build\fm4_launcher.exe`,
   from [work/fm4-launcher](../work/fm4-launcher) with the runtime's SDL3, Dear ImGui
   and JSON header, writes its tables to `launcher.json` and copies the look mods and
   post passes into `look` and `passes`;
@@ -364,7 +364,7 @@ repository.
   different builds; `run` checks the artifact hashes.
 - **`Launcher tests failed`:** the GUI launcher's port of the launch rules differs from
   `pipeline.py`. The log lists each difference (`logs\launcher-tests.log` and
-  `launcher-build	estsesult.json`). Change `work/fm4-launcher/src/plan.cpp` to match.
+  `launcher-build\tests\result.json`). Change `work/fm4-launcher/src/plan.cpp` to match.
 - **The GUI launcher does not start on another computer:** install the Visual C++
   2015-2022 x64 redistributable. A missing `MSVCP140_ATOMIC_WAIT.dll` means an older
   one is installed.

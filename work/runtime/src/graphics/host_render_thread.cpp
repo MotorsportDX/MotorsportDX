@@ -48,9 +48,13 @@ void HostRenderQueue::PushPm4Span(uint32_t end_index) {
     if (end_index == span_end_) {
       return;
     }
+    // A full queue merges the span into the last record when that is a span
+    // (the guest never writes past the published read index, so the merged
+    // span stays shorter than the ring). Calls are not bounded, and a span
+    // after a call is appended, so the queue exceeds its capacity by at most
+    // one span per queued call: calls are rare, and merging the span into one
+    // before the call would run it ahead of the call.
     if (records_.size() >= capacity_ && records_.back().kind == Kind::kPm4Span) {
-      // The guest never writes past the published read index, so the merged
-      // span stays shorter than the ring.
       records_.back().end = end_index;
       perf_trace::CountHostMergedSpan();
     } else {
@@ -84,6 +88,16 @@ bool HostRenderQueue::Pop(Record& record, size_t& depth) {
   depth = records_.size();
   record = std::move(records_.front());
   records_.pop_front();
+  if (record.kind == Kind::kPm4Span) {
+    // Consecutive kicks form one range of the ring: execute them as one, as
+    // the command processor thread executes all kicks since its last batch
+    // (one primary buffer end, so one submission, per batch, not per kick).
+    while (!records_.empty() && records_.front().kind == Kind::kPm4Span &&
+           records_.front().begin == record.end) {
+      record.end = records_.front().end;
+      records_.pop_front();
+    }
+  }
   return true;
 }
 

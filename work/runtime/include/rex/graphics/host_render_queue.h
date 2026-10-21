@@ -30,7 +30,8 @@ class HostRenderQueue {
     std::function<void()> call;
   };
   // capacity: the queue length above which a new PM4 span merges into the last
-  // record instead of being appended.
+  // record, when that is a span, instead of being appended. Calls are not
+  // bounded.
   explicit HostRenderQueue(size_t capacity);
 
   // The ring was (re)initialized: the next span starts at this index.
@@ -40,8 +41,9 @@ class HostRenderQueue {
   void PushPm4Span(uint32_t end_index);
   void PushCall(std::function<void()> fn);
 
-  // Takes the oldest record, false when the queue is empty. depth: the records
-  // queued before this one was taken, this one included.
+  // Takes the oldest record, false when the queue is empty. Consecutive PM4
+  // spans are taken as one span. depth: the records queued before this one
+  // was taken, this one included.
   bool Pop(Record& record, size_t& depth);
   bool empty() const;
   // Waits until a record is pushed, Wake is called or the timeout passes.

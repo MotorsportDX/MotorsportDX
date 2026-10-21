@@ -72,9 +72,8 @@ In a BuildRoot it starts with the Disc and content paths of `local.json`.
 
 When Play is pressed, the launcher checks the Discs and content, the key bindings and
 the options, compares the build artifacts with `build-result.json` once per session,
-writes `content-packages.txt`, and starts `game-buildm4_rex.exe` with the logs in
-`logs\play.log` and `logs
-untime.log`, as `run` does. It hides while the game runs
+writes `content-packages.txt`, and starts `game-build\fm4_rex.exe` with the logs in
+`logs\play.log` and `logs\runtime.log`, as `run` does. It hides while the game runs
 and shows again when the game exits. If the game exits with an error, a banner shows
 the exit code and the time it ran, with buttons that open both logs.
 
@@ -341,8 +340,10 @@ path, and the render targets stay on RTV.
   launcher says so.
 - `-Native` with `-Rov` is refused: `-Rov` stays the uncorrected reference.
 - `host_render_queue_capacity` (default 256) is the queue length above which a new
-  span of the ring merges into the last record, so the guest never waits for the
-  queue.
+  span of the ring merges into the last record when that is a span, so the guest
+  never waits for the queue. Calls (`CallInThread`) are not bounded.
+- The host render thread executes consecutive spans of the ring as one, as the
+  command processor thread executes every kick since its last batch.
 - The perf trace adds `render_thread_busy_ms`, `queue_depth_mean`,
   `queue_depth_max` and `host_render` (records and merged spans) to each window.
 

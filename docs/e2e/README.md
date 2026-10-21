@@ -64,6 +64,7 @@ Without network access (Jev unreachable), `--scenario quickrace` drives the same
 | `--arg NAME=value` | none | extra or overriding `--cvar=value`; repeatable (`--arg=--readback_resolve=fast` also works) |
 | `--look` | launcher's (`aces`, which has the mods of the earlier `pc` since 20 October 2026; `pc` is its alias) | look as `Build.ps1 -Look`, for example `original`, `aces,sharpen=0.6` or `aces,taa=0`; a look with TAA renders races in one tile without MSAA |
 | `--msaa` | off | keep the tiles and MSAA of `--quality` with a look that has TAA, as `Build.ps1 -Msaa` |
+| `--native` | off | stage N1 of the native path (`host_render_thread=true`), as `Build.ps1 -Native`. One tile only: where `Build.ps1 -Native` falls back to the PM4 RTV path in tiles, `e2e.py` refuses a tiled run (`--msaa`, a look without TAA, or a last `--env FM4_TILING_SCENARIO` other than 2) and `-Rov`, so a `--native` result is always the native path. The `freeze` scenario's look `original,taa=0` renders tiles, so a native `freeze` and its RTV baseline both take `--env FM4_TILING_SCENARIO=2` (one tile, no TAA, no FXAA) |
 | `--quality` | launcher's (`high`) | race render quality as `Build.ps1 -Quality`: `xbox`, `high` or `ultra` |
 | `--ao` | off | the runtime's ambient occlusion pass (the GTAO post pass, `post_pass_path`), as `pipeline.py --ao` |
 | `--tail` | 10 | seconds to keep running after the last step |

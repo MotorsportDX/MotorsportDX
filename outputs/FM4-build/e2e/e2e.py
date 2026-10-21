@@ -918,11 +918,19 @@ def run_once(options, out):
         env.update(tiling_env)
         args.update({k: v for k, v in tiling_cvars.items() if k not in args})
     if options.native:
-        # One tile only, like Build.ps1 -Native; --env FM4_TILING_SCENARIO=2 counts as one tile.
-        one_tile = single_tile or 'FM4_TILING_SCENARIO=2' in options.env
-        if not one_tile:
-            raise SystemExit('--native covers one tile: use a look with TAA or --env FM4_TILING_SCENARIO=2')
-        args.update(pipeline.native_cvars(True, args.get('render_target_path_d3d12') == 'rov'))
+        # One tile only, like Build.ps1 -Native, which runs the PM4 RTV path in tiles; here a
+        # tiled run is refused instead, so a --native result is always the native path. The
+        # last --env FM4_TILING_SCENARIO wins, as in the environment below.
+        if args.get('render_target_path_d3d12') == 'rov':
+            raise SystemExit('--native runs on RTV; it cannot be combined with -Rov')
+        tiling = [item.split('=', 1)[1] for item in options.env
+                  if item.startswith('FM4_TILING_SCENARIO=')]
+        if not (single_tile if not tiling else tiling[-1] == '2'):
+            cause = ('--msaa' if options.msaa else f'--env FM4_TILING_SCENARIO={tiling[-1]}'
+                     if tiling else f'the look {look!r} (no TAA)')
+            raise SystemExit(f'--native covers one tile, but {cause} renders races in tiles: '
+                             'use a look with TAA or --env FM4_TILING_SCENARIO=2')
+        args.update(pipeline.native_cvars(True))
     settings = pipeline.race_settings(options.quality or pipeline.DEFAULT_QUALITY, tiling_given or single_tile)
     if settings:
         env['FM4_RACE_SETTINGS'] = settings
