@@ -149,6 +149,10 @@
       "provenance": "Project documentation; research and plan note on photo mode, Autovista and replays (summarized observations: render scenario values, resolve sizes, hashes, no game content)"
     },
     {
+      "path": "docs/analysis/direct-race-launch.md",
+      "provenance": "Project documentation; research note on a direct race launch (summarized observations: guest function addresses, structure offsets, menu timings, no game content)"
+    },
+    {
       "path": "docs/analysis/dlc-structure.md",
       "provenance": "Project documentation; research note on the FM4 content package layout (file, table and column names and short identifiers, no game content)"
     },

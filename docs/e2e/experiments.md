@@ -66,6 +66,8 @@ What still varies: anything that follows wall time or host timing, for example t
 
 `--env FM4_TRACE_RNG=1` prints the guest random draws: each caller's first draws of the ANSI C generator (`sub_828C8910`, `sub_828C8930`, `sub_828C89A8`, `sub_82303E60`, `sub_823866D0`) with the state address and value, each `sqlite3_randomness` call (`sub_82BCED10`) with the generator state, the opponent queries, and a summary of the callers at each session start.
 
+A launch straight into a Quick Race, without the menus, is not built. What it would need is in [direct race launch](../analysis/direct-race-launch.md).
+
 ## Shader overrides (phase B4)
 
 Shader overrides replace the DXBC translation of a guest pixel shader with HLSL that you write. Research notes are in [b4-shader-research.md](../analysis/b4-shader-research.md).
