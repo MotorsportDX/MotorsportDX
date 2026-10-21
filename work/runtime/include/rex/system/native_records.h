@@ -9,6 +9,7 @@
 // while it is enabled.
 
 #include <cstdint>
+#include <memory>
 #include <utility>
 #include <vector>
 
@@ -30,12 +31,12 @@ struct Record {
 
 void SetEnabled(bool enabled);
 bool Enabled();
+// A record stays under its marker's address until a new marker replaces it:
+// the same segment can be executed more than once (the tile bodies of a tiling
+// bracket, run once per tile).
 void Put(uint32_t marker_address, Record&& record);
 // Tested without a lock before every packet.
 bool MayHave(uint32_t marker_address);
-bool Take(uint32_t marker_address, Record* record);
-// Records replaced by a newer one at the same address before they were taken,
-// since the last call.
-uint64_t TakeOverwritten();
+std::shared_ptr<const Record> Find(uint32_t marker_address);
 
 }  // namespace rex::system::native_records

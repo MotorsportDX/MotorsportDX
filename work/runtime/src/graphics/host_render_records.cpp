@@ -3,7 +3,10 @@
 // host_render_native. A converted writer of the title leaves a NOP marker in
 // its command buffer segment and its record under the marker's address
 // (rex/system/native_records.h). When the host render thread reaches the marker
-// it writes the record's registers the way the type-0 packets would have.
+// it writes the record's registers the way the type-0 packets would have. A
+// record stays under its address until a new marker replaces it, so a segment
+// executed more than once (the tile bodies of a tiling bracket) applies it
+// each time; a record whose address no longer holds a marker is stale.
 
 #include <rex/cvar.h>
 #include <rex/graphics/command_processor.h>
@@ -47,29 +50,26 @@ void CommandProcessor::HostBeforePacket(const memory::RingBuffer* reader) {
 }
 
 void CommandProcessor::HostApplyRecord(uint32_t address) {
-  system::native_records::Record record;
-  if (!system::native_records::Take(address, &record)) {
+  const std::shared_ptr<const system::native_records::Record> found =
+      system::native_records::Find(address);
+  if (!found) {
     return;
   }
+  const system::native_records::Record& record = *found;
   const uint32_t* guest = memory_->TranslatePhysical<const uint32_t*>(address);
   if (memory::load_and_swap<uint32_t>(guest) != system::native_records::kMarkerHeader ||
       memory::load_and_swap<uint32_t>(guest + 1) != system::native_records::kMarkerTag) {
-    // The marker was overwritten: the record cannot be placed.
-    REXGPU_ERROR("Native record: no marker at the record's address");
-    REXGPU_WARN("Native record: writer {:08X}, record {}, at {:08X}: the packet is {:08X}",
-                record.writer, record.sequence, address, memory::load_and_swap<uint32_t>(guest));
+    // The segment memory holds other PM4 now: the record is stale.
     return;
   }
   size_t offset = 0;
   for (const auto& [first, count] : record.runs) {
-    WriteRegistersFromMem(first, record.values.data() + offset, count);
+    WriteRegistersFromMem(first, const_cast<uint32_t*>(record.values.data() + offset), count);
     offset += count;
   }
   host_record_applied_ = address;
   ++perf_trace::host_records_applied;
   perf_trace::host_record_registers += offset;
-  perf_trace::host_records_overwritten.fetch_add(system::native_records::TakeOverwritten(),
-                                                 std::memory_order_relaxed);
 }
 
 void CommandProcessor::HostRecordMissing() {

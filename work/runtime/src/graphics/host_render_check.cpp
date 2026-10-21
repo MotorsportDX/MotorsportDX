@@ -112,7 +112,8 @@ void CommandProcessor::HostCheckTake(uint32_t address) {
       }
       state.capturing = true;
       state.begin = address;
-      state.end = address + uint32_t(entry.dwords.size() * sizeof(uint32_t));
+      // A converted writer's range in the stream is its two-dword marker.
+      state.end = address + uint32_t((entry.marker ? 2 : entry.dwords.size()) * sizeof(uint32_t));
       state.decoded =
           pm4_decode::Decode(entry.dwords.data(), entry.dwords.size(), bin_select_, bin_mask_);
       state.entry = std::move(entry);
