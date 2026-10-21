@@ -215,18 +215,31 @@ On 21 October 2026, after reading sections 1 to 7, the project owner chose a nat
 | Post passes | Anchors move from EDRAM bases to surfaces and call sites: the scene depth is the depth surface of the camera vertex shader's draws (until that is verified, the last wide depth resolve, as today); scene colour is the colour resolve after it (as the framework's colour group works today; not re-checked for the native path); the final point keeps its pixel shader hashes; camera and object constants come from the device shadow at the draw. The jitter stays in the `ndc_offset` system constant, with the cockpit mask (`2F76904F`) and any screen-space rectangle draw excluded by hash, and its pixel scale checked at 2x. With native MSAA, depth and stencil for motion vectors and the cockpit window come from sample 0 through a shader pass. | The post passes find their surfaces by EDRAM base today (2.9). |
 | Rules | The native path uses host render targets with bindless resources, like RTV. Look mods and GTAO target RTV and the native path (AGENTS.md, owner's decision of 21 October 2026). The PM4 RTV path stays selectable, and `-Rov` stays the uncorrected reference: the native path is compared against `-Rov` and RTV with `-Look "original,taa=0"`. | AGENTS.md, render target paths. |
 
+### 8.1 The second target device: ROG Xbox Ally X
+
+The project owner's slower target PC is an ASUS ROG Xbox Ally X handheld, the owner's second device (decision of 21 October 2026). Vendor and review specs ([HotHardware](https://hothardware.com/news/asus-rog-xbox-ally-x-handheld-revealed), [PC Games Hardware](https://www.pcgameshardware.de/Handheld-PC-Hardware-279763/Tests/Asus-ROG-Xbox-Ally-X-mit-Ryzen-Z2-AI-Extreme-Preis-Release-Steam-1484282/)): AMD Ryzen AI Z2 Extreme with 8 cores and 16 threads, a Radeon 890M integrated GPU (RDNA 3.5, 16 compute units), 24 GB of LPDDR5X-8000 shared by the CPU and the GPU, a configurable TDP of 15 to 35 W, a 7-inch 1920x1080 panel at 120 Hz with FreeSync Premium (VRR), and an 80 Wh battery. HDR support of the panel is not confirmed.
+
+What follows for the native port (inferred until measured on the device):
+
+- The device is more likely GPU bound than CP bound. The default look with GTAO and TAA may already use the whole GPU at 1x, and the launcher's choice for a 1080p screen, 2x (the smallest whole multiple of 1280x720 that covers it, [running](../running.md#-display-and-render-scale)), is probably too heavy.
+- 1080p is 1.5 times 1280x720, and the runtime's render scale is a whole multiple. Host render targets keyed by surface (N3) may allow 1.5x, the panel's own resolution, if the texture cache's scaled resolves follow; otherwise an upscaler from 720p ([FSR plan](fsr-plan.md)) is the route to a sharp 1080p image.
+- The CPU and the GPU share one power budget, so CPU time saved by the native path (no PM4, no spinning CP thread) can let the GPU clock higher.
+- The frame budget is 8.33 ms at 120 Hz and 16.7 ms at 60 Hz; VRR covers frame rates in between.
+
+Plan changes: N0 adds a device baseline (the current build through the [export](../running.md#export-to-another-computer), at 1x and 2x, with the default look and with AO off, plugged in and on battery, with the TDP profile noted, and `REX_PERF_TRACE_FILE` set for fps, p99, GPU and CP times). N4 keeps the capped-CPU run on the main PC as a quick proxy, but its gate runs on the Ally X. N5 adds the 1.5x render scale and the upscaler for the device. Proposed device targets, to be set after the baseline: races at 60 fps or more with p99 at most 16.7 ms on the default look at the panel's resolution, and as close to 120 fps as the GPU allows with VRR.
+
 ## 9. Stages
 
 Every stage is behind a switch, off by default until its gate passes, with the PM4 path as the fallback. The effort is person-weeks for one developer with an AI agent; it is inferred and not calibrated against past work.
 
 | Stage | Scope | Exit criteria | Effort |
 |---|---|---|---|
-| N0, foundations and measurements | One hook registry (merge the trace and diagnostics hooks); counters for the replay paths of `sub_826E4A28`, recordings per second and replays per recording, the `IM_LOAD` key check of 2.6, the coverage log of 2.3, `REX_LATE_WRITE_TRACE` on a race and a tiled race, the sync packets of 2.7, the guest render thread's time per frame (a zone around `sub_822DB318`) and a thread trace of the D3D entry points; the CP time split at 240 Hz and 2x; the frozen-frame A/B harness and the FAIL rules of section 10. | Every number recorded here with its run; the coverage list complete for a menu, a race and a replay; the variance of two identical baseline runs known. | 2 to 3 |
+| N0, foundations and measurements | One hook registry (merge the trace and diagnostics hooks); counters for the replay paths of `sub_826E4A28`, recordings per second and replays per recording, the `IM_LOAD` key check of 2.6, the coverage log of 2.3, `REX_LATE_WRITE_TRACE` on a race and a tiled race, the sync packets of 2.7, the guest render thread's time per frame (a zone around `sub_822DB318`) and a thread trace of the D3D entry points; the CP time split at 240 Hz and 2x; the frozen-frame A/B harness and the FAIL rules of section 10; a baseline on the ROG Xbox Ally X (8.1). | Every number recorded here with its run; the coverage list complete for a menu, a race and a replay; the variance of two identical baseline runs known. | 2 to 3 |
 | N1, native producer on the existing backend | The producers of section 8 feed the host render thread, which drives the existing D3D12 backend through `WriteRegisterFast`, `WriteRegistersFromMem`, `LoadShader` and `IssueDraw`; recordings replay as PM4 through `ExecutePacket`; render targets stay on the RTV cache; the ring and the CP thread are no longer used on this path. | State-level dual run without mismatches; frozen frames identical to RTV; no PM4 written in the coverage scenes; smoke and perf gates against the RTV build of the same commit; the success criteria for CP time and p99 measured. | 6 to 9 |
 | N2, decoded recordings | Operation lists with precomputed pipeline and binding keys; inherited state and `LOAD_ALU_CONSTANT` re-read at replay; fallback to PM4 per recording. | Dual run per replay without mismatches; render thread time per frame lower than N1 by a measured amount. | 3 to 5 |
 | N3, native render targets | Surface-keyed host targets with virtual placement, copies for aliased contents, one-pass tiles, native MSAA as a launcher option (2x and 4x in one pass, TAA on top), resolves as host copies and demand readback, post-pass anchors on surfaces, look mods and GTAO moved onto the native path. Starts with a GPU-only prototype at 2x (one scene pass and one resolve) against the RTV path. | Frozen frames within the agreed threshold against RTV and against `-Rov` with `-Look "original,taa=0"`; GTAO, TAA, motion vectors and the windshield checked at 2x; GPU time at 2x not above RTV; 4x MSAA in one pass working. | 12 to 20 |
-| N4, threading and slower CPUs | Event waits instead of spins, queue depth and latency tuned, a capped-CPU harness (fewer cores through the process affinity, a lower clock where the PC allows it). | The success criteria of section 10 met on the full and the capped CPU. | 3 to 5 |
-| N5, visual upgrades on the native base | Float targets for `k_16_16`, linear blending as an A/B, upscalers on the native anchors ([FSR plan](fsr-plan.md)), wider aspect ratios (needs a FOV and culling hook), HDR10 once an HDR display exists. | One A/B and one decision per item. | per item |
+| N4, threading and slower CPUs | Event waits instead of spins, queue depth and latency tuned, a capped-CPU run on the main PC (fewer cores through the process affinity) as a quick proxy, and runs on the ROG Xbox Ally X (8.1). | The success criteria of section 10 met on the main PC and on the Ally X. | 3 to 5 |
+| N5, visual upgrades on the native base | Float targets for `k_16_16`, linear blending as an A/B, upscalers on the native anchors ([FSR plan](fsr-plan.md)) and a 1.5x render scale for the Ally X's 1080p panel, wider aspect ratios (needs a FOV and culling hook), HDR10 once an HDR display exists. | One A/B and one decision per item. | per item |
 
 N0 to N4 total about 26 to 42 person-weeks. The earlier estimates for design A alone were 24 by the design and 40 to 56 with the reviewers' corrections; this plan reuses the backend in N1 and N2, which is why its range starts lower.
 
@@ -237,13 +250,14 @@ N0 to N4 total about 26 to 42 person-weeks. The earlier estimates for design A a
 - `compare.py` fails on a crash, a goal not reached, fps more than 10% below the baseline (also per phase), p99 more than 20% above it, a new error key or a missing phase; image statistics and draw counts only warn or inform. The native path needs FAIL rules for the draw count, the predicated run and skip counts and the frozen-frame image difference, and every rejected draw or failed shader load goes through `REXGPU_ERROR` so that it shows as a new error key. Its own metrics replace `cp_busy` (render thread busy, guest render thread busy, queue depth).
 - RTV against `-Rov` stays the reference comparison (AGENTS.md); no stage changes `-Rov`.
 - A watchdog that logs any guest wait longer than a set time, and soak runs over menus, races, the career, replays and photo mode.
-- Success criteria (proposed targets, to be confirmed against the N0 baseline of the USA build with the launcher defaults): at 240 Hz and 1x in the race, the render thread busy at most 2.5 ms per frame (the CP took 3.2 to 3.4 ms) and p99 at most 5.0 ms (5.59 to 5.78 ms), both against the 20 October 2026 smoke runs on the Japan/Asia BuildRoot `I:\FM4-build-pass`; the guest render thread reported per frame; on the capped CPU at most 10% fewer fps than on the full CPU; at 2x a GPU time per frame not above the RTV path; frozen frames within the threshold and no new error keys.
+- Success criteria (proposed targets, to be confirmed against the N0 baseline of the USA build with the launcher defaults): at 240 Hz and 1x in the race, the render thread busy at most 2.5 ms per frame (the CP took 3.2 to 3.4 ms) and p99 at most 5.0 ms (5.59 to 5.78 ms), both against the 20 October 2026 smoke runs on the Japan/Asia BuildRoot `I:\FM4-build-pass`; the guest render thread reported per frame; on the ROG Xbox Ally X the device targets of 8.1; at 2x a GPU time per frame not above the RTV path; frozen frames within the threshold and no new error keys.
 
 ## 11. Decisions
 
 Made by the project owner on 21 October 2026:
 
 - The target is a native port, judged by all five goals of section 8.
+- The slower target PC is the ROG Xbox Ally X, the owner's second device (8.1).
 - MSAA comes back as an option on the native path, rendered in one pass without tiles; one tile with TAA stays the default.
 - Look mods and GTAO target RTV and the native path; `-Rov` stays the uncorrected reference and the native path is compared against it (AGENTS.md, render target paths).
 
@@ -252,7 +266,6 @@ Still open:
 - The image threshold that counts as parity for the native path, and whether it may differ from RTV by design (one pass, MSAA, `LOAD_ALU_CONSTANT` read time, formats).
 - Whether the PM4 RTV path stays a permanent reference once the native path passes its gates.
 - Which modes N1 must cover (race, photo mode, replays, split screen, menus, video) and which may stay on PM4 at first.
-- The specification of the slower target PCs (cores and clock) for the N4 harness.
 - How far the runtime may diverge from the upstream ReXGlue command processor.
 
 ## 12. Open questions
