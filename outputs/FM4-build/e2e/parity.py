@@ -26,7 +26,8 @@ import frame_diff  # noqa: E402
 # 47.8% of the pixels. FM4_FIXED_FRAME_TIME=1 fixes the race clock, but the race still
 # diverges before the start (25.6% for a pair with it). The limits sit above that: the image
 # rule catches only a broken frame (black, clear gray, most geometry missing), not a wrong
-# detail, until the moment is pinned; each run's own freeze is exact.
+# detail; 60% is the final limit the project owner set on 21 October 2026
+# (docs/analysis/d3d-hle.md, section 11). Each run's own freeze is exact.
 IMAGE_LEVEL = 4           # a pixel differs above 4 of 255 (frame_diff.LEVEL)
 IMAGE_FAIL_PCT = 60.0     # FAIL when more than 60% of the pixels differ above the level
 STABLE_FAIL_PCT = 0.05    # a run's freeze held when its own captures differ in at most 0.05%
