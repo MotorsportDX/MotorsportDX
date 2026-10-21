@@ -1,5 +1,6 @@
-"""Offline tests of the frozen-frame tools: frame_diff.py, parity.py and the summary fields of
-e2e.py they read. Run: python outputs/FM4-build/e2e/test_e2e_tools.py"""
+"""Offline tests of the frozen-frame tools: frame_diff.py, parity.py, the summary fields of
+e2e.py they read and the input file of the freeze scenario's pulses.
+Run: python outputs/FM4-build/e2e/test_e2e_tools.py"""
 import contextlib, io, json, os, sys, tempfile, time, unittest
 from pathlib import Path
 
@@ -136,12 +137,16 @@ class ParityTests(unittest.TestCase):
         self.assertTrue(any('predicated_skipped' in f for f in report['fail']))
 
     def test_image_fail_and_limit(self):
-        changed = image(100, (0, 0, 48, 32, 180))  # a quarter of the frame
+        changed = image(100, (0, 0, W, 48, 180))  # three quarters of the frame
         candidate = make_run(self.root, 'c', [changed, changed])
         code, report = gate(self.base, candidate)
         self.assertEqual(code, 1)
         self.assertTrue(any('frozen frame differs' in f for f in report['fail']))
-        self.assertEqual(gate(self.base, candidate, '--image-pct', '30')[0], 0)
+        self.assertEqual(gate(self.base, candidate, '--image-pct', '80')[0], 0)
+        # A quarter of the frame is within the moment's variance of the default limit.
+        quarter = make_run(self.root, 'd', [image(100, (0, 0, 48, 32, 180))] * 2)
+        self.assertEqual(gate(self.base, quarter)[0], 0)
+        self.assertEqual(gate(self.base, quarter, '--image-pct', '20')[0], 1)
 
     def test_freeze_did_not_hold(self):
         code, report = gate(self.base, make_run(self.root, 'c', [image(180), image(), image()]))
@@ -163,6 +168,27 @@ class ParityTests(unittest.TestCase):
         code, report = gate(self.root / 'rb', self.root / 'rc')
         self.assertEqual(code, 0)
         self.assertTrue(any(r['metric'].startswith('run2: ') for r in report['rows']))
+
+
+class InputTests(unittest.TestCase):
+    """The diagnostic controller's input file (docs/e2e/architecture.md)."""
+    def test_pulse_actions(self):
+        self.assertEqual(e2e.parse_action('~y')['pulse'], e2e.BUTTONS['y'])
+        self.assertIsNone(e2e.parse_action('~y')['pulse_from'])
+        state = e2e.parse_action('a+~y@720')
+        self.assertEqual((state['buttons'], state['pulse'], state['pulse_from']),
+                         (e2e.BUTTONS['a'], e2e.BUTTONS['y'], 720))
+        self.assertEqual(e2e.parse_action('none')['pulse'], 0)
+
+    def test_input_file(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            path = Path(tmp) / 'input.txt'
+            e2e.set_input(path, rt=255)
+            self.assertEqual(path.read_text().split(), '0 0 255 0 0 0 0'.split())
+            e2e.set_input(path, **e2e.parse_action('~y'))
+            self.assertEqual(path.read_text().split(), '0 0 0 0 0 0 0 32768'.split())
+            e2e.set_input(path, **e2e.parse_action('~y@720'))
+            self.assertEqual(path.read_text().split(), '0 0 0 0 0 0 0 32768 720'.split())
 
 
 class SummaryTests(unittest.TestCase):
