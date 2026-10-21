@@ -1,6 +1,6 @@
 # D3D-level HLE: feasibility and plan
 
-Status: analysis, 21 October 2026. The same day the project owner chose a native port as the target; its architecture and stages are in sections 8 and 9, the measurements of stage N0 are in section 13, and the design of stage N1 with the order of its increments is in section 14. Addresses are the USA `default.xex` (the Japan/Asia executable has the same code, see [release comparison](releases.md)). The generated C++ that was read is `<BuildRoot>\project\generated\default`; the catalog, call graph and decompiled functions stay outside the repository under `I:\FM4-re` ([function catalog](function-catalog.md)).
+Status: analysis, 21 October 2026. The same day the project owner chose a native port as the target; its architecture and stages are in sections 8 and 9, the measurements of stage N0 are in section 13, and the design of stage N1 with the order of its increments is in section 14, with the results of increments 1 and 2 in 14.6 and 14.8. Addresses are the USA `default.xex` (the Japan/Asia executable has the same code, see [release comparison](releases.md)). The generated C++ that was read is `<BuildRoot>\project\generated\default`; the catalog, call graph and decompiled functions stay outside the repository under `I:\FM4-re` ([function catalog](function-catalog.md)).
 
 ## Summary
 
@@ -470,11 +470,40 @@ From the ring allocations of `n0-career-c` (13.5). The counts are for the whole 
 | `Resolve` body `sub_82348DC8` | 665,001 and 190,574 (31.5 million dwords) | yes | yes | yes |
 | `Swap` `sub_8237FA28` with `BeginCommand` | 22,889 | yes | yes | yes |
 | Ring waits `sub_822DB108` and `CommandBufferOverflow` `sub_822FEF08` | 817,081 and 812,501 | yes | yes | yes |
-| The tiling bracket in one tile (`BeginTiling`, `EndTiling`, `sub_822B7248`, `sub_8236F838`, `sub_823719A8`) | 4,580 brackets, 32,190 stream writes | | yes | yes |
+| The tiling bracket with one tile (`BeginTiling`, `EndTiling`, `sub_822B7248`, `sub_8236F838`, `sub_823719A8`) | 4,580 brackets, 32,190 stream writes | yes (measured; inferred for the race until 14.8) | | |
 | `EVENT_WRITE_ZPD` | | | 2 a frame | 2 a frame |
 | `BeginCommandBuffer` (`sub_826E1EC0`) | 10,209 | 4.4 a second | at load | |
 
-Which scene uses each writer is inferred from 13.2, 13.6 and 13.7. Increment 2 splits the coverage log by phase, so that the list for each scene is measured.
+The table above is inferred from 13.2, 13.6 and 13.7. Measured by phase on 21 October 2026 (`n2chk5-career`, 14.8: the `career` scenario with `FM4_N0_TRACE`, the identity check and the host render thread; menus from PLAY CAREER to START RACE, 29 s and 1,612 frames; the one-tile race, 42 s and 4,783 frames; the replay, 30 s and 2,723 frames). Per frame: ring allocations through `AllocateRingSpace` (A) or `BeginCommand` (B) and segment overflows (O) by the function that called them, and the ranges the identity check compared by outermost hooked writer (checked). Writers below 0.01 a frame in every phase are left out.
+
+| Writer | Menus | One-tile race | Replay |
+|---|---|---|---|
+| `WriteDirtyRegisters` `sub_823114F8` | checked 102.7 | checked 193.7 | checked 278.5 |
+| `WriteDirtyFloatConstants` `sub_82310E78` | checked 34.5 | checked 824.1 | checked 922.1 |
+| `WriteDirtyFetchConstants` `sub_8230FA40` | checked 1.7, O 0.03 | checked 70.9, O 0.02 | checked 74.6, O 0.01 |
+| `D3DDevice_WriteRegistersChunked` `sub_82379530` | O 0.30 | O 2.29 | O 2.42 |
+| `DrawIndexedVertices` `sub_82311080` | checked 158.8, O 0.24 | checked 188.7, O 0.18 | checked 29.8, O 0.04 |
+| `DrawVertices` `sub_8233AC60` | checked 16.3 | checked 28.7 | checked 34.0 |
+| `DrawVerticesUP` `sub_822B95D8` | | checked 2.0 | |
+| `DRAW_INDX_2` writer `sub_82370370` | checked 15.1, A 14.40 | checked 19.5, A 19.02 | checked 19.0, A 18.41 |
+| Draw flush `sub_823436B8` (outermost) | checked 0.7 | checked 7.6 | checked 13.1 |
+| `LOAD_ALU_CONSTANT` writer `sub_82343608` | | O 0.10 | O 0.01 |
+| `BeginVertices` `sub_8234D278` | A 0.42 | A 17.32 | A 0.07 |
+| `BeginIndexedVertices` `sub_8234DAE8` | | A 2.46 | A 5.71 |
+| `RunCommandBuffer` `sub_82310818` and `sub_823102D0` | O 12.77 | O 0.47 and 37.76 | O 0.49 and 22.26 |
+| `Resolve` body `sub_82348DC8` | A 20.54 | A 28.88, O 0.03 | A 35.60, O 0.04 |
+| `Swap` `sub_8237FA28` | B 0.95, O 0.95 | B 0.98, O 0.98 | B 0.97, O 0.97 |
+| Ring wait `sub_822DB108` | A 10.09 | A 46.86 | A 31.30 |
+| `CommandBufferOverflow` `sub_822FEF08` | A 8.19 | A 46.86 | A 31.30 |
+| `sub_822C5260` | O 5.32 | O 4.88 | O 4.84 |
+| `sub_826EC9C0` | B 0.12 | B 1.30 | |
+| The tiling bracket: `BeginTiling` `sub_82371B80`, `EndTiling` `sub_8236FA20`, `sub_822B7248`, `sub_8236F838`, `sub_823719A8` | O 1.90, O 1.90, B 1.90, A 5.69, A 13.35 | | |
+| `BeginCommandBuffer` `sub_826E23E8` and `sub_826E1EC0` | O 0.08, A 0.08 | | |
+| `sub_8239DDA0`, `sub_82310530`, `sub_82353F18`, `sub_82333538`, `sub_822EBE20`, `sub_822BF380` | up to 0.02 | up to 0.03 | up to 0.06 |
+
+- The menus run the tiling bracket about twice a frame and the one-tile race and the replay never do (the first version of the table above, `3669bdb`, had it the other way round). The menus also record command buffers (0.08 a frame); the race and the replay record none.
+- `EVENT_WRITE_ZPD` and the ring waits of `BlockUntilNotBusy` (`sub_82386C48`) are inline writers without an allocation in these phases; their counts per frame are in 13.6.
+- The allocations and overflows are a lower bound for the inline writers, as in 13.5; the checked ranges are exact for the hooked writers, counted for the outermost one only (a dirty writer inside `DrawIndexedVertices` counts as `DrawIndexedVertices`).
 
 ### 14.5 Increments
 
@@ -483,8 +512,8 @@ Which scene uses each writer is inferred from 13.2, 13.6 and 13.7. Increment 2 s
 | 1 | The host render thread and the record queue, with every writer on the fallback: PM4 spans and calls only. Behind the cvar `host_render_thread` and the launcher option `-Native`, off by default. `-Native` with the tiles (`-Msaa`, a look without TAA) keeps the PM4 RTV path, and `-Native` with `-Rov` is refused. | A menu, a one-tile race and a replay without a crash and without a new error key; the `compare.py` smoke and perf gates and `parity.py` on `freeze` against RTV of the same commit. |
 | 2 | The coverage log by phase, and the identity check of 14.3 with its decoder. | The coverage list per scene recorded; the check finds no mismatch on the fallback (PM4 against itself). |
 | 3 | The dirty writers become register delta records; the ring position check of 14.3. | The identity check without mismatches in the coverage scenes; the gates of increment 1. |
-| 4 | The menu writers: draws, `sub_82370370`, shader loads and constant blocks (copied into the record when the queue may run ahead of the guest), resolves, the swap, the ring waits, and `RunCommandBuffer` as a replay record (the host render thread executes the recorded PM4 through `ExecuteIndirectBuffer`; the menus replay 19 buffers a frame). | The identity check; no PM4 written into the ring in the menus (recordings keep their PM4); the gates of increment 1. |
-| 5 | The race and replay writers: the tiling bracket in one tile, `EVENT_WRITE_ZPD`, the remaining fences, and the replay record at the race's rate. | The exit criteria of N1 (section 9); photo mode, split screen and the intro videos smoke checked on the fallback. |
+| 4 | The menu writers: draws, `sub_82370370`, shader loads and constant blocks (copied into the record when the queue may run ahead of the guest), resolves, the swap, the ring waits, the tiling bracket with one tile (the menus run it about twice a frame, 14.4), and `RunCommandBuffer` as a replay record (the host render thread executes the recorded PM4 through `ExecuteIndirectBuffer`; the menus replay 19 buffers a frame). | The identity check; no PM4 written into the ring in the menus (recordings keep their PM4); the gates of increment 1. |
+| 5 | The race and replay writers: `BeginVertices` and `BeginIndexedVertices`, `EVENT_WRITE_ZPD`, the remaining fences, and the replay record at the race's rate. | The exit criteria of N1 (section 9); photo mode, split screen and the intro videos smoke checked on the fallback. |
 
 ### 14.6 Increment 1 results, 21 October 2026
 
@@ -527,3 +556,20 @@ Two parts, both off by default, with the PM4 RTV path and `-Rov` unchanged.
 - Cost: with the check off, each hook tests one static flag and the packet loop one member flag. With it on, a copy per hooked call, a table insert and lookup per range and a decode on the host render thread; measured with the perf gate.
 
 In increment 3 the dirty writers' records become native (register deltas read from the device shadow before the original body runs into a scratch segment instead of the ring), and the same decoder and comparison check them against that PM4.
+
+### 14.8 Increment 2 results, 21 and 22 October 2026
+
+On `I:\FM4-build-usa` (USA release), commit `adb9c61` (`fm4_rex.exe` SHA-256 `f3e2ae8574f0ffa54a0aea0940806818ed2a2be6386880496d2738d9f2bec8d1`, `rexgpu-xenos.dll` `826205d716040999ac2512daf0613b51656ba7ce20e4164bec879490b1a8b1b6`, `rexruntime.dll` `b57464c77c3009a172784e5c4f85a041bdcd4a2b0d3e466935ac2a6f42450a7f`), the host render thread, the launcher defaults at 240 Hz and 1x, the title's AI driving.
+
+| Run | Setting | Ranges compared | Mismatches | Other |
+|---|---|---|---|---|
+| `n2chk5-career` (menus, one-tile race, replay) | check, `FM4_N0_TRACE` | 16,863,547 | 0 | 16 left before their end, 138 dropped, 0 overwritten |
+| `n2prt-career` | check, `host_render_check_perturb=1000` | 16,214,571 | 16,095, all registers | 16,095 perturbed |
+| `n2chkp` (perf, `photo`, three runs) | check | | 0 (no new error key) | |
+
+- The fallback passes its own identity check in the menus, the one-tile race and the replay: no register, type-3 packet, predicate decision, draw or byte of PM4 differed. The perturbed run reported exactly the ranges it changed, so the comparison catches a difference.
+- The first runs found what the check had to learn: `COHER_STATUS_HOST`, which the command processor rewrites, gave 24,869 mismatches in `n2chk-career`, and ranges that crossed into another command buffer segment through `AllocateRingSpace` or `BeginCommand` were left unfinished about once a frame in the menus (1,632 in `n2chk2-career`). Both are handled (14.7); the 16 ranges left before their end in `n2chk5-career` jump more than one segment or overlap a later range, and are not compared.
+- The coverage list per scene is the measured table of 14.4.
+- Cost with the check off (`n2natp` against `n1natp2`, the perf gate of increment 1, three runs each): race 227.2 against 219.6 fps by the medians of the runs, p99 5.57 against 6.08 ms, PASS; over the race windows of the three runs, 1.813 against 1.833 us of render thread time per draw. The new hooks and the packet loop's flag cost nothing measurable.
+- Cost with the check on (`n2chkp` against `n2natp`): race 94.1 against 227.2 fps, p99 15.17 against 5.57 ms (FAIL, as expected of a diagnostic mode); 4.825 against 1.813 us per draw, about 3 us more per draw, most of it probably the table lookup under a lock at every packet. A filter in front of the table would lower it before increment 3 runs the check on the converted writers.
+- Not covered: 60 and 120 Hz, 2x, photo mode, split screen and the intro videos with the check; the overflow body's own PM4 and the allocators' PM4, which are not copied.
