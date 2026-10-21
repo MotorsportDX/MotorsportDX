@@ -13,10 +13,10 @@ Parts:
 ## The freeze scenario
 
 ```
-python outputs\FM4-build\e2e\e2e.py --build-root <BuildRoot> --out <BuildRoot>\e2e\<name> --scenario freeze --profile copy --env FM4_GAME_CMDLINE=engageaionstart
+python outputs\FM4-build\e2e\e2e.py --build-root <BuildRoot> --out <BuildRoot>\e2e\<name> --scenario freeze --profile copy --env FM4_GAME_CMDLINE=engageaionstart --env FM4_FIXED_SEED=1
 ```
 
-Steps: Quick Race with the default car and track (as `quickrace`, driven by the title's AI); as soon as the race HUD shows (`LAPS` or `PLACE`), Y until the rewind menu shows (`RESUME FROM HERE`, `REWIND FURTHER`; the first press is often ignored), then Y four more times, which rewinds to the oldest frame the rewind keeps (REWIND FURTHER greys out there; further presses do nothing); then the phase `freeze`: 20 s of the frozen frame, about 10 captures. The title keeps rendering the frozen frame every frame under the rewind hint bar.
+Steps: Quick Race with the default car and track (as `quickrace`, driven by the title's AI); from START RACE on, Y every capture until the rewind shows (`REWINDING`, `REWIND FURTHER`, `RESUME FROM HERE`), then Y four more times, which rewinds to the oldest frame the rewind keeps (REWIND FURTHER greys out there; further presses do nothing); then the phase `freeze`: 20 s of the frozen frame, about 10 captures. The title keeps rendering the frozen frame every frame under the rewind hint bar. The rewind keeps a window of about the last 10 s of the race and takes Y only after about 10 s of race (the presses before do nothing, and a held Y does not start it), so the oldest frame lies in the first seconds of the race. Quick Race also picks other opponents and grid slots each run; `--env FM4_FIXED_SEED=<n>` (the fixed seed of the race setup, [experiments](experiments.md)) pins them. What it does not pin is the moment: the test input follows the wall clock, not the guest frames, so the press that starts the rewind, and with it the oldest frame, moves by a fraction of a second from run to run (see [Baseline variance](#baseline-variance)).
 
 Unless `--look` or `--arg` says otherwise, the scenario pins:
 
@@ -61,14 +61,14 @@ python outputs\FM4-build\e2e\parity.py <baseline run> <candidate run> [--phase f
 FAIL when:
 
 - the candidate crashed, missed its goal or a phase, or has an error key the baseline does not have (as `compare.py`);
-- in the frozen phase, the draws per frame differ from the baseline by more than `--draws` (default 2%);
-- the predicated run or skipped packets per frame (`counts.predicated_run`, `counts.predicated_skipped`) differ by more than `--predicated` (default 2%);
+- in the frozen phase, the draws per frame differ from the baseline by more than `--draws` (default 1%);
+- the predicated run or skipped packets per frame (`counts.predicated_run`, `counts.predicated_skipped`) differ by more than `--predicated` (default 1%);
 - the last frozen captures differ in more than `--image-pct` (default 1%) of the pixels above `--level` (default 4);
 - either run's own freeze did not hold: its captures differ in more than `--stable-pct` (default 0.05%).
 
 The draws and the predicated packets are averaged over all frames of the phase (`draws_per_frame_mean`, `counts_per_frame_mean`). Per one-second window they alternate by about 0.5% with the number of frames in the window, because the half-rate mirror draws every other frame.
 
-Performance stays with `compare.py`: a stage of the native port runs both. Repeated runs (`run1..runN`) are compared run by run. The defaults are provisional until the baseline variance below is measured on a deterministic scene.
+Performance stays with `compare.py`: a stage of the native port runs both. Repeated runs (`run1..runN`) are compared run by run. The draw and predication limits are about seven times the variance of two seeded baseline runs; the image limit is a target for a frozen moment pinned to the frame, which the harness cannot reach yet (see below), so until then two runs fail the image rule on the moment alone and the image share is read against the measured variance.
 
 The `parity` tier of `matrix.py` runs `freeze` twice at 60 Hz and, with `--baseline`, appends the `parity.py` verdict to the cell's line (its reports and crops go to `<cell>\parity`):
 
@@ -83,20 +83,29 @@ The native path has no command-processor thread, so `cp_busy` does not describe 
 | Field | From the perf window | On the PM4 path |
 | --- | --- | --- |
 | `render_thread_busy_ms_per_frame_median` | `render_thread_busy_ms` | the command processor's busy time per frame; `render_thread_source` says `cp` (else `render_thread`) |
-| `guest_render_thread_ms_per_frame_median` | `guest_render_ms` (the guest render thread's zone) | the same, once the trace has it |
+| `guest_render_thread_ms_per_frame_median` | `guest_render_ms` (the guest render thread's zone), else the D3D layer trace | with `--env FM4_N0_TRACE=<out>
+0.jsonl` ([traces](traces.md#d3d-layer-counters-fm4_n0_trace)): `render.ms` per `render.calls` (the calls of `sub_822DB318` that presented a frame), per second; `guest_render_thread_source` says `n0_trace` |
 | `queue_depth_median`, `queue_depth_max` | `queue_depth_mean`, `queue_depth_max` | missing |
 | `draws_per_frame_mean`, `counts_per_frame_mean` | `draws`, `counts` | the same |
 
-`parity.py` lists them; they never fail it. `compare.py` ignores them.
+The n0.jsonl seconds map to the phases by the steady clock (`summary.json` `phase_steady_ms`, QueryPerformanceCounter in milliseconds, the clock of `steady_ms`); a phase takes the seconds that lie inside it. With `--repeat` every run writes the same n0.jsonl, so `--resummarize` reads only the last run's. `parity.py` lists these fields; they never fail it. `compare.py` ignores them.
 
 ## Baseline variance
 
-Measured on 21 October 2026 on `I:\FM4-build-usa`, the build of 21 October 2026 (`snapshots\n0val`, `fm4_rex.exe` SHA-256 `7e50a9fc...`), at 60 Hz with the pins above.
+Measured on 21 October 2026 on `I:\FM4-build-pass` (the Japan/Asia data), with the fixed seed build of 21 October 2026 (`snapshots
+0seed`, `fm4_rex.exe` SHA-256 `27f90c57c8...`), at 60 Hz with the pins above and `FM4_FIXED_SEED=1`: two RTV runs with the launcher defaults otherwise, and two `-Rov` runs.
 
-| Pair | Changed pixels above 4 | Mean difference | Draws per frame | Predicated run / skipped per frame | Own freeze |
-| --- | --- | --- | --- | --- | --- |
-| RTV against RTV (`ffz-rtv-a`, `ffz-rtv-b`) | 54.92% | 46.5 | 3,241.08 against 3,005.03 (-7.3%) | 9,281.96 against 8,198.68 (-11.7%) / 10,464 against 8,758 (-16.3%) | 0.00% in both |
+| Pair | Changed pixels above 4 | Mean difference | Draws per frame | Predicated run per frame | Predicated skipped per frame | Own freeze |
+| --- | --- | --- | --- | --- | --- | --- |
+| RTV against RTV (`fz2-rtv-a`, `fz2-rtv-b`) | 25.47% | 11.1 | 3,270.47 against 3,270.92 (+0.01%) | 9,140.85 against 9,141.44 (+0.01%) | 9,930 against 9,930 | 0.00% in both |
+| `-Rov` against `-Rov` (`fz2-rov-a`, `fz2-rov-b`) | 28.23% | 14.1 | 3,267.93 against 3,272.45 (+0.14%) | 9,125.95 against 9,138.32 (+0.14%) | 9,911 against 9,918 (+0.07%) | 0.00% in both |
+| RTV against `-Rov` (`fz2-rtv-a`, `fz2-rov-a`) | 24.13% | 11.2 | 3,270.47 against 3,267.93 (-0.08%) | 9,140.85 against 9,125.95 (-0.16%) | 9,930 against 9,911 (-0.19%) | 0.00% in both |
 
-- Within a run the frozen frame is byte-identical from capture to capture, on RTV (`ffz-rtv-a`, `ffz-rtv-b`) and on `-Rov` (`ffz-rov-a`: 2,459.42 draws, 6,477.94 predicated run and 6,825 skipped packets per frame, 59.66 fps and 16.46 ms of GPU time per frame at 2x): the rendering of a fixed scene is deterministic on both paths.
-- Between runs the scene is not the same. The rewind's oldest frame is the start, but Quick Race picks other opponent cars and puts the player in another grid slot each time, and the camera sits elsewhere. So these numbers measure the scene, not the rendering, and give no threshold yet.
-- A fixed seed for the Quick Race setup is in progress in a separate session; with it the variance is measured again (RTV against RTV and `-Rov` against `-Rov`), and the threshold follows from it.
+- Within a run the frozen frame is byte-identical from capture to capture on both paths: the rendering of a fixed scene is deterministic.
+- With the seed the scene is the same: the same opponents, the same grid slot, the same place on the straight. The frozen moment is not: the oldest frame of the rewind lies a fraction of a second apart from run to run, and with the cockpit camera that moves the whole picture, so a quarter of the pixels change. The image numbers above measure that moment, not the rendering.
+- The draws and the predicated packets of the frozen frame vary by at most 0.14% between runs and agree between RTV and `-Rov` within 0.2%. The limits of `parity.py` (1%) follow from that.
+- The image limit (1% above 4) stays a target until the freeze is pinned to a guest frame. That needs the test input to press Y at a guest frame (the `FM4TestInput` driver in `work/fm4-rex/src`), or a hook that starts the rewind at a fixed race tick; the e2e harness alone cannot do it.
+- The same scene on the USA data (`I:\FM4-build-usa`, `snapshots
+0main`, local main of 21 October 2026, `34662eb1...`, run `fz-n0` with `FM4_N0_TRACE`): 3,270.94 draws and 9,141.46 predicated run packets per frame, 21.81% of the pixels against `fz2-rtv-a`. Its guest render thread took 16.0 ms per frame in the frozen phase at 60 fps, nearly the whole frame interval: at 60 Hz the zone measures the frame pacing more than the work.
+- Without the seed (on the build of `snapshots
+0val` on `I:\FM4-build-usa`, `7e50a9fc...`) two RTV runs differed in 54.92% of the pixels and by 7.3% in draws per frame: other opponents and another grid slot.

@@ -158,13 +158,15 @@ SCENARIOS.update({
     ],
 })
 SCENARIOS.update({
-    # A frozen frame for image parity (docs/e2e/frozen-frames.md): Quick Race; as soon as the
-    # race HUD shows, Y (rewind; the first press is often ignored, so it is checked) and Y again
-    # until REWIND FURTHER greys out at the oldest frame the rewind keeps; then 20 s of the
-    # frozen frame (phase freeze), which the title keeps rendering under the rewind hint bar.
+    # A frozen frame for image parity (docs/e2e/frozen-frames.md): Quick Race; from START RACE
+    # on, Y (rewind) every capture until the rewind shows, then Y again until REWIND FURTHER
+    # greys out at the oldest frame the rewind keeps; then 20 s of the frozen frame (phase
+    # freeze), which the title keeps rendering under the rewind hint bar. The rewind keeps a
+    # window of about the last 10 s and takes Y only after about 10 s of race, so the oldest
+    # frame lies in the first seconds of the race but moves with the time of the press (the
+    # test input is not tied to guest frames). A held Y does not start it.
     'freeze': SCENARIOS['quickrace'][:-1] + [
-        [60, 'wait', 0, 'LAPS|PLACE'],
-        [20, 'y', 0.15, 'REWIND FURTHER|RESUME FROM HERE', 4],
+        [90, 'y', 0.15, 'REWINDING|REWIND FURTHER|RESUME FROM HERE', 1],
         [4, 'y', 0.15], [4, 'y', 0.15], [4, 'y', 0.15], [4, 'y', 0.15], [6, 'wait', 0],
         [1, 'phase:freeze', 0], [20, 'wait', 0], [1, 'phase:end', 0],
     ],
@@ -905,6 +907,7 @@ def run_once(options, out):
     failed_step = None
     phases = []
     phase_times = []
+    phase_steady = []
     mod_defines = ModDefines(args.get('shader_mod_path'))
     screen = Screen(capture, process, out / 'steps.jsonl')
     try:
@@ -930,6 +933,7 @@ def run_once(options, out):
                 if action.startswith('phase:'):
                     phases.append((action[6:], perf_lines(out / 'perf.jsonl')))
                     phase_times.append((action[6:], time.time()))
+                    phase_steady.append((action[6:], time.perf_counter() * 1000))
                 elif action.startswith('defines:'):
                     mod_defines.write(action[8:])
                 elif ',' in action:
@@ -966,6 +970,7 @@ def run_once(options, out):
 
     frames = sorted(capture.glob('frame-*.ppm'))
     phase_frames = frames_by_phase(frames, phase_times, time.time())
+    phase_steady_ms = steady_by_phase(phase_steady, time.perf_counter() * 1000)
     final_stats = None
     if frames:
         # Keep the final capture under a stable name for checkpoints.
@@ -993,6 +998,7 @@ def run_once(options, out):
     # Each phase covers the perf windows from its mark to the next mark.
     phase_windows = windows_by_phase(phases, len(perf))
     phase_stats = {name: summarize(perf[start:end], end - start) for name, (start, end) in phase_windows.items()}
+    n0_trace = env.get('FM4_N0_TRACE') and str(root / env['FM4_N0_TRACE'])
     summary = {
         'crashed': crashed, 'goal': options.goal, 'scenario': None if options.steps else options.scenario,
         'goal_reached': goal_reached, 'failed_step': failed_step, 'args': options.arg, 'profile': options.profile,
@@ -1008,11 +1014,14 @@ def run_once(options, out):
         'phases': phase_stats,
         'phase_windows': phase_windows,
         'phase_frames': phase_frames,
+        'phase_steady_ms': phase_steady_ms,
+        'n0_trace': n0_trace,
         'final_capture': final_stats,
         'clear_gray_frames': clear_gray_frames,
         'errors': errors,
         'top_errors': sorted(errors.items(), key=lambda kv: -kv[1])[:10],
     }
+    guest_render_from_n0(summary)
     (out / 'summary.json').write_text(json.dumps(summary, indent=2))
     return summary
 
@@ -1093,6 +1102,41 @@ def windows_by_phase(marks, total):
             if name != 'end' and end > start}
 
 
+def steady_by_phase(marks, end):
+    """{phase: [start, end]} on the steady clock (QueryPerformanceCounter, ms) from the phase
+    marks; the clock of the title's and the runtime's traces (n0.jsonl, REX_PM4_STATS)."""
+    bounds = marks + [('end', end)]
+    return {name: [round(start, 1), round(stop, 1)]
+            for (name, start), (_, stop) in zip(bounds, bounds[1:]) if name != 'end'}
+
+
+def n0_render_ms(lines):
+    """Median over n0.jsonl lines of the guest render thread's time per presented frame."""
+    values = [l['render']['ms'] / l['render']['calls'] for l in lines
+              if (l.get('render') or {}).get('calls')]
+    return round(statistics.median(values), 2) if values else None
+
+
+def guest_render_from_n0(summary):
+    """guest_render_thread_ms_per_frame_median of the run and its phases from the D3D layer
+    trace (FM4_N0_TRACE, docs/e2e/traces.md) when the perf trace has none. A line covers the
+    second before its steady_ms; a phase takes the lines inside it."""
+    path = summary.get('n0_trace')
+    if not path or not Path(path).is_file():
+        return
+    lines = [json.loads(l) for l in Path(path).read_text().splitlines() if l.strip()]
+    def put(target, value):
+        key = 'guest_render_thread_ms_per_frame_median'
+        if value is not None and (key not in target or target.get('guest_render_thread_source') == 'n0_trace'):
+            target[key] = value
+            target['guest_render_thread_source'] = 'n0_trace'
+    put(summary, n0_render_ms(lines[len(lines) // 3:] if len(lines) > 6 else lines))
+    for name, (start, end) in (summary.get('phase_steady_ms') or {}).items():
+        if name in (summary.get('phases') or {}):
+            put(summary['phases'][name], n0_render_ms(
+                [l for l in lines if start <= l.get('steady_ms', 0) - 1000 and l.get('steady_ms', 0) <= end]))
+
+
 def resummarize(out, measure):
     """Refreshes perf statistics of finished runs, e.g. after new summary fields were added.
     Phases are recomputed from phase_windows, or for older runs from the phase marks of the
@@ -1110,6 +1154,7 @@ def resummarize(out, measure):
             summary['phase_windows'] = windows
             summary['phases'] = {name: summarize(perf[start:end], end - start)
                                  for name, (start, end) in windows.items()}
+        guest_render_from_n0(summary)
         (directory / 'summary.json').write_text(json.dumps(summary, indent=2))
         return summary
     runs = sorted(out.glob('run[0-9]*'), key=lambda d: int(d.name[3:]))

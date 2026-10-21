@@ -62,6 +62,9 @@ def cell_args(root, name, hz, scenario, repeat, build, extra):
         args += ['--tail', '40', '--measure', '30']
     if scenario in ('photo', 'career', 'career_finish', 'dlc', 'freeze'):
         args += ['--profile', 'copy']
+    if scenario == 'freeze':
+        # The same opponents and grid every run (an --env given to matrix.py comes later and wins).
+        args += ['--env', 'FM4_FIXED_SEED=1']
     if scenario in PROFILE_FROM:
         # The profile saved by the earlier cell of the same gate (its photo, its race result).
         source = f'{name}-{hz}-{PROFILE_FROM[scenario]}'

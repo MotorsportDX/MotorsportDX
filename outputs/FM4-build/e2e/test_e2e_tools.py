@@ -107,7 +107,7 @@ class ParityTests(unittest.TestCase):
         self.tmp.cleanup()
 
     def test_pass(self):
-        code, report = gate(self.base, make_run(self.root, 'c', [image(), image()], draws=1010))
+        code, report = gate(self.base, make_run(self.root, 'c', [image(), image()], draws=1005))
         self.assertEqual((code, report['verdict']), (0, 'PASS'))
 
     def test_draws_and_predication_fail(self):
@@ -201,6 +201,27 @@ class SummaryTests(unittest.TestCase):
             summary = e2e.resummarize(run, 0)
             self.assertEqual(summary['phase_windows'], {'freeze': [4, 8]})
             self.assertEqual(summary['phases']['freeze']['draws_per_frame_mean'], 130)
+
+    def test_guest_render_from_n0_trace(self):
+        self.assertEqual(e2e.steady_by_phase([('race', 1000.0), ('freeze', 5000.0)], 9000.0),
+                         {'race': [1000.0, 5000.0], 'freeze': [5000.0, 9000.0]})
+        with tempfile.TemporaryDirectory() as tmp:
+            path = Path(tmp) / 'n0.jsonl'
+            # One line per second; the race seconds take 4 ms per frame, the frozen ones 2 ms.
+            lines = [{'steady_ms': 1000.0 * s, 'render': {'calls': 60, 'ms': 240.0 if s <= 5 else 120.0}}
+                     for s in range(2, 10)]
+            lines.append({'steady_ms': 10000.0, 'render': {'calls': 0, 'ms': 0.0}})
+            path.write_text(''.join(json.dumps(l) + '\n' for l in lines))
+            summary = {'n0_trace': str(path), 'phases': {'race': {}, 'freeze': {}},
+                       'phase_steady_ms': {'race': [1000.0, 5000.0], 'freeze': [5000.0, 9000.0]}}
+            e2e.guest_render_from_n0(summary)
+            self.assertEqual(summary['phases']['race']['guest_render_thread_ms_per_frame_median'], 4)
+            self.assertEqual(summary['phases']['freeze']['guest_render_thread_ms_per_frame_median'], 2)
+            self.assertEqual(summary['guest_render_thread_source'], 'n0_trace')
+            # A value from the perf trace wins.
+            summary = {'n0_trace': str(path), 'guest_render_thread_ms_per_frame_median': 7}
+            e2e.guest_render_from_n0(summary)
+            self.assertEqual(summary['guest_render_thread_ms_per_frame_median'], 7)
 
     def test_compare_ignores_new_fields(self):
         b = compare.normalize({'fps_mean': 60, 'errors': {}, 'draws_per_frame_mean': 100})

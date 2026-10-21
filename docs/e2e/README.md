@@ -258,6 +258,7 @@ The statistics come from the steady part of the perf trace: without `--measure`,
 | `counts_per_s_median`, `counts_per_frame_median`, `counts_per_frame_mean` | event counts per second, per frame (median of the windows) and over all measured frames (see [traces.md](traces.md)) |
 | `phases` | the statistics above per phase, for the phases the scenario marks |
 | `phase_windows`, `phase_frames` | the perf windows and the captures of each phase |
+| `phase_steady_ms`, `n0_trace` | each phase on the steady clock (ms), and the `FM4_N0_TRACE` file of the run, whose seconds give the phases `guest_render_thread_ms_per_frame_median` ([frozen-frames.md](frozen-frames.md#backend-neutral-fields)) |
 | `final_capture` | `luma_mean`, `black_pct` (luma below 8), `saturated_pct` (luma 248 and above) and `luma_hist16` (16 bins) of the last capture |
 | `clear_gray_frames` | captures in which the exact FM4 clear color (102,102,102) covers at least 1% more than the mean of the neutral grays 97-101 and 103-107 do, i.e. geometry such as the road surface was not drawn; asphalt smoothed by TAA spreads over those grays and is not counted |
 | `errors`, `top_errors` | runtime log lines that match an error marker, keyed by their text (first 90 characters, numbers replaced by `#`) with counts; `top_errors` lists the ten most frequent |
