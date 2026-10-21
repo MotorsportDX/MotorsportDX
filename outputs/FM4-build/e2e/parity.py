@@ -21,9 +21,9 @@ import frame_diff  # noqa: E402
 # Limits of the frozen phase (docs/e2e/frozen-frames.md, "Baseline variance"). The freeze
 # scenario presses Y on the same race frame in every run, but the race advances by wall time,
 # so the frozen moment still differs between runs: four seeded baseline runs of 21 October
-# 2026 (two RTV, two -Rov) differed in 19.1-33.7% of the pixels and by up to 1.6% in draws and
-# predicated packets per frame; earlier pairs with presses on the wall clock differed in up to
-# 47.8% of the pixels. FM4_FIXED_FRAME_TIME=1 fixes the race clock, but the race still
+# 2026 (two RTV, two -Rov; race frames counted in pad polls) differed in 19.1-33.7% of the
+# pixels and by up to 1.6% in draws and predicated packets per frame; earlier pairs with
+# presses on the wall clock differed in up to 47.8% of the pixels. FM4_FIXED_FRAME_TIME=1 fixes the race clock, but the race still
 # diverges before the start (25.6% for a pair with it). The limits sit above that: the image
 # rule catches only a broken frame (black, clear gray, most geometry missing), not a wrong
 # detail; 60% is the final limit the project owner set on 21 October 2026

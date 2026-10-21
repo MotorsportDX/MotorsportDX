@@ -261,6 +261,8 @@ void FM4FixedSeedCountdownStart() {
   if (!FixedSeed()) return;
   std::lock_guard lock(car_mutex);
   ++countdown_starts;
-  std::fprintf(stderr, "FM4 fixed seed: the 3-2-1 starts, %zu car random states reset to %u\n",
+  std::fprintf(stderr,
+               "FM4 fixed seed: the 3-2-1 starts; %zu car random states registered so far, "
+               "each reset to %u at its next draw\n",
                car_states.size(), kCarSeed);
 }

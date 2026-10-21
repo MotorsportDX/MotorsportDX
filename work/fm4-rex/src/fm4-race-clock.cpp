@@ -29,23 +29,26 @@
 // then waits until the race is ready (the session's flags at +353, +355 and
 // +356, set as the loading ends) before its 3-2-1 starts (its +0x18 flag
 // clears). From there the 3-2-1 runs on the session time: the race scenario
-// follows 509 session updates later. The wait follows the loading (30 to 41
-// updates in a Quick Race on the same machine), and the cars settle on the
-// grid during it, so they start the 3-2-1 in slightly different states, which
-// the revving before the start makes larger. With FM4_FIXED_FRAME_TIME=1 the
+// follows 8.49 s of session time later (509 session updates with the fixed
+// step below, about 1,000 with the measured one, as the countdown runs two
+// passes per presented frame). The wait follows the loading (29 to 40 updates
+// in Quick Races with the fixed step on the same machine), and the cars stand
+// on the grid during it, so they start the 3-2-1 in other states, which the
+// revving before the start makes larger. With FM4_FIXED_FRAME_TIME=1 the
 // countdown sees the first flag (+353, sub_826D32D8) clear until
 // kCountdownWait session updates after it placed the cars, so the 3-2-1
 // starts on the same update whenever the loading ends before that (a line
 // says when it does not). The 3-2-1 start also resets the cars' random states
 // with FM4_FIXED_SEED (fm4-fixed-seed.cpp).
 //
-// With both switches the 12 cars' dynamics (CCarDynamics) were bit-identical
-// between two runs from the placing of the cars to about 265 updates into the
-// 3-2-1 (21 October 2026). Then, while the AI revs the engines, a car's state
-// differs in the last bit (+0x14) although every car field and random state
-// read so far was the same; a threshold of the engine code (+0x17F0,
-// sub_8234C198) amplifies it, and the race no longer repeats. The input that
-// differs is not found (docs/e2e/frozen-frames.md).
+// With both switches, dumps of the 12 cars' dynamics (CCarDynamics) in two
+// runs (21 October 2026, a probe build) showed no new difference from 30 to
+// 324 session updates after the placing of the cars (264 into the 3-2-1),
+// beside 156 words that already differed 30 updates after it. On the 325th,
+// while the AI revs the engines, 11 cars differ at once, from the last bit of
+// car 1's +0x14 to per-wheel fields; thresholds of the engine code (+0x17F0)
+// then amplify it, and the race no longer repeats. The input that differs is
+// not found (docs/e2e/frozen-frames.md).
 #include <rex/hook.h>
 #include <rex/memory.h>
 #include "fm4-diagnostic-state.h"
