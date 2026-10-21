@@ -111,6 +111,12 @@ struct State {
   uint64_t submit_flush_ticks = 0;
   uint64_t split_tsc[size_t(Split::kCount)]{};
   uint32_t split_packets[size_t(Split::kCount)]{};
+  // REX_CP_SPLIT: the same split inside indirect buffers at depth two and more
+  // (the replays of recorded command buffers, executed from the command
+  // buffer segments; docs/analysis/d3d-hle.md, section 15.2), their total time
+  // stamp counter ticks, count and dwords.
+  uint64_t replay_split_tsc[size_t(Split::kCount)]{};
+  uint64_t replay_tsc = 0, replays = 0, replay_dwords = 0;
   uint64_t window_tsc = 0;
   // Host render thread (host_render_thread): records taken, and the sum and
   // maximum of the queue depth when each was taken.
@@ -159,6 +165,10 @@ inline bool SplitEnabled() {
   }();
   return enabled;
 }
+// Depth of the indirect buffer being executed (command processor or host
+// render thread only).
+inline uint32_t indirect_depth = 0;
+
 class SplitScope {
  public:
   explicit SplitScope(Split split)
@@ -167,8 +177,10 @@ class SplitScope {
   ~SplitScope() {
     if (split_ == Split::kNone) return;
     State* state = Get();
-    state->split_tsc[size_t(split_)] += __rdtsc() - start_;
+    const uint64_t ticks = __rdtsc() - start_;
+    state->split_tsc[size_t(split_)] += ticks;
     ++state->split_packets[size_t(split_)];
+    if (indirect_depth >= 2) state->replay_split_tsc[size_t(split_)] += ticks;
   }
 
  private:
@@ -490,6 +502,14 @@ inline void OnSwap() {
     for (size_t i = 0; i < size_t(Split::kCount); ++i) {
       state->output << (i ? "," : "") << '"' << kSplitNames[i] << "\":" << state->split_packets[i];
     }
+    state->output << "},\"replay_split_ms\":{";
+    for (size_t i = 0; i < size_t(Split::kCount); ++i) {
+      state->output << (i ? "," : "") << '"' << kSplitNames[i] << "\":"
+                    << (tsc_per_ms > 0 ? double(state->replay_split_tsc[i]) / tsc_per_ms : 0.0);
+    }
+    state->output << "},\"replay\":{\"ms\":"
+                  << (tsc_per_ms > 0 ? double(state->replay_tsc) / tsc_per_ms : 0.0)
+                  << ",\"count\":" << state->replays << ",\"dwords\":" << state->replay_dwords;
   }
   if (host_render.load(std::memory_order_relaxed)) {
     uint64_t wait_ticks = 0;

@@ -165,8 +165,18 @@ void CommandProcessor::HostCheckFinish() {
   const bool marker = state.entry.marker;
   const uint32_t* guest = memory_->TranslatePhysical<const uint32_t*>(state.begin);
   state.bytes_changed = false;
+  // A converted call that joins the record of the marker before it rewrites
+  // that marker's sequence dword, so a copy holding the marker may have the
+  // older sequence.
+  const auto sequence_dword = [&](size_t i) {
+    return i >= 2 &&
+           memory::load_and_swap<uint32_t>(&state.entry.dwords[i - 2]) ==
+               system::native_records::kMarkerHeader &&
+           memory::load_and_swap<uint32_t>(&state.entry.dwords[i - 1]) ==
+               system::native_records::kMarkerTag;
+  };
   for (size_t i = 0; !marker && i < state.entry.dwords.size(); ++i) {
-    if (guest[i] != state.entry.dwords[i]) {
+    if (guest[i] != state.entry.dwords[i] && !sequence_dword(i)) {
       state.bytes_changed = true;
       state.first_changed = uint32_t(i);
       break;

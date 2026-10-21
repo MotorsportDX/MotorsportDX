@@ -840,7 +840,11 @@ void CommandProcessor::ExecuteIndirectBuffer(uint32_t ptr, uint32_t count) {
     }
   }
 
-  // Execute commands!
+  // Execute commands! With REX_CP_SPLIT the time of the replays (depth two:
+  // the indirect buffers that the command buffer segments call) is counted.
+  const bool split = perf_trace::SplitEnabled();
+  const uint64_t replay_start = split && perf_trace::indirect_depth == 1 ? __rdtsc() : 0;
+  ++perf_trace::indirect_depth;
   memory::RingBuffer reader(memory_->TranslatePhysical(ptr), count * sizeof(uint32_t));
   reader.set_write_offset(count * sizeof(uint32_t));
   do {
@@ -851,6 +855,13 @@ void CommandProcessor::ExecuteIndirectBuffer(uint32_t ptr, uint32_t count) {
       break;
     }
   } while (reader.read_count());
+  --perf_trace::indirect_depth;
+  if (replay_start) {
+    perf_trace::State* state = perf_trace::Get();
+    state->replay_tsc += __rdtsc() - replay_start;
+    ++state->replays;
+    state->replay_dwords += count;
+  }
   if (host_check_) {
     HostCheckBufferEnd(ptr + count * sizeof(uint32_t));
   }
