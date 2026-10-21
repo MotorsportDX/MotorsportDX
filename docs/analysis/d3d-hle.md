@@ -302,7 +302,7 @@ The measurement part of stage N0 (section 9). The frozen-frame A/B harness and t
 
 All runs are on `I:\FM4-build-usa` (USA release) with the counters of [traces](../e2e/traces.md#d3d-layer-counters-fm4_n0_trace) (`FM4_N0_TRACE`, `FM4_N0_KEYCHECK`, `REX_PM4_STATS`, `REX_CP_SPLIT`), the launcher defaults (look `pc`, quality `high`, one tile with TAA, the asynchronous swap), 240 Hz and 1x unless stated, the title's AI driving. The `career` scenario covers a menu, a race (Tsukuba Short Circuit, Ford Ka, 40 s) and a replay (30 s).
 
-Windows: the race and the replay are the whole phases as `e2e.py` summarizes them (the perf windows from one phase mark to the next; for each run the offset between `e2e.py`'s clock and the perf trace was chosen so that these windows reproduce the run's `summary.json` exactly). The menu is the windows from the main menu showing PLAY CAREER to START RACE selected (about 28 s: the main menu, Career, World Tour and the event screens). `REX_PM4_STATS` lines are one per perf window; `FM4_N0_TRACE` seconds are taken when they fall inside a phase's windows by the steady clock. fps is frames over time.
+Windows: the race and the replay are the whole phases as `e2e.py` summarizes them (the perf windows from one phase mark to the next; for each run the offset between `e2e.py`'s clock and the perf trace was chosen so that these windows reproduce the run's `summary.json` exactly). The menu is the windows from the main menu showing PLAY CAREER to START RACE selected (about 28 s: the main menu, Career, World Tour and the event screens). `REX_PM4_STATS` lines are one per perf window; an `FM4_N0_TRACE` line covers the second before its steady clock, and a phase takes the whole seconds inside its windows (the rule of `e2e.py`'s `steady_by_phase`). fps is frames over time.
 
 | Run | Settings | Build |
 |---|---|---|
@@ -322,17 +322,17 @@ The counters cost frame rate (the `career` race ran at 196.5 fps with `FM4_N0_TR
 |---|---|---|---|---|---|
 | fps in the counter run | 196.5 | 166.8 | 113.7 | 98.3 | 54.8 |
 | Draws executed | 2,108 | 2,681 | 1,835 | 2,700 | 704 |
-| `RunCommandBuffer` | 739 | 734 | 633 | 648 | 19 |
-| of which the inline path | 739 | 734 | 633 | 648 | 19 |
+| `RunCommandBuffer` | 739 | 733 | 625 | 648 | 19 |
+| of which the inline path | 739 | 733 | 625 | 648 | 19 |
 | `sub_826E4A28` (deferred, copied, queued, direct) | 0 | 0 | 0 | 0 | 0 |
 | `INDIRECT_BUFFER` executed (skipped by predication) | 853 | 1,250 (804) | 709 | 1,062 (676) | 101 (13) |
-| Distinct buffers replayed per second | 373 | 367 | 215 | 212 | 4.9 |
+| Distinct buffers replayed per second | 373 | 368 | 213 | 212 | 4.9 |
 | `BeginCommandBuffer` per second | 0 | 0 | 0 | 0 | 4.4 |
 
 - Every replay took a path that section 2.4 did not describe: when bit `0x20` of the buffer's flags at +108 is clear, `RunCommandBuffer` writes one `INDIRECT_BUFFER` per descriptor straight into the segment it is writing (`loc_82310CF8`), and only with the bit set does it close the segment and go through `sub_826E4BE0` and `sub_826E4A28`. In these runs the bit was never set, and `sub_826E4A28` was not called at all, from `RunCommandBuffer` or from the swap. Each replayed buffer had one descriptor.
 - Recordings happen at load, not per frame: 10,209 `BeginCommandBuffer`/`EndCommandBuffer` pairs in a run, 8,705 of them on a second guest thread (13.7), and 4.4 per second in the menu, with as many `D3DCommandBuffer_CreateClone` calls.
-- The buffer objects that `RunCommandBuffer` replays are not the recorded objects, and they do not point at the recorded PM4 chunks: in the race of `n0-career-c` 99.9% of the replays were of buffer objects never seen at `EndCommandBuffer`. With `FM4_N0_KEYCHECK`, 54% of the race replays (`n0-key2`; 48% in `n0-key`), 65% of the replay phase and 40 to 43% of the menu execute PM4 that is byte-identical to a recording of the same run, so those are copies made by game code (not through `CreateClone`); the rest is PM4 that no `EndCommandBuffer` of the run produced (inferred: command buffers built with the assets). The 16 most replayed buffers of each run are resource type 9 (`0x00400009` or `0x00500009` at +0), most of them in physical memory.
-- Reuse is high: `n0-career-c` replays 4,289 distinct buffer objects (`n0-msaa-b` 4,259), 3,039 of them 256 to 8,191 times. In the one-tile race 373 distinct buffers a second take 739 replays a frame, so a buffer is replayed about twice a frame, which makes 256 to 8,191 replays about 130 to 4,100 frames. With the PM4 hashed at every replay, 0.02% of the race replays found the bytes of a buffer changed since its previous replay (22.3 of 115,891 per second in `n0-key2`); whether that is a patch or a new buffer at the same address is not distinguished.
+- The buffer objects that `RunCommandBuffer` replays are not the recorded objects, and they do not point at the recorded PM4 chunks: in the race of `n0-career-c` 99.9% of the replays were of buffer objects never seen at `EndCommandBuffer`. With `FM4_N0_KEYCHECK`, 54% of the race replays (`n0-key2`; 48% in `n0-key`), 65% of the replay phase (66% in `n0-key`) and 43 to 47% of the menu execute PM4 that is byte-identical to a recording of the same run (1 minus `unseen` over `run` of the `cb` counters; the `same` counter compares a buffer with its own previous replay and is not this share), so those are copies made by game code (not through `CreateClone`); the rest is PM4 that no `EndCommandBuffer` of the run produced (inferred: command buffers built with the assets). The 16 most replayed buffers of each run are resource type 9 (`0x00400009` or `0x00500009` at +0), most of them in physical memory.
+- Reuse is high: `n0-career-c` replays 4,289 distinct buffer objects (`n0-msaa-b` 4,259), 3,039 of them 256 to 8,191 times. In the one-tile race 373 distinct buffers a second take 739 replays a frame, so a buffer is replayed about twice a frame, which makes 256 to 8,191 replays about 130 to 4,100 frames. With the PM4 hashed at every replay, 0.02% of the race replays found the bytes of a buffer changed since its previous replay (22.8 of 115,576 per second in `n0-key2`); whether that is a patch or a new buffer at the same address is not distinguished.
 
 ### 13.3 Shader keys and constant blocks
 
@@ -394,7 +394,7 @@ The command processor waited 0 ms for occlusion results in every phase (`wait_ms
 | A second thread | 8,705 recordings, 48 of the 64 `RecordCommandBuffers` calls, 395,318 `SetTexture` and 13,578 `DrawIndexedVertices` (into recordings), at load |
 | The tile stream worker | `sub_826EDFA8` once (it never returns), `sub_826ED978` 41,781 and `sub_826EDCE8` 41,758 times, about twice per `BeginTiling` (20,881) |
 
-Every `RunCommandBuffer` ran on the render thread, 99.9% of them through `CRenderEngine::RunCommandBuffer`, so its queue to another thread (2.4) was not used in these scenes. The calls of `sub_822DB318` that presented a frame took 4.97 ms each in the one-tile race (196.7 a second, 977 ms/s) and 5.96 ms in the tiled race (166.4 a second, 992 ms/s): in the race the guest render thread is busy for almost the whole frame, at the same time as the command processor (940 and 957 ms/s). In the replay phase it took 7.24 ms (one tile) and 3.09 ms (tiles) per frame and spun through calls without a frame (3,658 and 17,387 a second).
+Every `RunCommandBuffer` ran on the render thread, 99.9% of them through `CRenderEngine::RunCommandBuffer`, so its queue to another thread (2.4) was not used in these scenes. The calls of `sub_822DB318` that presented a frame took 4.97 ms each in the one-tile race (196.7 a second, 977 ms/s) and 5.96 ms in the tiled race (166.5 a second, 992 ms/s): in the race the guest render thread is busy for almost the whole frame, at the same time as the command processor (940 and 957 ms/s). In the replay phase it took 7.22 ms (one tile) and 3.09 ms (tiles) per frame and spun through calls without a frame (3,657 and 17,387 a second). These figures are per `n0.jsonl` second of the phase.
 
 ### 13.8 Command processor time split
 
@@ -402,7 +402,7 @@ The `photo` race (12 cars, the launcher defaults), three runs each. The first ro
 
 | Race phase | 1x, no split (`n0-p1x`) | 1x (`n0-p1x-split`) | 2x (`n0-p2x-split`) |
 |---|---|---|---|
-| fps, p99 frame time (median of runs) | 217.5, 6.91 ms | 206.6, 7.17 ms | 155.5, 10.46 ms |
+| fps (frames over time) and p99 frame time, median of the runs | 217.5, 6.91 ms | 206.6, 7.17 ms | 155.5, 10.46 ms |
 | fps of the three runs | 196.6 to 220.0 | 188.8 to 228.2 | 153.6 to 158.9 |
 | GPU per frame (median of runs) | 2.89 ms | 2.90 ms | 6.23 ms |
 | Command processor busy (median of runs) | 803 | 855 | 678 |
