@@ -930,7 +930,9 @@ def run_once(options, out):
                      if tiling else f'the look {look!r} (no TAA)')
             raise SystemExit(f'--native covers one tile, but {cause} renders races in tiles: '
                              'use a look with TAA or --env FM4_TILING_SCENARIO=2')
-        args.update(pipeline.native_cvars(True))
+        # An --arg given for the run keeps its value (host_render_native=false for an A/B).
+        for key, value in pipeline.native_cvars(True).items():
+            args.setdefault(key, value)
     settings = pipeline.race_settings(options.quality or pipeline.DEFAULT_QUALITY, tiling_given or single_tile)
     if settings:
         env['FM4_RACE_SETTINGS'] = settings

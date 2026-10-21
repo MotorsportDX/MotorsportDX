@@ -1,6 +1,6 @@
 # D3D-level HLE: feasibility and plan
 
-Status: analysis, 21 October 2026. The same day the project owner chose a native port as the target; its architecture and stages are in sections 8 and 9, the measurements of stage N0 are in section 13, and the design of stage N1 with the order of its increments is in section 14, with the results of increments 1 and 2 in 14.6 and 14.8. Addresses are the USA `default.xex` (the Japan/Asia executable has the same code, see [release comparison](releases.md)). The generated C++ that was read is `<BuildRoot>\project\generated\default`; the catalog, call graph and decompiled functions stay outside the repository under `I:\FM4-re` ([function catalog](function-catalog.md)).
+Status: analysis, 21 October 2026. The same day the project owner chose a native port as the target; its architecture and stages are in sections 8 and 9, the measurements of stage N0 are in section 13, and the design of stage N1 with the order of its increments is in section 14, with the results of increments 1 to 3 in 14.6, 14.8 and 14.10. Addresses are the USA `default.xex` (the Japan/Asia executable has the same code, see [release comparison](releases.md)). The generated C++ that was read is `<BuildRoot>\project\generated\default`; the catalog, call graph and decompiled functions stay outside the repository under `I:\FM4-re` ([function catalog](function-catalog.md)).
 
 ## Summary
 
@@ -590,14 +590,34 @@ All three fall back to `D3DDevice_WriteRegistersChunked` (`sub_82379530`) when t
 
 **The record.** `host_render_native` (runtime) with the host render thread turns the conversion on, and the GPU plugin publishes it to the title (`rex/system/native_records.h`). A hooked dirty writer then, unless the device records a command buffer (device+13904) or the segment has no room for the marker:
 
-1. builds the record from its arguments: runs of (first register, count) and their values, copied from the source in guest byte order, in the order of the PM4;
-2. stores the record under the marker's guest physical address, before the marker exists;
+1. takes the next sequence and its slot in a pool of 65,536 records, and builds the record there from its arguments: runs of (first register, count) and their values, copied from the source in guest byte order, in the order of the PM4;
+2. publishes the slot with the sequence, before the marker exists;
 3. writes the marker at device+48 (`NOP` with two data dwords: the tag `0x4E41544B` and the low 32 bits of the record's sequence), advances device+48 by three dwords and does not run the original body.
 
-The host render thread, before each packet, tests the address in the filter; on a hit it finds the record, checks that the packet is a marker with the record's sequence, and writes the runs through `WriteRegistersFromMem`, as the type-0 packets would have (the same side effects of the constant, fetch constant and hooked registers). A marker without a record is the error "Native record: marker without a record".
+The host render thread applies the record when its `NOP` handler executes a marker: the sequence in the marker names the slot, and when the slot still holds that sequence the runs go through `WriteRegistersFromMem`, as the type-0 packets would have (the same side effects of the constant, fetch constant and hooked registers). A record stays in its slot until the pool wraps around (about 30 frames at the race's rate), so a segment executed more than once, such as the tile bodies of the menus' tiling bracket, applies it each time. A marker whose slot holds another sequence (never published, or the pool wrapped) is the error "Native record: marker without a record". The pool replaced a table keyed by the marker's address on 22 October 2026: kept for the tile bodies, its records filled the reused segments' addresses, so that most packets went to a locked map of up to 457,000 records, 1.13 ms a race frame (14.10).
 
 **The identity check of a record** (with `FM4_NATIVE_CHECK=1` and `host_render_check`): the hook also runs the original body into a scratch segment of the hooking thread (64 KB of guest memory from the system heap, so a run always fits and the writer never calls the chunked writer or the overflow), with device+48 and device+52 pointing into it and restored afterwards, and stores the scratch PM4 as the check's copy under the marker's address. At the marker the host render thread applies the record, decodes the copy and compares the decoded registers with the register file, so the record must set every register the PM4 would have set, to the same value. The comparison of the PM4 bytes, the type-3 packets and the draws is left out for a marker (the scratch PM4 is not in the stream).
 
-**The filter.** One bit per dword of the 512 MB physical space (16 MB), set when an entry is stored, cleared when it is taken, tested without a lock before every packet; the table's lock is taken only on a hit. It serves the check's table and the records' table.
+**The filter.** One bit per dword of the 512 MB physical space (16 MB), set when an entry is stored, cleared when it is taken, tested without a lock before every packet; the table's lock is taken only on a hit. It serves the check's table (the records do not use a table).
 
 **Gates.** The identity check without mismatches in the coverage scenes (`career`), and a perturbed run that reports every perturbed range; the gates of increment 1 (smoke and perf against RTV of the same commit, `parity.py` on the one-tile `freeze`); the check's cost before and after the filter; the PM4 the command processor no longer translates, from the type-0 packet counts.
+
+### 14.10 Increment 3 results, 22 October 2026
+
+On `I:\FM4-build-usa` (USA release), commit `f4241ae` (`fm4_rex.exe` SHA-256 `e51dbd3a17ff64e1fd7ee335118312c2fda03cc2e597f95d1a2e62ce04d106dc`, `rexgpu-xenos.dll` `9202f16b05b36361e8e4888c99607bd4e00fa5deab05b69990bba72e0b929131`, `rexruntime.dll` `cb92f9687785aa1e93e292b2f69250e847b131090a74e53f8736e088235edc4c`), one binary for RTV (`host_render_thread` off) and the native path (`host_render_thread` and `host_render_native`), the launcher defaults at 240 Hz and 1x, the title's AI driving; the `freeze` pair at 60 Hz with its pins and one tile.
+
+| Gate | RTV | Native, records | Verdict |
+|---|---|---|---|
+| Smoke, `career` race (`n3brtv`, `n3bnat`) | 228.1 fps, p99 5.81 ms | 224.2 fps, p99 6.03 ms | PASS |
+| Smoke, `career` replay | 116.3 fps, p99 10.19 ms | 114.9 fps, p99 10.66 ms | PASS |
+| Smoke, `photo` race | 207.8 fps, p99 6.37 ms | 216.0 fps, p99 5.86 ms | WARN on capture statistics only |
+| Smoke, `photo_view` | 56.99 fps | 55.9 fps | WARN on capture statistics only |
+| Perf, `photo` race, three runs (`n3brtvp`, `n3bnatp`), median of the runs | 233.7 fps, p99 5.14 ms (runs 221.9 to 238.2) | 214.2 fps, p99 5.93 ms (runs 214.1 to 231.4) | WARN on capture statistics only; fps -8.4% and p99 +15.4%, inside the limits |
+| `parity.py`, `freeze` with one tile (`n3bfz-rtv`, `n3bfz-nat`) | | draws -0.0%, predicated run -0.0%, image 17.14% | PASS |
+
+- The identity check with the records (`n3bprt-career`, perturbed every 1,000th range): 33,262,248 ranges compared in the menus, the one-tile race and the replay, 32,860,019 records applied with 1,479,896,286 register values, no marker without a record, and 31,617 mismatches, exactly the perturbed ranges. Every cell reached its goal with the error keys of RTV.
+- What the records take off the command processor in the race (`n3bpm4-off` and `n3bpm4-on`, `REX_PM4_STATS`): type-0 packets 26,850 against 25,836 a frame (-3.8%), type-2 padding 19,320 against 17,366, type-3 packets 13,759 against 16,590 (the markers, 2,397 a frame). Most of the race's register writes come from the replayed command buffers, which keep their PM4 in N1 (13.2); the dirty writers called directly are a small part.
+- Over the race windows of the three perf runs, the host render thread was busy 1.894 us per draw at 1,936 draws a frame, the command processor thread 1.724 us at 1,773 (+9.9% per draw). Applying the records took 0.42 ms a frame in a run with a timing zone (`n3natp3`), about what parsing the packets they replace cost; the records do not save host time yet.
+- The first two designs of the record lookup are measured as well: a table that consumed records at their marker lost the second execution of the menus' tile bodies (about 23,000 markers a second without a record, the game hung, `n3chk-career`); a table that kept them cost 1.13 ms a race frame in its lookups (`n3zone-photo`) and the race ran at 176.9 against 225.0 fps on RTV (`n3natp`, FAIL). The pool of 14.9 replaced both.
+- The identity check with the filter (`n3bchkp` against `n2chkp`, check on, records off): 4.511 against 4.825 us per draw; the filter removed the per-packet lock but most of the check's cost is in the copies and the decode.
+- Not covered: 60 and 120 Hz, 2x, photo mode, split screen and the intro videos with the records.
