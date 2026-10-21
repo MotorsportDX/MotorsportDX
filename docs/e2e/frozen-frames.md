@@ -26,7 +26,7 @@ Unless `--look` or `--arg` says otherwise, the scenario pins the settings below.
 | `rtv_occlusion_debug` | `fake` | awaited occlusion intervals (the sun glare) report a fixed count instead of host query results, which arrive at different times |
 | `query_occlusion_fake_sample_count` | `1000` | the fixed count |
 | `rtv_occlusion_awaited_scale`, `rtv_occlusion_awaited_limit` | `-1`, `0` | no `sun` knob scaling |
-| `draw_resolution_scale_x`, `_y` | `2`, `2` | the draws at 2x; the captures stay 1280x720 with this look: the runtime logs "draw resolution scaling is enabled, but the swap source is unscaled (1280x720)" and the PPM captures of the `freeze` runs of 21 October 2026 are 1280x720, tiled (`fzpin-rtv-a`) and in one tile (`n1fz2-rtv`), while a 2x run with the `aces` look captures 2560x1440 (`n0-p2x-split`); why the swap source stays unscaled here is not established |
+| `draw_resolution_scale_x`, `_y` | `2`, `2` | 2560x1440 captures in the 1280x720 window: every capture of the phase `freeze` is 2560x1440, tiled (`fzpin-rtv-a`) and in one tile (`n1fz2-rtv`, `n1fz2-nat`). Only the first capture of a run, the legal notice about 3 s after the launch, is 1280x720. The runtime's warning "draw resolution scaling is enabled, but the swap source is unscaled (1280x720)" comes from that first swap and is logged once per run; a 2x run with the `aces` look logs it too (`n0-p2x-split`) |
 | PPM captures | kept | `frame_diff.py` reads them; `--keep-ppm` is implied |
 
 Variants:
