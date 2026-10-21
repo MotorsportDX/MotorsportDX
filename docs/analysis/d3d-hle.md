@@ -485,3 +485,23 @@ Which scene uses each writer is inferred from 13.2, 13.6 and 13.7. Increment 2 s
 | 3 | The dirty writers become register delta records; the ring position check of 14.3. | The identity check without mismatches in the coverage scenes; the gates of increment 1. |
 | 4 | The menu writers: draws, `sub_82370370`, shader loads and constant blocks (copied into the record when the queue may run ahead of the guest), resolves, the swap, the ring waits, and `RunCommandBuffer` as a replay record (the host render thread executes the recorded PM4 through `ExecuteIndirectBuffer`; the menus replay 19 buffers a frame). | The identity check; no PM4 written into the ring in the menus (recordings keep their PM4); the gates of increment 1. |
 | 5 | The race and replay writers: the tiling bracket in one tile, `EVENT_WRITE_ZPD`, the remaining fences, and the replay record at the race's rate. | The exit criteria of N1 (section 9); photo mode, split screen and the intro videos smoke checked on the fallback. |
+
+### 14.6 Increment 1 results, 21 October 2026
+
+On `I:\FM4-build-usa` (USA release), commit `e720054`, one binary for both paths (`fm4_rex.exe` SHA-256 `3ddfa5821c72ed7dae71b2ad0f48d70d3b73026db7b0234ed43bab6fd6ae5814`, `rexgpu-xenos.dll` `99f06d47c2afc5944eb220459dbe7420f277e3512518100c9750487277e1ddf7`, `rexruntime.dll` `22a1c4c7729a46b712a706fde9d28b8fffdadf10bee13928aa5a8faac47189ef`): RTV with `host_render_thread` off, and the host render thread with it on. The launcher defaults, 240 Hz and 1x, the title's AI driving.
+
+| Gate | RTV | Host render thread | Verdict |
+|---|---|---|---|
+| Smoke, `photo` race (`n1rtv2`, `n1nat2`) | 219.4 fps, p99 6.39 ms | 237.3 fps, p99 5.09 ms | WARN (capture statistics only) |
+| Smoke, `photo_view` | 56.96 fps | 56.97 fps | WARN (capture statistics only) |
+| Smoke, `career` race | 225.2 fps, p99 6.27 ms | 224.1 fps, p99 6.36 ms | PASS |
+| Smoke, `career` replay | 117.1 fps, p99 10.26 ms | 118.1 fps, p99 9.91 ms | PASS |
+| Perf, `photo` race, three runs (`n1rtvp2`, `n1natp2`) | 229.4 fps, p99 5.48 ms (runs 226.5 to 237.5) | 219.6 fps, p99 6.08 ms (runs 209.3 to 228.2) | WARN (fps -4.3%, p99 +10.9%) |
+| `parity.py`, `freeze` with one tile (`n1fz2-rtv`, `n1fz2-nat`) | | draws -0.6%, predicated run -1.5%, image 23.03% | PASS |
+
+- Every cell reached its goal; no new error key (both paths log the same three); no "packet runs past the span end" in any native run.
+- The perf difference follows the draw load of the AI races: over the race windows of the three runs together the host render thread was busy 1.833 us per draw at 2,024 draws a frame, the command processor thread 1.786 us at 1,769 (+2.6% per draw). Submissions per race frame are the same (2.97 in `career` on both).
+- The host render thread takes about one record a frame in the race (1.1, after merging consecutive spans): it waits for the vblank inside the swap's `WAIT_REG_MEM` while the guest kicks the next frame, as the command processor thread did. The queue holds a median of 56.9 to 72.2 kicks when a record is taken, up to the capacity of 256.
+- The first build of the same day (`8ced80d`, `n1nat`) executed each kick as its own span and ended a submission per kick: 45.2 submissions per `career` race frame against 2.9, 198.4 against 223.1 fps (FAIL). Merging consecutive spans (`e720054`) removed it.
+- The freeze pair renders one tile without TAA (`--env FM4_TILING_SCENARIO=2`, `FM4_FIXED_SEED=1`), because `-Native` covers one tile; the image share is within the pairs of RTV runs ([frozen-frame parity](../e2e/frozen-frames.md#baseline-variance)).
+- Not covered: 60 and 120 Hz, 2x, the ROG Xbox Ally X, photo mode's own captures, split screen and the intro videos, and the identity check (increment 2).
