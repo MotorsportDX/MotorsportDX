@@ -180,6 +180,18 @@ class InputTests(unittest.TestCase):
                          (e2e.BUTTONS['a'], e2e.BUTTONS['y'], 720))
         self.assertEqual(e2e.parse_action('none')['pulse'], 0)
 
+    def test_bad_actions(self):
+        for action in ('~y@-5', '~y@x', '~y@', '~q', 'q', 'foo=1', 'rt=x'):
+            with self.assertRaises(ValueError, msg=action):
+                e2e.parse_action(action)
+        e2e.check_actions(e2e.SCENARIOS['freeze'])
+        with self.assertRaisesRegex(ValueError, 'step 1: .*~y@-5'):
+            e2e.check_actions([[1, 'wait', 0], [1, 'a,~y@-5', 0.12]])
+        with self.assertRaisesRegex(ValueError, 'step 0'):
+            e2e.check_actions([[5, '?~q', 0.12, 'TEXT']])
+        e2e.check_actions([[1, 'phase:x', 0], [1, 'select:A B', 0], [1, 'defines:X=1', 0],
+                           [5, 'wait', 0, 'TEXT'], [1, 'none', 0], [1, 'rt=255+back', 0]])
+
     def test_input_file(self):
         with tempfile.TemporaryDirectory() as tmp:
             path = Path(tmp) / 'input.txt'

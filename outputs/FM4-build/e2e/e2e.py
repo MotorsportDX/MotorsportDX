@@ -15,8 +15,9 @@ BUTTONS = {'up': 0x1, 'down': 0x2, 'left': 0x4, 'right': 0x8, 'start': 0x10, 'ba
 # pulses it: the diagnostic controller presses it on every other poll of the title (once per
 # frame in a race) instead of holding it, so an edge-triggered button acts on the first frame
 # the title accepts it; '~y@<n>' starts the pulse on race frame n (the n-th poll after the
-# race starts) instead of at once. With hold 0 it pulses until the next input. These change
-# no input:
+# race starts; it waits outside a race) instead of at once. A plain step with hold 0 pulses
+# until the next input; a checked step or a comma sequence releases it after the hold, as any
+# press. Actions are checked before the launch. These change no input:
 #   'wait'             only waits (keeps a held throttle);
 #   'phase:<name>'     starts a measured phase ('phase:end' closes it) for summary.json phases;
 #   'select:<label>'   moves the menu highlight to the OCR'd label, for up to <seconds>;
@@ -169,7 +170,8 @@ SCENARIOS.update({
     # there); then 20 s of the frozen frame (phase freeze), which the title keeps rendering
     # under the rewind hint bar. The rewind keeps a window of about the last 10 s and takes Y
     # only after about 10 s of race (a held Y does not start it). The first press lands on race
-    # frame 720 in every run, so the oldest frame does not move with the wall clock.
+    # frame 720 in every run, but the race advances by wall time, so the frozen moment still
+    # differs between runs (docs/e2e/frozen-frames.md, "Baseline variance").
     'freeze': SCENARIOS['quickrace'][:-1] + [
         [0.5, '~y@720', 0], [90, 'wait', 0, 'REWINDING|REWIND FURTHER|RESUME FROM HERE', 1],
         [6, 'none', 0], [6, 'wait', 0],
@@ -315,21 +317,41 @@ def set_input(path, buttons=0, lt=0, rt=0, lx=0, ly=0, rx=0, ry=0, pulse=0, puls
 
 
 def parse_action(action):
+    """The input state of one press ('+'-joined parts); ValueError names a bad part."""
     state = dict(buttons=0, lt=0, rt=0, lx=0, ly=0, rx=0, ry=0, pulse=0, pulse_from=None)
     if action == 'none':
         return state
     for part in action.split('+'):
         if part.startswith('~'):
-            button, _, start = part[1:].partition('@')
+            button, at, start = part[1:].partition('@')
+            if button not in BUTTONS or (at and not start.isdigit()):
+                raise ValueError(f'bad pulse {part!r} in {action!r} (~<button> or ~<button>@<frame>)')
             state['pulse'] |= BUTTONS[button]
-            if start:
+            if at:
                 state['pulse_from'] = int(start)
         elif '=' in part:
-            key, value = part.split('=')
+            key, value = part.split('=', 1)
+            if key not in ('lt', 'rt', 'lx', 'ly', 'rx', 'ry'):
+                raise ValueError(f'bad axis {part!r} in {action!r}')
             state[key] = int(value)
-        else:
+        elif part in BUTTONS:
             state['buttons'] |= BUTTONS[part]
+        else:
+            raise ValueError(f'unknown button {part!r} in {action!r}')
     return state
+
+
+def check_actions(steps):
+    """Parses every input action of the steps, so a bad one fails before the launch."""
+    for index, (wait, action, hold, *text) in enumerate(steps):
+        action = action[1:] if text and action.startswith('?') else action
+        if action == 'wait' or action.startswith(('phase:', 'select:', 'defines:')):
+            continue
+        for press in action.split(','):
+            try:
+                parse_action(press)
+            except ValueError as error:
+                raise ValueError(f'step {index}: {error}') from None
 
 
 class Ocr:
@@ -918,6 +940,7 @@ def run_once(options, out):
     ai_driving = 'engageaionstart' in env.get('FM4_GAME_CMDLINE', '')
     if ai_driving:
         steps = without_driving_input(steps)
+    check_actions(steps)
 
     n0_trace = env.get('FM4_N0_TRACE') and str(root / env['FM4_N0_TRACE'])
     # The title appends to the trace, so this run's lines start at its present size.

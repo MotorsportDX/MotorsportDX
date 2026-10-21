@@ -47,7 +47,8 @@ class FM4TestInput final : public rex::input::InputDriver {
         next.gamepad.thumb_rx = int16_t(rx);
         next.gamepad.thumb_ry = int16_t(ry);
         // Optional eighth and ninth fields: pulsed buttons and the race frame they start
-        // on (see below).
+        // on (see below). A ninth field that is not a frame from 0 to 2^31 - 1 is ignored,
+        // so the pulse starts at once.
         if ((file >> pulse) && pulse > 0 && pulse <= 65535) {
           next_pulse = uint16_t(pulse);
           if ((file >> from) && from >= 0 && from <= 0x7FFFFFFF) next_from = from;
@@ -76,7 +77,8 @@ class FM4TestInput final : public rex::input::InputDriver {
       // the one after. With a race frame the pulse waits for that frame instead of starting
       // at once: frame 1 is the first poll after the title pushed its race render scenario
       // (fm4-vblank-rate.cpp), so the first press lands on the same guest frame in every
-      // run. Keystrokes do not see pulses.
+      // run. Outside a race (before it starts, after its scenario is popped) the pulse
+      // waits. Keystrokes do not see pulses.
       if (pulse_) {
         int64_t index = pulse_polls_;
         if (pulse_from_ >= 0) {

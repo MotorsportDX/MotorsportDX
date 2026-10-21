@@ -16,7 +16,8 @@
 // FM4_VBLANK_SWITCH=0 keeps the vblank rate fixed; FM4_VBLANK_TRACE=1 prints
 // every push and pop, with the state polls of the diagnostic controller and the
 // title's swaps so far. The push of a race scenario (`*_Race`) also starts the
-// race frames of the diagnostic controller's pulses (fm4-test-input.h).
+// race frames of the diagnostic controller's pulses (fm4-test-input.h), and its
+// pop ends them.
 //
 // FM4_FULL_RATE containing "countdown" runs the 3-2-1 countdown at the race
 // frame rate (FM4_FRAME_RATE, or 60) instead of 30. The countdown and the
@@ -191,6 +192,9 @@ REX_HOOK_RAW(sub_82438A38) {
       last_popped = names.back();
       names.pop_back();
     }
+    // The race ends: no race frames until the next race starts.
+    if (last_popped.ends_with("_Race"))
+      fm4_diagnostic_race_poll.store(0, std::memory_order_relaxed);
     Apply("pop", last_popped);
   }
   __imp__sub_82438A38(ctx, base);
