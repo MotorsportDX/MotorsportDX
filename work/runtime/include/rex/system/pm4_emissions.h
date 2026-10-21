@@ -21,6 +21,7 @@ struct Entry {
   uint64_t hash = 0;
   uint32_t length = 0;     // Bytes hashed.
   bool recorded = false;   // Written into a command buffer recording.
+  bool executed = false;   // Taken by the command processor at the packet's first execution.
 };
 
 // True once anything was recorded.

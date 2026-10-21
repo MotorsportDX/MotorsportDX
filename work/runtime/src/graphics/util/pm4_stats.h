@@ -8,11 +8,14 @@
 // written (rex/system/pm4_emissions.h, FM4_N0_KEYCHECK in the title) is hashed
 // again when the command processor executes it. "same" means the memory it reads
 // is the memory it pointed at when written, "changed" that the guest rewrote it
-// in between, "unknown" that no hook recorded the packet; each split by packets
-// written into a command buffer recording and packets written into the ring.
+// in between, each split by packets written into the ring and into a command
+// buffer recording. A packet that no hook recorded counts as "unknown" at its
+// first execution, whose bytes then serve as the reference for its later
+// executions ("same_executed", "changed_executed"; only while a hook records).
 // Changed packets are listed in <file>.changes ("<kind> <packet> <length>
-// <recorded> <hash at emission> <hash at execution>", hexadecimal, at most
-// 4,096 lines). Without the variable every helper returns at once.
+// <0 ring, 1 recording, 2 first execution> <reference hash> <hash at
+// execution>", hexadecimal, at most 4,096 lines). Without the variable every
+// helper returns at once.
 
 #include <cstdint>
 #include <cstdio>
@@ -29,7 +32,8 @@
 namespace rex::graphics::pm4_stats {
 
 struct Check {
-  uint64_t same[2]{}, changed[2]{};  // [ring, recording]
+  // [written into the ring, into a recording, first execution as reference]
+  uint64_t same[3]{}, changed[3]{};
   uint64_t unknown = 0;
 };
 
@@ -82,23 +86,34 @@ inline void CheckEmission(system::pm4_emissions::Kind kind, uint32_t packet_addr
   system::pm4_emissions::Entry entry;
   if (!system::pm4_emissions::Find(kind, packet_address, &entry)) {
     ++check.unknown;
+    // With a title hook recording emissions, keep the bytes of the first
+    // execution so later executions of this packet can be compared with it.
+    if (system::pm4_emissions::Active()) {
+      system::pm4_emissions::Record(kind, packet_address,
+                                    {XXH3_64bits(data, length), length, false, true});
+    }
     return;
   }
   const uint32_t hashed = entry.length && entry.length <= length ? entry.length : length;
   const uint64_t hash = XXH3_64bits(data, hashed);
+  const uint32_t origin = entry.executed ? 2 : entry.recorded ? 1 : 0;
   if (hash == entry.hash) {
-    ++check.same[entry.recorded];
+    ++check.same[origin];
     return;
   }
-  ++check.changed[entry.recorded];
+  ++check.changed[origin];
   if (kind == system::pm4_emissions::Kind::kShader) {
     state->changed_shaders.insert(uint64_t(packet_address) << 32 ^ hash);
   }
   if (state->change_lines < 4096) {
     ++state->change_lines;
     state->changes << uint32_t(kind) << ' ' << std::hex << packet_address << ' ' << hashed << ' '
-                   << unsigned(entry.recorded) << ' ' << entry.hash << ' ' << hash << std::dec
-                   << '\n';
+                   << origin << ' ' << entry.hash << ' ' << hash << std::dec << '\n';
+  }
+  if (entry.executed) {
+    // The reference of a packet no hook recorded follows its latest bytes.
+    entry.hash = hash;
+    system::pm4_emissions::Record(kind, packet_address, entry);
   }
 }
 
@@ -137,7 +152,8 @@ inline void OnSwap() {
     const Check& c = state->checks[k];
     out << ",\"" << kKinds[k] << "\":{\"same_ring\":" << c.same[0]
         << ",\"same_recorded\":" << c.same[1] << ",\"changed_ring\":" << c.changed[0]
-        << ",\"changed_recorded\":" << c.changed[1] << ",\"unknown\":" << c.unknown << '}';
+        << ",\"changed_recorded\":" << c.changed[1] << ",\"same_executed\":" << c.same[2]
+        << ",\"changed_executed\":" << c.changed[2] << ",\"unknown\":" << c.unknown << '}';
   }
   out << ",\"changed_shader_pairs\":" << state->changed_shaders.size() << "}\n";
   out.flush();

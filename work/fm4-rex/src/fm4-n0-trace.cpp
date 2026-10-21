@@ -122,6 +122,7 @@ struct Trace {
   std::atomic<uint64_t> runs_by_content{0};
   std::atomic<uint64_t> runs_first{0}, runs_same{0}, runs_changed{0};
   std::atomic<uint64_t> emitted_shaders{0}, emitted_constants{0}, scan_errors{0};
+  std::atomic<uint64_t> copied_emissions{0};
   std::atomic<uint64_t> render_calls{0}, render_ns{0}, render_max_ns{0};
   std::atomic<uint64_t> render_idle_calls{0}, render_idle_ns{0};
   std::mutex mutex;  // Guards everything below.
@@ -175,7 +176,8 @@ Trace* GetTrace() {
             "\"type10\":%llu,\"first\":%llu,"
             "\"same\":%llu,"
             "\"changed\":%llu},"
-            "\"emitted\":{\"im_load\":%llu,\"load_alu_constant\":%llu,\"scan_errors\":%llu},"
+            "\"emitted\":{\"im_load\":%llu,\"load_alu_constant\":%llu,\"scan_errors\":%llu,"
+            "\"copied\":%llu},"
             "\"render\":{\"calls\":%llu,\"ms\":%.3f,\"max_ms\":%.3f,\"idle_calls\":%llu,"
             "\"idle_ms\":%.3f}}\n",
             seconds,
@@ -191,6 +193,7 @@ Trace* GetTrace() {
             take(t.runs_unseen),
             take(t.runs_type10), take(t.runs_first), take(t.runs_same), take(t.runs_changed),
             take(t.emitted_shaders), take(t.emitted_constants), take(t.scan_errors),
+            take(t.copied_emissions),
             take(t.render_calls), double(take(t.render_ns)) / 1e6,
             double(take(t.render_max_ns)) / 1e6, take(t.render_idle_calls),
             double(take(t.render_idle_ns)) / 1e6);
@@ -297,6 +300,44 @@ uint32_t FirstChunk(uint8_t* base, uint32_t buffer) {
   return node && Load32(base, node + 4) ? Load32(base, node + 12) & 0x1FFFFFFF : 0;
 }
 
+// A buffer holding a byte copy of a recording's PM4: its IM_LOAD and
+// LOAD_ALU_CONSTANT packets get the emission entries of the recording's packets
+// at the same offsets, so the runtime checks them against the hashes taken when
+// the recording was written.
+void CopyEmissions(Trace& trace, uint8_t* base, uint32_t from, uint32_t to) {
+  uint32_t from_node = Load32(base, from + 116), to_node = Load32(base, to + 116);
+  for (uint32_t guard = 0; from_node && to_node && guard < 4096; ++guard) {
+    const uint32_t count = std::min(Load32(base, from_node + 4), 4096u);
+    if (Load32(base, to_node + 4) != count) return;
+    for (uint32_t i = 0; i < count; ++i) {
+      const uint32_t dwords = Load32(base, from_node + 8 + 8 * i) & 0xFFFFFF;
+      const uint32_t source = Load32(base, from_node + 12 + 8 * i) & 0x1FFFFFFF;
+      const uint32_t target = Load32(base, to_node + 12 + 8 * i) & 0x1FFFFFFF;
+      const uint8_t* words = PhysicalHost(source);
+      for (uint32_t at = 0; at < dwords;) {
+        const uint32_t header = rex::memory::load_and_swap<uint32_t>(words + at * 4);
+        const uint32_t type = header >> 30;
+        uint32_t length = 1;
+        if (type == 0 || type == 3) length += ((header >> 16) & 0x3FFF) + 1;
+        if (type == 1) length = 3;
+        const uint32_t opcode = (header >> 8) & 0x7F;
+        if (type == 3 && (opcode == 0x27 || opcode == 0x2F)) {
+          const auto kind = opcode == 0x27 ? rex::system::pm4_emissions::Kind::kShader
+                                           : rex::system::pm4_emissions::Kind::kConstants;
+          rex::system::pm4_emissions::Entry entry;
+          if (rex::system::pm4_emissions::Find(kind, source + at * 4, &entry)) {
+            rex::system::pm4_emissions::Record(kind, target + at * 4, entry);
+            Bump(trace.copied_emissions);
+          }
+        }
+        at += length;
+      }
+    }
+    from_node = Load32(base, from_node);
+    to_node = Load32(base, to_node);
+  }
+}
+
 // Packets written by the draw flush on this thread: the device and the segment
 // write pointer (device+48, the last dword written) when the scan started.
 struct Scan {
@@ -385,11 +426,14 @@ void N0RunCommandBufferPre(const PPCContext& ctx, uint8_t* base) {
   }
   const uint32_t frame = trace->frame.load(std::memory_order_relaxed);
   const uint64_t hash = trace->keycheck ? HashRecording(base, buffer) : 0;
+  bool first_replay = false;
+  uint32_t copy_of = 0;
   {
     std::lock_guard<std::mutex> lock(trace->mutex);
     if (trace->keycheck) {
       // Against the previous replay of this buffer, or its EndCommandBuffer.
       auto [last, first] = trace->last_hash.try_emplace(buffer, hash);
+      first_replay = first;
       if (first) {
         Bump(trace->runs_first);
       } else {
@@ -416,7 +460,10 @@ void N0RunCommandBufferPre(const PPCContext& ctx, uint8_t* base) {
       if (auto owner = trace->content_owners.find(hash); owner != trace->content_owners.end()) {
         recording = owner->second;
         it = trace->recordings.find(recording);
-        if (it != trace->recordings.end()) Bump(trace->runs_by_content);
+        if (it != trace->recordings.end()) {
+          Bump(trace->runs_by_content);
+          if (first_replay) copy_of = recording;
+        }
       }
     }
     trace->window_buffers.insert(recording);
@@ -436,6 +483,7 @@ void N0RunCommandBufferPre(const PPCContext& ctx, uint8_t* base) {
       Bump(it->second.end_frame < frame ? trace->runs_reused : trace->runs_same_frame);
     }
   }
+  if (copy_of) CopyEmissions(*trace, base, copy_of, buffer);
 }
 
 void N0ClonePost(uint32_t source, uint32_t clone) {
