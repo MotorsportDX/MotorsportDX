@@ -359,6 +359,28 @@ Shader mod iteration (17 October; design and results in [shader-mod-iteration.md
   - Conclusion of "Submit thread at the swap": "Removing all of it (0.35-0.6 ms of a 5-6.5 ms command processor frame, up to about 10% fps where the race is command processor bound) needs the swap submission to go through the submit thread without the command processor waiting, with the presenter's guest output signal and its paint ordered after that submission on the queue."
   - Launcher defaults, submit thread: "`d3d12_submit_thread=true`" without the asynchronous swap.
 
+### 21 October 2026: frozen-frame variance with presses on the wall clock
+
+Superseded the same day by the press pinned to race frame 720 ([frozen frames, baseline variance](../e2e/frozen-frames.md#baseline-variance)). The `freeze` scenario then pressed Y from START RACE every capture until the rewind showed, and four times more.
+
+Measured on 21 October 2026 on `I:\FM4-build-pass` (the Japan/Asia data), with the fixed seed build of 21 October 2026 (`snapshots\n0seed`, `fm4_rex.exe` SHA-256 `27f90c57c8...`), at 60 Hz with the pins of the `freeze` scenario and `FM4_FIXED_SEED=1`, the launcher defaults otherwise. The `fz2` runs used the scenario of that time (Y from START RACE, about every 2 s); `seed-a` and `seed-b`, an hour earlier, the first one (Y once `LAPS` or `PLACE` showed, about every 4 s).
+
+| Pair | Rewind started at race time | Changed pixels above 4 | Mean difference | Draws per frame | Predicated run per frame | Predicated skipped per frame | Own freeze |
+| --- | --- | --- | --- | --- | --- | --- | --- |
+| RTV against RTV (`fz2-rtv-a`, `fz2-rtv-b`) | about 11 s in both | 25.47% | 11.1 | 3,270.47 against 3,270.92 (+0.01%) | 9,140.85 against 9,141.44 (+0.01%) | 9,930 against 9,930 | 0.00% in both |
+| `-Rov` against `-Rov` (`fz2-rov-a`, `fz2-rov-b`) | about 11 s in both | 28.23% | 14.1 | 3,267.93 against 3,272.45 (+0.14%) | 9,125.95 against 9,138.32 (+0.14%) | 9,911 against 9,918 (+0.07%) | 0.00% in both |
+| RTV against RTV (`seed-a`, `seed-b`) | after 12.4 s, after 10.3 s | 47.82% | 33.3 | 3,298.92 against 3,271.40 (-0.83%) | 9,179.44 against 9,142.06 (-0.41%) | 9,938 against 9,930 (-0.08%) | 0.00% in both |
+| RTV against `-Rov` (`fz2-rtv-a`, `fz2-rov-a`) | about 11 s in both | 24.13% | 11.2 | 3,270.47 against 3,267.93 (-0.08%) | 9,140.85 against 9,125.95 (-0.16%) | 9,930 against 9,911 (-0.19%) | 0.00% in both |
+
+The race times are the last race clock read before the rewind showed.
+
+- Within a run the frozen frame is byte-identical from capture to capture on both paths: the rendering of a fixed scene is deterministic.
+- With the seed the scene is the same: the same opponents, the same grid slot, the same stretch of the straight. The frozen moment is not: the oldest frame of the rewind moves with the press that started it, and with the cockpit camera that moves the whole picture. The image numbers above measure that moment, not the rendering, and they grow with the spread of the presses: 24 to 28% for the `fz2` runs, 47.82% for `seed-a` and `seed-b`, whose presses were about 2 s apart.
+- The draws and the predicated packets of the frozen frame move with the moment too: up to 0.83% in draws and 0.41% in predicated run packets between seeded runs. RTV and `-Rov` at about the same moment agree within 0.2%. The limits of `parity.py` (2%) were about 2.4 times the largest difference.
+- The image limit (1% above 4) was a target until the freeze would be pinned to a guest frame. The press pinned to race frame 720 the same day did not pin the moment, and the limits became 3% and 60% ([frozen frames](../e2e/frozen-frames.md#baseline-variance)).
+- The same scene on the USA data (`I:\FM4-build-usa`, `snapshots\n0main`, local main of 21 October 2026, `34662eb1...`, run `fz-n0` with `FM4_N0_TRACE`): 3,270.94 draws and 9,141.46 predicated run packets per frame, 21.81% of the pixels against `fz2-rtv-a`. Its guest render thread took 16.0 ms per presented frame in the frozen phase at 60 fps, nearly the whole frame interval: at 60 Hz the zone measures the frame pacing more than the work.
+- Without the seed (on the build of `snapshots\n0val` on `I:\FM4-build-usa`, `7e50a9fc...`) two RTV runs differed in 54.92% of the pixels and by 7.3% in draws per frame: other opponents and another grid slot.
+
 ## 5. Superseded settings and decisions
 
 Each row gives the date of the change, the setting that was replaced, and what happened later. The current values are in [running](../running.md) and [current status](current.md).

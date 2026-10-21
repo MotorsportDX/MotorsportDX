@@ -14,7 +14,9 @@
 // countdown, post-race, replays and photo mode 30; menus and pre-race set none
 // (the control's default, 60).
 // FM4_VBLANK_SWITCH=0 keeps the vblank rate fixed; FM4_VBLANK_TRACE=1 prints
-// every push and pop.
+// every push and pop, with the state polls of the diagnostic controller and the
+// title's swaps so far. The push of a race scenario (`*_Race`) also starts the
+// race frames of the diagnostic controller's pulses (fm4-test-input.h).
 //
 // FM4_FULL_RATE containing "countdown" runs the 3-2-1 countdown at the race
 // frame rate (FM4_FRAME_RATE, or 60) instead of 30. The countdown and the
@@ -40,6 +42,7 @@
 #include <rex/hook.h>
 #include <rex/memory.h>
 #include <rex/runtime.h>
+#include "fm4-diagnostic-state.h"
 #include <algorithm>
 #include <cstdint>
 #include <cstdio>
@@ -107,8 +110,12 @@ void Apply(const char* event, const std::string& name) {
     current_rate = rate;
   }
   if (trace)
-    std::fprintf(stderr, "FM4 render scenario %s %s: depth %zu, frame rate %u, vblank %g Hz\n",
-                 event, name.c_str(), frame_rates.size(), frame_rate, current_rate);
+    std::fprintf(stderr,
+                 "FM4 render scenario %s %s: depth %zu, frame rate %u, vblank %g Hz, "
+                 "input polls %u, swaps %u\n",
+                 event, name.c_str(), frame_rates.size(), frame_rate, current_rate,
+                 fm4_diagnostic_polls.load(std::memory_order_relaxed),
+                 fm4_diagnostic_swaps.load(std::memory_order_relaxed));
 }
 }  // namespace
 
@@ -161,6 +168,10 @@ REX_HOOK_RAW(sub_82442600) {
                                                 kSettingsFrameRate,
                                             countdown ? countdown_rate : own);
     }
+    // The race starts: the anchor of FM4TestInput's race frames (its pulses).
+    if (valid && name.ends_with("_Race"))
+      fm4_diagnostic_race_poll.store(fm4_diagnostic_polls.load(std::memory_order_relaxed),
+                                     std::memory_order_relaxed);
     frame_rates.push_back(valid ? Load(base, settings + kSettingsFrameRate) : kDefaultFrameRate);
     names.push_back(name);
     fulls.push_back(countdown || (full_replay && name.find("-Car_Replay") != std::string::npos));

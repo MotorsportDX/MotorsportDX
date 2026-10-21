@@ -18,17 +18,19 @@ sys.path.insert(0, str(HERE))
 import compare  # noqa: E402
 import frame_diff  # noqa: E402
 
-# Limits of the frozen phase (docs/e2e/frozen-frames.md, "Baseline variance"). Three seeded
-# baseline pairs of 21 October 2026 differed by up to 0.84% in draws and 0.41% in predicated
-# packets per frame, and their frozen frames in 24-48% of the pixels: the rewind's oldest frame
-# moves with the time of the Y press. The draw and predication limits are about 2.4 times the
-# largest difference; the image limit is a target for a frozen moment pinned to a guest frame,
-# not a measured one.
+# Limits of the frozen phase (docs/e2e/frozen-frames.md, "Baseline variance"). The freeze
+# scenario presses Y on the same race frame in every run, but the race advances by wall time,
+# so the frozen moment still differs between runs: four seeded baseline runs of 21 October
+# 2026 (two RTV, two -Rov) differed in 19.1-33.7% of the pixels and by up to 1.6% in draws and
+# predicated packets per frame; earlier pairs with presses on the wall clock differed in up to
+# 47.8% of the pixels. The limits sit above that: the image rule catches only a broken frame
+# (black, clear gray, most geometry missing), not a wrong detail, until the moment is pinned;
+# each run's own freeze is exact.
 IMAGE_LEVEL = 4           # a pixel differs above 4 of 255 (frame_diff.LEVEL)
-IMAGE_FAIL_PCT = 1.0      # FAIL when more than 1% of the pixels differ above the level
+IMAGE_FAIL_PCT = 60.0     # FAIL when more than 60% of the pixels differ above the level
 STABLE_FAIL_PCT = 0.05    # a run's freeze held when its own captures differ in at most 0.05%
-DRAWS_FAIL_REL = 0.02     # draws per frame more than 2% away from the baseline
-PREDICATED_FAIL_REL = 0.02  # predicated run or skipped packets per frame more than 2% away
+DRAWS_FAIL_REL = 0.03     # draws per frame more than 3% away from the baseline
+PREDICATED_FAIL_REL = 0.03  # predicated run or skipped packets per frame more than 3% away
 PREDICATED_KEYS = ('predicated_run', 'predicated_skipped')
 NEUTRAL_KEYS = ('render_thread_busy_ms_per_frame_median', 'guest_render_thread_ms_per_frame_median',
                 'queue_depth_median', 'queue_depth_max', 'draws_per_frame_mean')

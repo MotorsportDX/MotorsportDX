@@ -11,7 +11,12 @@ BUTTONS = {'up': 0x1, 'down': 0x2, 'left': 0x4, 'right': 0x8, 'start': 0x10, 'ba
 
 # Each step: [seconds to wait before, action, hold seconds]. Actions are button names joined
 # with '+', or 'rt=<0..255>', 'lt=<0..255>', 'lx/ly/rx/ry=<-32768..32767>', or 'none'; a
-# comma-separated sequence taps each in turn (released between). These change no input:
+# comma-separated sequence taps each in turn (released between). A button name after '~'
+# pulses it: the diagnostic controller presses it on every other poll of the title (once per
+# frame in a race) instead of holding it, so an edge-triggered button acts on the first frame
+# the title accepts it; '~y@<n>' starts the pulse on race frame n (the n-th poll after the
+# race starts) instead of at once. With hold 0 it pulses until the next input. These change
+# no input:
 #   'wait'             only waits (keeps a held throttle);
 #   'phase:<name>'     starts a measured phase ('phase:end' closes it) for summary.json phases;
 #   'select:<label>'   moves the menu highlight to the OCR'd label, for up to <seconds>;
@@ -158,16 +163,16 @@ SCENARIOS.update({
     ],
 })
 SCENARIOS.update({
-    # A frozen frame for image parity (docs/e2e/frozen-frames.md): Quick Race; from START RACE
-    # on, Y (rewind) every capture until the rewind shows, then Y again until REWIND FURTHER
-    # greys out at the oldest frame the rewind keeps; then 20 s of the frozen frame (phase
-    # freeze), which the title keeps rendering under the rewind hint bar. The rewind keeps a
-    # window of about the last 10 s and takes Y only after about 10 s of race, so the oldest
-    # frame lies in the first seconds of the race but moves with the time of the press (the
-    # test input is not tied to guest frames). A held Y does not start it.
+    # A frozen frame for image parity (docs/e2e/frozen-frames.md): Quick Race; Y (rewind)
+    # pulsed from race frame 720 (12 s at 60 fps; '~y@720') until the rewind shows and for 6 s
+    # more, which rewinds to the oldest frame the rewind keeps (REWIND FURTHER greys out
+    # there); then 20 s of the frozen frame (phase freeze), which the title keeps rendering
+    # under the rewind hint bar. The rewind keeps a window of about the last 10 s and takes Y
+    # only after about 10 s of race (a held Y does not start it). The first press lands on race
+    # frame 720 in every run, so the oldest frame does not move with the wall clock.
     'freeze': SCENARIOS['quickrace'][:-1] + [
-        [90, 'y', 0.15, 'REWINDING|REWIND FURTHER|RESUME FROM HERE', 1],
-        [4, 'y', 0.15], [4, 'y', 0.15], [4, 'y', 0.15], [4, 'y', 0.15], [6, 'wait', 0],
+        [0.5, '~y@720', 0], [90, 'wait', 0, 'REWINDING|REWIND FURTHER|RESUME FROM HERE', 1],
+        [6, 'none', 0], [6, 'wait', 0],
         [1, 'phase:freeze', 0], [20, 'wait', 0], [1, 'phase:end', 0],
     ],
 })
@@ -294,9 +299,11 @@ def percentile(values, fraction):
     return values[min(len(values) - 1, int(round(fraction * (len(values) - 1))))]
 
 
-def set_input(path, buttons=0, lt=0, rt=0, lx=0, ly=0, rx=0, ry=0):
+def set_input(path, buttons=0, lt=0, rt=0, lx=0, ly=0, rx=0, ry=0, pulse=0, pulse_from=None):
     tmp = path.with_suffix('.tmp')
-    tmp.write_text(f'{buttons} {lt} {rt} {lx} {ly} {rx} {ry}\n')
+    # The pulsed buttons and their race frame (FM4TestInput) are written only when set.
+    extra = (f' {pulse}' + ('' if pulse_from is None else f' {pulse_from}')) if pulse else ''
+    tmp.write_text(f'{buttons} {lt} {rt} {lx} {ly} {rx} {ry}{extra}\n')
     # The game may be reading the file at this moment; Windows then refuses the replace.
     for attempt in range(50):
         try:
@@ -308,11 +315,16 @@ def set_input(path, buttons=0, lt=0, rt=0, lx=0, ly=0, rx=0, ry=0):
 
 
 def parse_action(action):
-    state = dict(buttons=0, lt=0, rt=0, lx=0, ly=0, rx=0, ry=0)
+    state = dict(buttons=0, lt=0, rt=0, lx=0, ly=0, rx=0, ry=0, pulse=0, pulse_from=None)
     if action == 'none':
         return state
     for part in action.split('+'):
-        if '=' in part:
+        if part.startswith('~'):
+            button, _, start = part[1:].partition('@')
+            state['pulse'] |= BUTTONS[button]
+            if start:
+                state['pulse_from'] = int(start)
+        elif '=' in part:
             key, value = part.split('=')
             state[key] = int(value)
         else:
@@ -331,7 +343,13 @@ class Ocr:
             raise RuntimeError('OCR server failed to start')
 
     def read(self, ppm):
-        self.process.stdin.write(f'{ppm}|2\n')
+        # Windows OCR sometimes reads nothing in an image at 2x that it reads at 1x (a frozen
+        # rewind frame with its hint bar every time), so an empty read is repeated at 1x.
+        # Boxes are in 720p pixels at either scale.
+        return self.read_scaled(ppm, 2) or self.read_scaled(ppm, 1)
+
+    def read_scaled(self, ppm, scale):
+        self.process.stdin.write(f'{ppm}|{scale}\n')
         self.process.stdin.flush()
         # OCR text may contain control characters such as tabs.
         result = json.loads(self.process.stdout.readline(), strict=False)

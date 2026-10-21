@@ -69,14 +69,17 @@ All hooks are opt-in. Without their variable they do nothing, and a normal launc
 
 ### Diagnostic controller (FM4_TEST_INPUT_FILE)
 
-The file holds one line of seven integers:
+The file holds one line of seven integers and an optional eighth and ninth:
 
 ```
-<buttons> <left trigger> <right trigger> <lx> <ly> <rx> <ry>
+<buttons> <left trigger> <right trigger> <lx> <ly> <rx> <ry> [<pulse> [<race frame>]]
 ```
 
 - `buttons` is the XInput bit mask: up `0x1`, down `0x2`, left `0x4`, right `0x8`, start `0x10`, back `0x20`, LB `0x100`, RB `0x200`, A `0x1000`, B `0x2000`, X `0x4000`, Y `0x8000` (`BUTTONS` in `e2e.py`).
 - Triggers are 0 to 255. Sticks are -32,768 to 32,767.
+- `pulse` (optional, off when missing or 0) is a second button mask. These buttons alternate between pressed and released on each state poll of the title (`XamInputGetState`), starting with pressed, instead of following the file. In a race the title polls the pad once per frame, on its main thread (twice per presented frame in the 30 fps countdown), and reacts to presses on their edge, so a pulsed button acts on the first frame the title accepts it, or the one after, whatever the wall-clock time. In `e2e.py` the action is the button name after `~` (`~y`). Keystrokes do not see pulses.
+- `race frame` (optional, with `pulse`) delays the pulse to that frame of the race: frame 1 is the first poll after the title pushes its race render scenario (`*_Race`, [`fm4-vblank-rate.cpp`](../../work/fm4-rex/src/fm4-vblank-rate.cpp)), and the first press comes on the given frame, so it lands on the same guest frame in every run. Before the first race the pulse waits. In `e2e.py`: `~y@720`. The `freeze` scenario pulses Y this way ([frozen frames](frozen-frames.md)).
+- A change of the pulse is logged as `FM4 test input: pulse=<mask> from race frame <n> after <n> pulsed polls` (-1: no race frame), and the first pulse on a race frame as `FM4 test input: pulse starts at race frame <n> (input poll <n>, swap <n>)`: the controller's state polls and the title's `D3DDevice_Swap` calls so far.
 - The driver reads the file at most every 50 ms. A missing, partial or out-of-range file means all controls are released.
 - It also produces keystroke events (`GetDeviceKeystroke`) from button changes, for callers that read keystrokes instead of the pad state.
 - Every button change is logged to stderr as `FM4 test input: buttons=...`. `fm4-ui-diagnostics.cpp` logs the game's own reads (`FM4 guest input`, `FM4 converted input`).
@@ -135,7 +138,7 @@ The game exiting at any point raises `exited with <code>`, which becomes `crashe
 `Ocr` in `e2e.py` keeps one [`ocr-server.ps1`](../../outputs/FM4-build/e2e/ocr-server.ps1) process for the run. The protocol is line-based, UTF-8:
 
 1. The server prints `{"ready":true}` once.
-2. Each request is one line, `<path to .ppm>|<scale>`. `e2e.py` always sends scale 2.
+2. Each request is one line, `<path to .ppm>|<scale>`. `e2e.py` sends scale 2, and repeats a request that read no line at scale 1: the Windows OCR engine reads nothing at 2x in some images that it reads at 1x, every time (a frozen rewind frame with its hint bar, 21 October 2026).
 3. Each answer is one JSON line, `{"lines":[...]}` or `{"error":"..."}`.
 
 Before recognition the server:

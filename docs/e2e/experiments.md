@@ -30,7 +30,7 @@ These go with the frame rate options on the [harness overview](README.md#frame-r
 | Switch | Effect |
 | --- | --- |
 | `--env FM4_VBLANK_SWITCH=0` | Keeps the guest vblank at the reported refresh rate, even in race scenarios. |
-| `--env FM4_VBLANK_TRACE=1` | Prints each render scenario push and pop with the vblank rate. |
+| `--env FM4_VBLANK_TRACE=1` | Prints each render scenario push and pop with the vblank rate, the diagnostic controller's state polls so far (one per frame in a race) and the title's swaps so far. |
 | `--env FM4_VRR_HALF_RATE=1` | Keeps `vblank_vrr` in the 30 fps scenarios. By default they are held to the fixed grid. |
 | `--arg=--vblank_rate=<hz>` | Sets a fixed startup vblank rate, without `FM4_FRAME_RATE`. |
 
@@ -62,7 +62,7 @@ What it pins:
 
 The title's other random states (the ANSI C generator `state * 1103515245 + 12345`) start from a constant (12345678) once per process and are not reseeded between races. They repeat per run, but a second race in the same process is not shown to start the same way as the first race of a fresh process.
 
-What still varies: anything that follows wall time or host timing (presumably the cable cars and the crowd, not verified), and the number of frames between steps of the harness (menu timing, the moment of the rewind).
+What still varies: anything that follows wall time or host timing (presumably the cable cars and the crowd, not verified), and the number of frames between steps of the harness (menu timing). The race itself advances by wall time, so even a press on a fixed race frame freezes another moment of the race in each run ([frozen frames](frozen-frames.md#baseline-variance)).
 
 `--env FM4_TRACE_RNG=1` prints the guest random draws: each caller's first draws of the ANSI C generator (`sub_828C8910`, `sub_828C8930`, `sub_828C89A8`, `sub_82303E60`, `sub_823866D0`) with the state address and value, each `sqlite3_randomness` call (`sub_82BCED10`) with the generator state, the opponent queries, and a summary of the callers at each session start.
 

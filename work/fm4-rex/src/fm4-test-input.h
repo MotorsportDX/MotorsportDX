@@ -29,9 +29,12 @@ class FM4TestInput final : public rex::input::InputDriver {
     const auto now = std::chrono::steady_clock::now();
     if (now >= next_read_) {
       next_read_ = now + std::chrono::milliseconds(50);
-      int buttons = 0, lt = 0, rt = 0, lx = 0, ly = 0, rx = 0, ry = 0;
+      int buttons = 0, lt = 0, rt = 0, lx = 0, ly = 0, rx = 0, ry = 0, pulse = 0;
+      long long from = -1;
       std::ifstream file(path_);
       rex::input::X_INPUT_STATE next{};
+      uint16_t next_pulse = 0;
+      int64_t next_from = -1;
       if ((file >> buttons >> lt >> rt >> lx >> ly >> rx >> ry) &&
           buttons >= 0 && buttons <= 65535 && lt >= 0 && lt <= 255 && rt >= 0 && rt <= 255 &&
           lx >= -32768 && lx <= 32767 && ly >= -32768 && ly <= 32767 &&
@@ -43,14 +46,53 @@ class FM4TestInput final : public rex::input::InputDriver {
         next.gamepad.thumb_ly = int16_t(ly);
         next.gamepad.thumb_rx = int16_t(rx);
         next.gamepad.thumb_ry = int16_t(ry);
+        // Optional eighth and ninth fields: pulsed buttons and the race frame they start
+        // on (see below).
+        if ((file >> pulse) && pulse > 0 && pulse <= 65535) {
+          next_pulse = uint16_t(pulse);
+          if ((file >> from) && from >= 0 && from <= 0x7FFFFFFF) next_from = from;
+        }
       }
       next.packet_number = ++packet_;
       if (uint16_t(next.gamepad.buttons) != uint16_t(state_.gamepad.buttons))
         std::fprintf(stderr, "FM4 test input: buttons=%u packet=%u\n", uint16_t(next.gamepad.buttons), packet_);
+      if (next_pulse != pulse_ || next_from != pulse_from_) {
+        std::fprintf(stderr, "FM4 test input: pulse=%u from race frame %lld after %u pulsed polls\n",
+                     next_pulse, static_cast<long long>(next_from), pulse_polls_);
+        pulse_polls_ = 0;
+      }
+      pulse_ = next_pulse;
+      pulse_from_ = next_from;
       state_ = next;
       fm4_diagnostic_buttons.store(uint16_t(state_.gamepad.buttons), std::memory_order_relaxed);
     }
-    if (out) *out = state_;
+    if (out) {
+      *out = state_;
+      const uint32_t poll = fm4_diagnostic_polls.fetch_add(1, std::memory_order_relaxed) + 1;
+      // Pulsed buttons alternate between pressed and released on each state poll of the
+      // guest, starting with pressed, instead of following the wall clock. In a race the
+      // title polls once per frame (twice in the countdown) and its buttons are
+      // edge-triggered, so a pulsed button acts on the first frame the title accepts it, or
+      // the one after. With a race frame the pulse waits for that frame instead of starting
+      // at once: frame 1 is the first poll after the title pushed its race render scenario
+      // (fm4-vblank-rate.cpp), so the first press lands on the same guest frame in every
+      // run. Keystrokes do not see pulses.
+      if (pulse_) {
+        int64_t index = pulse_polls_;
+        if (pulse_from_ >= 0) {
+          const uint32_t race = fm4_diagnostic_race_poll.load(std::memory_order_relaxed);
+          index = race ? int64_t(poll - race) - pulse_from_ : -1;
+          if (index == 0)
+            std::fprintf(stderr, "FM4 test input: pulse starts at race frame %lld (input poll %u, swap %u)\n",
+                         static_cast<long long>(pulse_from_), poll,
+                         fm4_diagnostic_swaps.load(std::memory_order_relaxed));
+        }
+        if (index >= 0) {
+          ++pulse_polls_;
+          if (index % 2 == 0) out->gamepad.buttons = uint16_t(uint16_t(out->gamepad.buttons) | pulse_);
+        }
+      }
+    }
     return X_ERROR_SUCCESS;
   }
   X_RESULT GetDeviceCapabilities(rex::input::DeviceId id, uint32_t,
@@ -117,6 +159,9 @@ class FM4TestInput final : public rex::input::InputDriver {
   std::mutex mutex_;
   std::chrono::steady_clock::time_point next_read_{};
   uint32_t packet_ = 0;
+  uint16_t pulse_ = 0;
+  int64_t pulse_from_ = -1;
+  uint32_t pulse_polls_ = 0;
   uint16_t keystroke_buttons_ = 0;
   unsigned keystroke_queries_ = 0;
   rex::input::X_INPUT_STATE state_{};

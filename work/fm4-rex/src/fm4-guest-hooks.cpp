@@ -7,6 +7,7 @@
 // (fm4-guest-hooks.h). Native-path hooks of docs/analysis/d3d-hle.md belong
 // here too, next to the addresses they replace.
 #include "fm4-guest-hooks.h"
+#include "fm4-diagnostic-state.h"
 
 using namespace fm4::hooks;
 
@@ -133,6 +134,7 @@ REX_HOOK_RAW(sub_8237FA28) {  // D3DDevice_Swap
   D3DTraceCount(0x8237FA28, ctx);
   N0Thread(N0Entry::kSwap);
   N0SwapPre();
+  fm4_diagnostic_swaps.fetch_add(1, std::memory_order_relaxed);
   __imp__sub_8237FA28(ctx, base);
 }
 
