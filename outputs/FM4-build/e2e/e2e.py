@@ -157,7 +157,26 @@ SCENARIOS.update({
         [1, 'rt=255', 0], [1, 'phase:race', 0], [20, 'wait', 0], [1, 'phase:end', 0],
     ],
 })
+SCENARIOS.update({
+    # A frozen frame for image parity (docs/e2e/frozen-frames.md): Quick Race; as soon as the
+    # race HUD shows, Y (rewind; the first press is often ignored, so it is checked) and Y again
+    # until REWIND FURTHER greys out at the oldest frame the rewind keeps; then 20 s of the
+    # frozen frame (phase freeze), which the title keeps rendering under the rewind hint bar.
+    'freeze': SCENARIOS['quickrace'][:-1] + [
+        [60, 'wait', 0, 'LAPS|PLACE'],
+        [20, 'y', 0.15, 'REWIND FURTHER|RESUME FROM HERE', 4],
+        [4, 'y', 0.15], [4, 'y', 0.15], [4, 'y', 0.15], [4, 'y', 0.15], [6, 'wait', 0],
+        [1, 'phase:freeze', 0], [20, 'wait', 0], [1, 'phase:end', 0],
+    ],
+})
 RETRY_S = 5
+# What the freeze scenario pins unless --look or --arg says otherwise: the title's own picture
+# (no mods, no TAA, so the tiles and MSAA of --quality), the occlusion reports (awaited ones
+# report a fixed count instead of host query results, which depend on timing), and 2x.
+FREEZE_LOOK = 'original,taa=0'
+FREEZE_ARGS = {'rtv_occlusion_debug': 'fake', 'query_occlusion_fake_sample_count': '1000',
+               'rtv_occlusion_awaited_scale': '-1', 'rtv_occlusion_awaited_limit': '0',
+               'draw_resolution_scale_x': '2', 'draw_resolution_scale_y': '2'}
 
 # Steps after a goal (--steps <name>): hold the throttle and press Back every 6 s, cycling
 # the race cameras (cockpit, hood, bumper, chase near, chase far, back to cockpit).
@@ -635,6 +654,18 @@ def perf_lines(path):
         return 0
 
 
+def frames_by_phase(frames, marks, end):
+    """The captures written during each phase ({name: [frame stems]}), by their file times
+    against the times of the phase marks; a phase ends at the next mark (or at end)."""
+    bounds = marks + [('end', end)]
+    result = {}
+    for (name, start), (_, stop) in zip(bounds, bounds[1:]):
+        if name != 'end':
+            result.setdefault(name, []).extend(
+                f.stem for f in frames if start <= f.stat().st_mtime < stop)
+    return result
+
+
 def prepare_profile(source, build_root, out):
     """Copies a user-data root to <out>/user-data, so saves and progress of the run stay out of
     the BuildRoot profile. The installed content packages (0000000000000000, gigabytes, never
@@ -715,12 +746,37 @@ def summarize(perf, measure):
         result['gpu_frame_ms_median'] = median([g['frame_ms'] for g in gpu])
         result['gpu_resolve_ms_median'] = median([g['resolve_ms'] for g in gpu])
         result['gpu_span_ms_median'] = median([g['span_ms'] for g in gpu])
+    frames_in = lambda p: max(1, len(p.get('frame_ms', [])))
+    # Over all measured frames: per-window values alternate with the frame count of a window
+    # when frames alternate (the half-rate mirror), by about 0.5% in a frozen frame.
+    all_frames = max(1, sum(len(p.get('frame_ms', [])) for p in steady))
+    result['draws_per_frame_mean'] = round(sum(p['draws'] for p in steady) / all_frames, 2)
+    # Backend-neutral names for the native path (docs/e2e/frozen-frames.md): the thread that
+    # turns the guest's commands into host work, the guest thread that records them, and the
+    # queue between the two. Each comes only from a trace that has it, except the render
+    # thread, which on the PM4 path is the command processor (render_thread_source).
+    if 'render_thread_busy_ms' in steady[0]:
+        result['render_thread_busy_ms_per_frame_median'] = median(
+            [p['render_thread_busy_ms'] / frames_in(p) for p in steady])
+        result['render_thread_source'] = 'render_thread'
+    elif 'wait_ms' in steady[0]:
+        result['render_thread_busy_ms_per_frame_median'] = median(
+            [(p['window_ms'] - sum(p['wait_ms'].values())) / frames_in(p) for p in steady])
+        result['render_thread_source'] = 'cp'
+    if 'guest_render_ms' in steady[0]:
+        result['guest_render_thread_ms_per_frame_median'] = median(
+            [p['guest_render_ms'] / frames_in(p) for p in steady])
+    if 'queue_depth_mean' in steady[0]:
+        result['queue_depth_median'] = median([p['queue_depth_mean'] for p in steady])
+    if 'queue_depth_max' in steady[0]:
+        result['queue_depth_max'] = max(p['queue_depth_max'] for p in steady)
     if 'counts' in steady[0]:
-        frames_in = lambda p: max(1, len(p.get('frame_ms', [])))
         result['counts_per_s_median'] = {k: median([per_s(p, p['counts'][k]) for p in steady])
                                          for k in steady[0]['counts']}
         result['counts_per_frame_median'] = {k: median([p['counts'][k] / frames_in(p) for p in steady])
                                              for k in steady[0]['counts']}
+        result['counts_per_frame_mean'] = {k: round(sum(p['counts'][k] for p in steady) / all_frames, 2)
+                                           for k in steady[0]['counts']}
     return result
 
 
@@ -792,9 +848,13 @@ def run_once(options, out):
     if options.profile:
         source = root / 'user-data' if options.profile == 'copy' else Path(options.profile)
         args['user_data_root'] = str(prepare_profile(source, root, out))
-    look = pipeline.DEFAULT_LOOK if options.look is None else options.look
+    freeze = options.scenario == 'freeze' and not options.steps
+    look = (FREEZE_LOOK if freeze else pipeline.DEFAULT_LOOK) if options.look is None else options.look
     args.update({k: str(v) for k, v in pipeline.look_cvars(root, look, options.shader_dev).items()})
     args.update({k: str(v) for k, v in pipeline.ao_cvars(root, options.ao, options.shader_dev).items()})
+    if freeze:
+        # After the look (whose sun knob sets the awaited scale), before the --arg items.
+        args.update(FREEZE_ARGS)
     for item in options.arg:
         key, value = item.lstrip('-').split('=', 1)
         args[key] = value
@@ -844,6 +904,7 @@ def run_once(options, out):
     goal_reached = None
     failed_step = None
     phases = []
+    phase_times = []
     mod_defines = ModDefines(args.get('shader_mod_path'))
     screen = Screen(capture, process, out / 'steps.jsonl')
     try:
@@ -868,6 +929,7 @@ def run_once(options, out):
                 done = True
                 if action.startswith('phase:'):
                     phases.append((action[6:], perf_lines(out / 'perf.jsonl')))
+                    phase_times.append((action[6:], time.time()))
                 elif action.startswith('defines:'):
                     mod_defines.write(action[8:])
                 elif ',' in action:
@@ -903,6 +965,7 @@ def run_once(options, out):
         stderr.close()
 
     frames = sorted(capture.glob('frame-*.ppm'))
+    phase_frames = frames_by_phase(frames, phase_times, time.time())
     final_stats = None
     if frames:
         # Keep the final capture under a stable name for checkpoints.
@@ -914,7 +977,7 @@ def run_once(options, out):
         if is_clear_gray(rgb, width, height):
             clear_gray_frames.append(frame.stem)
         ppm_to_png(frame, frame.with_suffix('.png'))
-        if not options.keep_ppm:
+        if not options.keep_ppm and not freeze:
             frame.unlink()
 
     perf = [json.loads(line) for line in (out / 'perf.jsonl').read_text().splitlines()] \
@@ -928,16 +991,23 @@ def run_once(options, out):
             key = re.sub(r'0x[0-9A-Fa-f]+|\d+', '#', key)
             errors[key] = errors.get(key, 0) + 1
     # Each phase covers the perf windows from its mark to the next mark.
-    bounds = phases + [('end', len(perf))]
-    phase_stats = {name: summarize(perf[start:end], end - start)
-                   for (name, start), (_, end) in zip(bounds, bounds[1:]) if name != 'end' and end > start}
+    phase_windows = windows_by_phase(phases, len(perf))
+    phase_stats = {name: summarize(perf[start:end], end - start) for name, (start, end) in phase_windows.items()}
     summary = {
         'crashed': crashed, 'goal': options.goal, 'scenario': None if options.steps else options.scenario,
         'goal_reached': goal_reached, 'failed_step': failed_step, 'args': options.arg, 'profile': options.profile,
+        'look': look,
+        # The binary the run used: a baseline variance or a parity verdict holds for one binary.
+        'binary': {'path': str(Path(options.game_build) / 'fm4_rex.exe'),
+                   'sha256': pipeline.digest(root / options.game_build / 'fm4_rex.exe'),
+                   'mtime': time.strftime('%Y-%m-%d %H:%M:%S', time.localtime(
+                       (root / options.game_build / 'fm4_rex.exe').stat().st_mtime))},
         'seconds': round(time.time() - started, 1), 'timeline': timeline,
         'frames_captured': len(frames), 'perf_windows': len(perf),
         **summarize(perf, options.measure),
         'phases': phase_stats,
+        'phase_windows': phase_windows,
+        'phase_frames': phase_frames,
         'final_capture': final_stats,
         'clear_gray_frames': clear_gray_frames,
         'errors': errors,
@@ -949,8 +1019,11 @@ def run_once(options, out):
 
 PHASE_KEYS = ('fps_mean', 'fps_median', 'frame_ms_p50', 'frame_ms_p95', 'frame_ms_p99', 'hitch_50ms_per_min',
               'cp_busy_ms_per_s_median', 'draws_per_s_median', 'gpu_frame_ms_median',
-              'submit_flush_wait_ms_per_frame_median')
-PHASE_NESTED_KEYS = ('submit_thread_ms_per_s_median', 'submit_thread_counts_per_s_median')
+              'submit_flush_wait_ms_per_frame_median', 'draws_per_frame_mean',
+              'render_thread_busy_ms_per_frame_median', 'guest_render_thread_ms_per_frame_median',
+              'queue_depth_median', 'queue_depth_max')
+PHASE_NESTED_KEYS = ('submit_thread_ms_per_s_median', 'submit_thread_counts_per_s_median',
+                     'counts_per_frame_median', 'counts_per_frame_mean')
 
 
 def aggregate(runs):
@@ -979,6 +1052,7 @@ def aggregate(runs):
         'wait_ms_per_s_median': nested('wait_ms_per_s_median'),
         'counts_per_s_median': nested('counts_per_s_median'),
         'counts_per_frame_median': nested('counts_per_frame_median'),
+        'counts_per_frame_mean': nested('counts_per_frame_mean'),
         'cpu_ms_per_s_median': nested('cpu_ms_per_s_median'),
         'occlusion_samples_median': nested('occlusion_samples_median'),
         'submit_thread_ms_per_s_median': nested('submit_thread_ms_per_s_median'),
@@ -990,8 +1064,13 @@ def aggregate(runs):
     }
     for key in ('fps_mean', 'frame_ms_p50', 'frame_ms_p95', 'frame_ms_p99', 'hitch_50ms_per_min', 'hitch_100ms_per_min',
                 'gpu_frame_ms_median', 'gpu_resolve_ms_median', 'gpu_span_ms_median',
-                'submit_flush_wait_ms_per_frame_median'):
+                'submit_flush_wait_ms_per_frame_median', 'draws_per_frame_mean',
+                'render_thread_busy_ms_per_frame_median', 'guest_render_thread_ms_per_frame_median',
+                'queue_depth_median', 'queue_depth_max'):
         summary[key] = median(pick(key))
+    sources = pick('render_thread_source')
+    if sources:
+        summary['render_thread_source'] = sources[0]
     phase_names = list(dict.fromkeys(name for r in ok for name in (r.get('phases') or {})))
     summary['phases'] = {name: {key: median([r['phases'][name][key] for r in ok
                                              if r['phases'].get(name, {}).get(key) is not None])
@@ -1006,12 +1085,31 @@ def aggregate(runs):
     return summary
 
 
+def windows_by_phase(marks, total):
+    """{phase: [first, end)} perf windows of each phase from its marks (name, windows written
+    when it started); a phase ends at the next mark or at total."""
+    bounds = marks + [('end', total)]
+    return {name: [start, end] for (name, start), (_, end) in zip(bounds, bounds[1:])
+            if name != 'end' and end > start}
+
+
 def resummarize(out, measure):
-    """Refreshes perf statistics of finished runs, e.g. after new summary fields were added."""
+    """Refreshes perf statistics of finished runs, e.g. after new summary fields were added.
+    Phases are recomputed from phase_windows, or for older runs from the phase marks of the
+    timeline against the perf windows' times (both count from the launch)."""
     def refresh(directory):
         summary = json.loads((directory / 'summary.json').read_text())
         perf = [json.loads(line) for line in (directory / 'perf.jsonl').read_text().splitlines()]
         summary.update(summarize(perf, measure))
+        windows = summary.get('phase_windows')
+        if windows is None and summary.get('timeline'):
+            marks = [(step[1][6:], sum(1 for p in perf if p.get('t', 0) <= step[0]))
+                     for step in summary['timeline'] if str(step[1]).startswith('phase:')]
+            windows = windows_by_phase(marks, len(perf))
+        if windows is not None:
+            summary['phase_windows'] = windows
+            summary['phases'] = {name: summarize(perf[start:end], end - start)
+                                 for name, (start, end) in windows.items()}
         (directory / 'summary.json').write_text(json.dumps(summary, indent=2))
         return summary
     runs = sorted(out.glob('run[0-9]*'), key=lambda d: int(d.name[3:]))

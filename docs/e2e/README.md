@@ -16,6 +16,7 @@ Related pages:
 - [architecture.md](architecture.md): how the harness and its game-side hooks are built, every Windows and D3D12 dependency, and a checklist for porting it to another platform or backend.
 - [traces.md](traces.md): debug trace and diagnostic environment variables and what each writes.
 - [experiments.md](experiments.md): A/B overrides, shader override diagnostics, FXC notes and other experiment-only switches.
+- [frozen-frames.md](frozen-frames.md): the frozen-frame parity harness (the `freeze` scenario, `frame_diff.py`, `parity.py`) and its baseline variance.
 - [setup.md](../setup.md): prerequisites, setup, generate, build and the BuildRoot layout.
 - [running.md](../running.md): launcher options and look knobs.
 - [status/current.md](../status/current.md): current state and what is verified on the latest build.
@@ -54,7 +55,7 @@ Without network access (Jev unreachable), `--scenario quickrace` drives the same
 | `--build-root` | required | BuildRoot used by `Build.ps1` |
 | `--game-build` | `game-build` | build directory under the BuildRoot, for example `game-build-prof` (see [traces.md](traces.md)) or `game-build-thinlto` (`pipeline.py --flavor`) |
 | `--out` | required | result directory, outside the repository |
-| `--scenario` | `boot` | fixed timeline: `boot`, `quickrace`, `photo`, `photo_view`, `career`, `career_finish`, `career_progress`, `dlc` |
+| `--scenario` | `boot` | fixed timeline: `boot`, `quickrace`, `photo`, `photo_view`, `career`, `career_finish`, `career_progress`, `dlc`, `freeze` |
 | `--profile` | none | copy a user-data root to `<out>\user-data` and run on it; `copy` means the BuildRoot's `user-data`, otherwise a path |
 | `--goal` | none | navigate with Jev instead of a timeline (`quickrace`) |
 | `--goal-timeout` | 360 | seconds allowed for the goal |
@@ -84,6 +85,7 @@ Fixed timelines with screen checks, no network access:
 | `career` | Career > GO RACE > WORLD TOUR, the profile's next event (Tsukuba Short Circuit with the Ford Ka for the BuildRoot profile), 40 s of driving, QUIT RACE, 30 s of the replay, CONTINUE to the event. |
 | `career_finish` | the same event to the end, driven by the title's AI (`engageaionstart`, needed): it wins the 3 laps in about 3 minutes; CONTINUE, then A every 6 s through YOU PLACED (Total), the driver and Ford affinity level 2 rewards (a gift car: the default) up to EVENT COMPLETE, after the save. |
 | `career_progress` | a new process on that profile: WORLD TOUR shows the next event (the TopGear challenge) with the driver at level 2 and credits other than the 8,610 CR before the race. |
+| `freeze` | Quick Race, rewound right after the start to the oldest frame the rewind keeps, then 20 s of that frozen frame (phase `freeze`). Pins the look `original,taa=0`, the occlusion reports and 2x, and keeps the PPM captures; see [frozen-frames.md](frozen-frames.md). |
 | `dlc` | downloadable content: Free Play > Quick Race with a Porsche Expansion Pack car (Porsche, 1970 914/6) on the Launch Track Pack's Test Track Benchmark (Speedway), then 20 s of racing (phase `race`). Checks the Porsche manufacturer, the car, the environment, the layout and the race HUD. Needs both packs imported into the BuildRoot profile with `Build.ps1 -Content`. |
 
 They write saves, so run them on a copy of the profile:
@@ -151,6 +153,7 @@ flowchart TD
 | `perf` | `photo` at 240 Hz | 3 | performance work, against a baseline gate of the same tier: its race phase (12 cars, 30 s) and photo mode |
 | `full` | `photo`, `photo_view`, `career` at 60 and 240 Hz | 3 (about 1 hour) | before committing a stage; `--hz 60,120,240` adds 120 Hz |
 | `career` | `career_finish` and `career_progress` at 240 Hz | 1 (about 8 min) | a career race to its rewards and the progress after a restart |
+| `parity` | `freeze` at 60 Hz | 2 (about 8 min) | image, draw and predication parity of a frozen frame with `parity.py` against a baseline ([frozen-frames.md](frozen-frames.md)) |
 
 ```
 python outputs\FM4-build\e2e\matrix.py --build-root <BuildRoot> --name <name> --tier smoke --baseline <older name>
@@ -201,6 +204,8 @@ python outputs\FM4-build\e2e\compare.py <BuildRoot>\e2e\baseline-v2 <BuildRoot>\
 
 A wait cause up more than 20% and more than 5 ms/s, or different capture statistics (luma, black and saturated share, luma histogram), only WARN. So does a rise in `clear_gray_frames`. Races are not deterministic, so check captures by eye.
 
+For image, draw and predication parity of one scene, use the `freeze` scenario and `parity.py` ([frozen-frames.md](frozen-frames.md)); a stage of the native port runs both gates.
+
 ## Output layout
 
 Each run writes to its `--out` directory:
@@ -233,7 +238,8 @@ The statistics come from the steady part of the perf trace: without `--measure`,
 | `goal`, `scenario` | the goal, or the scenario (`null` when `--steps` was given) |
 | `goal_reached` | `null` when there is no goal or check; `true` once a check or goal passed; `false` when a step failed or the goal was not reached |
 | `failed_step` | the step that timed out, with its text |
-| `args`, `profile` | the `--arg` items and the `--profile` given |
+| `args`, `profile`, `look` | the `--arg` items, the `--profile` given and the look that ran |
+| `binary` | path, SHA-256 and file time of the `fm4_rex.exe` that ran |
 | `seconds`, `timeline` | wall time, and the time and action of each step |
 | `frames_captured`, `perf_windows` | number of captures and of per-second perf windows |
 | `fps_median`, `fps_min` | per-second guest swap rate: median and lowest window |
@@ -243,12 +249,15 @@ The statistics come from the steady part of the perf trace: without `--measure`,
 | `wait_ms_per_s_median` | time per second the command-processor thread waited, per cause (see [traces.md](traces.md)) |
 | `cp_busy_ms_per_s_median` | window time minus all waits: wall time the command-processor thread works |
 | `readbacks_per_s_median`, `draws_per_s_median` | resolve readbacks and draws per second |
+| `draws_per_frame_mean` | draws over all measured frames |
+| `render_thread_busy_ms_per_frame_median`, `render_thread_source`, `guest_render_thread_ms_per_frame_median`, `queue_depth_median`, `queue_depth_max` | backend-neutral thread and queue metrics; on the PM4 path the render thread is the command processor (`render_thread_source` `cp`); the others only when the trace has them ([frozen-frames.md](frozen-frames.md#backend-neutral-fields)) |
 | `cpu_ms_per_s_median` | command-processor time per zone, per second |
 | `occlusion_samples_median` | mean passing samples per occlusion interval, unawaited and awaited |
 | `submit_thread_ms_per_s_median`, `submit_thread_counts_per_s_median`, `submit_flush_wait_ms_per_frame_median` | submit thread time (`busy_ms`, `record_ms`, `execute_ms`) and the swap's drain of it (`flush_wait_ms`) per second, its counts per second, and the drain per frame (see [traces.md](traces.md)) |
 | `gpu_frame_ms_median`, `gpu_resolve_ms_median`, `gpu_span_ms_median` | GPU time per frame from timestamps: busy time, resolves, and the first-to-last span |
-| `counts_per_s_median`, `counts_per_frame_median` | event counts per second and per frame (see [traces.md](traces.md)) |
+| `counts_per_s_median`, `counts_per_frame_median`, `counts_per_frame_mean` | event counts per second, per frame (median of the windows) and over all measured frames (see [traces.md](traces.md)) |
 | `phases` | the statistics above per phase, for the phases the scenario marks |
+| `phase_windows`, `phase_frames` | the perf windows and the captures of each phase |
 | `final_capture` | `luma_mean`, `black_pct` (luma below 8), `saturated_pct` (luma 248 and above) and `luma_hist16` (16 bins) of the last capture |
 | `clear_gray_frames` | captures in which the exact FM4 clear color (102,102,102) covers at least 1% more than the mean of the neutral grays 97-101 and 103-107 do, i.e. geometry such as the road surface was not drawn; asphalt smoothed by TAA spreads over those grays and is not counted |
 | `errors`, `top_errors` | runtime log lines that match an error marker, keyed by their text (first 90 characters, numbers replaced by `#`) with counts; `top_errors` lists the ten most frequent |
@@ -264,6 +273,9 @@ All scripts live in [`outputs/FM4-build/e2e/`](../../outputs/FM4-build/e2e/).
 | `e2e.py` | launch the game, drive it and collect a run |
 | `matrix.py` | run a gate tier on a build snapshot |
 | `compare.py <baseline> <candidate> [--json]` | compare two run directories and print a verdict |
+| `frame_diff.py <a> <b> [--out DIR]` | pixel difference of two frozen frames (captures or runs), with 1:1 crops of the largest differences ([frozen-frames.md](frozen-frames.md)) |
+| `parity.py <baseline> <candidate> [--out DIR]` | FAIL rules of a frozen-frame pair: draws and predicated packets per frame, image difference, new error keys ([frozen-frames.md](frozen-frames.md)) |
+| `test_e2e_tools.py` | offline tests of `frame_diff.py`, `parity.py` and the summary fields they read |
 | `race_clock.py <run>` | race timer of the captures against wall time (1.0: real time); needs `--keep-ppm` captures |
 | `cp_profile.py stacks.txt <BuildRoot>\game-build-prof [--function NAME]` | summarize the command-processor stack samples (see [traces.md](traces.md)) |
 | `inventory.py --build-root <BuildRoot> a.json [b.json ...] [--json out.json]` | combine `REX_GPU_INVENTORY` files of several scenarios |

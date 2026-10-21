@@ -43,6 +43,9 @@
 !/outputs/FM4-build/e2e/frame_graph.py
 !/outputs/FM4-build/e2e/race_clock.py
 !/outputs/FM4-build/e2e/pm4_writers.py
+!/outputs/FM4-build/e2e/frame_diff.py
+!/outputs/FM4-build/e2e/parity.py
+!/outputs/FM4-build/e2e/test_e2e_tools.py
 !/outputs/FM4-build/e2e/e2e.py
 !/outputs/FM4-build/e2e/jev.py
 !/outputs/FM4-build/e2e/ocr-server.ps1

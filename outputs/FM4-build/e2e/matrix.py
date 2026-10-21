@@ -10,6 +10,9 @@ Tiers (docs/e2e/README.md, "Gates"):
   full   three runs of every scenario at 60 and 240 Hz: before committing a stage (about 1 hour)
   career career_finish (the AI wins a career race, rewards, EVENT COMPLETE) and career_progress
          (a new process sees level 2 and the new credits) at 240 Hz, one run (about 8 minutes)
+  parity two runs of freeze (a rewind freeze at the start of a Quick Race, 2x, the title's own
+         picture, pinned occlusion) at 60 Hz: image, draw and predication parity with parity.py
+         against a baseline (docs/e2e/frozen-frames.md, about 8 minutes)
 An AI driver drives the player's car in every race (FM4_GAME_CMDLINE=engageaionstart; --human
 for the harness throttle).
 
@@ -27,6 +30,7 @@ TIERS = {
     'perf': (('photo',), (240,), 3),
     'full': (('photo', 'photo_view', 'career'), (60, 240), 3),
     'career': (('career_finish', 'career_progress'), (240,), 1),
+    'parity': (('freeze',), (60,), 2),
 }
 # Cells that run on the profile a previous cell of the gate saved.
 PROFILE_FROM = {'photo_view': 'photo', 'career_progress': 'career_finish'}
@@ -56,7 +60,7 @@ def cell_args(root, name, hz, scenario, repeat, build, extra):
         args += [f'--arg=--video_mode_refresh_rate={hz}', '--env', f'FM4_FRAME_RATE={hz}']
     if scenario == 'quickrace':
         args += ['--tail', '40', '--measure', '30']
-    if scenario in ('photo', 'career', 'career_finish', 'dlc'):
+    if scenario in ('photo', 'career', 'career_finish', 'dlc', 'freeze'):
         args += ['--profile', 'copy']
     if scenario in PROFILE_FROM:
         # The profile saved by the earlier cell of the same gate (its photo, its race result).
@@ -147,6 +151,14 @@ def main():
                         verdict = ' ' + json.loads(report.stdout)['verdict'] + f' vs {base.name}'
                     except (ValueError, KeyError):
                         verdict = ' compare failed'
+                    if scenario == 'freeze':
+                        # Image, draw and predication parity of the frozen frame.
+                        report = subprocess.run([sys.executable, HERE / 'parity.py', base, out, '--json',
+                                                 '--out', out / 'parity'], capture_output=True, text=True)
+                        try:
+                            verdict += ', parity ' + json.loads(report.stdout)['verdict']
+                        except (ValueError, KeyError):
+                            verdict += ', parity failed'
                 else:
                     verdict = f' (no baseline {base.name})'
             line = f'{cell}: exit {code}, {(time.time() - t) / 60:.1f} min, {describe(out)}{verdict}'

@@ -69,6 +69,10 @@
       "provenance": "Project documentation; A/B switches and experiment diagnostics (no game content)"
     },
     {
+      "path": "docs/e2e/frozen-frames.md",
+      "provenance": "Project documentation; frozen-frame parity harness and its baseline variance (no game content)"
+    },
+    {
       "path": "docs/analysis/gtao-design.md",
       "provenance": "Project documentation; design and research note on the GTAO pass (summarized observations, no game content)"
     },
@@ -170,6 +174,18 @@
     },
     {
       "path": "outputs/FM4-build/e2e/compare.py",
+      "provenance": "Original test tooling for this project; no game content or original game function bodies"
+    },
+    {
+      "path": "outputs/FM4-build/e2e/frame_diff.py",
+      "provenance": "Original test tooling for this project; no game content or original game function bodies"
+    },
+    {
+      "path": "outputs/FM4-build/e2e/parity.py",
+      "provenance": "Original test tooling for this project; no game content or original game function bodies"
+    },
+    {
+      "path": "outputs/FM4-build/e2e/test_e2e_tools.py",
       "provenance": "Original test tooling for this project; no game content or original game function bodies"
     },
     {
