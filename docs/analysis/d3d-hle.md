@@ -277,12 +277,15 @@ Made by the project owner on 21 October 2026:
 - Look mods and GTAO target RTV and the native path; `-Rov` stays the uncorrected reference and the native path is compared against it (AGENTS.md, render target paths).
 - The image limit of frozen-frame parity is final at 60% of the pixels above level 4 (the `parity.py` default), the same against RTV and against `-Rov`. Because the frozen moment differs between runs (section 10), it catches a broken frame, not a wrong detail; wrong details are left to the state-level dual run and the 1:1 crops.
 - N1 covers its modes in three tiers. Native with the full gates of section 9 (dual run, frozen-frame parity, perf, no PM4 written): the menus from boot to the pre-race and the post-race, the race with one tile (the default) and the replay. These are the scenes every session passes, the 240 Hz, p99 and CP time targets, the only scene with a frozen-frame harness, and the slowest mode, where the rewritten recordings (13.3) and the late writes (13.4) show up; covering the menus also avoids a switch between PM4 and the native path at the start and end of a race. Native with the PM4 fallback where they use writers not yet converted, and a smoke check only (no crash, a photo saved, no new error key): photo mode, split screen and the intro videos. The tiles and MSAA of `-Quality` stay on the PM4 RTV path, chosen at launch, until N3 replaces them with one pass, so the tiling writers are not converted twice.
+- The runtime's GPU layer (`work/runtime/src/graphics`) is the project's own and may diverge from the upstream ReXGlue SDK as far as the native path needs; the recompiler, core and kernel stay close to upstream. On 21 October 2026 the fork is pinned to upstream v0.10.0 (21 August 2026, still the latest tag): `src/codegen` and `src/core` are identical to it, `src/kernel` differs in 4 files, and `src/graphics` in 47 entries, among them 2,555 of the 7,476 lines of `d3d12/command_processor.cpp`, with the Vulkan backend and the SPIR-V translator removed. Upstream had 141 commits from 1 June 2026, 11 of them in `src/graphics`. So:
+  - The native path goes into new files beside the existing command processor and reaches the backend through the interfaces it already has (`WriteRegisterFast`, `WriteRegistersFromMem`, `LoadShader`, `IssueDraw`), so the PM4 RTV path stays selectable and `-Rov` unchanged (AGENTS.md).
+  - The fork stays pinned. Each new upstream release is reviewed: fixes to the recompiler, core and kernel are taken; graphics changes are ported only when they fix a problem seen in FM4.
+  - The upstream BSD-3-Clause and Xenia notices stay in the files that change ([sources and licensing](../sources-and-licensing.md)).
 
 Still open:
 
 - Whether the native path may differ from RTV by design (one pass, MSAA, `LOAD_ALU_CONSTANT` read time, formats), judged on the 1:1 crops.
 - Whether the PM4 RTV path stays a permanent reference once the native path passes its gates.
-- How far the runtime may diverge from the upstream ReXGlue command processor.
 
 ## 12. Open questions
 
