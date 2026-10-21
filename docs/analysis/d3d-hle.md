@@ -228,6 +228,20 @@ What follows for the native port (inferred until measured on the device):
 
 Plan changes: N0 adds a device baseline (the current build through the [export](../running.md#export-to-another-computer), at 1x and 2x, with the default look and with AO off, plugged in and on battery, with the TDP profile noted, and `REX_PERF_TRACE_FILE` set for fps, p99, GPU and CP times). N4 keeps the capped-CPU run on the main PC as a quick proxy, but its gate runs on the Ally X. N5 adds the 1.5x render scale and the upscaler for the device. Proposed device targets, to be set after the baseline: races at 60 fps or more with p99 at most 16.7 ms on the default look at the panel's resolution, and as close to 120 fps as the GPU allows with VRR.
 
+### 8.2 Shaders on the native path
+
+On RTV today the shader override path replaces a pixel shader per hash with HLSL (`shader_<hash>.ps.hlsl`) or hooks into its translation (`shader_<hash>.mod.hlsli`), under the contract of the DXBC translation: the Xenos constant buffers (float constants c0 to c255, bool and loop constants, fetch constants), the translated interpolators, and the exponent bias and gamma rules on output. Vertex shaders have no override.
+
+The native path creates the pipelines and binds the resources itself, so a native shader contract (stage N5) can add:
+
+- replacement shaders that declare their own resources per pass (the scene depth, the GTAO result, higher-resolution shadow maps, lookup tables, new textures) and their own constant buffers;
+- vertex shader overrides, keyed by the hash taken where `IM_LOAD` is written (2.6), for example for a widescreen projection;
+- behaviour per pass: the same game shader can be treated differently in the scene, the mirror or the shadow pass;
+- new passes at D3D-level points (after the opaque geometry, before the transparent geometry, before the HUD), with Shader Model 6 and compute shaders (DXC is needed, as in the [FSR plan](fsr-plan.md));
+- an offline translation of every game shader to HLSL and DXIL on the user's machine, as XenosRecomp does for Unleashed Recompiled, so that no shader compiles during play and any shader can be edited.
+
+What stays tied to the game is its data, not the Xenos GPU: the meaning of the constants the game writes ([material atlas](material-atlas.md)), the vertex and texture formats in guest memory (the native path converts them before a shader sees them), and the identity of each game shader by its microcode hash. Shaders written for the project may go into the repository like the look mods; translations of the game's own shaders are derived from game data, so they are generated on the user's machine like the recompiled code and are not committed.
+
 ## 9. Stages
 
 Every stage is behind a switch, off by default until its gate passes, with the PM4 path as the fallback. The effort is person-weeks for one developer with an AI agent; it is inferred and not calibrated against past work.
@@ -239,7 +253,7 @@ Every stage is behind a switch, off by default until its gate passes, with the P
 | N2, decoded recordings | Operation lists with precomputed pipeline and binding keys; inherited state and `LOAD_ALU_CONSTANT` re-read at replay; fallback to PM4 per recording. | Dual run per replay without mismatches; render thread time per frame lower than N1 by a measured amount. | 3 to 5 |
 | N3, native render targets | Surface-keyed host targets with virtual placement, copies for aliased contents, one-pass tiles, native MSAA as a launcher option (2x and 4x in one pass, TAA on top), resolves as host copies and demand readback, post-pass anchors on surfaces, look mods and GTAO moved onto the native path. Starts with a GPU-only prototype at 2x (one scene pass and one resolve) against the RTV path. | Frozen frames within the agreed threshold against RTV and against `-Rov` with `-Look "original,taa=0"`; GTAO, TAA, motion vectors and the windshield checked at 2x; GPU time at 2x not above RTV; 4x MSAA in one pass working. | 12 to 20 |
 | N4, threading and slower CPUs | Event waits instead of spins, queue depth and latency tuned, a capped-CPU run on the main PC (fewer cores through the process affinity) as a quick proxy, and runs on the ROG Xbox Ally X (8.1). | The success criteria of section 10 met on the main PC and on the Ally X. | 3 to 5 |
-| N5, visual upgrades on the native base | Float targets for `k_16_16`, linear blending as an A/B, upscalers on the native anchors ([FSR plan](fsr-plan.md)) and a 1.5x render scale for the Ally X's 1080p panel, wider aspect ratios (needs a FOV and culling hook), HDR10 once an HDR display exists. | One A/B and one decision per item. | per item |
+| N5, visual upgrades on the native base | Float targets for `k_16_16`, linear blending as an A/B, upscalers on the native anchors ([FSR plan](fsr-plan.md)), a 1.5x render scale for the Ally X's 1080p panel, the native shader contract of 8.2, wider aspect ratios (needs a FOV and culling hook), and HDR10 once an HDR display exists. | One A/B and one decision per item. | per item |
 
 N0 to N4 total about 26 to 42 person-weeks. The earlier estimates for design A alone were 24 by the design and 40 to 56 with the reviewers' corrections; this plan reuses the backend in N1 and N2, which is why its range starts lower.
 
