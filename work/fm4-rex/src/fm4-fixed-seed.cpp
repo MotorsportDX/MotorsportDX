@@ -12,9 +12,20 @@
 //     (driver+124, a copy at +128) from sub_8234BD70, which returns
 //     [[0x820008E8]+16], presumably the tick count (not verified). With the
 //     switch, the n-th driver of a race gets a seed derived from the seed and n.
+//   - The cars: each car's dynamics (CCarDynamics, constructor sub_828221D0)
+//     keeps a random state at +0x41D0, set to 12345678 when the car is built
+//     and drawn on every session update (sub_82304870, sub_8230CAA8). The
+//     cars are built in the pre-race, whose length follows the wall clock
+//     (the intro, and the countdown waiting until the race is ready), so the
+//     states differ by the start of the 3-2-1. With the switch, the
+//     countdown (fm4-race-clock.cpp) resets every car's state to 12345678
+//     when its 3-2-1 starts: the next draw from a car state after that point
+//     (the same update for every car) first stores the initial value, so
+//     only states in use are written.
 // The title's other random states (the ANSI C LCG: state * 1103515245 + 12345)
-// start from the constant 12345678 once per process and are not reseeded, so a
-// later race in the same process may draw from other states.
+// are set to 12345678 when their objects are built and are not reseeded. The
+// crowd (CCrowdPresentation::Update, sub_82948920) draws from one of them as
+// often as it renders, so the crowd differs between runs.
 //
 // Diagnostic (FM4_TRACE_RNG=1): the first draws of each caller of the LCG
 // functions (sub_828C8910 next, sub_828C8930 int range, sub_828C89A8 vector,
@@ -37,6 +48,9 @@ namespace {
 constexpr uint32_t kSqlitePrng = 0x82E67848;
 // sub_82A92FF0's return address from seeding the AI driver's random state.
 constexpr uint32_t kAiDriverSeedReturn = 0x82A930B8;
+// sub_828221D0's return address from setting the car's random state (+0x41D0).
+constexpr uint32_t kCarSeedReturn = 0x82822278;
+constexpr uint32_t kCarSeed = 12345678;
 
 std::optional<uint64_t> FixedSeed() {
   static const std::optional<uint64_t> seed = []() -> std::optional<uint64_t> {
@@ -67,6 +81,21 @@ uint64_t SplitMix64(uint64_t& state) {
 
 // The AI drivers created since the last opponent query or session start.
 uint32_t ai_drivers = 0;
+
+// The cars' random states (address: the countdown start they were last reset for).
+std::mutex car_mutex;
+std::map<uint32_t, uint32_t> car_states;
+uint32_t countdown_starts = 0;
+
+// Before a draw from state: resets a car's state once per countdown start.
+void ResetCarState(uint8_t* base, uint32_t state) {
+  if (!countdown_starts) return;
+  std::lock_guard lock(car_mutex);
+  const auto it = car_states.find(state);
+  if (it == car_states.end() || it->second == countdown_starts) return;
+  it->second = countdown_starts;
+  rex::memory::store_and_swap<uint32_t>(base + state, kCarSeed);
+}
 
 // Keys SQLite's RC4 generator as its first use does, with key bytes from the seed.
 void KeySqliteGenerator(uint8_t* base, uint64_t seed) {
@@ -166,6 +195,10 @@ REX_HOOK_RAW(sub_824882B8) {
 // Sets the state of a random number object (object, seed).
 REX_EXTERN(__imp__sub_822B9898);
 REX_HOOK_RAW(sub_822B9898) {
+  if (uint32_t(ctx.lr) == kCarSeedReturn && FixedSeed()) {
+    std::lock_guard lock(car_mutex);
+    car_states[ctx.r3.u32] = countdown_starts;
+  }
   if (uint32_t(ctx.lr) == kAiDriverSeedReturn) {
     if (const auto seed = FixedSeed()) {
       uint64_t state = *seed ^ (uint64_t(ai_drivers++) << 32);
@@ -211,12 +244,23 @@ REX_HOOK_RAW(sub_828C89A8) {
 
 REX_EXTERN(__imp__sub_82303E60);
 REX_HOOK_RAW(sub_82303E60) {
+  ResetCarState(base, ctx.r3.u32);
   Trace(base, "unit", ctx.r3.u32, uint32_t(ctx.lr));
   __imp__sub_82303E60(ctx, base);
 }
 
 REX_EXTERN(__imp__sub_823866D0);
 REX_HOOK_RAW(sub_823866D0) {
+  ResetCarState(base, ctx.r3.u32);
   Trace(base, "float", ctx.r3.u32, uint32_t(ctx.lr));
   __imp__sub_823866D0(ctx, base);
+}
+
+// Called by the countdown hook (fm4-race-clock.cpp) when the 3-2-1 starts.
+void FM4FixedSeedCountdownStart() {
+  if (!FixedSeed()) return;
+  std::lock_guard lock(car_mutex);
+  ++countdown_starts;
+  std::fprintf(stderr, "FM4 fixed seed: the 3-2-1 starts, %zu car random states reset to %u\n",
+               car_states.size(), kCarSeed);
 }

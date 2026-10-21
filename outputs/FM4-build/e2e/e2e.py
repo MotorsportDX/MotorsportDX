@@ -12,12 +12,12 @@ BUTTONS = {'up': 0x1, 'down': 0x2, 'left': 0x4, 'right': 0x8, 'start': 0x10, 'ba
 # Each step: [seconds to wait before, action, hold seconds]. Actions are button names joined
 # with '+', or 'rt=<0..255>', 'lt=<0..255>', 'lx/ly/rx/ry=<-32768..32767>', or 'none'; a
 # comma-separated sequence taps each in turn (released between). A button name after '~'
-# pulses it: the diagnostic controller presses it on every other poll of the title (once per
-# frame in a race) instead of holding it, so an edge-triggered button acts on the first frame
-# the title accepts it; '~y@<n>' starts the pulse on race frame n (the n-th poll after the
-# race starts; it waits outside a race) instead of at once. A plain step with hold 0 pulses
-# until the next input; a checked step or a comma sequence releases it after the hold, as any
-# press. Actions are checked before the launch. These change no input:
+# pulses it: the diagnostic controller presses it on every other poll of the title (about once
+# per frame in a race) instead of holding it, so an edge-triggered button acts on the first
+# frame the title accepts it; '~y@<n>' starts the pulse on race frame n (the n-th session
+# update after the race starts; it waits outside a race) instead of at once. A plain step
+# with hold 0 pulses until the next input; a checked step or a comma sequence releases it
+# after the hold, as any press. Actions are checked before the launch. These change no input:
 #   'wait'             only waits (keeps a held throttle);
 #   'phase:<name>'     starts a measured phase ('phase:end' closes it) for summary.json phases;
 #   'select:<label>'   moves the menu highlight to the OCR'd label, for up to <seconds>;
@@ -170,8 +170,9 @@ SCENARIOS.update({
     # there); then 20 s of the frozen frame (phase freeze), which the title keeps rendering
     # under the rewind hint bar. The rewind keeps a window of about the last 10 s and takes Y
     # only after about 10 s of race (a held Y does not start it). The first press lands on race
-    # frame 720 in every run, but the race advances by wall time, so the frozen moment still
-    # differs between runs (docs/e2e/frozen-frames.md, "Baseline variance").
+    # frame 720 (session updates) in every run, but the race advances by wall time unless
+    # --env FM4_FIXED_FRAME_TIME=1, and does not repeat exactly even then, so the frozen moment
+    # still differs between runs (docs/e2e/frozen-frames.md, "Baseline variance").
     'freeze': SCENARIOS['quickrace'][:-1] + [
         [0.5, '~y@720', 0], [90, 'wait', 0, 'REWINDING|REWIND FURTHER|RESUME FROM HERE', 1],
         [6, 'none', 0], [6, 'wait', 0],

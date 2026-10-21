@@ -30,7 +30,7 @@ These go with the frame rate options on the [harness overview](README.md#frame-r
 | Switch | Effect |
 | --- | --- |
 | `--env FM4_VBLANK_SWITCH=0` | Keeps the guest vblank at the reported refresh rate, even in race scenarios. |
-| `--env FM4_VBLANK_TRACE=1` | Prints each render scenario push and pop with the vblank rate, the diagnostic controller's state polls so far (one per frame in a race) and the title's swaps so far. |
+| `--env FM4_VBLANK_TRACE=1` | Prints each render scenario push and pop with the vblank rate, the diagnostic controller's state polls so far (about one per frame in a race), the title's swaps, its session updates (one per main loop pass in a session) and the session time. |
 | `--env FM4_VRR_HALF_RATE=1` | Keeps `vblank_vrr` in the 30 fps scenarios. By default they are held to the fixed grid. |
 | `--arg=--vblank_rate=<hz>` | Sets a fixed startup vblank rate, without `FM4_FRAME_RATE`. |
 
@@ -59,10 +59,20 @@ What it pins:
 
 - The opponent cars. The title picks them with SQL (`SELECT ... FROM Drivable_Data_Car ... ORDER BY RANDOM() LIMIT %d`, `sub_824885C0`), and SQLite's `random()` draws from its RC4 generator, which it keys once from the platform's randomness. With the switch, the generator is keyed from the seed at the start of each opponent query, so the query always returns the same cars. The grid follows from the cars, so the player's slot repeats too.
 - The AI drivers' random state. Each AI driver (`sub_82A92FF0`) seeds it when the race is set up from `sub_8234BD70`, which returns `[[0x820008E8]+16]`, presumably the tick count (not verified). With the switch, the n-th driver of a race gets a seed derived from the seed and n.
+- The cars' random states. Each car's dynamics (`CCarDynamics`, constructor `sub_828221D0`) keeps a random state at +0x41D0, set to 12345678 when the car is built in the pre-race and drawn on every session update (`sub_82304870`, `sub_8230CAA8`, `sub_8234C198`). The pre-race lasts as long as the menus, the intro and the loading take, so by the start of the 3-2-1 the states differ between runs. With the switch, every car's state goes back to 12345678 when the 3-2-1 starts (the countdown hook of [`fm4-race-clock.cpp`](../../work/fm4-rex/src/fm4-race-clock.cpp)); the line `FM4 fixed seed: the 3-2-1 starts, <n> car random states reset` shows it.
 
-The title's other random states (the ANSI C generator `state * 1103515245 + 12345`) start from a constant (12345678) once per process and are not reseeded between races. They repeat per run, but a second race in the same process is not shown to start the same way as the first race of a fresh process.
+The title's other random states (the ANSI C generator `state * 1103515245 + 12345`) are set to 12345678 when their objects are built and are not reseeded. The crowd (`CCrowdPresentation::Update`, `sub_82948920`) draws from one of them as often as it renders, so the spectators differ between runs.
 
-What still varies: anything that follows wall time or host timing (presumably the cable cars and the crowd, not verified), and the number of frames between steps of the harness (menu timing). The race itself advances by wall time, so even a press on a fixed race frame freezes another moment of the race in each run ([frozen frames](frozen-frames.md#baseline-variance)).
+What still varies: anything that follows wall time or host timing (the crowd), the number of frames between steps of the harness (menu timing), and the race itself: it advances by wall time unless the frame time is fixed ([below](#fixed-frame-time-for-races)), and even then it does not repeat exactly ([frozen frames](frozen-frames.md#what-pinning-the-moment-needs)).
+
+### Fixed frame time for races
+
+`--env FM4_FIXED_FRAME_TIME=1` makes the title's race clock count frames instead of wall time. It is off by default: with it, the game runs slower than real time whenever a frame takes longer than 1/60 s. Source: [`fm4-race-clock.cpp`](../../work/fm4-rex/src/fm4-race-clock.cpp) and [`fm4-command-line.cpp`](../../work/fm4-rex/src/fm4-command-line.cpp).
+
+- The step. The title's main loop (`Game::MainLoop`, `sub_822F7A00`) turns each pass of 16 or 17 ms into a step of 0.01668335 s (1/59.94) and any other pass into its measured length, so after a hitch the race catches up with the wall clock. The switch turns on the title's own developer option `lockupdatetimeto60fps` (`CForzaCommandLineParameters` +0x544), which makes every pass a step of 0.01668335 s. The session update (`sub_8240DB08`) adds the step, scaled, to the session time (a double at +0x18).
+- The 3-2-1. The countdown (`C321Component`, `sub_8239D450`) places the cars on the grid, waits until the race is ready (flags at +353, +355 and +356 of the session, set as the loading ends: 30 to 41 session updates in a Quick Race) and then runs its 3-2-1 on the session time (509 updates to the race scenario). The cars settle on the grid during the wait. With the switch the countdown sees the first flag clear until 60 updates after it placed the cars, so the 3-2-1 starts on the same update; the line `FM4 fixed frame time: the 3-2-1 starts <n> session updates after the cars were placed` shows it, with `not pinned` when the race was ready later than that.
+
+The diagnostic controller counts race frames in session updates in every run, with or without the switch ([diagnostic controller](architecture.md#diagnostic-controller-fm4_test_input_file)).
 
 `--env FM4_TRACE_RNG=1` prints the guest random draws: each caller's first draws of the ANSI C generator (`sub_828C8910`, `sub_828C8930`, `sub_828C89A8`, `sub_82303E60`, `sub_823866D0`) with the state address and value, each `sqlite3_randomness` call (`sub_82BCED10`) with the generator state, the opponent queries, and a summary of the callers at each session start.
 

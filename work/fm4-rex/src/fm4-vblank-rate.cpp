@@ -14,8 +14,9 @@
 // countdown, post-race, replays and photo mode 30; menus and pre-race set none
 // (the control's default, 60).
 // FM4_VBLANK_SWITCH=0 keeps the vblank rate fixed; FM4_VBLANK_TRACE=1 prints
-// every push and pop, with the state polls of the diagnostic controller and the
-// title's swaps so far. The push of a race scenario (`*_Race`) also starts the
+// every push and pop, with the state polls of the diagnostic controller, the
+// title's swaps, its session updates so far and the session time
+// (fm4-race-clock.cpp). The push of a race scenario (`*_Race`) also starts the
 // race frames of the diagnostic controller's pulses (fm4-test-input.h), and its
 // pop ends them.
 //
@@ -113,10 +114,12 @@ void Apply(const char* event, const std::string& name) {
   if (trace)
     std::fprintf(stderr,
                  "FM4 render scenario %s %s: depth %zu, frame rate %u, vblank %g Hz, "
-                 "input polls %u, swaps %u\n",
+                 "input polls %u, swaps %u, session updates %u, session time %.6f\n",
                  event, name.c_str(), frame_rates.size(), frame_rate, current_rate,
                  fm4_diagnostic_polls.load(std::memory_order_relaxed),
-                 fm4_diagnostic_swaps.load(std::memory_order_relaxed));
+                 fm4_diagnostic_swaps.load(std::memory_order_relaxed),
+                 fm4_diagnostic_updates.load(std::memory_order_relaxed),
+                 fm4_diagnostic_session_time.load(std::memory_order_relaxed));
 }
 }  // namespace
 
@@ -171,8 +174,8 @@ REX_HOOK_RAW(sub_82442600) {
     }
     // The race starts: the anchor of FM4TestInput's race frames (its pulses).
     if (valid && name.ends_with("_Race"))
-      fm4_diagnostic_race_poll.store(fm4_diagnostic_polls.load(std::memory_order_relaxed),
-                                     std::memory_order_relaxed);
+      fm4_diagnostic_race_update.store(fm4_diagnostic_updates.load(std::memory_order_relaxed),
+                                       std::memory_order_relaxed);
     frame_rates.push_back(valid ? Load(base, settings + kSettingsFrameRate) : kDefaultFrameRate);
     names.push_back(name);
     fulls.push_back(countdown || (full_replay && name.find("-Car_Replay") != std::string::npos));
@@ -194,7 +197,7 @@ REX_HOOK_RAW(sub_82438A38) {
     }
     // The race ends: no race frames until the next race starts.
     if (last_popped.ends_with("_Race"))
-      fm4_diagnostic_race_poll.store(0, std::memory_order_relaxed);
+      fm4_diagnostic_race_update.store(0, std::memory_order_relaxed);
     Apply("pop", last_popped);
   }
   __imp__sub_82438A38(ctx, base);

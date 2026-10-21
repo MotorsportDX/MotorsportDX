@@ -9,6 +9,11 @@
 // name means name=1 (the parser toggles a bare switch, and some switches are
 // parsed by two methods). Which options the retail code still reads, and which
 // fm4-dev-features.cpp rebuilds, is in docs/status/history.md.
+//
+// FM4_FIXED_FRAME_TIME=1 adds the option lockupdatetimeto60fps (+0x544): every
+// main loop pass then moves the game by 0.01668335 s, whatever wall time it
+// took (fm4-race-clock.cpp). With it the game runs slower than real time
+// whenever a frame takes longer than 1/60 s, so it is off by default.
 #include <rex/hook.h>
 #include <rex/memory.h>
 #include <rex/ppc/stack.h>
@@ -47,11 +52,13 @@ void Apply(PPCContext& ctx, uint8_t* base, uint32_t self, const char* when) {
 }  // namespace
 
 void FM4InstallCommandLine() {
-  const char* text = std::getenv("FM4_GAME_CMDLINE");
-  if (!text) return;
-  std::istringstream stream(text);
-  for (std::string option; stream >> option;)
-    options.push_back(option.find('=') == std::string::npos ? option + "=1" : option);
+  if (const char* text = std::getenv("FM4_GAME_CMDLINE")) {
+    std::istringstream stream(text);
+    for (std::string option; stream >> option;)
+      options.push_back(option.find('=') == std::string::npos ? option + "=1" : option);
+  }
+  const char* fixed = std::getenv("FM4_FIXED_FRAME_TIME");
+  if (fixed && std::string(fixed) == "1") options.push_back("lockupdatetimeto60fps=1");
   if (options.empty()) return;
   std::string joined;
   for (const auto& option : options) joined += ' ' + option;
