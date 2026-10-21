@@ -1,6 +1,6 @@
 # D3D-level HLE: feasibility and plan
 
-Status: analysis, 21 October 2026. Nothing here is implemented. The same day the project owner chose a native port as the target; its architecture and stages are in sections 8 and 9. Addresses are the USA `default.xex` (the Japan/Asia executable has the same code, see [release comparison](releases.md)). The generated C++ that was read is `<BuildRoot>\project\generated\default`; the catalog, call graph and decompiled functions stay outside the repository under `I:\FM4-re` ([function catalog](function-catalog.md)).
+Status: analysis, 21 October 2026. Nothing here is implemented. The same day the project owner chose a native port as the target; its architecture and stages are in sections 8 and 9, and the measurements of stage N0 are in section 13. Addresses are the USA `default.xex` (the Japan/Asia executable has the same code, see [release comparison](releases.md)). The generated C++ that was read is `<BuildRoot>\project\generated\default`; the catalog, call graph and decompiled functions stay outside the repository under `I:\FM4-re` ([function catalog](function-catalog.md)).
 
 ## Summary
 
@@ -62,23 +62,23 @@ Two consequences. An HLE has to read the shadow at flush time instead of followi
 
 `D3DDevice_FlushDirtyState` (`sub_826F6E18`) has one caller, `sub_82348DC8`, the large writer behind `Resolve` (2.8), and only runs when the argument in r7 (its fifth integer argument) is non-zero; `Resolve` passes zero and writes the dirty registers directly. Whether the game helpers that call `sub_82348DC8` directly (`sub_8280BE70`, `sub_827F55B0`, `sub_8280A720`) pass a non-zero value is not checked. `FlushDirtyState` writes the dirty groups through three writers: `WriteDirtyRegisters` `sub_823114F8`, `WriteDirtyFloatConstants` `sub_82310E78` and `WriteDirtyFetchConstants` `sub_8230FA40`, which build type-0 packets through `sub_82379530`. `RunCommandBuffer` and `EndCommandBuffer` call the same three writers directly, without `FlushDirtyState`. A hook on the writers covers every flush; a hook on `FlushDirtyState` alone misses the command buffer paths.
 
-The static scan behind [`fm4-d3d-trace.cpp`](../../work/fm4-rex/src/fm4-d3d-trace.cpp) lists 71 functions that write type-3 packets: 38 in the XDK range `0x826E1550` to `0x826F9B58`, 33 in the game range. Type-0 packets with computed headers are not found by that scan, so coverage has to be proven at run time: in a test mode, every ring allocation by a caller that the HLE has not replaced is logged.
+The static scan behind [`fm4-d3d-trace.cpp`](../../work/fm4-rex/src/fm4-d3d-trace.cpp) lists 71 functions that write type-3 packets: 38 in the XDK range `0x826E1550` to `0x826F9B58`, 33 in the game range. Type-0 packets with computed headers are not found by that scan, so coverage has to be proven at run time: in a test mode, every ring allocation by a caller that the HLE has not replaced is logged. The coverage log of 21 October 2026 (13.5) found 19 writers outside the list, among them the tiling stream (`sub_823719A8`, `sub_8236F838`, `sub_822B7248`), the segment overflow `sub_822FEF08` and the type-0 writers; the allocations and overflows of the scenes measured come from 26 of the 71.
 
 ### 2.4 Recorded command buffers
 
-`BeginCommandBuffer` (`sub_826E23E8`) points the device's current recording at the buffer and stores an optional tile table and the tile count. `EndCommandBuffer` (`sub_826E4050`) flushes all dirty state into the recording by value, then clears the device state. A recording is a linked list of PM4 chunks at +116 of the buffer (next pointer, size in dwords, data). `D3DCommandBuffer_CreateClone` (`sub_826E2350`) copies it. No code that patches a recording after `EndCommandBuffer` was found.
+`BeginCommandBuffer` (`sub_826E23E8`) points the device's current recording at the buffer and stores an optional tile table and the tile count. `EndCommandBuffer` (`sub_826E4050`) flushes all dirty state into the recording by value, then clears the device state. A recording is a linked list of PM4 chunks at +116 of the buffer (next pointer, size in dwords, data). `D3DCommandBuffer_CreateClone` (`sub_826E2350`) copies it. No code that patches a recording after `EndCommandBuffer` was found. The buffers replayed in a race are not the recorded objects: about half of the replays run byte copies of recordings made by game code, the rest PM4 that no `EndCommandBuffer` of the run produced, and the replayed PM4 changed between replays in 0.02% of them (13.2).
 
-`RunCommandBuffer` (`sub_82310818`) first flushes the device's currently dirty groups, so a replay inherits the state set before it (for example the part transform that `CCarModel::RunPartCommandBuffer` sets). Then `sub_826E4A28` handles each chunk in one of three ways: while a tiling bracket is open (device+13584) the chunk descriptors are deferred to `EndTiling`; while device+11152 is non-zero (a count of indirect buffer entries not yet drained) the descriptors are copied into the ring; otherwise one `INDIRECT_BUFFER` per descriptor is written. The split between these paths is not measured.
+`RunCommandBuffer` (`sub_82310818`) first flushes the device's currently dirty groups, so a replay inherits the state set before it (for example the part transform that `CCarModel::RunPartCommandBuffer` sets). Then, when bit `0x20` of the buffer's flags at +108 is clear, it writes one `INDIRECT_BUFFER` per descriptor straight into the segment it is writing. Only with the bit set does it close the segment and call `sub_826E4A28` per chunk, which handles it in one of three ways: while a tiling bracket is open (device+13584) the chunk descriptors are deferred to `EndTiling`; while device+11152 is non-zero (a count of indirect buffer entries not yet drained) the descriptors are copied into the ring; otherwise one `INDIRECT_BUFFER` per descriptor is written into the primary ring. In the scenes measured on 21 October 2026 every replay took the inline path and `sub_826E4A28` was never called (13.2).
 
-Every draw path, flush, replay and `EndCommandBuffer` also writes `LOAD_ALU_CONSTANT` packets (writer `sub_82343608`, through `sub_823436B8`). They carry only a guest address; the runtime reads the constants from guest memory when the CP executes the packet (`command_processor.cpp`, `ExecutePacketType3_LOAD_ALU_CONSTANT`). The constant tables come from the current shader objects; who fills them and whether the CPU rewrites them between a recording and its replay is not established.
+Every draw path, flush, replay and `EndCommandBuffer` also writes `LOAD_ALU_CONSTANT` packets (writer `sub_82343608`, through `sub_823436B8`). They carry only a guest address; the runtime reads the constants from guest memory when the CP executes the packet (`command_processor.cpp`, `ExecutePacketType3_LOAD_ALU_CONSTANT`). The constant tables come from the current shader objects; who fills them is not established. The CPU does rewrite blocks referenced from recordings between the recording and the replay (0.69% of those executions in a race, 12.7% in a replay; 13.3), and never rewrote a block referenced from the ring before its execution.
 
-Recording sites: car parts per view slot, part and LOD (`RecordCommandBuffers` `sub_8294D100`), crowd models (`sub_82946C00`, with `CreateClone`), track objects through the render engine's group allocator `sub_82875458`, the half-rate bloom (`sub_8237CC08`) and five recorders without a name (`sub_827DF7C0`, `sub_827E5E48`, `sub_827F55B0`, `sub_8280BE70`, `sub_82860758`). `CRenderEngine::RunCommandBuffer` (`sub_82310FC8`) can queue a replay into a per-thread group, so recording and replay may run on different threads (inferred).
+Recording sites: car parts per view slot, part and LOD (`RecordCommandBuffers` `sub_8294D100`), crowd models (`sub_82946C00`, with `CreateClone`), track objects through the render engine's group allocator `sub_82875458`, the half-rate bloom (`sub_8237CC08`) and five recorders without a name (`sub_827DF7C0`, `sub_827E5E48`, `sub_827F55B0`, `sub_8280BE70`, `sub_82860758`). `CRenderEngine::RunCommandBuffer` (`sub_82310FC8`) can queue a replay into a per-thread group, so recording and replay may run on different threads (inferred). Measured: recordings run on the render thread and on a second thread at load, and every replay ran on the render thread (13.7).
 
 ### 2.5 Predicated tiling
 
 The tiles are not produced by game code and not by the GPU alone. Between `BeginTiling` (`sub_82371B80`) and `EndTiling` (`sub_8236FA20`) the XDK writes a tagged stream (tags `0x80` to `0x90`), and a CPU-side interpreter, `sub_826ED978` (reached through `sub_826EDCE8` and `sub_826EDFA8`), walks the tile body once per tile: tag `0x86` marks the body, `0x87` steps the tile index and jumps back, `0x88` is a predicated block that is skipped when its mask ANDed with a word of the interpreter's context (default `0x7FFFFFFF`, probably the bin select) is zero, and the interpreter writes `INDIRECT_BUFFER` and `SET_BIN_SELECT` packets for the GPU. The `EndTiling` loop calls `SetPredication` (mask `3 << 2i` for tile i), `sub_82392628` and `Resolve` once per tile, and no draw; after the loop it calls `SetPredication(0)`, `sub_82392628` again and, with more than one tile, `SetPredication(0x80000000)`.
 
-`sub_826EDFA8` has no static caller. It is a worker loop: it waits on an event, drains the stream through `sub_826EDCE8` when signalled, and on a timeout calls `Swap` under a critical section when a device flag is set. Which thread runs it is not identified.
+`sub_826EDFA8` has no static caller. It is a worker loop: it waits on an event, drains the stream through `sub_826EDCE8` when signalled, and on a timeout calls `Swap` under a critical section when a device flag is set. It runs on a guest thread of its own, which calls `sub_826ED978` about twice per tiling bracket (13.7).
 
 `sub_82374660` prepares the tiles: it copies the caller's tile rectangles to device+13104 (16 bytes each, count at device+13100), stores each tile's origin rounded down to 32 at device+13344+8i, and sets the viewport, the scissor and a clear. These origins are EDRAM origins used by the resolve's address arithmetic, not a screen translation of the draws. `BeginTiling` writes the rectangles into the stream relative to tile 0's origin, so absolute rectangles come from device+13104. The tiling scenarios at `0x82D883C8` (stride `0x4D0`, five entries) are: 0, three tiles of 1280 by 256, 256 and 208 rows; 1, two tiles of 512 and 208 rows; 2, one tile of 1280x720; 3, one tile of 1120x584; 4, one tile of 1280x368.
 
@@ -88,7 +88,7 @@ A one-pass HLE can run the body once at full size and resolve once. It must keep
 
 The runtime keys shaders by XXH3 over the raw microcode dwords at the `IM_LOAD` source address, or over the ring copy for `IM_LOAD_IMMEDIATE`; translation never changes those bytes. A vertex shader object holds its microcode at +32 and its pass records from +896; a pixel shader object holds it at +24. The draw flush (`sub_823436B8` through `sub_82353BA8`) calls `sub_826EC0C0` whenever the bound vertex layout changes, and that function writes the rewritten 12-byte fetch instructions back into the shader's own microcode (`fm4_rex_recomp.20.cpp`, around line 12560). The vertex shader keys the runtime sees today are therefore keys of rewritten bytes.
 
-Look mods are pixel shaders only, keyed by the hash and an optional modification suffix; no rewrite of pixel shader microcode was found. `passes.toml` names vertex shaders by hash (the scene camera and the car shader set). An HLE keeps every key if it leaves the XDK flush running and hashes at the point where `IM_LOAD` is written; it gets different vertex shader keys if it hashes at `CreateVertexShader` or `SetVertexShader`. Two built-in shaders come from fixed data at `0x82067308` (96 bytes) and `0x82067368` (36 bytes) through `IM_LOAD_IMMEDIATE`.
+Look mods are pixel shaders only, keyed by the hash and an optional modification suffix; no rewrite of pixel shader microcode was found. `passes.toml` names vertex shaders by hash (the scene camera and the car shader set). An HLE keeps every key of the ring if it leaves the XDK flush running and hashes at the point where `IM_LOAD` is written; it gets different vertex shader keys if it hashes at `CreateVertexShader` or `SetVertexShader`. For `IM_LOAD`s inside recordings the key at the point of writing is not enough: the rewrite changes the microcode between recording and replay in 0.63% of those executions in a race and 16.7% in a replay, so they have to be hashed at replay (13.3). Two built-in shaders come from fixed data at `0x82067308` (96 bytes) and `0x82067368` (36 bytes) through `IM_LOAD_IMMEDIATE`.
 
 ### 2.7 What the guest reads back
 
@@ -97,7 +97,7 @@ Look mods are pixel shaders only, keyed by the hash and an optional modification
 | Ring index waits (`sub_822B0788`, catalog name `Resource::WaitForFence`; `BlockUntilIdle` `sub_826E4D20`) | the guest waits until the CP read pointer passes a ring write index; the runtime publishes the read pointer after each executed batch | a consumed index at the same granularity, or the waits spin until the XDK's timeout path (probably `sub_826F7EF0`, reached from the timed poll `sub_826E8358`) |
 | Resource fences | in the ring: `D3DResource_BlockUntilNotBusy` `sub_82386BF8` (21 call sites) writes a `WAIT_REG_MEM` (`sub_82386C48`) on the masked word at resource+24 (whether it is a pointer or a fence value is not settled) against the masked word at resource+28; on the CPU: `sub_826E4768` (3 callers: car and crowd command buffer release, video) waits on a ring index at resource+8 through `sub_822B0788`; `WAIT_REG_MEM` has no deadline in the runtime: it sleeps and re-checks until the value matches or the worker shuts down | the value written in order, after the work before it; never before (stale reads), never missing (hang) |
 | Vblank and swap counter | `MarkVblank` dispatches the guest interrupt callback and wakes waits; `EVENT_WRITE_SHD` with bit 31 writes the counter; `vblank_vrr` reads whether the CP waits | the same counter, callback and wake-up |
-| Occlusion queries | `EVENT_WRITE_ZPD`; the sun query is awaited; the launcher sets `rov_occlusion_async=previous`, so reports are published at once from the previous frame's samples (the runtime default `off` makes every report wait for the GPU); the `sun` knob rescales host samples | native queries written to the guest's sample memory, with the knob re-derived |
+| Occlusion queries | `EVENT_WRITE_ZPD` (2 per race frame with one tile, 6 with the tiles); the sun query is awaited; the launcher sets `rov_occlusion_async=previous`, so reports are published at once from the previous frame's samples (the runtime default `off` makes every report wait for the GPU); measured with the launcher defaults, the command processor waits 0 ms per report (13.6); the `sun` knob rescales host samples | native queries written to the guest's sample memory, with the knob re-derived |
 | `VIZ_QUERY` | faked as visible | the same, or a real query |
 | Resolve readbacks | about 19 to 31 per race frame, 8 to 15 MB (perf trace race windows; [CP draw offload](cp-draw-offload.md) gives 31.5 and 14.9 MB); known CPU readers: the photo save and the exclusion of resolved ranges in texture replacement, and possibly any of the 77 call sites of the texture lock `sub_826DEF78`, which returns a pointer into the texture's guest memory (video frames, saved textures, a shadow map helper, presentation code); `d3d12_readback_publish_await_signals` is off, so a fence can precede a readback | readbacks for every range the CPU can read, in order with the fences |
 | Memexport | none in the 1,040 shader entries of the four road inventories | nothing, until another scenario shows one |
@@ -146,7 +146,7 @@ Direct draw calls are 1,402,510, 18.2% of the draws the CP executed. The other 8
 | The DXBC translator can be reused, so the look mods keep working | Yes, if the HLE feeds it the same system constants, constant buffers and fetch constants, and hashes shaders where `IM_LOAD` is written (2.6). |
 | Unleashed Recompiled uses a similar path | Yes for the pattern (section 5). It shows nothing about predicated tiling, recorded command buffers, `LOAD_ALU_CONSTANT` or awaited queries, which are FM4's hard parts. |
 | 361 functions, 59 named with certainty | 361 in the module "XDK D3D", 59 at confidence 0.75 or more. The main setters are catalogued in the game module at 0.55 to 0.85 (2.1). |
-| The draw flow is mapped | Yes, statically ([function catalog](function-catalog.md#rendering-subsystem-manual-pass)). Recording rates and the replay path split are not measured. |
+| The draw flow is mapped | Yes, statically ([function catalog](function-catalog.md#rendering-subsystem-manual-pass)). Recording rates and the replay paths were measured on 21 October 2026 (13.2). |
 
 ## 5. Prior art: Unleashed Recompiled
 
@@ -176,7 +176,7 @@ Three designs were drafted and scored by three reviewers, each from one point of
 
 Reviewer findings that apply to every design:
 
-- The cost split used for the estimates (draw work 60%; PM4 parsing, register writes and other packets 24%; swap 13%; copies 3%) is the launcher-default race profile of 20 October 2026 in [CP draw offload](cp-draw-offload.md), taken before one tile became the default (2,400 to 3,050 draws per frame, which matches the tiled counts) and before the asynchronous swap. It has to be measured again on the current build.
+- The cost split used for the estimates (draw work 60%; PM4 parsing, register writes and other packets 24%; swap 13%; copies 3%) is the launcher-default race profile of 20 October 2026 in [CP draw offload](cp-draw-offload.md), taken before one tile became the default (2,400 to 3,050 draws per frame, which matches the tiled counts) and before the asynchronous swap. It has to be measured again on the current build (13.8).
 - No design touches the per-draw translation (textures, bindings and pipeline are 30% of the CP; all draw work is 60%). An operation list can carry precomputed pipeline and binding keys per recorded draw, so they are paid once per recording; the cheap per-draw reuse of [CP draw offload, option 3](cp-draw-offload.md#option-3-less-work-per-draw-on-the-one-thread) is the comparator for any of these designs.
 - A one-pass tiled scene targets the tiled modes (`-Msaa`, looks without TAA). It is not measured. The nearest measurement is the tiles with 4x MSAA against one tile without MSAA, the current default: CP 948 to 790 ms/s and 200.5 to 232.0 fps in the `career` race (20 October 2026), and GPU 6.50 to 5.54 ms at 2x (19 October 2026, one run each). That comparison also drops MSAA, so it bounds the gain from above. One pass does nothing for the defaults and must not change `-Rov`, which stays the uncorrected reference (AGENTS.md).
 - Hooks: no guest address is hooked twice today, but `fm4-d3d-trace.cpp` hooks eight entry points that an HLE replaces (`RunCommandBuffer`, `DrawIndexedVertices`, `SetPredication`, `DrawVertices`, `BeginVertices`, `BeginIndexedVertices`, `InsertAsyncCommandBufferCall`, `Swap`) and the `VIZ_QUERY` and `LOAD_ALU_CONSTANT` writers, and `fm4-jpeg-diagnostics.cpp` hooks `sub_822B0788` and one texture lock (`sub_826DEF78`). A guest address can have one definition, so these move into one hook registry first.
@@ -205,9 +205,9 @@ On 21 October 2026, after reading sections 1 to 7, the project owner chose a nat
 | Layer | Design | Why |
 |---|---|---|
 | State | Keep the XDK setters, the device object and its dirty bits. Replace the dirty writers (`sub_823114F8`, `sub_82310E78`, `sub_8230FA40`, `sub_82379530`) and the PM4 writers (the 71 of the static scan in 2.3 plus any the coverage log finds) with producers of host records that carry register deltas in Xenos form, draw parameters, resolves and events. | Game code writes the device object without calls (2.2); only the flush sees the whole state (2.3). |
-| Shaders | Hash where `IM_LOAD` is written (`sub_823436B8`), after the XDK's vertex fetch rewrite; key the two built-in shaders by their fixed data. Keep the DXBC translator and its constant buffer contract. | The vertex shader keys of `passes.toml` are keys of rewritten bytes (2.6); look mods are pixel shaders and keep their keys. |
-| Transport and threads | Each guest producer writes fixed records into a bounded queue with a global sequence number. One host render thread consumes them in order, owns the submission state and makes every guest-visible write (consumed ring index, fences, vblank counter, occlusion results, readbacks, swap). The existing submit thread keeps recording the D3D12 command lists. `LOAD_ALU_CONSTANT` blocks are copied into the record when the queue may run ahead of the guest. The consumer waits on events, not spin loops. Queue depth starts at one frame. | The backend's submission state is unlocked and assumes one producer; recording and replay may run on different guest threads (inferred, not traced); the guest's fences are ring indices that need a published progress value (2.7); the spin loops compete for cores on a slower CPU. Unleashed Recompiled uses the same shape (section 5). |
-| Recorded command buffers | First, the render thread replays recorded PM4 through the existing interpreter (`ExecutePacket`). Then each recording is decoded once into an operation list with precomputed pipeline and binding keys; a replay applies the inherited state, re-reads the `LOAD_ALU_CONSTANT` blocks, and falls back to PM4 per recording on any mismatch. | 82% of executed draws are replays in the tiled trace (section 3); per-draw translation is 30% of the CP and parsing about 24%. The decode is worth it only if recordings are reused, which stage N0 measures. |
+| Shaders | Hash where `IM_LOAD` is written (`sub_823436B8`), after the XDK's vertex fetch rewrite, for packets written into the ring; hash the `IM_LOAD`s of recordings at replay, because the rewrite changes their microcode after recording (13.3); key the two built-in shaders by their fixed data. Keep the DXBC translator and its constant buffer contract. | The vertex shader keys of `passes.toml` are keys of rewritten bytes (2.6); look mods are pixel shaders and keep their keys. |
+| Transport and threads | Each guest producer writes fixed records into a bounded queue with a global sequence number. One host render thread consumes them in order, owns the submission state and makes every guest-visible write (consumed ring index, fences, vblank counter, occlusion results, readbacks, swap). The existing submit thread keeps recording the D3D12 command lists. `LOAD_ALU_CONSTANT` blocks are copied into the record when the queue may run ahead of the guest. The consumer waits on events, not spin loops. Queue depth starts at one frame. | The backend's submission state is unlocked and assumes one producer; recordings are made on two guest threads, replays and direct draws on the render thread (13.7); the guest's fences are ring indices that need a published progress value (2.7); the spin loops compete for cores on a slower CPU. Unleashed Recompiled uses the same shape (section 5). |
+| Recorded command buffers | First, the render thread replays recorded PM4 through the existing interpreter (`ExecutePacket`). Then each recording is decoded once into an operation list with precomputed pipeline and binding keys; a replay applies the inherited state, re-reads the `LOAD_ALU_CONSTANT` blocks, and falls back to PM4 per recording on any mismatch. | 82% of executed draws are replays in the tiled trace (section 3); per-draw translation is 30% of the CP and parsing about 24%. The decode is worth it only if recordings are reused: they are, a replayed buffer runs about twice a frame for thousands of frames (13.2). Most replayed buffers are copies or built with the assets, so the decode keys on the replayed buffer and its PM4, not on `EndCommandBuffer`. |
 | Tiles | One pass. Every predicated block is still evaluated against the bins and drawn with a scissor over the absolute rectangles of the bins it selects (device+13104); the mirror's leftover mask keeps working. `EndTiling`'s per-tile resolves become one resolve plus the clears once the flags of 2.5 are decoded. | 2.5. |
 | Render targets | Host render targets keyed by the title's surface objects, with a virtual placement: surface creation and the EDRAM allocator are hooked so that placement never fails and never wraps, while the overlap of surfaces is still tracked in that virtual space. Contents are copied between surfaces only where a pass reads what another surface left without clearing first. Native MSAA follows each surface's MSAA mode; the host sample positions are checked against the Xenos pattern before 4x is offered. | MSAA without tiles cannot be addressed in EDRAM tiles (2.9); the ownership transfers show that some passes do read aliased contents (2.9). |
 | Resolves | A resolve becomes a host copy or MSAA resolve into the host texture keyed by the destination guest address (the texture cache's resolved-texture key), recorded with its source surface, selects, clears and clear values, destination layout, exponent bias and rectangle. `PostPasses::OnResolve` keeps receiving the same address and length in the same order, and the `RB_COPY_*` shadow resets stay. Guest memory is first written for every resolve, as today; later a resolved range is written only when the CPU touches it, through page protection (the runtime's watches catch writes only; a trap on reads is not built or verified). | 2.8; the CPU readers include the 77 texture-lock sites, so an allow-list is not safe (2.7). |
@@ -255,7 +255,7 @@ Every stage is behind a switch, off by default until its gate passes, with the P
 | N4, threading and slower CPUs | Event waits instead of spins, queue depth and latency tuned, a capped-CPU run on the main PC (fewer cores through the process affinity) as a quick proxy, and runs on the ROG Xbox Ally X (8.1). | The success criteria of section 10 met on the main PC and on the Ally X. | 3 to 5 |
 | N5, visual upgrades on the native base | Float targets for `k_16_16`, linear blending as an A/B, upscalers on the native anchors ([FSR plan](fsr-plan.md)), a 1.5x render scale for the Ally X's 1080p panel, the native shader contract of 8.2, wider aspect ratios (needs a FOV and culling hook), and HDR10 once an HDR display exists. | One A/B and one decision per item. | per item |
 
-N0 to N4 total about 26 to 42 person-weeks. The earlier estimates for design A alone were 24 by the design and 40 to 56 with the reviewers' corrections; this plan reuses the backend in N1 and N2, which is why its range starts lower.
+The measurement part of N0 was done on 21 October 2026 (section 13). N0 to N4 total about 26 to 42 person-weeks. The earlier estimates for design A alone were 24 by the design and 40 to 56 with the reviewers' corrections; this plan reuses the backend in N1 and N2, which is why its range starts lower.
 
 ## 10. Validation and success criteria
 
@@ -285,10 +285,137 @@ Still open:
 
 ## 12. Open questions
 
-- Who fills the `LOAD_ALU_CONSTANT` tables and whether the CPU rewrites the blocks between recording and replay.
-- The bin encoding of `EndTiling` and of the predicated blocks, the meaning of the clear flags and the float of its per-tile resolves, and which thread runs `sub_826EDFA8` (2.5).
+- Who fills the `LOAD_ALU_CONSTANT` tables (that the CPU rewrites blocks of recordings between recording and replay is measured, 13.3).
+- Where the replayed command buffers that are not copies of a recording come from (inferred: built with the assets), and whether the 0.02% of replays whose PM4 changed between replays are patches or new buffers at the same address (13.2).
+- The bin encoding of `EndTiling` and of the predicated blocks, and the meaning of the clear flags and the float of its per-tile resolves (2.5).
 - The resolve body's remaining arguments (the clear values written by `sub_822C4010` and `sub_822CF0A8`, the flags 0x4000 and 0x8000) and support for the "constant one" and "null" copies (2.8).
 - Which passes read aliased EDRAM contents on the one-tile default, and whether a caller-placed surface ever passes tile 2,048 (2.9).
 - The register-level meaning of the dirty bits inside the words at +16 and +32.
 - Resource creation and buffer locks (only the texture lock is identified), and how much dynamic geometry goes through the ring per frame.
 - Whether the video, Kinect and facade paths (`XMediaFacade_default.xex`, `SpeechFacade_default.xex`) call the same D3D entry points.
+
+## 13. Stage N0 measurements, 21 October 2026
+
+The measurement part of stage N0 (section 9). The frozen-frame A/B harness and the FAIL rules are a separate part of N0 and are not covered here.
+
+### 13.1 Runs
+
+All runs are on `I:\FM4-build-usa` (USA release) with the counters of [traces](../e2e/traces.md#d3d-layer-counters-fm4_n0_trace) (`FM4_N0_TRACE`, `FM4_N0_KEYCHECK`, `REX_PM4_STATS`, `REX_CP_SPLIT`), the launcher defaults (look `pc`, quality `high`, one tile with TAA, the asynchronous swap), 240 Hz and 1x unless stated, the title's AI driving. The `career` scenario covers a menu (Career, World Tour, the event screens), a race (Tsukuba Short Circuit, Ford Ka, 40 s) and a replay (30 s); its phases are the steady part as `e2e.py` measures them, the menu is the windows from PLAY CAREER to START RACE.
+
+| Run | Settings | Code |
+|---|---|---|
+| `n0-career-c` | `FM4_N0_TRACE`, `REX_PM4_STATS` | `4e32b17` |
+| `n0-msaa-b` | the same with `-Msaa` (three predicated tiles, 4x MSAA) | `4e32b17` |
+| `n0-key`, `n0-key-msaa` | `FM4_N0_KEYCHECK` and `REX_LATE_WRITE_TRACE`, one tile and `-Msaa` | `9b46523` |
+| `n0-key2` | `FM4_N0_KEYCHECK` with the checks of copies and of later executions | `b3ef3bc` |
+| `n0-p1x`, `n0-p1x-split`, `n0-p2x-split` | `photo`, three runs each: no counters; `REX_CP_SPLIT=1`; `REX_CP_SPLIT=1` at 2x | `b3ef3bc` |
+
+The counters cost frame rate (the `career` race ran at 195.5 fps with `FM4_N0_TRACE` and 153.6 fps with `FM4_N0_KEYCHECK`), so the fps of the counter runs are not performance figures; those come from the `n0-p*` runs. Earlier runs of the same day (`n0-career`, `n0-career-b`, `n0-msaa`) are superseded: their counters were incomplete, and `n0-msaa` crashed in a summary writer that read freed guest memory (fixed before `n0-career-c`).
+
+### 13.2 Replays and recordings
+
+| Per frame (`n0-career-c`, `n0-msaa-b`) | Race, one tile | Race, tiles | Replay, one tile | Replay, tiles | Menu |
+|---|---|---|---|---|---|
+| fps in the counter run | 195.5 | 162.9 | 113.5 | 99.8 | 54.7 |
+| Draws executed | 2,109 | 2,743 | 1,879 | 2,637 | 455 |
+| `RunCommandBuffer` | 743 | 758 | 643 | 598 | 21 |
+| of which the inline path | 743 | 758 | 643 | 598 | 21 |
+| `sub_826E4A28` (deferred, copied, queued, direct) | 0 | 0 | 0 | 0 | 0 |
+| `INDIRECT_BUFFER` executed (skipped by predication) | 868 | 1,311 (879) | 706 | 1,010 (564) | 97 (13) |
+| Distinct buffers replayed per second | 374 | 384 | 202 | 183 | 5.5 |
+| `BeginCommandBuffer` per second | 0 | 0 | 0 | 0 | 4.5 |
+
+- Every replay took a path that section 2.4 did not describe: when bit `0x20` of the buffer's flags at +108 is clear, `RunCommandBuffer` writes one `INDIRECT_BUFFER` per descriptor straight into the segment it is writing (`loc_82310CF8`), and only with the bit set does it close the segment and go through `sub_826E4BE0` and `sub_826E4A28`. In these runs the bit was never set, and `sub_826E4A28` was not called at all, from `RunCommandBuffer` or from the swap. Each replayed buffer had one descriptor.
+- Recordings happen at load, not per frame: 10,209 `BeginCommandBuffer`/`EndCommandBuffer` pairs in a run, 8,705 of them on a second guest thread (13.7), and about 4.5 per second in the menu, with as many `D3DCommandBuffer_CreateClone` calls.
+- The buffer objects that `RunCommandBuffer` replays are not the recorded objects, and they do not point at the recorded PM4 chunks: in `n0-career-c` 99.9% of the replays were of buffer objects never seen at `EndCommandBuffer`. With `FM4_N0_KEYCHECK`, 54% of the race replays (`n0-key2`; 39% in `n0-key`), 68% of the replay phase and 40% of the menu execute PM4 that is byte-identical to a recording of the same run, so those are copies made by game code (not through `CreateClone`); the rest is PM4 that no `EndCommandBuffer` of the run produced (inferred: command buffers built with the assets). The replayed objects are resource type 9 (`0x00400009` or `0x00500009` at +0), most of them in physical memory.
+- Reuse is high: a run replays 2,413 to 4,289 distinct buffer objects, most of them 256 to 8,191 times (`n0-key2`: 1,906 of 2,413). In the one-tile race 374 distinct buffers a second take 743 replays a frame, so a buffer is replayed about twice a frame, frame after frame. With the PM4 hashed at every replay, 0.02% of the race replays found the bytes of a buffer changed since its previous replay (26.8 of 114,647 per second in `n0-key2`); whether that is a patch or a new buffer at the same address is not distinguished.
+
+### 13.3 Shader keys and constant blocks
+
+`n0-key2` hashed every `IM_LOAD` source and every `LOAD_ALU_CONSTANT` block when `sub_823436B8` wrote the packet, gave byte copies of recordings the hashes of the recording's packets, and compared them with the bytes the command processor reads when it executes the packet. Packets that no hook saw being written (in the replayed buffers that are not copies of a recording) are compared with their first execution.
+
+| `n0-key2`, executions | Race | Replay | Menu |
+|---|---|---|---|
+| `IM_LOAD` written into the ring: checked, changed | 888,211, 0 | 208,438, 0 | 460,336, 0 |
+| `IM_LOAD` written into a recording: checked, changed | 90,322, 570 (0.63%) | 108,176, 18,040 (16.7%) | 2,285, 5 |
+| `IM_LOAD` against the first execution: checked, changed | 11,345,684, 4 | 4,361,342, 2 | 234,370, 0 |
+| `LOAD_ALU_CONSTANT` in the ring: checked, changed | 559,844, 0 | 106,194, 0 | 384,466, 0 |
+| `LOAD_ALU_CONSTANT` in a recording: checked, changed | 76,379, 530 (0.69%) | 22,704, 2,884 (12.7%) | 1,960, 0 |
+
+- A key taken where `IM_LOAD` is written matches the runtime's key for every packet written into the ring. For packets inside recordings it does not: between the recording and the replay the XDK's vertex fetch rewrite (2.6) changes the microcode in place, so the replay loads other bytes (56 distinct packet and key pairs in the run). The console GPU also reads the microcode when it executes the packet, so the runtime's key is the faithful one, and a native path has to hash recorded `IM_LOAD`s at replay, not at recording.
+- The `LOAD_ALU_CONSTANT` blocks of recordings are rewritten by the CPU between recording and replay as well (0.69% in the race, 12.7% in the replay phase); blocks referenced from the ring were never rewritten before execution. A decoded recording therefore has to re-read its constant blocks at every replay, as section 8 already plans.
+- `n0-key` and `n0-key-msaa` (without the copy and first-execution checks, so they could check only the recordings replayed as themselves) agree for the ring: 0 changes in 719,004 and 701,478 ring `IM_LOAD`s of the race, and 0 in the 5,168 and 5,866 recorded ones.
+
+### 13.4 Late writes
+
+`REX_LATE_WRITE_TRACE` (guest memory the command processor consumed and changed before the next signal the CPU can observe): in `n0-key` (one tile) no changed range in 15,907 frames and 31.2 million checked ranges; in `n0-key-msaa` (tiles) 25 changed ranges in 14,977 frames and 24.6 million checked, all of them one vertex range (`0x115A6A00`, 252,000 bytes, vertex shader `82130FF0`) in the race. No indirect buffer, constant block or shader changed after the command processor read it.
+
+### 13.5 Coverage of the PM4 writers
+
+The ring allocations by return address of `n0-career-c` and `n0-msaa-b` (boot, menus, a race and a replay each) come from 26 functions of the static list of 71 and from these functions it does not have:
+
+| Function | Seen as | Note |
+|---|---|---|
+| `sub_822B7248` | `BeginCommand` | once per tiling bracket (4,580 calls one tile, 20,881 tiles) |
+| `sub_826F2F60` (`D3DDevice_UpdateScaler`) | `BeginCommand`, overflow | once per run |
+| `sub_8236F838` (`CTileBuffer` helper) | `AllocateRingSpace` (three sites) | per tiling bracket; it also calls the `WAIT_REG_MEM` writer `sub_822DB108` |
+| `sub_823719A8` | `AllocateRingSpace` | the tiling stream, about 1,000 dwords per call |
+| `sub_826E1EC0` | `AllocateRingSpace` | once per `BeginCommandBuffer` |
+| `sub_822FEF08` (`D3DDevice_CommandBufferOverflow`) | `AllocateRingSpace` | on every segment change, with a `WAIT_REG_MEM` through `sub_822DB108` |
+| `sub_823102D0` | overflow | 614,621 to 980,500 calls a run; next to `CCarModel::RunPartCommandBuffer` |
+| `sub_822C5260` | overflow | about 108,000 calls a run |
+| `sub_82379530` (`D3DDevice_WriteRegistersChunked`), `sub_8230FA40` (`WriteDirtyFetchConstants`) | overflow | type-0 writers, which the static scan cannot find |
+| `sub_82353F18`, `sub_8239DDA0`, `sub_822BA060` (`SetShaderGPRAllocation`), `sub_822B0788`, `sub_826F4D00`, `BeginTiling`, `EndTiling`, `BeginCommandBuffer`, `BeginCommand` | overflow | inline writers that overflowed a segment |
+
+The overflow handler only shows inline writers that happened to fill a segment, so this list is a lower bound for them; type-0 and inline type-3 writers that never overflowed in these scenes are not proven absent.
+
+### 13.6 Synchronization packets and occlusion
+
+| Per frame | Race, one tile | Race, tiles | Replay, one tile | Menu |
+|---|---|---|---|---|
+| `EVENT_WRITE_ZPD` | 2.0 | 6.0 | 2.0 | 0 |
+| `REG_TO_MEM`, `COND_WRITE`, `MEM_WRITE` | 0 | 0 | 0 | 0 |
+| `REG_RMW` | 1.0 | 1.0 | 1.0 | 1.0 |
+| `WAIT_REG_MEM` | 375 | 470 | 382 | 43 |
+| `EVENT_WRITE_SHD` | 107 | 31 | 50 | 19 |
+| `INTERRUPT` | 2.0 | 4.0 (+2 skipped) | 2.0 | 5.1 |
+
+The command processor waited 0 ms for occlusion results in every phase (`wait_ms.occlusion`), so the GPU wait per occlusion report is 0 with the launcher defaults. Most `WAIT_REG_MEM`s are the segment-overflow waits of 13.5 (one per segment, satisfied at once); the vblank wait of the swap is one of them.
+
+### 13.7 Threads and the render thread's frame
+
+| Guest thread | Calls in `n0-msaa-b` |
+|---|---|
+| Render thread (`sub_822DB318`) | every `Swap`, draw, `RunCommandBuffer`, `Resolve` and `Clear`, 63.4 million `SetTexture`, 1,504 recordings, `BeginTiling` and `EndTiling` |
+| A second thread | 8,705 recordings, 48 of the 64 `RecordCommandBuffers` calls, 395,318 `SetTexture` and 13,578 `DrawIndexedVertices` (into recordings), at load |
+| The tile stream worker | `sub_826EDFA8` once (it never returns), `sub_826EDCE8` and `sub_826ED978` about twice per `BeginTiling` (41,781 calls for 20,881 brackets) |
+
+Every `RunCommandBuffer` ran on the render thread, 99.9% of them through `CRenderEngine::RunCommandBuffer`, so its queue to another thread (2.4) was not used in these scenes. The calls of `sub_822DB318` that presented a frame took 5.10 ms each in the one-tile race (195.9 per second, so 999 ms/s) and 6.14 ms in the tiled race (162.6 per second): in the race the guest render thread is busy for the whole frame, at the same time as the command processor (948 and 969 ms/s). In the replay phase it took 7.26 ms (one tile) and 2.96 ms (tiles) per frame and spun through the calls without a frame (3,690 and 17,570 per second).
+
+### 13.8 Command processor time split
+
+The `photo` race (12 cars, the launcher defaults), three runs each, ms per second of the command processor thread over each run's measured race windows, median of the three runs per row. `REX_CP_SPLIT` times the packets by kind (registers: type 0 and 1, `SET_CONSTANT2`, `LOAD_ALU_CONSTANT`, bin masks and selects; shaders: `IM_LOAD`; draws: `DRAW_INDX`, `DRAW_INDX_2`, which contain the `draw` zone, which contains the `copy` zone). The waits inside draw packets (the GPU wait at 2x) are taken out of the draw packets; "rest" is the busy time outside every timed kind and the swap: packet dispatch, indirect buffers, `WAIT_REG_MEM` and `EVENT_WRITE_ZPD` outside their waits.
+
+| Race phase | 1x, no split (`n0-p1x`) | 1x (`n0-p1x-split`) | 2x (`n0-p2x-split`) |
+|---|---|---|---|
+| fps, p99 frame time | 217.5, 6.91 ms | 206.6, 7.17 ms | 155.5, 10.46 ms |
+| GPU per frame | 2.89 ms | 2.90 ms | 6.23 ms |
+| Draws per frame | 1,661 | 1,780 | 1,745 |
+| Command processor busy | 815 | 847 | 667 |
+| Busy per draw | 2.25 us | 2.32 us | 2.57 us |
+| Wait for the vblank (`WAIT_REG_MEM`) | 167 | 131 | 14 |
+| Wait for the GPU (frame latency) | 0 | 0 | 319 |
+| Other waits | 19 | 16 | 5 |
+| Register packets | | 111 (28,641 packets per frame) | 82 |
+| Shader loads | | 31 | 23 |
+| Draw packets | | 603 | 471 |
+| of which the `draw` zone, copies included | 603 | 592 | 463 |
+| of which copies (resolves) | 71 | 64 | 41 |
+| Other timed packets | | 4.8 | 5.2 |
+| Swap | 11 | 10 | 8.8 |
+| Rest: dispatch, indirect buffers, untimed packets | | 88 | 76 |
+
+- At 1x the busy time splits into draw work 71% (draws 62%, resolves 7.6%), register packets 13%, dispatch and the untimed packets 10%, shader loads 3.7%, the swap 1.2% and other packets 0.6%. Against the profile of 20 October 2026 behind section 6 (draws 60%, parsing, registers and other packets 24%, swap 13%, copies 3%), the asynchronous swap took the swap from 13% to about 1%, and the front end (dispatch, registers, shaders: about 230 ms/s, 27%) is what a native producer can remove or move off this thread; the draw work stays with the backend in N1.
+- `REX_CP_SPLIT` costs about 3% of the command processor's time per draw (2.32 against 2.25 us), mostly in the register packets, of which it times about 29,000 per frame.
+- At 2x the GPU sets the frame rate: the command processor waits 319 ms/s for frames in flight, the busy time per draw is 2.57 us, and the split is otherwise the same.
+- The three runs of each cell vary with the AI race: 196.6 to 220.0 fps and 1,517 to 2,073 draws per frame without the split, the busy time per draw within 2.24 to 2.25 us.

@@ -23,6 +23,7 @@ timeline
     18 October : ROV occlusion divisor removed, sun query samples measured per MSAA level : Glass, chrome and rim look mods (false color, A/B at 2x, smoke gate), look mods compiled against real contracts : Track lighting knobs road_gloss and sky (TrackSettings copies, 2x sweep) : USA release support (clean build, smoke gate with dlc) : Post pass framework, GTAO on it with identical output : Motion vector sources checked in the game (per-car stencil IDs, the game's blur matrices) : Per-car motion vectors on the post pass framework (CPU and WARP tests)
     19 October : Motion vectors checked in the game (the game's blur matrices, debug views at 2x, GPU time, smoke gate) : Motion vector gaps: cockpit interior, glass, mirror panel, motion mask : Cockpit light look knob (interior shadow floor)
     20 October : pc with the cockpit knobs : TAA jitter only while the camera moves (still pictures no longer shimmer) : pc facing the sun (clear coat limit, road sheen, glass, chrome and rims) : AO in the garage, Autovista and the career home : Asynchronous swap (the swap no longer waits for the submit thread)
+    21 October : Native port chosen (D3D-level HLE analysis) : Stage N0 counters and measurements of the D3D layer
 ```
 
 | Date | Milestone |
