@@ -16,7 +16,8 @@
 //   as its source recording), replays of a recording ended in an earlier
 //   frame ("reused") or in the same frame, the replays among those whose buffer
 //   object is not the recording's but points at its first PM4 chunk
-//   ("by_chunk"), replays of buffers never seen ending ("unseen"), and
+//   ("by_chunk") or, with FM4_N0_KEYCHECK, holds a copy of its PM4
+//   ("by_content"), replays of buffers never seen ending ("unseen"), and
 //   RunCommandBuffer calls on the other object kind (type 10);
 // - "render": calls of the render thread's frame sub_822DB318 that called
 //   Swap, with their total and longest time, and the calls without a Swap (the
@@ -118,6 +119,7 @@ struct Trace {
   std::atomic<uint64_t> paths[kPathCount]{}, path_descriptors[kPathCount]{};
   std::atomic<uint64_t> begins{0}, ends{0}, clones{0}, runs{0}, runs_type10{0};
   std::atomic<uint64_t> runs_reused{0}, runs_same_frame{0}, runs_unseen{0}, runs_by_chunk{0};
+  std::atomic<uint64_t> runs_by_content{0};
   std::atomic<uint64_t> runs_first{0}, runs_same{0}, runs_changed{0};
   std::atomic<uint64_t> emitted_shaders{0}, emitted_constants{0}, scan_errors{0};
   std::atomic<uint64_t> render_calls{0}, render_ns{0}, render_max_ns{0};
@@ -127,6 +129,7 @@ struct Trace {
   std::unordered_map<uint32_t, Recording> recordings;
   std::unordered_map<uint32_t, uint32_t> clone_sources;
   std::unordered_map<uint32_t, uint32_t> chunk_owners;  // First PM4 chunk -> recording.
+  std::unordered_map<uint64_t, uint32_t> content_owners;  // PM4 hash -> recording (keycheck).
   std::unordered_map<uint32_t, Unseen> unseen;
   std::unordered_map<uint32_t, uint64_t> last_hash;  // Buffer -> PM4 hash (keycheck).
   std::map<uint64_t, uint64_t> lifetime_replays;  // Replays per closed recording -> recordings.
@@ -168,7 +171,8 @@ Trace* GetTrace() {
             "\"ib\":{\"deferred\":[%llu,%llu],\"copied\":[%llu,%llu],\"queued\":[%llu,%llu],"
             "\"direct\":[%llu,%llu],\"inline\":[%llu,%llu]},"
             "\"cb\":{\"begin\":%llu,\"end\":%llu,\"clone\":%llu,\"run\":%llu,\"distinct\":%zu,\"reused\":%llu,"
-            "\"same_frame\":%llu,\"by_chunk\":%llu,\"unseen\":%llu,\"type10\":%llu,\"first\":%llu,"
+            "\"same_frame\":%llu,\"by_chunk\":%llu,\"by_content\":%llu,\"unseen\":%llu,"
+            "\"type10\":%llu,\"first\":%llu,"
             "\"same\":%llu,"
             "\"changed\":%llu},"
             "\"emitted\":{\"im_load\":%llu,\"load_alu_constant\":%llu,\"scan_errors\":%llu},"
@@ -183,6 +187,7 @@ Trace* GetTrace() {
             take(t.path_descriptors[kInline]), take(t.begins), take(t.ends), take(t.clones),
             take(t.runs),
             distinct, take(t.runs_reused), take(t.runs_same_frame), take(t.runs_by_chunk),
+            take(t.runs_by_content),
             take(t.runs_unseen),
             take(t.runs_type10), take(t.runs_first), take(t.runs_same), take(t.runs_changed),
             take(t.emitted_shaders), take(t.emitted_constants), take(t.scan_errors),
@@ -406,6 +411,14 @@ void N0RunCommandBufferPre(const PPCContext& ctx, uint8_t* base) {
         if (it != trace->recordings.end()) Bump(trace->runs_by_chunk);
       }
     }
+    if (it == trace->recordings.end() && hash) {
+      // A copy of a recording's PM4 (same bytes elsewhere), with keycheck.
+      if (auto owner = trace->content_owners.find(hash); owner != trace->content_owners.end()) {
+        recording = owner->second;
+        it = trace->recordings.find(recording);
+        if (it != trace->recordings.end()) Bump(trace->runs_by_content);
+      }
+    }
     trace->window_buffers.insert(recording);
     if (it == trace->recordings.end()) {
       Bump(trace->runs_unseen);
@@ -454,7 +467,10 @@ void N0EndCommandBufferPost(uint32_t recording, uint8_t* base) {
   const uint64_t hash = trace->keycheck ? HashRecording(base, recording) : 0;
   const uint32_t chunk = FirstChunk(base, recording);
   std::lock_guard<std::mutex> lock(trace->mutex);
-  if (trace->keycheck) trace->last_hash[recording] = hash;
+  if (trace->keycheck) {
+    trace->last_hash[recording] = hash;
+    if (hash) trace->content_owners[hash] = recording;
+  }
   if (chunk) trace->chunk_owners[chunk] = recording;
   auto [it, inserted] = trace->recordings.try_emplace(recording, entry);
   if (!inserted) {
