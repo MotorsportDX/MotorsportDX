@@ -81,6 +81,10 @@
       "provenance": "Project documentation; feasibility analysis of moving command processor draw work to other threads (measured zone times and counts, code structure; no game content)"
     },
     {
+      "path": "docs/analysis/d3d-hle.md",
+      "provenance": "Project documentation; feasibility analysis and plan for a D3D-level HLE of the GPU path (call-site and trace counts, device object offsets, function addresses, design options; no decompiled code, no third-party code and no game content)"
+    },
+    {
       "path": "docs/analysis/fsr-plan.md",
       "provenance": "Project documentation; plan for AMD FSR 3.1 beside TAA (version and license review, integration design, stages; no third-party code and no game content)"
     },
