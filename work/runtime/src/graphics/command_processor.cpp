@@ -173,6 +173,7 @@ bool CommandProcessor::Initialize() {
   if (host_render_thread) {
     CreateHostRenderQueue();
     InitializeHostRecords();
+    InitializeHostOpLists();
     InitializeHostCheck();
   }
   worker_thread_ = system::object_ref<system::XHostThread>(
@@ -398,6 +399,9 @@ void CommandProcessor::EnableReadPointerWriteBack(uint32_t ptr, uint32_t block_s
 void CommandProcessor::UpdateWritePointer(uint32_t value) {
   write_ptr_index_ = value;
   if (host_render_queue_) {
+    if (host_records_) {
+      system::native_records::CountKick();
+    }
     if (value != 0xBAADF00D) {
       host_render_queue_->PushPm4Span(value);
     }
@@ -840,6 +844,14 @@ void CommandProcessor::ExecuteIndirectBuffer(uint32_t ptr, uint32_t count) {
     }
   }
 
+  // A replay (depth two: an indirect buffer that a command buffer segment
+  // calls) runs from its op list with host_render_oplists.
+  if (host_oplists_ && perf_trace::indirect_depth == 1 && HostReplay(ptr, count)) {
+    if (trace) {
+      --trace->depth;
+    }
+    return;
+  }
   // Execute commands! With REX_CP_SPLIT the time of the replays (depth two:
   // the indirect buffers that the command buffer segments call) is counted.
   const bool split = perf_trace::SplitEnabled();

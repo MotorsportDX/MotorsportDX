@@ -164,6 +164,14 @@ class CommandProcessor {
   // host_render_native (host_render_records.cpp): the records of converted
   // writers (rex/system/native_records.h).
   void InitializeHostRecords();
+  // host_render_oplists (host_render_oplists.cpp): replays of recorded command
+  // buffers from decoded op lists. HostReplay returns false when the replay
+  // runs as PM4.
+  struct HostOpLists;
+  void InitializeHostOpLists();
+  bool HostReplay(uint32_t ptr, uint32_t count);
+  static std::pair<uint32_t, uint32_t> HostOpListsInvalidated(void* context, uint32_t start,
+                                                              uint32_t length, bool exact_range);
   // A marker (the NOP handler): applies the record of its sequence.
   void HostApplyMarker(uint32_t sequence);
   void HostRecordMissing(uint32_t sequence, uint64_t stored);
@@ -313,6 +321,8 @@ class CommandProcessor {
   std::unique_ptr<HostRenderQueue> host_render_queue_;
   bool host_check_ = false;
   bool host_records_ = false;
+  bool host_oplists_ = false;
+  std::shared_ptr<HostOpLists> host_oplists_state_;
   // The packet being executed lies in the range the check compares.
   bool host_check_in_range_ = false;
   std::shared_ptr<HostCheckState> host_check_state_;  // shared_ptr: an incomplete type here.

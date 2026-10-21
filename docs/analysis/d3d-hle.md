@@ -633,7 +633,7 @@ Decisions of the main session after increment 3:
 The fixes, measured on `I:\FM4-build-usa` (commit `cfbe416`, 240 Hz, 1x):
 
 - **Empty records**: none. The host render thread counted no record without a register write in the perturbed check run and in the perf runs; 14.10's 1,014 fewer type-0 packets a frame against 2,397 markers compared two races with different loads, not the packets one record replaces (each record carried about 46 registers, 14.10).
-- **Joined records**: a converted call on the same device whose write pointer is still at the end of the thread's last marker joins that marker's record (a new slot with both calls' runs, and the marker's sequence dword rewritten). It assumes that the guest does not kick the segment between two such calls: the dirty writers run back to back, and the allocators and the overflow that kick write PM4 and end the joining. Markers per race frame fell from 2,072 to 760.
+- **Joined records**: a converted call on the same device whose write pointer is still at the end of the thread's last marker joins that marker's record (a new slot with both calls' runs, and the marker's sequence dword rewritten). Markers per race frame fell from 2,072 to 760. It first assumed that the guest does not kick between two such calls; since the first N2 commit (the main session's follow-up) a call joins only while the count of kicks of the ring write pointer is unchanged since the marker, because a kick moves the primary ring and not the segment's write pointer.
 - With both: the perturbed identity check (`n3cchk-career`) compared 15,828,454 ranges with 14,094 mismatches, the 14,093 perturbed ones and one byte difference: a range copied before a join rewrote the sequence dword of a marker it held (no register differed, so the host render thread read the new sequence). The byte comparison now skips the sequence dwords of markers.
 - Perf (`n3crtvp` against `n3cnatp`, three runs each): the race at 209.8 against 232.9 fps by the medians of the runs (216.5 against 231.2 over all race frames), p99 6.22 against 5.24 ms, WARN on capture statistics only; 1.753 against 1.775 us of render thread time per draw (+1.3%) at 2,180 and 1,775 draws a frame. The records now cost about what the PM4 they replace did, so `-Native` keeps `host_render_native` on.
 
@@ -668,3 +668,34 @@ With `host_render_check`, a replay executed from an op list is checked against i
 - Render thread time per race frame lower than N1 (increment 3) by a measured amount.
 - The success criteria of section 10 measured: render thread busy at most 2.5 ms per race frame at 240 Hz and p99 at most 5.0 ms.
 - Smoke, perf and `parity.py` on the one-tile `freeze` against RTV of the same commit.
+
+### 15.6 Two steps (the main session's decision of 22 October 2026)
+
+The measurement of 15.2 (15.7) puts 72% of the host render thread's time in the replays, but only about 0.5 to 0.6 ms of a 3.41 ms race frame in what the op lists can remove (the parse, the shader loads and part of the register packets); the rest is the draw path. N2 therefore has two steps, each with its own gate:
+
+1. **Op lists** as in 15.3. Gate: the identity check per replay without mismatches, its perturbation proof, the drop of the render thread's busy time measured against 3.41 ms a race frame, and smoke, perf and parity against RTV of the same commit.
+2. **Reuse per replayed draw**: the texture and binding keys and the descriptors built from them are reused while the draw's fetch constants and the shaders' bindings are unchanged since the op list's previous replay. Only the computation of keys and the building of descriptors are reused: the texture cache's validity (watches, uploads, invalidations) and the ownership of render targets still run at every draw, so a reused key never skips a texture reload the PM4 path would do. The identity check gets a binding mode that computes the keys both ways at every draw of a check run and compares them, with a perturbation proof. Step 2 starts from option 3 of [CP draw offload](cp-draw-offload.md#option-3-less-work-per-draw-on-the-one-thread), the comparator the plan names, and profiles the rest of `IssueDraw` (0.68 ms a race frame) before it chooses what to reuse. Gate: the section 10 targets (render thread busy at most 2.5 ms per race frame and p99 at most 5.0 ms at 240 Hz) and the checks of step 1.
+
+### 15.7 The replays measured, 22 October 2026
+
+The `photo` race, three runs each with `REX_CP_SPLIT` (`n2m-nat-split`: the native path with the records; `n2m-rtv-split`: RTV), on `I:\FM4-build-usa` at commit `274eee9`, 240 Hz and 1x, per race frame over 22,829 and 22,878 frames:
+
+| Per race frame | Native | RTV |
+|---|---|---|
+| Render thread busy | 3.41 ms | 3.43 ms |
+| Inside replays (indirect buffers at depth two) | 2.47 ms (72%), 560 replays, 263,139 dwords | 2.51 ms, 560 replays, 265,131 dwords |
+| of which draw packets | 1.66 ms | 1.69 ms |
+| of which register packets | 0.375 ms | 0.375 ms |
+| of which shader loads | 0.104 ms | 0.105 ms |
+| of which the rest (dispatch and parse) | 0.33 ms | 0.335 ms |
+| Draw zone in all (native) | 2.24 ms: textures 0.44, bindings 0.45, render targets 0.24, primitives 0.21, pipeline 0.13, vertex buffers 0.09, the rest of `IssueDraw` about 0.68 | |
+| Packets (native) | 26,081 register packets, 2,279 shader loads, 1,781 draws | |
+
+The records of the converted dirty writers take about 0.19 ms a frame, counted as other packets (their markers).
+
+### 15.8 Step 1, first results, 22 October 2026
+
+`host_render_oplists` (off by default; with the host render thread): a replay at depth two runs from an op list of register runs, written straight from guest memory through `WriteRegistersFromMem`, and blocks of every other packet executed through `ExecutePacket`. Validity comes from physical memory write watches (`EnablePhysicalMemoryAccessCallbacks`), not the shared memory's: those need a GPU request of the range.
+
+- The first build's watch callback answered that the range to unprotect "does not matter", so a write elsewhere on a page unprotected the pages of other op lists without telling them: their buffers changed unnoticed, and the stale op lists ran garbage as PM4 (362 packet overflows and failed draws in `n2a-career`). `host_render_oplists_verify` (a hash of each replayed buffer at every replay, diagnostics only) found 1,239 stale op lists in `n2b-career`, all on pages that had lost their watch. The callback now returns the triggered range: `n2c-career` with the verification had none, 14,875,959 replays from op lists, 8,153 decodes and 8,004 drops by a write, and no new error key.
+- Performance (`n2c-nat-split`, the `photo` race, three runs with `REX_CP_SPLIT`, against `n2m-nat-split` of 15.7): 4.113 ms of render thread time per race frame at 1,949 draws against 3.41 ms at 1,781, 2.11 against 1.92 us per draw. The replays' register packets took 0.337 ms and their rest 0.406 ms a frame, against 0.375 and 0.33: the op lists remove the dispatch of the type-0 packets only, the type-3 packets keep theirs, and the time per draw rose, probably through more access violations now that a fault unprotects only its own pages. Step 1 in this form saves nothing; it stays off.

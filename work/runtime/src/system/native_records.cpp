@@ -7,7 +7,12 @@ namespace {
 std::atomic<bool> enabled{false};
 std::atomic<uint64_t> next_sequence{0};
 std::unique_ptr<Slot[]> slots;
+std::atomic<uint32_t> kicks{0};
 }  // namespace
+
+void CountKick() { kicks.fetch_add(1, std::memory_order_release); }
+
+uint32_t Kicks() { return kicks.load(std::memory_order_acquire); }
 
 void SetEnabled(bool value) {
   if (value && !slots) {

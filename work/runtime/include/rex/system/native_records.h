@@ -53,5 +53,10 @@ Slot& Begin(uint64_t* sequence);
 void Publish(Slot& slot, uint64_t sequence);
 // Consumer: the slot of a marker's sequence (its low 32 bits).
 Slot& SlotOf(uint32_t sequence);
+// The kicks of the ring write pointer so far: a converted call joins the
+// record of the thread's last marker only while no kick happened since it was
+// written (a kick does not move the segment's write pointer).
+void CountKick();
+uint32_t Kicks();
 
 }  // namespace rex::system::native_records

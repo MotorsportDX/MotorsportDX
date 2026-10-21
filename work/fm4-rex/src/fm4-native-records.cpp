@@ -77,16 +77,15 @@ uint32_t Scratch() {
 // The last marker this thread wrote. A converted call on the same device whose
 // write pointer is still at the end of that marker (nothing written since)
 // joins its record instead of writing a marker of its own: the joined record
-// is published in a new slot and the marker's sequence dword rewritten. This
-// assumes that the guest does not kick the segment between two such calls (the
-// dirty writers run back to back in D3DDevice_FlushDirtyState, and the ring
-// allocators and the overflow, which kick, write PM4 and so end the joining);
-// a marker executed before its record was joined would show as a register
-// mismatch of the identity check.
+// is published in a new slot and the marker's sequence dword rewritten. It
+// joins only while the ring write pointer was not kicked since the marker was
+// written (a kick moves the primary ring, not the segment's write pointer), so
+// the host render thread cannot have executed the marker yet.
 struct LastMarker {
   uint32_t device = 0;
   uint32_t pointer = 0;  // The write pointer before the marker.
   uint64_t sequence = 0;
+  uint32_t kicks = 0;  // rex::system::native_records::Kicks() at the marker.
 };
 thread_local LastMarker last_marker;
 }  // namespace
@@ -104,6 +103,7 @@ bool NativeConvert(NativeWriter writer, PPCContext& ctx, uint8_t* base, PPCFunc*
 
   const bool join = last_marker.device == device &&
                     last_marker.pointer + marker_bytes == pointer &&
+                    last_marker.kicks == records::Kicks() &&
                     records::SlotOf(uint32_t(last_marker.sequence))
                             .sequence.load(std::memory_order_acquire) == last_marker.sequence;
   uint64_t record_sequence = 0;
@@ -182,6 +182,7 @@ bool NativeConvert(NativeWriter writer, PPCContext& ctx, uint8_t* base, PPCFunc*
     Store32(base, device + 48, pointer + marker_bytes);
     last_marker.device = device;
     last_marker.pointer = pointer;
+    last_marker.kicks = records::Kicks();
   }
   last_marker.sequence = record_sequence;
   NativeCheckSplitPost(base);

@@ -261,6 +261,11 @@ enum class HostCheckReason : uint32_t { kBytes, kRegisters, kType3, kDraws, kCou
 inline std::atomic<bool> host_records{false};
 inline uint64_t host_records_applied = 0, host_record_registers = 0, host_records_empty = 0;
 inline std::atomic<uint64_t> host_markers_missing{0};
+// The op lists of replays (host_render_oplists): replays run from an op list,
+// op lists decoded (host render thread only), op lists dropped by a write.
+inline std::atomic<bool> host_oplists{false};
+inline uint64_t host_oplist_replays = 0, host_oplists_decoded = 0;
+inline std::atomic<uint64_t> host_oplists_invalidated{0}, host_oplists_stale{0};
 inline std::atomic<bool> host_check{false};
 inline std::map<uint32_t, uint64_t> host_checks;
 inline uint64_t host_check_reasons[size_t(HostCheckReason::kCount)]{};
@@ -528,6 +533,15 @@ inline void OnSwap() {
                     << host_markers_missing.exchange(0, std::memory_order_relaxed);
       state->output << ",\"records_empty\":" << host_records_empty;
       host_records_applied = host_record_registers = host_records_empty = 0;
+    }
+    if (host_oplists.load(std::memory_order_relaxed)) {
+      state->output << ",\"oplist_replays\":" << host_oplist_replays
+                    << ",\"oplists_decoded\":" << host_oplists_decoded
+                    << ",\"oplists_invalidated\":"
+                    << host_oplists_invalidated.exchange(0, std::memory_order_relaxed)
+                    << ",\"oplists_stale\":"
+                    << host_oplists_stale.exchange(0, std::memory_order_relaxed);
+      host_oplist_replays = host_oplists_decoded = 0;
     }
     if (host_check.load(std::memory_order_relaxed)) {
       state->output << ",\"checks\":{";
