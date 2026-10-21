@@ -224,7 +224,7 @@ Every stage is behind a switch, off by default until its gate passes, with the P
 | N0, foundations and measurements | One hook registry (merge the trace and diagnostics hooks); counters for the replay paths of `sub_826E4A28`, recordings per second and replays per recording, the `IM_LOAD` key check of 2.6, the coverage log of 2.3, `REX_LATE_WRITE_TRACE` on a race and a tiled race, the sync packets of 2.7, the guest render thread's time per frame (a zone around `sub_822DB318`) and a thread trace of the D3D entry points; the CP time split at 240 Hz and 2x; the frozen-frame A/B harness and the FAIL rules of section 10. | Every number recorded here with its run; the coverage list complete for a menu, a race and a replay; the variance of two identical baseline runs known. | 2 to 3 |
 | N1, native producer on the existing backend | The producers of section 8 feed the host render thread, which drives the existing D3D12 backend through `WriteRegisterFast`, `WriteRegistersFromMem`, `LoadShader` and `IssueDraw`; recordings replay as PM4 through `ExecutePacket`; render targets stay on the RTV cache; the ring and the CP thread are no longer used on this path. | State-level dual run without mismatches; frozen frames identical to RTV; no PM4 written in the coverage scenes; smoke and perf gates against the RTV build of the same commit; the success criteria for CP time and p99 measured. | 6 to 9 |
 | N2, decoded recordings | Operation lists with precomputed pipeline and binding keys; inherited state and `LOAD_ALU_CONSTANT` re-read at replay; fallback to PM4 per recording. | Dual run per replay without mismatches; render thread time per frame lower than N1 by a measured amount. | 3 to 5 |
-| N3, native render targets | Surface-keyed host targets with virtual placement, copies for aliased contents, one-pass tiles, native MSAA, resolves as host copies and demand readback, post-pass anchors on surfaces, look mods and GTAO moved onto the native path. Starts with a GPU-only prototype at 2x (one scene pass and one resolve) against the RTV path. | Frozen frames within the agreed threshold against RTV and against `-Rov` with `-Look "original,taa=0"`; GTAO, TAA, motion vectors and the windshield checked at 2x; GPU time at 2x not above RTV; 4x MSAA in one pass working. | 12 to 20 |
+| N3, native render targets | Surface-keyed host targets with virtual placement, copies for aliased contents, one-pass tiles, native MSAA as a launcher option (2x and 4x in one pass, TAA on top), resolves as host copies and demand readback, post-pass anchors on surfaces, look mods and GTAO moved onto the native path. Starts with a GPU-only prototype at 2x (one scene pass and one resolve) against the RTV path. | Frozen frames within the agreed threshold against RTV and against `-Rov` with `-Look "original,taa=0"`; GTAO, TAA, motion vectors and the windshield checked at 2x; GPU time at 2x not above RTV; 4x MSAA in one pass working. | 12 to 20 |
 | N4, threading and slower CPUs | Event waits instead of spins, queue depth and latency tuned, a capped-CPU harness (fewer cores through the process affinity, a lower clock where the PC allows it). | The success criteria of section 10 met on the full and the capped CPU. | 3 to 5 |
 | N5, visual upgrades on the native base | Float targets for `k_16_16`, linear blending as an A/B, upscalers on the native anchors ([FSR plan](fsr-plan.md)), wider aspect ratios (needs a FOV and culling hook), HDR10 once an HDR display exists. | One A/B and one decision per item. | per item |
 
@@ -244,6 +244,7 @@ N0 to N4 total about 26 to 42 person-weeks. The earlier estimates for design A a
 Made by the project owner on 21 October 2026:
 
 - The target is a native port, judged by all five goals of section 8.
+- MSAA comes back as an option on the native path, rendered in one pass without tiles; one tile with TAA stays the default.
 - Look mods and GTAO target RTV and the native path; `-Rov` stays the uncorrected reference and the native path is compared against it (AGENTS.md, render target paths).
 
 Still open:
@@ -251,7 +252,6 @@ Still open:
 - The image threshold that counts as parity for the native path, and whether it may differ from RTV by design (one pass, MSAA, `LOAD_ALU_CONSTANT` read time, formats).
 - Whether the PM4 RTV path stays a permanent reference once the native path passes its gates.
 - Which modes N1 must cover (race, photo mode, replays, split screen, menus, video) and which may stay on PM4 at first.
-- Whether MSAA comes back as an option once tiles are gone, or one tile with TAA stays the only default.
 - The specification of the slower target PCs (cores and clock) for the N4 harness.
 - How far the runtime may diverge from the upstream ReXGlue command processor.
 
