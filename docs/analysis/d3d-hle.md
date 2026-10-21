@@ -1,6 +1,6 @@
 # D3D-level HLE: feasibility and plan
 
-Status: analysis, 21 October 2026. Nothing here is implemented. The same day the project owner chose a native port as the target; its architecture and stages are in sections 8 and 9, and the measurements of stage N0 are in section 13. Addresses are the USA `default.xex` (the Japan/Asia executable has the same code, see [release comparison](releases.md)). The generated C++ that was read is `<BuildRoot>\project\generated\default`; the catalog, call graph and decompiled functions stay outside the repository under `I:\FM4-re` ([function catalog](function-catalog.md)).
+Status: analysis, 21 October 2026. The same day the project owner chose a native port as the target; its architecture and stages are in sections 8 and 9, the measurements of stage N0 are in section 13, and the design of stage N1 with the order of its increments is in section 14. Addresses are the USA `default.xex` (the Japan/Asia executable has the same code, see [release comparison](releases.md)). The generated C++ that was read is `<BuildRoot>\project\generated\default`; the catalog, call graph and decompiled functions stay outside the repository under `I:\FM4-re` ([function catalog](function-catalog.md)).
 
 ## Summary
 
@@ -428,3 +428,60 @@ The `photo` race (12 cars, the launcher defaults), three runs each. The first ro
 - At 1x the busy time splits into draw packets 69% (the `draw` zone 68%: draws 60% and resolves 7.6%; the packet handling around them 1.3%), register packets 13%, the rest 12.5%, shader loads 3.6%, the swap 1.2% and other packets 0.6%. Against the profile of 20 October 2026 behind section 6 (draws 60%, parsing, registers and other packets 24%, swap 13%, copies 3%), the asynchronous swap took the swap from 13% to about 1%, and the front end (registers, shader loads and the rest: about 242 ms/s, 29%) is what a native producer can remove or move off this thread; the draw work stays with the backend in N1.
 - `REX_CP_SPLIT` costs about 3 to 5% of the command processor's time per draw (2.27 against 2.21 us over the three runs together, 2.30 against 2.20 us as the median of the runs), mostly in the register packets; the runs of one cell differ by about as much (2.17 to 2.34 us with the split).
 - At 2x the GPU sets the frame rate: the command processor waits 308 ms/s for frames in flight, the busy time per draw is 2.52 us, and the split is otherwise similar (draw packets 71%, registers 12%, the rest 12%).
+
+## 14. Stage N1 design, 21 October 2026
+
+The design of stage N1 (section 9) on the code as it is: what the host render thread replaces, what a record is, how converted and unconverted writers stay in order, and the order of the increments. The modes are the three tiers of section 11.
+
+### 14.1 What the command processor thread does today
+
+- `GraphicsSystem::WriteRegister` turns the guest's write of `CP_RB_WPTR` into `CommandProcessor::UpdateWritePointer`, which stores the index and sets an event.
+- `CommandProcessor::WorkerThreadMain` (the thread "GPU Commands") spins on that index (500 polls with `PollIdleWork`, then 5 ms event waits), runs `CallInThread` functions from a queue without a lock, executes the ring from its read index to the write index (`ExecutePrimaryBuffer`) and writes the read index back to the guest (`CP_RB_RPTR_ADDR`) after each batch.
+- Every guest-visible effect of a packet is made inside its handler, so on the thread that executes the packet: fences and the swap counter (`EVENT_WRITE_SHD`, `MEM_WRITE`, `COND_WRITE`, `REG_TO_MEM`), occlusion reports (`EVENT_WRITE_ZPD`), the waits on guest memory (`WAIT_REG_MEM`), the interrupts (`INTERRUPT`) and the swap. Two writes are made elsewhere and stay there in N1: resolve readbacks are copied into guest memory on the readback thread, ordered by the waits of the thread that issued them, and the vblank interrupt runs the guest's callback on the vsync thread, which also increments the counter that `EVENT_WRITE_SHD` writes.
+- The backend (`D3D12CommandProcessor`) assumes one producer thread: the submission state has no lock, and `PollIdleWork` flushes pending occlusion snapshots between batches.
+
+### 14.2 The host render thread and its records
+
+- One host render thread replaces the command processor thread on the native path. It is the only thread that drives the backend, and it makes every guest-visible write of 14.1.
+- Producers write fixed records into one bounded queue, in order, with a global sequence number. A record is one of: a PM4 span of the ring (the fallback), a call (`CallInThread`, now behind the queue's lock), and later the native kinds of 14.3 (register deltas, draws, shader loads, constant blocks, replays, resolves, events, waits, swap).
+- A full queue never blocks the guest: the guest may be inside the XDK's ring wait for an index only this thread publishes, so blocking the producer could deadlock. A new PM4 span merges into the last span instead (the merged span stays shorter than the ring, because the guest never writes past the published read index). Native records that cannot merge make the producer wait, which is safe only once no writer waits for the ring from inside a record (checked in increment 3).
+- The consumer waits on the queue's event, not in a spin loop; while the backend has pending work (`PollIdleWork`) it waits with a timeout of 1 ms.
+- After each record the consumer publishes the ring position the record ends at (the consumed ring index of 2.7), so the XDK's ring index waits work for converted writers as well.
+- The perf trace gets the backend-neutral fields of [frozen-frame parity](../e2e/frozen-frames.md): `render_thread_busy_ms`, `queue_depth_mean`, `queue_depth_max`, and the records and merged spans per window.
+
+### 14.3 Converted writers and the order with PM4
+
+- A converted writer replaces its PM4 with a record when it writes into the ring. When the device's current recording (device+13904) is set, it keeps writing PM4 into the recording, because recordings replay as PM4 in N1 (section 9).
+- A record carries the ring position the XDK has written up to (device+48) when the record is made. The consumer executes the PM4 up to that position before it applies the record, so a converted writer stays in order with the unconverted ones around it. This assumes the PM4 before device+48 is final when a later record is made; increment 3 checks it with a hash of the span at production and at the kick, like `REX_LATE_WRITE_TRACE`.
+- Converted writers no longer advance the ring, so the ring indices the guest waits on count PM4 only, and `D3DDevice_CommandBufferOverflow` (`sub_822FEF08`) sees fewer segment changes.
+- The identity check (the state-level dual run of section 10) runs in a check mode: the hook also runs the original writer into a scratch segment, the host render thread decodes that PM4 into register writes, draw parameters and the predicate decision, and compares them with the record; a mismatch goes through `REXGPU_ERROR` with the writer and the guest address, so it shows as a new error key.
+
+### 14.4 Writers by scene
+
+From the ring allocations of `n0-career-c` (13.5). The counts are for the whole run of boot, menus, a race and a replay, because the coverage log is per run, not per phase:
+
+| Writer | Ring allocations or overflows in the run | Menus | One-tile race | Replay |
+|---|---|---|---|---|
+| Dirty writers `sub_823114F8`, `sub_82310E78`, `sub_8230FA40`, `sub_82379530` | inline; 52,807 overflows in `sub_82379530` | yes | yes | yes |
+| `DRAW_INDX_2` writer `sub_82370370` (clears, screen passes) | 413,338 | yes | yes | yes |
+| `DrawIndexedVertices`, `DrawVertices`, `DrawVerticesUP`, `BeginVertices` | inline | yes | yes | yes |
+| `IM_LOAD` and `LOAD_ALU_CONSTANT` (`sub_823436B8`, `sub_82343608`) | inline | yes | yes | yes |
+| `RunCommandBuffer` (`sub_82310818`, inline `INDIRECT_BUFFER`) and `sub_823102D0` | 614,621 overflows in `sub_823102D0` | 19 a frame | 739 a frame | 625 a frame |
+| `Resolve` body `sub_82348DC8` | 665,001 and 190,574 (31.5 million dwords) | yes | yes | yes |
+| `Swap` `sub_8237FA28` with `BeginCommand` | 22,889 | yes | yes | yes |
+| Ring waits `sub_822DB108` and `CommandBufferOverflow` `sub_822FEF08` | 817,081 and 812,501 | yes | yes | yes |
+| The tiling bracket in one tile (`BeginTiling`, `EndTiling`, `sub_822B7248`, `sub_8236F838`, `sub_823719A8`) | 4,580 brackets, 32,190 stream writes | | yes | yes |
+| `EVENT_WRITE_ZPD` | | | 2 a frame | 2 a frame |
+| `BeginCommandBuffer` (`sub_826E1EC0`) | 10,209 | 4.4 a second | at load | |
+
+Which scene uses each writer is inferred from 13.2, 13.6 and 13.7. Increment 2 splits the coverage log by phase, so that the list for each scene is measured.
+
+### 14.5 Increments
+
+| Increment | Scope | Gate |
+|---|---|---|
+| 1 | The host render thread and the record queue, with every writer on the fallback: PM4 spans and calls only. Behind the cvar `host_render_thread` and the launcher option `-Native`, off by default. `-Native` with the tiles (`-Msaa`, a look without TAA) keeps the PM4 RTV path, and `-Native` with `-Rov` is refused. | A menu, a one-tile race and a replay without a crash and without a new error key; the `compare.py` smoke and perf gates and `parity.py` on `freeze` against RTV of the same commit. |
+| 2 | The coverage log by phase, and the identity check of 14.3 with its decoder. | The coverage list per scene recorded; the check finds no mismatch on the fallback (PM4 against itself). |
+| 3 | The dirty writers become register delta records; the ring position check of 14.3. | The identity check without mismatches in the coverage scenes; the gates of increment 1. |
+| 4 | The menu writers: draws, `sub_82370370`, shader loads and constant blocks (copied into the record when the queue may run ahead of the guest), resolves, the swap, the ring waits. | The identity check; no PM4 written in the menus; the gates of increment 1. |
+| 5 | The race and replay writers: `RunCommandBuffer` as a replay record (the host render thread executes the recorded PM4 through `ExecuteIndirectBuffer`), the tiling bracket in one tile, `EVENT_WRITE_ZPD`, the remaining fences. | The exit criteria of N1 (section 9); photo mode, split screen and the intro videos smoke checked on the fallback. |
