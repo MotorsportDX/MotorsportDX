@@ -33,6 +33,7 @@
 #include <rex/graphics/flags.h>
 #include <rex/graphics/graphics_system.h>
 #include <rex/graphics/host_render_queue.h>
+#include <rex/system/native_records.h>
 #include <rex/graphics/pipeline/texture/info.h>
 #include <rex/graphics/sampler_info.h>
 #include <rex/graphics/xenos.h>
@@ -171,6 +172,7 @@ bool CommandProcessor::Initialize() {
   const bool host_render_thread = HostRenderThreadEnabled();
   if (host_render_thread) {
     CreateHostRenderQueue();
+    InitializeHostRecords();
     InitializeHostCheck();
   }
   worker_thread_ = system::object_ref<system::XHostThread>(
@@ -876,8 +878,8 @@ void CommandProcessor::ExecutePacket(uint32_t ptr, uint32_t count) {
 }
 
 bool CommandProcessor::ExecutePacket(memory::RingBuffer* reader) {
-  if (host_check_) {
-    HostCheckBeforePacket(reader);
+  if (host_check_ || host_records_) {
+    HostBeforePacket(reader);
   }
   const uint32_t packet = reader->ReadAndSwap<uint32_t>();
   const uint32_t packet_type = packet >> 30;
@@ -1219,6 +1221,14 @@ bool CommandProcessor::ExecutePacketType3_NOP(memory::RingBuffer* reader, uint32
                                               uint32_t count) {
   // skip N 32-bit words to get to the next packet
   // No-op, ignore some data.
+  if (host_records_ && count == 1) {
+    // A marker of a converted writer whose record HostBeforePacket did not apply.
+    const uint32_t data = reader->ReadAndSwap<uint32_t>();
+    if (data == system::native_records::kMarkerTag) {
+      HostRecordMissing();
+    }
+    return true;
+  }
   reader->AdvanceRead(count * sizeof(uint32_t));
   return true;
 }

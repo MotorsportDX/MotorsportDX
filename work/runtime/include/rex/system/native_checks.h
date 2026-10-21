@@ -17,6 +17,9 @@ struct Entry {
   uint32_t writer = 0;    // Guest address of the hooked writer.
   uint64_t sequence = 0;  // Production order.
   std::vector<uint32_t> dwords;  // The PM4 as written, in guest byte order.
+  // The PM4 of a converted writer, written into a scratch segment; the stream
+  // holds its marker (rex/system/native_records.h) instead.
+  bool marker = false;
 };
 
 // True once anything was recorded.

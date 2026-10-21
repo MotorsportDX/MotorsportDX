@@ -149,9 +149,11 @@ REX_HOOK_RAW(sub_82370370) {  // DRAW_INDX_2 writer (clears, screen passes)
 
 // Dirty state writers of D3DDevice_FlushDirtyState, RunCommandBuffer and
 // EndCommandBuffer (the identity check only).
-FM4_CHECKED_HOOK(823114F8)  // WriteDirtyRegisters
-FM4_CHECKED_HOOK(82310E78)  // WriteDirtyFloatConstants
-FM4_CHECKED_HOOK(8230FA40)  // WriteDirtyFetchConstants
+// Converted by fm4-native-records.cpp while the runtime enables the records.
+#define FM4_CONVERTED_HOOK(address, writer)                         REX_EXTERN(__imp__sub_##address);                                 REX_HOOK_RAW(sub_##address) {                                       if (NativeConvert(NativeWriter::writer, ctx, base, __imp__sub_##address)) return;                                                                   NativeCheckPre(0x##address, base);                                __imp__sub_##address(ctx, base);                                  NativeCheckPost(base);                                          }
+FM4_CONVERTED_HOOK(823114F8, kRegisters)      // WriteDirtyRegisters
+FM4_CONVERTED_HOOK(82310E78, kFloatConstants)  // WriteDirtyFloatConstants
+FM4_CONVERTED_HOOK(8230FA40, kFetchConstants)  // WriteDirtyFetchConstants
 // D3DDevice_WriteRegistersChunked writes at the pointer in r4 and returns the
 // new one in r3 (the caller stores it to device+48 later), so its range comes
 // from the arguments, not from device+48.

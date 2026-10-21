@@ -43,6 +43,7 @@ set(FM4REX_SOURCES
     src/fm4-guest-hooks.cpp
     src/fm4-n0-trace.cpp
     src/fm4-native-check.cpp
+    src/fm4-native-records.cpp
     src/fm4-stream-trace.cpp
     src/fm4-streaming-fixes.cpp
     src/fm4-vblank-rate.cpp

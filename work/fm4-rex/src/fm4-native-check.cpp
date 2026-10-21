@@ -79,6 +79,8 @@ void Copy(uint8_t* base, uint32_t start, uint32_t end) {
 }
 }  // namespace
 
+bool NativeCheckEnabled() { return Enabled(); }
+
 void NativeCheckDevice(uint32_t address) {
   if (Enabled()) device.store(address, std::memory_order_relaxed);
 }

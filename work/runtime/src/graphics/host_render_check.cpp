@@ -86,13 +86,15 @@ void CommandProcessor::InitializeHostCheck() {
               host_check_state_->perturb);
 }
 
-void CommandProcessor::HostCheckBeforePacket(const memory::RingBuffer* reader) {
+void CommandProcessor::HostCheckFinishAt(uint32_t address) {
   HostCheckState& state = *host_check_state_;
-  const uint32_t address = uint32_t(reader->buffer() + reader->read_offset() -
-                                    memory_->TranslatePhysical<const uint8_t*>(0));
   if (state.capturing && address == state.end) {
     HostCheckFinish();
   }
+}
+
+void CommandProcessor::HostCheckTake(uint32_t address) {
+  HostCheckState& state = *host_check_state_;
   if (system::native_checks::Active()) {
     system::native_checks::Entry entry;
     if (system::native_checks::Take(address, &entry)) {
@@ -154,9 +156,12 @@ void CommandProcessor::HostCheckFinish() {
   perf_trace::HostCheckReason reason = perf_trace::HostCheckReason::kCount;
   // The PM4 the command processor read against the copy taken when the writer
   // returned.
+  // A converted writer's copy comes from a scratch segment; the stream holds
+  // its marker, so only its registers are compared.
+  const bool marker = state.entry.marker;
   const uint32_t* guest = memory_->TranslatePhysical<const uint32_t*>(state.begin);
   state.bytes_changed = false;
-  for (size_t i = 0; i < state.entry.dwords.size(); ++i) {
+  for (size_t i = 0; !marker && i < state.entry.dwords.size(); ++i) {
     if (guest[i] != state.entry.dwords[i]) {
       state.bytes_changed = true;
       state.first_changed = uint32_t(i);
@@ -208,7 +213,7 @@ void CommandProcessor::HostCheckFinish() {
       }
     }
   }
-  if (difference.empty() && !decoded.indirect) {
+  if (difference.empty() && !decoded.indirect && !marker) {
     std::vector<pm4_decode::Draw> expected_draws = decoded.draws;
     if (perturb && !perturbed_registers && !expected_draws.empty()) {
       expected_draws.front().initiator += 1u << 16;
@@ -253,9 +258,14 @@ void CommandProcessor::HostCheckFinish() {
     // the others.
     if (state.messages[size_t(reason)] < kMaxMessages) {
       ++state.messages[size_t(reason)];
-      REXGPU_ERROR("Native check: writer {:08X}, range at {:08X} ({} dwords, record {}): {}",
-                   writer, state.begin, state.entry.dwords.size(), state.entry.sequence,
-                   difference);
+      // One fixed error line per kind keeps the error keys of the gates stable;
+      // the details go into a warning beside it.
+      static const char* const kKinds[] = {"PM4 changed", "register mismatch",
+                                           "type-3 packet mismatch", "draw mismatch"};
+      REXGPU_ERROR("Native check: {}", kKinds[size_t(reason)]);
+      REXGPU_WARN("Native check: writer {:08X}, range at {:08X} ({} dwords, record {}{}): {}",
+                  writer, state.begin, state.entry.dwords.size(), state.entry.sequence,
+                  marker ? ", marker" : "", difference);
     }
   }
 }

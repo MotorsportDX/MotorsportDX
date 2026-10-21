@@ -252,6 +252,7 @@
 !/work/fm4-rex/src/fm4-guest-hooks.h
 !/work/fm4-rex/src/fm4-n0-trace.cpp
 !/work/fm4-rex/src/fm4-native-check.cpp
+!/work/fm4-rex/src/fm4-native-records.cpp
 !/work/fm4-rex/src/fm4-stream-trace.cpp
 !/work/fm4-rex/src/fm4-streaming-fixes.cpp
 !/work/fm4-rex/src/fm4-vblank-rate.cpp

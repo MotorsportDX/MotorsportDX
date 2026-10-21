@@ -243,6 +243,12 @@ inline std::atomic<uint32_t> host_merged_spans{0};
 // by a newer copy at the same address before they were reached, or left before
 // their end) and ranges changed on purpose (host_render_check_perturb).
 enum class HostCheckReason : uint32_t { kBytes, kRegisters, kType3, kDraws, kCount };
+// The records of converted writers (host_render_native): records applied and
+// the registers they wrote (host render thread only), markers reached without a
+// record, records replaced before their marker was reached.
+inline std::atomic<bool> host_records{false};
+inline uint64_t host_records_applied = 0, host_record_registers = 0;
+inline std::atomic<uint64_t> host_markers_missing{0}, host_records_overwritten{0};
 inline std::atomic<bool> host_check{false};
 inline std::map<uint32_t, uint64_t> host_checks;
 inline uint64_t host_check_reasons[size_t(HostCheckReason::kCount)]{};
@@ -495,6 +501,15 @@ inline void OnSwap() {
                   << ",\"queue_depth_max\":" << state->host_depth_max
                   << ",\"host_render\":{\"records\":" << state->host_records
                   << ",\"merged_spans\":" << host_merged_spans.exchange(0, std::memory_order_relaxed);
+    if (host_records.load(std::memory_order_relaxed)) {
+      state->output << ",\"records_applied\":" << host_records_applied
+                    << ",\"record_registers\":" << host_record_registers
+                    << ",\"markers_missing\":"
+                    << host_markers_missing.exchange(0, std::memory_order_relaxed)
+                    << ",\"records_overwritten\":"
+                    << host_records_overwritten.exchange(0, std::memory_order_relaxed);
+      host_records_applied = host_record_registers = 0;
+    }
     if (host_check.load(std::memory_order_relaxed)) {
       state->output << ",\"checks\":{";
       bool first_writer = true;

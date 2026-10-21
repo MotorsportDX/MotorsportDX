@@ -88,5 +88,12 @@ void NativeCheckPost(uint8_t* base, uint32_t pointer = 0);
 // write pointer to another segment: the range ends before and restarts after.
 void NativeCheckSplitPre(uint8_t* base);
 void NativeCheckSplitPost(uint8_t* base);
+bool NativeCheckEnabled();
+
+// fm4-native-records.cpp (host_render_native in the runtime): the converted
+// dirty state writers. Returns true when the writer left a marker and a record
+// instead of running its original body.
+enum class NativeWriter : uint32_t { kRegisters, kFloatConstants, kFetchConstants };
+bool NativeConvert(NativeWriter writer, PPCContext& ctx, uint8_t* base, PPCFunc* original);
 
 }  // namespace fm4::hooks
