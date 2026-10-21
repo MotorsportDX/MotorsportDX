@@ -3,8 +3,9 @@
 // The list comes from a static scan of the generated code for type-3 packet
 // headers (addresses and packet names only). Every 5 seconds the file is
 // rewritten with "<function> <packets> <calls> <caller>:<calls> ..." lines,
-// callers being guest return addresses (top 8).
-#include <rex/hook.h>
+// callers being guest return addresses (top 8). The hooks are in
+// fm4-guest-hooks.cpp.
+#include "fm4-guest-hooks.h"
 #include <algorithm>
 #include <array>
 #include <atomic>
@@ -158,154 +159,17 @@ Trace* GetTrace() {
   return trace;
 }
 
-inline void Count(size_t index, const PPCContext& ctx) {
+}  // namespace
+
+void fm4::hooks::D3DTraceCount(uint32_t address, const PPCContext& ctx) {
   Trace* trace = GetTrace();
   if (!trace) return;
+  const Function* found = std::lower_bound(
+      std::begin(kFunctions), std::end(kFunctions), address,
+      [](const Function& function, uint32_t value) { return function.address < value; });
+  if (found == std::end(kFunctions) || found->address != address) return;
+  const size_t index = size_t(found - std::begin(kFunctions));
   trace->calls[index].fetch_add(1, std::memory_order_relaxed);
   std::lock_guard<std::mutex> lock(trace->mutex);
   ++trace->callers[uint64_t(index) << 32 | uint32_t(ctx.lr)];
 }
-}  // namespace
-
-REX_EXTERN(__imp__sub_822A7E08);
-REX_HOOK_RAW(sub_822A7E08) { Count(0, ctx); __imp__sub_822A7E08(ctx, base); }
-REX_EXTERN(__imp__sub_822A7FD0);
-REX_HOOK_RAW(sub_822A7FD0) { Count(1, ctx); __imp__sub_822A7FD0(ctx, base); }
-REX_EXTERN(__imp__sub_822ACC80);
-REX_HOOK_RAW(sub_822ACC80) { Count(2, ctx); __imp__sub_822ACC80(ctx, base); }
-REX_EXTERN(__imp__sub_822B2FB8);
-REX_HOOK_RAW(sub_822B2FB8) { Count(3, ctx); __imp__sub_822B2FB8(ctx, base); }
-REX_EXTERN(__imp__sub_822BF380);
-REX_HOOK_RAW(sub_822BF380) { Count(4, ctx); __imp__sub_822BF380(ctx, base); }
-REX_EXTERN(__imp__sub_822C22A8);
-REX_HOOK_RAW(sub_822C22A8) { Count(5, ctx); __imp__sub_822C22A8(ctx, base); }
-REX_EXTERN(__imp__sub_822DADA8);
-REX_HOOK_RAW(sub_822DADA8) { Count(6, ctx); __imp__sub_822DADA8(ctx, base); }
-REX_EXTERN(__imp__sub_822DB108);
-REX_HOOK_RAW(sub_822DB108) { Count(7, ctx); __imp__sub_822DB108(ctx, base); }
-REX_EXTERN(__imp__sub_822EBE20);
-REX_HOOK_RAW(sub_822EBE20) { Count(8, ctx); __imp__sub_822EBE20(ctx, base); }
-REX_EXTERN(__imp__sub_82310530);
-REX_HOOK_RAW(sub_82310530) { Count(9, ctx); __imp__sub_82310530(ctx, base); }
-REX_EXTERN(__imp__sub_82310818);
-REX_HOOK_RAW(sub_82310818) { Count(10, ctx); __imp__sub_82310818(ctx, base); }
-REX_EXTERN(__imp__sub_82311080);
-REX_HOOK_RAW(sub_82311080) { Count(11, ctx); __imp__sub_82311080(ctx, base); }
-REX_EXTERN(__imp__sub_82333538);
-REX_HOOK_RAW(sub_82333538) { Count(12, ctx); __imp__sub_82333538(ctx, base); }
-REX_EXTERN(__imp__sub_8233AC60);
-REX_HOOK_RAW(sub_8233AC60) { Count(13, ctx); __imp__sub_8233AC60(ctx, base); }
-REX_EXTERN(__imp__sub_82343608);
-REX_HOOK_RAW(sub_82343608) { Count(14, ctx); __imp__sub_82343608(ctx, base); }
-REX_EXTERN(__imp__sub_823436B8);
-REX_HOOK_RAW(sub_823436B8) { Count(15, ctx); __imp__sub_823436B8(ctx, base); }
-REX_EXTERN(__imp__sub_82344038);
-REX_HOOK_RAW(sub_82344038) { Count(16, ctx); __imp__sub_82344038(ctx, base); }
-REX_EXTERN(__imp__sub_82348DC8);
-REX_HOOK_RAW(sub_82348DC8) { Count(17, ctx); __imp__sub_82348DC8(ctx, base); }
-REX_EXTERN(__imp__sub_8234D278);
-REX_HOOK_RAW(sub_8234D278) { Count(18, ctx); __imp__sub_8234D278(ctx, base); }
-REX_EXTERN(__imp__sub_8234DAE8);
-REX_HOOK_RAW(sub_8234DAE8) { Count(19, ctx); __imp__sub_8234DAE8(ctx, base); }
-REX_EXTERN(__imp__sub_823619B0);
-REX_HOOK_RAW(sub_823619B0) { Count(20, ctx); __imp__sub_823619B0(ctx, base); }
-REX_EXTERN(__imp__sub_82361D40);
-REX_HOOK_RAW(sub_82361D40) { Count(21, ctx); __imp__sub_82361D40(ctx, base); }
-REX_EXTERN(__imp__sub_8236F6F8);
-REX_HOOK_RAW(sub_8236F6F8) { Count(22, ctx); __imp__sub_8236F6F8(ctx, base); }
-REX_EXTERN(__imp__sub_82370370);
-REX_HOOK_RAW(sub_82370370) { Count(23, ctx); __imp__sub_82370370(ctx, base); }
-REX_EXTERN(__imp__sub_823712F8);
-REX_HOOK_RAW(sub_823712F8) { Count(24, ctx); __imp__sub_823712F8(ctx, base); }
-REX_EXTERN(__imp__sub_82374660);
-REX_HOOK_RAW(sub_82374660) { Count(25, ctx); __imp__sub_82374660(ctx, base); }
-REX_EXTERN(__imp__sub_8237FA28);
-REX_HOOK_RAW(sub_8237FA28) { Count(26, ctx); __imp__sub_8237FA28(ctx, base); }
-REX_EXTERN(__imp__sub_82381318);
-REX_HOOK_RAW(sub_82381318) { Count(27, ctx); __imp__sub_82381318(ctx, base); }
-REX_EXTERN(__imp__sub_82382A70);
-REX_HOOK_RAW(sub_82382A70) { Count(28, ctx); __imp__sub_82382A70(ctx, base); }
-REX_EXTERN(__imp__sub_82386C48);
-REX_HOOK_RAW(sub_82386C48) { Count(29, ctx); __imp__sub_82386C48(ctx, base); }
-REX_EXTERN(__imp__sub_82392800);
-REX_HOOK_RAW(sub_82392800) { Count(30, ctx); __imp__sub_82392800(ctx, base); }
-REX_EXTERN(__imp__sub_82395A48);
-REX_HOOK_RAW(sub_82395A48) { Count(31, ctx); __imp__sub_82395A48(ctx, base); }
-REX_EXTERN(__imp__sub_8239DF28);
-REX_HOOK_RAW(sub_8239DF28) { Count(32, ctx); __imp__sub_8239DF28(ctx, base); }
-REX_EXTERN(__imp__sub_826E1550);
-REX_HOOK_RAW(sub_826E1550) { Count(33, ctx); __imp__sub_826E1550(ctx, base); }
-REX_EXTERN(__imp__sub_826E35F8);
-REX_HOOK_RAW(sub_826E35F8) { Count(34, ctx); __imp__sub_826E35F8(ctx, base); }
-REX_EXTERN(__imp__sub_826E3CA8);
-REX_HOOK_RAW(sub_826E3CA8) { Count(35, ctx); __imp__sub_826E3CA8(ctx, base); }
-REX_EXTERN(__imp__sub_826E3E60);
-REX_HOOK_RAW(sub_826E3E60) { Count(36, ctx); __imp__sub_826E3E60(ctx, base); }
-REX_EXTERN(__imp__sub_826E4C90);
-REX_HOOK_RAW(sub_826E4C90) { Count(37, ctx); __imp__sub_826E4C90(ctx, base); }
-REX_EXTERN(__imp__sub_826E4E28);
-REX_HOOK_RAW(sub_826E4E28) { Count(38, ctx); __imp__sub_826E4E28(ctx, base); }
-REX_EXTERN(__imp__sub_826E5598);
-REX_HOOK_RAW(sub_826E5598) { Count(39, ctx); __imp__sub_826E5598(ctx, base); }
-REX_EXTERN(__imp__sub_826E5C20);
-REX_HOOK_RAW(sub_826E5C20) { Count(40, ctx); __imp__sub_826E5C20(ctx, base); }
-REX_EXTERN(__imp__sub_826E6490);
-REX_HOOK_RAW(sub_826E6490) { Count(41, ctx); __imp__sub_826E6490(ctx, base); }
-REX_EXTERN(__imp__sub_826E6D70);
-REX_HOOK_RAW(sub_826E6D70) { Count(42, ctx); __imp__sub_826E6D70(ctx, base); }
-REX_EXTERN(__imp__sub_826E7220);
-REX_HOOK_RAW(sub_826E7220) { Count(43, ctx); __imp__sub_826E7220(ctx, base); }
-REX_EXTERN(__imp__sub_826E75C0);
-REX_HOOK_RAW(sub_826E75C0) { Count(44, ctx); __imp__sub_826E75C0(ctx, base); }
-REX_EXTERN(__imp__sub_826E7718);
-REX_HOOK_RAW(sub_826E7718) { Count(45, ctx); __imp__sub_826E7718(ctx, base); }
-REX_EXTERN(__imp__sub_826E7AA0);
-REX_HOOK_RAW(sub_826E7AA0) { Count(46, ctx); __imp__sub_826E7AA0(ctx, base); }
-REX_EXTERN(__imp__sub_826E7B98);
-REX_HOOK_RAW(sub_826E7B98) { Count(47, ctx); __imp__sub_826E7B98(ctx, base); }
-REX_EXTERN(__imp__sub_826E80A8);
-REX_HOOK_RAW(sub_826E80A8) { Count(48, ctx); __imp__sub_826E80A8(ctx, base); }
-REX_EXTERN(__imp__sub_826E8928);
-REX_HOOK_RAW(sub_826E8928) { Count(49, ctx); __imp__sub_826E8928(ctx, base); }
-REX_EXTERN(__imp__sub_826E8C80);
-REX_HOOK_RAW(sub_826E8C80) { Count(50, ctx); __imp__sub_826E8C80(ctx, base); }
-REX_EXTERN(__imp__sub_826E8D60);
-REX_HOOK_RAW(sub_826E8D60) { Count(51, ctx); __imp__sub_826E8D60(ctx, base); }
-REX_EXTERN(__imp__sub_826E8E30);
-REX_HOOK_RAW(sub_826E8E30) { Count(52, ctx); __imp__sub_826E8E30(ctx, base); }
-REX_EXTERN(__imp__sub_826E8FD8);
-REX_HOOK_RAW(sub_826E8FD8) { Count(53, ctx); __imp__sub_826E8FD8(ctx, base); }
-REX_EXTERN(__imp__sub_826E92A0);
-REX_HOOK_RAW(sub_826E92A0) { Count(54, ctx); __imp__sub_826E92A0(ctx, base); }
-REX_EXTERN(__imp__sub_826E9CF0);
-REX_HOOK_RAW(sub_826E9CF0) { Count(55, ctx); __imp__sub_826E9CF0(ctx, base); }
-REX_EXTERN(__imp__sub_826EBBC0);
-REX_HOOK_RAW(sub_826EBBC0) { Count(56, ctx); __imp__sub_826EBBC0(ctx, base); }
-REX_EXTERN(__imp__sub_826EBCB0);
-REX_HOOK_RAW(sub_826EBCB0) { Count(57, ctx); __imp__sub_826EBCB0(ctx, base); }
-REX_EXTERN(__imp__sub_826EC9C0);
-REX_HOOK_RAW(sub_826EC9C0) { Count(58, ctx); __imp__sub_826EC9C0(ctx, base); }
-REX_EXTERN(__imp__sub_826ECF30);
-REX_HOOK_RAW(sub_826ECF30) { Count(59, ctx); __imp__sub_826ECF30(ctx, base); }
-REX_EXTERN(__imp__sub_826ED400);
-REX_HOOK_RAW(sub_826ED400) { Count(60, ctx); __imp__sub_826ED400(ctx, base); }
-REX_EXTERN(__imp__sub_826EE8E8);
-REX_HOOK_RAW(sub_826EE8E8) { Count(61, ctx); __imp__sub_826EE8E8(ctx, base); }
-REX_EXTERN(__imp__sub_826EE940);
-REX_HOOK_RAW(sub_826EE940) { Count(62, ctx); __imp__sub_826EE940(ctx, base); }
-REX_EXTERN(__imp__sub_826EEBC0);
-REX_HOOK_RAW(sub_826EEBC0) { Count(63, ctx); __imp__sub_826EEBC0(ctx, base); }
-REX_EXTERN(__imp__sub_826F1390);
-REX_HOOK_RAW(sub_826F1390) { Count(64, ctx); __imp__sub_826F1390(ctx, base); }
-REX_EXTERN(__imp__sub_826F3228);
-REX_HOOK_RAW(sub_826F3228) { Count(65, ctx); __imp__sub_826F3228(ctx, base); }
-REX_EXTERN(__imp__sub_826F3660);
-REX_HOOK_RAW(sub_826F3660) { Count(66, ctx); __imp__sub_826F3660(ctx, base); }
-REX_EXTERN(__imp__sub_826F36C8);
-REX_HOOK_RAW(sub_826F36C8) { Count(67, ctx); __imp__sub_826F36C8(ctx, base); }
-REX_EXTERN(__imp__sub_826F3858);
-REX_HOOK_RAW(sub_826F3858) { Count(68, ctx); __imp__sub_826F3858(ctx, base); }
-REX_EXTERN(__imp__sub_826F64A8);
-REX_HOOK_RAW(sub_826F64A8) { Count(69, ctx); __imp__sub_826F64A8(ctx, base); }
-REX_EXTERN(__imp__sub_826F7FB0);
-REX_HOOK_RAW(sub_826F7FB0) { Count(70, ctx); __imp__sub_826F7FB0(ctx, base); }

@@ -246,6 +246,9 @@
 !/work/fm4-rex/src/fm4-track-settings.h
 !/work/fm4-rex/src/fm4-ui-diagnostics.cpp
 !/work/fm4-rex/src/fm4-d3d-trace.cpp
+!/work/fm4-rex/src/fm4-guest-hooks.cpp
+!/work/fm4-rex/src/fm4-guest-hooks.h
+!/work/fm4-rex/src/fm4-n0-trace.cpp
 !/work/fm4-rex/src/fm4-stream-trace.cpp
 !/work/fm4-rex/src/fm4-streaming-fixes.cpp
 !/work/fm4-rex/src/fm4-vblank-rate.cpp

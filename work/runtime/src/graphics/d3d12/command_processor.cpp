@@ -24,6 +24,7 @@
 #include <utility>
 
 #include "../util/perf_trace.h"
+#include "../util/pm4_stats.h"
 
 #include <rex/assert.h>
 #include <rex/cvar.h>
@@ -2978,6 +2979,7 @@ void D3D12CommandProcessor::IssueSwap(uint32_t frontbuffer_ptr, uint32_t frontbu
                                       uint32_t frontbuffer_height) {
   SCOPE_profile_cpu_f("gpu");
   perf_trace::OnSwap();
+  pm4_stats::OnSwap();
   perf_trace::ZoneScope perf_zone(perf_trace::Zone::kSwap);
   rov_occlusion_frame_interval_ = 0;
   vertex_buffers_in_sync_[0] = 0;

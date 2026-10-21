@@ -985,6 +985,18 @@
       "provenance": "Original diagnostic integration source; guest function addresses and PM4 packet names only, no game function bodies"
     },
     {
+      "path": "work/fm4-rex/src/fm4-guest-hooks.cpp",
+      "provenance": "Original integration source: the hook registry of the D3D layer diagnostics; guest function addresses only, no game function bodies"
+    },
+    {
+      "path": "work/fm4-rex/src/fm4-guest-hooks.h",
+      "provenance": "Original integration source: declarations of the hook registry features; no game content"
+    },
+    {
+      "path": "work/fm4-rex/src/fm4-n0-trace.cpp",
+      "provenance": "Original diagnostic integration source: stage N0 counters of the D3D layer; guest addresses, structure offsets and PM4 opcodes only, no game function bodies"
+    },
+    {
       "path": "work/fm4-rex/src/fm4-dev-features.cpp",
       "provenance": "Original integration source; guest function addresses and structure offsets only, no game function bodies"
     },
@@ -1942,6 +1954,10 @@
     },
     {
       "path": "work/runtime/include/rex/system/guest_path.h",
+      "provenance": "runtime-fork"
+    },
+    {
+      "path": "work/runtime/include/rex/system/pm4_emissions.h",
       "provenance": "runtime-fork"
     },
     {
@@ -3642,6 +3658,10 @@
       "provenance": "runtime-fork"
     },
     {
+      "path": "work/runtime/src/graphics/util/pm4_stats.h",
+      "provenance": "runtime-fork"
+    },
+    {
       "path": "work/runtime/src/graphics/xenos.cpp",
       "provenance": "runtime-fork"
     },
@@ -4027,6 +4047,10 @@
     },
     {
       "path": "work/runtime/src/system/guest_path.cpp",
+      "provenance": "runtime-fork"
+    },
+    {
+      "path": "work/runtime/src/system/pm4_emissions.cpp",
       "provenance": "runtime-fork"
     },
     {

@@ -21,6 +21,7 @@
 #include <unordered_set>
 
 #include "util/perf_trace.h"
+#include "util/pm4_stats.h"
 
 #include <fmt/format.h>
 
@@ -842,11 +843,16 @@ bool CommandProcessor::ExecutePacket(memory::RingBuffer* reader) {
     REXGPU_WARN("GPU packet is CDCDCDCD - probably read uninitialized memory!");
   }
 
+  pm4_stats::CountPacket(packet_type);
   switch (packet_type) {
-    case 0x00:
+    case 0x00: {
+      perf_trace::SplitScope split(perf_trace::Split::kRegisters);
       return ExecutePacketType0(reader, packet);
-    case 0x01:
+    }
+    case 0x01: {
+      perf_trace::SplitScope split(perf_trace::Split::kRegisters);
       return ExecutePacketType1(reader, packet);
+    }
     case 0x02:
       return ExecutePacketType2(reader, packet);
     case 0x03:
@@ -961,6 +967,7 @@ bool CommandProcessor::ExecutePacketType3(memory::RingBuffer* reader, uint32_t p
   if (packet & 1) {
     bool any_pass = (bin_select_ & bin_mask_) != 0;
     if (!any_pass || opcode == PM4_XE_SWAP) {
+      pm4_stats::CountType3(opcode, true);
       perf_trace::Increment(perf_trace::Count::kPredicatedSkipped);
       if (opcode == PM4_DRAW_INDX || opcode == PM4_DRAW_INDX_2) ++perf_trace::segment_draws[0];
       reader->AdvanceRead(count * sizeof(uint32_t));
@@ -968,6 +975,41 @@ bool CommandProcessor::ExecutePacketType3(memory::RingBuffer* reader, uint32_t p
     }
     perf_trace::Increment(perf_trace::Count::kPredicatedRun);
   }
+  pm4_stats::CountType3(opcode, false);
+
+  perf_trace::Split split_kind = perf_trace::Split::kOther;
+  switch (opcode) {
+    case PM4_INDIRECT_BUFFER:
+    case PM4_INDIRECT_BUFFER_PFD:
+    case PM4_WAIT_REG_MEM:
+    case PM4_EVENT_WRITE_ZPD:
+    case PM4_XE_SWAP:
+      split_kind = perf_trace::Split::kNone;
+      break;
+    case PM4_SET_CONSTANT:
+    case PM4_SET_CONSTANT2:
+    case PM4_LOAD_ALU_CONSTANT:
+    case PM4_SET_SHADER_CONSTANTS:
+    case PM4_SET_BIN_MASK_LO:
+    case PM4_SET_BIN_MASK_HI:
+    case PM4_SET_BIN_SELECT_LO:
+    case PM4_SET_BIN_SELECT_HI:
+    case PM4_SET_BIN_MASK:
+    case PM4_SET_BIN_SELECT:
+      split_kind = perf_trace::Split::kRegisters;
+      break;
+    case PM4_IM_LOAD:
+    case PM4_IM_LOAD_IMMEDIATE:
+      split_kind = perf_trace::Split::kShaders;
+      break;
+    case PM4_DRAW_INDX:
+    case PM4_DRAW_INDX_2:
+      split_kind = perf_trace::Split::kDraw;
+      break;
+    default:
+      break;
+  }
+  perf_trace::SplitScope split(split_kind);
 
   bool result = false;
   switch (opcode) {
@@ -1226,6 +1268,7 @@ bool CommandProcessor::ExecutePacketType3_INDIRECT_BUFFER(memory::RingBuffer* re
   uint32_t list_length = reader->ReadAndSwap<uint32_t>();
   assert_zero(list_length & ~0xFFFFF);
   list_length &= 0xFFFFF;
+  pm4_stats::CountIndirectBuffer(list_length);
   ExecuteIndirectBuffer(GpuToCpu(list_ptr), list_length);
   return true;
 }
@@ -1804,9 +1847,20 @@ bool CommandProcessor::ExecutePacketType3_SET_CONSTANT2(memory::RingBuffer* read
   return true;
 }
 
+namespace {
+// Guest physical address of the type-3 header just read (pm4_stats emission
+// checks). The header of a packet at the start of a wrapped ring is reported at
+// the ring's start.
+uint32_t PacketAddress(const memory::RingBuffer* reader, const uint8_t* physical_membase) {
+  const uint32_t offset = uint32_t(reader->read_offset() >= 4 ? reader->read_offset() - 4 : 0);
+  return uint32_t(reader->buffer() + offset - physical_membase);
+}
+}  // namespace
+
 bool CommandProcessor::ExecutePacketType3_LOAD_ALU_CONSTANT(memory::RingBuffer* reader,
                                                             uint32_t packet, uint32_t count) {
   // load constants from memory
+  const uint32_t packet_address = PacketAddress(reader, memory_->TranslatePhysical<uint8_t*>(0));
   uint32_t address = reader->ReadAndSwap<uint32_t>();
   address &= 0x3FFFFFFF;
   uint32_t offset_type = reader->ReadAndSwap<uint32_t>();
@@ -1819,6 +1873,8 @@ bool CommandProcessor::ExecutePacketType3_LOAD_ALU_CONSTANT(memory::RingBuffer* 
     TraceGuestRead(GuestRead(uint32_t(GuestRead::kAluConstants) + type), address,
                    size_dwords * sizeof(uint32_t));
   }
+  pm4_stats::CheckEmission(system::pm4_emissions::Kind::kConstants, packet_address, xlat_address,
+                           size_dwords * sizeof(uint32_t));
   switch (type) {
     case 0:  // ALU
       WriteALURangeFromMem(index, xlat_address, size_dwords);
@@ -1855,6 +1911,7 @@ bool CommandProcessor::ExecutePacketType3_IM_LOAD(memory::RingBuffer* reader, ui
   SCOPE_profile_cpu_f("gpu");
 
   // load sequencer instruction memory (pointer-based)
+  const uint32_t packet_address = PacketAddress(reader, memory_->TranslatePhysical<uint8_t*>(0));
   uint32_t addr_type = reader->ReadAndSwap<uint32_t>();
   auto shader_type = static_cast<xenos::ShaderType>(addr_type & 0x3);
   uint32_t addr = addr_type & ~0x3;
@@ -1863,6 +1920,9 @@ bool CommandProcessor::ExecutePacketType3_IM_LOAD(memory::RingBuffer* reader, ui
   uint32_t size_dwords = start_size & 0xFFFF;  // dwords
   assert_true(start == 0);
   TraceGuestRead(GuestRead::kShader, addr, size_dwords * sizeof(uint32_t));
+  pm4_stats::CheckEmission(system::pm4_emissions::Kind::kShader, packet_address,
+                           memory_->TranslatePhysical<const uint8_t*>(addr),
+                           size_dwords * sizeof(uint32_t));
 
   auto shader =
       LoadShader(shader_type, addr, memory_->TranslatePhysical<uint32_t*>(addr), size_dwords);

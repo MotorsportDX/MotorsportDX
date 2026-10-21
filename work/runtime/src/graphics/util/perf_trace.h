@@ -9,6 +9,7 @@
 #include <cstdint>
 #include <cstdlib>
 #include <fstream>
+#include <intrin.h>
 #include <map>
 #include <string>
 #include <vector>
@@ -65,6 +66,24 @@ enum class Zone : uint32_t {
   kCount
 };
 
+// With REX_CP_SPLIT=1 (and the trace), packet handlers are timed by kind,
+// exclusive of each other: register writes (type 0 and 1, SET_CONSTANT(2),
+// LOAD_ALU_CONSTANT, SET_SHADER_CONSTANTS, bin masks and selects), shader loads
+// (IM_LOAD, IM_LOAD_IMMEDIATE), draw packets (DRAW_INDX, DRAW_INDX_2, with the
+// draw and copy zones and any wait inside them) and other packets. Indirect
+// buffers, WAIT_REG_MEM, EVENT_WRITE_ZPD and the swap are not timed here (they
+// nest packets or wait). Written as "cp_split_ms"; the time stamp counter keeps
+// the cost per packet low, but it is not zero, so compare cp_busy with a run
+// without the switch.
+enum class Split : uint32_t {
+  kRegisters,
+  kShaders,
+  kDraw,
+  kOther,
+  kCount,
+  kNone = kCount
+};
+
 struct State {
   std::ofstream output;
   Wait cause = Wait::kOther;
@@ -89,6 +108,9 @@ struct State {
   // so cp_busy stays comparable with traces that lack it.
   uint32_t submit_flushes = 0, submit_flushes_blocked = 0, submit_flush_jobs = 0;
   uint64_t submit_flush_ticks = 0;
+  uint64_t split_tsc[size_t(Split::kCount)]{};
+  uint32_t split_packets[size_t(Split::kCount)]{};
+  uint64_t window_tsc = 0;
 };
 
 // Every resolve destination seen in the run, rewritten as JSON next to the
@@ -120,10 +142,35 @@ inline State* Get() {
     if (!result->output.is_open()) return nullptr;
     result->frequency = 1000000000;
     result->origin = result->window_start = Now();
+    result->window_tsc = __rdtsc();
     return result;
   }();
   return state;
 }
+
+inline bool SplitEnabled() {
+  static const bool enabled = [] {
+    const char* value = std::getenv("REX_CP_SPLIT");
+    return Get() && value && *value && *value != '0';
+  }();
+  return enabled;
+}
+class SplitScope {
+ public:
+  explicit SplitScope(Split split)
+      : split_(SplitEnabled() ? split : Split::kNone),
+        start_(split_ != Split::kNone ? __rdtsc() : 0) {}
+  ~SplitScope() {
+    if (split_ == Split::kNone) return;
+    State* state = Get();
+    state->split_tsc[size_t(split_)] += __rdtsc() - start_;
+    ++state->split_packets[size_t(split_)];
+  }
+
+ private:
+  Split split_;
+  uint64_t start_;
+};
 
 // Attributes fence waits inside its scope to a cause.
 class CauseScope {
@@ -388,6 +435,20 @@ inline void OnSwap() {
                 << ",\"flushes_blocked\":" << state->submit_flushes_blocked
                 << ",\"flush_jobs\":" << state->submit_flush_jobs
                 << ",\"flush_wait_ms\":" << ms(state->submit_flush_ticks);
+  if (SplitEnabled()) {
+    const uint64_t tsc = __rdtsc() - state->window_tsc;
+    const double tsc_per_ms = double(tsc) / ms(elapsed);
+    static const char* const kSplitNames[] = {"registers", "shaders", "draw", "other"};
+    state->output << "},\"cp_split_ms\":{";
+    for (size_t i = 0; i < size_t(Split::kCount); ++i) {
+      state->output << (i ? "," : "") << '"' << kSplitNames[i]
+                    << "\":" << (tsc_per_ms > 0 ? double(state->split_tsc[i]) / tsc_per_ms : 0.0);
+    }
+    state->output << "},\"cp_split_packets\":{";
+    for (size_t i = 0; i < size_t(Split::kCount); ++i) {
+      state->output << (i ? "," : "") << '"' << kSplitNames[i] << "\":" << state->split_packets[i];
+    }
+  }
   // Every frame duration in the window, for run-wide percentiles and hitches.
   state->output << "},\"frame_ms\":[";
   for (size_t i = 0; i < state->frame_ms.size(); ++i) {
@@ -410,6 +471,7 @@ inline void OnSwap() {
   state->frequency = frequency;
   state->origin = origin;
   state->window_start = state->last_swap = now;
+  state->window_tsc = __rdtsc();
 }
 
 }  // namespace rex::graphics::perf_trace

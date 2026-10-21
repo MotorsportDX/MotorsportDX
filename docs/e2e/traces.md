@@ -19,6 +19,9 @@ Summary of the variables on this page:
 | `REX_BIN_TRACE` | draw packets per bin select | `REX_BIN_TRACE_EVERY`, default 10 | [Draw traces](#draw-traces) |
 | `REX_GPU_INVENTORY` | state per shader pair (JSON) | every 600 frames | [Inventory](#inventory-rex_gpu_inventory) |
 | `FM4_D3D_TRACE` | calls of PM4 packet writers | every 5 seconds | [PM4 writers](#pm4-writers-fm4_d3d_trace) |
+| `FM4_N0_TRACE`, `FM4_N0_KEYCHECK` | the title's D3D layer: replay paths, recordings, threads, ring allocations, emission hashes | every second, summary every 5 seconds | [D3D layer counters](#d3d-layer-counters-fm4_n0_trace) |
+| `REX_PM4_STATS` | packets per opcode, emission checks of IM_LOAD and LOAD_ALU_CONSTANT | every perf window | [PM4 statistics](#pm4-statistics-rex_pm4_stats) |
+| `REX_CP_SPLIT` | command-processor time per packet kind, in the perf trace | every perf window | [Performance trace](#performance-trace-rex_perf_trace_file) |
 | `REX_FRAME_GRAPH` | passes, resolves and GPU times (JSON lines) | `REX_FRAME_GRAPH_EVERY`, default 600 | [Frame graph](#frame-graph-rex_frame_graph) |
 | `REX_TRANSFER_DRAW_TRACE` | draws that needed ownership transfers | `REX_TRANSFER_DRAW_EVERY`, default 60 | [Transfer draws](#transfer-draws-rex_transfer_draw_trace) |
 | `REX_LATE_WRITE_TRACE`, `REX_STALE_PAGE_TRACE`, `REX_READBACK_SKIP_TRACE` | data race and stale data findings | every frame or every 4th frame | [Data race and stale data](#data-race-and-stale-data) |
@@ -54,6 +57,7 @@ Each line (one window) has:
   - `upload_ranges` (shared memory uploads).
   - `pipeline_draws_waited`, `pipeline_draws_dropped`, and `submissions`.
 - `cpu_ms`: command-processor time per zone, inclusive (`draw` contains the `draw_*` zones): `draw`, `draw_primitives`, `draw_render_targets`, `draw_pipeline`, `draw_textures`, `draw_bindings`, `draw_vertex_buffers`, `copy`, `submit`, `swap`, `shared_memory_lock`, `shared_memory_upload` (split into `shared_memory_copy` and `shared_memory_protect`), `submit_record` and `submit_execute`.
+- `cp_split_ms` and `cp_split_packets`, only with `REX_CP_SPLIT=1`: command-processor time and packets per packet kind, exclusive of each other and measured with the time stamp counter: `registers` (type-0 and type-1 packets, `SET_CONSTANT`, `SET_CONSTANT2`, `LOAD_ALU_CONSTANT`, `SET_SHADER_CONSTANTS`, bin masks and selects), `shaders` (`IM_LOAD`, `IM_LOAD_IMMEDIATE`), `draw` (`DRAW_INDX`, `DRAW_INDX_2`, including the `draw` and `copy` zones and any wait inside them) and `other`. Indirect buffers, `WAIT_REG_MEM`, `EVENT_WRITE_ZPD` and the swap are not timed. What `cp_busy` has beyond these and the `swap` zone is packet dispatch and the untimed packets. The timing costs a little per packet, so compare `cp_busy` with a run without the switch.
 - `submit_thread`: the `d3d12_submit_thread` replay thread and its drain at the swap:
   - `jobs`: submissions the thread finished; `busy_ms`: its wall time in total, split into `record_ms` (replaying the deferred command lists), `execute_ms` (`Close`, `ExecuteCommandLists` and `Signal`) and `callback_ms`.
   - `callbacks`, `callback_ms`: with `d3d12_submit_thread_async_swap`, the work the thread does after the swap submission: the presenter's guest output signal and the presentation of the frame (painting and `Present` when the guest output thread paints). Zero otherwise; missing in older traces.
@@ -124,6 +128,25 @@ python outputs\FM4-build\e2e\pm4_writers.py <BuildRoot>\project\generated\defaul
 ```
 
 The scan misses headers whose packet count is computed at run time (SET_CONSTANT). It finds predicated headers (bit 0 set) and reports them with a `(pred)` suffix. The scene draws are predicated `DRAW_INDX` packets (`0xC0032201`, `0xC0012201`), so their writers (`sub_82311080`, `sub_8233AC60`, `sub_8234D278`, `sub_8234DAE8`, see [Ghidra render path](../analysis/ghidra-render-path.md)) carry `DRAW_INDX(pred)` in the trace, next to the `SET_BIN_MASK_LO` header they also write.
+
+## D3D layer counters (FM4_N0_TRACE)
+
+`FM4_N0_TRACE=<file>` counts what stage N0 of the [D3D-level HLE plan](../analysis/d3d-hle.md#9-stages) measures, in [`work/fm4-rex/src/fm4-n0-trace.cpp`](../../work/fm4-rex/src/fm4-n0-trace.cpp). The hooks are in the hook registry [`fm4-guest-hooks.cpp`](../../work/fm4-rex/src/fm4-guest-hooks.cpp), which holds every hook of the D3D layer and its diagnostics (one definition per guest address). One JSON line per second:
+
+- `t`, `steady_ms`: seconds since the first hook call, and the steady clock (the clock of `REX_PM4_STATS`).
+- `frames`: `Swap` calls.
+- `ib`: replays and their descriptors, as `[calls, descriptors]` per path: `inline` (`RunCommandBuffer` writes one `INDIRECT_BUFFER` per descriptor into the segment it is writing, when bit `0x20` of the buffer's flags at +108 is clear), and the calls of `sub_826E4A28`: `deferred` (a tiling bracket is open, device+13584), `copied` (device+11152 is non-zero, the descriptors are copied into the ring), `queued` (the swap's call with r7 set: a tag stream and a DPC) and `direct` (it returns 0 and `sub_826E4BE0` writes `INDIRECT_BUFFER` at return address `0x826E4C20`).
+- `cb`: `begin`, `end`, `clone` and `run` (`BeginCommandBuffer`, `EndCommandBuffer`, `D3DCommandBuffer_CreateClone`, `RunCommandBuffer`), `distinct` buffers replayed in the second (a clone counts as its source), replays of a recording ended in an earlier frame (`reused`) or in the same frame (`same_frame`), the replays among those through another buffer object that points at the recording's first PM4 chunk (`by_chunk`), replays of buffers whose recording ended before the trace started (`unseen`), runs of the other object kind (`type10`), and with `FM4_N0_KEYCHECK` the first replay of a buffer that was not recorded in the trace (`first`) and replays whose PM4 is the same as at the previous replay or at `EndCommandBuffer` (`same`) or not (`changed`).
+- `emitted`: with `FM4_N0_KEYCHECK`, the `IM_LOAD` and `LOAD_ALU_CONSTANT` packets hashed at emission, and the written ranges that did not parse as whole packets (`scan_errors`).
+- `render`: the calls of the render thread's frame `sub_822DB318` that called `Swap`, with their total and longest time, and the calls without a `Swap` (`idle_calls`, `idle_ms`; the render loop calls it also while it has nothing to present).
+
+`<file>.summary` is rewritten every 5 seconds: `L <replays> <recordings>` (how many replays each recording had before it was recorded again, open ones with their replays so far), `H <runs from> <buffers>` (a histogram of the replays of buffers never seen ending) and `U` lines for the 16 most replayed of them (their first words, flags at +108, nodes and descriptors), `T <entry point> <thread id> <calls>` for the D3D entry points, the tile stream functions and the render frame, and `A <allocator> <return address> <calls> <dwords>` for `BeginCommand` `sub_823913D0`, `AllocateRingSpace` `sub_8234D738` and the segment overflow `sub_822FEF08` (called by inline writers when their segment is full).
+
+`FM4_N0_KEYCHECK=1` hashes, when the draw flush `sub_823436B8` writes them, the microcode of each `IM_LOAD` and the block of each `LOAD_ALU_CONSTANT`, keyed by the guest physical address of the packet, for the runtime's check ([PM4 statistics](#pm4-statistics-rex_pm4_stats)), and hashes the PM4 of each recording at `EndCommandBuffer` and again at each replay. It costs frame rate; use it for counts, not timing.
+
+## PM4 statistics (REX_PM4_STATS)
+
+`REX_PM4_STATS=<file>` writes one JSON line per perf trace window (so the lines match `perf.jsonl` and its phases), in [`pm4_stats.h`](../../work/runtime/src/graphics/util/pm4_stats.h): `steady_ms`, `swaps`, `packets` by type 0 to 3, `type3` as `"<opcode in hexadecimal>": [executed, skipped by predication]`, `indirect_buffers` and their dwords, and the emission checks `im_load` and `load_alu_constant`: a packet that `FM4_N0_KEYCHECK` recorded is hashed again when the command processor executes it, `same_*` or `changed_*` for packets written into the ring or into a recording, `unknown` for packets no hook recorded. `changed_shader_pairs` counts the distinct packet and hash pairs of changed `IM_LOAD`s in the run. `<file>.changes` lists the first 4,096 changed packets (kind, packet address, bytes, recorded, hash at emission, hash at execution).
 
 ## Frame graph (REX_FRAME_GRAPH)
 

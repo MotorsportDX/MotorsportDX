@@ -39,6 +39,8 @@ set(FM4REX_SOURCES
     src/fm4-jpeg-diagnostics.cpp
     src/fm4-ui-diagnostics.cpp
     src/fm4-d3d-trace.cpp
+    src/fm4-guest-hooks.cpp
+    src/fm4-n0-trace.cpp
     src/fm4-stream-trace.cpp
     src/fm4-streaming-fixes.cpp
     src/fm4-vblank-rate.cpp

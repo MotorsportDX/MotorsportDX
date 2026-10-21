@@ -1,7 +1,7 @@
 #define WIN32_LEAN_AND_MEAN
 #define NOMINMAX
 #include <Windows.h>
-#include <rex/hook.h>
+#include "fm4-guest-hooks.h"
 #include <cstdio>
 #include <cstdlib>
 #include <atomic>
@@ -9,14 +9,7 @@
 #include <fstream>
 #include <vector>
 
-REX_EXTERN(__imp__sub_82714208);
-REX_EXTERN(__imp__sub_82714388);
-REX_EXTERN(__imp__sub_82BB96E0);
-REX_EXTERN(__imp__sub_82859218);
-REX_EXTERN(__imp__sub_826DEF78);
-REX_EXTERN(__imp__sub_8273B290);
-REX_EXTERN(__imp__sub_822B0788);
-
+// Photo save diagnostics. The hooks are in fm4-guest-hooks.cpp.
 namespace {
 // Match generated REX_PHYS_HOST_OFFSET on Windows, including GPU writeback
 // pointers in the E0000000-FFFFFFFF physical-memory alias.
@@ -57,7 +50,10 @@ uint32_t ReadGuest32(uint8_t* base, uint32_t address) {
     return 0;
   return _byteswap_ulong(result);
 }
-void TraceJPEG(PPCContext& ctx, uint8_t* base, PPCFunc* original, uint32_t address) {
+}  // namespace
+
+namespace fm4::hooks {
+void TraceJpeg(PPCContext& ctx, uint8_t* base, PPCFunc* original, uint32_t address) {
   if (!std::getenv("FM4_CAPTURE_DIR")) { original(ctx, base); return; }
   const auto sp = ctx.r1.u32;
   const uint64_t saved[] = {ctx.r27.u64, ctx.r28.u64, ctx.r29.u64, ctx.r30.u64, ctx.r31.u64};
@@ -81,25 +77,21 @@ void TraceJPEG(PPCContext& ctx, uint8_t* base, PPCFunc* original, uint32_t addre
     std::fflush(stderr);
   }
 }
-}
 
-REX_HOOK_RAW(sub_82714208) { TraceJPEG(ctx, base, __imp__sub_82714208, 0x82714208); }
-REX_HOOK_RAW(sub_82714388) { TraceJPEG(ctx, base, __imp__sub_82714388, 0x82714388); }
-
-REX_HOOK_RAW(sub_82859218) {
+void TracePhotoSave(PPCContext& ctx, uint8_t* base, PPCFunc* original) {
   const char* directory = std::getenv("FM4_PHOTO_ENCODER_TRACE");
   static std::atomic<unsigned> calls{0};
   const int previous = photo_trace_call;
   const unsigned call = directory && *directory ? calls.fetch_add(1) : 8;
   photo_trace_call = call < 8 ? static_cast<int>(call) : -1;
   struct Restore { int previous; ~Restore() { photo_trace_call = previous; } } restore{previous};
-  __imp__sub_82859218(ctx, base);
+  original(ctx, base);
 }
 
-REX_HOOK_RAW(sub_826DEF78) {
+void TracePhotoTextureLock(PPCContext& ctx, uint8_t* base, PPCFunc* original) {
   const uint32_t texture = ctx.r3.u32, output = ctx.r5.u32;
   if (photo_trace_call >= 0) DumpPhotoRange(base, "lock-texture-before", texture, 64);
-  __imp__sub_826DEF78(ctx, base);
+  original(ctx, base);
   if (photo_trace_call >= 0) {
     DumpPhotoRange(base, "lock-result", output, 8);
     DumpPhotoRange(base, "lock-texture-after", texture, 64);
@@ -110,8 +102,8 @@ REX_HOOK_RAW(sub_826DEF78) {
 }
 
 // Observe the game's resource-fence wait without changing its timeout or result.
-REX_HOOK_RAW(sub_822B0788) {
-  if (photo_trace_call < 0) { __imp__sub_822B0788(ctx, base); return; }
+void TracePhotoFenceWait(PPCContext& ctx, uint8_t* base, PPCFunc* original) {
+  if (photo_trace_call < 0) { original(ctx, base); return; }
   const uint32_t device = ctx.r3.u32, wanted = ctx.r4.u32;
   const uint32_t pointer = ReadGuest32(base, device + 11024);
   const uint32_t before = ReadGuest32(base, pointer);
@@ -119,7 +111,7 @@ REX_HOOK_RAW(sub_822B0788) {
   LARGE_INTEGER begin{}, end{}, frequency{};
   QueryPerformanceFrequency(&frequency);
   QueryPerformanceCounter(&begin);
-  __imp__sub_822B0788(ctx, base);
+  original(ctx, base);
   QueryPerformanceCounter(&end);
   const uint32_t after = ReadGuest32(base, pointer);
   const uint32_t issued_after = ReadGuest32(base, device + 11036);
@@ -131,7 +123,7 @@ REX_HOOK_RAW(sub_822B0788) {
   std::fflush(stderr);
 }
 
-REX_HOOK_RAW(sub_8273B290) {
+void TracePhotoCopy(PPCContext& ctx, uint8_t* base, PPCFunc* original) {
   const uint32_t destination = ctx.r3.u32, pitch = ctx.r4.u32, source = ctx.r6.u32;
   const uint32_t width = ctx.r7.u32, height = ctx.r8.u32;
   const bool bounded = width <= 4096 && height <= 2160 && pitch <= 65536;
@@ -140,7 +132,7 @@ REX_HOOK_RAW(sub_8273B290) {
                  photo_trace_call, destination, pitch, ctx.r5.u32, source, width, height, ctx.r9.u32);
     DumpPhotoRange(base, "copy-source", source, uint64_t((width + 31) & ~31u) * ((height + 31) & ~31u) * 4);
   }
-  __imp__sub_8273B290(ctx, base);
+  original(ctx, base);
   if (photo_trace_call >= 0 && bounded) {
     DumpPhotoRange(base, "copy-output", destination, uint64_t(pitch) * height);
     std::fflush(stderr);
@@ -149,7 +141,7 @@ REX_HOOK_RAW(sub_8273B290) {
 
 // Opt-in observation of the photo encoder's actual input. Never changes guest
 // registers or memory, and caps both the number and size of snapshots.
-REX_HOOK_RAW(sub_82BB96E0) {
+void TracePhotoEncoder(PPCContext& ctx, uint8_t* base, PPCFunc* original) {
   const char* directory = std::getenv("FM4_PHOTO_ENCODER_TRACE");
   static std::atomic<unsigned> calls{0};
   if (directory && *directory) {
@@ -209,5 +201,6 @@ REX_HOOK_RAW(sub_82BB96E0) {
       }
     }
   }
-  __imp__sub_82BB96E0(ctx, base);
+  original(ctx, base);
 }
+}  // namespace fm4::hooks
