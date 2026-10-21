@@ -18,7 +18,8 @@ ALLOCATORS = ('BeginCommand', 'AllocateRingSpace', 'overflow')
 def functions(directory):
     """Sorted guest addresses of the functions of the generated code."""
     found = set()
-    for path in Path(directory).glob('fm4_rex_funcs.*.h'):
+    # fm4_rex_funcs.h declares every function; the numbered parts only those of a partition.
+    for path in [Path(directory) / 'fm4_rex_funcs.h']:
         found.update(int(m, 16) for m in re.findall(r'DECLARE_REX_FUNC\(sub_([0-9A-F]{8})\)',
                                                     path.read_text(errors='replace')))
     return sorted(found)
@@ -64,7 +65,9 @@ def windows(summary, perf, n0):
     anchor = next(((name, phase_mark(summary, name)) for name in steady if phase_mark(summary, name)), None)
     if menu and anchor and anchor[0] in marks:
         name, mark = anchor
-        # Offsets from the run's clock to the steady clock and to the perf trace's clock.
+        # Offsets from the run's clock to the steady clock and to the perf trace's clock. The
+        # perf window's t is the end of the first window of the phase, so the menu's perf
+        # windows can be off by one window at each end.
         to_steady = steady[name][0] - mark * 1000
         to_perf = perf[marks[name][0]]['t'] - mark if marks[name][0] < len(perf) else None
         start, end = menu[0] * 1000 + to_steady, menu[1] * 1000 + to_steady

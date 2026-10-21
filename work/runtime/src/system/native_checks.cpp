@@ -14,6 +14,7 @@ struct Shard {
 Shard shards[kShards];
 std::atomic<bool> active{false};
 std::atomic<uint64_t> overwritten{0};
+std::atomic<uint64_t> dropped{0};
 
 Shard& ShardOf(uint32_t packet_address) { return shards[(packet_address >> 2) % kShards]; }
 }  // namespace
@@ -45,5 +46,9 @@ bool Take(uint32_t packet_address, Entry* entry) {
 }
 
 uint64_t TakeOverwritten() { return overwritten.exchange(0, std::memory_order_relaxed); }
+
+void CountDropped() { dropped.fetch_add(1, std::memory_order_relaxed); }
+
+uint64_t TakeDropped() { return dropped.exchange(0, std::memory_order_relaxed); }
 
 }  // namespace rex::system::native_checks

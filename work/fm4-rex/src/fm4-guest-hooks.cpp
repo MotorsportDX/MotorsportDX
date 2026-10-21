@@ -152,7 +152,15 @@ REX_HOOK_RAW(sub_82370370) {  // DRAW_INDX_2 writer (clears, screen passes)
 FM4_CHECKED_HOOK(823114F8)  // WriteDirtyRegisters
 FM4_CHECKED_HOOK(82310E78)  // WriteDirtyFloatConstants
 FM4_CHECKED_HOOK(8230FA40)  // WriteDirtyFetchConstants
-FM4_CHECKED_HOOK(82379530)  // D3DDevice_WriteRegistersChunked
+// D3DDevice_WriteRegistersChunked writes at the pointer in r4 and returns the
+// new one in r3 (the caller stores it to device+48 later), so its range comes
+// from the arguments, not from device+48.
+REX_EXTERN(__imp__sub_82379530);
+REX_HOOK_RAW(sub_82379530) {
+  NativeCheckPre(0x82379530, base, ctx.r4.u32);
+  __imp__sub_82379530(ctx, base);
+  NativeCheckPost(base, ctx.r3.u32);
+}
 REX_EXTERN(__imp__sub_8237FA28);
 REX_HOOK_RAW(sub_8237FA28) {  // D3DDevice_Swap
   D3DTraceCount(0x8237FA28, ctx);
@@ -220,19 +228,23 @@ REX_HOOK_RAW(sub_826E4A28) {  // Indirect buffer paths of RunCommandBuffer and S
 REX_EXTERN(__imp__sub_823913D0);
 REX_HOOK_RAW(sub_823913D0) {  // BeginCommand
   N0RingAllocation(0, ctx);
+  NativeCheckSplitPre(base);
   __imp__sub_823913D0(ctx, base);
+  NativeCheckSplitPost(base);
 }
 REX_EXTERN(__imp__sub_8234D738);
 REX_HOOK_RAW(sub_8234D738) {  // AllocateRingSpace
   N0RingAllocation(1, ctx);
+  NativeCheckSplitPre(base);
   __imp__sub_8234D738(ctx, base);
+  NativeCheckSplitPost(base);
 }
 REX_EXTERN(__imp__sub_822FEF08);
 REX_HOOK_RAW(sub_822FEF08) {  // Segment overflow of the inline writers
   N0OverflowPre(ctx, base);
-  NativeCheckOverflowPre(base);
+  NativeCheckSplitPre(base);
   __imp__sub_822FEF08(ctx, base);
-  NativeCheckOverflowPost(base);
+  NativeCheckSplitPost(base);
   N0OverflowPost(ctx, base);
 }
 

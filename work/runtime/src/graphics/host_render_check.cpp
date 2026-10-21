@@ -49,11 +49,29 @@ struct CommandProcessor::HostCheckState {
   std::vector<pm4_decode::Draw> draws;
   uint64_t compared = 0;
   uint32_t perturb = 0;
-  uint32_t messages = 0;
+  uint32_t messages[size_t(perf_trace::HostCheckReason::kCount)] = {};
+  uint32_t incomplete_messages = 0;
 };
 
 namespace {
 constexpr uint32_t kMaxMessages = 64;
+
+// Registers whose value the command processor changes by design after the
+// write: the coherency request (WriteRegister sets bit 31, MakeCoherent clears
+// it when it is done) and the gamma ramp's port, whose index the data writes
+// advance.
+bool ChangedByExecution(uint32_t index) {
+  switch (index) {
+    case XE_GPU_REG_COHER_STATUS_HOST:
+    case XE_GPU_REG_DC_LUT_RW_INDEX:
+    case XE_GPU_REG_DC_LUT_SEQ_COLOR:
+    case XE_GPU_REG_DC_LUT_PWL_DATA:
+    case XE_GPU_REG_DC_LUT_30_COLOR:
+      return true;
+    default:
+      return false;
+  }
+}
 }  // namespace
 
 void CommandProcessor::InitializeHostCheck() {
@@ -80,22 +98,19 @@ void CommandProcessor::HostCheckBeforePacket(const memory::RingBuffer* reader) {
     if (system::native_checks::Take(address, &entry)) {
       if (state.capturing) {
         // A range that never reached its end: not compared.
-        perf_trace::host_check_unmatched.fetch_add(1, std::memory_order_relaxed);
+        perf_trace::host_check_incomplete.fetch_add(1, std::memory_order_relaxed);
+        if (state.incomplete_messages < 16) {
+          ++state.incomplete_messages;
+          REXGPU_WARN(
+              "Native check: writer {:08X}, range at {:08X} to {:08X} left before its end for "
+              "the range at {:08X} (ring {:08X}, {} bytes)",
+              state.entry.writer, state.begin, state.end, address, primary_buffer_ptr_,
+              primary_buffer_size_);
+        }
       }
       state.capturing = true;
       state.begin = address;
       state.end = address + uint32_t(entry.dwords.size() * sizeof(uint32_t));
-      // The PM4 the command processor reads now against the copy taken when the
-      // writer returned.
-      const uint32_t* guest = memory_->TranslatePhysical<const uint32_t*>(address);
-      state.bytes_changed = false;
-      for (size_t i = 0; i < entry.dwords.size(); ++i) {
-        if (guest[i] != entry.dwords[i]) {
-          state.bytes_changed = true;
-          state.first_changed = uint32_t(i);
-          break;
-        }
-      }
       state.decoded =
           pm4_decode::Decode(entry.dwords.data(), entry.dwords.size(), bin_select_, bin_mask_);
       state.entry = std::move(entry);
@@ -118,6 +133,12 @@ void CommandProcessor::HostCheckDraw(uint32_t initiator, uint32_t dma_base, uint
   host_check_state_->draws.push_back({initiator, dma_base, dma_size});
 }
 
+void CommandProcessor::HostCheckBufferEnd(uint32_t end_address) {
+  if (host_check_state_->capturing && end_address == host_check_state_->end) {
+    HostCheckFinish();
+  }
+}
+
 void CommandProcessor::HostCheckFinish() {
   HostCheckState& state = *host_check_state_;
   state.capturing = false;
@@ -125,10 +146,25 @@ void CommandProcessor::HostCheckFinish() {
   const pm4_decode::Decoded& decoded = state.decoded;
   const uint32_t writer = state.entry.writer;
   ++perf_trace::host_checks[writer];
-  perf_trace::host_check_unmatched.fetch_add(system::native_checks::TakeOverwritten(),
-                                             std::memory_order_relaxed);
+  perf_trace::host_check_overwritten.fetch_add(system::native_checks::TakeOverwritten(),
+                                               std::memory_order_relaxed);
+  perf_trace::host_check_dropped.fetch_add(system::native_checks::TakeDropped(),
+                                           std::memory_order_relaxed);
   std::string difference;
+  perf_trace::HostCheckReason reason = perf_trace::HostCheckReason::kCount;
+  // The PM4 the command processor read against the copy taken when the writer
+  // returned.
+  const uint32_t* guest = memory_->TranslatePhysical<const uint32_t*>(state.begin);
+  state.bytes_changed = false;
+  for (size_t i = 0; i < state.entry.dwords.size(); ++i) {
+    if (guest[i] != state.entry.dwords[i]) {
+      state.bytes_changed = true;
+      state.first_changed = uint32_t(i);
+      break;
+    }
+  }
   if (state.bytes_changed) {
+    reason = perf_trace::HostCheckReason::kBytes;
     difference = fmt::format("the PM4 changed after the writer returned (dword {})",
                              state.first_changed);
   }
@@ -152,7 +188,8 @@ void CommandProcessor::HostCheckFinish() {
     };
     order.erase(std::remove_if(order.begin(), order.end(),
                                [&](uint32_t index) {
-                                 return index >= RegisterFile::kRegisterCount || loaded(index);
+                                 return index >= RegisterFile::kRegisterCount || loaded(index) ||
+                                        ChangedByExecution(index);
                                }),
                 order.end());
     if (perturb && !order.empty()) {
@@ -165,6 +202,8 @@ void CommandProcessor::HostCheckFinish() {
       if (value != last[index]) {
         difference = fmt::format("register {:04X} is {:08X}, the record has {:08X}", index,
                                  value, last[index]);
+        reason = perf_trace::HostCheckReason::kRegisters;
+        ++perf_trace::host_check_registers[index];
         break;
       }
     }
@@ -178,6 +217,7 @@ void CommandProcessor::HostCheckFinish() {
     if (state.type3.size() != decoded.type3.size()) {
       difference = fmt::format("{} type-3 packets executed, the record has {}",
                                state.type3.size(), decoded.type3.size());
+      reason = perf_trace::HostCheckReason::kType3;
     }
     for (size_t i = 0; difference.empty() && i < state.type3.size(); ++i) {
       const pm4_decode::Type3& a = state.type3[i];
@@ -186,11 +226,13 @@ void CommandProcessor::HostCheckFinish() {
         difference = fmt::format("type-3 packet {} is opcode {:02X} {}, the record has {:02X} {}",
                                  i, a.opcode, a.runs ? "run" : "skipped", b.opcode,
                                  b.runs ? "run" : "skipped");
+        reason = perf_trace::HostCheckReason::kType3;
       }
     }
     if (difference.empty() && state.draws.size() != expected_draws.size()) {
       difference = fmt::format("{} draws issued, the record has {}", state.draws.size(),
                                expected_draws.size());
+      reason = perf_trace::HostCheckReason::kDraws;
     }
     for (size_t i = 0; difference.empty() && i < state.draws.size(); ++i) {
       const pm4_decode::Draw& a = state.draws[i];
@@ -200,13 +242,17 @@ void CommandProcessor::HostCheckFinish() {
             "draw {} has initiator {:08X} base {:08X} size {:08X}, the record has {:08X} {:08X} "
             "{:08X}",
             i, a.initiator, a.dma_base, a.dma_size, b.initiator, b.dma_base, b.dma_size);
+        reason = perf_trace::HostCheckReason::kDraws;
       }
     }
   }
   if (!difference.empty()) {
     perf_trace::host_check_mismatches.fetch_add(1, std::memory_order_relaxed);
-    if (state.messages < kMaxMessages) {
-      ++state.messages;
+    ++perf_trace::host_check_reasons[size_t(reason)];
+    // The first messages of each kind, so that a frequent kind does not hide
+    // the others.
+    if (state.messages[size_t(reason)] < kMaxMessages) {
+      ++state.messages[size_t(reason)];
       REXGPU_ERROR("Native check: writer {:08X}, range at {:08X} ({} dwords, record {}): {}",
                    writer, state.begin, state.entry.dwords.size(), state.entry.sequence,
                    difference);

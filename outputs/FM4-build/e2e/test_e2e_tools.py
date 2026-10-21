@@ -298,5 +298,42 @@ class SummaryTests(unittest.TestCase):
         self.assertEqual(compare.check_fail(b, c), [])
 
 
+class CoverageTests(unittest.TestCase):
+    """coverage.py: the writers of each phase from the n0 trace's alloc table and the checks."""
+
+    def test_phases_and_menu(self):
+        import coverage
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            (root / 'fm4_rex_funcs.h').write_text(
+                'DECLARE_REX_FUNC(sub_82000000);\nDECLARE_REX_FUNC(sub_82000100);\n')
+            # The run's clock: menu steps at 10 to 20 s, the race from 30 s; steady = run * 1000 + 5000.
+            lines = [{'steady_ms': 5000 + 1000 * s, 'alloc': {'AllocateRingSpace:82000010': [2, 8]}}
+                     for s in range(12, 21)]
+            lines += [{'steady_ms': 5000 + 1000 * s, 'alloc': {'overflow:82000120': [1, 0]}}
+                      for s in range(32, 40)]
+            trace = root / 'n0.jsonl'
+            trace.write_text('\n'.join(json.dumps(l) for l in lines) + '\n')
+            perf = [{'t': float(s), 'frame_ms': [16.0] * 60,
+                     'host_render': {'checks': {'82000100': 5}}} for s in range(1, 45)]
+            (root / 'perf.jsonl').write_text('\n'.join(json.dumps(p) for p in perf) + '\n')
+            summary = {'n0_trace': str(trace), 'n0_trace_offset': 0,
+                       'timeline': [[10.0, 'wait', 'PLAY CAREER', True], [20.0, 'select:START RACE', True],
+                                    [30.0, 'phase:race'], [40.0, 'phase:end']],
+                       'phase_steady_ms': {'race': [35000.0, 45000.0]},
+                       'phase_windows': {'race': [29, 39]}}
+            (root / 'summary.json').write_text(json.dumps(summary))
+            starts = coverage.functions(root)
+            self.assertEqual(starts, [0x82000000, 0x82000100])
+            n0 = lines
+            result = {name: coverage.tally(l, p, starts)
+                      for name, (l, p) in coverage.windows(summary, perf, n0).items()}
+            self.assertEqual(list(result), ['menu', 'race'])
+            self.assertEqual(result['menu']['allocations']['sub_82000000']['AllocateRingSpace'],
+                             [18, 72])
+            self.assertEqual(result['race']['allocations']['sub_82000100']['overflow'], [8, 0])
+            self.assertEqual(result['race']['checks'], {'sub_82000100': 50})
+
+
 if __name__ == '__main__':
     unittest.main()

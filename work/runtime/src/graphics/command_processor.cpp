@@ -700,6 +700,11 @@ uint32_t CommandProcessor::ExecutePrimaryBuffer(uint32_t read_index, uint32_t wr
       break;
     }
   } while (reader.read_count());
+  if (host_check_) {
+    // At the end of the ring the next packet is at its start.
+    HostCheckBufferEnd(primary_buffer_ptr_ +
+                       (write_index ? write_index * 4 : primary_buffer_size_));
+  }
 
   OnPrimaryBufferEnd();
 
@@ -844,6 +849,9 @@ void CommandProcessor::ExecuteIndirectBuffer(uint32_t ptr, uint32_t count) {
       break;
     }
   } while (reader.read_count());
+  if (host_check_) {
+    HostCheckBufferEnd(ptr + count * sizeof(uint32_t));
+  }
 
   if (trace) {
     if (trace->sampled()) {

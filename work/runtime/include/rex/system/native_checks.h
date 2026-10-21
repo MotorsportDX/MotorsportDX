@@ -27,5 +27,9 @@ bool Take(uint32_t packet_address, Entry* entry);
 // Entries replaced by a newer one at the same address before they were taken,
 // since the last call.
 uint64_t TakeOverwritten();
+// Ranges a hook could not copy (a write pointer that went backwards or jumped
+// more than 1 MB, or an allocation inside a writer that passes its own pointer).
+void CountDropped();
+uint64_t TakeDropped();
 
 }  // namespace rex::system::native_checks

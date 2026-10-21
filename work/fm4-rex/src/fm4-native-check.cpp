@@ -8,8 +8,11 @@
 // and the pointer after the body into rex/system/native_checks.h, keyed by the
 // guest physical address of the first packet. Only the outermost hooked writer
 // of a thread copies (the draw writers call the flush and the dirty writers).
-// A segment overflow inside the writer (sub_822FEF08) ends the range before the
-// overflow, and a new one starts after it. Nothing is copied while the device
+// A ring allocation inside the writer (BeginCommand sub_823913D0,
+// AllocateRingSpace sub_8234D738, the segment overflow sub_822FEF08) may move
+// the write pointer to another command buffer segment, so it ends the range
+// before the call and a new one starts after it; the PM4 the allocator writes
+// itself is not copied. Nothing is copied while the device
 // records a command buffer (device+13904): that PM4 is not in the ring. The
 // runtime compares the copies with what it executes when host_render_check is
 // set.
@@ -51,11 +54,16 @@ struct Range {
   uint32_t writer = 0;
   uint32_t start = 0;  // device+48 when the range started.
   bool active = false;
+  bool explicit_pointer = false;  // The writer passes its write pointer.
 };
 thread_local Range range;
 
 void Copy(uint8_t* base, uint32_t start, uint32_t end) {
-  if (end <= start || end - start > (1u << 20)) {
+  if (end == start) {
+    return;
+  }
+  if (end < start || end - start > (1u << 20)) {
+    rex::system::native_checks::CountDropped();
     return;
   }
   const uint32_t first = Physical(start + 4);
@@ -75,28 +83,39 @@ void NativeCheckDevice(uint32_t address) {
   if (Enabled()) device.store(address, std::memory_order_relaxed);
 }
 
-void NativeCheckPre(uint32_t writer, uint8_t* base) {
+void NativeCheckPre(uint32_t writer, uint8_t* base, uint32_t pointer) {
   if (!Enabled() || range.depth++) return;
   const uint32_t dev = device.load(std::memory_order_relaxed);
   range.writer = writer;
   range.active = dev && !Load32(base, dev + 13904);
-  if (range.active) range.start = Load32(base, dev + 48);
+  range.explicit_pointer = pointer != 0;
+  if (range.active) range.start = pointer ? pointer : Load32(base, dev + 48);
 }
 
-void NativeCheckPost(uint8_t* base) {
+void NativeCheckPost(uint8_t* base, uint32_t pointer) {
   if (!Enabled() || --range.depth) return;
   if (range.active) {
-    Copy(base, range.start, Load32(base, device.load(std::memory_order_relaxed) + 48));
+    Copy(base, range.start,
+         pointer ? pointer : Load32(base, device.load(std::memory_order_relaxed) + 48));
     range.active = false;
   }
 }
 
-void NativeCheckOverflowPre(uint8_t* base) {
+void NativeCheckSplitPre(uint8_t* base) {
   if (!Enabled() || !range.depth || !range.active) return;
-  Copy(base, range.start, Load32(base, device.load(std::memory_order_relaxed) + 48));
+  if (range.explicit_pointer) {
+    // The writer's own pointer is not visible here: the range is not checked.
+    rex::system::native_checks::CountDropped();
+    range.active = false;
+    return;
+  }
+  const uint32_t current = Load32(base, device.load(std::memory_order_relaxed) + 48);
+  Copy(base, range.start, current);
+  // Nested allocators (the overflow inside AllocateRingSpace) copy nothing twice.
+  range.start = current;
 }
 
-void NativeCheckOverflowPost(uint8_t* base) {
+void NativeCheckSplitPost(uint8_t* base) {
   if (!Enabled() || !range.depth || !range.active) return;
   range.start = Load32(base, device.load(std::memory_order_relaxed) + 48);
 }

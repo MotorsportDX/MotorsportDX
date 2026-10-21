@@ -236,14 +236,19 @@ inline void CountVblank(uint32_t kind) {
 // into the last record because the queue was full; guest threads).
 inline std::atomic<bool> host_render{false};
 inline std::atomic<uint32_t> host_merged_spans{0};
-// The identity check (host_render_check): ranges compared by writer (host
-// render thread only), mismatches, ranges never compared (overwritten before
-// they were reached, or left before their end) and ranges changed on purpose
-// (host_render_check_perturb).
+// The identity check (host_render_check): ranges compared by writer, the
+// mismatches by kind (the PM4 changed after production, a register, the type-3
+// packets and predicate decisions, the draws) and the registers that differed
+// (these three on the host render thread only), ranges never compared (replaced
+// by a newer copy at the same address before they were reached, or left before
+// their end) and ranges changed on purpose (host_render_check_perturb).
+enum class HostCheckReason : uint32_t { kBytes, kRegisters, kType3, kDraws, kCount };
 inline std::atomic<bool> host_check{false};
 inline std::map<uint32_t, uint64_t> host_checks;
-inline std::atomic<uint64_t> host_check_mismatches{0}, host_check_unmatched{0},
-    host_check_perturbed{0};
+inline uint64_t host_check_reasons[size_t(HostCheckReason::kCount)]{};
+inline std::map<uint32_t, uint64_t> host_check_registers;
+inline std::atomic<uint64_t> host_check_mismatches{0}, host_check_overwritten{0},
+    host_check_incomplete{0}, host_check_dropped{0}, host_check_perturbed{0};
 inline void CountHostMergedSpan() {
   if (Get()) host_merged_spans.fetch_add(1, std::memory_order_relaxed);
 }
@@ -500,10 +505,30 @@ inline void OnSwap() {
         first_writer = false;
       }
       host_checks.clear();
+      static const char* const kReasonNames[] = {"bytes", "registers", "type3", "draws"};
       state->output << "},\"check_mismatches\":"
                     << host_check_mismatches.exchange(0, std::memory_order_relaxed)
-                    << ",\"check_unmatched\":"
-                    << host_check_unmatched.exchange(0, std::memory_order_relaxed)
+                    << ",\"check_reasons\":{";
+      for (size_t i = 0; i < size_t(HostCheckReason::kCount); ++i) {
+        state->output << (i ? "," : "") << '"' << kReasonNames[i]
+                      << "\":" << host_check_reasons[i];
+        host_check_reasons[i] = 0;
+      }
+      state->output << "},\"check_registers\":{";
+      bool first_register = true;
+      for (const auto& [index, count] : host_check_registers) {
+        char name[8];
+        std::snprintf(name, sizeof(name), "%04X", index);
+        state->output << (first_register ? "" : ",") << '"' << name << "\":" << count;
+        first_register = false;
+      }
+      host_check_registers.clear();
+      state->output << "},\"check_overwritten\":"
+                    << host_check_overwritten.exchange(0, std::memory_order_relaxed)
+                    << ",\"check_incomplete\":"
+                    << host_check_incomplete.exchange(0, std::memory_order_relaxed)
+                    << ",\"check_dropped\":"
+                    << host_check_dropped.exchange(0, std::memory_order_relaxed)
                     << ",\"check_perturbed\":"
                     << host_check_perturbed.exchange(0, std::memory_order_relaxed);
     }

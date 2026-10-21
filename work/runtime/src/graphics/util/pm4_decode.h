@@ -169,7 +169,35 @@ inline Decoded Decode(const uint32_t* dwords, size_t count, uint64_t bin_select,
         case PM4_SET_BIN_SELECT:
           if (body >= 2) bin_select = (uint64_t(word(data)) << 32) | word(data + 1);
           break;
+        case PM4_EVENT_WRITE:
+        case PM4_EVENT_WRITE_SHD:
+        case PM4_EVENT_WRITE_EXT:
+        case PM4_EVENT_WRITE_ZPD:
+          // The command processor writes the event's initiator.
+          out.loaded.emplace_back(XE_GPU_REG_VGT_EVENT_INITIATOR, 1);
+          break;
+        case PM4_VIZ_QUERY:
+          out.loaded.emplace_back(XE_GPU_REG_VGT_EVENT_INITIATOR, 1);
+          out.loaded.emplace_back(XE_GPU_REG_PA_SC_VIZ_QUERY_STATUS_0, 1);
+          out.loaded.emplace_back(XE_GPU_REG_PA_SC_VIZ_QUERY_STATUS_1, 1);
+          break;
+        case PM4_ME_INIT:
+        case PM4_NOP:
+        case PM4_INTERRUPT:
+        case PM4_XE_SWAP:
+        case PM4_WAIT_REG_MEM:
+        case PM4_WAIT_FOR_IDLE:
+        case PM4_MEM_WRITE:
+        case PM4_REG_TO_MEM:
+        case PM4_IM_LOAD:
+        case PM4_IM_LOAD_IMMEDIATE:
+        case PM4_INVALIDATE_STATE:
+        case PM4_CONTEXT_UPDATE:
+          // No register write.
+          break;
         default:
+          // A packet this decoder does not model may write any register.
+          out.unknown_writes = true;
           break;
       }
     }

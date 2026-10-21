@@ -160,6 +160,9 @@ class CommandProcessor {
   void HostCheckType3(uint32_t opcode, bool runs);
   void HostCheckDraw(uint32_t initiator, uint32_t dma_base, uint32_t dma_size);
   void HostCheckFinish();
+  // A buffer ended at this guest physical address: a range ending there is
+  // complete (its end is never reached as the address of a next packet).
+  void HostCheckBufferEnd(uint32_t end_address);
   virtual bool SetupContext() = 0;
   virtual void ShutdownContext() = 0;
 

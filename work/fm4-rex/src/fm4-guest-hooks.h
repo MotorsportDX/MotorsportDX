@@ -80,9 +80,13 @@ void N0RenderFrameEnd(uint64_t start);
 // check of the native path. Pre and post calls bracket a PM4 writer's original
 // body; the device comes from the draw flush.
 void NativeCheckDevice(uint32_t address);
-void NativeCheckPre(uint32_t writer, uint8_t* base);
-void NativeCheckPost(uint8_t* base);
-void NativeCheckOverflowPre(uint8_t* base);
-void NativeCheckOverflowPost(uint8_t* base);
+// pointer: the write pointer where the range starts or ends (the last dword
+// written), when the writer does not keep device+48 current; 0 for device+48.
+void NativeCheckPre(uint32_t writer, uint8_t* base, uint32_t pointer = 0);
+void NativeCheckPost(uint8_t* base, uint32_t pointer = 0);
+// Around the ring allocators and the segment overflow, which may move the
+// write pointer to another segment: the range ends before and restarts after.
+void NativeCheckSplitPre(uint8_t* base);
+void NativeCheckSplitPost(uint8_t* base);
 
 }  // namespace fm4::hooks
