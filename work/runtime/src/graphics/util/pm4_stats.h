@@ -9,13 +9,15 @@
 // again when the command processor executes it. "same" means the memory it reads
 // is the memory it pointed at when written, "changed" that the guest rewrote it
 // in between, each split by packets written into the ring and into a command
-// buffer recording. A packet that no hook recorded counts as "unknown" at its
-// first execution, whose bytes then serve as the reference for its later
-// executions ("same_executed", "changed_executed"; only while a hook records).
-// Changed packets are listed in <file>.changes ("<kind> <packet> <length>
-// <0 ring, 1 recording, 2 first execution> <reference hash> <hash at
-// execution>", hexadecimal, at most 4,096 lines). Without the variable every
-// helper returns at once.
+// buffer recording. A packet that no hook recorded counts as "unknown"; while a
+// hook records (the table is active), only at its first execution, whose bytes
+// then serve as the reference for its later executions ("same_executed",
+// "changed_executed"), and without a hook at every execution. Changed packets
+// are listed in <file>.changes ("<kind: 0 IM_LOAD, 1 LOAD_ALU_CONSTANT>
+// <packet> <length> <0 ring, 1 recording, 2 first execution> <reference hash>
+// <hash at execution>", hexadecimal, at most 4,096 lines). The emission table
+// and the set of changed shader packets are never pruned, so they grow with the
+// run. Without the variable every helper returns at once.
 
 #include <cstdint>
 #include <cstdio>

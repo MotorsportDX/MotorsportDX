@@ -1849,10 +1849,12 @@ bool CommandProcessor::ExecutePacketType3_SET_CONSTANT2(memory::RingBuffer* read
 
 namespace {
 // Guest physical address of the type-3 header just read (pm4_stats emission
-// checks). The header of a packet at the start of a wrapped ring is reported at
-// the ring's start.
+// checks), 0 without REX_PM4_STATS. A header in the last dword of the buffer
+// left the read offset wrapped to 0.
 uint32_t PacketAddress(const memory::RingBuffer* reader, const uint8_t* physical_membase) {
-  const uint32_t offset = uint32_t(reader->read_offset() >= 4 ? reader->read_offset() - 4 : 0);
+  if (!pm4_stats::Get()) return 0;
+  const uint32_t offset =
+      uint32_t(reader->read_offset() ? reader->read_offset() - 4 : reader->capacity() - 4);
   return uint32_t(reader->buffer() + offset - physical_membase);
 }
 }  // namespace
