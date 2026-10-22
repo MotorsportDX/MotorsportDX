@@ -1,6 +1,6 @@
 # D3D-level HLE: feasibility and plan
 
-Status: analysis, 21 October 2026. The same day the project owner chose a native port as the target; its architecture and stages are in sections 8 and 9, the measurements of stage N0 are in section 13, and the design of stage N1 with the order of its increments is in section 14, with the results of increments 1 to 3 in 14.6, 14.8 and 14.10 and the end of N1 in 14.11; the design of stage N2 is in section 15. Addresses are the USA `default.xex` (the Japan/Asia executable has the same code, see [release comparison](releases.md)). The generated C++ that was read is `<BuildRoot>\project\generated\default`; the catalog, call graph and decompiled functions stay outside the repository under `I:\FM4-re` ([function catalog](function-catalog.md)).
+Status: analysis, 21 October 2026. The same day the project owner chose a native port as the target; its architecture and stages are in sections 8 and 9, the measurements of stage N0 are in section 13, and the design of stage N1 with the order of its increments is in section 14, with the results of increments 1 to 3 in 14.6, 14.8 and 14.10 and the end of N1 in 14.11; the design of stage N2 is in section 15, and the design of stage N3 in section 16. Addresses are the USA `default.xex` (the Japan/Asia executable has the same code, see [release comparison](releases.md)). The generated C++ that was read is `<BuildRoot>\project\generated\default`; the catalog, call graph and decompiled functions stay outside the repository under `I:\FM4-re` ([function catalog](function-catalog.md)).
 
 ## Summary
 
@@ -744,3 +744,45 @@ On `I:\FM4-build-usa`, the native path at 240 Hz and 1x (build of 22 October 202
 - **(ii) Descriptors**: not built. The bindless path already keeps descriptor indices while the shaders' layouts and the textures' SRV keys stay the same, and the whole descriptor phase took 0.156 ms a frame with the timers of 15.10, so (i) and (ii) together cannot reach the 0.15 ms of the timebox. The main session accepted leaving it out on 22 October 2026.
 - By the timebox, `d3d12_reuse_draw_bindings` stays off by default, and N2 closes. Its result: the replays are measured (15.7), the draw path is profiled (15.10), and neither the op lists (15.8) nor the reuse of bindings saves render thread time on this backend. The render thread's time per race frame with the launcher defaults and `-Native` is 3.1 to 3.4 ms (15.7, 15.12) against the 2.5 ms of section 10, which N4 takes up; the profile points at the descriptor and constant buffer work and the render target cache leaving the render thread or changing in N3.
 - The closing gate on the same build (`fm4_rex.exe` SHA-256 beginning `78bedf74a7dcd99a`, `rexgpu-xenos.dll` `c517e68a6f680fa2`, `rexruntime.dll` `69ff51d7dace118a`; the op lists and the reuse off, `-Native` with the records): smoke `n2zrtv` against `n2znat`, the `career` race 231.9 against 220.4 fps and the replay 115.3 against 118.2 fps (PASS), the `photo` race 221.5 against 218.6 fps and `photo_view` 57.0 against 56.9 fps (WARN on capture statistics only); `parity.py` on the one-tile `freeze` (`n2zfz-rtv`, `n2zfz-nat`) PASS, draws +0.0%, image 22.78%; the error keys of RTV everywhere.
+
+## 16. Stage N3 design, 22 October 2026
+
+Stage N3 (section 9) moves the render targets out of the EDRAM model: host targets keyed by the title's surfaces, resolves as host copies with readback on demand, one-pass tiles and native MSAA, the post passes anchored on surfaces. The design table of section 8 holds; this section measures where the GPU and the render thread spend the work N3 changes, and orders the increments by it. The resolve and tiling writers deferred from N1 (14.11) belong here.
+
+### 16.1 Measured, 22 October 2026
+
+RTV with the launcher defaults (one tile with TAA), the `career` scenario with `REX_FRAME_GRAPH` every 60th frame at 1x (`n3m-fg-career`, 268 race frames) and at 2x (`n3m-fg2x-career`, 163 race frames), and the perf gate at 2x (`n3m2xp`, the `photo` race, three runs), on `I:\FM4-build-usa` at 240 Hz. Per race frame:
+
+| | 1x | 2x |
+|---|---|---|
+| GPU time in passes (frame graph) | 1.94 ms | 3.97 ms |
+| GPU time in resolves, with the transfers and texture loads issued for them | 1.15 ms | 2.75 ms (41% of the frame's) |
+| of which the full-screen depth resolve (1280x720 to `8_8_8_8`) | 0.39 ms (1.25 a frame) | 1.11 ms (1.43 a frame) |
+| of which the full-screen colour resolve (1280x720, `2_10_10_10`) | 0.42 ms (2.21 a frame) | 0.84 ms (2.59 a frame) |
+| Resolves | 28 (28 to 35) | 28 |
+| Ownership transfers | 20 (18 to 24) | 20, 0.25 ms in the passes that only transfer |
+| Surfaces (distinct base, format, MSAA and pitch) | 15 (14 to 17) | |
+| EDRAM bases shared by more than one surface | 1 | |
+| GPU time per frame (perf gate, median of the runs) | | 5.73 ms, race 172.1 fps, p99 8.71 ms |
+| Resolve readbacks to guest memory (`readback_resolve=fast`) | | 24.8, 13.9 MB |
+
+- The scene renders into one colour surface at EDRAM base 0 (`2_10_10_10_FLOAT`, also viewed as `16_16_16_16`) with its depth at base 720 in one tile; probably the rear-view mirror into a 2x MSAA surface at pitch 400, the shadow cascades into depth at pitch 560 (resolved to 512x512), and the bloom and exposure chain into small surfaces at bases 0 and 288 (inferred from the pass shapes, not from the shaders).
+- The frames of the photo and garage scenes keep the tiles and 4x MSAA of `-Quality`: 11.7 tile resolves of 1280x720 a frame there.
+- On the render thread at 1x (15.10) the render target cache takes 0.23 ms a race frame and the code between the primitives and it about 0.15 ms; the resolves (the copy zone) 0.18 ms.
+
+### 16.2 Where N3 can save, by the measurement
+
+1. **The full-screen resolves**: 1.95 of the 2.75 ms of resolves at 2x. Today each one dumps or copies the host render target into the scaled resolve buffer in the guest's tiled layout, the texture cache loads it back into a texture when a pass samples it, and the readback copies it to guest memory. A resolve as a host copy writes the texture the next passes sample straight from the render target and leaves the rest to demand.
+2. **The readbacks**: 24.8 a frame, 13.9 MB at 2x, of every resolve, because any of them may be read by the CPU (2.7). Readback on demand needs a read trap on the resolved pages, which the runtime does not have (section 8). Their cost is measured: the perf gate at 2x with `readback_resolve=none` (`n3m2xnorbp`, three runs, the CPU's readers not served) ran the race at 185.7 against 172.1 fps, p99 7.87 against 8.71 ms, and 5.26 against 5.73 ms of GPU time per frame (medians of the runs), at 2,061 against 1,854 draws a frame: at least 0.47 ms of GPU time a frame, 8%.
+3. **The ownership transfers**: 20 a frame, 0.25 ms of passes that only transfer at 2x, plus the transfers inside other passes. Surface-keyed targets with virtual placement remove those between surfaces that do not alias.
+4. **The render target cache's CPU time**: about 0.4 ms a race frame (16.1), part of N4's CPU targets.
+
+### 16.3 Increments
+
+| Increment | Scope | Gate |
+|---|---|---|
+| 1, GPU-only prototype at 2x | The full-screen depth and colour resolves of the scene (16.2, 1) become host copies into the textures the texture cache gives their destinations, behind `native_rt_resolve_prototype` (off). GPU-only: the copies into the scaled resolve buffer and the readbacks of these two destinations are left out, so their CPU readers (the photo save) are not served; measured against RTV at 2x. | GPU time at 2x per race frame against RTV of the same commit; `parity.py` on the one-tile `freeze` at 2x; the 1:1 crops of the GTAO, TAA and motion vector passes that read these textures. |
+| 2 | The readback on demand for every resolve (16.2, 2), with a read trap on the resolved pages, so increment 1 serves the CPU's readers again. | The photo save and the texture replacement's exclusion of resolved ranges work; readback bytes per frame measured. |
+| 3 | Surface-keyed host targets with virtual placement, the transfers only where a pass reads what another surface left (16.2, 3); the resolve and tiling writers of N1 as records. | Frozen frames within the image limit against RTV and against `-Rov` with `-Look "original,taa=0"`; transfers per frame measured. |
+| 4 | One-pass tiles and native MSAA (2x and 4x in one pass, TAA on top), so `-Quality`'s tiles leave the PM4 RTV path. | 4x MSAA in one pass; the tiled scenes in one pass within the image limit. |
+| 5 | The post passes anchored on surfaces; GTAO, TAA, motion vectors and the windshield checked at 2x on the native path. | The N3 gate of section 9. |
