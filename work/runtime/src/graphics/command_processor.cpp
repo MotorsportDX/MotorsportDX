@@ -221,6 +221,16 @@ void CommandProcessor::CallInThread(std::function<void()> fn) {
   }
 }
 
+void CommandProcessor::RequestHostService() {
+  host_service_pending_.store(true, std::memory_order_release);
+  if (host_render_queue_) {
+    host_render_queue_->Wake();
+  } else {
+    write_ptr_index_event_->Set();
+  }
+  wait_reg_mem_event_->Set();
+}
+
 void CommandProcessor::ClearCaches() {}
 
 void CommandProcessor::InvalidateGpuMemory() {}
@@ -279,6 +289,7 @@ void CommandProcessor::WorkerThreadMain() {
       do {
         // If we spin around too much, revert to a "low-power" state, unless the
         // guest may be waiting for backend work that only progresses here.
+        MaybeServiceHostRequests();
         const bool backend_pending = PollIdleWork();
         if (loop_count > 500 && !backend_pending) {
           const int wait_time_ms = 5;
@@ -901,6 +912,7 @@ void CommandProcessor::ExecutePacket(uint32_t ptr, uint32_t count) {
 }
 
 bool CommandProcessor::ExecutePacket(memory::RingBuffer* reader) {
+  MaybeServiceHostRequests();
   if (host_check_) {
     HostBeforePacket(reader);
   }
@@ -1451,6 +1463,7 @@ bool CommandProcessor::ExecutePacketType3_WAIT_REG_MEM(memory::RingBuffer* reade
         break;
     }
     if (!matched) {
+      MaybeServiceHostRequests();
       if (!waiting_reg_mem_.exchange(true, std::memory_order_relaxed)) {
         graphics_system_->WakeVsyncWorker();
       }

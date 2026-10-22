@@ -183,6 +183,12 @@ X_STATUS XFile::ReadInternal(uint32_t buffer_guest_address, uint32_t buffer_leng
                                         memory::PageAccess::kReadWrite) {
           result = X_STATUS_ACCESS_VIOLATION;
         } else {
+          if (buffer_physical_heap) {
+            // Readbacks on demand of resolves into the buffer land before the
+            // file data (docs/analysis/d3d-hle.md 16.5).
+            memory()->ServeReadTrace(buffer_physical_heap->GetPhysicalAddress(buffer_guest_address),
+                                     buffer_length);
+          }
           result = file_->ReadSync(
               std::span<uint8_t>(
                   buffer_physical_heap

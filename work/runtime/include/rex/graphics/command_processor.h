@@ -101,6 +101,10 @@ class CommandProcessor {
   virtual void Shutdown();
 
   void CallInThread(std::function<void()> fn);
+  // From any thread: the command processor runs ServiceHostRequests at its next
+  // packet or wait (the readbacks on demand, docs/analysis/d3d-hle.md 16.5).
+  // Unlike CallInThread it is served in the middle of a command buffer too.
+  void RequestHostService();
 
   virtual void ClearCaches();
   virtual void InvalidateGpuMemory();
@@ -231,6 +235,14 @@ class CommandProcessor {
   // Called repeatedly while the command processor waits for the guest. Returns
   // true while backend work that the guest may be waiting for is still pending.
   virtual bool PollIdleWork() { return false; }
+  // On the command processor's thread, after RequestHostService.
+  virtual void ServiceHostRequests() {}
+  void MaybeServiceHostRequests() {
+    if (host_service_pending_.load(std::memory_order_acquire)) {
+      host_service_pending_.store(false, std::memory_order_relaxed);
+      ServiceHostRequests();
+    }
+  }
 
   uint32_t ExecutePrimaryBuffer(uint32_t start_index, uint32_t end_index);
   virtual void OnPrimaryBufferEnd() {}
@@ -341,6 +353,7 @@ class CommandProcessor {
 
   std::unique_ptr<rex::thread::Event> write_ptr_index_event_;
   std::unique_ptr<rex::thread::Event> wait_reg_mem_event_;
+  std::atomic<bool> host_service_pending_{false};
   std::atomic<uint32_t> write_ptr_index_;
 
   // Some titles submit writes beyond the emulated register file range in PM4

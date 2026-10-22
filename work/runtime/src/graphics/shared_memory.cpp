@@ -24,6 +24,7 @@
 #include <rex/math.h>
 #include <rex/memory.h>
 #include "util/perf_trace.h"
+#include "util/read_trace.h"
 
 REXCVAR_DEFINE_BOOL(shared_memory_exact_invalidation, false, "GPU",
                     "Invalidate only the pages a guest CPU write touches, not up to 256 KB around "
@@ -725,6 +726,7 @@ std::pair<uint32_t, uint32_t> SharedMemory::MemoryInvalidationCallback(
   uint32_t block_last = page_last >> 6;
 
   auto global_lock = global_critical_region_.Acquire();
+  read_trace::NoteInvalidation(physical_address_start, length);
 
   if (REXCVAR_GET(shared_memory_exact_invalidation)) {
     exact_range = true;

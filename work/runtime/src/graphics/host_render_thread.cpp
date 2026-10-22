@@ -139,6 +139,7 @@ void CommandProcessor::HostRenderThreadMain() {
       const uint64_t perf_start = perf_trace::Now();
       PrepareForWait();
       while (worker_running_ && host_render_queue_->empty()) {
+        MaybeServiceHostRequests();
         host_render_queue_->Wait(PollIdleWork() ? 1 : 100);
       }
       ReturnFromWait();

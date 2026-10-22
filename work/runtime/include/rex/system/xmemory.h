@@ -320,19 +320,24 @@ class PhysicalHeap : public BaseHeap {
                         uint32_t virtual_address, uint32_t length, bool is_write,
                         bool unwatch_exact_range, bool unprotect = true);
 
-  // Read trace (diagnostic, Memory::ArmReadTrace): system pages trapped, still
-  // trapped from an earlier arm, and found with their trap removed by another
+  // Read traps (Memory::ArmReadTrace): system pages trapped, still trapped
+  // from an earlier arm, and found with their trap removed by another
   // protection change.
   struct ReadTraceArmResult {
     uint32_t armed = 0, kept = 0, lost = 0;
   };
   void ArmReadTrace(uint32_t physical_address, uint32_t length, uint32_t tag,
                     ReadTraceArmResult& result);
+  // Restores the trapped pages of the range; returns how many.
+  uint32_t DisarmReadTrace(uint32_t physical_address, uint32_t length);
   enum class ReadTraceFault { kNone, kTrapped, kLost };
   // With the global lock held, for an access violation at the virtual address:
-  // kTrapped if the page was trapped (its protection is restored and tag is
-  // set), kLost if it was marked trapped but another change removed the trap.
-  ReadTraceFault HandleReadTraceFault(uint32_t virtual_address, uint32_t& tag);
+  // kTrapped if the page is trapped (tag is set, the trap stays), kLost if it
+  // was marked trapped but another change removed the trap (the mark is
+  // cleared).
+  ReadTraceFault PeekReadTraceFault(uint32_t virtual_address, uint32_t& tag);
+  // With the global lock held: restores the page if it is still trapped.
+  void RestoreReadTracePage(uint32_t virtual_address);
 
   uint32_t GetPhysicalAddress(uint32_t address) const;
 
@@ -369,6 +374,9 @@ class PhysicalHeap : public BaseHeap {
   bool IsReadTraceTrapped(uint32_t system_page) const {
     return !read_trace_saved_.empty() && read_trace_saved_[system_page];
   }
+  // The system pages of a physical range in this heap; false if none.
+  bool GetReadTraceSystemPages(uint32_t physical_address, uint32_t length, uint32_t& first,
+                               uint32_t& last) const;
 };
 
 // Models the entire guest memory system on the console.
@@ -535,18 +543,36 @@ class Memory {
       std::unique_lock<std::recursive_mutex> global_lock_locked_once, uint32_t virtual_address,
       uint32_t length, bool is_write, bool unwatch_exact_range, bool unprotect = true);
 
-  // Read trace (diagnostic of resolve readbacks, docs/analysis/d3d-hle.md 16.4):
-  // ArmReadTrace makes the range inaccessible in the three physical views,
-  // remembering the protection of each system page. The first access to a
-  // trapped page restores that protection and calls the handler, on the
-  // faulting thread with the global lock held (the handler must not take it),
-  // and lets the access continue. A write then still meets its write watch.
+  // Read traps of resolve destinations (the read trace and the readback on
+  // demand, docs/analysis/d3d-hle.md 16.4 and 16.5): ArmReadTrace makes the
+  // range inaccessible in the three physical views, remembering the protection
+  // of each system page. An access to a trapped page calls the handler on the
+  // faulting thread with the global lock held once; the handler may release it
+  // while it waits, but must hold it again when it returns. If the handler
+  // returns true, the page gets its protection back; either way the access is
+  // retried, so a write still meets its write watch, and a page that is still
+  // trapped faults again.
   enum class ReadTraceEvent { kRead, kWrite, kLost };
-  typedef void (*ReadTraceHandler)(void* context, uint32_t physical_address, uint32_t tag,
-                                   ReadTraceEvent event);
-  void SetReadTraceHandler(ReadTraceHandler handler, void* context);
+  typedef bool (*ReadTraceHandler)(void* context,
+                                   std::unique_lock<std::recursive_mutex>& global_lock,
+                                   uint32_t physical_address, uint32_t tag, ReadTraceEvent event);
+  // Called before the runtime writes guest memory through the physical view
+  // (a file read into a physical buffer) or makes it writable, on that thread
+  // without the global lock, so pending readbacks of the range land first; and
+  // with discard (it must not wait then) before the range is released or
+  // decommitted, when its contents no longer matter.
+  typedef void (*ReadTraceServeHandler)(void* context, uint32_t physical_address,
+                                        uint32_t length, bool discard);
+  void SetReadTraceHandler(ReadTraceHandler handler, ReadTraceServeHandler serve_handler,
+                           void* context);
   PhysicalHeap::ReadTraceArmResult ArmReadTrace(uint32_t physical_address, uint32_t length,
                                                 uint32_t tag);
+  uint32_t DisarmReadTrace(uint32_t physical_address, uint32_t length);
+  void ServeReadTrace(uint32_t physical_address, uint32_t length, bool discard = false) {
+    if (read_trace_serve_handler_) {
+      read_trace_serve_handler_(read_trace_context_, physical_address, length, discard);
+    }
+  }
 
   // Diagnostics: for each physical memory view (A0000000, C0000000, E0000000)
   // in which the page is committed, "<view>:p<guest protect>w<write watched>
@@ -671,6 +697,7 @@ class Memory {
   std::vector<std::pair<PhysicalMemoryInvalidationCallback, void*>*>
       physical_memory_invalidation_callbacks_;
   ReadTraceHandler read_trace_handler_ = nullptr;
+  ReadTraceServeHandler read_trace_serve_handler_ = nullptr;
   void* read_trace_context_ = nullptr;
 };
 

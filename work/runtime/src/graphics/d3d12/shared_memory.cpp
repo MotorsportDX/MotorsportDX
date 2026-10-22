@@ -22,6 +22,7 @@
 #include <rex/ui/d3d12/d3d12_util.h>
 
 #include "../util/perf_trace.h"
+#include "../util/read_trace.h"
 
 REXCVAR_DEFINE_BOOL(d3d12_tiled_shared_memory, true, "GPU/D3D12",
                     "Use tiled shared memory on D3D12")
@@ -329,6 +330,10 @@ bool D3D12SharedMemory::UploadRanges(
       MakeRangeValid(upload_range_start << page_size_log2(), uint32_t(upload_buffer_size), false);
       perf_trace::ZoneEnd(perf_trace::Zone::kSharedMemoryProtect, perf_start);
       perf_start = perf_trace::ZoneStart();
+      // A page whose resolve readback is still pending would upload stale
+      // data (docs/analysis/d3d-hle.md 16.5): counted, expected never.
+      read_trace::CountPhysicalRead(upload_range_start << page_size_log2(),
+                                    uint32_t(upload_buffer_size));
       std::memcpy(upload_buffer_mapping,
                   memory().TranslatePhysical(upload_range_start << page_size_log2()),
                   upload_buffer_size);

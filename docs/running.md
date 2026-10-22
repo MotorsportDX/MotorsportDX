@@ -339,6 +339,11 @@ path, and the render targets stay on RTV.
   With `-Msaa` or a look without TAA the tiles stay on the PM4 RTV path, and the
   launcher says so.
 - `-Native` with `-Rov` is refused: `-Rov` stays the uncorrected reference.
+- `-Native` also sets `readback_resolve_on_demand=true` (stage N3,
+  [section 16.5](analysis/d3d-hle.md)): resolves skip their readback to guest
+  memory, and the first access by the CPU to a resolved range waits for the
+  readback of the latest resolve to it. On RTV without `-Native` it is off unless
+  passed as a cvar; the ROV path never uses it.
 - `host_render_queue_capacity` (default 256) is the queue length at which a new
   span of the ring merges into the last record when that is a span, so the guest
   never waits for the queue. Calls (`CallInThread`) are not bounded.

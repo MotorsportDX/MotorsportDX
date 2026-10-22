@@ -608,14 +608,18 @@ bool Memory::AccessViolationCallback(std::unique_lock<std::recursive_mutex> glob
   if (read_trace_handler_) {
     uint32_t tag = 0;
     const PhysicalHeap::ReadTraceFault fault =
-        physical_heap->HandleReadTraceFault(virtual_address, tag);
+        physical_heap->PeekReadTraceFault(virtual_address, tag);
     if (fault != PhysicalHeap::ReadTraceFault::kNone) {
-      read_trace_handler_(read_trace_context_, physical_heap->GetPhysicalAddress(virtual_address),
-                          tag,
-                          fault == PhysicalHeap::ReadTraceFault::kLost
-                              ? ReadTraceEvent::kLost
-                              : (is_write ? ReadTraceEvent::kWrite : ReadTraceEvent::kRead));
+      const bool restore = read_trace_handler_(
+          read_trace_context_, global_lock_locked_once,
+          physical_heap->GetPhysicalAddress(virtual_address), tag,
+          fault == PhysicalHeap::ReadTraceFault::kLost
+              ? ReadTraceEvent::kLost
+              : (is_write ? ReadTraceEvent::kWrite : ReadTraceEvent::kRead));
       if (fault == PhysicalHeap::ReadTraceFault::kTrapped) {
+        if (restore) {
+          physical_heap->RestoreReadTracePage(virtual_address);
+        }
         // Retried with the protection from before the trap: a write to a
         // watched page faults again below.
         return true;
@@ -756,10 +760,18 @@ void Memory::EnablePhysicalMemoryAccessCallbacks(uint32_t physical_address, uint
                                          enable_invalidation_notifications, enable_data_providers);
 }
 
-void Memory::SetReadTraceHandler(ReadTraceHandler handler, void* context) {
+void Memory::SetReadTraceHandler(ReadTraceHandler handler, ReadTraceServeHandler serve_handler,
+                                 void* context) {
   auto global_lock = global_critical_region_.Acquire();
   read_trace_handler_ = handler;
+  read_trace_serve_handler_ = serve_handler;
   read_trace_context_ = context;
+}
+
+uint32_t Memory::DisarmReadTrace(uint32_t physical_address, uint32_t length) {
+  return heaps_.vA0000000.DisarmReadTrace(physical_address, length) +
+         heaps_.vC0000000.DisarmReadTrace(physical_address, length) +
+         heaps_.vE0000000.DisarmReadTrace(physical_address, length);
 }
 
 PhysicalHeap::ReadTraceArmResult Memory::ArmReadTrace(uint32_t physical_address, uint32_t length,
@@ -2095,6 +2107,7 @@ bool PhysicalHeap::Decommit(uint32_t address, uint32_t size) {
   }
 
   // Not caring about the contents anymore.
+  memory_->ServeReadTrace(GetPhysicalAddress(address), size, true);
   TriggerCallbacks(std::move(global_lock), address, size, true, true);
 
   return BaseHeap::Decommit(address, size);
@@ -2119,6 +2132,7 @@ bool PhysicalHeap::Release(uint32_t base_address, uint32_t* out_region_size) {
   // thus callback handlers will keep considering this range valid forever.
   uint32_t region_size;
   if (QuerySize(base_address, &region_size)) {
+    memory_->ServeReadTrace(GetPhysicalAddress(base_address), region_size, true);
     TriggerCallbacks(std::move(global_lock), base_address, region_size, true, true);
   }
 
@@ -2127,6 +2141,11 @@ bool PhysicalHeap::Release(uint32_t base_address, uint32_t* out_region_size) {
 
 bool PhysicalHeap::Protect(uint32_t address, uint32_t size, uint32_t protect,
                            uint32_t* old_protect) {
+  if (protect & memory::kMemoryProtectWrite) {
+    // The invalidation below drops GPU data that a pending readback of a
+    // resolve has not brought to guest memory yet: it lands first.
+    memory_->ServeReadTrace(GetPhysicalAddress(address), size);
+  }
   auto global_lock = global_critical_region_.Acquire();
 
   // Only invalidate if making writable again, for simplicity - not when simply
@@ -2420,29 +2439,37 @@ bool PhysicalHeap::TriggerCallbacks(std::unique_lock<std::recursive_mutex> globa
   return true;
 }
 
-void PhysicalHeap::ArmReadTrace(uint32_t physical_address, uint32_t length, uint32_t tag,
-                                ReadTraceArmResult& result) {
+bool PhysicalHeap::GetReadTraceSystemPages(uint32_t physical_address, uint32_t length,
+                                           uint32_t& first, uint32_t& last) const {
   uint32_t physical_address_offset = GetPhysicalAddress(heap_base_);
   if (physical_address < physical_address_offset) {
     if (physical_address_offset - physical_address >= length) {
-      return;
+      return false;
     }
     length -= physical_address_offset - physical_address;
     physical_address = physical_address_offset;
   }
   uint32_t heap_relative_address = physical_address - physical_address_offset;
   if (heap_relative_address >= heap_size_) {
-    return;
+    return false;
   }
   length = std::min(length, heap_size_ - heap_relative_address);
   if (length == 0) {
-    return;
+    return false;
   }
-  uint32_t system_page_first = (heap_relative_address + host_address_offset()) / system_page_size_;
-  uint32_t system_page_last = std::min(
+  first = (heap_relative_address + host_address_offset()) / system_page_size_;
+  last = std::min(
       (heap_relative_address + length - 1 + host_address_offset()) / system_page_size_,
       system_page_count_ - 1);
+  return true;
+}
 
+void PhysicalHeap::ArmReadTrace(uint32_t physical_address, uint32_t length, uint32_t tag,
+                                ReadTraceArmResult& result) {
+  uint32_t system_page_first, system_page_last;
+  if (!GetReadTraceSystemPages(physical_address, length, system_page_first, system_page_last)) {
+    return;
+  }
   uint8_t* protect_base = membase_ + heap_base_;
   auto global_lock = global_critical_region_.Acquire();
   if (read_trace_saved_.empty()) {
@@ -2485,8 +2512,40 @@ void PhysicalHeap::ArmReadTrace(uint32_t physical_address, uint32_t length, uint
   }
 }
 
-PhysicalHeap::ReadTraceFault PhysicalHeap::HandleReadTraceFault(uint32_t virtual_address,
-                                                                uint32_t& tag) {
+uint32_t PhysicalHeap::DisarmReadTrace(uint32_t physical_address, uint32_t length) {
+  uint32_t system_page_first, system_page_last;
+  if (!GetReadTraceSystemPages(physical_address, length, system_page_first, system_page_last)) {
+    return 0;
+  }
+  uint8_t* protect_base = membase_ + heap_base_;
+  auto global_lock = global_critical_region_.Acquire();
+  if (read_trace_saved_.empty()) {
+    return 0;
+  }
+  // In runs of one saved protection.
+  uint32_t restored = 0;
+  for (uint32_t i = system_page_first; i <= system_page_last;) {
+    const uint8_t saved = read_trace_saved_[i];
+    uint32_t run_last = i;
+    while (run_last < system_page_last && read_trace_saved_[run_last + 1] == saved) {
+      ++run_last;
+    }
+    if (saved) {
+      for (uint32_t j = i; j <= run_last; ++j) {
+        read_trace_saved_[j] = 0;
+      }
+      rex::memory::Protect(protect_base + size_t(i) * system_page_size_,
+                           size_t(run_last + 1 - i) * system_page_size_,
+                           rex::memory::PageAccess(saved - 1));
+      restored += run_last + 1 - i;
+    }
+    i = run_last + 1;
+  }
+  return restored;
+}
+
+PhysicalHeap::ReadTraceFault PhysicalHeap::PeekReadTraceFault(uint32_t virtual_address,
+                                                              uint32_t& tag) {
   if (read_trace_saved_.empty() || virtual_address < heap_base_ ||
       virtual_address - heap_base_ >= heap_size_) {
     return ReadTraceFault::kNone;
@@ -2494,21 +2553,36 @@ PhysicalHeap::ReadTraceFault PhysicalHeap::HandleReadTraceFault(uint32_t virtual
   const uint32_t i = std::min(
       (virtual_address - heap_base_ + host_address_offset()) / system_page_size_,
       system_page_count_ - 1);
-  const uint8_t saved = read_trace_saved_[i];
-  if (!saved) {
+  if (!read_trace_saved_[i]) {
     return ReadTraceFault::kNone;
   }
-  read_trace_saved_[i] = 0;
   tag = read_trace_tags_[i];
-  uint8_t* page = membase_ + heap_base_ + size_t(i) * system_page_size_;
   size_t page_length = system_page_size_;
   rex::memory::PageAccess access;
-  if (!rex::memory::QueryProtect(page, page_length, access) ||
+  if (!rex::memory::QueryProtect(membase_ + heap_base_ + size_t(i) * system_page_size_,
+                                 page_length, access) ||
       access != rex::memory::PageAccess::kNoAccess) {
+    read_trace_saved_[i] = 0;
     return ReadTraceFault::kLost;
   }
-  rex::memory::Protect(page, system_page_size_, rex::memory::PageAccess(saved - 1));
   return ReadTraceFault::kTrapped;
+}
+
+void PhysicalHeap::RestoreReadTracePage(uint32_t virtual_address) {
+  if (read_trace_saved_.empty() || virtual_address < heap_base_ ||
+      virtual_address - heap_base_ >= heap_size_) {
+    return;
+  }
+  const uint32_t i = std::min(
+      (virtual_address - heap_base_ + host_address_offset()) / system_page_size_,
+      system_page_count_ - 1);
+  const uint8_t saved = read_trace_saved_[i];
+  if (!saved) {
+    return;
+  }
+  read_trace_saved_[i] = 0;
+  rex::memory::Protect(membase_ + heap_base_ + size_t(i) * system_page_size_, system_page_size_,
+                       rex::memory::PageAccess(saved - 1));
 }
 
 std::unique_lock<std::recursive_mutex> PhysicalHeap::AcquireHostPageReconcileLock() const {

@@ -47,6 +47,10 @@
 #include <rex/ui/d3d12/d3d12_upload_buffer_pool.h>
 #include <rex/ui/d3d12/d3d12_util.h>
 
+namespace rex::graphics::read_trace {
+class Servicer;
+}
+
 namespace rex::graphics::d3d12 {
 
 class PostPasses;
@@ -239,6 +243,7 @@ class D3D12CommandProcessor : public CommandProcessor {
   void OnPrimaryBufferEnd() override;
   void PrepareForWait() override;
   bool PollIdleWork() override;
+  void ServiceHostRequests() override;
 
   Shader* LoadShader(xenos::ShaderType shader_type, uint32_t guest_address,
                      const uint32_t* host_address, uint32_t dword_count) override;
@@ -394,6 +399,16 @@ class D3D12CommandProcessor : public CommandProcessor {
   bool UpdateBindings(const D3D12Shader* vertex_shader, const D3D12Shader* pixel_shader,
                       ID3D12RootSignature* root_signature, bool shared_memory_is_uav);
   bool IssueCopy_ReadbackResolvePath();
+  bool GetResolvePixelSizeLog2(uint32_t& pixel_size_log2) const;
+  // Records the copy of a resolved range into a readback buffer: from the
+  // current scaled resolve range through resolve_downscale_cs with a draw
+  // resolution scale, otherwise from shared memory. False if nothing was
+  // recorded.
+  bool RecordReadbackCopy(uint32_t address, uint32_t length, uint32_t pixel_size_log2,
+                          ID3D12Resource* destination, uint64_t destination_offset);
+  // The readbacks on demand that faulting threads wait for
+  // (docs/analysis/d3d-hle.md 16.5), synchronously.
+  void ServiceDemandReadbacks();
   bool IssueDraw_MemexportReadbackFullPath(uint32_t total_size);
   bool IssueDraw_MemexportReadbackFastPath(uint32_t total_size);
 
@@ -823,6 +838,12 @@ class D3D12CommandProcessor : public CommandProcessor {
 
   ID3D12Resource* readback_buffer_ = nullptr;
   uint32_t readback_buffer_size_ = 0;
+  // readback_resolve_on_demand: the command processor's side, and the
+  // persistently mapped buffer of the readbacks on demand.
+  read_trace::Servicer* demand_servicer_ = nullptr;
+  ID3D12Resource* demand_readback_buffer_ = nullptr;
+  uint64_t demand_readback_buffer_size_ = 0;
+  void* demand_readback_mapping_ = nullptr;
   std::unordered_map<uint64_t, ReadbackBuffer> readback_buffers_;
   std::unordered_map<uint64_t, ReadbackBuffer> memexport_readback_buffers_;
 

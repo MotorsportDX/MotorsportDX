@@ -148,6 +148,12 @@ REXCVAR_DEFINE_BOOL(d3d12_readback_publish_await_signals, false, "GPU/D3D12",
                     "published data is from an earlier completed submission either way, so this "
                     "only changes timing; it costs about the copy time")
     .lifecycle(rex::cvar::Lifecycle::kRequiresRestart);
+REXCVAR_DEFINE_BOOL(readback_resolve_on_demand, false, "GPU/D3D12",
+                    "Resolves skip their readback and trap their guest pages instead; the first "
+                    "access by the CPU waits for the readback of the latest resolve "
+                    "(docs/analysis/d3d-hle.md 16.5). Not with the ROV path or "
+                    "readback_resolve=none")
+    .lifecycle(rex::cvar::Lifecycle::kRequiresRestart);
 
 REXCVAR_DEFINE_INT32(async_shader_draw_wait_us, 0, "GPU/D3D12",
                      "With async_shader_compilation, how long a draw waits for its pipeline "
@@ -158,6 +164,17 @@ REXCVAR_DEFINE_INT32(async_shader_draw_wait_us, 0, "GPU/D3D12",
 namespace rex::graphics::d3d12 {
 
 namespace {
+
+// The command processor's side of the readback on demand: an access that
+// faults asks for the service at the next packet or wait.
+class DemandServicer : public read_trace::Servicer {
+ public:
+  explicit DemandServicer(CommandProcessor& processor) : processor_(processor) {}
+  void RequestReadbackService() override { processor_.RequestHostService(); }
+
+ private:
+  CommandProcessor& processor_;
+};
 // Optional bounded publication timeline. Sampling is diagnostic only: a zero
 // sample does not prove that the entire resolved image is zero.
 // Optional trace of resolve readbacks that kept guest data
@@ -1997,6 +2014,16 @@ bool D3D12CommandProcessor::SetupContext() {
     return false;
   }
 
+  // Not with the ROV path (the reference keeps its readback, AGENTS.md) or
+  // without readbacks.
+  if (REXCVAR_GET(readback_resolve_on_demand) &&
+      render_target_cache_->GetPath() != RenderTargetCache::Path::kPixelShaderInterlock &&
+      GetReadbackResolveMode(REXCVAR_GET(d3d12_readback_resolve)) !=
+          ReadbackResolveMode::kDisabled) {
+    demand_servicer_ = new DemandServicer(*this);
+  }
+  read_trace::Configure(*memory_, demand_servicer_);
+
   // Initialize resource binding.
   constant_buffer_pool_ = std::make_unique<ui::d3d12::D3D12UploadBufferPool>(
       provider, std::max(ui::d3d12::D3D12UploadBufferPool::kDefaultPageSize,
@@ -2717,6 +2744,9 @@ bool D3D12CommandProcessor::SetupContext() {
 }
 
 void D3D12CommandProcessor::ShutdownContext() {
+  read_trace::Shutdown(*memory_);
+  delete demand_servicer_;
+  demand_servicer_ = nullptr;
   ShutdownReadbackPublishThread();
   ShutdownSubmitThread();
   AwaitAllQueueOperationsCompletion();
@@ -2729,6 +2759,12 @@ void D3D12CommandProcessor::ShutdownContext() {
 
   ui::d3d12::util::ReleaseAndNull(readback_buffer_);
   readback_buffer_size_ = 0;
+  if (demand_readback_buffer_) {
+    demand_readback_buffer_->Unmap(0, nullptr);
+    demand_readback_mapping_ = nullptr;
+  }
+  ui::d3d12::util::ReleaseAndNull(demand_readback_buffer_);
+  demand_readback_buffer_size_ = 0;
   for (auto& resolve_readback_pair : readback_buffers_) {
     auto& readback = resolve_readback_pair.second;
     for (uint32_t i = 0; i < kReadbackSlots; ++i) {
@@ -4547,6 +4583,25 @@ bool D3D12CommandProcessor::IssueCopy_ReadbackResolvePath() {
   }
 
   bool is_scaled = texture_cache_->IsDrawResolutionScaled();
+  if (demand_servicer_) {
+    // The readback waits for the first access by the CPU (d3d-hle.md 16.5).
+    read_trace::Demand demand;
+    demand.address = written_address;
+    demand.length = written_length;
+    if (is_scaled) {
+      const uint64_t scale = uint64_t(texture_cache_->draw_resolution_scale_x()) *
+                             texture_cache_->draw_resolution_scale_y();
+      if (!GetResolvePixelSizeLog2(demand.pixel_size_log2) || !scale) {
+        return true;
+      }
+      demand.scaled_start =
+          uint32_t(texture_cache_->GetCurrentScaledResolveRangeStartScaled() / scale);
+      demand.scaled_length =
+          uint32_t(texture_cache_->GetCurrentScaledResolveRangeLengthScaled() / scale);
+    }
+    read_trace::OnDeferredResolve(*memory_, demand);
+    return true;
+  }
   uint64_t resolve_key = MakeReadbackResolveKey(written_address, written_length);
   ReadbackBuffer& rb = readback_buffers_[resolve_key];
   rb.last_used_frame = frame_current_;
@@ -4588,132 +4643,13 @@ bool D3D12CommandProcessor::IssueCopy_ReadbackResolvePath() {
     return true;
   }
 
-  if (is_scaled) {
-    if (!resolve_downscale_pipeline_ || !resolve_downscale_root_signature_) {
-      return true;
-    }
-
-    reg::RB_COPY_DEST_INFO copy_dest_info = register_file_->Get<reg::RB_COPY_DEST_INFO>();
-    const FormatInfo* format_info = FormatInfo::Get(uint32_t(copy_dest_info.copy_dest_format));
-    uint32_t bits_per_pixel = format_info->bits_per_pixel;
-    if (bits_per_pixel != 8 && bits_per_pixel != 16 && bits_per_pixel != 32 &&
-        bits_per_pixel != 64) {
-      return true;
-    }
-
-    uint32_t pixel_size_log2;
-    if (!rex::bit_scan_forward(bits_per_pixel >> 3, &pixel_size_log2)) {
-      return true;
-    }
-    uint32_t tile_size_1x = 32 * 32 * (uint32_t(1) << pixel_size_log2);
-    uint32_t tile_count = written_length / tile_size_1x;
-    if (!tile_count) {
-      return true;
-    }
-
-    uint32_t scaled_length = uint32_t(texture_cache_->GetCurrentScaledResolveRangeLengthScaled());
-    uint64_t scaled_address = texture_cache_->GetCurrentScaledResolveRangeStartScaled();
-    if (!scaled_length) {
-      return true;
-    }
-
-    uint32_t downscale_buffer_size = AlignReadbackBufferSize(written_length);
-    if (downscale_buffer_size > resolve_downscale_buffer_size_) {
-      const ui::d3d12::D3D12Provider& provider = GetD3D12Provider();
-      ID3D12Device* device = provider.GetDevice();
-      D3D12_RESOURCE_DESC buffer_desc;
-      ui::d3d12::util::FillBufferResourceDesc(buffer_desc, downscale_buffer_size,
-                                              D3D12_RESOURCE_FLAG_ALLOW_UNORDERED_ACCESS);
-      ID3D12Resource* buffer = nullptr;
-      if (FAILED(device->CreateCommittedResource(
-              &ui::d3d12::util::kHeapPropertiesDefault, provider.GetHeapFlagCreateNotZeroed(),
-              &buffer_desc, D3D12_RESOURCE_STATE_UNORDERED_ACCESS, nullptr,
-              IID_PPV_ARGS(&buffer)))) {
-        REXGPU_ERROR("Failed to create a {} MB resolve downscale buffer",
-                     downscale_buffer_size >> 20);
-        return true;
-      }
-      if (resolve_downscale_buffer_) {
-        resources_for_deletion_.emplace_back(GetCurrentSubmission(),
-                                             resolve_downscale_buffer_.Detach());
-      }
-      resolve_downscale_buffer_.Attach(buffer);
-      resolve_downscale_buffer_size_ = downscale_buffer_size;
-    }
-
-    if (!resolve_downscale_buffer_) {
-      return true;
-    }
-
-    ID3D12Resource* scaled_resolve_buffer = texture_cache_->GetCurrentScaledResolveBufferResource();
-    size_t scaled_resolve_buffer_index = texture_cache_->GetCurrentScaledResolveBufferIndexPublic();
-    if (!scaled_resolve_buffer) {
-      return true;
-    }
-    uint64_t scaled_buffer_base = uint64_t(scaled_resolve_buffer_index) << 30;
-    if (scaled_address < scaled_buffer_base) {
-      return true;
-    }
-    uint64_t source_offset = scaled_address - scaled_buffer_base;
-
-    ui::d3d12::util::DescriptorCpuGpuHandlePair downscale_descriptors[2];
-    if (!RequestOneUseSingleViewDescriptors(2, downscale_descriptors)) {
-      return true;
-    }
-
-    const ui::d3d12::D3D12Provider& provider = GetD3D12Provider();
-    ID3D12Device* device = provider.GetDevice();
-    uint32_t aligned_scaled_length =
-        rex::align(scaled_length, uint32_t(D3D12_RAW_UAV_SRV_BYTE_ALIGNMENT));
-    ui::d3d12::util::CreateBufferRawSRV(device, downscale_descriptors[0].first,
-                                        scaled_resolve_buffer, aligned_scaled_length,
-                                        source_offset);
-    uint32_t aligned_written_length =
-        rex::align(written_length, uint32_t(D3D12_RAW_UAV_SRV_BYTE_ALIGNMENT));
-    ui::d3d12::util::CreateBufferRawUAV(device, downscale_descriptors[1].first,
-                                        resolve_downscale_buffer_.Get(), aligned_written_length, 0);
-
-    PushUAVBarrier(scaled_resolve_buffer);
-    texture_cache_->TransitionCurrentScaledResolveRange(
-        D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE);
-    SubmitBarriers();
-
-    SetExternalPipeline(resolve_downscale_pipeline_.Get());
-    deferred_command_list_.D3DSetComputeRootSignature(resolve_downscale_root_signature_.Get());
-    ResolveDownscaleConstants constants;
-    constants.scale_x = texture_cache_->draw_resolution_scale_x();
-    constants.scale_y = texture_cache_->draw_resolution_scale_y();
-    constants.pixel_size_log2 = pixel_size_log2;
-    constants.tile_count = tile_count;
-    constants.half_pixel_offset = (REXCVAR_GET(readback_resolve_half_pixel_offset) &&
-                                   (constants.scale_x > 1 || constants.scale_y > 1))
-                                      ? 1u
-                                      : 0u;
-    deferred_command_list_.D3DSetComputeRoot32BitConstants(
-        UINT(ResolveDownscaleRootParameter::kConstants), sizeof(constants) / sizeof(uint32_t),
-        &constants, 0);
-    deferred_command_list_.D3DSetComputeRootDescriptorTable(
-        UINT(ResolveDownscaleRootParameter::kSource), downscale_descriptors[0].second);
-    deferred_command_list_.D3DSetComputeRootDescriptorTable(
-        UINT(ResolveDownscaleRootParameter::kDestination), downscale_descriptors[1].second);
-    deferred_command_list_.D3DDispatch(tile_count, 1, 1);
-
-    PushUAVBarrier(resolve_downscale_buffer_.Get());
-    PushTransitionBarrier(resolve_downscale_buffer_.Get(), D3D12_RESOURCE_STATE_UNORDERED_ACCESS,
-                          D3D12_RESOURCE_STATE_COPY_SOURCE);
-    SubmitBarriers();
-    deferred_command_list_.D3DCopyBufferRegion(rb.buffers[write_index], 0,
-                                               resolve_downscale_buffer_.Get(), 0, written_length);
-    PushTransitionBarrier(resolve_downscale_buffer_.Get(), D3D12_RESOURCE_STATE_COPY_SOURCE,
-                          D3D12_RESOURCE_STATE_UNORDERED_ACCESS);
-    texture_cache_->TransitionCurrentScaledResolveRange(D3D12_RESOURCE_STATE_UNORDERED_ACCESS);
-    SubmitBarriers();
-  } else {
-    shared_memory_->UseAsCopySource();
-    SubmitBarriers();
-    ID3D12Resource* shared_memory_buffer = shared_memory_->GetBuffer();
-    deferred_command_list_.D3DCopyBufferRegion(rb.buffers[write_index], 0, shared_memory_buffer,
-                                               written_address, written_length);
+  uint32_t pixel_size_log2 = 0;
+  if (is_scaled && !GetResolvePixelSizeLog2(pixel_size_log2)) {
+    return true;
+  }
+  if (!RecordReadbackCopy(written_address, written_length, pixel_size_log2,
+                          rb.buffers[write_index], 0)) {
+    return true;
   }
 
   ReadbackResolveMode readback_mode = GetReadbackResolveMode(REXCVAR_GET(d3d12_readback_resolve));
@@ -4784,14 +4720,145 @@ bool D3D12CommandProcessor::IssueCopy_ReadbackResolvePath() {
         TraceReadbackSkip(written_address, written_length, skipped);
       }
       perf_trace::CountReadback(written_length);
-      if (read_trace::Enabled(*memory_)) {
-        read_trace::OnReadback(*memory_, written_address, written_length);
-      }
+      read_trace::OnReadback(*memory_, written_address, written_length);
       TraceResolvePublication(written_address, written_length,
                               static_cast<const uint8_t*>(rb.mapped_data[read_index]));
       DumpReadback(*register_file_, written_address, written_length,
                    static_cast<const uint8_t*>(rb.mapped_data[read_index]));
     }
+  }
+  return true;
+}
+
+bool D3D12CommandProcessor::GetResolvePixelSizeLog2(uint32_t& pixel_size_log2) const {
+  reg::RB_COPY_DEST_INFO copy_dest_info = register_file_->Get<reg::RB_COPY_DEST_INFO>();
+  const FormatInfo* format_info = FormatInfo::Get(uint32_t(copy_dest_info.copy_dest_format));
+  uint32_t bits_per_pixel = format_info->bits_per_pixel;
+  if (bits_per_pixel != 8 && bits_per_pixel != 16 && bits_per_pixel != 32 &&
+      bits_per_pixel != 64) {
+    return false;
+  }
+  return rex::bit_scan_forward(bits_per_pixel >> 3, &pixel_size_log2);
+}
+
+bool D3D12CommandProcessor::RecordReadbackCopy(uint32_t address, uint32_t length,
+                                               uint32_t pixel_size_log2,
+                                               ID3D12Resource* destination,
+                                               uint64_t destination_offset) {
+  if (texture_cache_->IsDrawResolutionScaled()) {
+    if (!resolve_downscale_pipeline_ || !resolve_downscale_root_signature_) {
+      return false;
+    }
+
+    uint32_t tile_size_1x = 32 * 32 * (uint32_t(1) << pixel_size_log2);
+    uint32_t tile_count = length / tile_size_1x;
+    if (!tile_count) {
+      return false;
+    }
+
+    uint32_t scaled_length = uint32_t(texture_cache_->GetCurrentScaledResolveRangeLengthScaled());
+    uint64_t scaled_address = texture_cache_->GetCurrentScaledResolveRangeStartScaled();
+    if (!scaled_length) {
+      return false;
+    }
+
+    uint32_t downscale_buffer_size = AlignReadbackBufferSize(length);
+    if (downscale_buffer_size > resolve_downscale_buffer_size_) {
+      const ui::d3d12::D3D12Provider& provider = GetD3D12Provider();
+      ID3D12Device* device = provider.GetDevice();
+      D3D12_RESOURCE_DESC buffer_desc;
+      ui::d3d12::util::FillBufferResourceDesc(buffer_desc, downscale_buffer_size,
+                                              D3D12_RESOURCE_FLAG_ALLOW_UNORDERED_ACCESS);
+      ID3D12Resource* buffer = nullptr;
+      if (FAILED(device->CreateCommittedResource(
+              &ui::d3d12::util::kHeapPropertiesDefault, provider.GetHeapFlagCreateNotZeroed(),
+              &buffer_desc, D3D12_RESOURCE_STATE_UNORDERED_ACCESS, nullptr,
+              IID_PPV_ARGS(&buffer)))) {
+        REXGPU_ERROR("Failed to create a {} MB resolve downscale buffer",
+                     downscale_buffer_size >> 20);
+        return false;
+      }
+      if (resolve_downscale_buffer_) {
+        resources_for_deletion_.emplace_back(GetCurrentSubmission(),
+                                             resolve_downscale_buffer_.Detach());
+      }
+      resolve_downscale_buffer_.Attach(buffer);
+      resolve_downscale_buffer_size_ = downscale_buffer_size;
+    }
+
+    if (!resolve_downscale_buffer_) {
+      return false;
+    }
+
+    ID3D12Resource* scaled_resolve_buffer = texture_cache_->GetCurrentScaledResolveBufferResource();
+    size_t scaled_resolve_buffer_index = texture_cache_->GetCurrentScaledResolveBufferIndexPublic();
+    if (!scaled_resolve_buffer) {
+      return false;
+    }
+    uint64_t scaled_buffer_base = uint64_t(scaled_resolve_buffer_index) << 30;
+    if (scaled_address < scaled_buffer_base) {
+      return false;
+    }
+    uint64_t source_offset = scaled_address - scaled_buffer_base;
+
+    ui::d3d12::util::DescriptorCpuGpuHandlePair downscale_descriptors[2];
+    if (!RequestOneUseSingleViewDescriptors(2, downscale_descriptors)) {
+      return false;
+    }
+
+    const ui::d3d12::D3D12Provider& provider = GetD3D12Provider();
+    ID3D12Device* device = provider.GetDevice();
+    uint32_t aligned_scaled_length =
+        rex::align(scaled_length, uint32_t(D3D12_RAW_UAV_SRV_BYTE_ALIGNMENT));
+    ui::d3d12::util::CreateBufferRawSRV(device, downscale_descriptors[0].first,
+                                        scaled_resolve_buffer, aligned_scaled_length,
+                                        source_offset);
+    uint32_t aligned_length =
+        rex::align(length, uint32_t(D3D12_RAW_UAV_SRV_BYTE_ALIGNMENT));
+    ui::d3d12::util::CreateBufferRawUAV(device, downscale_descriptors[1].first,
+                                        resolve_downscale_buffer_.Get(), aligned_length, 0);
+
+    PushUAVBarrier(scaled_resolve_buffer);
+    texture_cache_->TransitionCurrentScaledResolveRange(
+        D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE);
+    SubmitBarriers();
+
+    SetExternalPipeline(resolve_downscale_pipeline_.Get());
+    deferred_command_list_.D3DSetComputeRootSignature(resolve_downscale_root_signature_.Get());
+    ResolveDownscaleConstants constants;
+    constants.scale_x = texture_cache_->draw_resolution_scale_x();
+    constants.scale_y = texture_cache_->draw_resolution_scale_y();
+    constants.pixel_size_log2 = pixel_size_log2;
+    constants.tile_count = tile_count;
+    constants.half_pixel_offset = (REXCVAR_GET(readback_resolve_half_pixel_offset) &&
+                                   (constants.scale_x > 1 || constants.scale_y > 1))
+                                      ? 1u
+                                      : 0u;
+    deferred_command_list_.D3DSetComputeRoot32BitConstants(
+        UINT(ResolveDownscaleRootParameter::kConstants), sizeof(constants) / sizeof(uint32_t),
+        &constants, 0);
+    deferred_command_list_.D3DSetComputeRootDescriptorTable(
+        UINT(ResolveDownscaleRootParameter::kSource), downscale_descriptors[0].second);
+    deferred_command_list_.D3DSetComputeRootDescriptorTable(
+        UINT(ResolveDownscaleRootParameter::kDestination), downscale_descriptors[1].second);
+    deferred_command_list_.D3DDispatch(tile_count, 1, 1);
+
+    PushUAVBarrier(resolve_downscale_buffer_.Get());
+    PushTransitionBarrier(resolve_downscale_buffer_.Get(), D3D12_RESOURCE_STATE_UNORDERED_ACCESS,
+                          D3D12_RESOURCE_STATE_COPY_SOURCE);
+    SubmitBarriers();
+    deferred_command_list_.D3DCopyBufferRegion(destination, destination_offset,
+                                               resolve_downscale_buffer_.Get(), 0, length);
+    PushTransitionBarrier(resolve_downscale_buffer_.Get(), D3D12_RESOURCE_STATE_COPY_SOURCE,
+                          D3D12_RESOURCE_STATE_UNORDERED_ACCESS);
+    texture_cache_->TransitionCurrentScaledResolveRange(D3D12_RESOURCE_STATE_UNORDERED_ACCESS);
+    SubmitBarriers();
+  } else {
+    shared_memory_->UseAsCopySource();
+    SubmitBarriers();
+    ID3D12Resource* shared_memory_buffer = shared_memory_->GetBuffer();
+    deferred_command_list_.D3DCopyBufferRegion(destination, destination_offset,
+                                               shared_memory_buffer, address, length);
   }
   return true;
 }
@@ -6951,6 +7018,86 @@ bool D3D12CommandProcessor::FlushROVOcclusionSnapshots() {
 void D3D12CommandProcessor::PrepareForWait() { FlushROVOcclusionSnapshots(); }
 
 bool D3D12CommandProcessor::PollIdleWork() { return FlushROVOcclusionSnapshots(); }
+
+void D3D12CommandProcessor::ServiceHostRequests() { ServiceDemandReadbacks(); }
+
+void D3D12CommandProcessor::ServiceDemandReadbacks() {
+  std::vector<read_trace::Demand> demands = read_trace::TakeRequests();
+  if (demands.empty()) {
+    return;
+  }
+  const auto start = std::chrono::steady_clock::now();
+  std::vector<uint64_t> offsets(demands.size());
+  uint64_t total = 0;
+  for (size_t i = 0; i < demands.size(); ++i) {
+    offsets[i] = total;
+    total += AlignReadbackBufferSize(demands[i].length);
+  }
+  bool copied = true;
+  if (total > demand_readback_buffer_size_) {
+    if (demand_readback_buffer_) {
+      // Not in use: every readback on demand awaits its copy.
+      demand_readback_buffer_->Unmap(0, nullptr);
+      demand_readback_mapping_ = nullptr;
+      ui::d3d12::util::ReleaseAndNull(demand_readback_buffer_);
+      demand_readback_buffer_size_ = 0;
+    }
+    const ui::d3d12::D3D12Provider& provider = GetD3D12Provider();
+    D3D12_RESOURCE_DESC buffer_desc;
+    ui::d3d12::util::FillBufferResourceDesc(buffer_desc, total, D3D12_RESOURCE_FLAG_NONE);
+    D3D12_RANGE read_range = {0, SIZE_T(total)};
+    if (FAILED(provider.GetDevice()->CreateCommittedResource(
+            &ui::d3d12::util::kHeapPropertiesReadback, provider.GetHeapFlagCreateNotZeroed(),
+            &buffer_desc, D3D12_RESOURCE_STATE_COPY_DEST, nullptr,
+            IID_PPV_ARGS(&demand_readback_buffer_))) ||
+        FAILED(demand_readback_buffer_->Map(0, &read_range, &demand_readback_mapping_))) {
+      REXGPU_ERROR("Failed to create a {} MB buffer for readbacks on demand", total >> 20);
+      ui::d3d12::util::ReleaseAndNull(demand_readback_buffer_);
+      demand_readback_mapping_ = nullptr;
+      copied = false;
+    } else {
+      demand_readback_buffer_size_ = total;
+    }
+  }
+  std::vector<bool> recorded(demands.size(), false);
+  // Served in idle loops too, where no submission is open.
+  if (copied && !BeginSubmission(false)) {
+    copied = false;
+  }
+  if (copied) {
+    const bool is_scaled = texture_cache_->IsDrawResolutionScaled();
+    for (size_t i = 0; i < demands.size(); ++i) {
+      const read_trace::Demand& demand = demands[i];
+      // The scaled resolve range that the resolve made current, read as the
+      // readback at the resolve reads it.
+      if (is_scaled && !texture_cache_->MakeScaledResolveRangeCurrent(demand.scaled_start,
+                                                                      demand.scaled_length)) {
+        continue;
+      }
+      recorded[i] = RecordReadbackCopy(demand.address, demand.length, demand.pixel_size_log2,
+                                       demand_readback_buffer_, offsets[i]);
+    }
+    copied = AwaitAllQueueOperationsCompletion();
+  }
+  if (copied) {
+    const auto* data = static_cast<const uint8_t*>(demand_readback_mapping_);
+    for (size_t i = 0; i < demands.size(); ++i) {
+      if (!recorded[i]) {
+        copied = false;
+        continue;
+      }
+      const uint32_t skipped = shared_memory_->CopyReadbackToGuest(
+          demands[i].address, demands[i].length, data + offsets[i]);
+      TraceReadbackSkip(demands[i].address, demands[i].length, skipped);
+      perf_trace::CountReadback(demands[i].length);
+    }
+  }
+  read_trace::CompleteRequests(
+      *memory_, demands, copied,
+      uint64_t(std::chrono::duration_cast<std::chrono::nanoseconds>(
+                   std::chrono::steady_clock::now() - start)
+                   .count()));
+}
 
 void D3D12CommandProcessor::SubmitThreadMain() {
   ID3D12CommandQueue* direct_queue = GetD3D12Provider().GetDirectQueue();
