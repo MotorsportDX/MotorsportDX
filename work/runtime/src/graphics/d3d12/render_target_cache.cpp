@@ -1335,6 +1335,30 @@ bool D3D12RenderTargetCache::Resolve(const memory::Memory& memory, D3D12SharedMe
     return true;
   }
 
+  // native_rt_surfaces=1: the copy reads the tiles of its source, the clears
+  // overwrite theirs (d3d-hle.md 16.9).
+  if (GetPath() == Path::kHostRenderTargets) {
+    auto count_span = [&](const draw_util::ResolveEdramInfo& edram_info, bool clears) {
+      uint32_t span_base, span_row_length, span_rows;
+      draw_util::GetResolveEdramTileSpan(edram_info, resolve_info.coordinate_info,
+                                         resolve_info.height_div_8, span_base, span_row_length,
+                                         span_rows);
+      CountStaleTilesForResolve(span_base, span_row_length, span_rows,
+                                edram_info.pitch_tiles, clears);
+    };
+    if (resolve_info.copy_dest_extent_length) {
+      count_span(resolve_info.IsCopyingDepth() ? resolve_info.depth_edram_info
+                                               : resolve_info.color_edram_info,
+                 false);
+    }
+    if (resolve_info.IsClearingDepth()) {
+      count_span(resolve_info.depth_edram_info, true);
+    }
+    if (resolve_info.IsClearingColor()) {
+      count_span(resolve_info.color_edram_info, true);
+    }
+  }
+
   DeferredCommandList& command_list = command_processor_.GetDeferredCommandList();
 
   // Copying.

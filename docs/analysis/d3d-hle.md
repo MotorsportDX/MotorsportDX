@@ -927,3 +927,20 @@ The design:
 3. **The N1 writers.** The title's resolve writer becomes a record that names the source surface (its object, base and format) and the destination, so the host knows the surface without decoding the copy registers; the tiling bracket writers belong to increment 4 (one-pass tiles).
 
 Steps, each behind `native_rt_surfaces` (off) with a step gate: (1) a count-only mode that marks stale tiles instead of nothing and counts, per transfer the cache performs today, whether its tiles are read before they are overwritten (the ceiling of the lazy transfers, as 16.4 did for the readbacks); (2) the lazy transfers; (3) the resolves from the host surface with the byte check; (4) the resolve writer as a record. The close gate follows step 4, or an earlier step if the numbers end the increment.
+
+### 16.10 Increment 3, step 1: which transfers are read, 22 October 2026
+
+`native_rt_surfaces=1` counts, without changing anything, how the tiles of each ownership transfer end ([traces.md](../e2e/traces.md)): taken by another render target before anything touched them, overwritten (a draw's overwrite rectangle covers them wholly, or a resolve clears them), or read (a draw that is not a uniform overwrite touches them within its scissor, or a resolve copies them). Measured on `I:\FM4-build-usa` at 2x with the readback on demand (`n3s1-count-career-2x`, one `career` run), per frame:
+
+| | Race (7,762 frames) | Replay (3,106 frames) |
+|---|---|---|
+| Transfers | 18.5 | 21.8 |
+| Tiles transferred, and left after the cutout | 2,382 and 2,289 | 2,750 and 2,657 |
+| Taken by another render target unread | 228 | 249 |
+| Overwritten | 1,019 | 1,318 |
+| Read by a draw (an upper bound) | 999 | 1,059 |
+| Read by a resolve | 43 | 30 |
+| Transfers with no tile read, and with some | 3.3 and 15.3 | 3.3 and 18.5 |
+
+At least 55% of the transferred tiles in the race (1,247 of 2,289) are never read, so lazy transfers remove at least that share of the copies; the reads by draws are counted whenever a draw that may read has the tile within its scissor, which the full-screen scissors of the 3D passes make an overestimate.
+

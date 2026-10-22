@@ -227,6 +227,13 @@ class RenderTargetCache {
   // and the transfer cutout made from it (slots, x, y, width, height).
   std::string DescribeLastUpdateUniformDraw() const;
 
+  // native_rt_surfaces=1, count only (docs/analysis/d3d-hle.md 16.9): whether
+  // the tiles of each ownership transfer are read by their new owner before
+  // they are overwritten or another render target takes them. A resolve (with
+  // the EDRAM tile span it copies or clears) reads or overwrites them.
+  void CountStaleTilesForResolve(uint32_t base_tiles, uint32_t row_length_used, uint32_t rows,
+                                 uint32_t pitch_tiles, bool clears);
+
  protected:
   RenderTargetCache(const RegisterFile& register_file, const memory::Memory& memory,
                     uint32_t draw_resolution_scale_x, uint32_t draw_resolution_scale_y)
@@ -739,6 +746,18 @@ class RenderTargetCache {
   // render targets. They are reordered so for one source, all transfers are
   // consecutive in the array.
   std::vector<Transfer> last_update_transfers_[1 + xenos::kMaxColorRenderTargets];
+  // The count-only mode of native_rt_surfaces: per EDRAM tile, the transfer
+  // whose data it holds and that nobody read or overwrote yet (0 none), and
+  // per transfer its tiles still pending.
+  std::vector<uint32_t> stale_tile_transfers_;
+  std::unordered_map<uint32_t, uint32_t> stale_transfer_pending_;
+  uint32_t stale_next_transfer_ = 1;
+  void CountStaleTilesForDraw(const RenderTargetKey* keys, uint32_t used_bits,
+                              const Transfer::Rectangle& overwrite_cutout,
+                              uint32_t overwrite_cutout_slots, bool is_rasterization_done);
+  // Ends the stale state of a tile: 0 dropped, 1 overwritten, 2 read by a
+  // draw, 3 read by a resolve.
+  void EndStaleTile(uint32_t tile, uint32_t outcome);
   std::pair<uint32_t, uint32_t> last_update_ranges_[1 + xenos::kMaxColorRenderTargets] = {};
 
   UniformDraw uniform_draw_;

@@ -295,6 +295,27 @@ inline void CountNativeResolve(uint32_t textures) {
   native_resolve_textures.fetch_add(textures, std::memory_order_relaxed);
   if (!textures) native_resolve_misses.fetch_add(1, std::memory_order_relaxed);
 }
+// native_rt_surfaces=1 (d3d-hle.md 16.9): ownership transfers, their tiles and
+// those left after the cutout, how the transferred tiles ended (dropped when
+// another render target took them, overwritten, read by a draw or a resolve),
+// and the transfers that ended with no tile read and with some.
+enum class StaleTileOutcome : uint32_t { kDropped, kOverwritten, kReadByDraw, kReadByResolve,
+                                         kCount };
+inline std::atomic<uint64_t> stale_transfers{0}, stale_transfer_tiles{0}, stale_pending_tiles{0},
+    stale_tiles[size_t(StaleTileOutcome::kCount)]{}, stale_transfers_unread{0},
+    stale_transfers_read{0};
+inline void CountStaleTransfer(uint32_t tiles, uint32_t pending) {
+  stale_transfers.fetch_add(1, std::memory_order_relaxed);
+  stale_transfer_tiles.fetch_add(tiles, std::memory_order_relaxed);
+  stale_pending_tiles.fetch_add(pending, std::memory_order_relaxed);
+  if (!pending) stale_transfers_unread.fetch_add(1, std::memory_order_relaxed);
+}
+inline void CountStaleTile(StaleTileOutcome outcome) {
+  stale_tiles[size_t(outcome)].fetch_add(1, std::memory_order_relaxed);
+}
+inline void CountStaleTransferEnd(bool read) {
+  (read ? stale_transfers_read : stale_transfers_unread).fetch_add(1, std::memory_order_relaxed);
+}
 inline void CountNativeResolveChecks(uint32_t checked, uint32_t mismatched) {
   native_resolve_checks.fetch_add(checked, std::memory_order_relaxed);
   native_resolve_mismatches.fetch_add(mismatched, std::memory_order_relaxed);
@@ -503,6 +524,23 @@ inline void OnSwap() {
                 << ",\"checks\":" << native_resolve_checks.exchange(0, std::memory_order_relaxed)
                 << ",\"mismatches\":"
                 << native_resolve_mismatches.exchange(0, std::memory_order_relaxed) << '}'
+                << ",\"rt_transfers\":{\"transfers\":"
+                << stale_transfers.exchange(0, std::memory_order_relaxed) << ",\"tiles\":"
+                << stale_transfer_tiles.exchange(0, std::memory_order_relaxed)
+                << ",\"pending_tiles\":"
+                << stale_pending_tiles.exchange(0, std::memory_order_relaxed)
+                << ",\"dropped\":"
+                << stale_tiles[0].exchange(0, std::memory_order_relaxed)
+                << ",\"overwritten\":"
+                << stale_tiles[1].exchange(0, std::memory_order_relaxed)
+                << ",\"read_draw\":"
+                << stale_tiles[2].exchange(0, std::memory_order_relaxed)
+                << ",\"read_resolve\":"
+                << stale_tiles[3].exchange(0, std::memory_order_relaxed)
+                << ",\"transfers_unread\":"
+                << stale_transfers_unread.exchange(0, std::memory_order_relaxed)
+                << ",\"transfers_read\":"
+                << stale_transfers_read.exchange(0, std::memory_order_relaxed) << '}'
                 << ",\"vblanks\":{\"grid\":" << vblanks[0].exchange(0, std::memory_order_relaxed)
                 << ",\"late\":" << vblanks[1].exchange(0, std::memory_order_relaxed)
                 << ",\"forced\":" << vblanks[2].exchange(0, std::memory_order_relaxed) << '}'

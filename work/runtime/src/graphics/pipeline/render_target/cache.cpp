@@ -28,6 +28,8 @@
 #include <rex/logging.h>
 #include <rex/math.h>
 
+#include "../../util/perf_trace.h"
+
 REXCVAR_DEFINE_BOOL(mrt_edram_used_range_clamp_to_min, true, "GPU",
                     "Clamp MRT EDRAM used range to minimum");
 
@@ -43,6 +45,13 @@ REXCVAR_DEFINE_BOOL(execute_unclipped_draw_vs_on_cpu_for_psi_render_backend, tru
 
 REXCVAR_DEFINE_BOOL(snorm16_render_target_full_range, true, "GPU",
                     "Use full range for SNORM16 render targets");
+
+REXCVAR_DEFINE_INT32(native_rt_surfaces, 0, "GPU",
+                     "Surface-keyed host render targets (docs/analysis/d3d-hle.md 16.9): 0 off, "
+                     "1 count only (whether the tiles of each ownership transfer are read before "
+                     "they are overwritten, in the perf trace)")
+    .range(0, 1)
+    .lifecycle(rex::cvar::Lifecycle::kRequiresRestart);
 
 REXCVAR_DEFINE_BOOL(direct_host_resolve, true, "GPU",
                     "Resolve from host render targets directly to shared memory when possible")
@@ -777,6 +786,10 @@ bool RenderTargetCache::Update(bool is_rasterization_done,
                     interlock_barrier_only ? nullptr : &last_update_transfers_[rt_bit_index],
                     (overwrite_cutout_slots >> rt_bit_index) & 1 ? &overwrite_cutout : nullptr);
   }
+  if (!interlock_barrier_only && REXCVAR_GET(native_rt_surfaces) == 1) {
+    CountStaleTilesForDraw(rt_keys, depth_and_color_rts_used_bits, overwrite_cutout,
+                           overwrite_cutout_slots, is_rasterization_done);
+  }
 
   // Remember the sample count that the render targets of a uniform draw are
   // next used with (keys compared without the sample count).
@@ -906,6 +919,123 @@ uint32_t RenderTargetCache::GetLastUpdateBoundRenderTargets(
     }
   }
   return rts_used;
+}
+
+void RenderTargetCache::EndStaleTile(uint32_t tile, uint32_t outcome) {
+  uint32_t& transfer = stale_tile_transfers_[tile];
+  if (!transfer) {
+    return;
+  }
+  static perf_trace::StaleTileOutcome kOutcomes[] = {
+      perf_trace::StaleTileOutcome::kDropped, perf_trace::StaleTileOutcome::kOverwritten,
+      perf_trace::StaleTileOutcome::kReadByDraw, perf_trace::StaleTileOutcome::kReadByResolve};
+  perf_trace::CountStaleTile(kOutcomes[outcome]);
+  auto it = stale_transfer_pending_.find(transfer);
+  if (it != stale_transfer_pending_.end()) {
+    // The high bit: some tile of the transfer was read.
+    if (outcome >= 2) {
+      it->second |= UINT32_C(1) << 31;
+    }
+    if (!(--it->second & ~(UINT32_C(1) << 31))) {
+      perf_trace::CountStaleTransferEnd((it->second >> 31) != 0);
+      stale_transfer_pending_.erase(it);
+    }
+  }
+  transfer = 0;
+}
+
+void RenderTargetCache::CountStaleTilesForDraw(const RenderTargetKey* keys, uint32_t used_bits,
+                                               const Transfer::Rectangle& overwrite_cutout,
+                                               uint32_t overwrite_cutout_slots,
+                                               bool is_rasterization_done) {
+  if (stale_tile_transfers_.empty()) {
+    stale_tile_transfers_.resize(xenos::kEdramTileCount);
+  }
+  draw_util::Scissor scissor;
+  draw_util::GetScissor(register_file(), scissor);
+  for (uint32_t slot = 0; slot < 1 + xenos::kMaxColorRenderTargets; ++slot) {
+    if (!((used_bits >> slot) & 1)) {
+      continue;
+    }
+    const RenderTargetKey key = keys[slot];
+    const uint32_t pitch_tiles = key.GetPitchTiles();
+    if (!pitch_tiles) {
+      continue;
+    }
+    // The tiles that this update's transfers gave the render target, minus
+    // those wholly inside the cutout, which the transfer leaves out.
+    const uint32_t tile_width =
+        (xenos::kEdramTileWidthSamples >> uint32_t(key.Is64bpp())) >>
+        uint32_t(key.msaa_samples >= xenos::MsaaSamples::k4X);
+    const uint32_t tile_height =
+        xenos::kEdramTileHeightSamples >> uint32_t(key.msaa_samples >= xenos::MsaaSamples::k2X);
+    auto tile_inside = [&](uint32_t relative_tile, const Transfer::Rectangle& rect) {
+      const uint32_t x = (relative_tile % pitch_tiles) * tile_width;
+      const uint32_t y = (relative_tile / pitch_tiles) * tile_height;
+      return x >= rect.x_pixels && y >= rect.y_pixels &&
+             x + tile_width <= rect.x_pixels + rect.width_pixels &&
+             y + tile_height <= rect.y_pixels + rect.height_pixels;
+    };
+    const bool overwrites = (overwrite_cutout_slots >> slot) & 1;
+    for (const Transfer& transfer : last_update_transfers_[slot]) {
+      const uint32_t id = stale_next_transfer_++;
+      uint32_t pending = 0;
+      for (uint32_t tile = transfer.start_tiles; tile < transfer.end_tiles; ++tile) {
+        const uint32_t edram_tile = tile & (xenos::kEdramTileCount - 1);
+        // The previous owner's data that nobody read.
+        EndStaleTile(edram_tile, 0);
+        const uint32_t relative_tile =
+            (edram_tile - key.base_tiles) & (xenos::kEdramTileCount - 1);
+        if (overwrites && tile_inside(relative_tile, overwrite_cutout)) {
+          continue;
+        }
+        stale_tile_transfers_[edram_tile] = id;
+        ++pending;
+      }
+      perf_trace::CountStaleTransfer(transfer.end_tiles - transfer.start_tiles, pending);
+      if (pending) {
+        stale_transfer_pending_[id] = pending;
+      }
+    }
+    if (!is_rasterization_done) {
+      continue;
+    }
+    // The draw: overwrites the tiles wholly inside its rectangle, or may read
+    // every tile its scissor touches.
+    const std::pair<uint32_t, uint32_t> range = last_update_ranges_[slot];
+    for (uint32_t relative_tile = 0; relative_tile < range.second; ++relative_tile) {
+      const uint32_t edram_tile = (key.base_tiles + relative_tile) & (xenos::kEdramTileCount - 1);
+      if (!stale_tile_transfers_[edram_tile]) {
+        continue;
+      }
+      if (overwrites) {
+        if (tile_inside(relative_tile, overwrite_cutout)) {
+          EndStaleTile(edram_tile, 1);
+        }
+        continue;
+      }
+      const uint32_t x = (relative_tile % pitch_tiles) * tile_width;
+      const uint32_t y = (relative_tile / pitch_tiles) * tile_height;
+      if (x < scissor.offset[0] + scissor.extent[0] && x + tile_width > scissor.offset[0] &&
+          y < scissor.offset[1] + scissor.extent[1] && y + tile_height > scissor.offset[1]) {
+        EndStaleTile(edram_tile, 2);
+      }
+    }
+  }
+}
+
+void RenderTargetCache::CountStaleTilesForResolve(uint32_t base_tiles, uint32_t row_length_used,
+                                                  uint32_t rows, uint32_t pitch_tiles,
+                                                  bool clears) {
+  if (stale_tile_transfers_.empty() || REXCVAR_GET(native_rt_surfaces) != 1) {
+    return;
+  }
+  for (uint32_t row = 0; row < rows; ++row) {
+    for (uint32_t column = 0; column < row_length_used; ++column) {
+      EndStaleTile((base_tiles + row * pitch_tiles + column) & (xenos::kEdramTileCount - 1),
+                   clears ? 1 : 3);
+    }
+  }
 }
 
 uint32_t RenderTargetCache::GetRenderTargetHeight(uint32_t pitch_tiles_at_32bpp,
