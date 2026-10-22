@@ -234,6 +234,10 @@ class RenderTargetCache {
   void CountStaleTilesForResolve(uint32_t base_tiles, uint32_t row_length_used, uint32_t rows,
                                  uint32_t pitch_tiles, bool clears);
 
+  // native_rt_surfaces bit 4 (docs/analysis/d3d-hle.md 16.12): the deferred
+  // tiles of all render targets.
+  uint32_t lazy_held_tiles() const { return lazy_held_tiles_; }
+
  protected:
   RenderTargetCache(const RegisterFile& register_file, const memory::Memory& memory,
                     uint32_t draw_resolution_scale_x, uint32_t draw_resolution_scale_y)
@@ -347,9 +351,16 @@ class RenderTargetCache {
     RenderTarget(RenderTarget&& render_target) = delete;
     RenderTarget& operator=(RenderTarget&& render_target) = delete;
     RenderTargetKey key() const { return key_; }
+    // native_rt_surfaces bit 4: the tiles this render target owns whose data
+    // another render target still holds (deferred transfers).
+    uint32_t lazy_owned_held_tiles() const { return lazy_owned_held_tiles_; }
 
    protected:
     RenderTarget(RenderTargetKey key) : key_(key) {}
+
+   private:
+    friend class RenderTargetCache;
+    uint32_t lazy_owned_held_tiles_ = 0;
 
    private:
     RenderTargetKey key_;
@@ -610,6 +621,15 @@ class RenderTargetCache {
   // EDRAM memory are committed with a memory barrier.
   void PixelShaderInterlockFullEdramBarrierPlaced();
 
+  // native_rt_surfaces bit 4 (docs/analysis/d3d-hle.md 16.12): moves the
+  // deferred tiles of a span (or, with owner set, every deferred tile that
+  // owner owns) into transfers into their owners, sorted by source and merged,
+  // appended to out by owner.
+  void TakeDeferredTransfers(uint32_t base_tiles, uint32_t row_length_used, uint32_t rows,
+                             uint32_t pitch_tiles, const RenderTarget* owner,
+                             uint32_t flush_outcome,
+                             std::vector<std::pair<RenderTarget*, std::vector<Transfer>>>& out);
+
  private:
   const RegisterFile& register_file_;
   uint32_t draw_resolution_scale_x_;
@@ -759,6 +779,37 @@ class RenderTargetCache {
   // draw, 3 read by a resolve.
   void EndStaleTile(uint32_t tile, uint32_t outcome);
   std::pair<uint32_t, uint32_t> last_update_ranges_[1 + xenos::kMaxColorRenderTargets] = {};
+
+  // native_rt_surfaces bit 4 (docs/analysis/d3d-hle.md 16.12), lazy ownership
+  // transfers: per EDRAM tile, the render target that still holds the data of
+  // a transfer into the tile's owner that was deferred (nullptr if none).
+  std::vector<RenderTarget*> lazy_holders_;
+  uint32_t lazy_held_tiles_ = 0;
+  uint64_t lazy_flushes_ = 0;
+  std::vector<Transfer> lazy_transfers_scratch_;
+  bool IsLazyTransfersEnabled() const;
+  // Before a claim: the deferred tiles of the claimed range that another
+  // render target owns leave their holder for lazy_detached_.
+  std::vector<RenderTarget*> lazy_detached_;
+  std::vector<uint32_t> lazy_detached_tiles_;
+  void DetachLazyHolders(RenderTargetKey dest, uint32_t start_tiles_base_relative,
+                         uint32_t length_tiles);
+  // After a clear's claim: its transfers of detached tiles copy from the holder,
+  // none when the holder is the destination.
+  void SubstituteDetachedHolders(RenderTarget* dest, std::vector<Transfer>& transfers);
+  // The detached tiles no transfer took: overwritten.
+  void EndDetachedHolders();
+  // After the claims of an update: takes the transfer source from the holder of
+  // each detached tile, drops the transfers back into the holder, defers the
+  // tiles that the draw does not touch, and adds the copies from the holders
+  // of the deferred tiles that it touches.
+  void DeferTransfers(const RenderTargetKey* keys, RenderTarget* const* rts, uint32_t used_bits,
+                      const Transfer::Rectangle& touched,
+                      const Transfer::Rectangle& overwrite_cutout,
+                      uint32_t overwrite_cutout_slots);
+  // Sorts transfers by source and start and merges the adjacent ones.
+  static void SortAndMergeTransfers(std::vector<Transfer>& transfers);
+  void SetLazyHolder(uint32_t tile, RenderTarget* owner, RenderTarget* holder);
 
   UniformDraw uniform_draw_;
   UniformDraw last_update_uniform_draw_;

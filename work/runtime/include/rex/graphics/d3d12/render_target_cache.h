@@ -85,6 +85,10 @@ class D3D12RenderTargetCache final : public RenderTargetCache {
   // PendingTransfers), if any. Called before anything else uses the render
   // targets, and at the end of a submission.
   void PerformPendingTransfers();
+  // native_rt_surfaces bit 4: copies the deferred transfers of a resolve's
+  // spans, or of every tile one render target owns, into their owners.
+  void FlushLazyTransfers(const draw_util::ResolveInfo* resolve_info,
+                          const RenderTarget* owner);
 
   void WriteEdramRawSRVDescriptor(D3D12_CPU_DESCRIPTOR_HANDLE handle);
   void WriteEdramRawUAVDescriptor(D3D12_CPU_DESCRIPTOR_HANDLE handle);
@@ -834,6 +838,7 @@ class D3D12RenderTargetCache final : public RenderTargetCache {
   ID3D12PipelineState* uint32_rtv_clear_pipelines_[2][size_t(xenos::MsaaSamples::k4X) + 1] = {};
 
   std::vector<Transfer> clear_transfers_[2];
+  std::vector<std::pair<RenderTarget*, std::vector<Transfer>>> lazy_flush_groups_;
 
   // Temporary storage for DXBC building.
   std::vector<uint32_t> built_shader_;

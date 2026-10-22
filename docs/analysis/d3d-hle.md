@@ -975,7 +975,7 @@ The first open item was time-boxed by the main session to one diagnostic build a
 - 9,120 bitwise 4x MSAA depth resolves (D24FS8, sample 0, photo mode's three tile destinations of 1280x256 and 1280x208). 9,084 differ, in 30,710 words each on average (about one word in ten); 36 match.
 - 42,661 full copies of 4x MSAA sources, which average the samples, and every 2x MSAA copy. All of these match, so both sides address the same pixels.
 
-The differing depths are close: the 24-bit values differ by about 0x70, by the same amount along a row and with the copy always the larger. That is what another sample of the same sloped surface gives, or a different depth conversion of the same sample. The words do not appear elsewhere on the other side, so this is no displacement. By their code, the dump (EDRAM sample bit 0 of x to host sample bit 0, bit 0 of y to host sample bit 1), the precompiled fast copy (guest sample bit 1 horizontal, bit 0 vertical, the same at scale 1 in the unscaled and scaled builds, which `-Rov` also uses) and `resolve_host_32bpp` all take host sample 0 for guest sample 0. The cause is not found within the time box, and nothing shows the precompiled path to be wrong, so no RTV bug is recorded. These copies keep the dump, which is correct and covers only photo mode at 1x; the diagnostic cvar stays for a later look.
+The differing depths are close: the 24-bit values differ by about 0x70, by the same amount along a row and with the copy always the larger. That is what another sample of the same sloped surface gives, or a different depth conversion of the same sample. The words do not appear elsewhere on the other side, so this is no displacement. By their code, the dump (EDRAM sample bit 0 of x to host sample bit 0, bit 0 of y to host sample bit 1), the precompiled fast copy (guest sample bit 1 horizontal, bit 0 vertical, the same at scale 1 in the unscaled and scaled builds, which `-Rov` also uses) and `resolve_host_32bpp` all take host sample 0 for guest sample 0. The cause is not found within the time box, and nothing shows the precompiled path to be wrong, so no RTV bug is recorded. These copies keep the dump, which is correct and covers only photo mode at 1x; the diagnostic cvar stays for a later look. The main session reads the signature (a constant offset along each row of about 112 float24 ulps, the copy always the larger, the averaged copies all equal) as a different host sample in the vertical direction on a sloped depth plane, not a conversion. The first thing to check later is which host sample the 4x depth dump reads for guest sample 0: the dump's sample index or swizzle on the depth path, and any detour through a host depth store, not the copy shader. Which side is right needs a byte comparison against `-Rov` in photo mode at 1x.
 
 The close gate of increment 3 on `I:\FM4-build-usa` at 240 Hz, on the binary of `d9a0c9f` (one binary for RTV and `-Native`'s cvars with bit 2, 22 October 2026):
 
@@ -998,20 +998,28 @@ Every cell reached its goal with RTV's error keys; the smoke and perf warnings a
 **Lazy mode** (`native_rt_surfaces` bit 4, off by default, only with the RTV path):
 
 - **The holder.** A per-tile table records, for each tile whose transfer was deferred, the render target that still holds its data (the holder), and for depth with a different host encoding the host depth holder. A tile owned by X with holder S has its data in S's pixels; S's pixels there stay valid because S only draws into tiles it claims.
-- **The transfer at claim time.** Only the transferred tiles that the claiming draw may read are copied now: those inside the draw's scissor and outside its overwrite cutout. The rest are deferred, with their holder set to the transfer's source, or kept if they already have one.
+- **The transfer at claim time.** Before the claims, the deferred tiles of the claimed ranges that another render target owns leave their holder, so that a claim that lists no transfer for them (a range wholly inside an overwrite cutout or a clear) cannot leave a stale holder behind. Only the transferred tiles that the claiming draw may touch are copied now. These are the tiles within its scissor, and for a draw with a covered rectangle (a uniform draw) within that rectangle; the overwrite cutout then drops those it covers. The rest are deferred, with their holder set to the transfer's source or to the holder they left.
 - **Chains.** When a tile with holder S is claimed again, its transfer comes from S, not from the current owner. When S claims it back, the deferral ends with no copy, because the data is already in S.
 - **Flushes.** The deferred transfers are copied into the owner, grouped by holder, before anything reads the tile:
   - a draw on the owner that is not an overwrite of the tile and has it within its scissor;
-  - a resolve whose span includes the tile (before the dump or the resolve from the host render target);
+  - a resolve whose copy span includes the tile (before the dump or the resolve from the host render target); a resolve's clear copies the partly cleared tiles from their holder in its own transfers;
   - any dump of the tile into the EDRAM buffer;
   - `ClearCache` and the destruction of a holder.
 - **Ending a deferral without a copy.** An overwrite draw's cutout or a resolve clear covering the tile wholly ends the deferral without a copy.
-- **First version.** Transfers with a separate host depth source stay eager (they keep the host depth precision of float24 and are rare in the race), as do transfers into or out of 64bpp formats, if the counts show them rare.
+- **First version.** Transfers with a separate host depth source and transfers into depth render targets whose host encoding differs (float24 kept in 32-bit floats) stay eager. They carry the host depth precision, which the ownership map tracks per range.
 - **Memory.** Lazy mode keeps no extra render target alive: holders are keys that exist until `ClearCache` today, which then also keeps every holder. The memory cap with LRU eviction (an eviction flushes the evicted holder's deferred tiles) belongs to the sizing of host targets to surface extents, decided before increment 4.
 
-**Counters.** Tiles deferred, copied at a flush (by kind of flush), ended by an overwrite or a clear, and ended by a claim back to the holder; flush copies per frame; the transfer GPU time (a timestamp kind beside the resolves).
+**Counters** (perf trace `lazy_transfers`, in tiles):
 
-**Check mode** (`native_rt_surfaces_check`, extended): on check frames every flush point also verifies its own premise. A tile it leaves deferred must be outside the reading draw's scissor or inside its cutout. After the flush, a byte comparison of the owner's tiles copied by a flush against a dump of the same tiles copied eagerly from the holder (both into the EDRAM layout) is made for every N-th flush. A perturbation option skips every 1,000th flush, and the check must report every skipped one.
+- copied at the claim;
+- deferred, and deferred again for a new owner;
+- ended without a copy: claimed back by the holder, or inside an overwrite draw's cutout;
+- ended with a copy: into a new owner that reads them, or at a flush by the kind of reader (draw, resolve copy, resolve clear, post pass);
+- still deferred at the end of the window.
+
+The GPU time of the transfers is a timestamp kind of its own (`gpu.transfer_ms`, which includes the copies inside resolves).
+
+**Check mode** (`native_rt_surfaces_lazy_check`). After each draw's flush, every tile the draw may touch within the range it claims must have no deferral left (violations). No tile it may touch beyond that range may be held by the drawing render target itself, which would draw into data it holds for another owner without claiming it (hazards). `native_rt_surfaces_lazy_perturb=N` skips the copy of every N-th deferred tile that a draw reads, so the check must report exactly the skipped ones. Resolves and post passes take every deferred tile of what they read before they read it.
 
 **Expected gain.** The transfers are about 0.14 to 0.25 ms of GPU time a race frame at 2x (16.10); lazy mode removes the copies of at least 54.5% of the tiles and the draws of the transfers whose tiles are all deferred.
 

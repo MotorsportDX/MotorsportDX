@@ -86,6 +86,22 @@ With `native_rt_resolve=true` (off by default) each window has a `native_rt_reso
 
 With bit 2 of `native_rt_surfaces` each window has a `host_resolve` object: `found` (resolves that could read their source from one host render target), `done` (those that did, outside check frames), `other` (copy resolves that could not), and with `native_rt_surfaces_check=N` `checks`, `mismatches` (each also logs a warning with the first differing words) and `check_formats` (checks by the source format: color formats 0 to 15, then D24S8 and D24FS8). The design is in [d3d-hle.md 16.11](../analysis/d3d-hle.md). The diagnostic `native_rt_surfaces_unscaled_msaa=true` also resolves the unscaled fast copies of multisampled sources from the host render target, which bit 2 otherwise leaves to the dump; its mismatch warnings add the EDRAM base and pitch, the resolve rectangle, the render target's base and pitch, the destination size, and where each side's first differing word appears on the other side, and the checks of multisampled sources that match log an info line.
 
+With bit 4 of `native_rt_surfaces` (lazy ownership transfers, [d3d-hle.md 16.12](../analysis/d3d-hle.md)) each window has a `lazy_transfers` object, counted in tiles:
+
+- `copied`: copied when a render target claimed them.
+- `deferred`: left with their holder.
+- How deferrals end without a copy:
+  - `claimed_back`: the holder claimed them again;
+  - `overwritten`: copied for an overwrite draw but inside its cutout, which drops the copy.
+- `redeferred`: claimed by another render target and deferred again, from the same holder.
+- How deferrals end with a copy:
+  - `chain_copied`: from the holder into a new owner that reads them;
+  - `flushed_draw`, `flushed_resolve`, `flushed_clear` and `flushed_other`: before a draw, a resolve's copy, a resolve's clear or a post pass read them.
+- `violations`, `hazards` and `perturbed`: from `native_rt_surfaces_lazy_check` (deferred tiles left where a draw touches the range it claims; tiles a render target holds for another owner where it may touch beyond its range) and `native_rt_surfaces_lazy_perturb`.
+- `pending`: the tiles still deferred at the end of the window.
+
+The perf trace's `gpu` object has `transfer_ms`: the GPU time of the ownership transfers a frame, including the copies inside resolves.
+
 ### Ownership transfers read or not (native_rt_surfaces bit 1)
 
 With bit 1 of `native_rt_surfaces` (count only, off by default) each window has an `rt_transfers` object: the ownership `transfers` the render target cache made, their `tiles` and the `pending_tiles` left after the overwrite cutout, and how those tiles ended: `dropped` (another render target took them before anything touched them), `overwritten` (a draw's overwrite rectangle wholly covered them, or a resolve cleared them), `read_draw` (a draw that may read touched them: any draw that is not a uniform overwrite, within its scissor, so this overestimates) and `read_resolve` (a resolve copied them); `transfers_unread` and `transfers_read` count the transfers that ended with no tile read and with some. The design is in [d3d-hle.md 16.9](../analysis/d3d-hle.md).

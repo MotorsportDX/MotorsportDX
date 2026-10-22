@@ -1425,6 +1425,10 @@ bool D3D12RenderTargetCache::Resolve(const memory::Memory& memory, D3D12SharedMe
     return true;
   }
 
+  // native_rt_surfaces bit 4: the deferred transfers of the tiles the resolve
+  // copies, before it reads them (d3d-hle.md 16.12).
+  FlushLazyTransfers(&resolve_info, nullptr);
+
   // native_rt_surfaces=1: the copy reads the tiles of its source, the clears
   // overwrite theirs (d3d-hle.md 16.9).
   if (GetPath() == Path::kHostRenderTargets) {
@@ -4134,6 +4138,23 @@ void D3D12RenderTargetCache::PerformTransfersAndResolveClears(
     const Transfer::Rectangle* resolve_clear_rectangle) {
   assert_true(GetPath() == Path::kHostRenderTargets);
 
+  // The GPU time of the transfers (perf trace gpu transfer_ms).
+  struct TransferTimestamp {
+    D3D12CommandProcessor& command_processor;
+    uint32_t pair = UINT32_MAX;
+    ~TransferTimestamp() {
+      if (pair != UINT32_MAX) {
+        command_processor.EndTransferTimestamp(pair);
+      }
+    }
+  } transfer_timestamp{command_processor_};
+  for (uint32_t i = 0; i < render_target_count; ++i) {
+    if (render_targets[i] && !render_target_transfers[i].empty()) {
+      transfer_timestamp.pair = command_processor_.BeginTransferTimestamp();
+      break;
+    }
+  }
+
   const ui::d3d12::D3D12Provider& provider = command_processor_.GetD3D12Provider();
   ID3D12Device* device = provider.GetDevice();
   uint64_t current_submission = command_processor_.GetCurrentSubmission();
@@ -5023,6 +5044,44 @@ void D3D12RenderTargetCache::PerformTransfersAndResolveClears(
   }
 }
 
+void D3D12RenderTargetCache::FlushLazyTransfers(const draw_util::ResolveInfo* resolve_info,
+                                                const RenderTarget* owner) {
+  if (GetPath() != Path::kHostRenderTargets || !lazy_held_tiles()) {
+    return;
+  }
+  lazy_flush_groups_.clear();
+  if (resolve_info) {
+    auto take_span = [&](const draw_util::ResolveEdramInfo& edram_info,
+                         perf_trace::LazyTileOutcome outcome) {
+      uint32_t span_base, span_row_length, span_rows;
+      draw_util::GetResolveEdramTileSpan(edram_info, resolve_info->coordinate_info,
+                                         resolve_info->height_div_8, span_base, span_row_length,
+                                         span_rows);
+      TakeDeferredTransfers(span_base, span_row_length, span_rows, edram_info.pitch_tiles,
+                            nullptr, uint32_t(outcome), lazy_flush_groups_);
+    };
+    if (resolve_info->copy_dest_extent_length) {
+      take_span(resolve_info->IsCopyingDepth() ? resolve_info->depth_edram_info
+                                               : resolve_info->color_edram_info,
+                perf_trace::LazyTileOutcome::kFlushedResolve);
+    }
+    // The clears take the deferred tiles they claim from their holders
+    // (PrepareHostRenderTargetsResolveClear).
+  } else if (owner) {
+    TakeDeferredTransfers(0, 0, 0, 0, owner,
+                          uint32_t(perf_trace::LazyTileOutcome::kFlushedOther),
+                          lazy_flush_groups_);
+  }
+  for (auto& group : lazy_flush_groups_) {
+    if (group.second.empty()) {
+      continue;
+    }
+    RenderTarget* render_target = group.first;
+    PerformTransfersAndResolveClears(1, &render_target, &group.second);
+  }
+  lazy_flush_groups_.clear();
+}
+
 ID3D12Resource* D3D12RenderTargetCache::TransitionLastColorRenderTarget(
     uint32_t index, D3D12_RESOURCE_STATES state, LastColorRenderTarget& out) {
   if (GetPath() != Path::kHostRenderTargets || index >= xenos::kMaxColorRenderTargets) {
@@ -5033,8 +5092,10 @@ ID3D12Resource* D3D12RenderTargetCache::TransitionLastColorRenderTarget(
       render_target->key().msaa_samples != xenos::MsaaSamples::k1X) {
     return nullptr;
   }
-  // The transfers kept pending write into the render targets first.
+  // The transfers kept pending write into the render targets first, and the
+  // deferred ones of all its tiles, since a post pass reads all of it.
   PerformPendingTransfers();
+  FlushLazyTransfers(nullptr, render_target);
   auto& d3d12_rt = *static_cast<D3D12RenderTarget*>(render_target);
   command_processor_.PushTransitionBarrier(d3d12_rt.resource(), d3d12_rt.SetResourceState(state),
                                            state);

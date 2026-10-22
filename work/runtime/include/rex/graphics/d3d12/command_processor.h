@@ -69,6 +69,10 @@ class D3D12CommandProcessor : public CommandProcessor {
   // GPU timestamps of texture loads for the perf trace (N3, d3d-hle.md 16.1).
   uint32_t BeginTextureLoadTimestamp(bool full_screen = false);
   void EndTextureLoadTimestamp(uint32_t pair);
+  // Ownership transfers between host render targets (perf trace gpu
+  // transfer_ms).
+  uint32_t BeginTransferTimestamp();
+  void EndTransferTimestamp(uint32_t pair) { EndGpuTimestamp(pair); }
 
   void ClearCaches() override;
   void InvalidateGpuMemory() override;
@@ -485,7 +489,8 @@ class D3D12CommandProcessor : public CommandProcessor {
     kTextureLoad,
     kReadback,
     kResolveFull,
-    kTextureLoadFull
+    kTextureLoadFull,
+    kTransfer
   };
   static constexpr uint32_t kGpuTimestampPairsPerFrame = 256;
   static constexpr uint32_t kGpuTimestampInvalid = UINT32_MAX;

@@ -50,8 +50,22 @@ REXCVAR_DEFINE_INT32(native_rt_surfaces, 0, "GPU",
                      "Surface-keyed host render targets (docs/analysis/d3d-hle.md 16.9), bits: 1 "
                      "count whether the tiles of each ownership transfer are read before they "
                      "are overwritten (perf trace), 2 resolve from the host render target "
-                     "instead of its dump into the EDRAM buffer. RTV path only")
-    .range(0, 3)
+                     "instead of its dump into the EDRAM buffer, 4 defer ownership transfers "
+                     "until a draw, a resolve or a post pass reads the tiles (16.12). RTV path "
+                     "only")
+    .range(0, 7)
+    .lifecycle(rex::cvar::Lifecycle::kRequiresRestart);
+
+REXCVAR_DEFINE_BOOL(native_rt_surfaces_lazy_check, false, "GPU",
+                    "With native_rt_surfaces bit 4: after each flush of deferred transfers, "
+                    "look for deferred tiles left in what the reader reads, and for deferred "
+                    "tiles that their holder may draw into without claiming them (perf trace "
+                    "lazy_transfers violations)")
+    .lifecycle(rex::cvar::Lifecycle::kRequiresRestart);
+REXCVAR_DEFINE_INT32(native_rt_surfaces_lazy_perturb, 0, "GPU",
+                     "With native_rt_surfaces_lazy_check: skip the copy of every N-th deferred "
+                     "tile that a draw reads (0: never), to prove that the check reports it")
+    .range(0, 1000000)
     .lifecycle(rex::cvar::Lifecycle::kRequiresRestart);
 
 REXCVAR_DEFINE_BOOL(direct_host_resolve, true, "GPU",
@@ -391,6 +405,12 @@ void RenderTargetCache::ClearCache() {
       }
       if (!ownership_range.host_depth_render_target_float24.IsEmpty()) {
         used_render_targets.emplace(ownership_range.host_depth_render_target_float24);
+      }
+    }
+    // The holders of deferred transfers (native_rt_surfaces bit 4).
+    for (RenderTarget* holder : lazy_holders_) {
+      if (holder) {
+        used_render_targets.emplace(holder->key());
       }
     }
     if (render_targets_.size() != used_render_targets.size()) {
@@ -778,6 +798,40 @@ bool RenderTargetCache::Update(bool is_rasterization_done,
   }
   last_update_overwrite_cutout_ = overwrite_cutout;
   last_update_overwrite_cutout_slots_ = overwrite_cutout_slots;
+  // native_rt_surfaces bit 4 (d3d-hle.md 16.12): the deferred tiles that change
+  // their owner leave their holder before the claims, and the render target
+  // pixels the draw may touch - its scissor, and with a covered rectangle only
+  // the pixels the rectangle reaches.
+  const bool lazy_transfers = !interlock_barrier_only && GetPath() == Path::kHostRenderTargets &&
+                              (lazy_held_tiles_ || IsLazyTransfersEnabled());
+  Transfer::Rectangle lazy_touched = {};
+  if (lazy_transfers) {
+    for (uint32_t i = 0; i < edram_bases_sorted_count; ++i) {
+      DetachLazyHolders(rt_keys[edram_bases_sorted[i].second], 0, rt_lengths_tiles[i]);
+    }
+    if (is_rasterization_done) {
+      draw_util::Scissor scissor;
+      draw_util::GetScissor(regs, scissor, false);
+      const float scale[] = {float(uniform_draw.scale_x), float(uniform_draw.scale_y)};
+      int32_t low[2], high[2];
+      for (uint32_t i = 0; i < 2; ++i) {
+        const int32_t scissor_scale = int32_t(i ? uniform_draw.scale_y : uniform_draw.scale_x);
+        low[i] = int32_t(scissor.offset[i]) * scissor_scale;
+        high[i] = int32_t(scissor.offset[i] + scissor.extent[i]) * scissor_scale;
+        if (uniform_draw.bounds_valid) {
+          low[i] = std::max(low[i], int32_t(std::floor(uniform_draw.bounds[i] * scale[i])));
+          high[i] = std::min(high[i], int32_t(std::ceil(uniform_draw.bounds[2 + i] * scale[i])));
+        }
+        low[i] = std::max(low[i], int32_t(0));
+      }
+      if (high[0] > low[0] && high[1] > low[1]) {
+        lazy_touched.x_pixels = uint32_t(low[0]);
+        lazy_touched.y_pixels = uint32_t(low[1]);
+        lazy_touched.width_pixels = uint32_t(high[0] - low[0]);
+        lazy_touched.height_pixels = uint32_t(high[1] - low[1]);
+      }
+    }
+  }
   for (uint32_t i = 0; i < edram_bases_sorted_count; ++i) {
     const std::pair<uint32_t, uint32_t>& rt_base_index = edram_bases_sorted[i];
     uint32_t rt_bit_index = rt_base_index.second;
@@ -786,6 +840,10 @@ bool RenderTargetCache::Update(bool is_rasterization_done,
     ChangeOwnership(rt_keys[rt_bit_index], 0, rt_lengths_tiles[i],
                     interlock_barrier_only ? nullptr : &last_update_transfers_[rt_bit_index],
                     (overwrite_cutout_slots >> rt_bit_index) & 1 ? &overwrite_cutout : nullptr);
+  }
+  if (lazy_transfers) {
+    DeferTransfers(rt_keys, rts, depth_and_color_rts_used_bits, lazy_touched, overwrite_cutout,
+                   overwrite_cutout_slots);
   }
   if (!interlock_barrier_only && (REXCVAR_GET(native_rt_surfaces) & 1)) {
     CountStaleTilesForDraw(rt_keys, depth_and_color_rts_used_bits, overwrite_cutout,
@@ -1037,6 +1095,363 @@ void RenderTargetCache::CountStaleTilesForResolve(uint32_t base_tiles, uint32_t 
                    clears ? 1 : 3);
     }
   }
+}
+
+bool RenderTargetCache::IsLazyTransfersEnabled() const {
+  return GetPath() == Path::kHostRenderTargets && (REXCVAR_GET(native_rt_surfaces) & 4);
+}
+
+void RenderTargetCache::SetLazyHolder(uint32_t tile, RenderTarget* owner, RenderTarget* holder) {
+  RenderTarget*& entry = lazy_holders_[tile];
+  if (entry) {
+    --lazy_held_tiles_;
+    if (owner) {
+      --owner->lazy_owned_held_tiles_;
+    }
+  }
+  entry = holder;
+  if (holder) {
+    ++lazy_held_tiles_;
+    if (owner) {
+      ++owner->lazy_owned_held_tiles_;
+    }
+  }
+  perf_trace::lazy_pending_tiles.store(lazy_held_tiles_, std::memory_order_relaxed);
+}
+
+void RenderTargetCache::SortAndMergeTransfers(std::vector<Transfer>& transfers) {
+  std::sort(transfers.begin(), transfers.end(), [](const Transfer& a, const Transfer& b) {
+    return std::tie(a.source, a.host_depth_source, a.start_tiles) <
+           std::tie(b.source, b.host_depth_source, b.start_tiles);
+  });
+  size_t merged = 0;
+  for (size_t i = 0; i < transfers.size(); ++i) {
+    if (merged && transfers[merged - 1].AreSourcesSame(transfers[i]) &&
+        transfers[merged - 1].end_tiles == transfers[i].start_tiles) {
+      transfers[merged - 1].end_tiles = transfers[i].end_tiles;
+    } else {
+      transfers[merged++] = transfers[i];
+    }
+  }
+  transfers.erase(transfers.begin() + merged, transfers.end());
+}
+
+void RenderTargetCache::DetachLazyHolders(RenderTargetKey dest, uint32_t start_tiles_base_relative,
+                                          uint32_t length_tiles) {
+  if (!lazy_held_tiles_ || !length_tiles) {
+    return;
+  }
+  if (lazy_detached_.empty()) {
+    lazy_detached_.resize(xenos::kEdramTileCount);
+  }
+  // The claimed extent, split where it wraps around the EDRAM.
+  const uint32_t start = (dest.base_tiles + start_tiles_base_relative) & (xenos::kEdramTileCount - 1);
+  const uint32_t length = std::min(length_tiles, xenos::kEdramTileCount);
+  const uint32_t extents[2][2] = {
+      {start, std::min(start + length, xenos::kEdramTileCount)},
+      {0, start + length > xenos::kEdramTileCount ? start + length - xenos::kEdramTileCount : 0}};
+  for (const auto& extent : extents) {
+    uint32_t tile = extent[0];
+    while (tile < extent[1]) {
+      // The ownership range of the tile: skipped whole when the claiming render
+      // target owns it already or its owner has no deferred tile.
+      auto range_it = ownership_ranges_.upper_bound(tile);
+      assert_true(range_it != ownership_ranges_.begin());
+      --range_it;
+      const uint32_t run_end = std::min(range_it->second.end_tiles, extent[1]);
+      const RenderTargetKey owner_key = range_it->second.render_target;
+      RenderTarget* owner = nullptr;
+      if (owner_key != dest && !owner_key.IsEmpty()) {
+        auto owner_it = render_targets_.find(owner_key);
+        if (owner_it != render_targets_.end()) {
+          owner = owner_it->second;
+        }
+      }
+      if (owner && owner->lazy_owned_held_tiles_) {
+        for (; tile < run_end; ++tile) {
+          if (RenderTarget* holder = lazy_holders_[tile]) {
+            SetLazyHolder(tile, owner, nullptr);
+            lazy_detached_[tile] = holder;
+            lazy_detached_tiles_.push_back(tile);
+          }
+        }
+      }
+      tile = run_end;
+    }
+  }
+}
+
+void RenderTargetCache::SubstituteDetachedHolders(RenderTarget* dest,
+                                                  std::vector<Transfer>& transfers) {
+  if (lazy_detached_tiles_.empty() || !dest) {
+    return;
+  }
+  lazy_transfers_scratch_.clear();
+  uint32_t copied = 0, claimed_back = 0;
+  for (const Transfer& transfer : transfers) {
+    for (uint32_t tile = transfer.start_tiles; tile < transfer.end_tiles; ++tile) {
+      const uint32_t edram_tile = tile & (xenos::kEdramTileCount - 1);
+      RenderTarget* source = transfer.source;
+      RenderTarget* host_depth_source = transfer.host_depth_source;
+      if (RenderTarget* holder = lazy_detached_[edram_tile]) {
+        lazy_detached_[edram_tile] = nullptr;
+        source = holder;
+        if (host_depth_source == source) {
+          host_depth_source = nullptr;
+        }
+        if (source == dest) {
+          ++claimed_back;
+          continue;
+        }
+        ++copied;
+      }
+      lazy_transfers_scratch_.emplace_back(tile, tile + 1, source, host_depth_source);
+    }
+  }
+  SortAndMergeTransfers(lazy_transfers_scratch_);
+  transfers.swap(lazy_transfers_scratch_);
+  perf_trace::CountLazyTiles(perf_trace::LazyTileOutcome::kFlushedClear, copied);
+  perf_trace::CountLazyTiles(perf_trace::LazyTileOutcome::kClaimedBack, claimed_back);
+}
+
+void RenderTargetCache::EndDetachedHolders() {
+  // Detached but in no transfer: inside an overwrite cutout or a clear, whose
+  // pixels replace the deferred data.
+  uint32_t overwritten = 0;
+  for (uint32_t tile : lazy_detached_tiles_) {
+    if (lazy_detached_[tile]) {
+      lazy_detached_[tile] = nullptr;
+      ++overwritten;
+    }
+  }
+  lazy_detached_tiles_.clear();
+  perf_trace::CountLazyTiles(perf_trace::LazyTileOutcome::kOverwritten, overwritten);
+}
+
+void RenderTargetCache::DeferTransfers(const RenderTargetKey* keys, RenderTarget* const* rts,
+                                       uint32_t used_bits, const Transfer::Rectangle& touched,
+                                       const Transfer::Rectangle& overwrite_cutout,
+                                       uint32_t overwrite_cutout_slots) {
+  if (lazy_holders_.empty()) {
+    lazy_holders_.resize(xenos::kEdramTileCount);
+  }
+  if (lazy_detached_.empty()) {
+    lazy_detached_.resize(xenos::kEdramTileCount);
+  }
+  const bool defer = IsLazyTransfersEnabled();
+  const bool check = REXCVAR_GET(native_rt_surfaces_lazy_check);
+  const uint32_t perturb_every =
+      check ? uint32_t(std::max(REXCVAR_GET(native_rt_surfaces_lazy_perturb), int32_t(0))) : 0;
+  for (uint32_t slot = 0; slot < 1 + xenos::kMaxColorRenderTargets; ++slot) {
+    if (!((used_bits >> slot) & 1)) {
+      continue;
+    }
+    const RenderTargetKey key = keys[slot];
+    RenderTarget* dest = rts[slot];
+    const uint32_t pitch_tiles = key.GetPitchTiles();
+    if (!dest || !pitch_tiles) {
+      continue;
+    }
+    const uint32_t tile_width =
+        (xenos::kEdramTileWidthSamples >> uint32_t(key.Is64bpp())) >>
+        uint32_t(key.msaa_samples >= xenos::MsaaSamples::k4X);
+    const uint32_t tile_height =
+        xenos::kEdramTileHeightSamples >> uint32_t(key.msaa_samples >= xenos::MsaaSamples::k2X);
+    // The tile columns and rows relative to the render target that the draw
+    // may touch: it reads and writes nothing outside them.
+    uint32_t columns[2] = {}, rows[2] = {};
+    if (touched.width_pixels && touched.height_pixels) {
+      columns[0] = touched.x_pixels / tile_width;
+      columns[1] = std::min((touched.x_pixels + touched.width_pixels + tile_width - 1) / tile_width,
+                            pitch_tiles);
+      rows[0] = touched.y_pixels / tile_height;
+      rows[1] = (touched.y_pixels + touched.height_pixels + tile_height - 1) / tile_height;
+    }
+    auto read_by_draw = [&](uint32_t relative_tile) {
+      const uint32_t column = relative_tile % pitch_tiles, row = relative_tile / pitch_tiles;
+      return column >= columns[0] && column < columns[1] && row >= rows[0] && row < rows[1];
+    };
+    // Wholly inside the overwrite cutout: the copy is dropped (counted only).
+    const bool overwrites = (overwrite_cutout_slots >> slot) & 1;
+    auto overwritten = [&](uint32_t relative_tile) {
+      if (!overwrites) {
+        return false;
+      }
+      const uint32_t x = (relative_tile % pitch_tiles) * tile_width;
+      const uint32_t y = (relative_tile / pitch_tiles) * tile_height;
+      return x >= overwrite_cutout.x_pixels && y >= overwrite_cutout.y_pixels &&
+             x + tile_width <= overwrite_cutout.x_pixels + overwrite_cutout.width_pixels &&
+             y + tile_height <= overwrite_cutout.y_pixels + overwrite_cutout.height_pixels;
+    };
+    const bool dest_host_depth =
+        key.is_depth && IsHostDepthEncodingDifferent(key.GetDepthFormat());
+    std::vector<Transfer>& transfers = last_update_transfers_[slot];
+    lazy_transfers_scratch_.clear();
+    auto emit = [&](uint32_t tile, RenderTarget* source, RenderTarget* host_depth_source) {
+      if (!lazy_transfers_scratch_.empty()) {
+        Transfer& last = lazy_transfers_scratch_.back();
+        if (last.end_tiles == tile && last.source == source &&
+            last.host_depth_source == host_depth_source) {
+          ++last.end_tiles;
+          return;
+        }
+      }
+      lazy_transfers_scratch_.emplace_back(tile, tile + 1, source, host_depth_source);
+    };
+    // The tiles that change their owner: from the holder detached before the
+    // claim if there is one, none when the holder takes them back, deferred
+    // unless the draw touches them.
+    uint32_t copied = 0, deferred = 0, claimed_back = 0, redeferred = 0, chain_copied = 0,
+             overwritten_tiles = 0;
+    for (const Transfer& transfer : transfers) {
+      for (uint32_t tile = transfer.start_tiles; tile < transfer.end_tiles; ++tile) {
+        const uint32_t edram_tile = tile & (xenos::kEdramTileCount - 1);
+        RenderTarget* source = transfer.source;
+        RenderTarget* host_depth_source = transfer.host_depth_source;
+        const bool held = lazy_detached_[edram_tile] != nullptr;
+        if (held) {
+          source = lazy_detached_[edram_tile];
+          lazy_detached_[edram_tile] = nullptr;
+          if (host_depth_source == source) {
+            host_depth_source = nullptr;
+          }
+        }
+        if (source == dest) {
+          ++claimed_back;
+          continue;
+        }
+        const uint32_t relative_tile =
+            (edram_tile - key.base_tiles) & (xenos::kEdramTileCount - 1);
+        if (defer && !host_depth_source && !dest_host_depth && !read_by_draw(relative_tile)) {
+          SetLazyHolder(edram_tile, dest, source);
+          ++(held ? redeferred : deferred);
+          continue;
+        }
+        emit(tile, source, host_depth_source);
+        if (!held) {
+          ++copied;
+        } else if (overwritten(relative_tile)) {
+          ++overwritten_tiles;
+        } else {
+          ++chain_copied;
+        }
+      }
+    }
+    // The tiles the render target already owned, deferred before, that the draw
+    // touches now.
+    uint32_t flushed = 0;
+    const uint32_t range_length = last_update_ranges_[slot].second;
+    if (dest->lazy_owned_held_tiles_ && columns[1] > columns[0]) {
+      for (uint32_t row = rows[0]; row < rows[1]; ++row) {
+        for (uint32_t column = columns[0]; column < columns[1]; ++column) {
+          const uint32_t relative_tile = row * pitch_tiles + column;
+          if (relative_tile >= range_length) {
+            break;
+          }
+          const uint32_t edram_tile =
+              (key.base_tiles + relative_tile) & (xenos::kEdramTileCount - 1);
+          RenderTarget* holder = lazy_holders_[edram_tile];
+          if (!holder) {
+            continue;
+          }
+          if (perturb_every && ++lazy_flushes_ % perturb_every == 0) {
+            perf_trace::CountLazyTiles(perf_trace::LazyTileOutcome::kPerturbed, 1);
+            continue;
+          }
+          SetLazyHolder(edram_tile, dest, nullptr);
+          emit(edram_tile, holder, nullptr);
+          ++(overwritten(relative_tile) ? overwritten_tiles : flushed);
+        }
+      }
+    }
+    if (check && columns[1] > columns[0]) {
+      // No deferred tile left where the draw touches the range it claimed
+      // (violations), and none held by this render target where it may touch
+      // tiles beyond that range (hazards: it would draw into data it holds for
+      // another owner).
+      uint32_t violations = 0, hazards = 0;
+      for (uint32_t row = rows[0]; row < rows[1]; ++row) {
+        for (uint32_t column = columns[0]; column < columns[1]; ++column) {
+          const uint32_t relative_tile = row * pitch_tiles + column;
+          const uint32_t edram_tile =
+              (key.base_tiles + relative_tile) & (xenos::kEdramTileCount - 1);
+          RenderTarget* holder = lazy_holders_[edram_tile];
+          if (relative_tile < range_length) {
+            violations += holder != nullptr;
+          } else {
+            hazards += holder == dest;
+          }
+        }
+      }
+      perf_trace::CountLazyTiles(perf_trace::LazyTileOutcome::kViolation, violations);
+      perf_trace::CountLazyTiles(perf_trace::LazyTileOutcome::kHazard, hazards);
+    }
+    perf_trace::CountLazyTiles(perf_trace::LazyTileOutcome::kCopied, copied);
+    perf_trace::CountLazyTiles(perf_trace::LazyTileOutcome::kDeferred, deferred);
+    perf_trace::CountLazyTiles(perf_trace::LazyTileOutcome::kClaimedBack, claimed_back);
+    perf_trace::CountLazyTiles(perf_trace::LazyTileOutcome::kFlushedDraw, flushed);
+    perf_trace::CountLazyTiles(perf_trace::LazyTileOutcome::kRedeferred, redeferred);
+    perf_trace::CountLazyTiles(perf_trace::LazyTileOutcome::kChainCopied, chain_copied);
+    perf_trace::CountLazyTiles(perf_trace::LazyTileOutcome::kOverwritten, overwritten_tiles);
+    if (deferred || claimed_back || flushed || copied || redeferred || chain_copied ||
+        overwritten_tiles) {
+      SortAndMergeTransfers(lazy_transfers_scratch_);
+      transfers.swap(lazy_transfers_scratch_);
+    }
+  }
+  EndDetachedHolders();
+}
+
+void RenderTargetCache::TakeDeferredTransfers(
+    uint32_t base_tiles, uint32_t row_length_used, uint32_t rows, uint32_t pitch_tiles,
+    const RenderTarget* owner, uint32_t flush_outcome,
+    std::vector<std::pair<RenderTarget*, std::vector<Transfer>>>& out) {
+  if (!lazy_held_tiles_ || (owner && !owner->lazy_owned_held_tiles_)) {
+    return;
+  }
+  uint32_t flushed = 0;
+  auto take = [&](uint32_t tile) {
+    RenderTarget* holder = lazy_holders_[tile];
+    if (!holder) {
+      return;
+    }
+    auto range_it = ownership_ranges_.upper_bound(tile);
+    assert_true(range_it != ownership_ranges_.begin());
+    --range_it;
+    auto tile_owner_it = render_targets_.find(range_it->second.render_target);
+    RenderTarget* tile_owner =
+        tile_owner_it != render_targets_.end() ? tile_owner_it->second : nullptr;
+    if (owner && tile_owner != owner) {
+      return;
+    }
+    SetLazyHolder(tile, tile_owner, nullptr);
+    if (!tile_owner) {
+      return;
+    }
+    auto group_it = std::find_if(out.begin(), out.end(),
+                                 [&](const auto& group) { return group.first == tile_owner; });
+    if (group_it == out.end()) {
+      out.emplace_back(tile_owner, std::vector<Transfer>());
+      group_it = std::prev(out.end());
+    }
+    group_it->second.emplace_back(tile, tile + 1, holder, nullptr);
+    ++flushed;
+  };
+  if (owner) {
+    for (uint32_t tile = 0; tile < xenos::kEdramTileCount; ++tile) {
+      take(tile);
+    }
+  } else {
+    for (uint32_t row = 0; row < rows; ++row) {
+      for (uint32_t column = 0; column < row_length_used; ++column) {
+        take((base_tiles + row * pitch_tiles + column) & (xenos::kEdramTileCount - 1));
+      }
+    }
+  }
+  for (auto& group : out) {
+    SortAndMergeTransfers(group.second);
+  }
+  perf_trace::CountLazyTiles(perf_trace::LazyTileOutcome(flush_outcome), flushed);
 }
 
 uint32_t RenderTargetCache::GetRenderTargetHeight(uint32_t pitch_tiles_at_32bpp,
@@ -1361,17 +1776,32 @@ bool RenderTargetCache::PrepareHostRenderTargetsResolveClear(
   }
 
   clear_rectangle_out = clear_rectangle;
+  // native_rt_surfaces bit 4: the deferred tiles the clears claim leave their
+  // holder, which their transfers then copy from (d3d-hle.md 16.12).
+  if (depth_render_target) {
+    DetachLazyHolders(depth_render_target_key, depth_clear_start_tiles_base_relative,
+                      depth_clear_length_tiles);
+  }
+  if (color_render_target) {
+    DetachLazyHolders(color_render_target_key, color_clear_start_tiles_base_relative,
+                      color_clear_length_tiles);
+  }
   depth_render_target_out = depth_render_target;
   depth_transfers_out.clear();
   if (depth_render_target) {
     ChangeOwnership(depth_render_target_key, depth_clear_start_tiles_base_relative,
                     depth_clear_length_tiles, &depth_transfers_out, &clear_rectangle);
+    SubstituteDetachedHolders(depth_render_target, depth_transfers_out);
   }
   color_render_target_out = color_render_target;
   color_transfers_out.clear();
   if (color_render_target) {
     ChangeOwnership(color_render_target_key, color_clear_start_tiles_base_relative,
                     color_clear_length_tiles, &color_transfers_out, &clear_rectangle);
+    SubstituteDetachedHolders(color_render_target, color_transfers_out);
+  }
+  if (!lazy_detached_tiles_.empty()) {
+    EndDetachedHolders();
   }
   return true;
 }

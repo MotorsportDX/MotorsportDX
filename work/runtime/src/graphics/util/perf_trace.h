@@ -118,6 +118,9 @@ struct State {
   double gpu_load_ms = 0, gpu_readback_ms = 0;
   // Of the resolves and loads, those of at least 1280x720 (d3d-hle.md 16.7).
   double gpu_resolve_full_ms = 0, gpu_load_full_ms = 0;
+  // Ownership transfers between host render targets (d3d-hle.md 16.12), also
+  // those inside resolves.
+  double gpu_transfer_ms = 0;
   // Samples passing depth/stencil per occlusion snapshot interval, as reported
   // to the guest (after any divisor), to compare paths and calibrate.
   double occlusion_samples[2]{};  // Unawaited, awaited.
@@ -315,6 +318,23 @@ inline void CountStaleTile(StaleTileOutcome outcome) {
 }
 inline void CountStaleTransferEnd(bool read) {
   (read ? stale_transfers_read : stale_transfers_unread).fetch_add(1, std::memory_order_relaxed);
+}
+// native_rt_surfaces bit 4 (d3d-hle.md 16.12), in tiles: copied at the claim,
+// deferred; and how deferrals end or go on: claimed back by their holder (no
+// copy), deferred again for a new owner, copied for a new owner from the
+// holder, inside an overwrite draw's cutout (no copy), copied before a draw, a
+// resolve's copy, a resolve's clear or a post pass reads them; the check's
+// violations and perturbed (skipped) copies, and its hazards (a render target
+// may draw where it holds another owner's tile); the deferred tiles at the end
+// of the window.
+enum class LazyTileOutcome : uint32_t { kCopied, kDeferred, kClaimedBack, kFlushedDraw,
+                                        kFlushedResolve, kFlushedOther, kViolation, kPerturbed,
+                                        kRedeferred, kChainCopied, kOverwritten, kFlushedClear,
+                                        kHazard, kCount };
+inline std::atomic<uint64_t> lazy_tiles[size_t(LazyTileOutcome::kCount)]{};
+inline std::atomic<uint64_t> lazy_pending_tiles{0};
+inline void CountLazyTiles(LazyTileOutcome outcome, uint32_t tiles) {
+  lazy_tiles[size_t(outcome)].fetch_add(tiles, std::memory_order_relaxed);
 }
 // native_rt_surfaces bit 2: resolves that could read the host render target,
 // those that did (not in a check frame, nothing failed), the byte checks and
@@ -514,7 +534,7 @@ inline void AddOcclusionInterval(bool awaited, uint64_t passed_samples) {
 // first to last GPU timestamp of the frame, including idle gaps.
 inline void AddGpuFrame(double busy_ms, double resolve_ms, double span_ms, double load_ms = 0,
                         double readback_ms = 0, double resolve_full_ms = 0,
-                        double load_full_ms = 0) {
+                        double load_full_ms = 0, double transfer_ms = 0) {
   State* state = Get();
   if (!state) return;
   ++state->gpu_frames;
@@ -525,6 +545,7 @@ inline void AddGpuFrame(double busy_ms, double resolve_ms, double span_ms, doubl
   state->gpu_readback_ms += readback_ms;
   state->gpu_resolve_full_ms += resolve_full_ms;
   state->gpu_load_full_ms += load_full_ms;
+  state->gpu_transfer_ms += transfer_ms;
 }
 
 inline ResolveInventory* GetResolveInventory() {
@@ -632,7 +653,23 @@ inline void OnSwap() {
                 << ",\"transfers_unread\":"
                 << stale_transfers_unread.exchange(0, std::memory_order_relaxed)
                 << ",\"transfers_read\":"
-                << stale_transfers_read.exchange(0, std::memory_order_relaxed) << '}';
+                << stale_transfers_read.exchange(0, std::memory_order_relaxed) << '}'
+                << ",\"lazy_transfers\":{\"copied\":"
+                << lazy_tiles[0].exchange(0, std::memory_order_relaxed) << ",\"deferred\":"
+                << lazy_tiles[1].exchange(0, std::memory_order_relaxed) << ",\"claimed_back\":"
+                << lazy_tiles[2].exchange(0, std::memory_order_relaxed) << ",\"flushed_draw\":"
+                << lazy_tiles[3].exchange(0, std::memory_order_relaxed)
+                << ",\"flushed_resolve\":"
+                << lazy_tiles[4].exchange(0, std::memory_order_relaxed) << ",\"flushed_other\":"
+                << lazy_tiles[5].exchange(0, std::memory_order_relaxed) << ",\"violations\":"
+                << lazy_tiles[6].exchange(0, std::memory_order_relaxed) << ",\"perturbed\":"
+                << lazy_tiles[7].exchange(0, std::memory_order_relaxed) << ",\"redeferred\":"
+                << lazy_tiles[8].exchange(0, std::memory_order_relaxed) << ",\"chain_copied\":"
+                << lazy_tiles[9].exchange(0, std::memory_order_relaxed) << ",\"overwritten\":"
+                << lazy_tiles[10].exchange(0, std::memory_order_relaxed) << ",\"flushed_clear\":"
+                << lazy_tiles[11].exchange(0, std::memory_order_relaxed) << ",\"hazards\":"
+                << lazy_tiles[12].exchange(0, std::memory_order_relaxed) << ",\"pending\":"
+                << lazy_pending_tiles.load(std::memory_order_relaxed) << '}';
   {
     const double tsc_per_ms = double(__rdtsc() - state->window_tsc) / ms(elapsed);
     const uint64_t replay_tsc = constant_replay.tsc.exchange(0, std::memory_order_relaxed);
@@ -710,7 +747,8 @@ inline void OnSwap() {
                 << ",\"load_ms\":" << state->gpu_load_ms / gpu_frames
                 << ",\"readback_ms\":" << state->gpu_readback_ms / gpu_frames
                 << ",\"resolve_full_ms\":" << state->gpu_resolve_full_ms / gpu_frames
-                << ",\"load_full_ms\":" << state->gpu_load_full_ms / gpu_frames;
+                << ",\"load_full_ms\":" << state->gpu_load_full_ms / gpu_frames
+                << ",\"transfer_ms\":" << state->gpu_transfer_ms / gpu_frames;
   const auto ns_ms = [](uint64_t ns) { return double(ns) / 1e6; };
   state->output << "},\"submit_thread\":{\"jobs\":"
                 << submit_thread_jobs.exchange(0, std::memory_order_relaxed) << ",\"busy_ms\":"
