@@ -15,6 +15,7 @@
 #include <cstdint>
 #include <cstring>
 #include <memory>
+#include <utility>
 #include <vector>
 
 #include <rex/assert.h>
@@ -661,8 +662,30 @@ class DeferredCommandList {
 
   const D3D12CommandProcessor& command_processor_;
 
+  // An allocator whose value-initialization is default-initialization, so
+  // growing the stream does not zero the arguments that the command writers
+  // fill (a draw back end command is about 0.5 KB).
+  template <typename T>
+  struct DefaultInitAllocator : std::allocator<T> {
+    template <typename U>
+    struct rebind {
+      using other = DefaultInitAllocator<U>;
+    };
+    DefaultInitAllocator() noexcept = default;
+    template <typename U>
+    DefaultInitAllocator(const DefaultInitAllocator<U>&) noexcept {}
+    template <typename U>
+    void construct(U* pointer) noexcept {
+      ::new (static_cast<void*>(pointer)) U;
+    }
+    template <typename U, typename... Args>
+    void construct(U* pointer, Args&&... args) {
+      ::new (static_cast<void*>(pointer)) U(std::forward<Args>(args)...);
+    }
+  };
+
   // uintmax_t to ensure uint64_t and pointer alignment of all structures.
-  std::vector<uintmax_t> command_stream_;
+  std::vector<uintmax_t, DefaultInitAllocator<uintmax_t>> command_stream_;
 
   // The replay's copy of the registers for kDeferredConstants and
   // kDrawBackEnd, allocated at the first use, and the front half's results of
