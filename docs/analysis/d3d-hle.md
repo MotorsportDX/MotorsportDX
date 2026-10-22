@@ -276,6 +276,7 @@ A full gate took 1.5 to 2 hours, too long to follow every step of an increment, 
 - Performance is judged on the busy time per draw and the GPU time per frame, which the AI races' varying draw load moves less than the fps; so one run a side is enough at a step gate, and three runs are for the close gate.
 - A step gate reuses its RTV baseline while the step's diff changes only code behind a cvar that is off on RTV (checked with `git diff`); the close gate measures RTV again on the final binary.
 - Where a run's time goes (`photo` at 1x, 252 s): the boot to the main menu 28 s, the menus and loading to the race 120 s (with a fixed 40 s wait after GO RACE, about 20 s of it idle), the measured race 34 s, photo mode and the save about 70 s. The direct race launch ([direct-race-launch.md](direct-race-launch.md)) could save at most the 52 s of menus, but is not built; the `race` scenario drops photo mode instead.
+- Durations measured on 22 October 2026 (`sg0`, 2x, the build of 16.8): a step gate takes 10 minutes of game runs (`career` with the identity check 3.7, `race` on RTV 3.3, `race` native 3.3) and 13.5 with the freeze (3.5); a build adds 15 to 20 minutes when the runtime changed. A close gate takes about 65 minutes (smoke on RTV and native 18, perf with three runs a side 26, the freeze at 1x and 2x a side 14, the perturbation proof 4).
 
 ## 11. Decisions
 
