@@ -10,6 +10,7 @@
  * @modified    Tom Clay, 2026 - Adapted for ReXGlue runtime
  */
 
+#include <atomic>
 #include <cstdint>
 #include <memory>
 #include <mutex>
@@ -228,6 +229,8 @@ class BaseHeap {
   void Reset();
 
  protected:
+  // A host protection change of a physical view (Memory::physical_protect_epoch).
+  void NotePhysicalProtect();
   BaseHeap();
 
   // Callers must hold the global critical region - see
@@ -563,6 +566,12 @@ class Memory {
   // decommitted, when its contents no longer matter.
   typedef void (*ReadTraceServeHandler)(void* context, uint32_t physical_address,
                                         uint32_t length, bool discard);
+  // Counts host protection changes of the physical views other than the read
+  // traps' own (allocation, protection, release): a trap armed before an
+  // unchanged count is still in place unless an access or a disarm took it.
+  uint64_t physical_protect_epoch() const {
+    return physical_protect_epoch_.load(std::memory_order_acquire);
+  }
   void SetReadTraceHandler(ReadTraceHandler handler, ReadTraceServeHandler serve_handler,
                            void* context);
   PhysicalHeap::ReadTraceArmResult ArmReadTrace(uint32_t physical_address, uint32_t length,
@@ -696,6 +705,7 @@ class Memory {
   rex::thread::global_critical_region global_critical_region_;
   std::vector<std::pair<PhysicalMemoryInvalidationCallback, void*>*>
       physical_memory_invalidation_callbacks_;
+  std::atomic<uint64_t> physical_protect_epoch_{0};
   ReadTraceHandler read_trace_handler_ = nullptr;
   ReadTraceServeHandler read_trace_serve_handler_ = nullptr;
   void* read_trace_context_ = nullptr;

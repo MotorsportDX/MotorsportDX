@@ -674,6 +674,7 @@ bool Memory::AccessViolationCallback(std::unique_lock<std::recursive_mutex> glob
       }
     }
     if (allow_write) {
+      physical_protect_epoch_.fetch_add(1, std::memory_order_acq_rel);
       size_t host_page_size = rex::memory::page_size();
       uintptr_t page_base =
           reinterpret_cast<uintptr_t>(host_address) & ~(uintptr_t(host_page_size - 1));
@@ -1000,6 +1001,12 @@ BaseHeap::BaseHeap() : membase_(nullptr), heap_base_(0), heap_size_(0), page_siz
 
 BaseHeap::~BaseHeap() = default;
 
+void BaseHeap::NotePhysicalProtect() {
+  if (heap_type_ == HeapType::kGuestPhysical) {
+    memory_->physical_protect_epoch_.fetch_add(1, std::memory_order_acq_rel);
+  }
+}
+
 std::unique_lock<std::recursive_mutex> BaseHeap::AcquireHostPageReconcileLock() const {
   if (page_size_ >= memory_->system_page_size_) {
     return {};
@@ -1099,6 +1106,7 @@ bool BaseHeap::SyncHostPageAccess(uint32_t start_page_number, uint32_t end_page_
   const auto flush_run = [&](uint32_t run_last_page) {
     const size_t run_length = (size_t(run_last_page - run_first_page) + 1) * host_page_size;
     uint8_t* const run_pointer = heap_host_base + size_t(run_first_page) * host_page_size;
+    NotePhysicalProtect();
     if (!rex::memory::Protect(run_pointer, run_length, run_access, nullptr)) {
       REXSYS_ERROR("BaseHeap::SyncHostPageAccess failed for heap {:08X} host pages {}-{}",
                    heap_base_, run_first_page, run_last_page);
@@ -1714,6 +1722,7 @@ bool BaseHeap::Release(uint32_t base_address, uint32_t* out_region_size) {
     // it. It's possible this is some virtual/physical stuff where the GPU
     // still can access it.
     if (REXCVAR_GET(protect_on_release)) {
+      NotePhysicalProtect();
       if (!rex::memory::Protect(TranslateRelative(base_page_number << page_size_shift_),
                                 base_page_entry.region_page_count << page_size_shift_,
                                 rex::memory::PageAccess::kNoAccess, nullptr)) {
@@ -1796,6 +1805,7 @@ bool BaseHeap::Protect(uint32_t address, uint32_t size, uint32_t protect, uint32
   if (page_size_ >= memory_->system_page_size_) {
     const uint32_t page_count = end_page_number - start_page_number + 1;
     memory::PageAccess old_protect_access;
+    NotePhysicalProtect();
     if (!rex::memory::Protect(TranslateRelative(start_page_number << page_size_shift_),
                               page_count << page_size_shift_, ToPageAccess(protect),
                               old_protect ? &old_protect_access : nullptr)) {

@@ -45,6 +45,12 @@ constexpr uint32_t kPhysicalPages = (512u << 20) >> 12;
 struct Destination {
   uint32_t address = 0, length = 0;
   bool armed = false, read = false, written = false;
+  // The pages are still trapped since the arm at the physical protection
+  // epoch: no access and no disarm of them (an overlapping arm only tags some
+  // with another destination, whose readback brings the latest data of those
+  // pages too). Then the next resolve keeps the trap instead of arming again.
+  bool intact = false;
+  uint64_t epoch = 0;
   // Readback on demand: the latest resolve's readback is pending; it was
   // requested; requests made and served (an access waits until served reaches
   // the request it joined).
@@ -66,7 +72,7 @@ struct Window {
   uint64_t read_arms = 0, unread_arms = 0, written_arms = 0;
   uint64_t read_bytes = 0, unread_bytes = 0, written_bytes = 0;
   uint64_t read_faults = 0, write_faults = 0, guest_first = 0, host_first = 0;
-  uint64_t armed_pages = 0, kept_pages = 0, lost = 0;
+  uint64_t armed_pages = 0, kept_pages = 0, lost = 0, kept_arms = 0;
   // Readback on demand.
   uint64_t deferred = 0, deferred_bytes = 0, requests = 0, served = 0, served_bytes = 0;
   uint64_t forced = 0, timeouts = 0, cp_faults = 0, failed = 0, lost_pending = 0;
@@ -142,6 +148,16 @@ uint32_t TagOf(Trace& t, uint32_t address, uint32_t length) {
   return it->second;
 }
 
+// Destinations overlapping a range are no longer intact (their pages there
+// were restored), with the mutex held.
+void Break(Trace& t, uint32_t address, uint32_t length) {
+  for (Destination& d : t.destinations) {
+    if (d.address < address + length && address < d.address + d.length) {
+      d.intact = false;
+    }
+  }
+}
+
 // Ends the current arm of a destination, with the mutex held.
 void Close(Trace& t, Destination& d) {
   if (!d.armed) return;
@@ -212,6 +228,9 @@ bool OnFault(void* context, std::unique_lock<std::recursive_mutex>& global_lock,
   std::unique_lock<std::mutex> lock(t.mutex);
   if (tag >= t.destinations.size()) return true;
   Destination& d = t.destinations[tag];
+  // The page loses its trap here or after the readback: every destination
+  // with it is no longer intact (its tag names only the latest).
+  Break(t, (physical_address & 0x1FFFFFFF) & ~uint32_t(0xFFF), 0x1000);
   if (event == memory::Memory::ReadTraceEvent::kLost) {
     ++d.lost;
     ++t.window.lost;
@@ -279,6 +298,8 @@ void OnServe(void* context, uint32_t address, uint32_t length, bool discard) {
     // Released: what a pending readback would bring no longer matters (a
     // later readback skips the pages the guest's new data invalidates).
     SetPendingPages(t, address & 0x1FFFFFFF, length, false);
+    std::lock_guard<std::mutex> lock(t.mutex);
+    Break(t, address & 0x1FFFFFFF, length);
     return;
   }
   std::unique_lock<std::mutex> lock(t.mutex);
@@ -366,6 +387,37 @@ bool DemandEnabled() {
   return t && t->servicer;
 }
 
+// Traps a destination after its readback or deferred resolve, without the
+// mutex (arming takes the global lock, and the fault handler takes the mutex
+// under the global lock). An intact trap stays as it is. Returns whether the
+// trap was armed again.
+bool Arm(Trace& t, memory::Memory& memory, uint32_t tag) {
+  const uint64_t epoch = memory.physical_protect_epoch();
+  uint32_t address, length;
+  {
+    std::lock_guard<std::mutex> lock(t.mutex);
+    Destination& d = t.destinations[tag];
+    address = d.address;
+    length = d.length;
+    if (d.intact && d.epoch == epoch) {
+      d.armed = true;
+      ++t.window.kept_arms;
+      return false;
+    }
+  }
+  const auto result = memory.ArmReadTrace(address, length, tag);
+  std::lock_guard<std::mutex> lock(t.mutex);
+  Destination& d = t.destinations[tag];
+  d.armed = true;
+  d.intact = true;
+  d.epoch = epoch;
+  d.lost += result.lost;
+  t.window.armed_pages += result.armed;
+  t.window.kept_pages += result.kept;
+  t.window.lost += result.lost;
+  return true;
+}
+
 void OnReadback(memory::Memory& memory, uint32_t address, uint32_t length) {
   Trace* t = trace.load(std::memory_order_acquire);
   if (!t || !t->trace || !length) return;
@@ -380,21 +432,13 @@ void OnReadback(memory::Memory& memory, uint32_t address, uint32_t length) {
     ++t->window.readbacks;
     t->window.readback_bytes += length;
   }
-  // Not under the mutex: arming takes the global lock, and the fault handler
-  // takes the mutex under the global lock.
-  const auto result = memory.ArmReadTrace(address, length, tag);
-  std::lock_guard<std::mutex> lock(t->mutex);
-  Destination& d = t->destinations[tag];
-  d.armed = true;
-  d.lost += result.lost;
-  t->window.armed_pages += result.armed;
-  t->window.kept_pages += result.kept;
-  t->window.lost += result.lost;
+  Arm(*t, memory, tag);
 }
 
 void OnDeferredResolve(memory::Memory& memory, Demand demand) {
   Trace* t = trace.load(std::memory_order_acquire);
   if (!t || !t->servicer || !demand.length) return;
+  bool intact;
   {
     std::lock_guard<std::mutex> lock(t->mutex);
     t->cp_thread = rex::thread::current_thread_id();
@@ -406,18 +450,17 @@ void OnDeferredResolve(memory::Memory& memory, Demand demand) {
     d.demand = demand;
     // Before the trap, so an access finds the readback it needs.
     d.pending = true;
+    intact = d.intact;
     ++t->window.deferred;
     t->window.deferred_bytes += demand.length;
   }
-  SetPendingPages(*t, demand.address, demand.length, true);
-  const auto result = memory.ArmReadTrace(demand.address, demand.length, demand.tag);
-  std::lock_guard<std::mutex> lock(t->mutex);
-  Destination& d = t->destinations[demand.tag];
-  d.armed = true;
-  d.lost += result.lost;
-  t->window.armed_pages += result.armed;
-  t->window.kept_pages += result.kept;
-  t->window.lost += result.lost;
+  if (!intact) {
+    SetPendingPages(*t, demand.address, demand.length, true);
+  }
+  if (Arm(*t, memory, demand.tag) && intact) {
+    // The epoch changed: the bits may have been cleared by a discard.
+    SetPendingPages(*t, demand.address, demand.length, true);
+  }
 }
 
 std::vector<Demand> TakeRequests() {
@@ -454,6 +497,7 @@ void CompleteRequests(memory::Memory& memory, const std::vector<Demand>& demands
   {
     std::lock_guard<std::mutex> lock(t->mutex);
     for (const Demand& demand : demands) {
+      Break(*t, demand.address, demand.length);
       Destination& d = t->destinations[demand.tag];
       d.pending = false;
       d.requested = false;
@@ -517,7 +561,7 @@ void Shutdown(memory::Memory& memory) {
       if (d.pending || d.armed) {
         ranges.emplace_back(d.address, d.length);
       }
-      d.pending = d.requested = false;
+      d.pending = d.requested = d.intact = false;
       d.served = d.wanted;
     }
   }
@@ -540,10 +584,12 @@ void WriteWindow(std::ostream& output, double seconds) {
            << ",\"written_kb\":" << (w.written_bytes >> 10) << ",\"read_faults\":" << w.read_faults
            << ",\"write_faults\":" << w.write_faults << ",\"guest_first\":" << w.guest_first
            << ",\"host_first\":" << w.host_first << ",\"armed_pages\":" << w.armed_pages
-           << ",\"kept_pages\":" << w.kept_pages << ",\"lost\":" << w.lost;
+           << ",\"kept_pages\":" << w.kept_pages << ",\"kept_arms\":" << w.kept_arms
+           << ",\"lost\":" << w.lost;
   }
   if (t->demand) {
     output << "},\"demand_readback\":{\"deferred\":" << w.deferred
+           << ",\"kept_arms\":" << w.kept_arms
            << ",\"deferred_kb\":" << (w.deferred_bytes >> 10) << ",\"requests\":" << w.requests
            << ",\"served\":" << w.served << ",\"served_kb\":" << (w.served_bytes >> 10)
            << ",\"forced\":" << w.forced << ",\"stall_ms\":" << double(w.stall_ns) / 1e6
