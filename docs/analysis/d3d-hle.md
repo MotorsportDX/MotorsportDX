@@ -708,7 +708,7 @@ The records of the converted dirty writers take about 0.19 ms a frame, counted a
 
 ### 15.10 The draw path profiled, 22 October 2026
 
-The native `photo` race, three runs each with `REX_CP_SPLIT`, on `I:\FM4-build-usa` at 240 Hz and 1x, ms per race frame. `n2d-nat-split` has the draw zone's first level of parts (21 timers fewer per draw); `n2f-nat-split` adds the parts of the gaps, the bindings and the textures, and its timers inflate it (render thread busy 3.77 against 3.23 ms), so its numbers are read as proportions. Since then the detail zones run only with `REX_CP_SPLIT`.
+The native `photo` race, three runs each with `REX_CP_SPLIT`, on `I:\FM4-build-usa` at 240 Hz and 1x, ms per race frame. `n2d-nat-split` has the draw zone's first level of parts (fewer timers per draw); `n2f-nat-split` adds the parts of the gaps, the bindings and the textures, and its timers inflate it (render thread busy 3.77 against 3.23 ms), so its numbers are read as proportions. Since then the detail zones run only with `REX_CP_SPLIT`.
 
 | Part of the draw zone | `n2d` | `n2f` |
 |---|---|---|
