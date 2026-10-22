@@ -117,7 +117,13 @@ class D3D12TextureCache final : public TextureCache {
                                     D3D12_CPU_DESCRIPTOR_HANDLE handle);
   uint32_t GetActiveTextureBindlessSRVIndex(const D3D12Shader::TextureBinding& host_shader_binding);
 
-  SamplerParameters GetSamplerParameters(const D3D12Shader::SamplerBinding& binding) const;
+  SamplerParameters GetSamplerParameters(const D3D12Shader::SamplerBinding& binding) const {
+    return GetSamplerParameters(register_file(), binding);
+  }
+  // From the fetch constant in the given register file (N4 step 2, the copy the
+  // draw back end reads; d3d-hle.md 17.6).
+  SamplerParameters GetSamplerParameters(const RegisterFile& regs,
+                                         const D3D12Shader::SamplerBinding& binding) const;
   void WriteSampler(SamplerParameters parameters, D3D12_CPU_DESCRIPTOR_HANDLE handle) const;
 
   // Returns whether the actual scale is not smaller than the requested one.

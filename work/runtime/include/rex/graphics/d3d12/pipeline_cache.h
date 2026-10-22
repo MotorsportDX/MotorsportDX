@@ -98,6 +98,24 @@ class PipelineCache {
     return reinterpret_cast<const Pipeline*>(handle)->state.load(std::memory_order_acquire);
   }
 
+  // The draw back end's check (d3d12_draw_back_end_check, d3d-hle.md 17.6): the
+  // size and the bytes of a pipeline's description, and the description for
+  // the given register file, without a root signature, a geometry shader or a
+  // pipeline (any thread; the translations must be valid).
+  size_t GetPipelineDescriptionSize() const { return sizeof(PipelineDescription); }
+  const void* GetPipelineDescription(void* handle) const {
+    return &reinterpret_cast<const Pipeline*>(handle)->description.description;
+  }
+  bool ComputePipelineDescription(const RegisterFile& regs,
+                                  D3D12Shader::D3D12Translation* vertex_shader,
+                                  D3D12Shader::D3D12Translation* pixel_shader,
+                                  const PrimitiveProcessor::ProcessingResult& primitive_processing_result,
+                                  reg::RB_DEPTHCONTROL normalized_depth_control,
+                                  uint32_t normalized_color_mask,
+                                  uint32_t bound_depth_and_color_render_target_bits,
+                                  const uint32_t* bound_depth_and_color_render_target_formats,
+                                  void* description_out);
+
   // HLSL replacing translations (shader_override_path, shader_mod_path), also
   // compiling the post passes (post_pass_path), or nullptr.
   const ShaderOverrides* shader_overrides() const { return shader_overrides_.get(); }
@@ -280,14 +298,17 @@ class PipelineCache {
 
   // If draw_util::IsRasterizationPotentiallyDone is false, the pixel shader
   // MUST be made nullptr BEFORE calling this! The shaders must be translated
-  // and valid unless for_placeholder is true.
+  // and valid unless for_placeholder is true. With description_only, the root
+  // signature and the geometry shader are left null (nothing is created).
   bool GetCurrentStateDescription(
-      D3D12Shader::D3D12Translation* vertex_shader, D3D12Shader::D3D12Translation* pixel_shader,
+      const RegisterFile& regs, D3D12Shader::D3D12Translation* vertex_shader,
+      D3D12Shader::D3D12Translation* pixel_shader,
       const PrimitiveProcessor::ProcessingResult& primitive_processing_result,
       reg::RB_DEPTHCONTROL normalized_depth_control, uint32_t normalized_color_mask,
       uint32_t bound_depth_and_color_render_target_bits,
       const uint32_t* bound_depth_and_color_render_target_formats,
-      PipelineRuntimeDescription& runtime_description_out, bool for_placeholder = false);
+      PipelineRuntimeDescription& runtime_description_out, bool for_placeholder = false,
+      bool description_only = false);
 
   static bool GetGeometryShaderKey(PipelineGeometryShader geometry_shader_type,
                                    DxbcShaderTranslator::Modification vertex_shader_modification,

@@ -31,6 +31,7 @@
 #include <rex/graphics/command_processor.h>
 #include <rex/graphics/d3d12/deferred_command_list.h>
 #include <rex/graphics/d3d12/deferred_constants.h>
+#include <rex/graphics/d3d12/draw_back_end.h>
 #include <rex/graphics/d3d12/graphics_system.h>
 #include <rex/graphics/d3d12/pipeline_cache.h>
 #include <rex/graphics/d3d12/primitive_processor.h>
@@ -986,6 +987,8 @@ class D3D12CommandProcessor : public CommandProcessor {
 
   // System shader constants.
   DxbcShaderTranslator::SystemConstants system_constants_;
+  // What UpdateSystemConstantValues passes to draw_back_end::ComputeSystemConstants.
+  draw_back_end::SystemConstantInputs system_constant_inputs_ = {};
   // shader_mod_live_knobs: the knob values written after the system constants
   // (ShaderOverrides::kKnobsOffset), and where they come from (nullptr without
   // live knobs).

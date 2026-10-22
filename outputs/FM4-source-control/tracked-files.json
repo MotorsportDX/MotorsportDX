@@ -4548,6 +4548,14 @@
     {
       "path": "work/runtime/src/graphics/d3d12/deferred_constants.cpp",
       "provenance": "runtime-fork"
+    },
+    {
+      "path": "work/runtime/include/rex/graphics/d3d12/draw_back_end.h",
+      "provenance": "runtime-fork"
+    },
+    {
+      "path": "work/runtime/src/graphics/d3d12/draw_back_end.cpp",
+      "provenance": "runtime-fork"
     }
   ]
 }

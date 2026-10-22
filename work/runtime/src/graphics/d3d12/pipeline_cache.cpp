@@ -1101,7 +1101,8 @@ bool PipelineCache::ConfigurePipeline(
 
   PipelineRuntimeDescription runtime_description;
   if (!GetCurrentStateDescription(
-          vertex_shader, pixel_shader, primitive_processing_result, normalized_depth_control,
+          register_file_, vertex_shader, pixel_shader, primitive_processing_result,
+          normalized_depth_control,
           normalized_color_mask, bound_depth_and_color_render_target_bits,
           bound_depth_and_color_render_target_formats, runtime_description, use_async)) {
     return false;
@@ -1360,13 +1361,35 @@ bool PipelineCache::TranslateAnalyzedShader(DxbcShaderTranslator& translator,
   return translation.is_valid();
 }
 
+bool PipelineCache::ComputePipelineDescription(
+    const RegisterFile& regs, D3D12Shader::D3D12Translation* vertex_shader,
+    D3D12Shader::D3D12Translation* pixel_shader,
+    const PrimitiveProcessor::ProcessingResult& primitive_processing_result,
+    reg::RB_DEPTHCONTROL normalized_depth_control, uint32_t normalized_color_mask,
+    uint32_t bound_depth_and_color_render_target_bits,
+    const uint32_t* bound_depth_and_color_render_target_formats, void* description_out) {
+  PipelineRuntimeDescription runtime_description;
+  if (!GetCurrentStateDescription(regs, vertex_shader, pixel_shader, primitive_processing_result,
+                                  normalized_depth_control, normalized_color_mask,
+                                  bound_depth_and_color_render_target_bits,
+                                  bound_depth_and_color_render_target_formats, runtime_description,
+                                  false, true)) {
+    return false;
+  }
+  std::memcpy(description_out, &runtime_description.description,
+              sizeof(runtime_description.description));
+  return true;
+}
+
 bool PipelineCache::GetCurrentStateDescription(
-    D3D12Shader::D3D12Translation* vertex_shader, D3D12Shader::D3D12Translation* pixel_shader,
+    const RegisterFile& regs, D3D12Shader::D3D12Translation* vertex_shader,
+    D3D12Shader::D3D12Translation* pixel_shader,
     const PrimitiveProcessor::ProcessingResult& primitive_processing_result,
     reg::RB_DEPTHCONTROL normalized_depth_control, uint32_t normalized_color_mask,
     uint32_t bound_depth_and_color_render_target_bits,
     const uint32_t* bound_depth_and_color_render_target_formats,
-    PipelineRuntimeDescription& runtime_description_out, bool for_placeholder) {
+    PipelineRuntimeDescription& runtime_description_out, bool for_placeholder,
+    bool description_only) {
   // Translated shaders needed at least for the root signature, unless in
   // placeholder mode (async compilation) where both VS and PS translation
   // may be deferred to background threads.
@@ -1376,7 +1399,6 @@ bool PipelineCache::GetCurrentStateDescription(
 
   PipelineDescription& description_out = runtime_description_out.description;
 
-  const auto& regs = register_file_;
   auto pa_su_sc_mode_cntl = regs.Get<reg::PA_SU_SC_MODE_CNTL>();
 
   // Initialize all unused fields to zero for comparison/hashing.
@@ -1404,13 +1426,16 @@ bool PipelineCache::GetCurrentStateDescription(
       render_target_cache_.GetPath() == RenderTargetCache::Path::kPixelShaderInterlock;
 
   // Root signature.
-  runtime_description_out.root_signature = command_processor_.GetRootSignature(
-      static_cast<const DxbcShader*>(&vertex_shader->shader()),
-      (pixel_shader && !for_placeholder) ? static_cast<const DxbcShader*>(&pixel_shader->shader())
-                                         : nullptr,
-      tessellated);
-  if (runtime_description_out.root_signature == nullptr) {
-    return false;
+  if (!description_only) {
+    runtime_description_out.root_signature = command_processor_.GetRootSignature(
+        static_cast<const DxbcShader*>(&vertex_shader->shader()),
+        (pixel_shader && !for_placeholder)
+            ? static_cast<const DxbcShader*>(&pixel_shader->shader())
+            : nullptr,
+        tessellated);
+    if (runtime_description_out.root_signature == nullptr) {
+      return false;
+    }
   }
 
   // Vertex shader.
@@ -1472,7 +1497,8 @@ bool PipelineCache::GetCurrentStateDescription(
           description_out.geometry_shader,
           DxbcShaderTranslator::Modification(vertex_shader->modification()),
           DxbcShaderTranslator::Modification(pixel_shader ? pixel_shader->modification() : 0),
-          geometry_shader_key)
+          geometry_shader_key) &&
+              !description_only
           ? &GetGeometryShader(geometry_shader_key)
           : nullptr;
 

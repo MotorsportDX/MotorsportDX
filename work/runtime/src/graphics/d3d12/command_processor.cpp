@@ -5420,15 +5420,11 @@ void D3D12CommandProcessor::UpdateFixedFunctionState(
   SetScissorRect(scissor_rect);
 
   if (render_target_cache_->GetPath() == RenderTargetCache::Path::kHostRenderTargets) {
-    const RegisterFile& regs = *register_file_;
-
-    // Blend factor.
-    float blend_factor[] = {
-        regs.Get<float>(XE_GPU_REG_RB_BLEND_RED),
-        regs.Get<float>(XE_GPU_REG_RB_BLEND_GREEN),
-        regs.Get<float>(XE_GPU_REG_RB_BLEND_BLUE),
-        regs.Get<float>(XE_GPU_REG_RB_BLEND_ALPHA),
-    };
+    // Blend factor and stencil reference value (draw_back_end, N4 step 2).
+    float blend_factor[4];
+    uint32_t stencil_ref;
+    draw_back_end::ComputeBlendFactorAndStencilReference(
+        *register_file_, primitive_polygonal, normalized_depth_control, blend_factor, stencil_ref);
     // std::memcmp instead of != so in case of NaN, every draw won't be
     // invalidating it.
     ff_blend_factor_update_needed_ |=
@@ -5439,17 +5435,6 @@ void D3D12CommandProcessor::UpdateFixedFunctionState(
       ff_blend_factor_update_needed_ = false;
     }
 
-    // Stencil reference value. Per-face reference not supported by Direct3D 12,
-    // choose the back face one only if drawing only back faces.
-    Register stencil_ref_mask_reg;
-    auto pa_su_sc_mode_cntl = regs.Get<reg::PA_SU_SC_MODE_CNTL>();
-    if (primitive_polygonal && normalized_depth_control.backface_enable &&
-        pa_su_sc_mode_cntl.cull_front && !pa_su_sc_mode_cntl.cull_back) {
-      stencil_ref_mask_reg = XE_GPU_REG_RB_STENCILREFMASK_BF;
-    } else {
-      stencil_ref_mask_reg = XE_GPU_REG_RB_STENCILREFMASK;
-    }
-    uint32_t stencil_ref = regs.Get<reg::RB_STENCILREFMASK>(stencil_ref_mask_reg).stencilref;
     ff_stencil_ref_update_needed_ |= ff_stencil_ref_ != stencil_ref;
     if (ff_stencil_ref_update_needed_) {
       ff_stencil_ref_ = stencil_ref;
@@ -5468,420 +5453,40 @@ void D3D12CommandProcessor::UpdateSystemConstantValues(
   SCOPE_profile_cpu_f("gpu");
 #endif  // XE_GPU_FINE_GRAINED_DRAW_SCOPES
 
-  const RegisterFile& regs = *register_file_;
-  auto pa_cl_clip_cntl = regs.Get<reg::PA_CL_CLIP_CNTL>();
-  auto pa_cl_vte_cntl = regs.Get<reg::PA_CL_VTE_CNTL>();
-  auto pa_su_sc_mode_cntl = regs.Get<reg::PA_SU_SC_MODE_CNTL>();
-  auto rb_alpha_ref = regs.Get<float>(XE_GPU_REG_RB_ALPHA_REF);
-  auto rb_colorcontrol = regs.Get<reg::RB_COLORCONTROL>();
-  auto rb_depth_info = regs.Get<reg::RB_DEPTH_INFO>();
-  auto rb_stencilrefmask = regs.Get<reg::RB_STENCILREFMASK>();
-  auto rb_stencilrefmask_bf = regs.Get<reg::RB_STENCILREFMASK>(XE_GPU_REG_RB_STENCILREFMASK_BF);
-  auto rb_surface_info = regs.Get<reg::RB_SURFACE_INFO>();
-  auto sq_context_misc = regs.Get<reg::SQ_CONTEXT_MISC>();
-  auto sq_program_cntl = regs.Get<reg::SQ_PROGRAM_CNTL>();
-  auto vgt_draw_initiator = regs.Get<reg::VGT_DRAW_INITIATOR>();
-  uint32_t vgt_indx_offset = regs.Get<reg::VGT_INDX_OFFSET>().indx_offset;
-  uint32_t vgt_max_vtx_indx = regs.Get<reg::VGT_MAX_VTX_INDX>().max_indx;
-  uint32_t vgt_min_vtx_indx = regs.Get<reg::VGT_MIN_VTX_INDX>().min_indx;
-
-  bool edram_rov_used =
+  // The values come from draw_back_end::ComputeSystemConstants, which reads
+  // the register file it is given (N4 step 2, d3d-hle.md 17.6).
+  draw_back_end::SystemConstantInputs& inputs = system_constant_inputs_;
+  inputs.edram_rov_used =
       render_target_cache_->GetPath() == RenderTargetCache::Path::kPixelShaderInterlock;
-  uint32_t draw_resolution_scale_x = texture_cache_->draw_resolution_scale_x();
-  uint32_t draw_resolution_scale_y = texture_cache_->draw_resolution_scale_y();
-
-  // Get the color info register values for each render target. Also, for ROV,
-  // exclude components that don't exist in the format from the write mask.
-  // Don't exclude fully overlapping render targets, however - two render
-  // targets with the same base address are used in the lighting pass of
-  // 4D5307E6, for example, with the needed one picked with dynamic control
-  // flow.
-  reg::RB_COLOR_INFO color_infos[4];
-  float rt_clamp[4][4];
-  // Two UINT32_MAX if no components actually existing in the RT are written.
-  uint32_t rt_keep_masks[4][2];
-  for (uint32_t i = 0; i < 4; ++i) {
-    auto color_info = regs.Get<reg::RB_COLOR_INFO>(reg::RB_COLOR_INFO::rt_register_indices[i]);
-    color_infos[i] = color_info;
-    if (edram_rov_used) {
-      RenderTargetCache::GetPSIColorFormatInfo(
-          color_info.color_format, (normalized_color_mask >> (i * 4)) & 0b1111, rt_clamp[i][0],
-          rt_clamp[i][1], rt_clamp[i][2], rt_clamp[i][3], rt_keep_masks[i][0], rt_keep_masks[i][1]);
-    }
-  }
-
-  // Disable depth and stencil if it aliases a color render target (for
-  // instance, during the XBLA logo in 58410954, though depth writing is already
-  // disabled there).
-  bool depth_stencil_enabled =
-      normalized_depth_control.stencil_enable || normalized_depth_control.z_enable;
-  if (edram_rov_used && depth_stencil_enabled) {
-    for (uint32_t i = 0; i < 4; ++i) {
-      if (rb_depth_info.depth_base == color_infos[i].color_base &&
-          (rt_keep_masks[i][0] != UINT32_MAX || rt_keep_masks[i][1] != UINT32_MAX)) {
-        depth_stencil_enabled = false;
-        break;
-      }
-    }
-  }
-
-  bool dirty = false;
-
-  // Flags.
-  uint32_t flags = 0;
-  if (edram_rov_used && rov_occlusion_initialized_ && REXCVAR_GET(occlusion_query_enable)) {
-    flags |= DxbcShaderTranslator::kSysFlag_ROVOcclusionQuery;
-  }
-  // Whether shared memory is an SRV or a UAV. Because a resource can't be in a
-  // read-write (UAV) and a read-only (SRV, IBV) state at once, if any shader in
-  // the pipeline uses memexport, the shared memory buffer must be a UAV.
-  if (shared_memory_is_uav) {
-    flags |= DxbcShaderTranslator::kSysFlag_SharedMemoryIsUAV;
-  }
-  // W0 division control.
-  // http://www.x.org/docs/AMD/old/evergreen_3D_registers_v2.pdf
-  // 8: VTX_XY_FMT = true: the incoming XY have already been multiplied by 1/W0.
-  //               = false: multiply the X, Y coordinates by 1/W0.
-  // 9: VTX_Z_FMT = true: the incoming Z has already been multiplied by 1/W0.
-  //              = false: multiply the Z coordinate by 1/W0.
-  // 10: VTX_W0_FMT = true: the incoming W0 is not 1/W0. Perform the reciprocal
-  //                        to get 1/W0.
-  if (pa_cl_vte_cntl.vtx_xy_fmt) {
-    flags |= DxbcShaderTranslator::kSysFlag_XYDividedByW;
-  }
-  if (pa_cl_vte_cntl.vtx_z_fmt) {
-    flags |= DxbcShaderTranslator::kSysFlag_ZDividedByW;
-  }
-  if (pa_cl_vte_cntl.vtx_w0_fmt) {
-    flags |= DxbcShaderTranslator::kSysFlag_WNotReciprocal;
-  }
-  // Whether the primitive is polygonal and SV_IsFrontFace matters.
-  if (primitive_polygonal) {
-    flags |= DxbcShaderTranslator::kSysFlag_PrimitivePolygonal;
-  }
-  // Primitive type.
-  if (draw_util::IsPrimitiveLine(regs)) {
-    flags |= DxbcShaderTranslator::kSysFlag_PrimitiveLine;
-  }
-  // Depth format.
-  if (rb_depth_info.depth_format == xenos::DepthRenderTargetFormat::kD24FS8) {
-    flags |= DxbcShaderTranslator::kSysFlag_DepthFloat24;
-  }
-  // Alpha test.
-  xenos::CompareFunction alpha_test_function = rb_colorcontrol.alpha_test_enable
-                                                   ? rb_colorcontrol.alpha_func
-                                                   : xenos::CompareFunction::kAlways;
-  flags |= uint32_t(alpha_test_function) << DxbcShaderTranslator::kSysFlag_AlphaPassIfLess_Shift;
-  // Gamma writing.
-  if (!render_target_cache_->gamma_render_target_as_unorm16()) {
-    for (uint32_t i = 0; i < 4; ++i) {
-      if (color_infos[i].color_format == xenos::ColorRenderTargetFormat::k_8_8_8_8_GAMMA) {
-        flags |= DxbcShaderTranslator::kSysFlag_ConvertColor0ToGamma << i;
-      }
-    }
-  }
-  if (edram_rov_used && depth_stencil_enabled) {
-    flags |= DxbcShaderTranslator::kSysFlag_ROVDepthStencil;
-    if (normalized_depth_control.z_enable) {
-      flags |= uint32_t(normalized_depth_control.zfunc)
-               << DxbcShaderTranslator::kSysFlag_ROVDepthPassIfLess_Shift;
-      if (normalized_depth_control.z_write_enable) {
-        flags |= DxbcShaderTranslator::kSysFlag_ROVDepthWrite;
-      }
-    } else {
-      // In case stencil is used without depth testing - always pass, and
-      // don't modify the stored depth.
-      flags |= DxbcShaderTranslator::kSysFlag_ROVDepthPassIfLess |
-               DxbcShaderTranslator::kSysFlag_ROVDepthPassIfEqual |
-               DxbcShaderTranslator::kSysFlag_ROVDepthPassIfGreater;
-    }
-    if (normalized_depth_control.stencil_enable) {
-      flags |= DxbcShaderTranslator::kSysFlag_ROVStencilTest;
-    }
-    // Hint - if not applicable to the shader, will not have effect.
-    if (alpha_test_function == xenos::CompareFunction::kAlways &&
-        !rb_colorcontrol.alpha_to_mask_enable) {
-      flags |= DxbcShaderTranslator::kSysFlag_ROVDepthStencilEarlyWrite;
-    }
-  }
-  dirty |= system_constants_.flags != flags;
-  system_constants_.flags = flags;
-
-  // Tessellation factor range, plus 1.0 according to the images in
-  // https://www.slideshare.net/blackdevilvikas/next-generation-graphics-programming-on-xbox-360
-  float tessellation_factor_min = regs.Get<float>(XE_GPU_REG_VGT_HOS_MIN_TESS_LEVEL) + 1.0f;
-  float tessellation_factor_max = regs.Get<float>(XE_GPU_REG_VGT_HOS_MAX_TESS_LEVEL) + 1.0f;
-  dirty |= system_constants_.tessellation_factor_range_min != tessellation_factor_min;
-  system_constants_.tessellation_factor_range_min = tessellation_factor_min;
-  dirty |= system_constants_.tessellation_factor_range_max != tessellation_factor_max;
-  system_constants_.tessellation_factor_range_max = tessellation_factor_max;
-
-  // Line loop closing index (or 0 when drawing other primitives or using an
-  // index buffer).
-  dirty |= system_constants_.line_loop_closing_index != line_loop_closing_index;
-  system_constants_.line_loop_closing_index = line_loop_closing_index;
-
-  // Index or tessellation edge factor buffer endianness.
-  dirty |= system_constants_.vertex_index_endian != index_endian;
-  system_constants_.vertex_index_endian = index_endian;
-
-  // Vertex index offset.
-  dirty |= system_constants_.vertex_index_offset != vgt_indx_offset;
-  system_constants_.vertex_index_offset = vgt_indx_offset;
-
-  // Vertex index range.
-  dirty |= system_constants_.vertex_index_min != vgt_min_vtx_indx;
-  dirty |= system_constants_.vertex_index_max != vgt_max_vtx_indx;
-  system_constants_.vertex_index_min = vgt_min_vtx_indx;
-  system_constants_.vertex_index_max = vgt_max_vtx_indx;
-
-  // User clip planes (UCP_ENA_#), when not CLIP_DISABLE.
-  // The shader knows only the total count - tightly packing the user clip
-  // planes that are actually used.
-  if (!pa_cl_clip_cntl.clip_disable) {
-    float* user_clip_plane_write_ptr = system_constants_.user_clip_planes[0];
-    uint32_t user_clip_planes_remaining = pa_cl_clip_cntl.ucp_ena;
-    uint32_t user_clip_plane_index;
-    while (rex::bit_scan_forward(user_clip_planes_remaining, &user_clip_plane_index)) {
-      user_clip_planes_remaining &= ~(UINT32_C(1) << user_clip_plane_index);
-      const void* user_clip_plane_regs =
-          &regs[XE_GPU_REG_PA_CL_UCP_0_X + user_clip_plane_index * 4];
-      if (std::memcmp(user_clip_plane_write_ptr, user_clip_plane_regs, 4 * sizeof(float))) {
-        dirty = true;
-        std::memcpy(user_clip_plane_write_ptr, user_clip_plane_regs, 4 * sizeof(float));
-      }
-      user_clip_plane_write_ptr += 4;
-    }
-  }
-
-  // Conversion to Direct3D 12 normalized device coordinates.
-  for (uint32_t i = 0; i < 3; ++i) {
-    dirty |= system_constants_.ndc_scale[i] != viewport_info.ndc_scale[i];
-    dirty |= system_constants_.ndc_offset[i] != viewport_info.ndc_offset[i];
-    system_constants_.ndc_scale[i] = viewport_info.ndc_scale[i];
-    system_constants_.ndc_offset[i] = viewport_info.ndc_offset[i];
-  }
-
-  // Point size.
-  if (vgt_draw_initiator.prim_type == xenos::PrimitiveType::kPointList) {
-    auto pa_su_point_minmax = regs.Get<reg::PA_SU_POINT_MINMAX>();
-    auto pa_su_point_size = regs.Get<reg::PA_SU_POINT_SIZE>();
-    float point_vertex_diameter_min = float(pa_su_point_minmax.min_size) * (2.0f / 16.0f);
-    float point_vertex_diameter_max = float(pa_su_point_minmax.max_size) * (2.0f / 16.0f);
-    float point_constant_diameter_x = float(pa_su_point_size.width) * (2.0f / 16.0f);
-    float point_constant_diameter_y = float(pa_su_point_size.height) * (2.0f / 16.0f);
-    dirty |= system_constants_.point_vertex_diameter_min != point_vertex_diameter_min;
-    dirty |= system_constants_.point_vertex_diameter_max != point_vertex_diameter_max;
-    dirty |= system_constants_.point_constant_diameter[0] != point_constant_diameter_x;
-    dirty |= system_constants_.point_constant_diameter[1] != point_constant_diameter_y;
-    system_constants_.point_vertex_diameter_min = point_vertex_diameter_min;
-    system_constants_.point_vertex_diameter_max = point_vertex_diameter_max;
-    system_constants_.point_constant_diameter[0] = point_constant_diameter_x;
-    system_constants_.point_constant_diameter[1] = point_constant_diameter_y;
-    // 2 because 1 in the NDC is half of the viewport's axis, 0.5 for diameter
-    // to radius conversion to avoid multiplying the per-vertex diameter by an
-    // additional constant in the shader.
-    float point_screen_diameter_to_ndc_radius_x =
-        (/* 0.5f * 2.0f * */ float(draw_resolution_scale_x)) /
-        std::max(viewport_info.xy_extent[0], uint32_t(1));
-    float point_screen_diameter_to_ndc_radius_y =
-        (/* 0.5f * 2.0f * */ float(draw_resolution_scale_y)) /
-        std::max(viewport_info.xy_extent[1], uint32_t(1));
-    dirty |= system_constants_.point_screen_diameter_to_ndc_radius[0] !=
-             point_screen_diameter_to_ndc_radius_x;
-    dirty |= system_constants_.point_screen_diameter_to_ndc_radius[1] !=
-             point_screen_diameter_to_ndc_radius_y;
-    system_constants_.point_screen_diameter_to_ndc_radius[0] =
-        point_screen_diameter_to_ndc_radius_x;
-    system_constants_.point_screen_diameter_to_ndc_radius[1] =
-        point_screen_diameter_to_ndc_radius_y;
-  }
-
-  // Texture signedness / gamma.
-  uint32_t textures_resolution_scaled = 0;
+  inputs.rov_occlusion_query =
+      inputs.edram_rov_used && rov_occlusion_initialized_ && REXCVAR_GET(occlusion_query_enable);
+  inputs.host_render_targets_used =
+      render_target_cache_->GetPath() == RenderTargetCache::Path::kHostRenderTargets;
+  inputs.gamma_render_target_as_unorm16 = render_target_cache_->gamma_render_target_as_unorm16();
+  inputs.fixed16_truncated_to_minus_1_to_1 = render_target_cache_->IsFixed16TruncatedToMinus1To1();
+  inputs.shared_memory_is_uav = shared_memory_is_uav;
+  inputs.primitive_polygonal = primitive_polygonal;
+  inputs.index_endian = index_endian;
+  inputs.line_loop_closing_index = line_loop_closing_index;
+  inputs.used_texture_mask = used_texture_mask;
+  inputs.normalized_color_mask = normalized_color_mask;
+  inputs.normalized_depth_control = normalized_depth_control;
+  inputs.draw_resolution_scale_x = texture_cache_->draw_resolution_scale_x();
+  inputs.draw_resolution_scale_y = texture_cache_->draw_resolution_scale_y();
+  inputs.textures_resolution_scaled = 0;
   uint32_t textures_remaining = used_texture_mask;
   uint32_t texture_index;
   while (rex::bit_scan_forward(textures_remaining, &texture_index)) {
     textures_remaining &= ~(uint32_t(1) << texture_index);
-    uint32_t& texture_signs_uint = system_constants_.texture_swizzled_signs[texture_index >> 2];
-    uint32_t texture_signs_shift = (texture_index & 3) * 8;
-    uint8_t texture_signs = texture_cache_->GetActiveTextureSwizzledSigns(texture_index);
-    uint32_t texture_signs_shifted = uint32_t(texture_signs) << texture_signs_shift;
-    uint32_t texture_signs_mask = uint32_t(0b11111111) << texture_signs_shift;
-    dirty |= (texture_signs_uint & texture_signs_mask) != texture_signs_shifted;
-    texture_signs_uint = (texture_signs_uint & ~texture_signs_mask) | texture_signs_shifted;
-    uint32_t integer_scale_bits = texture_cache_->GetActiveIntegerScaleBits(texture_index);
-    dirty |= system_constants_.texture_integer_scale_bits[texture_index] != integer_scale_bits;
-    system_constants_.texture_integer_scale_bits[texture_index] = integer_scale_bits;
-    textures_resolution_scaled |=
+    inputs.texture_swizzled_signs[texture_index] =
+        texture_cache_->GetActiveTextureSwizzledSigns(texture_index);
+    inputs.texture_integer_scale_bits[texture_index] =
+        texture_cache_->GetActiveIntegerScaleBits(texture_index);
+    inputs.textures_resolution_scaled |=
         uint32_t(texture_cache_->IsActiveTextureResolutionScaled(texture_index)) << texture_index;
   }
-  dirty |= system_constants_.textures_resolution_scaled != textures_resolution_scaled;
-  system_constants_.textures_resolution_scaled = textures_resolution_scaled;
-
-  // Log2 of sample count, for alpha to mask and with ROV, for EDRAM address
-  // calculation with MSAA.
-  uint32_t sample_count_log2_x = rb_surface_info.msaa_samples >= xenos::MsaaSamples::k4X ? 1 : 0;
-  uint32_t sample_count_log2_y = rb_surface_info.msaa_samples >= xenos::MsaaSamples::k2X ? 1 : 0;
-  dirty |= system_constants_.sample_count_log2[0] != sample_count_log2_x;
-  dirty |= system_constants_.sample_count_log2[1] != sample_count_log2_y;
-  system_constants_.sample_count_log2[0] = sample_count_log2_x;
-  system_constants_.sample_count_log2[1] = sample_count_log2_y;
-
-  // Alpha test and alpha to coverage.
-  dirty |= system_constants_.alpha_test_reference != rb_alpha_ref;
-  system_constants_.alpha_test_reference = rb_alpha_ref;
-  uint32_t alpha_to_mask =
-      rb_colorcontrol.alpha_to_mask_enable ? (rb_colorcontrol.value >> 24) | (1 << 8) : 0;
-  dirty |= system_constants_.alpha_to_mask != alpha_to_mask;
-  system_constants_.alpha_to_mask = alpha_to_mask;
-
-  uint32_t edram_tile_dwords_scaled = xenos::kEdramTileWidthSamples *
-                                      xenos::kEdramTileHeightSamples *
-                                      (draw_resolution_scale_x * draw_resolution_scale_y);
-
-  // EDRAM pitch for ROV writing.
-  if (edram_rov_used) {
-    // Align, then multiply by 32bpp tile size in dwords.
-    uint32_t edram_32bpp_tile_pitch_dwords_scaled =
-        ((rb_surface_info.surface_pitch *
-          (rb_surface_info.msaa_samples >= xenos::MsaaSamples::k4X ? 2 : 1)) +
-         (xenos::kEdramTileWidthSamples - 1)) /
-        xenos::kEdramTileWidthSamples * edram_tile_dwords_scaled;
-    dirty |= system_constants_.edram_32bpp_tile_pitch_dwords_scaled !=
-             edram_32bpp_tile_pitch_dwords_scaled;
-    system_constants_.edram_32bpp_tile_pitch_dwords_scaled = edram_32bpp_tile_pitch_dwords_scaled;
-  }
-
-  // Color exponent bias and ROV render target writing.
-  for (uint32_t i = 0; i < 4; ++i) {
-    reg::RB_COLOR_INFO color_info = color_infos[i];
-    // Exponent bias is in bits 20:25 of RB_COLOR_INFO.
-    int32_t color_exp_bias = color_info.color_exp_bias;
-    if (color_info.color_format == xenos::ColorRenderTargetFormat::k_16_16 ||
-        color_info.color_format == xenos::ColorRenderTargetFormat::k_16_16_16_16) {
-      if (render_target_cache_->GetPath() == RenderTargetCache::Path::kHostRenderTargets &&
-          !render_target_cache_->IsFixed16TruncatedToMinus1To1()) {
-        // Remap from -32...32 to -1...1 by dividing the output values by 32,
-        // losing blending correctness, but getting the full range.
-        color_exp_bias -= 5;
-      }
-    }
-    auto color_exp_bias_scale =
-        rex::memory::Reinterpret<float>(int32_t(0x3F800000 + (color_exp_bias << 23)));
-    dirty |= system_constants_.color_exp_bias[i] != color_exp_bias_scale;
-    system_constants_.color_exp_bias[i] = color_exp_bias_scale;
-    if (edram_rov_used) {
-      dirty |= system_constants_.edram_rt_keep_mask[i][0] != rt_keep_masks[i][0];
-      system_constants_.edram_rt_keep_mask[i][0] = rt_keep_masks[i][0];
-      dirty |= system_constants_.edram_rt_keep_mask[i][1] != rt_keep_masks[i][1];
-      system_constants_.edram_rt_keep_mask[i][1] = rt_keep_masks[i][1];
-      if (rt_keep_masks[i][0] != UINT32_MAX || rt_keep_masks[i][1] != UINT32_MAX) {
-        uint32_t rt_base_dwords_scaled = color_info.color_base * edram_tile_dwords_scaled;
-        dirty |= system_constants_.edram_rt_base_dwords_scaled[i] != rt_base_dwords_scaled;
-        system_constants_.edram_rt_base_dwords_scaled[i] = rt_base_dwords_scaled;
-        uint32_t format_flags = RenderTargetCache::AddPSIColorFormatFlags(color_info.color_format);
-        dirty |= system_constants_.edram_rt_format_flags[i] != format_flags;
-        system_constants_.edram_rt_format_flags[i] = format_flags;
-        // Can't do float comparisons here because NaNs would result in always
-        // setting the dirty flag.
-        dirty |=
-            std::memcmp(system_constants_.edram_rt_clamp[i], rt_clamp[i], 4 * sizeof(float)) != 0;
-        std::memcpy(system_constants_.edram_rt_clamp[i], rt_clamp[i], 4 * sizeof(float));
-        uint32_t blend_factors_ops =
-            regs[reg::RB_BLENDCONTROL::rt_register_indices[i]] & 0x1FFF1FFF;
-        dirty |= system_constants_.edram_rt_blend_factors_ops[i] != blend_factors_ops;
-        system_constants_.edram_rt_blend_factors_ops[i] = blend_factors_ops;
-      }
-    }
-  }
-
-  if (edram_rov_used) {
-    uint32_t depth_base_dwords_scaled = rb_depth_info.depth_base * edram_tile_dwords_scaled;
-    dirty |= system_constants_.edram_depth_base_dwords_scaled != depth_base_dwords_scaled;
-    system_constants_.edram_depth_base_dwords_scaled = depth_base_dwords_scaled;
-
-    // For non-polygons, front polygon offset is used, and it's enabled if
-    // POLY_OFFSET_PARA_ENABLED is set, for polygons, separate front and back
-    // are used.
-    float poly_offset_front_scale = 0.0f, poly_offset_front_offset = 0.0f;
-    float poly_offset_back_scale = 0.0f, poly_offset_back_offset = 0.0f;
-    if (primitive_polygonal) {
-      if (pa_su_sc_mode_cntl.poly_offset_front_enable) {
-        poly_offset_front_scale = regs.Get<float>(XE_GPU_REG_PA_SU_POLY_OFFSET_FRONT_SCALE);
-        poly_offset_front_offset = regs.Get<float>(XE_GPU_REG_PA_SU_POLY_OFFSET_FRONT_OFFSET);
-      }
-      if (pa_su_sc_mode_cntl.poly_offset_back_enable) {
-        poly_offset_back_scale = regs.Get<float>(XE_GPU_REG_PA_SU_POLY_OFFSET_BACK_SCALE);
-        poly_offset_back_offset = regs.Get<float>(XE_GPU_REG_PA_SU_POLY_OFFSET_BACK_OFFSET);
-      }
-    } else {
-      if (pa_su_sc_mode_cntl.poly_offset_para_enable) {
-        poly_offset_front_scale = regs.Get<float>(XE_GPU_REG_PA_SU_POLY_OFFSET_FRONT_SCALE);
-        poly_offset_front_offset = regs.Get<float>(XE_GPU_REG_PA_SU_POLY_OFFSET_FRONT_OFFSET);
-        poly_offset_back_scale = poly_offset_front_scale;
-        poly_offset_back_offset = poly_offset_front_offset;
-      }
-    }
-    // With non-square resolution scaling, make sure the worst-case impact is
-    // reverted (slope only along the scaled axis), thus max. More bias is
-    // better than less bias, because less bias means Z fighting with the
-    // background is more likely.
-    float poly_offset_scale_factor = xenos::kPolygonOffsetScaleSubpixelUnit *
-                                     std::max(draw_resolution_scale_x, draw_resolution_scale_y);
-    poly_offset_front_scale *= poly_offset_scale_factor;
-    poly_offset_back_scale *= poly_offset_scale_factor;
-    dirty |= system_constants_.edram_poly_offset_front_scale != poly_offset_front_scale;
-    system_constants_.edram_poly_offset_front_scale = poly_offset_front_scale;
-    dirty |= system_constants_.edram_poly_offset_front_offset != poly_offset_front_offset;
-    system_constants_.edram_poly_offset_front_offset = poly_offset_front_offset;
-    dirty |= system_constants_.edram_poly_offset_back_scale != poly_offset_back_scale;
-    system_constants_.edram_poly_offset_back_scale = poly_offset_back_scale;
-    dirty |= system_constants_.edram_poly_offset_back_offset != poly_offset_back_offset;
-    system_constants_.edram_poly_offset_back_offset = poly_offset_back_offset;
-
-    if (depth_stencil_enabled && normalized_depth_control.stencil_enable) {
-      dirty |= system_constants_.edram_stencil_front_reference != rb_stencilrefmask.stencilref;
-      system_constants_.edram_stencil_front_reference = rb_stencilrefmask.stencilref;
-      dirty |= system_constants_.edram_stencil_front_read_mask != rb_stencilrefmask.stencilmask;
-      system_constants_.edram_stencil_front_read_mask = rb_stencilrefmask.stencilmask;
-      dirty |=
-          system_constants_.edram_stencil_front_write_mask != rb_stencilrefmask.stencilwritemask;
-      system_constants_.edram_stencil_front_write_mask = rb_stencilrefmask.stencilwritemask;
-      uint32_t stencil_func_ops = (normalized_depth_control.value >> 8) & ((1 << 12) - 1);
-      dirty |= system_constants_.edram_stencil_front_func_ops != stencil_func_ops;
-      system_constants_.edram_stencil_front_func_ops = stencil_func_ops;
-
-      if (primitive_polygonal && normalized_depth_control.backface_enable) {
-        dirty |= system_constants_.edram_stencil_back_reference != rb_stencilrefmask_bf.stencilref;
-        system_constants_.edram_stencil_back_reference = rb_stencilrefmask_bf.stencilref;
-        dirty |= system_constants_.edram_stencil_back_read_mask != rb_stencilrefmask_bf.stencilmask;
-        system_constants_.edram_stencil_back_read_mask = rb_stencilrefmask_bf.stencilmask;
-        dirty |= system_constants_.edram_stencil_back_write_mask !=
-                 rb_stencilrefmask_bf.stencilwritemask;
-        system_constants_.edram_stencil_back_write_mask = rb_stencilrefmask_bf.stencilwritemask;
-        uint32_t stencil_func_ops_bf = (normalized_depth_control.value >> 20) & ((1 << 12) - 1);
-        dirty |= system_constants_.edram_stencil_back_func_ops != stencil_func_ops_bf;
-        system_constants_.edram_stencil_back_func_ops = stencil_func_ops_bf;
-      } else {
-        dirty |= std::memcmp(system_constants_.edram_stencil_back,
-                             system_constants_.edram_stencil_front, 4 * sizeof(uint32_t)) != 0;
-        std::memcpy(system_constants_.edram_stencil_back, system_constants_.edram_stencil_front,
-                    4 * sizeof(uint32_t));
-      }
-    }
-
-    dirty |= system_constants_.edram_blend_constant[0] != regs.Get<float>(XE_GPU_REG_RB_BLEND_RED);
-    system_constants_.edram_blend_constant[0] = regs.Get<float>(XE_GPU_REG_RB_BLEND_RED);
-    dirty |=
-        system_constants_.edram_blend_constant[1] != regs.Get<float>(XE_GPU_REG_RB_BLEND_GREEN);
-    system_constants_.edram_blend_constant[1] = regs.Get<float>(XE_GPU_REG_RB_BLEND_GREEN);
-    dirty |= system_constants_.edram_blend_constant[2] != regs.Get<float>(XE_GPU_REG_RB_BLEND_BLUE);
-    system_constants_.edram_blend_constant[2] = regs.Get<float>(XE_GPU_REG_RB_BLEND_BLUE);
-    dirty |=
-        system_constants_.edram_blend_constant[3] != regs.Get<float>(XE_GPU_REG_RB_BLEND_ALPHA);
-    system_constants_.edram_blend_constant[3] = regs.Get<float>(XE_GPU_REG_RB_BLEND_ALPHA);
-  }
+  bool dirty = draw_back_end::ComputeSystemConstants(*register_file_, viewport_info, inputs,
+                                                     system_constants_);
 
   // Live knobs of the shader mods, changed by shader_mod_set.
   if (shader_mod_knobs_source_ &&

@@ -978,8 +978,7 @@ uint32_t D3D12TextureCache::GetActiveTextureBindlessSRVIndex(
 }
 
 D3D12TextureCache::SamplerParameters D3D12TextureCache::GetSamplerParameters(
-    const D3D12Shader::SamplerBinding& binding) const {
-  const auto& regs = register_file();
+    const RegisterFile& regs, const D3D12Shader::SamplerBinding& binding) const {
   xenos::xe_gpu_texture_fetch_t fetch = regs.GetTextureFetch(binding.fetch_constant);
 
   SamplerParameters parameters;
