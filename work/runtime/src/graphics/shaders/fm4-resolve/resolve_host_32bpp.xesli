@@ -1,0 +1,235 @@
+// Resolve of a 32bpp destination straight from the host render target that
+// owns the source tiles (stage N3, increment 3, docs/analysis/d3d-hle.md 16.9):
+// each sample is read from the render target and encoded as the dump into the
+// EDRAM buffer would store it (the 24-bit unorm or 20e4 float depth with
+// stencil, 7e3 color, fixed point), then copied bitwise (as the fast resolve)
+// or converted and packed (as resolve_full_32bpp) into the destination. HLSL
+// only. Defines: XE_HOST_SOURCE_KIND (0 float color, 1 uint color, 2 depth and
+// stencil), XE_HOST_SOURCE_MS (multisampled source), and
+// XE_RESOLVE_RESOLUTION_SCALED for the scaled resolve buffer.
+
+#define XE_RESOLVE_HOST
+#include "endian.xesli"
+#include "pixel_formats.xesli"
+#include "resolve.xesli"
+
+#ifdef XE_HOST_SOURCE_MS
+  #if XE_HOST_SOURCE_KIND == 2
+    Texture2DMS<float> xe_resolve_host_source : register(t0, space0);
+    Texture2DMS<uint2> xe_resolve_host_stencil : register(t1, space0);
+  #elif XE_HOST_SOURCE_KIND == 1
+    Texture2DMS<uint4> xe_resolve_host_source : register(t0, space0);
+  #else
+    Texture2DMS<float4> xe_resolve_host_source : register(t0, space0);
+  #endif
+#else
+  #if XE_HOST_SOURCE_KIND == 2
+    Texture2D<float> xe_resolve_host_source : register(t0, space0);
+    Texture2D<uint2> xe_resolve_host_stencil : register(t1, space0);
+  #elif XE_HOST_SOURCE_KIND == 1
+    Texture2D<uint4> xe_resolve_host_source : register(t0, space0);
+  #else
+    Texture2D<float4> xe_resolve_host_source : register(t0, space0);
+  #endif
+#endif
+byte_buffer_align16_wo_declare_xe(xe_resolve_dest, set=1, binding=0, u0, space0)
+
+// DxbcShaderTranslator::PreClampedFloat32To7e3.
+uint XeHostFloat32To7e3(float value) {
+  uint f32 = asuint(min(max(value, 0.0f), 31.875f));
+  uint biased;
+  if (f32 < 0x3E800000u) {
+    biased = ((f32 & 0x7FFFFFu) | 0x800000u) >> min(125u - (f32 >> 23u), 24u);
+  } else {
+    biased = f32 + 0xC2000000u;
+  }
+  return ((biased + 0x7FFFu + ((biased >> 16u) & 1u)) >> 16u) & 0x3FFu;
+}
+
+// DxbcShaderTranslator::PreClampedDepthTo20e4 with the host depth in [0, 0.5).
+uint XeHostDepthTo20e4(float depth, bool round_to_nearest_even) {
+  uint f32 = asuint(depth);
+  uint biased;
+  if (f32 < 0x38800000u - (1u << 23u)) {
+    biased = ((f32 & 0x7FFFFFu) | 0x800000u) >> min(112u - (f32 >> 23u), 24u);
+  } else {
+    biased = f32 + (0xC8000000u + (1u << 23u));
+  }
+  if (round_to_nearest_even) {
+    biased += 3u + ((biased >> 3u) & 1u);
+  }
+  return (biased >> 3u) & 0xFFFFFFu;
+}
+
+// The EDRAM word of a sample of the resolve's pixel, as the dump stores it.
+uint XeHostEdramWord(uint2_xe pixel_index, uint guest_sample, uint host_info,
+                     uint2_xe host_offset) {
+  int2 position = int2(pixel_index + host_offset);
+  uint samples_log2 = (host_info >> 4u) & 3u;
+  uint host_sample;
+  if (samples_log2 >= 2u) {
+    // The EDRAM's sample bit 1 is horizontal, bit 0 vertical; the host's the
+    // other way around.
+    host_sample = ((guest_sample >> 1u) & 1u) | ((guest_sample & 1u) << 1u);
+  } else {
+    host_sample = (host_info >> (8u + 2u * (guest_sample & 1u))) & 3u;
+  }
+  uint format = host_info & 15u;
+  #if XE_HOST_SOURCE_KIND == 2
+    #ifdef XE_HOST_SOURCE_MS
+      float depth = xe_resolve_host_source.Load(position, host_sample);
+      uint stencil = xe_resolve_host_stencil.Load(position, host_sample).y;
+    #else
+      float depth = xe_resolve_host_source.Load(int3(position, 0));
+      uint stencil = xe_resolve_host_stencil.Load(int3(position, 0)).y;
+    #endif
+    uint depth24;
+    if (format == kXenosDepthRenderTargetFormat_D24FS8) {
+      depth24 = XeHostDepthTo20e4(depth, (host_info & (1u << 6u)) != 0u);
+    } else {
+      depth24 = uint(round(depth * float(0xFFFFFF)));
+    }
+    return (depth24 << 8u) | (stencil & 0xFFu);
+  #elif XE_HOST_SOURCE_KIND == 1
+    #ifdef XE_HOST_SOURCE_MS
+      uint4 value = xe_resolve_host_source.Load(position, host_sample);
+    #else
+      uint4 value = xe_resolve_host_source.Load(int3(position, 0));
+    #endif
+    if (format == kXenosColorRenderTargetFormat_32_FLOAT) {
+      return value.x;
+    }
+    // 16_16 and 16_16_FLOAT.
+    return (value.x & 0xFFFFu) | (value.y << 16u);
+  #else
+    #ifdef XE_HOST_SOURCE_MS
+      float4 value = xe_resolve_host_source.Load(position, host_sample);
+    #else
+      float4 value = xe_resolve_host_source.Load(int3(position, 0));
+    #endif
+    if (format == kXenosColorRenderTargetFormat_2_10_10_10_FLOAT ||
+        format == kXenosColorRenderTargetFormat_2_10_10_10_FLOAT_AS_16_16_16_16) {
+      uint alpha = uint(mad(saturate(value.a), 3.0f, 0.5f));
+      return XeHostFloat32To7e3(value.r) | (XeHostFloat32To7e3(value.g) << 10u) |
+             (XeHostFloat32To7e3(value.b) << 20u) | ((alpha & 3u) << 30u);
+    }
+    if (format == kXenosColorRenderTargetFormat_2_10_10_10 ||
+        format == kXenosColorRenderTargetFormat_2_10_10_10_AS_10_10_10_10) {
+      uint4 fixed = uint4(mad(value, float4(1023.0f, 1023.0f, 1023.0f, 3.0f), 0.5f));
+      return (fixed.r & 1023u) | ((fixed.g & 1023u) << 10u) | ((fixed.b & 1023u) << 20u) |
+             ((fixed.a & 3u) << 30u);
+    }
+    // 8_8_8_8.
+    uint4 fixed = uint4(mad(value, 255.0f, 0.5f));
+    return (fixed.r & 255u) | ((fixed.g & 255u) << 8u) | ((fixed.b & 255u) << 16u) |
+           ((fixed.a & 255u) << 24u);
+  #endif
+}
+
+uint4_xe XeHostEdramWords4(uint2_xe pixel_index, uint guest_sample, uint host_info,
+                           uint2_xe host_offset, uint fill_y) {
+  pixel_index.y = max(pixel_index.y, fill_y);
+  return uint4_xe(
+      XeHostEdramWord(pixel_index, guest_sample, host_info, host_offset),
+      XeHostEdramWord(pixel_index + uint2_xe(1u, 0u), guest_sample, host_info, host_offset),
+      XeHostEdramWord(pixel_index + uint2_xe(2u, 0u), guest_sample, host_info, host_offset),
+      XeHostEdramWord(pixel_index + uint2_xe(3u, 0u), guest_sample, host_info, host_offset));
+}
+
+#define LOCAL_SIZE_X_XE 8
+#define LOCAL_SIZE_Y_XE 8
+#define LOCAL_SIZE_Z_XE 1
+entry_bindings_begin_compute_xe
+  XE_RESOLVE_PUSH_CONST_BINDING
+entry_bindings_end_inputs_begin_compute_xe
+  entry_in_global_thread_id_xe
+entry_inputs_end_code_begin_compute_xe
+{
+  // 1 thread = 4 host pixels, as in resolve_full_32bpp.
+  XeResolveInfo resolve_info = XeResolveGetInfo(pass_push_consts_xe);
+  uint host_info = push_const_xe(xe_resolve_host_info);
+  uint host_offset_packed = push_const_xe(xe_resolve_host_offset);
+  uint2_xe host_offset = uint2_xe(host_offset_packed & 0xFFFFu, host_offset_packed >> 16u);
+  uint2_xe pixel_index = in_global_thread_id_xe.xy << uint2_xe(2u, 0u);
+  dont_flatten_xe
+  if (pixel_index.x >= resolve_info.width_div_8_scaled << 3u) {
+    return;
+  }
+  uint fill_y = resolve_info.half_pixel_offset_fill_source.y;
+  uint first_sample = XeResolveFirstSampleIndex(resolve_info.sample_select);
+  uint4_xe packed;
+  dont_flatten_xe
+  if ((host_info & (1u << 7u)) != 0u) {
+    // Bitwise, the first sample of each pixel, with the fast copy's red and
+    // blue swap of color.
+    packed = XeHostEdramWords4(pixel_index, first_sample, host_info, host_offset, fill_y);
+    #if XE_HOST_SOURCE_KIND != 2
+      uint4_xe unused = uint_x4_xe(0u);
+      XeResolveSwap8PixelsRedBlue32bpp(resolve_info, packed, unused);
+    #endif
+  } else {
+    // XeResolveLoad4RGBAColors with the words from the render target.
+    float4_xe pixel_0, pixel_1, pixel_2, pixel_3;
+    XeResolveUnpack32bpp4Samples(
+        XeHostEdramWords4(pixel_index, first_sample, host_info, host_offset, fill_y),
+        resolve_info.edram_format, pixel_0, pixel_1, pixel_2, pixel_3);
+    float exp_bias = resolve_info.dest_exp_bias_factor;
+    dont_flatten_xe
+    if (resolve_info.sample_select >= kXenosCopySampleSelect_01) {
+      exp_bias *= 0.5f;
+      float4_xe msaa_0, msaa_1, msaa_2, msaa_3;
+      XeResolveUnpack32bpp4Samples(
+          XeHostEdramWords4(pixel_index, first_sample | 1u, host_info, host_offset, fill_y),
+          resolve_info.edram_format, msaa_0, msaa_1, msaa_2, msaa_3);
+      pixel_0 += msaa_0;
+      pixel_1 += msaa_1;
+      pixel_2 += msaa_2;
+      pixel_3 += msaa_3;
+      dont_flatten_xe
+      if (resolve_info.sample_select >= kXenosCopySampleSelect_0123) {
+        exp_bias *= 0.5f;
+        XeResolveUnpack32bpp4Samples(
+            XeHostEdramWords4(pixel_index, 2u, host_info, host_offset, fill_y),
+            resolve_info.edram_format, msaa_0, msaa_1, msaa_2, msaa_3);
+        pixel_0 += msaa_0;
+        pixel_1 += msaa_1;
+        pixel_2 += msaa_2;
+        pixel_3 += msaa_3;
+        XeResolveUnpack32bpp4Samples(
+            XeHostEdramWords4(pixel_index, 3u, host_info, host_offset, fill_y),
+            resolve_info.edram_format, msaa_0, msaa_1, msaa_2, msaa_3);
+        pixel_0 += msaa_0;
+        pixel_1 += msaa_1;
+        pixel_2 += msaa_2;
+        pixel_3 += msaa_3;
+      }
+    }
+    pixel_0 *= exp_bias;
+    pixel_1 *= exp_bias;
+    pixel_2 *= exp_bias;
+    pixel_3 *= exp_bias;
+    dont_flatten_xe if (resolve_info.dest_swap) {
+      pixel_0 = pixel_0.bgra;
+      pixel_1 = pixel_1.bgra;
+      pixel_2 = pixel_2.bgra;
+      pixel_3 = pixel_3.bgra;
+    }
+    packed = XePack32bpp4Pixels(pixel_0, pixel_1, pixel_2, pixel_3, resolve_info.dest_format,
+                                resolve_info.dest_num_format);
+  }
+  dont_flatten_xe
+  if (pixel_index.x == 0u &&
+      resolve_info.half_pixel_offset_fill_source.x != 0u) {
+    if (resolve_info.half_pixel_offset_fill_source.x >= 2u) {
+      if (resolve_info.half_pixel_offset_fill_source.x >= 3u) {
+        packed.z = packed.w;
+      }
+      packed.y = packed.z;
+    }
+    packed.x = packed.y;
+  }
+  byte_buffer_align16_store16_xe(
+      xe_resolve_dest, XeResolveDestPixelAddress(resolve_info, pixel_index, 2u),
+      XeEndianSwap32(packed, resolve_info.dest_endian_128));
+}
+entry_code_end_compute_xe

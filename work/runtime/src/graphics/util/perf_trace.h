@@ -316,6 +316,26 @@ inline void CountStaleTile(StaleTileOutcome outcome) {
 inline void CountStaleTransferEnd(bool read) {
   (read ? stale_transfers_read : stale_transfers_unread).fetch_add(1, std::memory_order_relaxed);
 }
+// native_rt_surfaces bit 2: resolves that could read the host render target,
+// those that did (not in a check frame, nothing failed), the byte checks and
+// the mismatches.
+inline std::atomic<uint64_t> host_resolves_found{0}, host_resolves_done{0}, host_resolves_other{0},
+    host_resolve_checks{0}, host_resolve_mismatches{0};
+inline void CountHostResolve(bool found, bool done) {
+  (found ? host_resolves_found : host_resolves_other).fetch_add(1, std::memory_order_relaxed);
+  if (done) host_resolves_done.fetch_add(1, std::memory_order_relaxed);
+}
+// The byte checks by the source's format: color formats 0 to 15, depth 16 and
+// 17.
+inline std::atomic<uint64_t> host_resolve_check_formats[18]{};
+inline void CountHostResolveCheckFormat(bool is_depth, uint32_t format) {
+  host_resolve_check_formats[(is_depth ? 16 : 0) + (format & 15)].fetch_add(
+      1, std::memory_order_relaxed);
+}
+inline void CountHostResolveChecks(uint32_t checked, uint32_t mismatched) {
+  host_resolve_checks.fetch_add(checked, std::memory_order_relaxed);
+  host_resolve_mismatches.fetch_add(mismatched, std::memory_order_relaxed);
+}
 inline void CountNativeResolveChecks(uint32_t checked, uint32_t mismatched) {
   native_resolve_checks.fetch_add(checked, std::memory_order_relaxed);
   native_resolve_mismatches.fetch_add(mismatched, std::memory_order_relaxed);
@@ -524,6 +544,19 @@ inline void OnSwap() {
                 << ",\"checks\":" << native_resolve_checks.exchange(0, std::memory_order_relaxed)
                 << ",\"mismatches\":"
                 << native_resolve_mismatches.exchange(0, std::memory_order_relaxed) << '}'
+                << ",\"host_resolve\":{\"found\":"
+                << host_resolves_found.exchange(0, std::memory_order_relaxed) << ",\"done\":"
+                << host_resolves_done.exchange(0, std::memory_order_relaxed) << ",\"other\":"
+                << host_resolves_other.exchange(0, std::memory_order_relaxed) << ",\"checks\":"
+                << host_resolve_checks.exchange(0, std::memory_order_relaxed)
+                << ",\"mismatches\":"
+                << host_resolve_mismatches.exchange(0, std::memory_order_relaxed)
+                << ",\"check_formats\":[";
+  for (size_t i = 0; i < 18; ++i) {
+    state->output << (i ? "," : "")
+                  << host_resolve_check_formats[i].exchange(0, std::memory_order_relaxed);
+  }
+  state->output << "]}"
                 << ",\"rt_transfers\":{\"transfers\":"
                 << stale_transfers.exchange(0, std::memory_order_relaxed) << ",\"tiles\":"
                 << stale_transfer_tiles.exchange(0, std::memory_order_relaxed)

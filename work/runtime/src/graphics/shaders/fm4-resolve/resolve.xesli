@@ -54,6 +54,16 @@ push_const_begin_xe(b0, space0)
       // copies) instead of a format conversion.
       uint xe_resolve_texture_info;
     #endif
+    #ifdef XE_RESOLVE_HOST
+      // Resolve from the host render target (resolve_host_32bpp): bits 0:3 its
+      // format (color or depth), 4:5 log2 of its sample count, 6 float24 depth
+      // rounded to the nearest even, 7 a bitwise copy (as the fast resolve
+      // copies) instead of a format conversion, 8:9 and 10:11 the host sample of the
+      // guest's 2x MSAA samples 0 and 1.
+      uint xe_resolve_host_info;
+      // The host render target pixel of the resolve's first one, 16:16.
+      uint xe_resolve_host_offset;
+    #endif
   #endif
 push_const_end_xe
 

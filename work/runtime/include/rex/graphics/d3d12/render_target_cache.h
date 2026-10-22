@@ -212,6 +212,26 @@ class D3D12RenderTargetCache final : public RenderTargetCache {
   // with the parameters of the resolve copy but one more constant (the
   // texture's endianness and host format, and whether the copy is bitwise),
   // and the scratch textures of native_rt_resolve_check by destination.
+  // native_rt_surfaces bit 2 (docs/analysis/d3d-hle.md 16.9): resolves from the
+  // host render target, resolve_host_32bpp by source kind (float color, uint
+  // color, depth) and multisampling, with the parameters of the resolve copy,
+  // two more constants and the stencil in a table of its own; and the byte check
+  // of native_rt_surfaces_check (scratch for the shader's bytes, readbacks of
+  // both, compared when the submission completes).
+  ID3D12RootSignature* host_resolve_root_signature_ = nullptr;
+  ID3D12PipelineState* host_resolve_pipelines_[3][2] = {};
+  Microsoft::WRL::ComPtr<ID3D12Resource> host_resolve_scratch_;
+  uint64_t host_resolve_scratch_size_ = 0;
+  D3D12_RESOURCE_STATES host_resolve_scratch_state_ = D3D12_RESOURCE_STATE_COPY_DEST;
+  struct HostResolveCheck {
+    Microsoft::WRL::ComPtr<ID3D12Resource> readback[2];
+    uint64_t length = 0;
+    uint64_t submission = 0;
+    uint32_t dest = 0, format = 0;
+    bool is_depth = false;
+    uint32_t msaa = 0, sample_select = 0, host_offset = 0, width = 0, height = 0;
+  };
+  std::vector<HostResolveCheck> host_resolve_checks_;
   ID3D12RootSignature* resolve_texture_root_signature_ = nullptr;
   ID3D12PipelineState* resolve_texture_pipeline_ = nullptr;
   std::unordered_map<uint64_t, Microsoft::WRL::ComPtr<ID3D12Resource>> resolve_texture_scratch_;
@@ -688,6 +708,33 @@ class D3D12RenderTargetCache final : public RenderTargetCache {
   bool TryResolveCopyDirectly(const draw_util::ResolveInfo& resolve_info,
                               draw_util::ResolveCopyShaderIndex copy_shader,
                               bool draw_resolution_scaled);
+  struct HostResolveSource {
+    RenderTarget* render_target = nullptr;
+    uint32_t kind = 0;  // 0 float color, 1 uint color, 2 depth.
+    uint32_t multisampled = 0;
+    uint32_t host_info = 0;
+    uint32_t host_offset = 0;
+  };
+  // Whether a resolve can read its source straight from one host render
+  // target that owns every source tile with the same layout.
+  bool FindHostResolveSource(const draw_util::ResolveInfo& resolve_info,
+                             draw_util::ResolveCopyShaderIndex copy_shader,
+                             HostResolveSource& source_out);
+  // The resolve from the host render target into the destination, or with
+  // check, into scratch initialized with the destination's bytes, then both
+  // read back for the byte check.
+  bool DispatchHostResolve(D3D12TextureCache& texture_cache, D3D12SharedMemory& shared_memory,
+                           const draw_util::ResolveInfo& resolve_info,
+                           const draw_util::ResolveCopyShaderConstants& constants,
+                           const HostResolveSource& source, bool scaled, bool check);
+
+ public:
+  // At each frame's start: the byte checks whose submission completed;
+  // returns the compared resolves and those that differed.
+  void PollHostResolveChecks(uint64_t completed_submission, uint32_t& checked_out,
+                             uint32_t& mismatched_out);
+
+ private:
   // After the resolve copy: writes the host textures of a full-screen 32bpp
   // destination straight from the EDRAM buffer (native_rt_resolve).
   void ResolveIntoHostTextures(D3D12TextureCache& texture_cache,

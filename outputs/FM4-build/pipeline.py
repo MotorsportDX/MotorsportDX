@@ -28,6 +28,13 @@ THIRDPARTY_SUBMODULES = ('cli11','libmspack','FFmpeg','tomlplusplus','simde','xx
 RESOLVE_SHADERS = [f'resolve_full_{bits}bpp{suffix}' for bits in (8,16,32,64) for suffix in ('','_scaled')]
 # Resolves straight into host textures (stage N3 increment 1, docs/analysis/d3d-hle.md 16.7).
 RESOLVE_SHADERS.append('resolve_texture_32bpp')
+# Resolves straight from the host render targets (stage N3 increment 3, d3d-hle.md 16.9): one
+# source (resolve_host_32bpp.xesli) built per source kind, multisampling and scaling.
+RESOLVE_HOST_SHADERS = {
+    f'resolve_host_32bpp_{kind}{ms}{scaled}': [f'XE_HOST_SOURCE_KIND={index}'] +
+    (['XE_HOST_SOURCE_MS'] if ms else []) + (['XE_RESOLVE_RESOLUTION_SCALED'] if scaled else [])
+    for index, kind in enumerate(('color', 'uint', 'depth'))
+    for ms in ('', '_ms') for scaled in ('', '_scaled')}
 EXECUTABLES = ('default.xex','SpeechFacade_default.xex','XMediaFacade_default.xex')
 # The supported releases and the SHA-256 of their three executables. The releases differ only
 # in the XEX headers (media ID, disc version, game region, ratings, LAN key). The decrypted
@@ -250,14 +257,19 @@ def compile_resolve_shaders(root, fxc):
     bytecode = shaders/'bytecode/d3d12_5_1'
     area_output = source/'src/ui/shaders/bytecode/d3d12_5_1/guest_output_area_ps.h'
     outputs = [bytecode/f'{name}_cs.h' for name in RESOLVE_SHADERS]+[bytecode/'resolve_downscale_cs.h']
+    host_outputs = [bytecode/f'{name}_cs.h' for name in RESOLVE_HOST_SHADERS]
     if (marker.is_file() and marker.read_text() == inputs.hexdigest() and
-            all(path.is_file() for path in outputs+[area_output])):
+            all(path.is_file() for path in outputs+host_outputs+[area_output])):
         return
     strip = ['/O3','/Qstrip_reflect','/Qstrip_debug','/Qstrip_priv','/Gfp','/nologo']
     flags = ['/T','cs_5_1',*strip]
     for name,output in zip(RESOLVE_SHADERS,outputs):
         run([fxc,'/D','SHADING_LANGUAGE_HLSL_XE=1',*flags,
              '/Fh',output,'/Vn',name+'_cs',shader_source/(name+'.cs.xesl')],log=root/f'logs/{name}.log')
+    for (name,defines),output in zip(RESOLVE_HOST_SHADERS.items(),host_outputs):
+        run([fxc,'/D','SHADING_LANGUAGE_HLSL_XE=1',*[arg for define in defines for arg in ('/D',define)],
+             *flags,'/Fh',output,'/Vn',name+'_cs',shader_source/'resolve_host_32bpp.xesli'],
+            log=root/f'logs/{name}.log')
     run([fxc,*flags,'/Fh',outputs[-1],'/Vn','resolve_downscale_cs',downscale],
         log=root/'logs/resolve_downscale.log')
     run([fxc,'/T','ps_5_1',*strip,'/Fh',area_output,'/Vn','guest_output_area_ps',area],

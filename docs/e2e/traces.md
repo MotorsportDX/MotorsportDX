@@ -82,9 +82,13 @@ Each window then has a `read_trace` object: `readbacks` and `readback_kb` publis
 
 With `native_rt_resolve=true` (off by default) each window has a `native_rt_resolve` object: `resolves` (full-screen 32bpp resolves that looked for host textures of their destination), `textures` (the textures they wrote straight, which then need no load), `misses` (resolves that found none, so the texture loads as before), and with `native_rt_resolve_check=N` (every N-th frame the resolve shader writes scratch copies instead, the loads stay, and the loaded texels are compared with the scratch's) `checks` and `mismatches` (each mismatch also logs a warning with the first differing texel). The design is in [d3d-hle.md 16.7](../analysis/d3d-hle.md).
 
-### Ownership transfers read or not (native_rt_surfaces=1)
+### Resolves from the host render target (native_rt_surfaces bit 2)
 
-With `native_rt_surfaces=1` (count only, off by default) each window has an `rt_transfers` object: the ownership `transfers` the render target cache made, their `tiles` and the `pending_tiles` left after the overwrite cutout, and how those tiles ended: `dropped` (another render target took them before anything touched them), `overwritten` (a draw's overwrite rectangle wholly covered them, or a resolve cleared them), `read_draw` (a draw that may read touched them: any draw that is not a uniform overwrite, within its scissor, so this overestimates) and `read_resolve` (a resolve copied them); `transfers_unread` and `transfers_read` count the transfers that ended with no tile read and with some. The design is in [d3d-hle.md 16.9](../analysis/d3d-hle.md).
+With bit 2 of `native_rt_surfaces` each window has a `host_resolve` object: `found` (resolves that could read their source from one host render target), `done` (those that did, outside check frames), `other` (copy resolves that could not), and with `native_rt_surfaces_check=N` `checks`, `mismatches` (each also logs a warning with the first differing words) and `check_formats` (checks by the source format: color formats 0 to 15, then D24S8 and D24FS8). The design is in [d3d-hle.md 16.11](../analysis/d3d-hle.md).
+
+### Ownership transfers read or not (native_rt_surfaces bit 1)
+
+With bit 1 of `native_rt_surfaces` (count only, off by default) each window has an `rt_transfers` object: the ownership `transfers` the render target cache made, their `tiles` and the `pending_tiles` left after the overwrite cutout, and how those tiles ended: `dropped` (another render target took them before anything touched them), `overwritten` (a draw's overwrite rectangle wholly covered them, or a resolve cleared them), `read_draw` (a draw that may read touched them: any draw that is not a uniform overwrite, within its scissor, so this overestimates) and `read_resolve` (a resolve copied them); `transfers_unread` and `transfers_read` count the transfers that ended with no tile read and with some. The design is in [d3d-hle.md 16.9](../analysis/d3d-hle.md).
 
 ### Readbacks on demand (readback_resolve_on_demand)
 

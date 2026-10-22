@@ -948,3 +948,22 @@ The main session approved the design of 16.9 on 22 October 2026 with four correc
 
 The main session accepted step 1 and decided on 22 October 2026 that step 3 (the resolves from the host surface) comes before step 2 (the lazy transfers): its ceiling is larger (about 0.45 ms at 2x against 0.14 to 0.25 ms), and it is on the critical path of increment 4, whose one-pass tiles and native MSAA need resolves that read the MSAA host surface directly, since a dump of MSAA tiles into the EDRAM buffer is what increment 4 removes. The lazy transfers can follow at any time; the overwrite share under the strict rule and the memory of keeping every surface come with step 2 at the latest.
 
+### 16.11 Increment 3, step 3: resolves from the host render target, 22 October 2026
+
+`native_rt_surfaces` is a set of bits since this step: 1 the count of 16.10, 2 the resolves from the host render target. With bit 2 a 32bpp resolve (the fast copy or `resolve_full_32bpp`) whose source tiles one host render target owns with the same pitch, sample count and format reads that render target with `resolve_host_32bpp` (FXC from `fm4-resolve`, twelve builds: float, uint and depth sources, single- and multisampled, unscaled and scaled) instead of its dump into the EDRAM buffer: each sample is encoded as the dump stores it (unorm24 depth rounded to the nearest even and float24 depth as `PreClampedDepthTo20e4` with the host depth in [0, 0.5), each with stencil; 7e3 color as `PreClampedFloat32To7e3` with alpha in two bits; fixed point; 16_16 and 32_FLOAT as their bits), then copied bitwise with the fast copy's red and blue swap, or unpacked, averaged, biased and packed as the full copy does, into the same destination. The stencil comes through a root table of its own, because one-use descriptors are not contiguous with bindless resources (the first build read the wrong descriptor for it). `native_rt_surfaces_check=N` resolves as before every N-th frame, then into scratch that starts with the destination's bytes, and compares both. The unscaled fast copies of multisampled sources stay on the dump: they are older precompiled shaders whose sample addressing differs (every 4x depth resolve of photo mode's tiles at 1x differed), while the scaled ones match.
+
+The step gate on `I:\FM4-build-usa` at 240 Hz with `-Native`'s cvars and bit 2, byte check every 30th frame:
+
+| Run | Byte checks | Mismatches | Source formats checked |
+|---|---|---|---|
+| `career` 2x (race, replay, menus) | 16,697 | 0 | 8_8_8_8 3,948, 2_10_10_10 1,000, 2_10_10_10_FLOAT 9,351, 16_16 536, 32_FLOAT 618, D24S8 516, D24FS8 728 |
+| `career` 1x | 19,743 | 0 | 8_8_8_8 4,871, 2_10_10_10 1,194, 2_10_10_10_FLOAT 10,864, 16_16 639, 32_FLOAT 723, D24S8 618, D24FS8 834 |
+| `photo` 2x (race, photo mode) | 13,708 | 0 | 8_8_8_8 2,802, 2_10_10_10 948, 2_10_10_10_FLOAT 7,796, 16_16 439, 32_FLOAT 520, D24S8 403, D24FS8 800 |
+| `photo` 1x | 14,951 | 0 | 8_8_8_8 3,242, 2_10_10_10 1,044, 2_10_10_10_FLOAT 8,633, 16_16 496, 32_FLOAT 583, D24S8 463, D24FS8 490 |
+
+The destinations are `8_8_8_8` (the depth resolves), `2_10_10_10` and the rest of the title's 32bpp formats. In the race 25.0 of 28.8 resolves a frame come from the host render target; 3.8 a frame cannot (other copy shaders or several owners). At 1x photo mode's 4x MSAA depth resolves keep the dump (above).
+
+The race at 2x (`race` scenario, one run each, the `-Native` cvars): without bit 2 (`n3h-race-native0-2x`) 182.3 fps, p99 7.83 ms, GPU 5.41 ms a frame with 0.72 ms of resolves; with bit 2 (`n3h-race-native-2x`) 190.2 fps, p99 7.27 ms, GPU 5.16 ms with 0.48 ms of resolves (the full-screen ones 0.32 to 0.18 ms): 0.25 ms of GPU time a frame less. RTV with the launcher defaults (`n3h-race-rtv-2x`) ran 155.4 fps, GPU 6.28 ms, at 2,520 against 1,881 draws a frame (another race load).
+
+Host render target memory, for step 2: the render target cache already keeps every render target key it made until `ClearCache`, each covering the whole EDRAM from its base (2,048 tiles): the 16 surfaces of a race frame take about 203 MB at 1x and 810 MB at 2x today (2_10_10_10_FLOAT and D24FS8 at 8 bytes a sample), so keeping every surface's target alive adds nothing; sizing them to the surfaces' extents would save most of it. A one-pass 4x MSAA scene (increment 4) needs 1280x720 with 4 samples, which the EDRAM-sized targets cannot hold: about 28 MB for colour and 28 MB for depth at 1x, 112 MB each at 2x.
+

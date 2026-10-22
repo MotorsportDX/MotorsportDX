@@ -5112,6 +5112,8 @@ bool D3D12CommandProcessor::BeginSubmission(bool is_guest_command) {
       uint32_t checked, mismatched;
       texture_cache_->PollResolveTextureChecks(submission_completed_, checked, mismatched);
       perf_trace::CountNativeResolveChecks(checked, mismatched);
+      render_target_cache_->PollHostResolveChecks(submission_completed_, checked, mismatched);
+      perf_trace::CountHostResolveChecks(checked, mismatched);
     }
     frame_open_ = true;
 

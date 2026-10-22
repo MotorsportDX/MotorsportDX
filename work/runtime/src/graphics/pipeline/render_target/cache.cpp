@@ -47,10 +47,11 @@ REXCVAR_DEFINE_BOOL(snorm16_render_target_full_range, true, "GPU",
                     "Use full range for SNORM16 render targets");
 
 REXCVAR_DEFINE_INT32(native_rt_surfaces, 0, "GPU",
-                     "Surface-keyed host render targets (docs/analysis/d3d-hle.md 16.9): 0 off, "
-                     "1 count only (whether the tiles of each ownership transfer are read before "
-                     "they are overwritten, in the perf trace)")
-    .range(0, 1)
+                     "Surface-keyed host render targets (docs/analysis/d3d-hle.md 16.9), bits: 1 "
+                     "count whether the tiles of each ownership transfer are read before they "
+                     "are overwritten (perf trace), 2 resolve from the host render target "
+                     "instead of its dump into the EDRAM buffer. RTV path only")
+    .range(0, 3)
     .lifecycle(rex::cvar::Lifecycle::kRequiresRestart);
 
 REXCVAR_DEFINE_BOOL(direct_host_resolve, true, "GPU",
@@ -786,7 +787,7 @@ bool RenderTargetCache::Update(bool is_rasterization_done,
                     interlock_barrier_only ? nullptr : &last_update_transfers_[rt_bit_index],
                     (overwrite_cutout_slots >> rt_bit_index) & 1 ? &overwrite_cutout : nullptr);
   }
-  if (!interlock_barrier_only && REXCVAR_GET(native_rt_surfaces) == 1) {
+  if (!interlock_barrier_only && (REXCVAR_GET(native_rt_surfaces) & 1)) {
     CountStaleTilesForDraw(rt_keys, depth_and_color_rts_used_bits, overwrite_cutout,
                            overwrite_cutout_slots, is_rasterization_done);
   }
@@ -1027,7 +1028,7 @@ void RenderTargetCache::CountStaleTilesForDraw(const RenderTargetKey* keys, uint
 void RenderTargetCache::CountStaleTilesForResolve(uint32_t base_tiles, uint32_t row_length_used,
                                                   uint32_t rows, uint32_t pitch_tiles,
                                                   bool clears) {
-  if (stale_tile_transfers_.empty() || REXCVAR_GET(native_rt_surfaces) != 1) {
+  if (stale_tile_transfers_.empty() || !(REXCVAR_GET(native_rt_surfaces) & 1)) {
     return;
   }
   for (uint32_t row = 0; row < rows; ++row) {
