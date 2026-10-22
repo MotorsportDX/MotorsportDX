@@ -1270,3 +1270,37 @@ The render thread outside the draw zone (`n4c-split-race`, `REX_CP_SPLIT`, 1,919
 | `WAIT_REG_MEM` (a wait, not busy time) | 0.65 |
 
 Without the split at 1,800 draws (`n4c-race-off*`): busy 3.42 ms, the draw zone 2.37 ms (textures 0.47, bindings 0.51, render targets 0.26, primitives 0.21, pipeline 0.14, copies 0.12, vertex buffers 0.09, the rest 0.57) and 1.05 ms outside it. Where the last 0.3 to 0.4 ms after increment 2 comes from is in 17.6 (the budget).
+
+### 17.8 Step 2, increment 2 results, 23 October 2026
+
+`d3d12_draw_back_end=2` (off by default; it needs bindless resources, host render targets and `async_shader_compilation` off, as `-Native` sets them, and turns itself off otherwise):
+
+- **The front end** translates the shaders (`PipelineCache::TranslateShadersForDraw`) instead of configuring the pipeline, records no pipeline, viewport, scissor, blend factor, stencil reference, system constants, root parameters or topology for guest draws, fills the system constants' inputs that come from the render target cache and the texture cache, takes the texture SRV indices where the texture cache decides them, and writes `kDrawBackEnd` at the draw with the index buffer view. Afterwards it marks its own caches of that state stale, so its next commands (render target transfers, texture loads, post passes) set what they need again. The capture also carries the float, bool and loop constants of the draw (step 1's slots) and a few knobs of the look.
+- **The replay** keeps one register file per list and the D3D12 state the list sets, including what the front end's own commands set as they are replayed (`draw_back_end::ReplayState`), and records the back end into the command list being replayed: the pipeline description from its registers, the lookup and, when missing, the synchronous creation (`ConfigurePipelineDescribed`); viewport, scissor, blend factor and stencil reference; the system constants; the samplers, the bindless sampler heap and its map; the constant buffers from a pool of its own; the descriptor indices; root signature, root parameters, topology, index buffer and the draw. The view heap stays the front end's; the replay sets the sampler heap at each list's start.
+- **The check** computes the same results from the live register file at the draw and compares them with the replay's: the pipeline description, viewport, scissor, blend factor and stencil reference, system constants, sampler parameters and the constant buffers' bytes. The capture format is one encoder (`CaptureDrawBackEnd`) and one decoder (`draw_back_end::Decode`).
+
+On `I:\FM4-build-usa` at 240 Hz and 1x with `-Native`'s cvars and the e2e fast route (`rexgpu-xenos.dll` SHA-256 beginning `afcf26f89a895735`, `fm4_rex.exe` `6b843735b19128e7`, `rexruntime.dll` `7ef511d0c95f99d7`):
+
+| Check | Result |
+|---|---|
+| The check with perturbation 1,000 (`n4g-chk2-career`: race, replay, menus; the back end fills the constant buffers itself, `d3d12_deferred_constants` off) | 41,252,704 draws checked; mismatches only in the 41,252 perturbed pipeline comparisons, none in the other six kinds; no draw dropped, no pipeline created on the replay, the three error keys of RTV, no clear gray frame |
+| The same on the build before the last change (`n4f-chk2-career`) | 42,415,761 draws, likewise only the 42,415 perturbed; the race and replay pictures correct |
+
+The step gate, A/B alternating `n4g-race-off1`, `-rep1`, `-off2`, `-rep2`, fitted per window at 1,800 draws a race frame (the AI races put 1,453 to 2,488 draws a frame into the runs):
+
+| At 1,800 draws a race frame | Off | `d3d12_draw_back_end=2` |
+|---|---|---|
+| Render thread busy | 3.383 ms (1.732 us a draw) | 2.993 ms (1.373 us a draw): −0.39 ms |
+| Draw zone | 2.366 | 1.931 |
+| Bindings, pipeline, textures zones | 0.509, 0.137, 0.460 | 0.102, 0.033, 0.334 |
+| The capture (inside the draw zone) | | 0.248 (138 to 139 ns a draw, 484 bytes: 22 constant slots, 2.0 context registers, 54 bytes of groups) |
+| Submit thread recording | 0.722 ms | 1.567 ms |
+| Submit thread busy | 0.852 ms | 1.698 ms |
+| p99, all race windows pooled | 6.40 ms (1,928 draws a frame) | 5.26 ms (2,064) |
+
+- **Render thread.** The draw zone loses 0.68 ms (the bindings 0.41, the pipeline 0.10, the fixed function state and the calls, and 0.13 in the textures zone, whose code is the same: 245 to 266 ns a draw off against 178 to 184 with the back end moved, in every run, read as the cache effect of the shorter draw) and gains the capture's 0.25 ms; the marking of written registers outside the draw zone (0.07 ms in 17.7) brings the net to −0.39 ms. At the race's mean load of the runs (2,064 draws) the slopes give −0.48 ms.
+- **Submit thread.** The replay of `kDrawBackEnd` takes 606 to 612 ns a draw (1.22 to 1.26 ms a race frame), its D3D12 calls included; those calls took about 140 ns a draw in the off runs' replay (pipeline handles, root constant buffer views, index buffer, draw; `n4f-rsplit-roff1` against `-rrep1` with `REX_N4_REPLAY_SPLIT`), so the back end's own work on the replay is about 470 ns a draw, against about 350 ns it took on the render thread. The walk of the list drops from 0.16 to 0.04 ms (fewer commands); the other command kinds cost the same. The recording stays under the 2.5 ms budget at the highest loads of the runs (1.57 + 0.57 us a draw beyond 1,800: 1.97 ms at 2,500 draws).
+- **p99 at the same load.** In windows of 1,700 to 2,000 draws: 4.98 ms off (5 windows, 1,758 draws) against 5.22 (19 windows, 1,875 draws); 2,000 to 2,300 draws: 6.06 (4 windows, 2,276 draws) against 5.25 (24 windows, 2,158 draws). The off runs have few windows in either band, so the bands do not separate the two; pooled, p99 falls.
+- **Pipelines on the replay.** `rep1` created 2 pipelines on the replay (26 ms) in a window before the race (its longest frame 21 ms); `rep2` and the check run created none and dropped no draw. With `async_shader_compilation` off the front end creates the same pipelines synchronously where it meets them, so the replay waits only where the render thread would have waited.
+
+The gate's render thread target was a drop of at least 0.4 ms at 1,800 draws: −0.39 ms misses it by 0.01 ms, with the capture costing 0.25 ms of it plus the marking. The submit thread target (2.5 ms) and p99 hold. Increment 3 (the capture to about 0.1 ms, 17.6) is where the rest of the render thread's saving lies.
