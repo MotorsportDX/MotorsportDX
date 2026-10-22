@@ -344,6 +344,10 @@ path, and the render targets stay on RTV.
   memory, and the first access by the CPU to a resolved range waits for the
   readback of the latest resolve to it. On RTV without `-Native` it is off unless
   passed as a cvar; the ROV path never uses it.
+- `-Native` also sets `native_rt_surfaces=2` (stage N3,
+  [section 16.11](analysis/d3d-hle.md)): a resolve whose source one host render
+  target holds reads it directly instead of its dump into the EDRAM buffer. Off on
+  RTV without `-Native` unless passed as a cvar; never on the ROV path.
 - `host_render_queue_capacity` (default 256) is the queue length at which a new
   span of the ring merges into the last record when that is a span, so the guest
   never waits for the queue. Calls (`CallInThread`) are not bounded.
