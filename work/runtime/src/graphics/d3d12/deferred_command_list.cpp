@@ -270,11 +270,18 @@ void DeferredCommandList::Execute(ID3D12GraphicsCommandList* command_list,
         command_list->SetMarker(1, label_name, static_cast<UINT>(args.label_length + 1));
       } break;
       case Command::kDeferredConstants: {
-        if (constant_shadow_.empty()) {
-          constant_shadow_.resize(deferred_constants::kSlotCount * 4);
+        if (!register_shadow_) {
+          register_shadow_ = std::make_unique<RegisterFile>();
         }
         deferred_constants::Replay(reinterpret_cast<const uint8_t*>(stream),
-                                   constant_shadow_.data());
+                                   register_shadow_->values + deferred_constants::kFirstRegister);
+      } break;
+      case Command::kDrawBackEnd: {
+        if (!register_shadow_) {
+          register_shadow_ = std::make_unique<RegisterFile>();
+        }
+        command_processor_.ReplayDrawBackEnd(reinterpret_cast<const uint8_t*>(stream),
+                                             *register_shadow_, back_end_list_state_);
       } break;
       default:
         assert_unhandled_case(header.command);

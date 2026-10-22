@@ -431,6 +431,9 @@ uint32_t CommandProcessor::ReadRegisterValue(uint32_t index) const {
 
 void CommandProcessor::WriteRegister(uint32_t index, uint32_t value) {
   RegisterFile& regs = *register_file_;
+  if (track_register_writes_ && index < RegisterFile::kRegisterCount) {
+    written_registers_[index >> 6] |= uint64_t(1) << (index & 63);
+  }
   if (index >= RegisterFile::kRegisterCount) {
     auto [it, inserted] = extended_register_values_.insert_or_assign(index, value);
     (void)it;

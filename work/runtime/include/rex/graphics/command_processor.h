@@ -198,6 +198,9 @@ class CommandProcessor {
         !((register_write_hooked_[index >> 6] >> (index & 63)) & 1)) {
       // Volatile for the WAIT_REG_MEM loop.
       const_cast<volatile uint32_t&>(register_file_->values[index]) = value;
+      if (track_register_writes_) {
+        written_registers_[index >> 6] |= uint64_t(1) << (index & 63);
+      }
     } else {
       WriteRegister(index, value);
     }
@@ -363,6 +366,12 @@ class CommandProcessor {
   static constexpr size_t kRegisterBitWords = (RegisterFile::kRegisterCount + 63) / 64;
   uint64_t register_write_hooked_[kRegisterBitWords] = {};
   uint64_t register_unknown_[kRegisterBitWords] = {};
+  // The registers written since the backend last took them (the draw back
+  // end of N4 step 2, docs/analysis/d3d-hle.md 17.6), while
+  // track_register_writes_ is set: WriteRegisterFast and WriteRegister mark
+  // them; a backend that changes the register file directly marks its own.
+  bool track_register_writes_ = false;
+  uint64_t written_registers_[kRegisterBitWords] = {};
 
   uint64_t bin_select_ = 0xFFFFFFFFull;
   uint64_t bin_mask_ = 0xFFFFFFFFull;

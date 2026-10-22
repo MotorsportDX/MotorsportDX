@@ -433,6 +433,39 @@ inline void AddDeferredConstantReplay(uint64_t tsc, uint32_t checks, uint32_t mi
   }
 }
 
+// The draw back end's capture (d3d12_draw_back_end, N4 step 2 of d3d-hle.md,
+// 17.6), on the thread that runs the draws: commands written, their bytes
+// without the check's, the context registers, fetch constant slots and bytes
+// of the front half's groups in them, and the time stamp counter ticks of the
+// capture.
+struct alignas(64) BackEndCaptureCounts {
+  uint64_t captures = 0, bytes = 0, context_dwords = 0, written_dwords = 0, fetch_slots = 0,
+           group_bytes = 0, tsc = 0;
+};
+inline BackEndCaptureCounts back_end_capture;
+// written_dwords: the context registers written since the previous capture,
+// before the back end's set and the change filter.
+inline void CountBackEndCapture(uint32_t bytes, uint32_t context_dwords, uint32_t written_dwords,
+                                uint32_t fetch_slots, uint32_t group_bytes, uint64_t tsc) {
+  if (!Get()) return;
+  ++back_end_capture.captures;
+  back_end_capture.bytes += bytes;
+  back_end_capture.context_dwords += context_dwords;
+  back_end_capture.written_dwords += written_dwords;
+  back_end_capture.fetch_slots += fetch_slots;
+  back_end_capture.group_bytes += group_bytes;
+  back_end_capture.tsc += tsc;
+}
+// Its replay (the thread that replays the deferred command list): commands,
+// time stamp counter ticks without the check, draws checked, mismatches by kind
+// (pipeline, viewport, scissor, fixed function, system constants, samplers)
+// and comparisons changed on purpose.
+struct alignas(64) BackEndReplayCounts {
+  std::atomic<uint64_t> replays{0}, tsc{0}, checks{0}, perturbed{0};
+  std::atomic<uint64_t> mismatches[6]{};
+};
+inline BackEndReplayCounts back_end_replay;
+
 // The binding check (d3d12_reuse_draw_bindings_check): bindings kept in sync
 // compared with fresh keys, mismatches, comparisons changed on purpose.
 inline std::atomic<uint64_t> binding_checks{0}, binding_check_mismatches{0},
@@ -714,6 +747,28 @@ inline void OnSwap() {
                   << ",\"perturbed\":"
                   << constant_replay.perturbed.exchange(0, std::memory_order_relaxed) << '}';
     draw_constants = DrawConstantCounts{};
+    const uint64_t back_end_tsc = back_end_replay.tsc.exchange(0, std::memory_order_relaxed);
+    state->output << ",\"back_end\":{\"captures\":" << back_end_capture.captures
+                  << ",\"bytes\":" << back_end_capture.bytes
+                  << ",\"context_dwords\":" << back_end_capture.context_dwords
+                  << ",\"written_dwords\":" << back_end_capture.written_dwords
+                  << ",\"fetch_slots\":" << back_end_capture.fetch_slots
+                  << ",\"group_bytes\":" << back_end_capture.group_bytes << ",\"capture_ms\":"
+                  << (tsc_per_ms > 0 ? double(back_end_capture.tsc) / tsc_per_ms : 0.0)
+                  << ",\"replays\":"
+                  << back_end_replay.replays.exchange(0, std::memory_order_relaxed)
+                  << ",\"replay_ms\":"
+                  << (tsc_per_ms > 0 ? double(back_end_tsc) / tsc_per_ms : 0.0)
+                  << ",\"checks\":" << back_end_replay.checks.exchange(0, std::memory_order_relaxed)
+                  << ",\"perturbed\":"
+                  << back_end_replay.perturbed.exchange(0, std::memory_order_relaxed)
+                  << ",\"mismatches\":[";
+    for (size_t i = 0; i < 6; ++i) {
+      state->output << (i ? "," : "")
+                    << back_end_replay.mismatches[i].exchange(0, std::memory_order_relaxed);
+    }
+    state->output << "]}";
+    back_end_capture = BackEndCaptureCounts{};
   }
   state->output << ",\"vblanks\":{\"grid\":" << vblanks[0].exchange(0, std::memory_order_relaxed)
                 << ",\"late\":" << vblanks[1].exchange(0, std::memory_order_relaxed)

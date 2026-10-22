@@ -412,6 +412,30 @@ class D3D12CommandProcessor : public CommandProcessor {
   // REX_N4_REGISTER_DELTA: counts the context registers changed since the
   // previous draw (perf trace, d3d-hle.md 17.5).
   void CountContextRegisterDelta();
+  // d3d12_draw_back_end (draw_back_end.cpp, d3d-hle.md 17.6): the capture of a
+  // draw's back-end inputs into the deferred command list, and its replay.
+  struct DrawBackEndCapture {
+    D3D12Shader::D3D12Translation* vertex_translation;
+    D3D12Shader::D3D12Translation* pixel_translation;
+    const PrimitiveProcessor::ProcessingResult* primitive;
+    uint32_t bound_render_target_bits;
+    const uint32_t* bound_render_target_formats;
+    uint32_t flags;
+    float jitter[2];
+    // For the check.
+    void* pipeline_handle;
+    const draw_util::ViewportInfo* viewport;
+    const draw_util::Scissor* scissor;
+  };
+  void InitializeDrawBackEnd();
+  void CaptureDrawBackEnd(const DrawBackEndCapture& capture);
+
+ public:
+  // Called by DeferredCommandList::Execute for a kDrawBackEnd command.
+  void ReplayDrawBackEnd(const uint8_t* arguments, RegisterFile& shadow,
+                         draw_back_end::ListState& list) const;
+
+ private:
   bool UpdateConstantBuffersDeferred(const D3D12Shader* vertex_shader,
                                      const D3D12Shader* pixel_shader,
                                      uint32_t root_parameter_float_constants_vertex,
@@ -1024,6 +1048,23 @@ class D3D12CommandProcessor : public CommandProcessor {
   deferred_constants::Pending pending_constants_;
   // REX_N4_REGISTER_DELTA: the context registers at the previous draw.
   std::vector<uint32_t> context_register_snapshot_;
+  // The constant registers' pending mask is kept for d3d12_deferred_constants
+  // or d3d12_draw_back_end.
+  bool track_constants_ = false;
+  // d3d12_draw_back_end: 0 off, 1 the capture (increment 1); the check, every
+  // Nth check perturbed (0: none), the checks so far; the context registers and
+  // the front half's groups as last captured into the current list, and
+  // whether the list has a capture yet.
+  uint32_t draw_back_end_ = 0;
+  bool draw_back_end_check_ = false;
+  uint32_t draw_back_end_perturb_ = 0;
+  uint64_t draw_back_end_checks_ = 0;
+  uint32_t back_end_context_[draw_back_end::kContextCount] = {};
+  draw_back_end::ListState back_end_front_ = {};
+  bool back_end_list_captured_ = false;
+  // The replay's system constants, kept across lists like system_constants_
+  // (only the thread that replays the lists touches them).
+  mutable DxbcShaderTranslator::SystemConstants back_end_replay_constants_ = {};
 
   // Whether the latest shared memory and EDRAM buffer binding contains the
   // shared memory UAV rather than the SRV.

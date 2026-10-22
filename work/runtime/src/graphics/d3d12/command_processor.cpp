@@ -1929,6 +1929,7 @@ bool D3D12CommandProcessor::SetupContext() {
   ID3D12CommandQueue* direct_queue = provider.GetDirectQueue();
 
   InitializeDeferredConstants();
+  InitializeDrawBackEnd();
   if (REXCVAR_GET(d3d12_submit_thread)) {
     submit_shutdown_ = false;
     submit_async_swap_ = REXCVAR_GET(d3d12_submit_thread_async_swap);
@@ -2904,7 +2905,7 @@ void D3D12CommandProcessor::ShutdownContext() {
 
 void D3D12CommandProcessor::WriteRegister(uint32_t index, uint32_t value) {
   CommandProcessor::WriteRegister(index, value);
-  if (deferred_constants_) {
+  if (track_constants_) {
     pending_constants_.MarkWritten(index, index);
   }
 
@@ -2974,7 +2975,7 @@ void D3D12CommandProcessor::WriteRegistersFromMem(uint32_t start_index, uint32_t
   if (start_index >= XE_GPU_REG_SHADER_CONSTANT_000_X &&
       end_index <= XE_GPU_REG_SHADER_CONSTANT_511_W) {
     memory::copy_and_swap(register_file_->values + start_index, base, num_registers);
-    if (deferred_constants_) {
+    if (track_constants_) {
       pending_constants_.MarkWritten(start_index, end_index);
     }
     if (frame_open_) {
@@ -3004,7 +3005,7 @@ void D3D12CommandProcessor::WriteRegistersFromMem(uint32_t start_index, uint32_t
       end_index <= XE_GPU_REG_SHADER_CONSTANT_LOOP_31) {
     memory::copy_and_swap(register_file_->values + start_index, base, num_registers);
     cbuffer_binding_bool_loop_.up_to_date = false;
-    if (deferred_constants_) {
+    if (track_constants_) {
       pending_constants_.MarkWritten(start_index, end_index);
     }
     return;
@@ -3034,7 +3035,7 @@ void D3D12CommandProcessor::WriteRegistersFromMem(uint32_t start_index, uint32_t
     if (!changed_textures) {
       return;
     }
-    if (deferred_constants_) {
+    if (track_constants_) {
       pending_constants_.MarkWritten(XE_GPU_REG_SHADER_CONSTANT_FETCH_00_0 + first_changed,
                                      XE_GPU_REG_SHADER_CONSTANT_FETCH_00_0 + last_changed);
     }
@@ -3054,7 +3055,7 @@ void D3D12CommandProcessor::WriteRegistersFromMem(uint32_t start_index, uint32_t
       end_index <= XE_GPU_REG_SHADER_CONSTANT_FETCH_31_5) {
     memory::copy_and_swap(register_file_->values + start_index, base, num_registers);
     cbuffer_binding_fetch_.up_to_date = false;
-    if (deferred_constants_) {
+    if (track_constants_) {
       pending_constants_.MarkWritten(start_index, end_index);
     }
     uint32_t first_fetch_dword = start_index - XE_GPU_REG_SHADER_CONSTANT_FETCH_00_0;
@@ -3806,9 +3807,14 @@ bool D3D12CommandProcessor::IssueDraw(xenos::PrimitiveType primitive_type, uint3
     RegisterFile* register_file = nullptr;
     uint32_t index = 0;
     uint32_t value = 0;
+    // The written register mask of d3d12_draw_back_end, or nullptr.
+    uint64_t* written_registers = nullptr;
     ~RegisterRestore() {
       if (register_file) {
         register_file->values[index] = value;
+        if (written_registers) {
+          written_registers[index >> 6] |= uint64_t(1) << (index & 63);
+        }
       }
     }
   } surface_info_restore;
@@ -3864,6 +3870,11 @@ bool D3D12CommandProcessor::IssueDraw(xenos::PrimitiveType primitive_type, uint3
         rb_surface_info.surface_pitch *= 2;
         rb_surface_info.msaa_samples = next_msaa;
         register_file_->values[XE_GPU_REG_RB_SURFACE_INFO] = rb_surface_info.value;
+        if (track_register_writes_) {
+          surface_info_restore.written_registers = written_registers_;
+          written_registers_[XE_GPU_REG_RB_SURFACE_INFO >> 6] |=
+              uint64_t(1) << (XE_GPU_REG_RB_SURFACE_INFO & 63);
+        }
       }
       uniform_draw.scale_x = uniform_draw_scale_x;
       uniform_draw.scale_y = uniform_draw_scale_y;
@@ -4048,11 +4059,13 @@ bool D3D12CommandProcessor::IssueDraw(xenos::PrimitiveType primitive_type, uint3
   // render target: a shift of the image through ndc_offset, on this draw's
   // copy of the viewport info only.
   float jitter[2];
-  if (post_passes_ &&
+  const bool jitter_applied =
+      post_passes_ &&
       post_passes_->DrawJitter(regs, vertex_shader->ucode_data_hash(), normalized_depth_control,
                                primitive_type == xenos::PrimitiveType::kRectangleList ||
                                    uniform_draw_set,
-                               jitter)) {
+                               jitter);
+  if (jitter_applied) {
     post_pass::AddJitterToNdcOffset(jitter, viewport_info.xy_extent, viewport_info.ndc_offset);
     if (draw_list_entry.trace) {
       std::memcpy(&draw_list_entry.values[15], &jitter[0], sizeof(float));
@@ -4085,6 +4098,34 @@ bool D3D12CommandProcessor::IssueDraw(xenos::PrimitiveType primitive_type, uint3
     return false;
   }
   perf_trace::ZoneEnd(perf_trace::Zone::kDrawBindings, perf_start);
+  if (draw_back_end_) {
+    // The back end's inputs into the deferred command list (N4 step 2,
+    // increment 1, d3d-hle.md 17.6).
+    namespace be = draw_back_end;
+    const be::SystemConstantInputs& inputs = system_constant_inputs_;
+    DrawBackEndCapture capture;
+    capture.vertex_translation = vertex_shader_translation;
+    capture.pixel_translation = pixel_shader_translation;
+    capture.primitive = &primitive_processing_result;
+    capture.bound_render_target_bits = bound_depth_and_color_render_target_bits;
+    capture.bound_render_target_formats = bound_depth_and_color_render_target_formats;
+    capture.flags = (memexport_used ? be::kFlagMemexport : 0) |
+                    (convert_z_to_float24 ? be::kFlagConvertZToFloat24 : 0) |
+                    (host_render_targets_used ? be::kFlagHostRenderTargets : 0) |
+                    (inputs.edram_rov_used ? be::kFlagEdramRov : 0) |
+                    (inputs.gamma_render_target_as_unorm16 ? be::kFlagGammaAsUnorm16 : 0) |
+                    (inputs.fixed16_truncated_to_minus_1_to_1 ? be::kFlagFixed16Truncated : 0) |
+                    (inputs.rov_occlusion_query ? be::kFlagRovOcclusionQuery : 0) |
+                    (jitter_applied ? be::kFlagJitter : 0) |
+                    (uniform_draw_scale_x << be::kFlagUniformScaleShift) |
+                    (uniform_draw_scale_y << (be::kFlagUniformScaleShift + 2));
+    capture.jitter[0] = jitter_applied ? jitter[0] : 0.0f;
+    capture.jitter[1] = jitter_applied ? jitter[1] : 0.0f;
+    capture.pipeline_handle = pipeline_handle;
+    capture.viewport = &viewport_info;
+    capture.scissor = &scissor;
+    CaptureDrawBackEnd(capture);
+  }
   // Must not call anything that can change the descriptor heap from now on!
 
   // Ensure vertex buffers are resident.
@@ -5091,9 +5132,10 @@ bool D3D12CommandProcessor::BeginSubmission(bool is_guest_command) {
   if (!submission_open_) {
     submission_open_ = true;
     submission_draws_ = 0;
-    // Each submission's deferred command list captures every constant register
-    // it reads (d3d12_deferred_constants).
+    // Each submission's deferred command list captures every register it reads
+    // (d3d12_deferred_constants, d3d12_draw_back_end).
     pending_constants_.SetAll();
+    back_end_list_captured_ = false;
 
     // Start a new deferred command list - will submit it to the real one in the
     // end of the submission (when async pipeline creation requests are

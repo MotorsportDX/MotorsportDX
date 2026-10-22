@@ -14,11 +14,14 @@
 #include <algorithm>
 #include <cstdint>
 #include <cstring>
+#include <memory>
 #include <vector>
 
 #include <rex/assert.h>
 #include <rex/literals.h>
 #include <rex/math.h>
+#include <rex/graphics/d3d12/draw_back_end.h>
+#include <rex/graphics/register_file.h>
 #include <rex/ui/d3d12/d3d12_api.h>
 
 namespace rex::graphics::d3d12 {
@@ -450,6 +453,11 @@ class DeferredCommandList {
   void* DeferredConstants(size_t arguments_size_bytes) {
     return WriteCommand(Command::kDeferredConstants, arguments_size_bytes);
   }
+  // d3d12_draw_back_end (draw_back_end.h): reserves the arguments of a draw's
+  // back-end capture, applied when the list is replayed.
+  void* DrawBackEnd(size_t arguments_size_bytes) {
+    return WriteCommand(Command::kDrawBackEnd, arguments_size_bytes);
+  }
 
   void InsertDebugMarker(const char* label_name) {
     size_t label_len = std::strlen(label_name);
@@ -504,6 +512,7 @@ class DeferredCommandList {
     kEndDebugMarker,
     kInsertDebugMarker,
     kDeferredConstants,
+    kDrawBackEnd,
   };
 
   struct CommandHeader {
@@ -655,11 +664,12 @@ class DeferredCommandList {
   // uintmax_t to ensure uint64_t and pointer alignment of all structures.
   std::vector<uintmax_t> command_stream_;
 
-  // The replay's copy of the constant registers for kDeferredConstants
-  // (deferred_constants::kSlotCount * 4 dwords), allocated at the first use.
-  // Each list captures every register it reads, so the copy carries nothing
-  // from one list to the next.
-  std::vector<uint32_t> constant_shadow_;
+  // The replay's copy of the registers for kDeferredConstants and
+  // kDrawBackEnd, allocated at the first use, and the front half's results of
+  // the last kDrawBackEnd. Each list captures every register and result it
+  // reads, so they carry nothing from one list to the next.
+  std::unique_ptr<RegisterFile> register_shadow_;
+  draw_back_end::ListState back_end_list_state_ = {};
 };
 
 }  // namespace rex::graphics::d3d12
