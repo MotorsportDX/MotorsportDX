@@ -58,6 +58,11 @@ REXCVAR_DEFINE_INT32(native_rt_surfaces_check, 0, "GPU/D3D12",
                      "bytes (docs/analysis/d3d-hle.md 16.9)")
     .range(0, 100000)
     .lifecycle(rex::cvar::Lifecycle::kRequiresRestart);
+REXCVAR_DEFINE_BOOL(native_rt_surfaces_unscaled_msaa, false, "GPU/D3D12",
+                    "Diagnostic: with native_rt_surfaces bit 2, also resolve the unscaled fast "
+                    "copies of multisampled sources from the host render target (they differ in "
+                    "the byte check, docs/analysis/d3d-hle.md 16.11)")
+    .lifecycle(rex::cvar::Lifecycle::kRequiresRestart);
 REXCVAR_DECLARE(int32_t, native_rt_resolve_check);
 
 namespace rex::graphics::d3d12 {
@@ -5971,10 +5976,11 @@ bool D3D12RenderTargetCache::FindHostResolveSource(const draw_util::ResolveInfo&
       key.GetPitchTiles() != edram_info.pitch_tiles) {
     return false;
   }
-  // The unscaled fast copies of multisampled sources are older precompiled
-  // shaders whose sample addressing the byte check does not match (16.11):
-  // they keep the dump.
-  if (bitwise && key.msaa_samples != xenos::MsaaSamples::k1X && !IsDrawResolutionScaled()) {
+  // The unscaled fast copies of 4x MSAA depth differ from the dump in the byte
+  // check by a sample's depth, for a cause not found (16.11): they keep the
+  // dump unless the diagnostic native_rt_surfaces_unscaled_msaa is on.
+  if (bitwise && key.msaa_samples != xenos::MsaaSamples::k1X && !IsDrawResolutionScaled() &&
+      !REXCVAR_GET(native_rt_surfaces_unscaled_msaa)) {
     return false;
   }
   uint32_t format;
@@ -6178,6 +6184,22 @@ bool D3D12RenderTargetCache::DispatchHostResolve(
   host_check.host_offset = source.host_offset;
   host_check.width = width;
   host_check.height = height;
+  {
+    const draw_util::ResolveEdramInfo& edram_info = host_check.is_depth
+                                                        ? resolve_info.depth_edram_info
+                                                        : resolve_info.color_edram_info;
+    const RenderTargetKey key = source.render_target->key();
+    host_check.where = fmt::format(
+        "edram base {} pitch {}, offset {}x{} size {}x{}, render target base {} pitch {}, "
+        "dest pitch {} height {}, scaled {}",
+        edram_info.base_tiles, edram_info.pitch_tiles,
+        resolve_info.coordinate_info.edram_offset_x_div_8 << 3,
+        resolve_info.coordinate_info.edram_offset_y_div_8 << 3,
+        resolve_info.coordinate_info.width_div_8 << 3, resolve_info.height_div_8 << 3,
+        key.base_tiles, key.GetPitchTiles(), resolve_info.copy_dest_coordinate_info.pitch_aligned_div_32 << 5,
+        resolve_info.copy_dest_coordinate_info.height_aligned_div_32 << 5,
+        uint32_t(IsDrawResolutionScaled()));
+  }
   D3D12_RESOURCE_DESC readback_desc;
   ui::d3d12::util::FillBufferResourceDesc(readback_desc, dest_length, D3D12_RESOURCE_FLAG_NONE);
   for (auto& readback : host_check.readback) {
@@ -6245,8 +6267,27 @@ void D3D12RenderTargetCache::PollHostResolveChecks(uint64_t completed_submission
       }
       ++checked_out;
       perf_trace::CountHostResolveCheckFormat(it->is_depth, it->format);
+      if (!differing && it->msaa && REXCVAR_GET(native_rt_surfaces_unscaled_msaa)) {
+        REXGPU_INFO("native_rt_surfaces check: resolve to {:08X} from host format {} equal (msaa "
+                    "log2 {}, sample select {}, {})",
+                    it->dest, it->format, it->msaa, it->sample_select, it->where);
+      }
       if (differing) {
         ++mismatched_out;
+        // Where each side's first differing word appears on the other side, in
+        // words from the first difference.
+        int64_t copied_at_host = INT64_MIN, host_at_copied = INT64_MIN;
+        for (uint64_t i = 0; i < (it->length >> 2); ++i) {
+          if (copied_at_host == INT64_MIN && data[1][i] == copied) {
+            copied_at_host = int64_t(i) - int64_t(first >> 2);
+          }
+          if (host_at_copied == INT64_MIN && data[0][i] == from_host) {
+            host_at_copied = int64_t(i) - int64_t(first >> 2);
+          }
+        }
+        examples += fmt::format("; copied word found in the host result at {}, host word in the "
+                                "copied result at {} (words); {}",
+                                copied_at_host, host_at_copied, it->where);
         REXGPU_WARN(
             "native_rt_surfaces check: resolve to {:08X} from host format {} differs in {} "
             "words, first at +{:X}: copied {:08X}, from the host render target {:08X} (msaa "

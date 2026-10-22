@@ -18,6 +18,7 @@
 #include <deque>
 #include <functional>
 #include <memory>
+#include <string>
 #include <unordered_map>
 #include <utility>
 #include <vector>
@@ -230,6 +231,7 @@ class D3D12RenderTargetCache final : public RenderTargetCache {
     uint32_t dest = 0, format = 0;
     bool is_depth = false;
     uint32_t msaa = 0, sample_select = 0, host_offset = 0, width = 0, height = 0;
+    std::string where;
   };
   std::vector<HostResolveCheck> host_resolve_checks_;
   ID3D12RootSignature* resolve_texture_root_signature_ = nullptr;

@@ -84,7 +84,7 @@ With `native_rt_resolve=true` (off by default) each window has a `native_rt_reso
 
 ### Resolves from the host render target (native_rt_surfaces bit 2)
 
-With bit 2 of `native_rt_surfaces` each window has a `host_resolve` object: `found` (resolves that could read their source from one host render target), `done` (those that did, outside check frames), `other` (copy resolves that could not), and with `native_rt_surfaces_check=N` `checks`, `mismatches` (each also logs a warning with the first differing words) and `check_formats` (checks by the source format: color formats 0 to 15, then D24S8 and D24FS8). The design is in [d3d-hle.md 16.11](../analysis/d3d-hle.md).
+With bit 2 of `native_rt_surfaces` each window has a `host_resolve` object: `found` (resolves that could read their source from one host render target), `done` (those that did, outside check frames), `other` (copy resolves that could not), and with `native_rt_surfaces_check=N` `checks`, `mismatches` (each also logs a warning with the first differing words) and `check_formats` (checks by the source format: color formats 0 to 15, then D24S8 and D24FS8). The design is in [d3d-hle.md 16.11](../analysis/d3d-hle.md). The diagnostic `native_rt_surfaces_unscaled_msaa=true` also resolves the unscaled fast copies of multisampled sources from the host render target, which bit 2 otherwise leaves to the dump; its mismatch warnings add the EDRAM base and pitch, the resolve rectangle, the render target's base and pitch, the destination size, and where each side's first differing word appears on the other side, and the checks of multisampled sources that match log an info line.
 
 ### Ownership transfers read or not (native_rt_surfaces bit 1)
 
