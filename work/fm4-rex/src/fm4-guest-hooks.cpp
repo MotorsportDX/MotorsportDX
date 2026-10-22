@@ -9,6 +9,11 @@
 #include "fm4-guest-hooks.h"
 #include "fm4-diagnostic-state.h"
 
+#include <rex/memory.h>
+
+#include <cstdio>
+#include <cstdlib>
+
 using namespace fm4::hooks;
 
 // A PM4 writer that only fm4-d3d-trace.cpp counts.
@@ -297,3 +302,36 @@ REX_EXTERN(__imp__sub_8273B290);
 REX_HOOK_RAW(sub_8273B290) { TracePhotoCopy(ctx, base, __imp__sub_8273B290); }
 REX_EXTERN(__imp__sub_82BB96E0);
 REX_HOOK_RAW(sub_82BB96E0) { TracePhotoEncoder(ctx, base, __imp__sub_82BB96E0); }
+
+// CTileBuffer::SetScenario (this, scenario). FM4_ONE_PASS_MSAA=2 or 4 makes
+// the tiling scenario of that sample count (1, two tiles with 2x MSAA; 0,
+// three tiles with 4x) one tile of 1280x720 before the title first reads the
+// table at 0x82D883C8 (stride 0x4D0: the sample count at +4, the tile count
+// at +8 and +16, the tile rectangles from +24), so that the races render in
+// one pass with MSAA: increment 4 of stage N3 (docs/analysis/d3d-hle.md 16.17).
+// A probe of the native path only; RTV and -Rov run the title's table.
+REX_EXTERN(__imp__sub_82883948);
+REX_HOOK_RAW(sub_82883948) {
+  static const bool patched = [base]() {
+    const char* value = std::getenv("FM4_ONE_PASS_MSAA");
+    const uint32_t samples = value ? uint32_t(std::atoi(value)) : 0;
+    if (samples != 2 && samples != 4) {
+      return false;
+    }
+    const uint32_t entry = 0x82D883C8u + (samples == 2 ? 1u : 0u) * 0x4D0u;
+    auto store = [base](uint32_t address, uint32_t word) {
+      rex::memory::store_and_swap<uint32_t>(base + address, word);
+    };
+    store(entry + 8, 1);
+    store(entry + 16, 1);
+    const uint32_t rectangle[4] = {0, 0, 1280, 720};
+    for (uint32_t i = 0; i < 12; ++i) {
+      store(entry + 24 + 4 * i, i < 4 ? rectangle[i] : 0);
+    }
+    std::fprintf(stderr, "FM4 one pass: tiling scenario %u is one 1280x720 tile with %ux MSAA\n",
+                 samples == 2 ? 1u : 0u, samples);
+    return true;
+  }();
+  (void)patched;
+  __imp__sub_82883948(ctx, base);
+}

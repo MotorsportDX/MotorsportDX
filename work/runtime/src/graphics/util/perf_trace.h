@@ -121,6 +121,10 @@ struct State {
   // Ownership transfers between host render targets (d3d-hle.md 16.12), also
   // those inside resolves.
   double gpu_transfer_ms = 0, gpu_transfer_depth_ms = 0;
+  // Resolves by kind (full screen, at least 256x256 at 32bpp, smaller, clears
+  // only): GPU time and count.
+  double gpu_resolve_bucket_ms[4] = {};
+  uint64_t gpu_resolve_bucket_count[4] = {};
   // Samples passing depth/stencil per occlusion snapshot interval, as reported
   // to the guest (after any divisor), to compare paths and calibrate.
   double occlusion_samples[2]{};  // Unawaited, awaited.
@@ -664,6 +668,15 @@ inline void AddGpuFrame(double busy_ms, double resolve_ms, double span_ms, doubl
   state->gpu_transfer_depth_ms += transfer_depth_ms;
 }
 
+inline void AddGpuResolveBuckets(const double* ms, const uint32_t* counts) {
+  State* state = Get();
+  if (!state) return;
+  for (size_t i = 0; i < 4; ++i) {
+    state->gpu_resolve_bucket_ms[i] += ms[i];
+    state->gpu_resolve_bucket_count[i] += counts[i];
+  }
+}
+
 inline ResolveInventory* GetResolveInventory() {
   static ResolveInventory* inventory = []() -> ResolveInventory* {
     if (!Get()) return nullptr;
@@ -943,7 +956,17 @@ inline void OnSwap() {
                 << ",\"resolve_full_ms\":" << state->gpu_resolve_full_ms / gpu_frames
                 << ",\"load_full_ms\":" << state->gpu_load_full_ms / gpu_frames
                 << ",\"transfer_ms\":" << state->gpu_transfer_ms / gpu_frames
-                << ",\"transfer_depth_ms\":" << state->gpu_transfer_depth_ms / gpu_frames;
+                << ",\"transfer_depth_ms\":" << state->gpu_transfer_depth_ms / gpu_frames
+                << ",\"resolve_buckets\":{";
+  {
+    static const char* const kBuckets[] = {"full", "mid", "small", "clear"};
+    for (size_t i = 0; i < 4; ++i) {
+      state->output << (i ? "," : "") << '"' << kBuckets[i] << "\":["
+                    << state->gpu_resolve_bucket_ms[i] / gpu_frames << ','
+                    << double(state->gpu_resolve_bucket_count[i]) / gpu_frames << ']';
+    }
+  }
+  state->output << "}";
   const auto ns_ms = [](uint64_t ns) { return double(ns) / 1e6; };
   state->output << "},\"submit_thread\":{\"jobs\":"
                 << submit_thread_jobs.exchange(0, std::memory_order_relaxed) << ",\"busy_ms\":"

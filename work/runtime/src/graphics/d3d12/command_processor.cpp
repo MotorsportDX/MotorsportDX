@@ -4645,6 +4645,7 @@ bool D3D12CommandProcessor::IssueCopy() {
     const bool result = render_target_cache_->Resolve(*memory_, *shared_memory_, *texture_cache_,
                                                       written_address, written_length);
     EndGpuTimestamp(timestamp);
+    SetGpuTimestampKind(timestamp, GetResolveTimestampKind(written_length));
     if (result) {
       CountResolveDestination(written_address, written_length);
       if (post_passes_) {
@@ -4671,9 +4672,7 @@ bool D3D12CommandProcessor::IssueCopy_ReadbackResolvePath() {
   const bool resolved = render_target_cache_->Resolve(*memory_, *shared_memory_, *texture_cache_,
                                                       written_address, written_length);
   EndGpuTimestamp(timestamp);
-  if (written_length >= 1280 * 720 * 4) {
-    SetGpuTimestampKind(timestamp, GpuTimestampKind::kResolveFull);
-  }
+  SetGpuTimestampKind(timestamp, GetResolveTimestampKind(written_length));
   if (!resolved) {
     return false;
   }
@@ -7302,6 +7301,10 @@ void D3D12CommandProcessor::ReadGpuTimestampFrame() {
     const uint64_t* ticks = gpu_timestamp_mapping_ + size_t(slot) * kGpuTimestampPairsPerFrame * 2;
     uint64_t busy = 0, resolve = 0, load = 0, readback = 0, resolve_full = 0, load_full = 0,
              transfer = 0, transfer_depth = 0;
+    // Resolves by kind: full screen, mid, small, clears only.
+    double bucket_ms[4] = {};
+    uint32_t bucket_count[4] = {};
+    const double tick_ms = 1000.0 / double(gpu_timestamp_frequency_);
     uint64_t first = UINT64_MAX, last = 0;
     for (uint32_t pair = 0; pair < frame.pairs; ++pair) {
       const uint64_t begin = ticks[pair * 2], end = ticks[pair * 2 + 1];
@@ -7322,7 +7325,17 @@ void D3D12CommandProcessor::ReadGpuTimestampFrame() {
         case GpuTimestampKind::kResolveFull:
           resolve += duration;
           resolve_full += duration;
+          bucket_ms[0] += double(duration) * tick_ms;
+          ++bucket_count[0];
           break;
+        case GpuTimestampKind::kResolveMid:
+        case GpuTimestampKind::kResolveSmall:
+        case GpuTimestampKind::kResolveClear: {
+          resolve += duration;
+          const size_t bucket = 1 + size_t(frame.kinds[pair]) - size_t(GpuTimestampKind::kResolveMid);
+          bucket_ms[bucket] += double(duration) * tick_ms;
+          ++bucket_count[bucket];
+        } break;
         case GpuTimestampKind::kTextureLoadFull:
           load += duration;
           load_full += duration;
@@ -7343,6 +7356,7 @@ void D3D12CommandProcessor::ReadGpuTimestampFrame() {
                             double(readback) * ms, double(resolve_full) * ms,
                             double(load_full) * ms, double(transfer) * ms,
                             double(transfer_depth) * ms);
+    perf_trace::AddGpuResolveBuckets(bucket_ms, bucket_count);
   }
   frame = {};
 }
@@ -7350,6 +7364,17 @@ void D3D12CommandProcessor::ReadGpuTimestampFrame() {
 uint32_t D3D12CommandProcessor::BeginTextureLoadTimestamp(bool full_screen) {
   return BeginGpuTimestamp(full_screen ? GpuTimestampKind::kTextureLoadFull
                                        : GpuTimestampKind::kTextureLoad);
+}
+
+D3D12CommandProcessor::GpuTimestampKind D3D12CommandProcessor::GetResolveTimestampKind(
+    uint32_t written_length) {
+  if (written_length >= 1280 * 720 * 4) {
+    return GpuTimestampKind::kResolveFull;
+  }
+  if (written_length >= 256 * 256 * 4) {
+    return GpuTimestampKind::kResolveMid;
+  }
+  return written_length ? GpuTimestampKind::kResolveSmall : GpuTimestampKind::kResolveClear;
 }
 
 uint32_t D3D12CommandProcessor::BeginTransferTimestamp(bool depth) {

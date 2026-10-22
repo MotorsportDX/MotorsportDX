@@ -545,8 +545,15 @@ class D3D12CommandProcessor : public CommandProcessor {
     kResolveFull,
     kTextureLoadFull,
     kTransfer,
-    kTransferDepth
+    kTransferDepth,
+    // Resolves below the full screen, by the bytes written: at least 256x256
+    // at 32bpp, less, and none (clears only).
+    kResolveMid,
+    kResolveSmall,
+    kResolveClear
   };
+  // The resolve's kind by the bytes it wrote.
+  static GpuTimestampKind GetResolveTimestampKind(uint32_t written_length);
   static constexpr uint32_t kGpuTimestampPairsPerFrame = 256;
   static constexpr uint32_t kGpuTimestampInvalid = UINT32_MAX;
   struct GpuTimestampFrame {

@@ -11,7 +11,11 @@
 
 #include <algorithm>
 #include <cmath>
+#include <cstdlib>
 #include <cstring>
+#include <fstream>
+#include <set>
+#include <string>
 #include <iterator>
 #include <tuple>
 #include <unordered_set>
@@ -63,6 +67,11 @@ REXCVAR_DEFINE_INT32(native_rt_surfaces_memory_cap_mb, 0, "GPU",
                      "EDRAM tile")
     .range(0, 65536)
     .lifecycle(rex::cvar::Lifecycle::kRequiresRestart);
+REXCVAR_DEFINE_BOOL(native_rt_surfaces_grow_stress, false, "GPU",
+                    "With native_rt_surfaces bit 8: create every host render target with 8 tile "
+                    "rows and grow it only to the rows asked for, so that every surface grows "
+                    "(a check of the growth, docs/analysis/d3d-hle.md 16.16)")
+    .lifecycle(rex::cvar::Lifecycle::kRequiresRestart);
 REXCVAR_DEFINE_BOOL(native_rt_surfaces_lazy_check, false, "GPU",
                     "With native_rt_surfaces bit 4: after each flush of deferred transfers, "
                     "look for deferred tiles left in what the reader reads, and for deferred "
@@ -80,6 +89,30 @@ REXCVAR_DEFINE_BOOL(direct_host_resolve, true, "GPU",
     .lifecycle(rex::cvar::Lifecycle::kHotReload);
 
 namespace rex::graphics {
+
+namespace {
+// REX_SURFACE_PROBE=<path> (docs/analysis/d3d-hle.md 16.17): one line for
+// every new combination of a draw's render targets - the raw RB_SURFACE_INFO
+// (pitch, sample count, HiZ pitch), the raw RB_DEPTH_INFO and RB_COLOR_INFO
+// of the bound targets with their 12-bit EDRAM bases, the window offset and
+// the window and screen scissors - with the update it first appeared in.
+struct SurfaceProbe {
+  std::ofstream output;
+  std::map<std::string, uint64_t> counts;
+};
+SurfaceProbe* GetSurfaceProbe() {
+  static SurfaceProbe* probe = []() -> SurfaceProbe* {
+    const char* path = std::getenv("REX_SURFACE_PROBE");
+    if (!path || !*path) {
+      return nullptr;
+    }
+    auto* result = new SurfaceProbe;
+    result->output.open(path);
+    return result->output ? result : nullptr;
+  }();
+  return probe;
+}
+}  // namespace
 
 void RenderTargetCache::GetPSIColorFormatInfo(xenos::ColorRenderTargetFormat format,
                                               uint32_t write_mask, float& clamp_rgb_low,
@@ -812,6 +845,30 @@ bool RenderTargetCache::Update(bool is_rasterization_done,
   }
   last_update_overwrite_cutout_ = overwrite_cutout;
   last_update_overwrite_cutout_slots_ = overwrite_cutout_slots;
+  if (SurfaceProbe* probe = GetSurfaceProbe(); probe && !interlock_barrier_only) {
+    std::string line = fmt::format("surface {:08X}", regs[XE_GPU_REG_RB_SURFACE_INFO]);
+    if (depth_and_color_rts_used_bits & 1) {
+      const auto depth_info = regs.Get<reg::RB_DEPTH_INFO>();
+      line += fmt::format(" depth {:08X} base {}", depth_info.value,
+                          depth_info.depth_base | (depth_info.depth_base_bit_11 << 11));
+    }
+    for (uint32_t i = 0; i < xenos::kMaxColorRenderTargets; ++i) {
+      if ((depth_and_color_rts_used_bits >> (1 + i)) & 1) {
+        const auto color_info =
+            regs.Get<reg::RB_COLOR_INFO>(reg::RB_COLOR_INFO::rt_register_indices[i]);
+        line += fmt::format(" color{} {:08X} base {}", i, color_info.value,
+                            color_info.color_base | (color_info.color_base_bit_11 << 11));
+      }
+    }
+    line += fmt::format(" height {} window {:08X} scissor {:08X} {:08X} screen {:08X}", height_used,
+                        regs[XE_GPU_REG_PA_SC_WINDOW_OFFSET],
+                        regs[XE_GPU_REG_PA_SC_WINDOW_SCISSOR_TL],
+                        regs[XE_GPU_REG_PA_SC_WINDOW_SCISSOR_BR],
+                        regs[XE_GPU_REG_PA_SC_SCREEN_SCISSOR_BR]);
+    if (++probe->counts[line] == 1) {
+      probe->output << "update " << render_target_update_clock_ << ' ' << line << std::endl;
+    }
+  }
   // native_rt_surfaces bit 4 (d3d-hle.md 16.12): the deferred tiles that change
   // their owner leave their holder before the claims, and the render target
   // pixels the draw may touch - its scissor, and with a covered rectangle only
@@ -1964,15 +2021,25 @@ RenderTargetCache::RenderTarget* RenderTargetCache::GetOrCreateRenderTarget(Rend
       sized ? std::min(full_rows, (needed_rows + 7) & ~uint32_t(7)) : full_rows;
   const uint32_t tile_height = xenos::kEdramTileHeightSamples >>
                                uint32_t(key.msaa_samples >= xenos::MsaaSamples::k2X);
+  // The growth check: every target starts at 8 rows and grows only to what
+  // is asked for.
+  const bool grow_stress = sized && REXCVAR_GET(native_rt_surfaces_grow_stress);
   auto it_rt = render_targets_.find(key);
   RenderTarget* render_target;
+  if (it_rt == render_targets_.end() && grow_stress) {
+    render_target = CreateSizedRenderTarget(key, std::min(rows, uint32_t(8)));
+    render_targets_.emplace(key, render_target);
+    it_rt = render_targets_.find(key);
+  }
   if (it_rt != render_targets_.end()) {
     render_target = it_rt->second;
     if (render_target && sized && render_target->tile_rows_ < needed_rows) {
       // Grown by at least a half, so that a surface that grows row by row is
       // not copied each time.
-      const uint32_t grown_rows = std::min(
-          full_rows, std::max(rows, (render_target->tile_rows_ * 3 / 2 + 7) & ~uint32_t(7)));
+      const uint32_t grown_rows =
+          grow_stress ? rows
+                      : std::min(full_rows, std::max(rows, (render_target->tile_rows_ * 3 / 2 + 7) &
+                                                               ~uint32_t(7)));
       if (RenderTarget* larger = ResizeRenderTarget(render_target, grown_rows)) {
         REXGPU_DEBUG("Grew the {} from {} to {} lines", key.GetDebugName(),
                      render_target->tile_rows_ * tile_height, grown_rows * tile_height);
