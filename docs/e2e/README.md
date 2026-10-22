@@ -57,7 +57,7 @@ Without network access (Jev unreachable), `--scenario quickrace` drives the same
 | `--out` | required | result directory, outside the repository |
 | `--scenario` | `boot` | fixed timeline: `boot`, `quickrace`, `photo`, `photo_view`, `career`, `career_finish`, `career_progress`, `dlc`, `freeze` |
 | `--profile` | none | copy a user-data root to `<out>\user-data` and run on it; `copy` means the BuildRoot's `user-data`, otherwise a path |
-| `--fast-route` | off | reach the race of `quickrace`, `race`, `photo` or `freeze` through the title's screen events instead of fixed delays ([fast route](#fast-route)) |
+| `--fast-route` | off | reach the race of `quickrace`, `race`, `photo`, `freeze` or `career` through the title's screen events instead of fixed delays and OCR ([fast route](#fast-route)) |
 | `--goal` | none | navigate with Jev instead of a timeline (`quickrace`) |
 | `--goal-timeout` | 360 | seconds allowed for the goal |
 | `--env NAME=value` | none | extra variable for the game process; repeatable |
@@ -126,18 +126,20 @@ FM4 menus ignore the first press after some screens open, and the career and GO 
 
 ## Fast route
 
-`--fast-route` reaches the race of `quickrace`, `race`, `photo` and `freeze` through the title's screen events (`events.txt`, [architecture](architecture.md#screen-events-fm4_test_events_file)) instead of the fixed delays of the menu route. It needs a binary with the events writer (`fm4-test-events.cpp`, 22 October 2026). The race is the same Quick Race: the same screens accept the same defaults (Abarth, 1980 131 Abarth, its default paint, the default difficulty, Bernese Alps, Festival Circuit), so the render scenario, the tiling and the quality are those of the menu route, and `FM4_FIXED_SEED` pins the opponents and the grid as it does there.
+`--fast-route` reaches the race of `quickrace`, `race`, `photo`, `freeze` and `career` through the title's screen events (`events.txt`, [architecture](architecture.md#screen-events-fm4_test_events_file)) instead of the fixed delays and OCR checks of the menu route. It needs a binary with the events writer (`fm4-test-events.cpp`, 22 October 2026). The steps after the race starts are those of the menu route. In `quickrace`, `race`, `photo` and `freeze` the race is the same Quick Race: the same screens accept the same defaults (Abarth, 1980 131 Abarth, its default paint, the default difficulty, Bernese Alps, Festival Circuit), so the render scenario, the tiling and the quality are those of the menu route, and `FM4_FIXED_SEED` pins the opponents and the grid as it does there.
 
 | Part | Menu route | Fast route |
 | --- | --- | --- |
 | Boot | waits for the Microsoft Studios video in OCR, then A per splash screen | A every 2.5 s until the title scene (`120_P_PRE_SPLASH`) is created, then A on the title until the main menu's render scenario (`UI_Homespace`) is pushed |
 | Main menu to GO RACE | three Rights and eight A presses 5 s to 8 s apart | three Rights, a `select:FREE PLAY` check, then A on each screen 1.5 s after the scene before it, repeated when the next scene does not follow (`115_C_BUY_MFRSELECT`, `108_C_BUY_CARSELECT`, `114_C_BUY_BUYCAR_COLOR`, `838_I_PRO_OPTIONS_SET_DIFFICULTY`, `122_F_TRK_LOCSELECT`, `123_F_TRK_TRACKSELECT`, then the race event controller `17_DYNAMIC_LOADING_FREEPLAY`) |
 | Loading to START RACE | a fixed 40 s wait after GO RACE, then A, Down, Up, A | the pre-race menu's scene (`4_C_INI_PRERACE`), 3 s for it to slide in, then Down, Up, A until START RACE creates the HUD |
-| Race phase | starts 19 s after START RACE | starts 9.2 s after the race scenario (`12-Car_Race`) is pushed, where the menu route put it |
+| Race phase | starts 19 s after START RACE, 9.1 s to 9.2 s after the race scenario (`12-Car_Race`) is pushed | starts about 9.3 s after that push |
 
-Measured on 22 October 2026 at 1x and 240 Hz with `FM4_FIXED_SEED=1` ([direct race launch](../analysis/direct-race-launch.md#the-fast-route-22-october-2026)): five `photo` runs of the fast route all reached their goal, in 191.6 s to 193.9 s against 249.9 s to 252.5 s for the menu route, about 57 s less per run. GO RACE comes at 49.7 s instead of 79.5 s and the race at 81.1 s instead of 138.0 s; one `race` run took 137.1 s against 193.4 s. The race phase matched the menu route's three seeded runs: 1,914 to 1,968 draws per frame against 1,902 to 1,956, 212.8 to 220.7 fps against 211.7 to 219.6, the same GPU time per frame and no new error key. The boot to the main menu (24 s, splash videos that A skips only in their last part) and the loading (17 s) stay as they are.
+Measured on 22 October 2026 at 1x and 240 Hz with `FM4_FIXED_SEED=1` ([direct race launch](../analysis/direct-race-launch.md#the-fast-route-22-october-2026)): five `photo` runs of the fast route all reached their goal, in 191.6 s to 193.9 s against 249.9 s to 252.5 s for the menu route, about 57 s less per run. GO RACE comes at 49.7 s instead of 79.5 s and the race at 81.1 s instead of 138.0 s; one `race` run took 137.1 s against 193.4 s, and one `freeze` run 150.5 s against 207.6 s, with `parity.py` passing against the menu route's frozen frame. The race phase matched the menu route's three seeded runs: 1,914 to 1,968 draws per frame against 1,902 to 1,956, 212.8 to 220.7 fps against 211.7 to 219.6, the same GPU time per frame and no new error key. The boot to the main menu (24 s, splash videos that A skips only in their last part) and the loading (17 s) stay as they are.
 
-`matrix.py --fast-route` passes `--fast-route` to the cells that have a fast route (`photo`) and leaves the others (`photo_view`, `career`) on their menus.
+`career` takes the same boot, then A on PLAY CAREER (the main menu's default) until the career home's scene (`102_H_CAR_HOME`), GO RACE > WORLD TOUR until `200_WORLD_TOUR`, A every 3 s until the event's screen (`204_C_RACE_INFO`; the globe that zooms to the event for about 10 s ignores A), `select:START RACE` and A until the event loads (`19_DYNAMIC_LOADING_WORLDTOUR`), then the pre-race menu as in a Quick Race. Its race phase starts 5.1 s after the race scenario (`8-Car_Race`) is pushed, where the menu route's OCR of LAPS put it. The career menus were already driven by OCR, so it saves less: three runs on 23 October 2026 reached their goal in 203.3 s to 209.9 s, against 206.5 s to 215.1 s for the menu route's `career` runs at 1x and 240 Hz of 21 to 23 October 2026, and started the race phase at 83.8 s to 84.6 s instead of 86.2 s to 92.4 s.
+
+`matrix.py --fast-route` passes `--fast-route` to the cells that have a fast route (`photo`, `career`, `freeze`) and leaves the others (`photo_view`, `career_finish`, `career_progress`) on their menus.
 
 ## Goal mode
 
@@ -177,7 +179,7 @@ flowchart TD
 python outputs\FM4-build\e2e\matrix.py --build-root <BuildRoot> --name <name> --tier smoke --baseline <older name>
 ```
 
-Options: `--build-root` and `--name` are required. `--tier` defaults to `smoke`. `--scenarios`, `--hz` and `--repeat` override the tier. `--baseline` compares each cell with the cell of the same Hz and scenario of that gate. `--game-build` (default `game-build`) names the build to snapshot, `--no-snapshot` runs the build directory itself, `--human` keeps the harness throttle, `--look` gives every cell a look as `Build.ps1 -Look` (for example `pc,taa=0` for a baseline without TAA, or `pc,taa_point=1`), and `--env` and `--arg` pass to every cell.
+Options: `--build-root` and `--name` are required. `--tier` defaults to `smoke`. `--scenarios`, `--hz` and `--repeat` override the tier. `--baseline` compares each cell with the cell of the same Hz and scenario of that gate. `--game-build` (default `game-build`) names the build to snapshot, `--no-snapshot` runs the build directory itself, `--human` keeps the harness throttle, `--look` gives every cell a look as `Build.ps1 -Look` (for example `pc,taa=0` for a baseline without TAA, or `pc,taa_point=1`), `--fast-route` runs the cells that have a [fast route](#fast-route) on it, and `--env` and `--arg` pass to every cell.
 
 Cells go to `<BuildRoot>\e2e\<name>-<hz>-<scenario>`, and `<BuildRoot>\e2e\<name>.log` keeps one line per cell. Each cell is compared with `compare.py` when `--baseline` is given. `matrix.py` exits with 1 when any cell's run fails (a crash or a goal not reached). The `compare.py` verdict, and for `freeze` cells the `parity.py` verdict, only go into the cell's line: a FAIL there does not change the exit code.
 
