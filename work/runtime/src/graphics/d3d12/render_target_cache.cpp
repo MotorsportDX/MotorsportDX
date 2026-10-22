@@ -64,6 +64,11 @@ REXCVAR_DEFINE_BOOL(native_rt_surfaces_unscaled_msaa, false, "GPU/D3D12",
                     "the byte check, docs/analysis/d3d-hle.md 16.11)")
     .lifecycle(rex::cvar::Lifecycle::kRequiresRestart);
 REXCVAR_DECLARE(int32_t, native_rt_resolve_check);
+REXCVAR_DEFINE_BOOL(native_rt_surfaces_transfer_inventory, false, "GPU/D3D12",
+                    "Log the ownership transfers every 600 frames: transfers and tiles by "
+                    "destination and source format and sample count, with a separate host "
+                    "depth source and with stencil bit draws (docs/analysis/d3d-hle.md 16.12)")
+    .lifecycle(rex::cvar::Lifecycle::kRequiresRestart);
 
 namespace rex::graphics::d3d12 {
 
@@ -4463,6 +4468,17 @@ void D3D12RenderTargetCache::PerformTransfersAndResolveClears(
     command_processor_.PushTransitionBarrier(
         dest_d3d12_rt.resource(), dest_d3d12_rt.SetResourceState(dest_state), dest_state);
 
+    // The GPU time of the transfers into depth render targets (perf trace gpu
+    // transfer_depth_ms).
+    TransferTimestamp depth_transfer_timestamp{command_processor_};
+    if (!current_transfers.empty() && dest_rt_key.is_depth) {
+      depth_transfer_timestamp.pair = command_processor_.BeginTransferTimestamp(true);
+    }
+    if (!current_transfers.empty() && REXCVAR_GET(native_rt_surfaces_transfer_inventory)) {
+      CountTransferInventory(dest_rt_key, current_transfers,
+                             dest_rt_key.is_depth && !use_stencil_reference_output_);
+    }
+
     if (!current_transfers.empty()) {
       are_current_command_list_render_targets_valid_ = false;
       if (dest_rt_key.is_depth) {
@@ -5042,6 +5058,41 @@ void D3D12RenderTargetCache::PerformTransfersAndResolveClears(
       }
     }
   }
+}
+
+void D3D12RenderTargetCache::CountTransferInventory(RenderTargetKey dest,
+                                                    const std::vector<Transfer>& transfers,
+                                                    bool stencil_bits) {
+  auto describe = [](RenderTargetKey key) {
+    return fmt::format("{}{}x{}", key.is_depth ? "depth " : "color ",
+                       key.is_depth ? uint32_t(key.GetDepthFormat())
+                                    : uint32_t(key.GetColorFormat()),
+                       1u << uint32_t(key.msaa_samples));
+  };
+  for (const Transfer& transfer : transfers) {
+    std::string name = fmt::format(
+        "{} <- {}{}{}", describe(dest), transfer.source ? describe(transfer.source->key()) : "?",
+        transfer.host_depth_source ? " + host depth" : "", stencil_bits ? " + stencil bits" : "");
+    auto& entry = transfer_inventory_[name];
+    ++entry.first;
+    entry.second += transfer.end_tiles - transfer.start_tiles;
+  }
+  const uint64_t frame = command_processor_.GetCurrentFrame();
+  if (frame < transfer_inventory_frame_ + 600) {
+    return;
+  }
+  std::vector<std::pair<std::string, std::pair<uint64_t, uint64_t>>> entries(
+      transfer_inventory_.begin(), transfer_inventory_.end());
+  std::sort(entries.begin(), entries.end(), [](const auto& a, const auto& b) {
+    return a.second.second > b.second.second;
+  });
+  for (const auto& entry : entries) {
+    REXGPU_INFO("Transfer inventory, frames {} to {}: {}: {} transfers, {} tiles",
+                transfer_inventory_frame_, frame, entry.first, entry.second.first,
+                entry.second.second);
+  }
+  transfer_inventory_.clear();
+  transfer_inventory_frame_ = frame;
 }
 
 void D3D12RenderTargetCache::FlushLazyTransfers(const draw_util::ResolveInfo* resolve_info,

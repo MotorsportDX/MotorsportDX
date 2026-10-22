@@ -17,6 +17,7 @@
 #include <cstdint>
 #include <deque>
 #include <functional>
+#include <map>
 #include <memory>
 #include <string>
 #include <unordered_map>
@@ -839,6 +840,11 @@ class D3D12RenderTargetCache final : public RenderTargetCache {
 
   std::vector<Transfer> clear_transfers_[2];
   std::vector<std::pair<RenderTarget*, std::vector<Transfer>>> lazy_flush_groups_;
+  // native_rt_surfaces_transfer_inventory: transfers and tiles by kind.
+  std::map<std::string, std::pair<uint64_t, uint64_t>> transfer_inventory_;
+  uint64_t transfer_inventory_frame_ = 0;
+  void CountTransferInventory(RenderTargetKey dest, const std::vector<Transfer>& transfers,
+                              bool stencil_bits);
 
   // Temporary storage for DXBC building.
   std::vector<uint32_t> built_shader_;

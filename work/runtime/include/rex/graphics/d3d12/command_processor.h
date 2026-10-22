@@ -70,8 +70,9 @@ class D3D12CommandProcessor : public CommandProcessor {
   uint32_t BeginTextureLoadTimestamp(bool full_screen = false);
   void EndTextureLoadTimestamp(uint32_t pair);
   // Ownership transfers between host render targets (perf trace gpu
-  // transfer_ms).
-  uint32_t BeginTransferTimestamp();
+  // transfer_ms), and of them those into depth render targets
+  // (transfer_depth_ms).
+  uint32_t BeginTransferTimestamp(bool depth = false);
   void EndTransferTimestamp(uint32_t pair) { EndGpuTimestamp(pair); }
 
   void ClearCaches() override;
@@ -490,7 +491,8 @@ class D3D12CommandProcessor : public CommandProcessor {
     kReadback,
     kResolveFull,
     kTextureLoadFull,
-    kTransfer
+    kTransfer,
+    kTransferDepth
   };
   static constexpr uint32_t kGpuTimestampPairsPerFrame = 256;
   static constexpr uint32_t kGpuTimestampInvalid = UINT32_MAX;

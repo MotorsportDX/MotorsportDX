@@ -100,7 +100,7 @@ With bit 4 of `native_rt_surfaces` (lazy ownership transfers, [d3d-hle.md 16.12]
 - `violations`, `hazards` and `perturbed`: from `native_rt_surfaces_lazy_check` (deferred tiles left where a draw touches the range it claims; tiles a render target holds for another owner where it may touch beyond its range) and `native_rt_surfaces_lazy_perturb`.
 - `pending`: the tiles still deferred at the end of the window.
 
-The perf trace's `gpu` object has `transfer_ms`: the GPU time of the ownership transfers a frame, including the copies inside resolves.
+The perf trace's `gpu` object has `transfer_ms`: the GPU time of the ownership transfers a frame, including the copies inside resolves. `transfer_depth_ms` is the share of the transfers into depth render targets. `native_rt_surfaces_transfer_inventory=true` logs the transfers every 600 frames: one info line per kind (the destination's and the source's format and sample count, with a separate host depth source, with stencil bit draws) with its transfers and tiles.
 
 ### Ownership transfers read or not (native_rt_surfaces bit 1)
 

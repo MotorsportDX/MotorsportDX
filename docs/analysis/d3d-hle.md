@@ -1025,6 +1025,55 @@ The GPU time of the transfers is a timestamp kind of its own (`gpu.transfer_ms`,
 
 **Step gate.** The `career` check run with the transfer check and its perturbation proof; one 2x race perf run with lazy mode, against RTV's `n3c2xpr`; the freeze parity at 1x and 2x, because the image can change if a flush is missed.
 
+### 16.13 Increment 3, step 2 results: lazy ownership transfers, 23 October 2026
+
+`native_rt_surfaces` bit 4 is built as designed in 16.12 and stays off by default, also in `-Native`. The step gate ran on `I:\FM4-build-usa` at 240 Hz and 2x, with `-Native`'s cvars and `native_rt_surfaces=6`.
+
+The first build (`n3l-*`) had two faults:
+
+- Its check reported 224 violations a frame. A claim lists no transfer for a range wholly inside an overwrite cutout or a resolve clear, so such tiles changed their owner while still recorded as deferred. A later claim would then have copied the holder's stale data over the overwritten tile.
+- It deferred only 193 tiles a frame, because it took the scissor as the region a uniform draw touches.
+
+The second build (`n3m-*`, the commits of this step) fixes both. Deferred tiles leave their holder before every claim, and a uniform draw touches only its covered rectangle.
+
+| Run (`n3m-*`) | Result |
+|---|---|
+| `career` with `native_rt_surfaces_lazy_check` | 0 violations, 0 hazards; race 187.5 fps |
+| `career` with the check and `native_rt_surfaces_lazy_perturb=1000` | 26,630 copies skipped, 26,630 violations reported, 0 hazards |
+| `race` with bit 4, against bit 2 alone (one run each) | 191.5 against 182.9 fps, GPU 5.15 against 5.34 ms a frame (1,658 against 2,404 draws a frame, another race load); transfers 0.306 against 0.328 ms a frame |
+| `parity.py` on `freeze` against RTV's `n3c-freeze-*-rtv`, 1x and 2x | PASS, 25.4% and 30.7% of the image above 4 (22.3% and 31.1% without bit 4) |
+
+In the race, a frame claims 2,216 tiles from another owner:
+
+- 434 are copied at the claim.
+- 1,782 are deferred, and about as many deferrals end in the same frame:
+  - 1,004 (56.3%) end without a copy: 143 claimed back by their holder, 861 inside an overwrite draw's cutout;
+  - 778 end with a copy: 768 before a draw touches them, 9 into a new owner, 1 before a resolve.
+- 14 are deferred again for a new owner.
+
+The copies of tiles fall by about 45%, but the GPU time of the transfers falls by only 0.022 ms a frame, under the 0.05 ms that the main session set for turning the bit on. Bit 4 therefore lands off, for the record, with its check.
+
+**Why the transfers cost 0.33 ms rather than 0.14 to 0.25 ms.** The estimate of 16.10 scaled the transfer time by tiles. A race at 2x with the transfer inventory (`native_rt_surfaces_transfer_inventory`, `n3i-race-2x`, bit 2 without bit 4) shows where the time goes. It has 19.5 transfers and 2,384 tiles a frame, and 0.346 ms of transfers a frame. 0.309 ms (89%) of that goes into depth render targets, which receive only 1,320 of the tiles (55%). This GPU has no stencil reference output from the pixel shader, so every transfer into a depth target draws its depth and then its stencil one bit at a time: nine passes over its rectangles, against one for a colour target. The race's transfers a frame:
+
+| Destination (format, samples) | Source | Transfers | Tiles |
+|---|---|---|---|
+| 16_16, 4x | D24FS8, 1x | 1 | 608 |
+| D24S8, 4x | 2_10_10_10, 1x | 1 | 496 |
+| D24S8, 1x | 2_10_10_10, 1x | 1 | 224 |
+| D24S8, 4x | D24S8, 1x | 1 | 224 |
+| 2_10_10_10_FLOAT, 1x | D24S8, 4x | 4 | 160 |
+| D24S8, 4x | 2_10_10_10_FLOAT, 1x | 2 | 160 |
+| 8_8_8_8, 1x | D24S8, 4x | 2.25 | 152 |
+| D24S8, 4x | D24FS8, 1x | 1 | 112 |
+| D24FS8, 1x | D24S8, 4x, with a host depth source | 1.5 | 64 |
+| 8_8_8_8, 1x | 8_8_8_8, 1x (another surface) | 1 | 62 |
+| 8_8_8_8, 1x | D24FS8, 1x | 0.75 | 40 |
+| 8_8_8_8, 2x | 8_8_8_8, 1x | 0.5 | 40 |
+| D24FS8, 2x | 8_8_8_8, 1x and D24S8, 4x, with a host depth source; D24FS8, 1x | 1.5 | 40 |
+| 32_FLOAT, 1x | 2_10_10_10_FLOAT, 1x | 1 | 2 |
+
+The transfers are the title's reuse of the same EDRAM for depth and colour and for 1x and 4x surfaces, such as a scene depth read back as colour and a colour surface reused as the next pass's depth. The one-pass scene of increment 4 removes most of them with the tiles that alias. What remains costs mainly through the stencil bit passes, which a GPU with stencil reference output (`PSSpecifiedStencilRefSupported`) does not need. Lazy transfers can avoid only the share no one reads, and in the race that is small in time.
+
 ## 17. Stage N4 design, 22 October 2026
 
 Stage N4 (section 9) brings the render thread to the CPU targets of section 10: busy at most 2.5 ms per race frame and p99 at most 5.0 ms at 240 Hz, on the main PC and on the ROG Xbox Ally X. The native path's render thread is busy 3.1 to 3.4 ms per race frame at 1x (15.7, 15.12), so N4 has to remove 0.6 to 0.9 ms. The main session's order: first the descriptor and constant buffer work leaves the render thread, which the profile of 15.10 points at ([CP draw offload](cp-draw-offload.md), options 1 and 2).

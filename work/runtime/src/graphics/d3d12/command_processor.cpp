@@ -7587,7 +7587,7 @@ void D3D12CommandProcessor::ReadGpuTimestampFrame() {
       closed_frame_submissions_[slot] <= submission_completed_) {
     const uint64_t* ticks = gpu_timestamp_mapping_ + size_t(slot) * kGpuTimestampPairsPerFrame * 2;
     uint64_t busy = 0, resolve = 0, load = 0, readback = 0, resolve_full = 0, load_full = 0,
-             transfer = 0;
+             transfer = 0, transfer_depth = 0;
     uint64_t first = UINT64_MAX, last = 0;
     for (uint32_t pair = 0; pair < frame.pairs; ++pair) {
       const uint64_t begin = ticks[pair * 2], end = ticks[pair * 2 + 1];
@@ -7616,6 +7616,9 @@ void D3D12CommandProcessor::ReadGpuTimestampFrame() {
         case GpuTimestampKind::kTransfer:
           transfer += duration;
           break;
+        case GpuTimestampKind::kTransferDepth:
+          transfer_depth += duration;
+          break;
       }
       first = std::min(first, begin);
       last = std::max(last, end);
@@ -7624,7 +7627,8 @@ void D3D12CommandProcessor::ReadGpuTimestampFrame() {
     perf_trace::AddGpuFrame(double(busy) * ms, double(resolve) * ms,
                             last > first ? double(last - first) * ms : 0.0, double(load) * ms,
                             double(readback) * ms, double(resolve_full) * ms,
-                            double(load_full) * ms, double(transfer) * ms);
+                            double(load_full) * ms, double(transfer) * ms,
+                            double(transfer_depth) * ms);
   }
   frame = {};
 }
@@ -7634,8 +7638,9 @@ uint32_t D3D12CommandProcessor::BeginTextureLoadTimestamp(bool full_screen) {
                                        : GpuTimestampKind::kTextureLoad);
 }
 
-uint32_t D3D12CommandProcessor::BeginTransferTimestamp() {
-  return BeginGpuTimestamp(GpuTimestampKind::kTransfer);
+uint32_t D3D12CommandProcessor::BeginTransferTimestamp(bool depth) {
+  return BeginGpuTimestamp(depth ? GpuTimestampKind::kTransferDepth
+                                 : GpuTimestampKind::kTransfer);
 }
 
 void D3D12CommandProcessor::SetGpuTimestampKind(uint32_t pair, GpuTimestampKind kind) {

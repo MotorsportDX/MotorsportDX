@@ -120,7 +120,7 @@ struct State {
   double gpu_resolve_full_ms = 0, gpu_load_full_ms = 0;
   // Ownership transfers between host render targets (d3d-hle.md 16.12), also
   // those inside resolves.
-  double gpu_transfer_ms = 0;
+  double gpu_transfer_ms = 0, gpu_transfer_depth_ms = 0;
   // Samples passing depth/stencil per occlusion snapshot interval, as reported
   // to the guest (after any divisor), to compare paths and calibrate.
   double occlusion_samples[2]{};  // Unawaited, awaited.
@@ -534,7 +534,8 @@ inline void AddOcclusionInterval(bool awaited, uint64_t passed_samples) {
 // first to last GPU timestamp of the frame, including idle gaps.
 inline void AddGpuFrame(double busy_ms, double resolve_ms, double span_ms, double load_ms = 0,
                         double readback_ms = 0, double resolve_full_ms = 0,
-                        double load_full_ms = 0, double transfer_ms = 0) {
+                        double load_full_ms = 0, double transfer_ms = 0,
+                        double transfer_depth_ms = 0) {
   State* state = Get();
   if (!state) return;
   ++state->gpu_frames;
@@ -546,6 +547,7 @@ inline void AddGpuFrame(double busy_ms, double resolve_ms, double span_ms, doubl
   state->gpu_resolve_full_ms += resolve_full_ms;
   state->gpu_load_full_ms += load_full_ms;
   state->gpu_transfer_ms += transfer_ms;
+  state->gpu_transfer_depth_ms += transfer_depth_ms;
 }
 
 inline ResolveInventory* GetResolveInventory() {
@@ -748,7 +750,8 @@ inline void OnSwap() {
                 << ",\"readback_ms\":" << state->gpu_readback_ms / gpu_frames
                 << ",\"resolve_full_ms\":" << state->gpu_resolve_full_ms / gpu_frames
                 << ",\"load_full_ms\":" << state->gpu_load_full_ms / gpu_frames
-                << ",\"transfer_ms\":" << state->gpu_transfer_ms / gpu_frames;
+                << ",\"transfer_ms\":" << state->gpu_transfer_ms / gpu_frames
+                << ",\"transfer_depth_ms\":" << state->gpu_transfer_depth_ms / gpu_frames;
   const auto ns_ms = [](uint64_t ns) { return double(ns) / 1e6; };
   state->output << "},\"submit_thread\":{\"jobs\":"
                 << submit_thread_jobs.exchange(0, std::memory_order_relaxed) << ",\"busy_ms\":"
