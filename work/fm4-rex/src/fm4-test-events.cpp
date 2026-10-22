@@ -18,7 +18,7 @@
 // e2e.py waits for these instead of fixed delays or OCR where a screen has an
 // event (checked steps whose text starts with '@'). The writer only observes:
 // no guest register or memory changes, and nothing is written without the
-// variable. Events are rare (a few hundred per run), so each line is flushed.
+// variable. Events are rare (under a hundred per run), so each line is flushed.
 //
 // The frontend's scene registry (built by sub_824E2790) holds 249 entries of
 // (factory, name) from +4; sub_824B8EE0(registry, id, parent) calls the factory
