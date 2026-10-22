@@ -5107,6 +5107,12 @@ bool D3D12CommandProcessor::BeginSubmission(bool is_guest_command) {
 
   if (is_opening_frame) {
     ReadGpuTimestampFrame();
+    {
+      // native_rt_resolve_check (d3d-hle.md 16.7).
+      uint32_t checked, mismatched;
+      texture_cache_->PollResolveTextureChecks(submission_completed_, checked, mismatched);
+      perf_trace::CountNativeResolveChecks(checked, mismatched);
+    }
     frame_open_ = true;
 
     // Reset bindings that depend on the data stored in the pools.

@@ -47,6 +47,13 @@ push_const_begin_xe(b0, space0)
         uint xe_resolve_copy_mask;
       #endif
     #endif
+    #ifdef XE_RESOLVE_TEXTURE
+      // Resolve into a host texture (resolve_texture_32bpp): bits 0:2 the
+      // texture's endianness, bit 3 the host format (0 R8G8B8A8, 1
+      // R10G10B10A2), bit 4 a bitwise copy of the samples (as the fast resolve
+      // copies) instead of a format conversion.
+      uint xe_resolve_texture_info;
+    #endif
   #endif
 push_const_end_xe
 

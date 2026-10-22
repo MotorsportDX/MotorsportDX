@@ -3614,6 +3614,10 @@
       "provenance": "runtime-fork"
     },
     {
+      "path": "work/runtime/src/graphics/shaders/fm4-resolve/resolve_texture_32bpp.cs.xesl",
+      "provenance": "runtime-fork"
+    },
+    {
       "path": "work/runtime/src/graphics/shaders/fm4-resolve/resolve_full_64bpp.cs.xesl",
       "provenance": "runtime-fork"
     },

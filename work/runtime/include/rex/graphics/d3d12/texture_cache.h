@@ -195,6 +195,36 @@ class D3D12TextureCache final : public TextureCache {
                             uint32_t source_width, uint32_t source_height,
                             WriteBackCounts& previous_counts_out);
 
+  // Increment 1 of stage N3 (docs/analysis/d3d-hle.md 16.7, native_rt_resolve):
+  // the existing host textures of a resolve destination (both packed_mips
+  // keys, every endianness) that a resolve shader can write straight, so they
+  // need no load from the resolved memory: one level, unsigned, the resolve's
+  // resolution scaling, created with unordered access, not replaced.
+  struct ResolveTextureTarget {
+    void* texture = nullptr;  // D3D12Texture.
+    ID3D12Resource* resource = nullptr;
+    xenos::Endian endianness = xenos::Endian::kNone;
+    DXGI_FORMAT uav_format = DXGI_FORMAT_UNKNOWN;
+  };
+  static constexpr size_t kMaxResolveTextureTargets = 8;
+  size_t GetResolveTextureTargets(uint32_t base_address, uint32_t pitch, uint32_t width,
+                                  uint32_t height, xenos::TextureFormat format,
+                                  ResolveTextureTarget* targets_out);
+  // Whether textures of this key are created for unordered access (with
+  // native_rt_resolve, the 32bpp full-screen single-level 2D ones).
+  bool IsResolveTextureTargetKey(const TextureKey& key) const;
+  // The write: the texture to UNORDERED_ACCESS, then back to the state of
+  // textures bound to guest draws, loaded and watched.
+  void BeginResolveTextureWrite(const ResolveTextureTarget& target);
+  void EndResolveTextureWrite(const ResolveTextureTarget& target);
+  // native_rt_resolve_check: the texture's next load is compared with a copy
+  // the resolve shader wrote (scratch, in UNORDERED_ACCESS state; the cache
+  // keeps a reference). Polled at each frame's start; returns the textures
+  // compared and those that differed since the last call.
+  void QueueResolveTextureCheck(const ResolveTextureTarget& target, ID3D12Resource* scratch);
+  void PollResolveTextureChecks(uint64_t completed_submission, uint32_t& checked_out,
+                                uint32_t& mismatched_out);
+
  protected:
   bool IsSignedVersionSeparateForFormat(TextureKey key) const override;
   bool IsScaledResolveSupportedForFormat(TextureKey key) const override;
@@ -624,6 +654,19 @@ class D3D12TextureCache final : public TextureCache {
   // Range used in the last successful MakeScaledResolveRangeCurrent call.
   uint64_t scaled_resolve_current_range_start_scaled_;
   uint64_t scaled_resolve_current_range_length_scaled_;
+
+  // native_rt_resolve_check: textures whose next load is compared with what
+  // the resolve shader wrote into scratch; after the load, the readback copies
+  // of both and the submission they were recorded in.
+  struct ResolveTextureCheck {
+    TextureKey key;
+    Microsoft::WRL::ComPtr<ID3D12Resource> scratch;
+    Microsoft::WRL::ComPtr<ID3D12Resource> readback[2];
+    uint64_t submission = 0;
+    uint32_t width = 0, height = 0, row_pitch = 0;
+  };
+  std::vector<ResolveTextureCheck> resolve_texture_checks_;
+  void RecordResolveTextureCheckCopies(D3D12Texture& texture);
 };
 
 }  // namespace rex::graphics::d3d12

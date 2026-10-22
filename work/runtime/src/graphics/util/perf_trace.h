@@ -285,6 +285,21 @@ inline std::atomic<uint64_t> host_markers_missing{0};
 inline std::atomic<bool> host_oplists{false};
 // d3d12_reuse_draw_bindings: fetch constant writes that changed no dword.
 inline uint64_t fetch_writes_unchanged = 0;
+// native_rt_resolve (d3d-hle.md 16.7): full-screen 32bpp resolves that looked
+// for host textures, the textures written, the resolves with none, and the
+// checked textures and those that differed (native_rt_resolve_check).
+inline std::atomic<uint64_t> native_resolves{0}, native_resolve_textures{0},
+    native_resolve_misses{0}, native_resolve_checks{0}, native_resolve_mismatches{0};
+inline void CountNativeResolve(uint32_t textures) {
+  native_resolves.fetch_add(1, std::memory_order_relaxed);
+  native_resolve_textures.fetch_add(textures, std::memory_order_relaxed);
+  if (!textures) native_resolve_misses.fetch_add(1, std::memory_order_relaxed);
+}
+inline void CountNativeResolveChecks(uint32_t checked, uint32_t mismatched) {
+  native_resolve_checks.fetch_add(checked, std::memory_order_relaxed);
+  native_resolve_mismatches.fetch_add(mismatched, std::memory_order_relaxed);
+}
+
 // The binding check (d3d12_reuse_draw_bindings_check): bindings kept in sync
 // compared with fresh keys, mismatches, comparisons changed on purpose.
 inline std::atomic<uint64_t> binding_checks{0}, binding_check_mismatches{0},
@@ -481,6 +496,13 @@ inline void OnSwap() {
                 << binding_check_mismatches.exchange(0, std::memory_order_relaxed)
                 << ",\"perturbed\":" << binding_check_perturbed.exchange(0, std::memory_order_relaxed)
                 << '}'
+                << ",\"native_rt_resolve\":{\"resolves\":"
+                << native_resolves.exchange(0, std::memory_order_relaxed) << ",\"textures\":"
+                << native_resolve_textures.exchange(0, std::memory_order_relaxed)
+                << ",\"misses\":" << native_resolve_misses.exchange(0, std::memory_order_relaxed)
+                << ",\"checks\":" << native_resolve_checks.exchange(0, std::memory_order_relaxed)
+                << ",\"mismatches\":"
+                << native_resolve_mismatches.exchange(0, std::memory_order_relaxed) << '}'
                 << ",\"vblanks\":{\"grid\":" << vblanks[0].exchange(0, std::memory_order_relaxed)
                 << ",\"late\":" << vblanks[1].exchange(0, std::memory_order_relaxed)
                 << ",\"forced\":" << vblanks[2].exchange(0, std::memory_order_relaxed) << '}'

@@ -543,6 +543,11 @@ class TextureCache {
   // The texture of key if it exists (a key from Texture::key(), with the
   // resolution scale decided).
   Texture* FindTexture(const TextureKey& key) const;
+  // A texture whose data the backend wrote itself (native_rt_resolve): loaded
+  // and watched, as after a load.
+  void MarkTextureLoaded(Texture& texture) {
+    texture.MakeUpToDateAndWatch(global_critical_region_.Acquire());
+  }
   // After a write-back into textures (of one memory, nullptr where none):
   // starts counting the guest's use of them and returns the counts of the
   // previous write-back.

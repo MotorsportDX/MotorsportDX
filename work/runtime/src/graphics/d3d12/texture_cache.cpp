@@ -46,6 +46,18 @@ REXCVAR_DEFINE_STRING(texture_replace_path, "", "GPU/D3D12",
                       "subdirectory; format and size may differ from the original (empty: off)")
     .lifecycle(rex::cvar::Lifecycle::kRequiresRestart);
 
+REXCVAR_DEFINE_BOOL(native_rt_resolve, false, "GPU/D3D12",
+                    "Full-screen 32bpp resolves also write the host textures that sample their "
+                    "destination, so those need no load from the resolved memory "
+                    "(docs/analysis/d3d-hle.md 16.7). Host render target path only")
+    .lifecycle(rex::cvar::Lifecycle::kRequiresRestart);
+REXCVAR_DEFINE_INT32(native_rt_resolve_check, 0, "GPU/D3D12",
+                     "With native_rt_resolve: every N-th frame (0: never), write the resolves' "
+                     "textures into scratch copies instead, keep the load, and compare the "
+                     "loaded texels with the scratch bytes")
+    .range(0, 100000)
+    .lifecycle(rex::cvar::Lifecycle::kRequiresRestart);
+
 namespace rex::graphics::d3d12 {
 
 namespace {
@@ -1571,6 +1583,198 @@ bool D3D12TextureCache::WriteResolvedTexture(uint32_t base_address, uint32_t pit
   return true;
 }
 
+bool D3D12TextureCache::IsResolveTextureTargetKey(const TextureKey& key) const {
+  return REXCVAR_GET(native_rt_resolve) && key.dimension == xenos::DataDimension::k2DOrStacked &&
+         key.GetDepthOrArraySize() == 1 && !key.mip_max_level && key.tiled &&
+         !key.signed_separate &&
+         (key.format == xenos::TextureFormat::k_8_8_8_8 ||
+          key.format == xenos::TextureFormat::k_2_10_10_10) &&
+         key.GetWidth() >= 1280 && key.GetHeight() >= 720;
+}
+
+size_t D3D12TextureCache::GetResolveTextureTargets(uint32_t base_address, uint32_t pitch,
+                                                   uint32_t width, uint32_t height,
+                                                   xenos::TextureFormat format,
+                                                   ResolveTextureTarget* targets_out) {
+  size_t count = 0;
+  for (uint32_t endianness = 0; endianness < 4; ++endianness) {
+    TextureKey key;
+    xenos::xe_gpu_texture_fetch_t fetch;
+    if (!ResolvedTextureKey(base_address, pitch, width, height, format,
+                            xenos::Endian(endianness), key, fetch)) {
+      return 0;
+    }
+    for (uint32_t packed_mips = 0; packed_mips < 2; ++packed_mips) {
+      TextureKey variant_key = key;
+      variant_key.packed_mips = packed_mips;
+      // The fetch's key leaves this to the texture's creation; the resolve
+      // made the range scaled.
+      variant_key.scaled_resolve = uint32_t(IsDrawResolutionScaled());
+      auto* texture = static_cast<D3D12Texture*>(FindTexture(variant_key));
+      if (!texture || texture->replacement() || !IsResolveTextureTargetKey(variant_key) ||
+          !(texture->resource()->GetDesc().Flags & D3D12_RESOURCE_FLAG_ALLOW_UNORDERED_ACCESS)) {
+        continue;
+      }
+      ResolveTextureTarget& target = targets_out[count++];
+      target.texture = texture;
+      target.resource = texture->resource();
+      target.endianness = xenos::Endian(endianness);
+      target.uav_format = format == xenos::TextureFormat::k_8_8_8_8 ? DXGI_FORMAT_R8G8B8A8_UINT
+                                                                    : DXGI_FORMAT_R10G10B10A2_UINT;
+      if (count >= kMaxResolveTextureTargets) {
+        return count;
+      }
+    }
+  }
+  return count;
+}
+
+void D3D12TextureCache::BeginResolveTextureWrite(const ResolveTextureTarget& target) {
+  auto& texture = *static_cast<D3D12Texture*>(target.texture);
+  command_processor_.PushTransitionBarrier(
+      target.resource, texture.SetResourceState(D3D12_RESOURCE_STATE_UNORDERED_ACCESS),
+      D3D12_RESOURCE_STATE_UNORDERED_ACCESS);
+}
+
+void D3D12TextureCache::EndResolveTextureWrite(const ResolveTextureTarget& target) {
+  auto& texture = *static_cast<D3D12Texture*>(target.texture);
+  // As guest draws bind it.
+  constexpr D3D12_RESOURCE_STATES kState =
+      D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE | D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE;
+  command_processor_.PushTransitionBarrier(target.resource, texture.SetResourceState(kState),
+                                           kState);
+  // The resolve marked the memory as written: the texture holds it already.
+  MarkTextureLoaded(texture);
+  texture.MarkAsUsed();
+}
+
+void D3D12TextureCache::QueueResolveTextureCheck(const ResolveTextureTarget& target,
+                                                 ID3D12Resource* scratch) {
+  const TextureKey& key = static_cast<D3D12Texture*>(target.texture)->key();
+  for (const ResolveTextureCheck& check : resolve_texture_checks_) {
+    if (check.key == key) {
+      return;
+    }
+  }
+  ResolveTextureCheck& check = resolve_texture_checks_.emplace_back();
+  check.key = key;
+  check.scratch = scratch;
+}
+
+void D3D12TextureCache::RecordResolveTextureCheckCopies(D3D12Texture& texture) {
+  for (ResolveTextureCheck& check : resolve_texture_checks_) {
+    if (check.submission || check.key != texture.key()) {
+      continue;
+    }
+    const ui::d3d12::D3D12Provider& provider = command_processor_.GetD3D12Provider();
+    ID3D12Device* device = provider.GetDevice();
+    D3D12_RESOURCE_DESC desc = texture.resource()->GetDesc();
+    D3D12_PLACED_SUBRESOURCE_FOOTPRINT footprint;
+    UINT64 total = 0;
+    device->GetCopyableFootprints(&desc, 0, 1, 0, &footprint, nullptr, nullptr, &total);
+    D3D12_RESOURCE_DESC buffer_desc;
+    ui::d3d12::util::FillBufferResourceDesc(buffer_desc, total, D3D12_RESOURCE_FLAG_NONE);
+    for (auto& readback : check.readback) {
+      if (FAILED(device->CreateCommittedResource(
+              &ui::d3d12::util::kHeapPropertiesReadback, provider.GetHeapFlagCreateNotZeroed(),
+              &buffer_desc, D3D12_RESOURCE_STATE_COPY_DEST, nullptr, IID_PPV_ARGS(&readback)))) {
+        check.submission = UINT64_MAX;
+        return;
+      }
+    }
+    ID3D12Resource* sources[2] = {texture.resource(), check.scratch.Get()};
+    D3D12_RESOURCE_STATES texture_state =
+        texture.SetResourceState(D3D12_RESOURCE_STATE_COPY_SOURCE);
+    command_processor_.PushTransitionBarrier(sources[0], texture_state,
+                                             D3D12_RESOURCE_STATE_COPY_SOURCE);
+    command_processor_.PushTransitionBarrier(sources[1], D3D12_RESOURCE_STATE_UNORDERED_ACCESS,
+                                             D3D12_RESOURCE_STATE_COPY_SOURCE);
+    command_processor_.SubmitBarriers();
+    for (uint32_t i = 0; i < 2; ++i) {
+      D3D12_TEXTURE_COPY_LOCATION location_dest, location_source;
+      location_dest.pResource = check.readback[i].Get();
+      location_dest.Type = D3D12_TEXTURE_COPY_TYPE_PLACED_FOOTPRINT;
+      location_dest.PlacedFootprint = footprint;
+      location_source.pResource = sources[i];
+      location_source.Type = D3D12_TEXTURE_COPY_TYPE_SUBRESOURCE_INDEX;
+      location_source.SubresourceIndex = 0;
+      command_processor_.GetDeferredCommandList().D3DCopyTextureRegion(&location_dest, 0, 0, 0,
+                                                                       &location_source, nullptr);
+    }
+    texture.SetResourceState(texture_state);
+    command_processor_.PushTransitionBarrier(sources[0], D3D12_RESOURCE_STATE_COPY_SOURCE,
+                                             texture_state);
+    command_processor_.PushTransitionBarrier(sources[1], D3D12_RESOURCE_STATE_COPY_SOURCE,
+                                             D3D12_RESOURCE_STATE_UNORDERED_ACCESS);
+    check.width = footprint.Footprint.Width;
+    check.height = footprint.Footprint.Height;
+    check.row_pitch = footprint.Footprint.RowPitch;
+    check.submission = command_processor_.GetCurrentSubmission();
+  }
+}
+
+void D3D12TextureCache::PollResolveTextureChecks(uint64_t completed_submission,
+                                                 uint32_t& checked_out,
+                                                 uint32_t& mismatched_out) {
+  checked_out = 0;
+  mismatched_out = 0;
+  for (auto it = resolve_texture_checks_.begin(); it != resolve_texture_checks_.end();) {
+    ResolveTextureCheck& check = *it;
+    if (!check.submission || (check.submission != UINT64_MAX &&
+                              check.submission > completed_submission)) {
+      ++it;
+      continue;
+    }
+    if (check.submission != UINT64_MAX) {
+      const uint8_t* data[2] = {};
+      D3D12_RANGE read_range = {0, SIZE_T(check.row_pitch) * check.height};
+      bool mapped = true;
+      for (uint32_t i = 0; i < 2; ++i) {
+        void* mapping = nullptr;
+        if (FAILED(check.readback[i]->Map(0, &read_range, &mapping))) {
+          mapped = false;
+        }
+        data[i] = static_cast<const uint8_t*>(mapping);
+      }
+      if (mapped) {
+        uint32_t differing = 0, first_x = 0, first_y = 0, loaded = 0, written = 0;
+        for (uint32_t y = 0; y < check.height; ++y) {
+          const auto* row_loaded =
+              reinterpret_cast<const uint32_t*>(data[0] + size_t(y) * check.row_pitch);
+          const auto* row_written =
+              reinterpret_cast<const uint32_t*>(data[1] + size_t(y) * check.row_pitch);
+          for (uint32_t x = 0; x < check.width; ++x) {
+            if (row_loaded[x] != row_written[x]) {
+              if (!differing++) {
+                first_x = x;
+                first_y = y;
+                loaded = row_loaded[x];
+                written = row_written[x];
+              }
+            }
+          }
+        }
+        ++checked_out;
+        if (differing) {
+          ++mismatched_out;
+          REXGPU_WARN(
+              "native_rt_resolve check: {:08X} {}x{} format {} differs in {} texels, first at "
+              "({}, {}): loaded {:08X}, written {:08X}",
+              check.key.base_page << 12, check.width, check.height, uint32_t(check.key.format),
+              differing, first_x, first_y, loaded, written);
+        }
+      }
+      D3D12_RANGE write_range = {};
+      for (uint32_t i = 0; i < 2; ++i) {
+        if (data[i]) {
+          check.readback[i]->Unmap(0, &write_range);
+        }
+      }
+    }
+    it = resolve_texture_checks_.erase(it);
+  }
+}
+
 D3D12TextureCache::D3D12Texture::D3D12Texture(D3D12TextureCache& texture_cache,
                                               const TextureKey& key, ID3D12Resource* resource,
                                               D3D12_RESOURCE_STATES resource_state,
@@ -1703,8 +1907,10 @@ std::unique_ptr<TextureCache::Texture> D3D12TextureCache::CreateTexture(TextureK
   desc.SampleDesc.Quality = 0;
   desc.Layout = D3D12_TEXTURE_LAYOUT_UNKNOWN;
   // Untiling through a buffer instead of using unordered access because copying
-  // is not done that often.
-  desc.Flags = D3D12_RESOURCE_FLAG_NONE;
+  // is not done that often; but resolves may write some straight
+  // (native_rt_resolve).
+  desc.Flags = IsResolveTextureTargetKey(key) ? D3D12_RESOURCE_FLAG_ALLOW_UNORDERED_ACCESS
+                                              : D3D12_RESOURCE_FLAG_NONE;
   const ui::d3d12::D3D12Provider& provider = command_processor_.GetD3D12Provider();
   ID3D12Device* device = provider.GetDevice();
   // Assuming untiling will be the next operation.
@@ -2104,6 +2310,10 @@ bool D3D12TextureCache::LoadTextureDataFromResidentMemoryImpl(Texture& texture, 
   }
 
   command_processor_.ReleaseScratchGPUBuffer(copy_buffer, copy_buffer_state);
+
+  if (!resolve_texture_checks_.empty() && load_base) {
+    RecordResolveTextureCheckCopies(d3d12_texture);
+  }
 
   return true;
 }

@@ -26,6 +26,8 @@ THIRDPARTY_VENDORED = ('aes_128','crypto','disasm','disruptorplus','dxbc','dxc',
 THIRDPARTY_SUBMODULES = ('cli11','libmspack','FFmpeg','tomlplusplus','simde','xxHash','spdlog','fmt',
                          'utfcpp','imgui','sdl3','inja','o1heap')
 RESOLVE_SHADERS = [f'resolve_full_{bits}bpp{suffix}' for bits in (8,16,32,64) for suffix in ('','_scaled')]
+# Resolves straight into host textures (stage N3 increment 1, docs/analysis/d3d-hle.md 16.7).
+RESOLVE_SHADERS.append('resolve_texture_32bpp')
 EXECUTABLES = ('default.xex','SpeechFacade_default.xex','XMediaFacade_default.xex')
 # The supported releases and the SHA-256 of their three executables. The releases differ only
 # in the XEX headers (media ID, disc version, game region, ratings, LAN key). The decrypted

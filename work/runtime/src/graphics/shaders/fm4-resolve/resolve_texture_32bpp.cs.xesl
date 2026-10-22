@@ -1,0 +1,113 @@
+// Resolve of a 32bpp destination straight into the host texture that samples
+// it (stage N3 of docs/analysis/d3d-hle.md, 16.7): the samples of the EDRAM
+// are read and packed as resolve_full_32bpp does (or copied bitwise as the
+// fast resolve does), the destination's endianness applied and then the
+// texture's, which is what the 32bpb texture load would have written into the
+// host texture from the resolved guest memory. The host texture is bound as a
+// UINT view of its format. Compiled with resolution scaling only: at 1x the
+// scale in the coordinate info is 1.
+
+#define XE_RESOLVE_RESOLUTION_SCALED
+#define XE_RESOLVE_TEXTURE
+#include "endian.xesli"
+#include "pixel_formats.xesli"
+#define XE_RESOLVE_COPY_EDRAM_BYTE_BUFFER_ALIGNMENT 4
+#include "resolve.xesli"
+
+image_wo_xe(image_2d_xe, uint4_xe, xe_resolve_dest_texture, set=1, binding=0, u0, space0,
+            texture(0))
+#define LOCAL_SIZE_X_XE 8
+#define LOCAL_SIZE_Y_XE 8
+#define LOCAL_SIZE_Z_XE 1
+entry_bindings_begin_compute_xe
+  XE_RESOLVE_PUSH_CONST_BINDING
+  entry_binding_next_xe
+  XE_RESOLVE_COPY_EDRAM_BINDING
+entry_bindings_end_inputs_begin_compute_xe
+  entry_in_global_thread_id_xe
+entry_inputs_end_code_begin_compute_xe
+{
+  // 1 thread = 4 host pixels, as in resolve_full_32bpp.
+  XeResolveInfo resolve_info = XeResolveGetInfo(pass_push_consts_xe);
+  uint texture_info = push_const_xe(xe_resolve_texture_info);
+  uint2_xe pixel_index = in_global_thread_id_xe.xy << uint2_xe(2u, 0u);
+  dont_flatten_xe
+  if (pixel_index.x >= resolve_info.width_div_8_scaled << 3u) {
+    return;
+  }
+  uint4_xe packed;
+  dont_flatten_xe
+  if ((texture_info & (1u << 4u)) != 0u) {
+    // Bitwise, the first sample of each pixel (one sample per pixel).
+    packed.x = byte_buffer_align4_load4_xe(
+        xe_resolve_edram,
+        XeResolveCopySourceFirstSampleAddressBytes(resolve_info, pixel_index));
+    packed.y = byte_buffer_align4_load4_xe(
+        xe_resolve_edram,
+        XeResolveCopySourceFirstSampleAddressBytes(
+            resolve_info, pixel_index + uint2_xe(1u, 0u)));
+    packed.z = byte_buffer_align4_load4_xe(
+        xe_resolve_edram,
+        XeResolveCopySourceFirstSampleAddressBytes(
+            resolve_info, pixel_index + uint2_xe(2u, 0u)));
+    packed.w = byte_buffer_align4_load4_xe(
+        xe_resolve_edram,
+        XeResolveCopySourceFirstSampleAddressBytes(
+            resolve_info, pixel_index + uint2_xe(3u, 0u)));
+    // The fast copy swaps red and blue of color like this.
+    dont_flatten_xe if (!resolve_info.edram_is_depth) {
+      uint4_xe unused = uint_x4_xe(0u);
+      XeResolveSwap8PixelsRedBlue32bpp(resolve_info, packed, unused);
+    }
+  } else {
+    float4_xe pixel_0, pixel_1, pixel_2, pixel_3;
+    XeResolveLoad4RGBAColors(
+        pass_byte_buffer_xe(xe_resolve_edram) pass_next_after_byte_buffer_xe
+        resolve_info, pixel_index, pixel_0, pixel_1, pixel_2, pixel_3);
+    packed = XePack32bpp4Pixels(pixel_0, pixel_1, pixel_2, pixel_3,
+                                resolve_info.dest_format,
+                                resolve_info.dest_num_format);
+  }
+  dont_flatten_xe
+  if (pixel_index.x == 0u &&
+      resolve_info.half_pixel_offset_fill_source.x != 0u) {
+    if (resolve_info.half_pixel_offset_fill_source.x >= 2u) {
+      if (resolve_info.half_pixel_offset_fill_source.x >= 3u) {
+        packed.z = packed.w;
+      }
+      packed.y = packed.z;
+    }
+    packed.x = packed.y;
+  }
+  // The guest memory's words, then as the texture load reads them.
+  packed = XeEndianSwap32(XeEndianSwap32(packed, resolve_info.dest_endian_128),
+                          texture_info & 7u);
+  uint2_xe texel = pixel_index + resolve_info.dest_xy_offset_scaled;
+  dont_flatten_xe
+  if ((texture_info & (1u << 3u)) != 0u) {
+    // R10G10B10A2_UINT.
+    image_store_2d_rgba_xe(xe_resolve_dest_texture, texel,
+        (uint_x4_xe(packed.x) >> uint4_xe(0u, 10u, 20u, 30u)) &
+        uint4_xe(1023u, 1023u, 1023u, 3u));
+    image_store_2d_rgba_xe(xe_resolve_dest_texture, texel + uint2_xe(1u, 0u),
+        (uint_x4_xe(packed.y) >> uint4_xe(0u, 10u, 20u, 30u)) &
+        uint4_xe(1023u, 1023u, 1023u, 3u));
+    image_store_2d_rgba_xe(xe_resolve_dest_texture, texel + uint2_xe(2u, 0u),
+        (uint_x4_xe(packed.z) >> uint4_xe(0u, 10u, 20u, 30u)) &
+        uint4_xe(1023u, 1023u, 1023u, 3u));
+    image_store_2d_rgba_xe(xe_resolve_dest_texture, texel + uint2_xe(3u, 0u),
+        (uint_x4_xe(packed.w) >> uint4_xe(0u, 10u, 20u, 30u)) &
+        uint4_xe(1023u, 1023u, 1023u, 3u));
+  } else {
+    // R8G8B8A8_UINT.
+    image_store_2d_rgba_xe(xe_resolve_dest_texture, texel,
+        (uint_x4_xe(packed.x) >> uint4_xe(0u, 8u, 16u, 24u)) & 255u);
+    image_store_2d_rgba_xe(xe_resolve_dest_texture, texel + uint2_xe(1u, 0u),
+        (uint_x4_xe(packed.y) >> uint4_xe(0u, 8u, 16u, 24u)) & 255u);
+    image_store_2d_rgba_xe(xe_resolve_dest_texture, texel + uint2_xe(2u, 0u),
+        (uint_x4_xe(packed.z) >> uint4_xe(0u, 8u, 16u, 24u)) & 255u);
+    image_store_2d_rgba_xe(xe_resolve_dest_texture, texel + uint2_xe(3u, 0u),
+        (uint_x4_xe(packed.w) >> uint4_xe(0u, 8u, 16u, 24u)) & 255u);
+  }
+}
+entry_code_end_compute_xe

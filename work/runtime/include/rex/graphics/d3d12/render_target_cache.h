@@ -208,6 +208,13 @@ class D3D12RenderTargetCache final : public RenderTargetCache {
       kResolveCopyShaders[size_t(draw_util::ResolveCopyShaderIndex::kCount)];
   ID3D12PipelineState* resolve_copy_pipelines_[size_t(draw_util::ResolveCopyShaderIndex::kCount)] =
       {};
+  // native_rt_resolve (docs/analysis/d3d-hle.md 16.7): resolve_texture_32bpp,
+  // with the parameters of the resolve copy but one more constant (the
+  // texture's endianness and host format, and whether the copy is bitwise),
+  // and the scratch textures of native_rt_resolve_check by destination.
+  ID3D12RootSignature* resolve_texture_root_signature_ = nullptr;
+  ID3D12PipelineState* resolve_texture_pipeline_ = nullptr;
+  std::unordered_map<uint64_t, Microsoft::WRL::ComPtr<ID3D12Resource>> resolve_texture_scratch_;
 
   // For host render targets.
 
@@ -681,6 +688,12 @@ class D3D12RenderTargetCache final : public RenderTargetCache {
   bool TryResolveCopyDirectly(const draw_util::ResolveInfo& resolve_info,
                               draw_util::ResolveCopyShaderIndex copy_shader,
                               bool draw_resolution_scaled);
+  // After the resolve copy: writes the host textures of a full-screen 32bpp
+  // destination straight from the EDRAM buffer (native_rt_resolve).
+  void ResolveIntoHostTextures(D3D12TextureCache& texture_cache,
+                               const draw_util::ResolveInfo& resolve_info,
+                               draw_util::ResolveCopyShaderIndex copy_shader,
+                               const draw_util::ResolveCopyShaderConstants& constants);
 
   // Writes contents of host render targets within rectangles from
   // ResolveInfo::GetCopyEdramTileSpan to edram_buffer_.
