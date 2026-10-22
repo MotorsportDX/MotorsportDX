@@ -969,3 +969,15 @@ Host render target memory, for step 2: the render target cache already keeps eve
 
 The main session accepted step 3 on 22 October 2026 and decided: the close gate runs now with bit 2 on in `-Native`, so the gain lands in main and soaks beside the readback on demand; step 2 (the lazy transfers, with the overwrite share under the strict rule of 16.10 first) follows, then step 4, then increment 4. Two items stay open here. First, the unscaled fast copies of 4x MSAA sources and the resolve from the host render target pick different samples for photo mode's tile depth at 1x, so one of them is wrong; which one is to be found against `-Rov`'s output of the same depth, and if the precompiled path is wrong, it is an existing RTV bug for [docs/status/current.md](../status/current.md), not fixed in this increment unless trivial. Second, the memory: every host render target covers 2,048 tiles from its base, 810 MB for the race's 16 surfaces at 2x; sizing them to the surfaces' extents (a 1280x720 scene target at 8 bytes a sample takes 7.4 MB at 1x and 29.5 MB at 2x, against 21 MB and 84 MB for an EDRAM-sized one) belongs to step 2 or increment 4, where 4x MSAA at 2x and the Ally X's shared memory make it matter.
 
+
+The close gate of increment 3 on `I:\FM4-build-usa` at 240 Hz, on the binary of `d9a0c9f` (one binary for RTV and `-Native`'s cvars with bit 2, 22 October 2026):
+
+| Gate | RTV | `-Native`'s cvars |
+|---|---|---|
+| perf 2x (`n3c2xpr`, `n3c2xpn`), race, three runs | 158.4 fps, p99 9.29 ms, GPU 6.13 ms a frame, resolves 0.68 ms | 190.1 fps, p99 7.68 ms, GPU 5.16 ms, resolves 0.47 ms; `compare.py` PASS |
+| smoke 2x (`n3c2x`, `n3c2xn`), races | `photo` 166.0, `career` 157.6 fps | 188.4, 183.3 fps |
+| smoke 1x (`n3c1x`, `n3c1xn`), races | `photo` 233.0, `career` 218.9 fps | 234.8, 224.1 fps |
+| `parity.py` on `freeze`, 1x and 2x (`n3c-freeze-*`) | | PASS, 22.3% and 31.1% of the image above 4 (35.1% and 28.4% at the close of increment 2) |
+| identity check with perturbation (`n3c-perturb-career`) | | 13,525 ranges perturbed, 13,525 reported |
+
+Every cell reached its goal with RTV's error keys; the smoke and perf warnings are capture statistics of races that differ (the `photo_view` photos checked by eye). With bit 2 the race resolves 26.1 times a frame from the host render target at 1x and 2x (3.75 a frame cannot), the replay 33.0 and photo mode 39.2. The readback on demand had no timeout, CP fault or lost trap; the races read nothing back. The first RTV perf cell (`n3c2xp`) lost its third run to a guest access violation (a write of guest address 0 while the race loaded, on RTV's defaults, which bit 2 does not touch); the repeated cell ran three of three, and the crash did not recur in the other 25 runs of the gate.
