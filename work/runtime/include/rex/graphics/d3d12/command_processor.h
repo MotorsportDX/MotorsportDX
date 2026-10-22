@@ -30,6 +30,7 @@
 #include <rex/assert.h>
 #include <rex/graphics/command_processor.h>
 #include <rex/graphics/d3d12/deferred_command_list.h>
+#include <rex/graphics/d3d12/deferred_constants.h>
 #include <rex/graphics/d3d12/graphics_system.h>
 #include <rex/graphics/d3d12/pipeline_cache.h>
 #include <rex/graphics/d3d12/primitive_processor.h>
@@ -398,6 +399,19 @@ class D3D12CommandProcessor : public CommandProcessor {
                                   uint32_t normalized_color_mask);
   bool UpdateBindings(const D3D12Shader* vertex_shader, const D3D12Shader* pixel_shader,
                       ID3D12RootSignature* root_signature, bool shared_memory_is_uav);
+  // d3d12_deferred_constants (deferred_constants.cpp): the float, bool and
+  // loop, and fetch constant buffers of UpdateBindings, allocated and bound
+  // here and filled when the deferred command list is replayed.
+  void InitializeDeferredConstants();
+  // REX_N4_REGISTER_DELTA: counts the context registers changed since the
+  // previous draw (perf trace, d3d-hle.md 17.5).
+  void CountContextRegisterDelta();
+  bool UpdateConstantBuffersDeferred(const D3D12Shader* vertex_shader,
+                                     const D3D12Shader* pixel_shader,
+                                     uint32_t root_parameter_float_constants_vertex,
+                                     uint32_t root_parameter_float_constants_pixel,
+                                     uint32_t root_parameter_bool_loop_constants,
+                                     uint32_t root_parameter_fetch_constants);
   bool IssueCopy_ReadbackResolvePath();
   bool GetResolvePixelSizeLog2(uint32_t& pixel_size_log2) const;
   // Records the copy of a resolved range into a readback buffer: from the
@@ -988,6 +1002,18 @@ class D3D12CommandProcessor : public CommandProcessor {
   ConstantBufferBinding cbuffer_binding_fetch_;
   ConstantBufferBinding cbuffer_binding_descriptor_indices_vertex_;
   ConstantBufferBinding cbuffer_binding_descriptor_indices_pixel_;
+
+  // d3d12_deferred_constants: on, with the check, every Nth checked command
+  // perturbed (0: none), the checked commands so far, and the constant
+  // registers written since they were last captured into the current
+  // submission's deferred command list.
+  bool deferred_constants_ = false;
+  bool deferred_constants_check_ = false;
+  uint32_t deferred_constants_perturb_ = 0;
+  uint64_t deferred_constants_commands_ = 0;
+  deferred_constants::Pending pending_constants_;
+  // REX_N4_REGISTER_DELTA: the context registers at the previous draw.
+  std::vector<uint32_t> context_register_snapshot_;
 
   // Whether the latest shared memory and EDRAM buffer binding contains the
   // shared memory UAV rather than the SRV.

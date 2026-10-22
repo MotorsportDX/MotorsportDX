@@ -445,6 +445,12 @@ class DeferredCommandList {
 
   void EndDebugMarker() { WriteCommand(Command::kEndDebugMarker, 0); }
 
+  // d3d12_deferred_constants (deferred_constants.h): reserves the arguments of
+  // a block of constant buffer fills, run when the list is replayed.
+  void* DeferredConstants(size_t arguments_size_bytes) {
+    return WriteCommand(Command::kDeferredConstants, arguments_size_bytes);
+  }
+
   void InsertDebugMarker(const char* label_name) {
     size_t label_len = std::strlen(label_name);
     uint8_t* args_ptr = reinterpret_cast<uint8_t*>(
@@ -497,6 +503,7 @@ class DeferredCommandList {
     kBeginDebugMarker,
     kEndDebugMarker,
     kInsertDebugMarker,
+    kDeferredConstants,
   };
 
   struct CommandHeader {
@@ -647,6 +654,12 @@ class DeferredCommandList {
 
   // uintmax_t to ensure uint64_t and pointer alignment of all structures.
   std::vector<uintmax_t> command_stream_;
+
+  // The replay's copy of the constant registers for kDeferredConstants
+  // (deferred_constants::kSlotCount * 4 dwords), allocated at the first use.
+  // Each list captures every register it reads, so the copy carries nothing
+  // from one list to the next.
+  std::vector<uint32_t> constant_shadow_;
 };
 
 }  // namespace rex::graphics::d3d12

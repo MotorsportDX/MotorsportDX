@@ -1928,6 +1928,7 @@ bool D3D12CommandProcessor::SetupContext() {
   ID3D12Device* device = provider.GetDevice();
   ID3D12CommandQueue* direct_queue = provider.GetDirectQueue();
 
+  InitializeDeferredConstants();
   if (REXCVAR_GET(d3d12_submit_thread)) {
     submit_shutdown_ = false;
     submit_async_swap_ = REXCVAR_GET(d3d12_submit_thread_async_swap);
@@ -2903,6 +2904,9 @@ void D3D12CommandProcessor::ShutdownContext() {
 
 void D3D12CommandProcessor::WriteRegister(uint32_t index, uint32_t value) {
   CommandProcessor::WriteRegister(index, value);
+  if (deferred_constants_) {
+    pending_constants_.MarkWritten(index, index);
+  }
 
   if (index >= XE_GPU_REG_SHADER_CONSTANT_000_X && index <= XE_GPU_REG_SHADER_CONSTANT_511_W) {
     if (frame_open_) {
@@ -2970,6 +2974,9 @@ void D3D12CommandProcessor::WriteRegistersFromMem(uint32_t start_index, uint32_t
   if (start_index >= XE_GPU_REG_SHADER_CONSTANT_000_X &&
       end_index <= XE_GPU_REG_SHADER_CONSTANT_511_W) {
     memory::copy_and_swap(register_file_->values + start_index, base, num_registers);
+    if (deferred_constants_) {
+      pending_constants_.MarkWritten(start_index, end_index);
+    }
     if (frame_open_) {
       uint32_t first_float_constant = (start_index - XE_GPU_REG_SHADER_CONSTANT_000_X) >> 2;
       uint32_t last_float_constant = (end_index - XE_GPU_REG_SHADER_CONSTANT_000_X) >> 2;
@@ -2997,6 +3004,9 @@ void D3D12CommandProcessor::WriteRegistersFromMem(uint32_t start_index, uint32_t
       end_index <= XE_GPU_REG_SHADER_CONSTANT_LOOP_31) {
     memory::copy_and_swap(register_file_->values + start_index, base, num_registers);
     cbuffer_binding_bool_loop_.up_to_date = false;
+    if (deferred_constants_) {
+      pending_constants_.MarkWritten(start_index, end_index);
+    }
     return;
   }
 
@@ -3024,6 +3034,10 @@ void D3D12CommandProcessor::WriteRegistersFromMem(uint32_t start_index, uint32_t
     if (!changed_textures) {
       return;
     }
+    if (deferred_constants_) {
+      pending_constants_.MarkWritten(XE_GPU_REG_SHADER_CONSTANT_FETCH_00_0 + first_changed,
+                                     XE_GPU_REG_SHADER_CONSTANT_FETCH_00_0 + last_changed);
+    }
     cbuffer_binding_fetch_.up_to_date = false;
     if (texture_cache_) {
       uint32_t index;
@@ -3040,6 +3054,9 @@ void D3D12CommandProcessor::WriteRegistersFromMem(uint32_t start_index, uint32_t
       end_index <= XE_GPU_REG_SHADER_CONSTANT_FETCH_31_5) {
     memory::copy_and_swap(register_file_->values + start_index, base, num_registers);
     cbuffer_binding_fetch_.up_to_date = false;
+    if (deferred_constants_) {
+      pending_constants_.MarkWritten(start_index, end_index);
+    }
     uint32_t first_fetch_dword = start_index - XE_GPU_REG_SHADER_CONSTANT_FETCH_00_0;
     uint32_t last_fetch_dword = end_index - XE_GPU_REG_SHADER_CONSTANT_FETCH_00_0;
     if (texture_cache_) {
@@ -4056,6 +4073,7 @@ bool D3D12CommandProcessor::IssueDraw(xenos::PrimitiveType primitive_type, uint3
   // Update system constants before uploading them.
   // TODO(Triang3l): With ROV, pass the disabled render target mask for safety.
   perf_trace::ZoneEnd(perf_trace::Zone::kDrawState, state_start);
+  CountContextRegisterDelta();
   perf_start = perf_trace::ZoneStart();
   UpdateSystemConstantValues(memexport_used, primitive_polygonal,
                              primitive_processing_result.line_loop_closing_index,
@@ -5073,6 +5091,9 @@ bool D3D12CommandProcessor::BeginSubmission(bool is_guest_command) {
   if (!submission_open_) {
     submission_open_ = true;
     submission_draws_ = 0;
+    // Each submission's deferred command list captures every constant register
+    // it reads (d3d12_deferred_constants).
+    pending_constants_.SetAll();
 
     // Start a new deferred command list - will submit it to the real one in the
     // end of the submission (when async pipeline creation requests are
@@ -5986,6 +6007,39 @@ bool D3D12CommandProcessor::UpdateBindings(const D3D12Shader* vertex_shader,
     cbuffer_binding_system_.up_to_date = true;
     current_graphics_root_up_to_date_ &= ~(1u << root_parameter_system_constants);
   }
+  // With d3d12_deferred_constants, the buffers below are allocated and bound
+  // there and filled when the deferred command list is replayed; they are up
+  // to date after it, so the inline fills are skipped.
+  if (deferred_constants_) {
+    if (!UpdateConstantBuffersDeferred(
+            vertex_shader, pixel_shader, root_parameter_float_constants_vertex,
+            root_parameter_float_constants_pixel, root_parameter_bool_loop_constants,
+            root_parameter_fetch_constants)) {
+      return false;
+    }
+  } else if (perf_trace::Get()) {
+    uint32_t fills = 0, slots = 0;
+    const auto count_map = [&](const uint64_t* map) {
+      ++fills;
+      for (uint32_t i = 0; i < 4; ++i) slots += uint32_t(__builtin_popcountll(map[i]));
+    };
+    if (!cbuffer_binding_float_vertex_.up_to_date) {
+      count_map(float_constant_map_vertex.float_bitmap);
+    }
+    if (!cbuffer_binding_float_pixel_.up_to_date) {
+      static constexpr uint64_t kNoMap[4] = {};
+      count_map(pixel_shader ? pixel_shader->constant_register_map().float_bitmap : kNoMap);
+    }
+    if (!cbuffer_binding_bool_loop_.up_to_date) {
+      ++fills;
+      slots += deferred_constants::kBoolLoopSlotCount;
+    }
+    if (!cbuffer_binding_fetch_.up_to_date) {
+      ++fills;
+      slots += deferred_constants::kFetchSlotCount;
+    }
+    perf_trace::CountConstantFills(fills, slots, 0);
+  }
   if (!cbuffer_binding_float_vertex_.up_to_date) {
     // Even if the shader doesn't need any float constants, a valid binding must
     // still be provided, so if the first draw in the frame with the current
@@ -6148,6 +6202,7 @@ bool D3D12CommandProcessor::UpdateBindings(const D3D12Shader* vertex_shader,
   }
 
   assert_true(sampler_count_vertex + sampler_count_pixel <= kSamplerHeapSize);
+  uint32_t descriptor_index_fills = 0;
 
   if (bindless_resources_used_) {
     //
@@ -6304,6 +6359,7 @@ bool D3D12CommandProcessor::UpdateBindings(const D3D12Shader* vertex_shader,
             current_sampler_bindless_indices_vertex_[i];
       }
       cbuffer_binding_descriptor_indices_vertex_.up_to_date = true;
+      ++descriptor_index_fills;
       current_graphics_root_up_to_date_ &= ~(1u << kRootParameter_Bindless_DescriptorIndicesVertex);
     }
 
@@ -6335,6 +6391,7 @@ bool D3D12CommandProcessor::UpdateBindings(const D3D12Shader* vertex_shader,
             current_sampler_bindless_indices_pixel_[i];
       }
       cbuffer_binding_descriptor_indices_pixel_.up_to_date = true;
+      ++descriptor_index_fills;
       current_graphics_root_up_to_date_ &= ~(1u << kRootParameter_Bindless_DescriptorIndicesPixel);
     }
   } else {
@@ -6532,6 +6589,8 @@ bool D3D12CommandProcessor::UpdateBindings(const D3D12Shader* vertex_shader,
   }
 
   perf_trace::ZoneEnd(perf_trace::Zone::kBindingsDescriptors, phase_start);
+  perf_trace::CountDrawDescriptors(uint32_t(sampler_count_vertex + sampler_count_pixel),
+                                   descriptor_index_fills);
   const perf_trace::DetailZoneScope root_parameters_zone(
       perf_trace::Zone::kBindingsRootParameters);
   // Update the root parameters.

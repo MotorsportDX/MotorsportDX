@@ -13,6 +13,7 @@
 #include <rex/dbg.h>
 #include <rex/graphics/d3d12/command_processor.h>
 #include <rex/graphics/d3d12/deferred_command_list.h>
+#include <rex/graphics/d3d12/deferred_constants.h>
 #include <rex/graphics/flags.h>
 #include <rex/math.h>
 
@@ -267,6 +268,13 @@ void DeferredCommandList::Execute(ID3D12GraphicsCommandList* command_list,
         const char* label_name = reinterpret_cast<const char*>(
             reinterpret_cast<const uint8_t*>(stream) + sizeof(DebugMarkerHeader));
         command_list->SetMarker(1, label_name, static_cast<UINT>(args.label_length + 1));
+      } break;
+      case Command::kDeferredConstants: {
+        if (constant_shadow_.empty()) {
+          constant_shadow_.resize(deferred_constants::kSlotCount * 4);
+        }
+        deferred_constants::Replay(reinterpret_cast<const uint8_t*>(stream),
+                                   constant_shadow_.data());
       } break;
       default:
         assert_unhandled_case(header.command);

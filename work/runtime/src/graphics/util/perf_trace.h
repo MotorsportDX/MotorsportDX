@@ -341,6 +341,65 @@ inline void CountNativeResolveChecks(uint32_t checked, uint32_t mismatched) {
   native_resolve_mismatches.fetch_add(mismatched, std::memory_order_relaxed);
 }
 
+// The constant buffers of the draws (d3d12_deferred_constants, N4 step 1 of
+// d3d-hle.md, section 17), on the thread that runs the draws: the float, bool
+// and loop, and fetch constant buffers filled on either path and their 16-byte
+// slots, the slots captured from the register file for the replay (deferred
+// only), the sampler parameters computed and the descriptor index buffers
+// written (bindless). Kept apart from the replay's counters, which another
+// thread writes.
+// With REX_N4_REGISTER_DELTA=1 also the context registers (0x2000 to 0x23FF,
+// where every register of the draw's pipeline, fixed function and system
+// constant state lies) that changed since the previous draw: draws compared,
+// changed dwords and changed 16-byte granules (d3d-hle.md 17.5).
+struct alignas(64) DrawConstantCounts {
+  uint64_t fills = 0, fill_slots = 0, captured_slots = 0, samplers = 0, descriptor_fills = 0;
+  uint64_t delta_draws = 0, delta_dwords = 0, delta_granules = 0;
+};
+inline DrawConstantCounts draw_constants;
+inline void CountConstantFills(uint32_t fills, uint32_t slots, uint32_t captured) {
+  if (!Get()) return;
+  draw_constants.fills += fills;
+  draw_constants.fill_slots += slots;
+  draw_constants.captured_slots += captured;
+}
+inline void CountDrawDescriptors(uint32_t samplers, uint32_t descriptor_fills) {
+  if (!Get()) return;
+  draw_constants.samplers += samplers;
+  draw_constants.descriptor_fills += descriptor_fills;
+}
+inline bool RegisterDeltaEnabled() {
+  static const bool enabled = [] {
+    const char* value = std::getenv("REX_N4_REGISTER_DELTA");
+    return Get() && value && *value && *value != '0';
+  }();
+  return enabled;
+}
+inline void CountRegisterDelta(uint32_t dwords, uint32_t granules) {
+  ++draw_constants.delta_draws;
+  draw_constants.delta_dwords += dwords;
+  draw_constants.delta_granules += granules;
+}
+// The replay of the deferred constants (the thread that replays the deferred
+// command list): time stamp counter ticks, buffers compared with the inline
+// bytes (d3d12_deferred_constants_check), those that differed, and comparisons
+// changed on purpose.
+struct alignas(64) ConstantReplayCounts {
+  std::atomic<uint64_t> tsc{0}, commands{0}, checks{0}, mismatches{0}, perturbed{0};
+};
+inline ConstantReplayCounts constant_replay;
+inline void AddDeferredConstantReplay(uint64_t tsc, uint32_t checks, uint32_t mismatches,
+                                      uint32_t perturbed) {
+  if (!Get()) return;
+  constant_replay.tsc.fetch_add(tsc, std::memory_order_relaxed);
+  constant_replay.commands.fetch_add(1, std::memory_order_relaxed);
+  if (checks) {
+    constant_replay.checks.fetch_add(checks, std::memory_order_relaxed);
+    constant_replay.mismatches.fetch_add(mismatches, std::memory_order_relaxed);
+    constant_replay.perturbed.fetch_add(perturbed, std::memory_order_relaxed);
+  }
+}
+
 // The binding check (d3d12_reuse_draw_bindings_check): bindings kept in sync
 // compared with fresh keys, mismatches, comparisons changed on purpose.
 inline std::atomic<uint64_t> binding_checks{0}, binding_check_mismatches{0},
@@ -573,8 +632,30 @@ inline void OnSwap() {
                 << ",\"transfers_unread\":"
                 << stale_transfers_unread.exchange(0, std::memory_order_relaxed)
                 << ",\"transfers_read\":"
-                << stale_transfers_read.exchange(0, std::memory_order_relaxed) << '}'
-                << ",\"vblanks\":{\"grid\":" << vblanks[0].exchange(0, std::memory_order_relaxed)
+                << stale_transfers_read.exchange(0, std::memory_order_relaxed) << '}';
+  {
+    const double tsc_per_ms = double(__rdtsc() - state->window_tsc) / ms(elapsed);
+    const uint64_t replay_tsc = constant_replay.tsc.exchange(0, std::memory_order_relaxed);
+    state->output << ",\"constants\":{\"fills\":" << draw_constants.fills
+                  << ",\"slots\":" << draw_constants.fill_slots
+                  << ",\"captured\":" << draw_constants.captured_slots
+                  << ",\"samplers\":" << draw_constants.samplers
+                  << ",\"descriptor_fills\":" << draw_constants.descriptor_fills
+                  << ",\"delta_draws\":" << draw_constants.delta_draws
+                  << ",\"delta_dwords\":" << draw_constants.delta_dwords
+                  << ",\"delta_granules\":" << draw_constants.delta_granules
+                  << ",\"replays\":"
+                  << constant_replay.commands.exchange(0, std::memory_order_relaxed)
+                  << ",\"replay_ms\":"
+                  << (tsc_per_ms > 0 ? double(replay_tsc) / tsc_per_ms : 0.0)
+                  << ",\"checks\":" << constant_replay.checks.exchange(0, std::memory_order_relaxed)
+                  << ",\"mismatches\":"
+                  << constant_replay.mismatches.exchange(0, std::memory_order_relaxed)
+                  << ",\"perturbed\":"
+                  << constant_replay.perturbed.exchange(0, std::memory_order_relaxed) << '}';
+    draw_constants = DrawConstantCounts{};
+  }
+  state->output << ",\"vblanks\":{\"grid\":" << vblanks[0].exchange(0, std::memory_order_relaxed)
                 << ",\"late\":" << vblanks[1].exchange(0, std::memory_order_relaxed)
                 << ",\"forced\":" << vblanks[2].exchange(0, std::memory_order_relaxed) << '}'
                 << ",\"wait_ms\":{";

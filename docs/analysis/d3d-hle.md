@@ -981,3 +981,46 @@ The close gate of increment 3 on `I:\FM4-build-usa` at 240 Hz, on the binary of 
 | identity check with perturbation (`n3c-perturb-career`) | | 13,525 ranges perturbed, 13,525 reported |
 
 Every cell reached its goal with RTV's error keys; the smoke and perf warnings are capture statistics of races that differ (the `photo_view` photos checked by eye). With bit 2 the race resolves 26.1 times a frame from the host render target at 1x and 2x (3.75 a frame cannot), the replay 33.0 and photo mode 39.2. The readback on demand had no timeout, CP fault or lost trap; the races read nothing back. The first RTV perf cell (`n3c2xp`) lost its third run to a guest access violation (a write of guest address 0 while the race loaded, on RTV's defaults, which bit 2 does not touch); the repeated cell ran three of three, and the crash did not recur in the other 25 runs of the gate.
+
+## 17. Stage N4 design, 22 October 2026
+
+Stage N4 (section 9) brings the render thread to the CPU targets of section 10: busy at most 2.5 ms per race frame and p99 at most 5.0 ms at 240 Hz, on the main PC and on the ROG Xbox Ally X. The native path's render thread is busy 3.1 to 3.4 ms per race frame at 1x (15.7, 15.12), so N4 has to remove 0.6 to 0.9 ms. The main session's order: first the descriptor and constant buffer work leaves the render thread, which the profile of 15.10 points at ([CP draw offload](cp-draw-offload.md), options 1 and 2).
+
+### 17.1 The bindings per draw, and what may leave the render thread
+
+The bindings zone of `IssueDraw` took 0.39 ms per race frame in `n2d` and 0.559 ms in `n2f`, whose extra timers inflate it (15.10). Its parts in `n2f`, and what each reads:
+
+| Part | ms per race frame (`n2f`) | Reads | Writes | Step 1 |
+|---|---|---|---|---|
+| System constant values (`UpdateSystemConstantValues`) | about 0.14 | about 25 registers, the viewport, the texture cache's signs, integer scale bits and resolution flags per texture, the render target cache's path and formats | `system_constants_` and its dirty flag | stays |
+| Constant buffer data | 0.199 | the register file (the float constants each shader uses, the bool and loop constants, the fetch constants) and `system_constants_` | upload memory that the GPU reads after `ExecuteCommandLists` | the float, bool and loop, and fetch buffers move; the system constants stay |
+| Descriptors (bindless, the default) | 0.156 | the fetch constants (the parameters of every sampler at every draw), the texture cache's bindings (SRV keys and indices) | 2 to 16 dwords of descriptor indices when a binding changed; a sampler descriptor only for a new sampler state | stay |
+| Root parameters | 0.040 | the buffers' addresses | the deferred command list | already deferred |
+| Root signature and common buffers | 0.020 | the shaders | the deferred command list | already deferred |
+
+- The D3D12 command recording is already off the render thread: the render thread appends to the deferred command list, and the submit thread (`d3d12_submit_thread` with `d3d12_submit_thread_async_swap`, both set by the launcher since 20 October 2026) replays it into the D3D12 command list and executes it.
+- Stay on the render thread for ordering: every read of the register file that decides something (which buffers are out of date, the system constant values, the sampler parameters), the texture cache's validity and bindings, and the render target cache's ownership. These read state that the next packets change, and the caches record their own work into the same deferred command list in stream order.
+- The descriptor phase is decisions, not writes: in the bindless path the writes are a few dwords of indices when a binding changed, and a sampler descriptor is created only for a sampler state not seen before. Moving those writes saves nothing; moving the decisions needs their inputs captured per draw (17.4).
+
+### 17.2 Step 1: deferred constant buffers
+
+`d3d12_deferred_constants` (off by default, not set by `-Native`, read at start-up):
+
+1. **At the draw (render thread).** `UpdateBindings` makes the same decisions as before: which of the float vertex, float pixel, bool and loop, and fetch constant buffers are out of date, their allocation from the constant buffer pool (the GPU address is needed now for the root parameter), and the root parameters. For each draw that refills any of them it writes one `kDeferredConstants` command into the deferred command list: the destinations and sizes, the two shaders' float constant maps, and the constant registers that the fills read and that were written since they were last captured into this list.
+2. **The capture.** A pending mask of the constant registers in 16-byte slots (586 slots from `0x4000` to `0x4927`) is set by the hooked constant writers (`WriteRegister`, `WriteRegistersFromMem`, and the changed dwords in the path of `d3d12_reuse_draw_bindings`) and set whole when a submission opens. A draw captures the pending slots its fills read and clears them. The inline path copies every constant a shader uses whenever one of them changed; the capture copies only the used constants written since the last capture, and only the written fetch and bool and loop slots.
+3. **At the replay (submit thread).** The thread that replays the list keeps a copy of the constant registers per list, applies the captured slots and fills the buffers from the copy, in the layout of the inline path.
+4. **Hand-over and fence.** The command is part of the list, so the list order is the hand-over: no new thread, and no wait or signal per draw. The fill runs while the list is replayed, before its `ExecuteCommandLists`, so the GPU reads the buffers only after they are filled. The pool reuses a buffer only after its frame's fence, which the submit thread signals after executing the list. Each list starts with all slots pending, so it captures every register it reads and carries nothing over from another list. Without the submit thread (or for a swap without the asynchronous swap) the list is replayed on the render thread at the end of the submission: the result is the same, without a saving.
+5. **The check.** `d3d12_deferred_constants_check` also writes the inline path's bytes of every filled buffer into the command; the replay compares them with its own, buffer by buffer and draw by draw, and logs an error for the first 16 that differ. `d3d12_deferred_constants_check_perturb=N` changes one byte of the comparison of every N-th command, so a perturbed run must report exactly the perturbed comparisons. A writer of the constant registers that bypasses the pending mask shows as a mismatch.
+6. **Counters** (the perf trace's `constants` object, [traces.md](../e2e/traces.md)): the buffers filled and their slots on either path, the slots captured, the commands replayed and the replay's time, the checks, mismatches and perturbed comparisons, and, for 17.4, the sampler parameters computed and the descriptor index buffers written.
+
+### 17.3 What step 1 can save
+
+At most the constant buffer data phase of 15.10 without the system constants: 0.199 ms per race frame with the `n2f` timers, about 0.14 ms without them (scaled by the bindings zone, 0.39 against 0.559 ms). The render thread keeps the allocations, the capture and the command, so the expected saving is about 0.05 to 0.1 ms per race frame, and the replay adds about the same work to the submit thread. Step 1 cannot reach the section 10 target alone; what it adds is the mechanism: register state captured at the draw and consumed in list order on the submit thread, checked byte for byte against the inline path.
+
+### 17.4 After step 1
+
+By the profile, the rest of the 0.6 to 0.9 ms has to come from moving decisions with their inputs, not only writes:
+
+- The system constant values and the sampler parameters on the replay, with their inputs captured at the draw: the registers they read, the viewport, and per texture the texture cache's signs, integer scale bits and resolution flags; the replay would own the bindless sampler heap. Ceiling by 15.10: about 0.14 ms for the system constants and a share of the 0.156 ms of descriptors.
+- A draw back end on the replay side: the pipeline configuration, the fixed function state and the draw recording, with the front end keeping the primitive processor, the render target cache and the texture cache in stream order (option 2 of [CP draw offload](cp-draw-offload.md), split at the draw instead of at the PM4). Ceiling: the bindings, pipeline, state and call parts of 15.10, about 0.6 to 0.7 ms per race frame.
+- The other items of the N4 row of section 9: event waits instead of the remaining spins, the vblank interrupt and the readback copies on the render thread, queue depth, the capped-CPU proxy and the Ally X runs.

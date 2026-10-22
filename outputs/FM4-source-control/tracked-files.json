@@ -4536,6 +4536,14 @@
     {
       "path": "work/runtime/src/graphics/util/read_trace.h",
       "provenance": "runtime-fork"
+    },
+    {
+      "path": "work/runtime/include/rex/graphics/d3d12/deferred_constants.h",
+      "provenance": "runtime-fork"
+    },
+    {
+      "path": "work/runtime/src/graphics/d3d12/deferred_constants.cpp",
+      "provenance": "runtime-fork"
     }
   ]
 }

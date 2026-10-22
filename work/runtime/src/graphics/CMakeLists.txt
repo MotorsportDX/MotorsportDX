@@ -88,6 +88,7 @@ if(REXGLUE_USE_D3D12)
         d3d12/shared_memory.cpp
         d3d12/texture_cache.cpp
         d3d12/deferred_command_list.cpp
+        d3d12/deferred_constants.cpp
         d3d12/pipeline_cache.cpp
         d3d12/shader_override.cpp
         d3d12/post_pass.cpp
