@@ -194,17 +194,24 @@ class CommandProcessor {
   // which marks its own with SetRegisterWritesHooked, and unknown registers
   // for the debug log) go through the virtual WriteRegister.
   void WriteRegisterFast(uint32_t index, uint32_t value) {
+    WriteRegisterUnmarked(index, value);
+    if (track_register_writes_ && index < RegisterFile::kRegisterCount) {
+      written_registers_[index >> 6] |= uint64_t(1) << (index & 63);
+    }
+  }
+  // WriteRegisterFast without marking the register written (a hooked register
+  // still marks itself in WriteRegister): for writers of a range, which mark it
+  // at once with MarkRegistersWritten.
+  void WriteRegisterUnmarked(uint32_t index, uint32_t value) {
     if (index < RegisterFile::kRegisterCount &&
         !((register_write_hooked_[index >> 6] >> (index & 63)) & 1)) {
       // Volatile for the WAIT_REG_MEM loop.
       const_cast<volatile uint32_t&>(register_file_->values[index]) = value;
-      if (track_register_writes_) {
-        written_registers_[index >> 6] |= uint64_t(1) << (index & 63);
-      }
     } else {
       WriteRegister(index, value);
     }
   }
+  void MarkRegistersWritten(uint32_t first, uint32_t count);
   void SetRegisterWritesHooked(uint32_t first, uint32_t last);
   uint32_t ReadRegisterValue(uint32_t index) const;
   virtual void WriteRegistersFromMem(uint32_t start_index, uint32_t* base, uint32_t num_registers);

@@ -146,6 +146,25 @@ void CommandProcessor::SetRegisterWritesHooked(uint32_t first, uint32_t last) {
   }
 }
 
+void CommandProcessor::MarkRegistersWritten(uint32_t first, uint32_t count) {
+  if (!count || first >= RegisterFile::kRegisterCount) {
+    return;
+  }
+  const uint32_t last = std::min<uint32_t>(first + count, RegisterFile::kRegisterCount) - 1;
+  const uint32_t first_word = first >> 6, last_word = last >> 6;
+  const uint64_t first_bits = ~uint64_t(0) << (first & 63);
+  const uint64_t last_bits = ~uint64_t(0) >> (63 - (last & 63));
+  if (first_word == last_word) {
+    written_registers_[first_word] |= first_bits & last_bits;
+    return;
+  }
+  written_registers_[first_word] |= first_bits;
+  for (uint32_t word = first_word + 1; word < last_word; ++word) {
+    written_registers_[word] = ~uint64_t(0);
+  }
+  written_registers_[last_word] |= last_bits;
+}
+
 CommandProcessor::~CommandProcessor() = default;
 
 bool CommandProcessor::Initialize() {
@@ -588,7 +607,10 @@ void CommandProcessor::WriteRegistersFromMem(uint32_t start_index, uint32_t* bas
                                              uint32_t num_registers) {
   for (uint32_t i = 0; i < num_registers; ++i) {
     uint32_t data = memory::load_and_swap<uint32_t>(base + i);
-    WriteRegisterFast(start_index + i, data);
+    WriteRegisterUnmarked(start_index + i, data);
+  }
+  if (track_register_writes_) {
+    MarkRegistersWritten(start_index, num_registers);
   }
 }
 
