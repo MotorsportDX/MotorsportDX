@@ -277,6 +277,12 @@ inline std::atomic<uint64_t> host_markers_missing{0};
 // The op lists of replays (host_render_oplists): replays run from an op list,
 // op lists decoded (host render thread only), op lists dropped by a write.
 inline std::atomic<bool> host_oplists{false};
+// d3d12_reuse_draw_bindings: fetch constant writes that changed no dword.
+inline uint64_t fetch_writes_unchanged = 0;
+// The binding check (d3d12_reuse_draw_bindings_check): bindings kept in sync
+// compared with fresh keys, mismatches, comparisons changed on purpose.
+inline std::atomic<uint64_t> binding_checks{0}, binding_check_mismatches{0},
+    binding_check_perturbed{0};
 inline uint64_t host_oplist_replays = 0, host_oplists_decoded = 0;
 inline std::atomic<uint64_t> host_oplists_invalidated{0}, host_oplists_stale{0};
 inline std::atomic<bool> host_check{false};
@@ -457,6 +463,12 @@ inline void OnSwap() {
                 << ",\"invalidations\":" << invalidations.exchange(0, std::memory_order_relaxed)
                 << ",\"invalidated_kb\":"
                 << (invalidated_bytes.exchange(0, std::memory_order_relaxed) >> 10)
+                << ",\"fetch_writes_unchanged\":" << fetch_writes_unchanged
+                << ",\"binding_check\":{\"checks\":"
+                << binding_checks.exchange(0, std::memory_order_relaxed) << ",\"mismatches\":"
+                << binding_check_mismatches.exchange(0, std::memory_order_relaxed)
+                << ",\"perturbed\":" << binding_check_perturbed.exchange(0, std::memory_order_relaxed)
+                << '}'
                 << ",\"vblanks\":{\"grid\":" << vblanks[0].exchange(0, std::memory_order_relaxed)
                 << ",\"late\":" << vblanks[1].exchange(0, std::memory_order_relaxed)
                 << ",\"forced\":" << vblanks[2].exchange(0, std::memory_order_relaxed) << '}'
@@ -622,6 +634,7 @@ inline void OnSwap() {
   if (ResolveInventory* inventory = GetResolveInventory(); inventory && ++inventory->windows % 10 == 0) {
     WriteResolveInventory(ms(now - state->origin) / 1000.0);
   }
+  fetch_writes_unchanged = 0;
   const Wait cause = state->cause;
   std::ofstream output = std::move(state->output);
   std::vector<float> frame_ms = std::move(state->frame_ms);

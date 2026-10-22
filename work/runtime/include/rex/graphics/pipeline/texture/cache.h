@@ -111,6 +111,14 @@ class TextureCache {
 
   virtual void RequestTextures(uint32_t used_texture_mask);
 
+  // The binding check of N2 step 2 (docs/analysis/d3d-hle.md, section 15.11):
+  // every binding kept in sync is compared with a key computed fresh from its
+  // fetch constant; every Nth comparison is changed on purpose (0: never).
+  void SetBindingCheck(bool enabled, uint32_t perturb_every) {
+    binding_check_ = enabled;
+    binding_check_perturb_ = perturb_every;
+  }
+
   // "ActiveTexture" means as of the latest RequestTextures call.
 
   uint32_t GetActiveTextureHostSwizzle(uint32_t fetch_constant_index) const {
@@ -659,6 +667,9 @@ class TextureCache {
   // Bit vector with bits reset on fetch constant writes to avoid parsing fetch
   // constants again and again.
   uint32_t texture_bindings_in_sync_ = 0;
+  bool binding_check_ = false;
+  uint32_t binding_check_perturb_ = 0;
+  uint64_t binding_check_count_ = 0;
 };
 
 }  // namespace rex::graphics

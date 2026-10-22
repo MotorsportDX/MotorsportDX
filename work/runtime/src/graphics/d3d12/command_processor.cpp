@@ -49,6 +49,17 @@
 
 REXCVAR_DEFINE_BOOL(d3d12_bindless, true, "GPU/D3D12", "Use bindless resources where available")
     .lifecycle(rex::cvar::Lifecycle::kRequiresRestart);
+REXCVAR_DEFINE_BOOL(d3d12_reuse_draw_bindings_check, false, "GPU/D3D12",
+                    "Compare every texture binding kept in sync with a key computed fresh from "
+                    "its fetch constant (the check of d3d12_reuse_draw_bindings)");
+REXCVAR_DEFINE_INT32(d3d12_reuse_draw_bindings_check_perturb, 0, "GPU/D3D12",
+                     "Test of d3d12_reuse_draw_bindings_check: change every Nth fresh key so "
+                     "that it must be reported (0: off)")
+    .range(0, 1000000);
+REXCVAR_DEFINE_BOOL(d3d12_reuse_draw_bindings, false, "GPU/D3D12",
+                    "Keep the texture bindings, the fetch constant buffer and the vertex buffer "
+                    "residency of fetch constants rewritten with their previous values (N2 step 2 "
+                    "of docs/analysis/d3d-hle.md, section 15.11)");
 
 REXCVAR_DEFINE_BOOL(d3d12_readback_memexport, false, "GPU/D3D12",
                     "Read data written by memory export in shaders on the CPU")
@@ -2242,6 +2253,8 @@ bool D3D12CommandProcessor::SetupContext() {
     REXGPU_ERROR("Failed to initialize the texture cache");
     return false;
   }
+  texture_cache_->SetBindingCheck(REXCVAR_GET(d3d12_reuse_draw_bindings_check),
+                                  uint32_t(REXCVAR_GET(d3d12_reuse_draw_bindings_check_perturb)));
 
   pipeline_cache_ = std::make_unique<PipelineCache>(
       *this, *register_file_, *render_target_cache_.get(), bindless_resources_used_);
@@ -2948,6 +2961,42 @@ void D3D12CommandProcessor::WriteRegistersFromMem(uint32_t start_index, uint32_t
       end_index <= XE_GPU_REG_SHADER_CONSTANT_LOOP_31) {
     memory::copy_and_swap(register_file_->values + start_index, base, num_registers);
     cbuffer_binding_bool_loop_.up_to_date = false;
+    return;
+  }
+
+  if (start_index >= XE_GPU_REG_SHADER_CONSTANT_FETCH_00_0 &&
+      end_index <= XE_GPU_REG_SHADER_CONSTANT_FETCH_31_5 &&
+      REXCVAR_GET(d3d12_reuse_draw_bindings)) {
+    // The title rewrites fetch constants at every draw, mostly with the values
+    // they have: only the fetch constants whose dwords change invalidate what
+    // depends on them.
+    uint32_t changed_textures = 0;
+    uint32_t first_changed = UINT32_MAX, last_changed = 0;
+    for (uint32_t i = 0; i < num_registers; ++i) {
+      const uint32_t value = memory::load_and_swap<uint32_t>(base + i);
+      uint32_t& stored = register_file_->values[start_index + i];
+      if (stored == value) {
+        continue;
+      }
+      stored = value;
+      const uint32_t fetch_dword = start_index + i - XE_GPU_REG_SHADER_CONSTANT_FETCH_00_0;
+      changed_textures |= UINT32_C(1) << (fetch_dword / 6);
+      first_changed = std::min(first_changed, fetch_dword);
+      last_changed = fetch_dword;
+    }
+    perf_trace::fetch_writes_unchanged += !changed_textures;
+    if (!changed_textures) {
+      return;
+    }
+    cbuffer_binding_fetch_.up_to_date = false;
+    if (texture_cache_) {
+      uint32_t index;
+      while (rex::bit_scan_forward(changed_textures, &index)) {
+        changed_textures &= ~(UINT32_C(1) << index);
+        texture_cache_->TextureFetchConstantWritten(index);
+      }
+    }
+    InvalidateVertexBufferResidencyRange(first_changed / 2, last_changed / 2);
     return;
   }
 

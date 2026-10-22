@@ -520,6 +520,37 @@ void TextureCache::RequestTextures(uint32_t used_texture_mask) {
       pending_shared_memory_ranges.push_back(pending_ranges[i]);
     }
   };
+  if (binding_check_) {
+    // The bindings kept in sync against keys computed fresh.
+    uint32_t in_sync = used_texture_mask & texture_bindings_in_sync_;
+    uint32_t check_index;
+    while (rex::bit_scan_forward(in_sync, &check_index)) {
+      in_sync &= ~(UINT32_C(1) << check_index);
+      const TextureBinding& binding = texture_bindings_[check_index];
+      TextureKey fresh_key;
+      uint8_t fresh_signs = 0;
+      BindingInfoFromFetchConstant(regs.GetTextureFetch(check_index), fresh_key, &fresh_signs);
+      if (binding_check_perturb_ && ++binding_check_count_ % binding_check_perturb_ == 0) {
+        fresh_key.base_page ^= 1;
+        perf_trace::binding_check_perturbed.fetch_add(1, std::memory_order_relaxed);
+      }
+      perf_trace::binding_checks.fetch_add(1, std::memory_order_relaxed);
+      const bool same = binding.key.is_valid
+                            ? fresh_key == binding.key && fresh_signs == binding.swizzled_signs
+                            : !fresh_key.is_valid;
+      if (!same) {
+        perf_trace::binding_check_mismatches.fetch_add(1, std::memory_order_relaxed);
+        static uint32_t messages = 0;
+        if (messages < 64) {
+          ++messages;
+          REXGPU_ERROR("Binding check: texture key mismatch");
+          REXGPU_WARN("Binding check: fetch constant {} kept in sync with an outdated key",
+                      check_index);
+        }
+      }
+    }
+  }
+
   // Phases of the textures zone (N2, d3d-hle.md 15.9): the keys of the
   // bindings out of sync (with FindOrCreateTexture timed apart), the loads, and
   // the binding update.
