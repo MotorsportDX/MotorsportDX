@@ -987,7 +987,7 @@ The close gate of increment 3 on `I:\FM4-build-usa` at 240 Hz, on the binary of 
 | `parity.py` on `freeze`, 1x and 2x (`n3c-freeze-*`) | | PASS, 22.3% and 31.1% of the image above 4 (35.1% and 28.4% at the close of increment 2) |
 | identity check with perturbation (`n3c-perturb-career`) | | 13,525 ranges perturbed, 13,525 reported |
 
-Every cell reached its goal with RTV's error keys; the smoke and perf warnings are capture statistics of races that differ (the `photo_view` photos checked by eye). With bit 2 the race resolves 26.1 times a frame from the host render target at 1x and 2x (3.75 a frame cannot), the replay 33.0 and photo mode 39.2. The readback on demand had no timeout, CP fault or lost trap; the races read nothing back. The first RTV perf cell (`n3c2xp`) lost its third run to a guest access violation (a write of guest address 0 while the race loaded, on RTV's defaults, which bit 2 does not touch); the repeated cell ran three of three, and the crash did not recur in the other 25 runs of the gate.
+Every cell reached its goal with RTV's error keys; the smoke and perf warnings are capture statistics of races that differ (the `photo_view` photos checked by eye). With bit 2 the race resolves 26.1 times a frame from the host render target at 1x and 2x (3.75 a frame cannot), the replay 33.0 and photo mode 39.2. The readback on demand had no timeout, CP fault or lost trap; the races read nothing back. The first RTV perf cell (`n3c2xp`) lost its third run to a guest access violation (a write of guest address 0 while the race loaded, on RTV's defaults, which bit 2 does not touch); the repeated cell ran three of three, and the crash did not recur in the other 25 runs of the gate. The crash handler's dump (`I:\FM4-build-usa\guest-null-crash.dmp`), symbolized by the main session against the snapshot's map file, puts the fault in guest code: `sub_82956DA8`, guest instruction `0x8295720C` (`stwx r11,r10,r18`). The function loads an object from its r6 argument; the buffer pointer at offset 160 of that object is null, so the store writes 0 to guest address 0. A game object's buffer was not set yet while the race loaded, either a load-order race between guest threads or an allocation that returned 0. Nothing points at the GPU path. If it recurs, the runtime log near the crash is to be checked for a failed allocation.
 
 ### 16.12 Increment 3, step 2 design: lazy ownership transfers, 22 October 2026
 
@@ -1073,6 +1073,52 @@ The copies of tiles fall by about 45%, but the GPU time of the transfers falls b
 | 32_FLOAT, 1x | 2_10_10_10_FLOAT, 1x | 1 | 2 |
 
 The transfers are the title's reuse of the same EDRAM for depth and colour and for 1x and 4x surfaces, such as a scene depth read back as colour and a colour surface reused as the next pass's depth. The one-pass scene of increment 4 removes most of them with the tiles that alias. What remains costs mainly through the stencil bit passes, which a GPU with stencil reference output (`PSSpecifiedStencilRefSupported`) does not need. Lazy transfers can avoid only the share no one reads, and in the race that is small in time.
+
+The main session's decisions of 23 October 2026: bit 4 lands off; the transfers that remain after increment 4 are judged from its own inventory. Writing the stencil from the pixel shader on GPUs with `PSSpecifiedStencilRefSupported` (no stencil bit passes) is an optional later item, not worked on now.
+
+### 16.14 Step 4 deferred, 23 October 2026
+
+The main session's decision of 23 October 2026: step 4 of 16.9, the title's resolve writer as a record, leaves stage N3 and is deferred to the API-level stage, where draws become records too. The measurements behind it:
+
+- The writer's body (`sub_82348DC8`) is about 2,550 lines of recompiled PPC, against a few dozen for the dirty writers of N1. A record built from its arguments would have to reproduce every register it writes (surface, copy, window and viewport state, the rectangle's draw); a record made by running the body into scratch and decoding it moves the work instead of removing it.
+- In a race at 2x on the native path (`n3i-race-2x`), the whole resolve execution (the command processor's `copy` zone) takes 0.142 ms of the render thread's 4.35 ms a frame. The PM4 that a record would replace is about 30 resolves of about 37 dwords, about 1,100 dwords a frame, under 0.02 ms of decoding.
+- The host already finds a resolve's source surface from the copy registers (`FindHostResolveSource`, 16.11), which is what increment 4's resolves consume.
+
+Whether increment 4 needs the tiling bracket writers to find the tile loop is decided in its design note.
+
+### 16.15 Host render targets sized to their surfaces: design, 23 October 2026
+
+The main session's decision of 23 October 2026 puts this before increment 4: a one-pass 4x MSAA scene of 1280x720 does not fit an EDRAM-sized host target (16.11), and the race's 16 surfaces take 810 MB at 2x. With `native_rt_surfaces` bit 8 (off, RTV path only):
+
+- **Size.** A host target is created with the tile rows the creating draw or clear needs, rounded up to a multiple of 8 tile rows (a 720-line scene at 1x takes 48 of its 128 EDRAM rows). Every target a draw binds is sized to the draw's rows, not only to the range the target claims: the render area of a draw is the intersection of its views, so a target cut short by the next target's base must not clip the others.
+- **Growth.** When a later draw or clear needs more rows, a new target of the same key replaces it. It has the larger height (at least half as large again, at most the EDRAM rows). All tiles of the old target are copied into it by an ownership transfer of the same key, which is bit-exact: colour keeps its bits through the transfer format; depth keeps the host float32 value, because the formats are equal, and the stencil. The old target is destroyed once the GPU has finished the submissions that use it. Every reference moves to the new target: the cache's map, the bound and accumulated targets, the holders of deferred tiles, and the transfers kept pending.
+- **Memory.** Every target's allocation is counted. The perf trace's `rt_memory` gives the targets, the MB in use and the peak MB, and the growths and evictions of the window.
+- **Cap.** With `native_rt_surfaces_memory_cap_mb=N`, the cache destroys the least recently bound targets while it is over the cap, at the start of a draw's update. Only targets that own no tile are destroyed: not a host depth source of any range, and not bound in the last update. Their deferred tiles as a holder are copied into their owners first (16.12). A target that owns tiles stays, so the cap can be exceeded.
+- **Step gate.** The `career` check run with bit 8 (the lazy check where bit 4 is on as well); the target memory at 1x and 2x before and after, in the race and the replay, peak and steady; one 2x race perf run per side; the `freeze` parity at 1x and 2x, since a target's extent can clip.
+
+### 16.16 Host render targets sized to their surfaces: results, 23 October 2026
+
+Bit 8 is built as designed in 16.15 and stays off by default. The step gate ran on `I:\FM4-build-usa` at 240 Hz, with `-Native`'s cvars and `native_rt_surfaces=10` (bits 2 and 8) against `native_rt_surfaces=2`. The memory is that of the host render targets (`rt_memory`); it does not shrink, so the steady value of a phase is also the run's peak after the menus:
+
+| Run (`n3z-*`) | Targets | Memory, without bit 8 | Memory, with bit 8 |
+|---|---|---|---|
+| `career` 1x, race and replay | 43 | 589.8 MB | 195.5 MB (-67%) |
+| `career` 2x, race and replay | 43 | 2,142.2 MB | 564.5 MB (-74%) |
+| `race` 2x | 42 | 2,102.2 MB | 548.5 MB (-74%) |
+
+- **Checks.** The byte check of the resolves from the host render target (`native_rt_surfaces_check=30`) compared 19,636 resolves at 1x and 16,552 at 2x with no mismatch, after the targets were sized and grown. Each run grew one target. `parity.py` on `freeze` against RTV's `n3c-freeze-*-rtv` passes at 1x and 2x, with 20.8% and 29.0% of the image above 4 (22.3% and 31.1% without bit 8). Every run reached its goal with RTV's error keys.
+- **Cap.** With `native_rt_surfaces_memory_cap_mb=200` at 2x (`n3z-career-2x-cap`), the cache kept 19 to 20 targets and 185 to 197 MB in the race and the replay, with a peak of 323.5 MB. To stay there it evicted 3,029 targets in the run, and they were created again. The working set of the targets that own tiles is about 550 MB at 2x, so a cap below it trades memory for re-creations. No byte check differed.
+- **Performance.** Three race pairs at 2x (`n3z-race-2x-*`), one run each, the race's load between 1,460 and 2,114 draws a frame:
+
+| | Without bit 8 | With bit 8 |
+|---|---|---|
+| Race fps | 197.0, 192.1, 194.5 | 185.7, 195.8, 188.6 |
+| GPU ms a frame | 4.97, 5.08, 5.03 | 5.28, 5.03, 5.18 |
+| Resolves, GPU ms a frame | 0.503, 0.487, 0.506 | 0.581, 0.605, 0.587 |
+| Transfers, GPU ms a frame | 0.339, 0.343, 0.342 | 0.267, 0.252, 0.261 |
+| Render thread time per draw | 2.092, 2.079, 2.108 us | 2.035, 2.080, 2.090 us |
+
+  With bit 8 the resolves take about 0.09 ms a frame more and the transfers about 0.08 ms less, so the frame's GPU time stays about the same. The full-screen resolves (0.17 ms) and the number of resolves from the host render target (25.3 a frame) are unchanged, so the added time is in the other resolves; its cause is not found yet.
 
 ## 17. Stage N4 design, 22 October 2026
 

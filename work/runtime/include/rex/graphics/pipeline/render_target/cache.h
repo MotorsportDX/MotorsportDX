@@ -354,6 +354,10 @@ class RenderTargetCache {
     // native_rt_surfaces bit 4: the tiles this render target owns whose data
     // another render target still holds (deferred transfers).
     uint32_t lazy_owned_held_tiles() const { return lazy_owned_held_tiles_; }
+    // native_rt_surfaces bit 8: the tile rows of the host target (EDRAM-sized
+    // otherwise) and its memory.
+    uint32_t tile_rows() const { return tile_rows_; }
+    uint64_t memory_bytes() const { return memory_bytes_; }
 
    protected:
     RenderTarget(RenderTargetKey key) : key_(key) {}
@@ -361,6 +365,10 @@ class RenderTargetCache {
    private:
     friend class RenderTargetCache;
     uint32_t lazy_owned_held_tiles_ = 0;
+    uint32_t tile_rows_ = 0;
+    uint64_t memory_bytes_ = 0;
+    // The update that last bound it, for the eviction.
+    uint64_t last_bound_ = 0;
 
    private:
     RenderTargetKey key_;
@@ -539,7 +547,35 @@ class RenderTargetCache {
   uint32_t GetRenderTargetHeight(uint32_t pitch_tiles_at_32bpp,
                                  xenos::MsaaSamples msaa_samples) const;
 
-  virtual RenderTarget* CreateRenderTarget(RenderTargetKey key) = 0;
+  // Creates the host target of the key with tile_rows rows of EDRAM tiles
+  // (fewer than the EDRAM's with native_rt_surfaces bit 8).
+  virtual RenderTarget* CreateRenderTarget(RenderTargetKey key, uint32_t tile_rows) = 0;
+
+  // native_rt_surfaces bit 8 (docs/analysis/d3d-hle.md 16.15): host targets
+  // sized to the tile rows their surfaces use.
+  bool IsSizingEnabled() const;
+  // The tile rows of an EDRAM-sized target of the key.
+  uint32_t GetFullTileRows(RenderTargetKey key) const;
+  // Creates a target with the rows, and counts its memory.
+  RenderTarget* CreateSizedRenderTarget(RenderTargetKey key, uint32_t tile_rows);
+  static void SetRenderTargetMemory(RenderTarget* render_target, uint64_t bytes) {
+    render_target->memory_bytes_ = bytes;
+  }
+  // A larger target of the same key holding all tiles of render_target (the
+  // implementation copies them), or nullptr if it could not be made.
+  virtual RenderTarget* ResizeRenderTarget(RenderTarget* render_target, uint32_t tile_rows) {
+    return nullptr;
+  }
+  // A target no longer in the cache: the implementation destroys it once the
+  // GPU no longer uses it, after moving its own references.
+  virtual void RetireRenderTarget(RenderTarget* render_target) { delete render_target; }
+  // Copies the deferred tiles a target holds into their owners (before it is
+  // evicted).
+  virtual void FlushLazyHolder(RenderTarget* holder) {}
+  // While over native_rt_surfaces_memory_cap_mb: retires the least recently
+  // bound targets that own no tile and are not bound now.
+  void EvictRenderTargets();
+  bool IsOverMemoryCap() const;
 
   // Whether depth buffer is encoded differently on the host, thus after
   // aliasing naively, precision may be lost - host depth must only be
@@ -628,7 +664,8 @@ class RenderTargetCache {
   void TakeDeferredTransfers(uint32_t base_tiles, uint32_t row_length_used, uint32_t rows,
                              uint32_t pitch_tiles, const RenderTarget* owner,
                              uint32_t flush_outcome,
-                             std::vector<std::pair<RenderTarget*, std::vector<Transfer>>>& out);
+                             std::vector<std::pair<RenderTarget*, std::vector<Transfer>>>& out,
+                             const RenderTarget* holder = nullptr);
 
  private:
   const RegisterFile& register_file_;
@@ -714,7 +751,14 @@ class RenderTargetCache {
     return xenos::GetStorageColorFormat(format);
   }
 
-  RenderTarget* GetOrCreateRenderTarget(RenderTargetKey key);
+  // With native_rt_surfaces bit 8, the target has at least tile_rows rows
+  // (grown if needed).
+  RenderTarget* GetOrCreateRenderTarget(RenderTargetKey key, uint32_t tile_rows = 0);
+  // Moves every reference of the cache from old_rt to new_rt, and retires
+  // old_rt.
+  void ReplaceRenderTarget(RenderTarget* old_rt, RenderTarget* new_rt);
+  uint64_t render_target_memory_ = 0, render_target_memory_peak_ = 0;
+  uint64_t render_target_update_clock_ = 0;
 
   // Checks if changing ownership of the range to the specified render target
   // would require transferring data - primarily for barrier placement on the

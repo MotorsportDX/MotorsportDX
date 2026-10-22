@@ -85,7 +85,7 @@ Increment 3 of stage N3 of the [native port](../analysis/d3d-hle.md#1611-increme
 | `parity.py` on `freeze`, 1x and 2x | | pass, 22.3% and 31.1% of the image above 4 |
 | identity check with perturbation | | 13,525 ranges perturbed, 13,525 reported |
 
-The race's resolves take 0.47 ms of GPU time a frame at 2x against 0.68 ms on RTV; 26.1 of 29.9 resolves a frame come from the host render target. One of the 14 RTV runs crashed while the race loaded (a guest write to address 0, on RTV's defaults); it did not recur.
+The race's resolves take 0.47 ms of GPU time a frame at 2x against 0.68 ms on RTV; 26.1 of 29.9 resolves a frame come from the host render target. One of the 14 RTV runs crashed while the race loaded, on RTV's defaults; it did not recur. The fault is in guest code (`sub_82956DA8` stores through a null buffer pointer of a game object, so it writes to guest address 0), not in the GPU path ([d3d-hle.md 16.11](../analysis/d3d-hle.md)).
 
 ### Readback on demand, stage N3, 22 October 2026
 

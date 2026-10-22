@@ -1070,6 +1070,10 @@ bool D3D12RenderTargetCache::Initialize() {
 
 void D3D12RenderTargetCache::Shutdown(bool from_destructor) {
   pending_transfers_ = PendingTransfers();
+  for (const auto& retired : retired_render_targets_) {
+    delete retired.second;
+  }
+  retired_render_targets_.clear();
   ui::d3d12::util::ReleaseAndNull(resolve_rov_clear_64bpp_pipeline_);
   ui::d3d12::util::ReleaseAndNull(resolve_rov_clear_32bpp_pipeline_);
   ui::d3d12::util::ReleaseAndNull(resolve_rov_clear_root_signature_);
@@ -1165,6 +1169,18 @@ void D3D12RenderTargetCache::CompletedSubmissionUpdated() {
   if (transfer_vertex_buffer_pool_) {
     transfer_vertex_buffer_pool_->Reclaim(command_processor_.GetCompletedSubmission());
   }
+  if (!retired_render_targets_.empty()) {
+    const uint64_t completed = command_processor_.GetCompletedSubmission();
+    auto kept = std::remove_if(retired_render_targets_.begin(), retired_render_targets_.end(),
+                               [&](const std::pair<uint64_t, RenderTarget*>& retired) {
+                                 if (retired.first > completed) {
+                                   return false;
+                                 }
+                                 delete retired.second;
+                                 return true;
+                               });
+    retired_render_targets_.erase(kept, retired_render_targets_.end());
+  }
 }
 
 void D3D12RenderTargetCache::BeginSubmission() {
@@ -1181,6 +1197,12 @@ void D3D12RenderTargetCache::BeginSubmission() {
 bool D3D12RenderTargetCache::Update(bool is_rasterization_done,
                                     reg::RB_DEPTHCONTROL normalized_depth_control,
                                     uint32_t normalized_color_mask, const Shader& vertex_shader) {
+  // native_rt_surfaces bit 8 with a memory cap: evictions only happen between
+  // updates, when no transfer still names a target (d3d-hle.md 16.15).
+  if (IsOverMemoryCap()) {
+    PerformPendingTransfers();
+    EvictRenderTargets();
+  }
   if (!RenderTargetCache::Update(is_rasterization_done, normalized_depth_control,
                                  normalized_color_mask, vertex_shader)) {
     return false;
@@ -1894,15 +1916,18 @@ DXGI_FORMAT D3D12RenderTargetCache::GetDepthSRVStencilDXGIFormat(
   }
 }
 
-RenderTargetCache::RenderTarget* D3D12RenderTargetCache::CreateRenderTarget(RenderTargetKey key) {
+RenderTargetCache::RenderTarget* D3D12RenderTargetCache::CreateRenderTarget(RenderTargetKey key,
+                                                                          uint32_t tile_rows) {
   ID3D12Device* device = command_processor_.GetD3D12Provider().GetDevice();
 
   D3D12_RESOURCE_DESC resource_desc;
   resource_desc.Dimension = D3D12_RESOURCE_DIMENSION_TEXTURE2D;
   resource_desc.Alignment = 0;
   resource_desc.Width = key.GetWidth() * draw_resolution_scale_x();
-  resource_desc.Height =
-      GetRenderTargetHeight(key.pitch_tiles_at_32bpp, key.msaa_samples) * draw_resolution_scale_y();
+  resource_desc.Height = tile_rows *
+                         (xenos::kEdramTileHeightSamples >>
+                          uint32_t(key.msaa_samples >= xenos::MsaaSamples::k2X)) *
+                         draw_resolution_scale_y();
   resource_desc.DepthOrArraySize = 1;
   resource_desc.MipLevels = 1;
   if (key.is_depth) {
@@ -2038,9 +2063,58 @@ RenderTargetCache::RenderTarget* D3D12RenderTargetCache::CreateRenderTarget(Rend
   }
   device->CreateShaderResourceView(resource.Get(), &srv_desc, descriptor_srv.GetHandle());
 
-  return new D3D12RenderTarget(key, resource.Get(), std::move(descriptor_draw),
-                               std::move(descriptor_load_separate), std::move(descriptor_srv),
-                               std::move(descriptor_srv_stencil), resource_state);
+  RenderTarget* render_target = new D3D12RenderTarget(
+      key, resource.Get(), std::move(descriptor_draw), std::move(descriptor_load_separate),
+      std::move(descriptor_srv), std::move(descriptor_srv_stencil), resource_state);
+  SetRenderTargetMemory(render_target,
+                        device->GetResourceAllocationInfo(0, 1, &resource_desc).SizeInBytes);
+  return render_target;
+}
+
+RenderTargetCache::RenderTarget* D3D12RenderTargetCache::ResizeRenderTarget(
+    RenderTarget* render_target, uint32_t tile_rows) {
+  // Nothing pending may still name the old target.
+  PerformPendingTransfers();
+  const RenderTargetKey key = render_target->key();
+  RenderTarget* larger = CreateSizedRenderTarget(key, tile_rows);
+  if (!larger) {
+    return nullptr;
+  }
+  // All tiles of the old target, by a transfer of the same key: bit-exact
+  // (the formats are equal, so depth keeps its host value).
+  const uint32_t tiles =
+      std::min(render_target->tile_rows() * key.GetPitchTiles(), xenos::kEdramTileCount);
+  std::vector<Transfer> transfers;
+  const uint32_t end = key.base_tiles + tiles;
+  transfers.emplace_back(key.base_tiles, std::min(end, xenos::kEdramTileCount), render_target,
+                         nullptr);
+  if (end > xenos::kEdramTileCount) {
+    transfers.emplace_back(0, end - xenos::kEdramTileCount, render_target, nullptr);
+  }
+  PerformTransfersAndResolveClears(1, &larger, &transfers);
+  return larger;
+}
+
+void D3D12RenderTargetCache::RetireRenderTarget(RenderTarget* render_target) {
+  InvalidateCommandListRenderTargets();
+  retired_render_targets_.emplace_back(command_processor_.GetCurrentSubmission(), render_target);
+}
+
+void D3D12RenderTargetCache::FlushLazyHolder(RenderTarget* holder) {
+  if (!lazy_held_tiles()) {
+    return;
+  }
+  lazy_flush_groups_.clear();
+  TakeDeferredTransfers(0, 0, 0, 0, nullptr,
+                        uint32_t(perf_trace::LazyTileOutcome::kFlushedOther),
+                        lazy_flush_groups_, holder);
+  for (auto& group : lazy_flush_groups_) {
+    if (!group.second.empty()) {
+      RenderTarget* owner = group.first;
+      PerformTransfersAndResolveClears(1, &owner, &group.second);
+    }
+  }
+  lazy_flush_groups_.clear();
 }
 
 bool D3D12RenderTargetCache::IsHostDepthEncodingDifferent(

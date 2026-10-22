@@ -136,7 +136,10 @@ class D3D12RenderTargetCache final : public RenderTargetCache {
     return D3D12_REQ_TEXTURE2D_U_OR_V_DIMENSION;
   }
 
-  RenderTarget* CreateRenderTarget(RenderTargetKey key) override;
+  RenderTarget* CreateRenderTarget(RenderTargetKey key, uint32_t tile_rows) override;
+  RenderTarget* ResizeRenderTarget(RenderTarget* render_target, uint32_t tile_rows) override;
+  void RetireRenderTarget(RenderTarget* render_target) override;
+  void FlushLazyHolder(RenderTarget* holder) override;
 
   bool IsHostDepthEncodingDifferent(xenos::DepthRenderTargetFormat format) const override;
 
@@ -840,6 +843,9 @@ class D3D12RenderTargetCache final : public RenderTargetCache {
 
   std::vector<Transfer> clear_transfers_[2];
   std::vector<std::pair<RenderTarget*, std::vector<Transfer>>> lazy_flush_groups_;
+  // native_rt_surfaces bit 8: replaced and evicted targets, destroyed once
+  // their submission has completed.
+  std::vector<std::pair<uint64_t, RenderTarget*>> retired_render_targets_;
   // native_rt_surfaces_transfer_inventory: transfers and tiles by kind.
   std::map<std::string, std::pair<uint64_t, uint64_t>> transfer_inventory_;
   uint64_t transfer_inventory_frame_ = 0;

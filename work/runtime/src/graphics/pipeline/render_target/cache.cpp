@@ -51,11 +51,18 @@ REXCVAR_DEFINE_INT32(native_rt_surfaces, 0, "GPU",
                      "count whether the tiles of each ownership transfer are read before they "
                      "are overwritten (perf trace), 2 resolve from the host render target "
                      "instead of its dump into the EDRAM buffer, 4 defer ownership transfers "
-                     "until a draw, a resolve or a post pass reads the tiles (16.12). RTV path "
-                     "only")
-    .range(0, 7)
+                     "until a draw, a resolve or a post pass reads the tiles (16.12), 8 size "
+                     "the host render targets to the tile rows their surfaces use (16.15). RTV "
+                     "path only")
+    .range(0, 15)
     .lifecycle(rex::cvar::Lifecycle::kRequiresRestart);
 
+REXCVAR_DEFINE_INT32(native_rt_surfaces_memory_cap_mb, 0, "GPU",
+                     "With native_rt_surfaces bit 8: above this many MB of host render "
+                     "targets (0: no cap), destroy the least recently bound ones that own no "
+                     "EDRAM tile")
+    .range(0, 65536)
+    .lifecycle(rex::cvar::Lifecycle::kRequiresRestart);
 REXCVAR_DEFINE_BOOL(native_rt_surfaces_lazy_check, false, "GPU",
                     "With native_rt_surfaces bit 4: after each flush of deferred transfers, "
                     "look for deferred tiles left in what the reader reads, and for deferred "
@@ -422,6 +429,7 @@ void RenderTargetCache::ClearCache() {
           continue;
         }
         if (used_render_targets.find(it->second->key()) == used_render_targets.end()) {
+          render_target_memory_ -= it->second->memory_bytes_;
           delete it->second;
           render_targets_.erase(it);
         }
@@ -468,6 +476,7 @@ bool RenderTargetCache::Update(bool is_rasterization_done,
   // For this update only.
   const UniformDraw uniform_draw = uniform_draw_;
   uniform_draw_ = UniformDraw();
+  ++render_target_update_clock_;
   last_update_uniform_draw_ = uniform_draw;
   last_update_overwrite_cutout_ = {};
   last_update_overwrite_cutout_slots_ = 0;
@@ -712,7 +721,12 @@ bool RenderTargetCache::Update(bool is_rasterization_done,
     rt_key.is_depth = rt_bit_index == 0;
     rt_key.resource_format = resource_formats[rt_bit_index];
     if (!interlock_barrier_only) {
-      RenderTarget* render_target = GetOrCreateRenderTarget(rt_key);
+      // With native_rt_surfaces bit 8, every bound target has the draw's rows:
+      // the render area is the intersection of the bound views.
+      RenderTarget* render_target = GetOrCreateRenderTarget(
+          rt_key, ((height_used << uint32_t(msaa_samples >= xenos::MsaaSamples::k2X)) +
+                   (xenos::kEdramTileHeightSamples - 1)) /
+                      xenos::kEdramTileHeightSamples);
       if (!render_target) {
         return false;
       }
@@ -1405,14 +1419,15 @@ void RenderTargetCache::DeferTransfers(const RenderTargetKey* keys, RenderTarget
 void RenderTargetCache::TakeDeferredTransfers(
     uint32_t base_tiles, uint32_t row_length_used, uint32_t rows, uint32_t pitch_tiles,
     const RenderTarget* owner, uint32_t flush_outcome,
-    std::vector<std::pair<RenderTarget*, std::vector<Transfer>>>& out) {
+    std::vector<std::pair<RenderTarget*, std::vector<Transfer>>>& out,
+    const RenderTarget* holder_filter) {
   if (!lazy_held_tiles_ || (owner && !owner->lazy_owned_held_tiles_)) {
     return;
   }
   uint32_t flushed = 0;
   auto take = [&](uint32_t tile) {
     RenderTarget* holder = lazy_holders_[tile];
-    if (!holder) {
+    if (!holder || (holder_filter && holder != holder_filter)) {
       return;
     }
     auto range_it = ownership_ranges_.upper_bound(tile);
@@ -1437,7 +1452,7 @@ void RenderTargetCache::TakeDeferredTransfers(
     group_it->second.emplace_back(tile, tile + 1, holder, nullptr);
     ++flushed;
   };
-  if (owner) {
+  if (owner || holder_filter) {
     for (uint32_t tile = 0; tile < xenos::kEdramTileCount; ++tile) {
       take(tile);
     }
@@ -1739,6 +1754,11 @@ bool RenderTargetCache::PrepareHostRenderTargetsResolveClear(
                      depth_clear_start_tiles_wrapped - color_clear_start_tiles_wrapped);
   }
 
+  // The tile rows the clear reaches (native_rt_surfaces bit 8).
+  const uint32_t clear_tile_rows =
+      (((clear_rectangle.y_pixels + clear_rectangle.height_pixels) << msaa_samples_y_log2) +
+       (xenos::kEdramTileHeightSamples - 1)) /
+      xenos::kEdramTileHeightSamples;
   RenderTargetKey depth_render_target_key;
   RenderTarget* depth_render_target = nullptr;
   if (depth_clear_length_tiles) {
@@ -1747,7 +1767,7 @@ bool RenderTargetCache::PrepareHostRenderTargetsResolveClear(
     depth_render_target_key.msaa_samples = msaa_samples;
     depth_render_target_key.is_depth = 1;
     depth_render_target_key.resource_format = resolve_info.depth_edram_info.format;
-    depth_render_target = GetOrCreateRenderTarget(depth_render_target_key);
+    depth_render_target = GetOrCreateRenderTarget(depth_render_target_key, clear_tile_rows);
     if (!depth_render_target) {
       // Failed to create the depth render target, don't clear it.
       depth_render_target_key = RenderTargetKey();
@@ -1763,7 +1783,7 @@ bool RenderTargetCache::PrepareHostRenderTargetsResolveClear(
     color_render_target_key.is_depth = 0;
     color_render_target_key.resource_format = uint32_t(GetColorResourceFormat(
         xenos::ColorRenderTargetFormat(resolve_info.color_edram_info.format)));
-    color_render_target = GetOrCreateRenderTarget(color_render_target_key);
+    color_render_target = GetOrCreateRenderTarget(color_render_target_key, clear_tile_rows);
     if (!color_render_target) {
       // Failed to create the color render target, don't clear it.
       color_render_target_key = RenderTargetKey();
@@ -1826,16 +1846,145 @@ void RenderTargetCache::PixelShaderInterlockFullEdramBarrierPlaced() {
   ownership_ranges_.emplace(0, empty_range);
 }
 
-RenderTargetCache::RenderTarget* RenderTargetCache::GetOrCreateRenderTarget(RenderTargetKey key) {
+bool RenderTargetCache::IsSizingEnabled() const {
+  return GetPath() == Path::kHostRenderTargets && (REXCVAR_GET(native_rt_surfaces) & 8);
+}
+
+uint32_t RenderTargetCache::GetFullTileRows(RenderTargetKey key) const {
+  const uint32_t tile_height = xenos::kEdramTileHeightSamples >>
+                               uint32_t(key.msaa_samples >= xenos::MsaaSamples::k2X);
+  return GetRenderTargetHeight(key.pitch_tiles_at_32bpp, key.msaa_samples) / tile_height;
+}
+
+RenderTargetCache::RenderTarget* RenderTargetCache::CreateSizedRenderTarget(RenderTargetKey key,
+                                                                          uint32_t tile_rows) {
+  RenderTarget* render_target = CreateRenderTarget(key, tile_rows);
+  if (render_target) {
+    render_target->tile_rows_ = tile_rows;
+    render_target_memory_ += render_target->memory_bytes_;
+    render_target_memory_peak_ = std::max(render_target_memory_peak_, render_target_memory_);
+    perf_trace::SetRenderTargetMemory(render_target_memory_, render_target_memory_peak_,
+                                      uint32_t(render_targets_.size()) + 1);
+  }
+  return render_target;
+}
+
+void RenderTargetCache::ReplaceRenderTarget(RenderTarget* old_rt, RenderTarget* new_rt) {
+  render_targets_[old_rt->key()] = new_rt;
+  new_rt->lazy_owned_held_tiles_ = old_rt->lazy_owned_held_tiles_;
+  new_rt->last_bound_ = old_rt->last_bound_;
+  for (RenderTarget*& holder : lazy_holders_) {
+    if (holder == old_rt) {
+      holder = new_rt;
+    }
+  }
+  for (RenderTarget*& render_target : last_update_used_render_targets_) {
+    if (render_target == old_rt) {
+      render_target = new_rt;
+    }
+  }
+  for (RenderTarget*& render_target : last_update_accumulated_render_targets_) {
+    if (render_target == old_rt) {
+      render_target = new_rt;
+    }
+  }
+  for (std::vector<Transfer>& transfers : last_update_transfers_) {
+    for (Transfer& transfer : transfers) {
+      if (transfer.source == old_rt) {
+        transfer.source = new_rt;
+      }
+      if (transfer.host_depth_source == old_rt) {
+        transfer.host_depth_source = new_rt;
+      }
+    }
+  }
+  render_target_memory_ -= old_rt->memory_bytes_;
+  perf_trace::SetRenderTargetMemory(render_target_memory_, render_target_memory_peak_,
+                                    uint32_t(render_targets_.size()));
+  RetireRenderTarget(old_rt);
+}
+
+bool RenderTargetCache::IsOverMemoryCap() const {
+  const int32_t cap_mb = REXCVAR_GET(native_rt_surfaces_memory_cap_mb);
+  return cap_mb > 0 && IsSizingEnabled() && render_target_memory_ > (uint64_t(cap_mb) << 20);
+}
+
+void RenderTargetCache::EvictRenderTargets() {
+  if (!IsOverMemoryCap()) {
+    return;
+  }
+  // Targets that own a tile, or keep the host depth of one, stay.
+  std::unordered_set<RenderTargetKey, RenderTargetKey::Hasher> used;
+  for (const auto& ownership_range_pair : ownership_ranges_) {
+    const OwnershipRange& ownership_range = ownership_range_pair.second;
+    used.emplace(ownership_range.render_target);
+    used.emplace(ownership_range.host_depth_render_target_unorm24);
+    used.emplace(ownership_range.host_depth_render_target_float24);
+  }
+  for (const RenderTarget* render_target : last_update_accumulated_render_targets_) {
+    if (render_target) {
+      used.emplace(render_target->key());
+    }
+  }
+  std::vector<RenderTarget*> candidates;
+  for (const auto& render_target_pair : render_targets_) {
+    if (render_target_pair.second && used.find(render_target_pair.first) == used.end()) {
+      candidates.push_back(render_target_pair.second);
+    }
+  }
+  std::sort(candidates.begin(), candidates.end(),
+            [](const RenderTarget* a, const RenderTarget* b) {
+              return a->last_bound_ < b->last_bound_;
+            });
+  uint32_t evicted = 0;
+  for (RenderTarget* render_target : candidates) {
+    if (!IsOverMemoryCap()) {
+      break;
+    }
+    FlushLazyHolder(render_target);
+    render_targets_.erase(render_target->key());
+    render_target_memory_ -= render_target->memory_bytes_;
+    RetireRenderTarget(render_target);
+    ++evicted;
+  }
+  perf_trace::SetRenderTargetMemory(render_target_memory_, render_target_memory_peak_,
+                                    uint32_t(render_targets_.size()));
+  perf_trace::CountRenderTargetEvictions(evicted);
+}
+
+RenderTargetCache::RenderTarget* RenderTargetCache::GetOrCreateRenderTarget(RenderTargetKey key,
+                                                                          uint32_t tile_rows) {
   assert_true(GetPath() == Path::kHostRenderTargets);
+  const uint32_t full_rows = GetFullTileRows(key);
+  // native_rt_surfaces bit 8: the rows asked for, rounded up to 8, at most the
+  // EDRAM's.
+  const bool sized = IsSizingEnabled() && tile_rows;
+  const uint32_t needed_rows = std::min(tile_rows, full_rows);
+  const uint32_t rows =
+      sized ? std::min(full_rows, (needed_rows + 7) & ~uint32_t(7)) : full_rows;
+  const uint32_t tile_height = xenos::kEdramTileHeightSamples >>
+                               uint32_t(key.msaa_samples >= xenos::MsaaSamples::k2X);
   auto it_rt = render_targets_.find(key);
   RenderTarget* render_target;
   if (it_rt != render_targets_.end()) {
     render_target = it_rt->second;
+    if (render_target && sized && render_target->tile_rows_ < needed_rows) {
+      // Grown by at least a half, so that a surface that grows row by row is
+      // not copied each time.
+      const uint32_t grown_rows = std::min(
+          full_rows, std::max(rows, (render_target->tile_rows_ * 3 / 2 + 7) & ~uint32_t(7)));
+      if (RenderTarget* larger = ResizeRenderTarget(render_target, grown_rows)) {
+        REXGPU_DEBUG("Grew the {} from {} to {} lines", key.GetDebugName(),
+                     render_target->tile_rows_ * tile_height, grown_rows * tile_height);
+        ReplaceRenderTarget(render_target, larger);
+        render_target = larger;
+        perf_trace::CountRenderTargetResize();
+      }
+    }
   } else {
-    render_target = CreateRenderTarget(key);
+    render_target = CreateSizedRenderTarget(key, rows);
     uint32_t width = key.GetWidth();
-    uint32_t height = GetRenderTargetHeight(key.pitch_tiles_at_32bpp, key.msaa_samples);
+    uint32_t height = rows * tile_height;
     if (render_target) {
       REXGPU_DEBUG(
           "Created a {}x{} {}xMSAA {} render target with guest format {} at "
@@ -1853,6 +2002,9 @@ RenderTargetCache::RenderTarget* RenderTargetCache::GetOrCreateRenderTarget(Rend
     }
     // Insert even if failed to create, not to try to create again.
     render_targets_.emplace(key, render_target);
+  }
+  if (render_target) {
+    render_target->last_bound_ = render_target_update_clock_;
   }
   return render_target;
 }

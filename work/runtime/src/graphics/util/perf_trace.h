@@ -333,6 +333,19 @@ enum class LazyTileOutcome : uint32_t { kCopied, kDeferred, kClaimedBack, kFlush
                                         kHazard, kCount };
 inline std::atomic<uint64_t> lazy_tiles[size_t(LazyTileOutcome::kCount)]{};
 inline std::atomic<uint64_t> lazy_pending_tiles{0};
+// native_rt_surfaces bit 8 (d3d-hle.md 16.15): the host render targets, their
+// memory now and at its peak, and the growths and evictions of the window.
+inline std::atomic<uint64_t> rt_memory_bytes{0}, rt_memory_peak_bytes{0}, rt_targets{0},
+    rt_resizes{0}, rt_evictions{0};
+inline void SetRenderTargetMemory(uint64_t bytes, uint64_t peak, uint32_t targets) {
+  rt_memory_bytes.store(bytes, std::memory_order_relaxed);
+  rt_memory_peak_bytes.store(peak, std::memory_order_relaxed);
+  rt_targets.store(targets, std::memory_order_relaxed);
+}
+inline void CountRenderTargetResize() { rt_resizes.fetch_add(1, std::memory_order_relaxed); }
+inline void CountRenderTargetEvictions(uint32_t count) {
+  rt_evictions.fetch_add(count, std::memory_order_relaxed);
+}
 inline void CountLazyTiles(LazyTileOutcome outcome, uint32_t tiles) {
   lazy_tiles[size_t(outcome)].fetch_add(tiles, std::memory_order_relaxed);
 }
@@ -671,7 +684,15 @@ inline void OnSwap() {
                 << lazy_tiles[10].exchange(0, std::memory_order_relaxed) << ",\"flushed_clear\":"
                 << lazy_tiles[11].exchange(0, std::memory_order_relaxed) << ",\"hazards\":"
                 << lazy_tiles[12].exchange(0, std::memory_order_relaxed) << ",\"pending\":"
-                << lazy_pending_tiles.load(std::memory_order_relaxed) << '}';
+                << lazy_pending_tiles.load(std::memory_order_relaxed) << '}'
+                << ",\"rt_memory\":{\"targets\":"
+                << rt_targets.load(std::memory_order_relaxed) << ",\"mb\":"
+                << double(rt_memory_bytes.load(std::memory_order_relaxed)) / 1048576.0
+                << ",\"peak_mb\":"
+                << double(rt_memory_peak_bytes.load(std::memory_order_relaxed)) / 1048576.0
+                << ",\"resizes\":" << rt_resizes.exchange(0, std::memory_order_relaxed)
+                << ",\"evictions\":" << rt_evictions.exchange(0, std::memory_order_relaxed)
+                << '}';
   {
     const double tsc_per_ms = double(__rdtsc() - state->window_tsc) / ms(elapsed);
     const uint64_t replay_tsc = constant_replay.tsc.exchange(0, std::memory_order_relaxed);
