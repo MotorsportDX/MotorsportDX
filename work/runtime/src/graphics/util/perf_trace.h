@@ -116,6 +116,8 @@ struct State {
   double gpu_busy_ms = 0, gpu_resolve_ms = 0, gpu_span_ms = 0;
   // Texture loads and resolve readback copies (N3, d3d-hle.md 16.1).
   double gpu_load_ms = 0, gpu_readback_ms = 0;
+  // Of the resolves and loads, those of at least 1280x720 (d3d-hle.md 16.7).
+  double gpu_resolve_full_ms = 0, gpu_load_full_ms = 0;
   // Samples passing depth/stencil per occlusion snapshot interval, as reported
   // to the guest (after any divisor), to compare paths and calibrate.
   double occlusion_samples[2]{};  // Unawaited, awaited.
@@ -396,7 +398,8 @@ inline void AddOcclusionInterval(bool awaited, uint64_t passed_samples) {
 // busy: sum of submission durations; resolve: sum of resolve durations; span:
 // first to last GPU timestamp of the frame, including idle gaps.
 inline void AddGpuFrame(double busy_ms, double resolve_ms, double span_ms, double load_ms = 0,
-                        double readback_ms = 0) {
+                        double readback_ms = 0, double resolve_full_ms = 0,
+                        double load_full_ms = 0) {
   State* state = Get();
   if (!state) return;
   ++state->gpu_frames;
@@ -405,6 +408,8 @@ inline void AddGpuFrame(double busy_ms, double resolve_ms, double span_ms, doubl
   state->gpu_span_ms += span_ms;
   state->gpu_load_ms += load_ms;
   state->gpu_readback_ms += readback_ms;
+  state->gpu_resolve_full_ms += resolve_full_ms;
+  state->gpu_load_full_ms += load_full_ms;
 }
 
 inline ResolveInventory* GetResolveInventory() {
@@ -529,7 +534,9 @@ inline void OnSwap() {
                 << ",\"resolve_ms\":" << state->gpu_resolve_ms / gpu_frames
                 << ",\"span_ms\":" << state->gpu_span_ms / gpu_frames
                 << ",\"load_ms\":" << state->gpu_load_ms / gpu_frames
-                << ",\"readback_ms\":" << state->gpu_readback_ms / gpu_frames;
+                << ",\"readback_ms\":" << state->gpu_readback_ms / gpu_frames
+                << ",\"resolve_full_ms\":" << state->gpu_resolve_full_ms / gpu_frames
+                << ",\"load_full_ms\":" << state->gpu_load_full_ms / gpu_frames;
   const auto ns_ms = [](uint64_t ns) { return double(ns) / 1e6; };
   state->output << "},\"submit_thread\":{\"jobs\":"
                 << submit_thread_jobs.exchange(0, std::memory_order_relaxed) << ",\"busy_ms\":"

@@ -66,7 +66,7 @@ class D3D12CommandProcessor : public CommandProcessor {
   ~D3D12CommandProcessor();
 
   // GPU timestamps of texture loads for the perf trace (N3, d3d-hle.md 16.1).
-  uint32_t BeginTextureLoadTimestamp();
+  uint32_t BeginTextureLoadTimestamp(bool full_screen = false);
   void EndTextureLoadTimestamp(uint32_t pair);
 
   void ClearCaches() override;
@@ -463,7 +463,16 @@ class D3D12CommandProcessor : public CommandProcessor {
   // frame has a slot of begin/end pairs: every submission (GPU busy time) and
   // every resolve. A slot is resolved when its frame closes and read when the
   // slot is reused, after the frame fence has already been awaited.
-  enum class GpuTimestampKind : uint8_t { kSubmission, kResolve, kTextureLoad, kReadback };
+  // The ...Full kinds are resolves and texture loads of at least 1280x720
+  // (the full-screen resolves, d3d-hle.md 16.7), also counted in their kind.
+  enum class GpuTimestampKind : uint8_t {
+    kSubmission,
+    kResolve,
+    kTextureLoad,
+    kReadback,
+    kResolveFull,
+    kTextureLoadFull
+  };
   static constexpr uint32_t kGpuTimestampPairsPerFrame = 256;
   static constexpr uint32_t kGpuTimestampInvalid = UINT32_MAX;
   struct GpuTimestampFrame {
@@ -482,6 +491,7 @@ class D3D12CommandProcessor : public CommandProcessor {
   void ReadGpuTimestampFrame();
   uint32_t BeginGpuTimestamp(GpuTimestampKind kind);
   void EndGpuTimestamp(uint32_t pair);
+  void SetGpuTimestampKind(uint32_t pair, GpuTimestampKind kind);
   void ResolveGpuTimestampFrame();
 
   // GPU marks of the REX_FRAME_GRAPH sampled frame: a timestamp at the start of

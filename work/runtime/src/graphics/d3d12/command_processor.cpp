@@ -4560,6 +4560,9 @@ bool D3D12CommandProcessor::IssueCopy_ReadbackResolvePath() {
   const bool resolved = render_target_cache_->Resolve(*memory_, *shared_memory_, *texture_cache_,
                                                       written_address, written_length);
   EndGpuTimestamp(timestamp);
+  if (written_length >= 1280 * 720 * 4) {
+    SetGpuTimestampKind(timestamp, GpuTimestampKind::kResolveFull);
+  }
   if (!resolved) {
     return false;
   }
@@ -7516,7 +7519,8 @@ void D3D12CommandProcessor::ReadGpuTimestampFrame() {
   if (gpu_timestamp_mapping_ && frame.resolved && frame.pairs &&
       closed_frame_submissions_[slot] <= submission_completed_) {
     const uint64_t* ticks = gpu_timestamp_mapping_ + size_t(slot) * kGpuTimestampPairsPerFrame * 2;
-    uint64_t busy = 0, resolve = 0, load = 0, readback = 0, first = UINT64_MAX, last = 0;
+    uint64_t busy = 0, resolve = 0, load = 0, readback = 0, resolve_full = 0, load_full = 0;
+    uint64_t first = UINT64_MAX, last = 0;
     for (uint32_t pair = 0; pair < frame.pairs; ++pair) {
       const uint64_t begin = ticks[pair * 2], end = ticks[pair * 2 + 1];
       const uint64_t duration = end > begin ? end - begin : 0;
@@ -7533,6 +7537,14 @@ void D3D12CommandProcessor::ReadGpuTimestampFrame() {
         case GpuTimestampKind::kReadback:
           readback += duration;
           break;
+        case GpuTimestampKind::kResolveFull:
+          resolve += duration;
+          resolve_full += duration;
+          break;
+        case GpuTimestampKind::kTextureLoadFull:
+          load += duration;
+          load_full += duration;
+          break;
       }
       first = std::min(first, begin);
       last = std::max(last, end);
@@ -7540,13 +7552,20 @@ void D3D12CommandProcessor::ReadGpuTimestampFrame() {
     const double ms = 1000.0 / double(gpu_timestamp_frequency_);
     perf_trace::AddGpuFrame(double(busy) * ms, double(resolve) * ms,
                             last > first ? double(last - first) * ms : 0.0, double(load) * ms,
-                            double(readback) * ms);
+                            double(readback) * ms, double(resolve_full) * ms,
+                            double(load_full) * ms);
   }
   frame = {};
 }
 
-uint32_t D3D12CommandProcessor::BeginTextureLoadTimestamp() {
-  return BeginGpuTimestamp(GpuTimestampKind::kTextureLoad);
+uint32_t D3D12CommandProcessor::BeginTextureLoadTimestamp(bool full_screen) {
+  return BeginGpuTimestamp(full_screen ? GpuTimestampKind::kTextureLoadFull
+                                       : GpuTimestampKind::kTextureLoad);
+}
+
+void D3D12CommandProcessor::SetGpuTimestampKind(uint32_t pair, GpuTimestampKind kind) {
+  if (pair == kGpuTimestampInvalid) return;
+  gpu_timestamp_frames_[uint32_t(frame_current_ % kQueueFrames)].kinds[pair] = kind;
 }
 
 void D3D12CommandProcessor::EndTextureLoadTimestamp(uint32_t pair) { EndGpuTimestamp(pair); }

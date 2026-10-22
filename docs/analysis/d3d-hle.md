@@ -852,3 +852,19 @@ The gate of 16.3 against RTV of the same binary (with the kept traps of 16.5), o
 - 99.9% of the deferred resolves kept their intact trap. The first build armed again at every resolve: about 1 ms of the command processor's time a race frame at 1x (its copy zone from 35 to 254 ms a second), which made the races slower than RTV at 1x; the kept traps removed it.
 - The first build also recorded the readback on demand outside a submission when the command processor was idle, so the copy never ran and the photo save wrote garbage; the service opens a submission now. A photo check is part of every run of this path since.
 - Whether RTV gets the readback on demand by default is the main session's decision after a soak (16.3).
+
+### 16.7 Increment 1 design, 22 October 2026
+
+Measured with the readback on demand (`n3i1m2xpd`, the perf gate at 2x, three runs, medians of the race windows): the GPU time a race frame is 5.44 ms, of which the resolves take 0.72 ms and the texture loads 0.58 ms. The resolves and loads of at least 1280x720 (new timestamp kinds `resolve_full_ms` and `load_full_ms` in the perf trace) take 0.32 and 0.33 ms: increment 1's ceiling is about 0.65 ms. The frame graph at 2x (`n3i1-fg2x-career`) shows the full-screen destinations of a race frame: the scene depth at EDRAM base 720 resolved to `8_8_8_8` at `1C0C1000` twice, the scene colour (`2_10_10_10_FLOAT`) resolved to `2_10_10_10` at `1B811000` twice, and the final colour (`2_10_10_10`) at `1B479000`; one full-screen pass reads the depth and the first colour resolve, the last pass the depth and the second.
+
+Today each of them takes three GPU steps: the dump of the render target into the EDRAM buffer and the resolve copy shader into the scaled resolve buffer (the copy), then the texture load from the scaled resolve buffer into the texture the next pass samples (the load). Increment 1 writes that texture straight from the render target with a conversion compute shader per format: the depth packed as the guest's `8_8_8_8`, and the float colour as `2_10_10_10` with the guest's exponent bias. Two ways to do it:
+
+| | A: skip the load | B: skip the copy and the load |
+|---|---|---|
+| Saves at most | 0.33 ms | 0.65 ms |
+| Scaled resolve buffer | written as today | not written; the host texture holds the data |
+| Readback on demand | unchanged (from the scaled resolve buffer) | from the host texture, on the CPU: copy the texture to a readback buffer, then downscale, tile and pack in the guest's layout on the CPU, only when a guest access asks for it |
+| Other GPU readers of the range (a texture of another format or size over it) | unchanged | the scaled resolve buffer is filled from the host texture first, the same way through the CPU; counted, expected none in races |
+| New shaders | 2 (the conversions) | 2 (the conversions); the readback shader of the earlier plan is CPU code instead |
+
+With the readback on demand, the third shader of the earlier plan (a re-tile from the host texture for the readback) is no longer needed in either way: in A the readback stays on the scaled resolve buffer, in B the rare readbacks (the photo save, the loading reads) and fills run on the CPU. A check mode keeps the old path beside the new one on a few frames and compares the converted texture with the loaded one, and in B the CPU's guest layout with the resolve copy's bytes.
