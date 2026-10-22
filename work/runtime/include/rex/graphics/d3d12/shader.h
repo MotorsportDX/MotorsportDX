@@ -47,6 +47,16 @@ class D3D12Shader : public DxbcShader {
   void SetTextureBindingLayoutUserUID(size_t uid) { texture_binding_layout_user_uid_ = uid; }
   void SetSamplerBindingLayoutUserUID(size_t uid) { sampler_binding_layout_user_uid_ = uid; }
 
+  // The draw back end (d3d12_draw_back_end, draw_back_end.cpp): the fetch
+  // constant slots the shader reads, set by the thread that runs the draws at
+  // the shader's first capture after its translation, and read by the replay.
+  bool back_end_fetch_slots_known() const { return back_end_fetch_slots_known_; }
+  uint64_t back_end_fetch_slots() const { return back_end_fetch_slots_; }
+  void SetBackEndFetchSlots(uint64_t slots) {
+    back_end_fetch_slots_ = slots;
+    back_end_fetch_slots_known_ = true;
+  }
+
  protected:
   Translation* CreateTranslationInstance(uint64_t modification) override;
 
@@ -54,6 +64,8 @@ class D3D12Shader : public DxbcShader {
   std::atomic_flag binding_layout_user_uids_set_up_ = ATOMIC_FLAG_INIT;
   size_t texture_binding_layout_user_uid_ = 0;
   size_t sampler_binding_layout_user_uid_ = 0;
+  uint64_t back_end_fetch_slots_ = 0;
+  bool back_end_fetch_slots_known_ = false;
 };
 
 }  // namespace rex::graphics::d3d12

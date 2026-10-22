@@ -1087,6 +1087,8 @@ class D3D12CommandProcessor : public CommandProcessor {
   bool draw_back_end_check_ = false;
   uint32_t draw_back_end_perturb_ = 0;
   uint64_t draw_back_end_checks_ = 0;
+  // The captures counted for the trace's sampled capture time.
+  uint32_t back_end_capture_samples_ = 0;
   uint32_t back_end_context_[draw_back_end::kContextCount] = {};
   draw_back_end::ListState back_end_front_ = {};
   bool back_end_list_captured_ = false;

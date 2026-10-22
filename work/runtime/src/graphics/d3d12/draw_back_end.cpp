@@ -599,6 +599,42 @@ void LogMismatch(draw_back_end::Mismatch kind, uint64_t vertex_shader_hash) {
   }
 }
 
+// The fetch constant slots a shader reads (bit n: slot kFetchFirstSlot + n):
+// its vertex fetch constants and the texture fetch constants of its textures
+// and samplers.
+uint64_t ShaderFetchSlots(const D3D12Shader& shader) {
+  uint64_t slots = 0;
+  const auto add = [&slots](uint32_t first_dword, uint32_t dword_count) {
+    const uint32_t first = first_dword >> 2;
+    const uint32_t last = (first_dword + dword_count - 1) >> 2;
+    slots |= ((uint64_t(1) << (last - first + 1)) - 1) << first;
+  };
+  const auto& map = shader.constant_register_map();
+  for (uint32_t i = 0; i < 3; ++i) {
+    uint32_t bits = map.vertex_fetch_bitmap[i];
+    while (bits) {
+      add((i * 32 + uint32_t(__builtin_ctz(bits))) * 2, 2);
+      bits &= bits - 1;
+    }
+  }
+  for (const D3D12Shader::TextureBinding& binding : shader.GetTextureBindingsAfterTranslation()) {
+    add(binding.fetch_constant * 6, 6);
+  }
+  for (const D3D12Shader::SamplerBinding& binding : shader.GetSamplerBindingsAfterTranslation()) {
+    add(binding.fetch_constant * 6, 6);
+  }
+  return slots;
+}
+
+// ShaderFetchSlots, computed at the shader's first capture (its bindings are
+// known after its translation) and kept in the shader.
+uint64_t BackEndFetchSlots(D3D12Shader& shader) {
+  if (!shader.back_end_fetch_slots_known()) {
+    shader.SetBackEndFetchSlots(ShaderFetchSlots(shader));
+  }
+  return shader.back_end_fetch_slots();
+}
+
 // The float constants of a stage's map, packed from the register file.
 uint32_t PackFloatConstants(const RegisterFile& regs, uint32_t stage, const uint64_t map[4],
                             uint8_t* out) {
@@ -707,7 +743,23 @@ void D3D12CommandProcessor::InvalidateStateAfterDrawBackEnd() {
 
 void D3D12CommandProcessor::CaptureDrawBackEnd(const DrawBackEndCapture& capture) {
   namespace be = draw_back_end;
-  const uint64_t start = __rdtsc();
+  // The trace's capture time: every 16th capture, its ticks counted 16 times
+  // (the time stamps of every capture would cost about a tenth of it), and
+  // every capture with REX_N4_CAPTURE_SPLIT, which also times each part.
+  const bool traced = perf_trace::Get() != nullptr;
+  const bool split = perf_trace::CaptureSplitEnabled();
+  const uint32_t time_scale =
+      split ? 1 : (traced && (++back_end_capture_samples_ & 15) == 0 ? 16 : 0);
+  const uint64_t start = time_scale ? __rdtsc() : 0;
+  uint64_t split_tsc[perf_trace::kCaptureSplitParts] = {};
+  uint64_t split_last = start;
+  const auto split_part = [&](uint32_t part) {
+    if (split) {
+      const uint64_t now = __rdtsc();
+      split_tsc[part] = now - split_last;
+      split_last = now;
+    }
+  };
   const bool replay_draw = draw_back_end_ == 2;
   const RegisterFile& regs = *register_file_;
   const uint32_t* context = regs.values + be::kContextFirst;
@@ -723,7 +775,9 @@ void D3D12CommandProcessor::CaptureDrawBackEnd(const DrawBackEndCapture& capture
   for (uint32_t word = 0; word < be::kContextWords; ++word) {
     uint64_t written = written_registers_[kFirstWord + word];
     written_registers_[kFirstWord + word] = 0;
-    written_count += uint32_t(__builtin_popcountll(written));
+    if (traced) {
+      written_count += uint32_t(__builtin_popcountll(written));
+    }
     uint64_t changed;
     if (list_start) {
       changed = be::kBackEndRegisters[word];
@@ -732,13 +786,14 @@ void D3D12CommandProcessor::CaptureDrawBackEnd(const DrawBackEndCapture& capture
       written &= be::kBackEndRegisters[word];
       changed = 0;
       while (written) {
+        // Without a branch on the comparison: few of the written registers
+        // change.
         const uint32_t bit = uint32_t(__builtin_ctzll(written));
         written &= written - 1;
         const uint32_t index = (word << 6) + bit;
-        if (context[index] != back_end_context_[index]) {
-          back_end_context_[index] = context[index];
-          changed |= uint64_t(1) << bit;
-        }
+        const uint32_t value = context[index];
+        changed |= uint64_t(value != back_end_context_[index]) << bit;
+        back_end_context_[index] = value;
       }
     }
     context_masks[word] = changed;
@@ -747,18 +802,22 @@ void D3D12CommandProcessor::CaptureDrawBackEnd(const DrawBackEndCapture& capture
       context_count += uint32_t(__builtin_popcountll(changed));
     }
   }
+  split_part(0);
 
   // The constant registers the back end reads, written since they were last
   // captured into this list (the pending mask is shared with
   // d3d12_deferred_constants, whose commands fill the same copy): with the
-  // replay, the float constants of both shaders' maps, the fetch constants and
+  // replay, the float constants of both shaders' maps, the fetch constants
+  // both shaders read (the others stay pending until a draw reads them) and
   // the bool and loop constants; for increment 1's check, the fetch constants
   // of the samplers.
-  const auto& vertex_shader = static_cast<const D3D12Shader&>(capture.vertex_translation->shader());
-  const D3D12Shader* pixel_shader =
-      capture.pixel_translation
-          ? &static_cast<const D3D12Shader&>(capture.pixel_translation->shader())
-          : nullptr;
+  auto& vertex_shader = static_cast<D3D12Shader&>(capture.vertex_translation->shader());
+  D3D12Shader* pixel_shader =
+      capture.pixel_translation ? &static_cast<D3D12Shader&>(capture.pixel_translation->shader())
+                                : nullptr;
+  constexpr uint32_t kFetchWord = deferred_constants::kFetchFirstSlot >> 6;
+  static_assert(deferred_constants::kFetchFirstSlot % 64 == 0 &&
+                deferred_constants::kFetchSlotCount <= 64);
   uint64_t constants_needed[deferred_constants::kMaskWords] = {};
   if (replay_draw) {
     const uint64_t* map_vertex = vertex_shader.constant_register_map().float_bitmap;
@@ -771,9 +830,8 @@ void D3D12CommandProcessor::CaptureDrawBackEnd(const DrawBackEndCapture& capture
         constants_needed[4 + i] = map_pixel[i];
       }
     }
-    deferred_constants::SetSlots(
-        constants_needed, deferred_constants::kFetchFirstSlot,
-        deferred_constants::kFetchFirstSlot + deferred_constants::kFetchSlotCount - 1);
+    constants_needed[kFetchWord] =
+        BackEndFetchSlots(vertex_shader) | (pixel_shader ? BackEndFetchSlots(*pixel_shader) : 0);
     deferred_constants::SetSlots(
         constants_needed, deferred_constants::kBoolLoopFirstSlot,
         deferred_constants::kBoolLoopFirstSlot + deferred_constants::kBoolLoopSlotCount - 1);
@@ -791,7 +849,7 @@ void D3D12CommandProcessor::CaptureDrawBackEnd(const DrawBackEndCapture& capture
     if (pixel_shader) {
       add_samplers(*pixel_shader);
     }
-    constants_needed[deferred_constants::kFetchFirstSlot >> 6] = fetch_needed;
+    constants_needed[kFetchWord] = fetch_needed;
   }
   uint64_t constant_masks[deferred_constants::kMaskWords];
   uint16_t constant_words = 0;
@@ -804,86 +862,91 @@ void D3D12CommandProcessor::CaptureDrawBackEnd(const DrawBackEndCapture& capture
       constant_count += uint32_t(__builtin_popcountll(constant_masks[word]));
     }
   }
+  split_part(1);
 
-  // The front half's groups.
-  be::ListState current;
-  std::memset(&current, 0, sizeof(current));
-  current.shaders.vertex = capture.vertex_translation;
-  current.shaders.pixel = capture.pixel_translation;
+  // The front half's groups that changed since the list's previous capture,
+  // compared with the list's state and written into it in place.
+  be::ListState& front = back_end_front_;
+  uint16_t groups = 0;
+  uint32_t group_bytes = 0;
+  const auto update_group = [&](be::Group index, auto& stored, const auto& value) {
+    static_assert(sizeof(stored) == sizeof(value));
+    if (list_start || std::memcmp(&stored, &value, sizeof(value))) {
+      std::memcpy(&stored, &value, sizeof(value));
+      groups |= uint16_t(1u << index);
+      group_bytes += uint32_t(sizeof(value));
+    }
+  };
+  const be::GroupShaders shaders = {capture.vertex_translation, capture.pixel_translation};
+  update_group(be::kGroupShaders, front.shaders, shaders);
   const PrimitiveProcessor::ProcessingResult& primitive = *capture.primitive;
-  current.primitive.host_primitive_type = uint8_t(primitive.host_primitive_type);
-  current.primitive.host_vertex_shader_type = uint8_t(primitive.host_vertex_shader_type);
-  current.primitive.tessellation_mode = uint8_t(primitive.tessellation_mode);
-  current.primitive.host_index_format = uint8_t(primitive.host_index_format);
-  current.primitive.host_primitive_reset_enabled = primitive.host_primitive_reset_enabled;
-  current.primitive.host_shader_index_endian = uint8_t(primitive.host_shader_index_endian);
-  current.primitive.index_buffer_type = uint8_t(primitive.index_buffer_type);
-  current.primitive.line_loop_closing_index = primitive.line_loop_closing_index;
+  be::GroupPrimitive primitive_group = {};
+  primitive_group.host_primitive_type = uint8_t(primitive.host_primitive_type);
+  primitive_group.host_vertex_shader_type = uint8_t(primitive.host_vertex_shader_type);
+  primitive_group.tessellation_mode = uint8_t(primitive.tessellation_mode);
+  primitive_group.host_index_format = uint8_t(primitive.host_index_format);
+  primitive_group.host_primitive_reset_enabled = primitive.host_primitive_reset_enabled;
+  primitive_group.host_shader_index_endian = uint8_t(primitive.host_shader_index_endian);
+  primitive_group.index_buffer_type = uint8_t(primitive.index_buffer_type);
+  primitive_group.line_loop_closing_index = primitive.line_loop_closing_index;
+  update_group(be::kGroupPrimitive, front.primitive, primitive_group);
+  be::GroupDraw draw = {};
   if (replay_draw) {
-    current.draw.index_buffer_gpu_address = capture.index_buffer.BufferLocation;
-    current.draw.index_buffer_size = capture.index_buffer.SizeInBytes;
-    current.draw.index_buffer_format = uint32_t(capture.index_buffer.Format);
+    draw.index_buffer_gpu_address = capture.index_buffer.BufferLocation;
+    draw.index_buffer_size = capture.index_buffer.SizeInBytes;
+    draw.index_buffer_format = uint32_t(capture.index_buffer.Format);
   } else {
     // Increment 1 captures the guest index base in place of the address.
-    current.draw.index_buffer_gpu_address = primitive.guest_index_base;
+    draw.index_buffer_gpu_address = primitive.guest_index_base;
   }
-  current.draw.host_draw_vertex_count = primitive.host_draw_vertex_count;
-  current.targets.bits = capture.bound_render_target_bits;
+  draw.host_draw_vertex_count = primitive.host_draw_vertex_count;
+  update_group(be::kGroupDraw, front.draw, draw);
+  be::GroupTargets targets = {};
+  targets.bits = capture.bound_render_target_bits;
   for (uint32_t i = 0; i < 5; ++i) {
-    current.targets.formats[i] =
+    targets.formats[i] =
         (capture.bound_render_target_bits >> i) & 1 ? capture.bound_render_target_formats[i] : 0;
   }
-  current.flags.flags = capture.flags | (shader_mod_knobs_source_ ? be::kFlagKnobs : 0);
-  current.flags.draw_resolution_scale_x = uint16_t(texture_cache_->draw_resolution_scale_x());
-  current.flags.draw_resolution_scale_y = uint16_t(texture_cache_->draw_resolution_scale_y());
+  update_group(be::kGroupTargets, front.targets, targets);
+  be::GroupFlags flags_group = {};
+  flags_group.flags = capture.flags | (shader_mod_knobs_source_ ? be::kFlagKnobs : 0);
+  flags_group.draw_resolution_scale_x = uint16_t(texture_cache_->draw_resolution_scale_x());
+  flags_group.draw_resolution_scale_y = uint16_t(texture_cache_->draw_resolution_scale_y());
   if (capture.flags & be::kFlagJitter) {
-    current.flags.jitter[0] = capture.jitter[0];
-    current.flags.jitter[1] = capture.jitter[1];
+    flags_group.jitter[0] = capture.jitter[0];
+    flags_group.jitter[1] = capture.jitter[1];
   }
   if (replay_draw) {
-    current.flags.frame = frame_current_;
-    current.flags.frame_completed = frame_completed_;
-    current.flags.submission = submission_current_;
+    flags_group.frame = frame_current_;
+    flags_group.frame_completed = frame_completed_;
+    flags_group.submission = submission_current_;
   }
+  update_group(be::kGroupFlags, front.flags, flags_group);
+  // The texture cache's answers: the entries of the used textures only (the
+  // decoder keeps the others as they were too).
   const be::SystemConstantInputs& inputs = system_constant_inputs_;
-  current.used_texture_mask = inputs.used_texture_mask;
-  current.textures_resolution_scaled = inputs.textures_resolution_scaled;
-  const uint32_t texture_count = uint32_t(__builtin_popcount(inputs.used_texture_mask));
+  const uint32_t used_texture_mask = inputs.used_texture_mask;
+  const uint32_t texture_count = uint32_t(__builtin_popcount(used_texture_mask));
+  bool textures_changed = list_start || front.used_texture_mask != used_texture_mask ||
+                          front.textures_resolution_scaled != inputs.textures_resolution_scaled;
   {
-    uint32_t remaining = inputs.used_texture_mask;
+    uint32_t remaining = used_texture_mask;
     while (remaining) {
       const uint32_t index = uint32_t(__builtin_ctz(remaining));
       remaining &= remaining - 1;
-      current.texture_swizzled_signs[index] = inputs.texture_swizzled_signs[index];
-      current.texture_integer_scale_bits[index] = inputs.texture_integer_scale_bits[index];
+      if (front.texture_swizzled_signs[index] != inputs.texture_swizzled_signs[index] ||
+          front.texture_integer_scale_bits[index] != inputs.texture_integer_scale_bits[index]) {
+        front.texture_swizzled_signs[index] = inputs.texture_swizzled_signs[index];
+        front.texture_integer_scale_bits[index] = inputs.texture_integer_scale_bits[index];
+        textures_changed = true;
+      }
     }
   }
-  uint16_t groups = 0;
-  const auto group_changed = [list_start](const void* a, const void* b, size_t size) {
-    return list_start || std::memcmp(a, b, size) != 0;
-  };
-  if (group_changed(&current.shaders, &back_end_front_.shaders, sizeof(current.shaders))) {
-    groups |= 1 << be::kGroupShaders;
-  }
-  if (group_changed(&current.primitive, &back_end_front_.primitive, sizeof(current.primitive))) {
-    groups |= 1 << be::kGroupPrimitive;
-  }
-  if (group_changed(&current.draw, &back_end_front_.draw, sizeof(current.draw))) {
-    groups |= 1 << be::kGroupDraw;
-  }
-  if (group_changed(&current.targets, &back_end_front_.targets, sizeof(current.targets))) {
-    groups |= 1 << be::kGroupTargets;
-  }
-  if (group_changed(&current.flags, &back_end_front_.flags, sizeof(current.flags))) {
-    groups |= 1 << be::kGroupFlags;
-  }
-  if (list_start || current.used_texture_mask != back_end_front_.used_texture_mask ||
-      current.textures_resolution_scaled != back_end_front_.textures_resolution_scaled ||
-      std::memcmp(current.texture_swizzled_signs, back_end_front_.texture_swizzled_signs,
-                  sizeof(current.texture_swizzled_signs)) ||
-      std::memcmp(current.texture_integer_scale_bits, back_end_front_.texture_integer_scale_bits,
-                  sizeof(current.texture_integer_scale_bits))) {
+  if (textures_changed) {
+    front.used_texture_mask = used_texture_mask;
+    front.textures_resolution_scaled = inputs.textures_resolution_scaled;
     groups |= 1 << be::kGroupTextures;
+    group_bytes += be::TexturesGroupSize(texture_count);
   }
   uint16_t texture_index_counts[2] = {};
   if (replay_draw) {
@@ -891,25 +954,15 @@ void D3D12CommandProcessor::CaptureDrawBackEnd(const DrawBackEndCapture& capture
       if (back_end_texture_indices_changed_[stage]) {
         groups |= 1 << (be::kGroupTextureIndicesVertex + stage);
         texture_index_counts[stage] = uint16_t(back_end_texture_indices_[stage].size());
+        group_bytes += texture_index_counts[stage] * 4;
       }
     }
     if (shader_mod_knobs_source_ && (list_start || back_end_knobs_changed_)) {
       groups |= 1 << be::kGroupKnobs;
+      group_bytes += be::kKnobCount * 4;
     }
   }
-  uint32_t group_bytes = 0;
-  for (uint32_t group = 0; group < be::kGroupCount; ++group) {
-    if (!(groups & (1 << group))) {
-      continue;
-    }
-    if (group == be::kGroupTextures) {
-      group_bytes += be::TexturesGroupSize(texture_count);
-    } else if (group == be::kGroupTextureIndicesVertex || group == be::kGroupTextureIndicesPixel) {
-      group_bytes += texture_index_counts[group - be::kGroupTextureIndicesVertex] * 4;
-    } else {
-      group_bytes += be::kGroupFixedSizes[group];
-    }
-  }
+  split_part(2);
 
   // The check: the back end's results at the draw.
   uint16_t flags = (list_start ? be::kListStart : 0) | (replay_draw ? be::kReplayDraw : 0);
@@ -937,12 +990,15 @@ void D3D12CommandProcessor::CaptureDrawBackEnd(const DrawBackEndCapture& capture
     }
   }
 
+  // The record: the header, the masks, the changed context registers, the
+  // constant slots, the changed groups, then the check's part.
   const uint32_t bytes = uint32_t(sizeof(be::Header)) +
                          uint32_t(__builtin_popcount(context_words)) * 8 +
                          uint32_t(__builtin_popcount(constant_words)) * 8 + context_count * 4 +
                          constant_count * 16 + group_bytes;
   auto* arguments =
       static_cast<uint8_t*>(deferred_command_list_.DrawBackEnd(bytes + check_bytes));
+  split_part(3);
   be::Header header = {};
   header.context_words = context_words;
   header.constant_words = constant_words;
@@ -987,31 +1043,32 @@ void D3D12CommandProcessor::CaptureDrawBackEnd(const DrawBackEndCapture& capture
       out += 16;
     }
   }
-  const auto write_group = [&](be::Group index, const void* data) {
-    if (groups & (1 << index)) {
-      std::memcpy(out, data, be::kGroupFixedSizes[index]);
-      out += be::kGroupFixedSizes[index];
+  split_part(4);
+  const auto write_group = [&](be::Group index, const auto& stored) {
+    if (groups & (1u << index)) {
+      std::memcpy(out, &stored, sizeof(stored));
+      out += sizeof(stored);
     }
   };
-  write_group(be::kGroupShaders, &current.shaders);
-  write_group(be::kGroupPrimitive, &current.primitive);
-  write_group(be::kGroupDraw, &current.draw);
-  write_group(be::kGroupTargets, &current.targets);
-  write_group(be::kGroupFlags, &current.flags);
+  write_group(be::kGroupShaders, front.shaders);
+  write_group(be::kGroupPrimitive, front.primitive);
+  write_group(be::kGroupDraw, front.draw);
+  write_group(be::kGroupTargets, front.targets);
+  write_group(be::kGroupFlags, front.flags);
   if (groups & (1 << be::kGroupTextures)) {
-    be::GroupTexturesHeader textures_header = {current.used_texture_mask,
-                                               current.textures_resolution_scaled};
+    be::GroupTexturesHeader textures_header = {front.used_texture_mask,
+                                               front.textures_resolution_scaled};
     std::memcpy(out, &textures_header, sizeof(textures_header));
     out += sizeof(textures_header);
     uint8_t* signs = out;
     out += (texture_count + 3) & ~3u;
     std::memset(signs, 0, out - signs);
-    uint32_t remaining = current.used_texture_mask;
+    uint32_t remaining = front.used_texture_mask;
     while (remaining) {
       const uint32_t index = uint32_t(__builtin_ctz(remaining));
       remaining &= remaining - 1;
-      *signs++ = current.texture_swizzled_signs[index];
-      std::memcpy(out, &current.texture_integer_scale_bits[index], 4);
+      *signs++ = front.texture_swizzled_signs[index];
+      std::memcpy(out, &front.texture_integer_scale_bits[index], 4);
       out += 4;
     }
   }
@@ -1051,11 +1108,11 @@ void D3D12CommandProcessor::CaptureDrawBackEnd(const DrawBackEndCapture& capture
       const bool polygonal = draw_util::IsPrimitivePolygonal(regs);
       pipeline_cache_->ComputePipelineDescription(
           regs, capture.vertex_translation, capture.pixel_translation, primitive, depth_control,
-          color_mask, current.targets.bits, current.targets.formats, expected.pipeline_description);
+          color_mask, front.targets.bits, front.targets.formats, expected.pipeline_description);
       const uint32_t uniform_scale_x = (capture.flags >> be::kFlagUniformScaleShift) & 3;
       const uint32_t uniform_scale_y = (capture.flags >> (be::kFlagUniformScaleShift + 2)) & 3;
-      const uint32_t scale_x = current.flags.draw_resolution_scale_x * uniform_scale_x;
-      const uint32_t scale_y = current.flags.draw_resolution_scale_y * uniform_scale_y;
+      const uint32_t scale_x = front.flags.draw_resolution_scale_x * uniform_scale_x;
+      const uint32_t scale_y = front.flags.draw_resolution_scale_y * uniform_scale_y;
       draw_util::GetHostViewportInfo(regs, scale_x, scale_y, true, D3D12_VIEWPORT_BOUNDS_MAX,
                                      D3D12_VIEWPORT_BOUNDS_MAX, false, depth_control,
                                      (capture.flags & be::kFlagConvertZToFloat24) != 0,
@@ -1109,14 +1166,27 @@ void D3D12CommandProcessor::CaptureDrawBackEnd(const DrawBackEndCapture& capture
   }
   assert_true(out == arguments + bytes + check_bytes);
 
-  back_end_front_ = current;
   back_end_list_captured_ = true;
   if (replay_draw) {
     back_end_texture_indices_changed_[0] = back_end_texture_indices_changed_[1] = false;
     back_end_knobs_changed_ = false;
   }
+  split_part(5);
   perf_trace::CountBackEndCapture(bytes, context_count, written_count, constant_count, group_bytes,
-                                  __rdtsc() - start);
+                                  time_scale ? (__rdtsc() - start) * time_scale : 0);
+  if (split) {
+    perf_trace::CaptureSplitCounts& counts = perf_trace::capture_split;
+    for (uint32_t part = 0; part < perf_trace::kCaptureSplitParts; ++part) {
+      counts.tsc[part] += split_tsc[part];
+    }
+    constexpr uint32_t kBoolLoopWord = deferred_constants::kBoolLoopFirstSlot >> 6;
+    static_assert(deferred_constants::kBoolLoopFirstSlot % 64 == 0);
+    for (uint32_t word = 0; word < kFetchWord; ++word) {
+      counts.float_slots += uint32_t(__builtin_popcountll(constant_masks[word]));
+    }
+    counts.fetch_slots += uint32_t(__builtin_popcountll(constant_masks[kFetchWord]));
+    counts.bool_loop_slots += uint32_t(__builtin_popcountll(constant_masks[kBoolLoopWord]));
+  }
 }
 
 void D3D12CommandProcessor::ReplayDrawBackEnd(const uint8_t* arguments, RegisterFile& shadow,
@@ -1517,9 +1587,19 @@ void D3D12CommandProcessor::ReplayDrawBackEndDraw(
     }
     const uint32_t* source = regs.values + XE_GPU_REG_SHADER_CONSTANT_FETCH_00_0;
     std::memcpy(mapping, source, deferred_constants::kFetchSlotCount * 16);
-    if (expected && std::memcmp(source, expected_bool_loop + expected->constant_bytes[2],
-                                expected->constant_bytes[3])) {
-      mismatches[be::kMismatchConstantBuffers] = true;
+    if (expected) {
+      // Only the fetch constants the shaders read: the copy's others may hold
+      // values of earlier draws, their writes pending until a draw reads them.
+      const uint8_t* expected_fetch = expected_bool_loop + expected->constant_bytes[2];
+      uint64_t read = vertex_shader.back_end_fetch_slots() |
+                      (pixel_shader ? pixel_shader->back_end_fetch_slots() : 0);
+      while (read) {
+        const uint32_t slot = uint32_t(__builtin_ctzll(read));
+        read &= read - 1;
+        if (std::memcmp(source + slot * 4, expected_fetch + slot * 16, 16)) {
+          mismatches[be::kMismatchConstantBuffers] = true;
+        }
+      }
     }
     bindings.fetch_valid = true;
   }

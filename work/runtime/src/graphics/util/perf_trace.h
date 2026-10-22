@@ -456,6 +456,24 @@ inline void CountBackEndCapture(uint32_t bytes, uint32_t context_dwords, uint32_
   back_end_capture.group_bytes += group_bytes;
   back_end_capture.tsc += tsc;
 }
+// REX_N4_CAPTURE_SPLIT=1 (with the trace): the capture by part (the context
+// registers, the constant masks, the front half's groups, the command's
+// allocation in the deferred command list, the record up to the constants,
+// the rest with the check) in time stamp counter ticks, and its constant slots
+// by kind: float, fetch, bool and loop.
+constexpr size_t kCaptureSplitParts = 6;
+struct alignas(64) CaptureSplitCounts {
+  uint64_t tsc[kCaptureSplitParts] = {};
+  uint64_t float_slots = 0, fetch_slots = 0, bool_loop_slots = 0;
+};
+inline CaptureSplitCounts capture_split;
+inline bool CaptureSplitEnabled() {
+  static const bool enabled = [] {
+    const char* value = std::getenv("REX_N4_CAPTURE_SPLIT");
+    return Get() && value && *value && *value != '0';
+  }();
+  return enabled;
+}
 // Its replay (the thread that replays the deferred command list): commands,
 // time stamp counter ticks without the check, draws checked, mismatches by kind
 // (pipeline, viewport, scissor, fixed function, system constants, samplers)
@@ -811,6 +829,17 @@ inline void OnSwap() {
     }
     state->output << "]}";
     back_end_capture = BackEndCaptureCounts{};
+    if (CaptureSplitEnabled()) {
+      state->output << ",\"capture_split\":{\"ms\":[";
+      for (size_t i = 0; i < kCaptureSplitParts; ++i) {
+        state->output << (i ? "," : "")
+                      << (tsc_per_ms > 0 ? double(capture_split.tsc[i]) / tsc_per_ms : 0.0);
+      }
+      state->output << "],\"float_slots\":" << capture_split.float_slots
+                    << ",\"fetch_slots\":" << capture_split.fetch_slots
+                    << ",\"bool_loop_slots\":" << capture_split.bool_loop_slots << '}';
+      capture_split = CaptureSplitCounts{};
+    }
     if (ReplaySplitEnabled()) {
       const auto tsc_ms = [&](uint64_t ticks) {
         return tsc_per_ms > 0 ? double(ticks) / tsc_per_ms : 0.0;
