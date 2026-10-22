@@ -275,7 +275,7 @@ A full gate took 1.5 to 2 hours, too long to follow every step of an increment, 
 - **Close gate**, once per increment before the fast-forward is asked for: smoke, perf with three runs, `parity.py` on the freeze at 1x and 2x, and the perturbation proof as one `career` run.
 - Performance is judged on the busy time per draw and the GPU time per frame, which the AI races' varying draw load moves less than the fps; so one run a side is enough at a step gate, and three runs are for the close gate.
 - A step gate reuses its RTV baseline while the step's diff changes only code behind a cvar that is off on RTV (checked with `git diff`); the close gate measures RTV again on the final binary.
-- Where a run's time goes (`photo` at 1x, 252 s): the boot to the main menu 28 s, the menus and loading to the race 120 s (with a fixed 40 s wait after GO RACE, about 20 s of it idle), the measured race 34 s, photo mode and the save about 70 s. The direct race launch ([direct-race-launch.md](direct-race-launch.md)) could save at most the 52 s of menus, but is not built; the `race` scenario drops photo mode instead.
+- Where a run's time goes (`photo` at 1x, 252 s): the boot to the main menu 28 s, the menus and loading to the race 120 s (with a fixed 40 s wait after GO RACE, about 20 s of it idle), the measured race 34 s, photo mode and the save about 70 s. The fast route (`e2e.py --fast-route`, since 23 October 2026), whose steps wait on the title's screen events instead of fixed delays, takes `photo` from about 251 s to about 193 s a run, about 57 s less; the boot (about 24 s) and the loading (17 s) remain as the floor. The `race` scenario drops photo mode as well.
 - Durations measured on 22 October 2026 (`sg0`, 2x, the build of 16.8): a step gate takes 10 minutes of game runs (`career` with the identity check 3.7, `race` on RTV 3.3, `race` native 3.3) and 13.5 with the freeze (3.5); a build adds 15 to 20 minutes when the runtime changed. A close gate takes about 65 minutes (smoke on RTV and native 18, perf with three runs a side 26, the freeze at 1x and 2x a side 14, the perturbation proof 4).
 
 ## 11. Decisions
@@ -1119,6 +1119,48 @@ Bit 8 is built as designed in 16.15 and stays off by default. The step gate ran 
 | Render thread time per draw | 2.092, 2.079, 2.108 us | 2.035, 2.080, 2.090 us |
 
   With bit 8 the resolves take about 0.09 ms a frame more and the transfers about 0.08 ms less, so the frame's GPU time stays about the same. The full-screen resolves (0.17 ms) and the number of resolves from the host render target (25.3 a frame) are unchanged, so the added time is in the other resolves; its cause is not found yet.
+
+### 16.17 Increment 4, step 0: the one-pass probe, 23 October 2026
+
+The main session approved the outline of increment 4 on 23 October 2026, with these decisions:
+
+- One pass is decided on the guest side, through the title's tiling scenario table, written into guest memory at start-up only on the native path; RTV with `-Quality` stays the tiled reference and `-Rov` is untouched.
+- 2x MSAA goes first, end to end. 4x is a second sub-step, after `-Rov` settles the depth sample question of 16.11.
+- The host's 2x and 4x sample positions are checked against the Xenos pattern.
+- Depth and stencil come from sample 0 for the motion vectors and the cockpit window.
+- The defaults (2x MSAA at 2x against 4x MSAA at 1x) are judged from perf and from 2x 1:1 crops of the race, the cockpit, the window edges and the foliage, against tiled RTV with `-Look "original,taa=0"`.
+
+**The table.** The tiling scenarios at `0x82D883C8` (stride `0x4D0`) hold the screen height at +0 (720), the sample count at +4 (log2: 2 for 4x, 1 for 2x, 0 for none), the tile count at +8 and +16, and the tile rectangles from +24 (left, top, right, bottom). The five entries are:
+
+| Entry | Name in the image | Samples | Tiles |
+|---|---|---|---|
+| 0 | `4xMSAA` | 4x | 1280x256, 1280x256, 1280x208 |
+| 1 | `2xMSAA` | 2x | 1280x512, 1280x208 |
+| 2 | `NonTiling` | none | 1280x720 |
+| 3 | `Small2xMSAA` | 2x | 1120x584 |
+| 4 | `SplitScreen_NonTiling2xMSAA` | 2x | 1280x368 |
+
+`FM4_ONE_PASS_MSAA=2` or `4` (title, `CTileBuffer::SetScenario` hook) rewrites entry 1 or 0 as one 1280x720 tile before the title reads it. `REX_SURFACE_PROBE` logs every new combination of a draw's raw surface registers.
+
+**The probe** (`n4p-*`, RTV, `race` at 1x and 240 Hz, `-Look "original,taa=0"`, `--env FM4_TILING_SCENARIO=1` for 2x and `0` for 4x), per race frame:
+
+| Run | Draws | GPU ms | Race fps | Resolves (full, mid, small, clears only) |
+|---|---|---|---|---|
+| Tiled 2x (`n4p-tiled-2x`) | 2,376 | 2.59 | 163.2 | 1, 9.5, 20.5, 2 |
+| One pass 2x (`n4p-onepass-2x`) | 1,530 | 2.32 | 207.6 | 3, 5.5, 20.5, 0 |
+| Tiled 4x (`n4p-tiled-4x`) | 2,390 | 2.83 | 161.7 | 1, 11.5, 20.5, 6 |
+
+- **One pass 2x** reaches the race and runs it to the end. The tile body runs once, so the race has 36% fewer draws. The title's per-tile resolve pairs collapse by themselves into one pair, a depth resolve and a colour resolve of 1280x720: tiled 2x resolves 1280x512 and 1280x208 from base 1024 (depth) and base 0 (colour) in each frame. The clears of the tiles go away. In the tiled modes, the tiles move the window offset (0, then -256 and -512 lines); one pass leaves it 0 and the window scissor at the full screen. No other per-tile constant is set. The HiZ pitch in `RB_SURFACE_INFO` equals the surface pitch in every mode.
+- **Placement.** The title keeps the tiled placement in one pass: colour at base 0, depth at base 1024. A 1280x720 2x surface takes 1,440 tiles, so the depth overlaps the colour from tile 1024 to 1440 and wraps past tile 2,048 over the colour's first 416 tiles. RTV shows exactly that: the top 208 lines of the race are wrong and the rest is right.
+- **One pass 4x** does not boot (`n4p-onepass-4x`, step 2 of the scenario timed out). Entry 0 also serves the user interface (Autovista's `UITilingScenario` 0) and the pre-race, the replays and photo mode, so 4x needs an entry of its own.
+
+**The design that follows from it, for 2x:**
+
+1. **A no-wrap tile space.** The host's tile space grows from 2,048 to 4,096 tiles, the 12 bits the registers carry (bit 11 of `RB_COLOR_INFO` and `RB_DEPTH_INFO`, which Xenos ignores). This covers the ownership map, the render target keys, the lazy and stale tables and the resolve spans, on the native path only. The dump into the EDRAM buffer cannot address past tile 2,048, so a resolve whose span passes it must come from the host render target. The unscaled fast copies of 2x MSAA sources are taken off the dump exclusion: all 1,650 of them matched in 16.11's diagnostic; only 4x depth differed.
+2. **The one-pass depth placed after the colour.** With one pass on, the scene's depth surface (2x, pitch 16 tiles, base 1024) is read at a host base after the colour (1,440). The draws and the resolves apply the same placement, so the 2x scene takes tiles 0 to 2,880 without an overlap. The probe shows no colour surface at base 1024 that would read that depth through the EDRAM. The first step gate checks that with the transfer inventory, and so that no transfer crosses between the moved depth and its old tiles.
+3. **One pass under `-Native`.** The launcher passes `FM4_ONE_PASS_MSAA=2` and the 2x scenario to the race with `-Native -Msaa 2`. The table patch stays a probe variable of the title and never reaches RTV or `-Rov`.
+4. **TAA and the post passes.** TAA runs on the resolved scene. The motion vectors and the cockpit window get depth and stencil from sample 0 through a shader pass. The host's 2x sample positions are checked against the Xenos pattern first.
+5. **Gates.** Step gates: the `career` check run with the resolve byte check, one 2x race perf run per side, and the freeze parity. The close gate is as in the outline, with `native_rt_surfaces` bits 2, 4 and 8 on in `-Native`, the growth stress run, and the transfer inventory against 16.13.
 
 ## 17. Stage N4 design, 22 October 2026
 
