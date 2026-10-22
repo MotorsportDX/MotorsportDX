@@ -1218,7 +1218,55 @@ That is about 0.6 to 0.7 KB a draw, against step 1's 0.55 KB, so the encoding ha
 
 **Expected saving and risks.** By 15.10 and 17.5 the back end takes about 0.6 to 0.7 ms a race frame off the render thread (the bindings, pipeline, fixed function and call parts), and the capture adds about 0.1 ms. The replay's recording grows from 1.1 ms a race frame (with step 1) by the moved work and, by 17.5, a hand-over cost of the same order: about 2 to 2.5 ms at 1x, which fits the 4.17 ms of a 240 Hz frame on the main PC; on the Ally X the replay may become the critical thread, which N4's Ally X runs measure. With `async_shader_compilation` off (the launcher's setting) a pipeline creation stalls the replay instead of the render thread.
 
-**Increments.**
+**Increments**, with the main session's decisions of 23 October 2026:
 
-1. The register-reading functions take a register file; the capture, the replay's register copy and the check run with the back end still on the render thread, computed inline from the copy. Gate: the check without mismatches with its perturbation proof, the render thread's busy time unchanged within the noise.
-2. The back end moves to the replay. Gate: the step gate of section 10 with the check, and the render thread's busy time per race frame and per draw against step 1, with the submit thread's time.
+1. The register-reading functions take a register file, and RTV and `-Rov` run through them unchanged; the capture, the replay's register copy and the check run while the back end still runs at the draw. It measures the capture's size per draw, its cost on the render thread per race frame and the replay's cost per KB before anything moves, and profiles the render thread outside the draw zone. Gate: the check with its perturbation proof (perturbed equal to reported, no other mismatch), a 1x smoke on RTV and on `-Rov` with `-Look "original,taa=0"`.
+2. The back end moves to the replay, off by default; `-Native` sets it only after its close gate, which includes the perf gate at 2x and the frozen-frame parity, since the recording of the pipeline and the state moves. Gate: the step gate of section 10 with the check, the render thread's busy time per race frame and per draw against step 1, the submit thread at most 2.5 ms per race frame at 1x on the main PC, and no regression of the race's p99 at the same draw load.
+
+**The budget to 2.5 ms** (the main session's decision of 23 October 2026 asked where it comes from; the numbers are in 17.7). At 1,800 draws a race frame the render thread is busy 3.39 to 3.42 ms. The back end takes the bindings (0.51 ms), the pipeline (0.14) and the fixed function state and the call (about 0.12) off it, about 0.77 ms, and the capture costs 0.24 ms as built: about 2.9 ms after increment 2. The last 0.3 to 0.4 ms has to come from:
+
+1. The capture itself, 0.24 ms (0.17 inside it, about 98 ns a draw, and 0.07 for the marking of written registers): one compact record built where the front half's results are made instead of copied and compared afterwards, the samplers' fetch masks kept per shader pair, and written registers marked once per range in `WriteRegistersFromMem`. Target about 0.1 ms.
+2. The register write path outside the draws: register packets (0.51 ms with the split's timers) and the records of the converted writers (0.21 ms, 92,307 registers a race frame) write ranges outside the constants register by register through `WriteRegisterFast`; a bulk path (a copy of the range and only its few hooked registers through `WriteRegister`) has a ceiling of about 0.1 to 0.2 ms.
+3. The texture keys (0.19 to 0.21 ms, 15.10, 17.7) of fetch constants that change at draws: the key computed again only when the dwords that make it change.
+
+The other N4 row items do not show in the race's busy time: `WAIT_REG_MEM` is a wait (0.65 ms a race frame), not busy time, and the readbacks are on demand (none in the race, 16.6). For the submit thread the measured parts add up to about 2.1 ms a race frame at 1x (0.73 today, 0.35 for step 1's hand-over, 0.24 for the capture's, about 0.77 of moved work), under the 2.5 ms budget; the hand-over costs 0.1 to 0.2 us a command beyond the replay's own time (17.5, 17.7), which increment 2 measures by its parts first.
+
+### 17.7 Step 2, increment 1 results, 23 October 2026
+
+`d3d12_draw_back_end=1` (off by default; with it off, RTV and `-Rov` run the refactored functions only):
+
+- **The refactor.** The back half's register-reading parts take the register file to read: `draw_back_end::ComputeSystemConstants` (`UpdateSystemConstantValues` with the render target cache's and the texture cache's answers passed in), `ComputeBlendFactorAndStencilReference`, `D3D12TextureCache::GetSamplerParameters(regs, binding)` and `PipelineCache::GetCurrentStateDescription(regs, ...)` with a description-only mode that creates nothing.
+- **The capture** (`kDrawBackEnd`, written after the bindings): the context registers of the back end's set that were written since the list's previous capture and changed; the fetch constant slots of the draw's samplers, from step 1's pending mask, so both commands fill one copy of the registers; and the front half's groups that changed (shader translations, primitive state, the draw call, the bound render targets, flags with the jitter, the texture cache's answers for the used textures). The set is the 76 registers named in the back end's functions and the `draw_util` functions they call. The base command processor marks written registers in `WriteRegisterFast` and `WriteRegister` while the capture is on, and the uniform draw's change of `RB_SURFACE_INFO` marks itself.
+- **The replay** keeps one register file per list (with step 1's constants) and the front half's groups; with the check it computes the pipeline description, viewport, scissor, blend factor and stencil reference, system constants (its own copy, kept across lists) and sampler parameters from that copy and compares them with the draw's.
+
+On `I:\FM4-build-usa` at 240 Hz and 1x with `-Native`'s cvars (`rexgpu-xenos.dll` SHA-256 beginning `d9037beac1615424`, `fm4_rex.exe` `45c9fc22a52f2c05`, `rexruntime.dll` `fc53a3fb5e89a96f`):
+
+| Check | Result |
+|---|---|
+| The check with perturbation 1,000 and `d3d12_deferred_constants` (`n4d-chk-career`: race, replay, menus) | 34,778,359 draws checked; mismatches only in the 34,778 perturbed pipeline comparisons, none in the viewport, scissor, blend factor and stencil reference, system constants or sampler parameters |
+| The same with all 1,024 context registers captured (the first build, `n4c-chk-career`) | 39,667,998 draws, likewise only the 39,667 perturbed |
+| Smoke at 1x with `-Look "original,taa=0"` on RTV (`n4c-rtv`) and `-Rov` (`n4c-rov`), the first build | 6 of 6 cells reached their goals, the photos saved and loaded, no clear gray frame, the three error keys of RTV |
+
+The capture in the race (`n4d-race-cap1`, `-cap2`):
+
+| Per draw | |
+|---|---|
+| Bytes | 120: 2.1 context registers (of 27 to 29 written since the previous draw), 2.7 fetch constant slots, 32 bytes of groups, the header and masks; about 300 at a list's first draw |
+| Capture on the render thread | about 98 ns (time stamp counter) |
+| Replay on the submit thread | 23 ns, 0.20 us per KB |
+
+A/B at 1,800 draws a race frame (alternating `n4d-race-off1`, `-cap1`, `-off2`, `-cap2`, fitted per window): render thread busy 3.393 against 3.631 ms (+0.24: 0.17 inside the capture, 0.07 for the marking and around it), the bindings zone unchanged (0.507 and 0.504), the submit thread's recording 0.728 against 0.966 ms (+0.24, of which 0.035 the replay of the commands), p99 5.17 to 5.66 ms with the draw load. Filtering by the 76-register set halved the bytes (from 90 at 5.2 context registers with all 1,024, `n4c-race-cap*`) but not the capture's time (102 against 98 ns): its cost is the per-draw work around the registers, not their comparison.
+
+The render thread outside the draw zone (`n4c-split-race`, `REX_CP_SPLIT`, 1,919 draws a race frame; the split's timers raise the busy time to 4.40 ms, so the values are read as proportions):
+
+| Part | ms a race frame |
+|---|---|
+| Draw zone | 2.99 (its parts 2.56, the timers' remainder 0.42) |
+| Register packets | 0.51 (0.48 in replays) |
+| Records of the converted writers (other packets) | 0.21 (711 records, 92,307 registers) |
+| Shader loads | 0.14 |
+| Draw packets beyond the draw zone | 0.06 |
+| Untimed: dispatch, parse, indirect buffers, the record queue | 0.50 |
+| `WAIT_REG_MEM` (a wait, not busy time) | 0.65 |
+
+Without the split at 1,800 draws (`n4c-race-off*`): busy 3.42 ms, the draw zone 2.37 ms (textures 0.47, bindings 0.51, render targets 0.26, primitives 0.21, pipeline 0.14, copies 0.12, vertex buffers 0.09, the rest 0.57) and 1.05 ms outside it. Where the last 0.3 to 0.4 ms after increment 2 comes from is in 17.6 (the budget).
