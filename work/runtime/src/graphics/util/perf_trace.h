@@ -466,6 +466,36 @@ struct alignas(64) BackEndReplayCounts {
 };
 inline BackEndReplayCounts back_end_replay;
 
+// REX_N4_REPLAY_SPLIT=1 (with the trace): the replay of the deferred command
+// lists by command kind (DeferredCommandList::Command order): time stamp
+// counter ticks and counts, and the ticks of whole Execute calls (the replaying
+// thread; N4 step 2, d3d-hle.md 17.8).
+constexpr size_t kReplaySplitKinds = 64;
+struct alignas(64) ReplaySplitCounts {
+  std::atomic<uint64_t> execute_tsc{0}, executes{0};
+  std::atomic<uint64_t> tsc[kReplaySplitKinds]{};
+  std::atomic<uint64_t> counts[kReplaySplitKinds]{};
+};
+inline ReplaySplitCounts replay_split;
+inline bool ReplaySplitEnabled() {
+  static const bool enabled = [] {
+    const char* value = std::getenv("REX_N4_REPLAY_SPLIT");
+    return Get() && value && *value && *value != '0';
+  }();
+  return enabled;
+}
+inline void AddReplaySplit(const uint64_t* tsc, const uint32_t* counts, size_t kinds,
+                           uint64_t execute_tsc) {
+  replay_split.execute_tsc.fetch_add(execute_tsc, std::memory_order_relaxed);
+  replay_split.executes.fetch_add(1, std::memory_order_relaxed);
+  for (size_t i = 0; i < kinds && i < kReplaySplitKinds; ++i) {
+    if (counts[i]) {
+      replay_split.tsc[i].fetch_add(tsc[i], std::memory_order_relaxed);
+      replay_split.counts[i].fetch_add(counts[i], std::memory_order_relaxed);
+    }
+  }
+}
+
 // The binding check (d3d12_reuse_draw_bindings_check): bindings kept in sync
 // compared with fresh keys, mismatches, comparisons changed on purpose.
 inline std::atomic<uint64_t> binding_checks{0}, binding_check_mismatches{0},
@@ -769,6 +799,26 @@ inline void OnSwap() {
     }
     state->output << "]}";
     back_end_capture = BackEndCaptureCounts{};
+    if (ReplaySplitEnabled()) {
+      const auto tsc_ms = [&](uint64_t ticks) {
+        return tsc_per_ms > 0 ? double(ticks) / tsc_per_ms : 0.0;
+      };
+      state->output << ",\"replay_split\":{\"executes\":"
+                    << replay_split.executes.exchange(0, std::memory_order_relaxed)
+                    << ",\"execute_ms\":"
+                    << tsc_ms(replay_split.execute_tsc.exchange(0, std::memory_order_relaxed))
+                    << ",\"ms\":[";
+      for (size_t i = 0; i < kReplaySplitKinds; ++i) {
+        state->output << (i ? "," : "")
+                      << tsc_ms(replay_split.tsc[i].exchange(0, std::memory_order_relaxed));
+      }
+      state->output << "],\"counts\":[";
+      for (size_t i = 0; i < kReplaySplitKinds; ++i) {
+        state->output << (i ? "," : "")
+                      << replay_split.counts[i].exchange(0, std::memory_order_relaxed);
+      }
+      state->output << "]}";
+    }
   }
   state->output << ",\"vblanks\":{\"grid\":" << vblanks[0].exchange(0, std::memory_order_relaxed)
                 << ",\"late\":" << vblanks[1].exchange(0, std::memory_order_relaxed)

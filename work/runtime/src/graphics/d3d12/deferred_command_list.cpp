@@ -17,6 +17,8 @@
 #include <rex/graphics/flags.h>
 #include <rex/math.h>
 
+#include "../util/perf_trace.h"
+
 namespace rex::graphics::d3d12 {
 
 DeferredCommandList::DeferredCommandList(const D3D12CommandProcessor& command_processor,
@@ -37,10 +39,17 @@ void DeferredCommandList::Execute(ID3D12GraphicsCommandList* command_list,
   const uintmax_t* stream = command_stream_.data();
   size_t stream_remaining = command_stream_.size();
   ID3D12PipelineState* current_pipeline_state = nullptr;
+  // REX_N4_REPLAY_SPLIT: time stamp counter ticks by command kind.
+  const bool split = perf_trace::ReplaySplitEnabled();
+  constexpr size_t kKinds = size_t(Command::kDrawBackEnd) + 1;
+  uint64_t split_tsc[kKinds] = {};
+  uint32_t split_counts[kKinds] = {};
+  const uint64_t execute_start = split ? __rdtsc() : 0;
   while (stream_remaining != 0) {
     const CommandHeader& header = *reinterpret_cast<const CommandHeader*>(stream);
     stream += kCommandHeaderSizeElements;
     stream_remaining -= kCommandHeaderSizeElements;
+    const uint64_t command_start = split ? __rdtsc() : 0;
     switch (header.command) {
       case Command::kD3DClearDepthStencilView: {
         auto& args = *reinterpret_cast<const ClearDepthStencilViewHeader*>(stream);
@@ -287,8 +296,15 @@ void DeferredCommandList::Execute(ID3D12GraphicsCommandList* command_list,
         assert_unhandled_case(header.command);
         break;
     }
+    if (split && size_t(header.command) < kKinds) {
+      split_tsc[size_t(header.command)] += __rdtsc() - command_start;
+      ++split_counts[size_t(header.command)];
+    }
     stream += header.arguments_size_elements;
     stream_remaining -= header.arguments_size_elements;
+  }
+  if (split) {
+    perf_trace::AddReplaySplit(split_tsc, split_counts, kKinds, __rdtsc() - execute_start);
   }
 }
 
