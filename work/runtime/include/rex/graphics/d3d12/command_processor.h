@@ -61,6 +61,10 @@ class D3D12CommandProcessor : public CommandProcessor {
                                  system::KernelState* kernel_state);
   ~D3D12CommandProcessor();
 
+  // GPU timestamps of texture loads for the perf trace (N3, d3d-hle.md 16.1).
+  uint32_t BeginTextureLoadTimestamp();
+  void EndTextureLoadTimestamp(uint32_t pair);
+
   void ClearCaches() override;
   void InvalidateGpuMemory() override;
 
@@ -444,7 +448,7 @@ class D3D12CommandProcessor : public CommandProcessor {
   // frame has a slot of begin/end pairs: every submission (GPU busy time) and
   // every resolve. A slot is resolved when its frame closes and read when the
   // slot is reused, after the frame fence has already been awaited.
-  enum class GpuTimestampKind : uint8_t { kSubmission, kResolve };
+  enum class GpuTimestampKind : uint8_t { kSubmission, kResolve, kTextureLoad, kReadback };
   static constexpr uint32_t kGpuTimestampPairsPerFrame = 256;
   static constexpr uint32_t kGpuTimestampInvalid = UINT32_MAX;
   struct GpuTimestampFrame {

@@ -769,6 +769,7 @@ RTV with the launcher defaults (one tile with TAA), the `career` scenario with `
 - The scene renders into one colour surface at EDRAM base 0 (`2_10_10_10_FLOAT`, also viewed as `16_16_16_16`) with its depth at base 720 in one tile; probably the rear-view mirror into a 2x MSAA surface at pitch 400, the shadow cascades into depth at pitch 560 (resolved to 512x512), and the bloom and exposure chain into small surfaces at bases 0 and 288 (inferred from the pass shapes, not from the shaders).
 - The frames of the photo and garage scenes keep the tiles and 4x MSAA of `-Quality`: 11.7 tile resolves of 1280x720 a frame there.
 - On the render thread at 1x (15.10) the render target cache takes 0.23 ms a race frame and the code between the primitives and it about 0.15 ms; the resolves (the copy zone) 0.18 ms.
+- The GPU time of the resolves split by kind (`n3s2xp`, the perf gate at 2x with GPU timestamps around the resolve copies, the texture loads and the readback copies, medians of the windows of three runs): copies 0.638 ms, texture loads 0.484 ms and readbacks 0.814 ms a race frame, of 5.77 ms. The frame graph's resolve time of 2.75 ms counts these together with the transfers issued for the resolves, so the 1.95 ms of the two full-screen resolves is not what a host copy alone removes: their copies and loads are part of 1.12 ms, and the readbacks are the largest single part.
 
 ### 16.2 Where N3 can save, by the measurement
 

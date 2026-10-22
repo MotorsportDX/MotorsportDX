@@ -1722,6 +1722,12 @@ bool D3D12TextureCache::LoadTextureDataFromResidentMemoryImpl(Texture& texture, 
                                                               bool load_mips) {
   D3D12Texture& d3d12_texture = static_cast<D3D12Texture&>(texture);
   TextureKey texture_key = d3d12_texture.key();
+  // The GPU time of the load for the perf trace (N3, d3d-hle.md 16.1).
+  struct LoadTimestamp {
+    D3D12CommandProcessor& processor;
+    uint32_t pair;
+    ~LoadTimestamp() { processor.EndTextureLoadTimestamp(pair); }
+  } load_timestamp{command_processor_, command_processor_.BeginTextureLoadTimestamp()};
 
   if (content_hash_enabled_ && LoadTextureReplacement(d3d12_texture, load_base, load_mips)) {
     return true;
