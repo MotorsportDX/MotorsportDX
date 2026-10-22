@@ -20,6 +20,7 @@
 #include <rex/graphics/flags.h>
 #include <rex/graphics/pipeline/texture/cache.h>
 #include <rex/graphics/pipeline/texture/info.h>
+#include "../../util/perf_trace.h"
 #include <rex/graphics/pipeline/texture/util.h>
 #include <rex/graphics/register_file.h>
 #include <rex/graphics/xenos.h>
@@ -519,6 +520,10 @@ void TextureCache::RequestTextures(uint32_t used_texture_mask) {
       pending_shared_memory_ranges.push_back(pending_ranges[i]);
     }
   };
+  // Phases of the textures zone (N2, d3d-hle.md 15.9): the keys of the
+  // bindings out of sync (with FindOrCreateTexture timed apart), the loads, and
+  // the binding update.
+  const uint64_t keys_start = perf_trace::DetailZoneStart();
   uint32_t textures_remaining = used_texture_mask & ~texture_bindings_in_sync_;
   uint32_t index = 0;
   while (rex::bit_scan_forward(textures_remaining, &index)) {
@@ -600,6 +605,8 @@ void TextureCache::RequestTextures(uint32_t used_texture_mask) {
     }
   }
 
+  perf_trace::ZoneEnd(perf_trace::Zone::kTexturesKeys, keys_start);
+  const uint64_t loads_start = perf_trace::DetailZoneStart();
   COUNT_profile_set("gpu/texture_cache/request_textures_pending_load_count",
                     uint32_t(pending_texture_loads.size()));
   COUNT_profile_set("gpu/texture_cache/request_textures_pending_range_count",
@@ -628,7 +635,9 @@ void TextureCache::RequestTextures(uint32_t used_texture_mask) {
       }
     }
   }
+  perf_trace::ZoneEnd(perf_trace::Zone::kTexturesLoads, loads_start);
   if (bindings_changed) {
+    const perf_trace::DetailZoneScope zone(perf_trace::Zone::kTexturesBindings);
     UpdateTextureBindingsImpl(bindings_changed);
   }
 

@@ -64,6 +64,19 @@ enum class Zone : uint32_t {
   kSubmitExecute,       // Close + ExecuteCommandLists + Signal.
   kSharedMemoryProtect, // Upload: marking pages valid and watching them again.
   kSharedMemoryCopy,    // Upload: copying guest memory into the upload buffer.
+  kDrawSetup,           // Draw: shader analysis and the submission, before the primitives.
+  kDrawState,           // Draw: pipeline bind, viewport and fixed function state.
+  kDrawCall,            // Draw: topology, memexport and the draw call, after the vertex buffers.
+  kDrawPreTargets,      // Draw: between the primitives and the render targets.
+  kDrawPrePipeline,     // Draw: between the render targets and the pipeline.
+  kDrawPreTextures,     // Draw: between the pipeline and the textures.
+  kBindingsRoot,        // Bindings: root signature and the common root constant buffers.
+  kBindingsConstants,   // Bindings: the constant buffer data.
+  kBindingsDescriptors, // Bindings: the descriptors.
+  kBindingsRootParameters,  // Bindings: the root parameters.
+  kTexturesKeys,        // Textures: the keys of the bindings out of sync.
+  kTexturesLoads,       // Textures: the shared memory requests and texture loads.
+  kTexturesBindings,    // Textures: the binding update of changed bindings.
   kCount
 };
 
@@ -338,6 +351,9 @@ inline void Increment(Count counter) {
 }
 
 inline uint64_t ZoneStart() { return Get() ? Now() : 0; }
+// The detail zones of the draw (draw_setup and after, bindings_*, textures_*):
+// only with REX_CP_SPLIT, because their timers cost about 0.5 ms a race frame.
+inline uint64_t DetailZoneStart() { return SplitEnabled() ? Now() : 0; }
 inline void ZoneEnd(Zone zone, uint64_t start) {
   if (State* state = Get(); state && start) state->zone_ticks[size_t(zone)] += Now() - start;
 }
@@ -345,6 +361,15 @@ class ZoneScope {
  public:
   explicit ZoneScope(Zone zone) : zone_(zone), start_(ZoneStart()) {}
   ~ZoneScope() { ZoneEnd(zone_, start_); }
+
+ private:
+  Zone zone_;
+  uint64_t start_;
+};
+class DetailZoneScope {
+ public:
+  explicit DetailZoneScope(Zone zone) : zone_(zone), start_(DetailZoneStart()) {}
+  ~DetailZoneScope() { ZoneEnd(zone_, start_); }
 
  private:
   Zone zone_;
@@ -460,7 +485,13 @@ inline void OnSwap() {
                                            "submit",        "swap",
                                            "shared_memory_lock", "shared_memory_upload",
                                            "submit_record", "submit_execute",
-                                           "shared_memory_protect", "shared_memory_copy"};
+                                           "shared_memory_protect", "shared_memory_copy",
+                                           "draw_setup", "draw_state", "draw_call",
+                                           "draw_pre_targets", "draw_pre_pipeline",
+                                           "draw_pre_textures", "bindings_root",
+                                           "bindings_constants", "bindings_descriptors",
+                                           "bindings_root_parameters", "textures_keys",
+                                           "textures_loads", "textures_bindings"};
   state->output << "},\"cpu_ms\":{";
   for (size_t i = 0; i < size_t(Zone::kCount); ++i) {
     state->output << (i ? "," : "") << '"' << kZoneNames[i] << "\":" << ms(state->zone_ticks[i]);

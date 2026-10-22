@@ -3456,6 +3456,12 @@ bool D3D12CommandProcessor::IssueDraw(xenos::PrimitiveType primitive_type, uint3
 #endif  // XE_GPU_FINE_GRAINED_DRAW_SCOPES
   perf_trace::CountDraw();
   perf_trace::ZoneScope perf_zone(perf_trace::Zone::kDraw);
+  // The parts of the draw zone outside its named zones (N2, d3d-hle.md 15.6):
+  // setup (shader analysis, the submission) before the primitives, state
+  // (pipeline bind, viewport and fixed function state) between the textures
+  // and the bindings (which include the system constants), and the call
+  // (topology, memexport, the draw itself) after the vertex buffers.
+  const uint64_t setup_start = perf_trace::DetailZoneStart();
   if (submission_open_ && submit_thread_.joinable()) {
     const int32_t interval = REXCVAR_GET(d3d12_submit_draw_interval);
     if (interval > 0 && ++submission_draws_ >= uint32_t(interval) &&
@@ -3643,6 +3649,7 @@ bool D3D12CommandProcessor::IssueDraw(xenos::PrimitiveType primitive_type, uint3
     return false;
   }
 
+  perf_trace::ZoneEnd(perf_trace::Zone::kDrawSetup, setup_start);
   // Process primitives.
   PrimitiveProcessor::ProcessingResult primitive_processing_result;
   uint64_t perf_start = perf_trace::ZoneStart();
@@ -3650,6 +3657,7 @@ bool D3D12CommandProcessor::IssueDraw(xenos::PrimitiveType primitive_type, uint3
     return false;
   }
   perf_trace::ZoneEnd(perf_trace::Zone::kDrawPrimitives, perf_start);
+  const uint64_t pre_targets_start = perf_trace::DetailZoneStart();
   if (draw_trace) {
     *draw_trace << " host_vertices " << primitive_processing_result.host_draw_vertex_count
                 << std::flush;
@@ -3811,6 +3819,7 @@ bool D3D12CommandProcessor::IssueDraw(xenos::PrimitiveType primitive_type, uint3
       }
     }
   }
+  perf_trace::ZoneEnd(perf_trace::Zone::kDrawPreTargets, pre_targets_start);
   perf_start = perf_trace::ZoneStart();
   if (!render_target_cache_->Update(is_rasterization_done, normalized_depth_control,
                                     normalized_color_mask, *vertex_shader)) {
@@ -3821,6 +3830,7 @@ bool D3D12CommandProcessor::IssueDraw(xenos::PrimitiveType primitive_type, uint3
                     index_count, ps_param_gen_pos, normalized_depth_control,
                     normalized_color_mask);
   perf_trace::ZoneEnd(perf_trace::Zone::kDrawRenderTargets, perf_start);
+  const uint64_t pre_pipeline_start = perf_trace::DetailZoneStart();
 
   // Create the pipeline (for this, need the actually used render target formats
   // from the render target cache), translating the shaders - doing this now to
@@ -3845,6 +3855,7 @@ bool D3D12CommandProcessor::IssueDraw(xenos::PrimitiveType primitive_type, uint3
   }
   void* pipeline_handle;
   ID3D12RootSignature* root_signature;
+  perf_trace::ZoneEnd(perf_trace::Zone::kDrawPrePipeline, pre_pipeline_start);
   perf_start = perf_trace::ZoneStart();
   if (!pipeline_cache_->ConfigurePipeline(
           vertex_shader_translation, pixel_shader_translation, primitive_processing_result,
@@ -3853,6 +3864,7 @@ bool D3D12CommandProcessor::IssueDraw(xenos::PrimitiveType primitive_type, uint3
     return false;
   }
   perf_trace::ZoneEnd(perf_trace::Zone::kDrawPipeline, perf_start);
+  const uint64_t pre_textures_start = perf_trace::DetailZoneStart();
   if (REXCVAR_GET(async_shader_compilation) &&
       pipeline_cache_->GetD3D12PipelineByHandle(pipeline_handle) == nullptr) {
     // The pipeline is still being created. Give it a short time before the draw
@@ -3878,9 +3890,11 @@ bool D3D12CommandProcessor::IssueDraw(xenos::PrimitiveType primitive_type, uint3
   uint32_t used_texture_mask =
       vertex_shader->GetUsedTextureMaskAfterTranslation() |
       (pixel_shader != nullptr ? pixel_shader->GetUsedTextureMaskAfterTranslation() : 0);
+  perf_trace::ZoneEnd(perf_trace::Zone::kDrawPreTextures, pre_textures_start);
   perf_start = perf_trace::ZoneStart();
   texture_cache_->RequestTextures(used_texture_mask);
   perf_trace::ZoneEnd(perf_trace::Zone::kDrawTextures, perf_start);
+  const uint64_t state_start = perf_trace::DetailZoneStart();
 
   // Bind the pipeline after configuring it and doing everything that may bind
   // other pipelines.
@@ -3956,6 +3970,7 @@ bool D3D12CommandProcessor::IssueDraw(xenos::PrimitiveType primitive_type, uint3
 
   // Update system constants before uploading them.
   // TODO(Triang3l): With ROV, pass the disabled render target mask for safety.
+  perf_trace::ZoneEnd(perf_trace::Zone::kDrawState, state_start);
   perf_start = perf_trace::ZoneStart();
   UpdateSystemConstantValues(memexport_used, primitive_polygonal,
                              primitive_processing_result.line_loop_closing_index,
@@ -4032,6 +4047,7 @@ bool D3D12CommandProcessor::IssueDraw(xenos::PrimitiveType primitive_type, uint3
   }
 
   perf_trace::ZoneEnd(perf_trace::Zone::kDrawVertexBuffers, perf_start);
+  const perf_trace::DetailZoneScope call_zone(perf_trace::Zone::kDrawCall);
 
   // Gather memexport ranges and ensure the heaps for them are resident, and
   // also load the data surrounding the export and to fill the regions that
@@ -5726,6 +5742,10 @@ bool D3D12CommandProcessor::UpdateBindings(const D3D12Shader* vertex_shader,
   const ui::d3d12::D3D12Provider& provider = GetD3D12Provider();
   ID3D12Device* device = provider.GetDevice();
   const RegisterFile& regs = *register_file_;
+  // Phases of the bindings zone (N2, d3d-hle.md 15.9): the root signature and
+  // the common root constant buffers, the constant buffer data, the
+  // descriptors, and the root parameters.
+  uint64_t phase_start = perf_trace::DetailZoneStart();
 
 #if XE_GPU_FINE_GRAINED_DRAW_SCOPES
   SCOPE_profile_cpu_f("gpu");
@@ -5774,6 +5794,8 @@ bool D3D12CommandProcessor::UpdateBindings(const D3D12Shader* vertex_shader,
               regs[XE_GPU_REG_SQ_VS_CONST] == 0x00000000);
   assert_true(regs[XE_GPU_REG_SQ_PS_CONST] == 0x000FF100 ||
               regs[XE_GPU_REG_SQ_PS_CONST] == 0x00000000);
+  perf_trace::ZoneEnd(perf_trace::Zone::kBindingsRoot, phase_start);
+  phase_start = perf_trace::DetailZoneStart();
   // Check if the float constant layout is still the same and get the counts.
   const Shader::ConstantRegisterMap& float_constant_map_vertex =
       vertex_shader->constant_register_map();
@@ -5909,6 +5931,8 @@ bool D3D12CommandProcessor::UpdateBindings(const D3D12Shader* vertex_shader,
   }
 
   //
+  perf_trace::ZoneEnd(perf_trace::Zone::kBindingsConstants, phase_start);
+  phase_start = perf_trace::DetailZoneStart();
   // Update descriptors.
   //
 
@@ -6371,6 +6395,9 @@ bool D3D12CommandProcessor::UpdateBindings(const D3D12Shader* vertex_shader,
     }
   }
 
+  perf_trace::ZoneEnd(perf_trace::Zone::kBindingsDescriptors, phase_start);
+  const perf_trace::DetailZoneScope root_parameters_zone(
+      perf_trace::Zone::kBindingsRootParameters);
   // Update the root parameters.
   if (!(current_graphics_root_up_to_date_ & (1u << root_parameter_fetch_constants))) {
     deferred_command_list_.D3DSetGraphicsRootConstantBufferView(root_parameter_fetch_constants,

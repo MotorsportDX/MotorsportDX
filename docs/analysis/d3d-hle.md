@@ -699,3 +699,33 @@ The records of the converted dirty writers take about 0.19 ms a frame, counted a
 
 - The first build's watch callback answered that the range to unprotect "does not matter", so a write elsewhere on a page unprotected the pages of other op lists without telling them: their buffers changed unnoticed, and the stale op lists ran garbage as PM4 (362 packet overflows and failed draws in `n2a-career`). `host_render_oplists_verify` (a hash of each replayed buffer at every replay, diagnostics only) found 1,239 stale op lists in `n2b-career`, all on pages that had lost their watch. The callback now returns the triggered range: `n2c-career` with the verification had none, 14,875,959 replays from op lists, 8,153 decodes and 8,004 drops by a write, and no new error key.
 - Performance (`n2c-nat-split`, the `photo` race, three runs with `REX_CP_SPLIT`, against `n2m-nat-split` of 15.7): 4.113 ms of render thread time per race frame at 1,949 draws against 3.41 ms at 1,781, 2.11 against 1.92 us per draw. The replays' register packets took 0.337 ms and their rest 0.406 ms a frame, against 0.375 and 0.33: the op lists remove the dispatch of the type-0 packets only, the type-3 packets keep theirs, and the time per draw rose, probably through more access violations now that a fault unprotects only its own pages. Step 1 in this form saves nothing; it stays off.
+
+### 15.9 Step 2 without op lists (the main session's decision of 22 October 2026)
+
+- Step 1 regressed per draw (2.11 against 1.92 us, 15.8). Its likely cause, the access violations of the page watches, is not measured; it is an open item, to be measured only if the op lists are revived. Step 1's gate of a lower busy time is dropped, and the op lists stay off by default.
+- Step 2 does not build on the op lists or on page watches. The reuse per draw is keyed on the draw's inputs as the backend sees them at `IssueDraw`: the fetch constants that the bound shaders use (from the register file), the shader pair, and the sampler and binding state. A reuse is valid while those inputs, a few dwords per texture or binding, compare equal; the texture memory's validity stays with the texture cache's own watches. It works for direct draws and replays alike, without op lists, and matches the cheap reuse per draw of [CP draw offload, option 3](cp-draw-offload.md#option-3-less-work-per-draw-on-the-one-thread).
+- Order: profile the rest of `IssueDraw` (0.68 ms a race frame) and the texture (0.44 ms) and binding (0.45 ms) zones by their calls; build the reuse with the binding check mode (the keys computed both ways at every draw of a check run, with a perturbation proof); gate with the section 10 targets and smoke, perf and parity against RTV.
+
+### 15.10 The draw path profiled, 22 October 2026
+
+The native `photo` race, three runs each with `REX_CP_SPLIT`, on `I:\FM4-build-usa` at 240 Hz and 1x, ms per race frame. `n2d-nat-split` has the draw zone's first level of parts (21 timers fewer per draw); `n2f-nat-split` adds the parts of the gaps, the bindings and the textures, and its timers inflate it (render thread busy 3.77 against 3.23 ms), so its numbers are read as proportions. Since then the detail zones run only with `REX_CP_SPLIT`.
+
+| Part of the draw zone | `n2d` | `n2f` |
+|---|---|---|
+| The whole draw zone | 2.18 | 2.64 |
+| Textures (`RequestTextures`) | 0.41 | 0.545: the keys of bindings out of sync 0.188, loads 0.048, binding update 0.056, the rest (the 3D-as-2D wrappers and timers) |
+| Bindings (`UpdateSystemConstantValues`, `UpdateBindings`) | 0.39 | 0.559: constant buffer data 0.199, descriptors 0.156, root parameters 0.040, root signature and common buffers 0.020, the rest the system constants |
+| Render targets | 0.23 | 0.234 |
+| Primitives | 0.20 | 0.199 |
+| Pipeline | 0.12 | 0.121 |
+| Vertex buffers | 0.08 | 0.086 |
+| Before the primitives (shader analysis, the submission) | 0.10 | 0.099 |
+| Between the primitives and the render targets (draw traces, shader modifications, the overwrite of uniform targets) | | 0.148 |
+| Between the render targets and the pipeline | | 0.063 |
+| Between the pipeline and the textures | | 0.021 |
+| Pipeline bind, viewport, fixed function state | 0.07 | 0.076 |
+| Topology, memexport and the draw call | 0.04 | 0.044 |
+| Not in a part (mostly the timers) | 0.55 | 0.447 |
+
+- The texture cache already keeps a binding while its fetch constant is not written (`texture_bindings_in_sync_`). Its key work (0.19 ms) comes from fetch constants that are written at every draw, also with the values they had, which marks the bindings out of sync.
+- What a reuse per draw can save: the keys of rewritten fetch constants with unchanged values, and the descriptors of a draw whose textures and samplers equal the previous draw's of the same shader pair; about 0.3 to 0.4 ms a frame by this profile. The constant buffer data changes per draw (the transforms), and the render targets and the gaps around them are the render target cache's work (N3).
