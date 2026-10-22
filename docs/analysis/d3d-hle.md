@@ -1310,3 +1310,38 @@ The gate's render thread target was a drop of at least 0.4 ms at 1,800 draws: �
 - **RTV's race** at 1x with the launcher's defaults, alternating local main's build (`43c7a2c`: `n4h-race-rtvb1`, `-rtvb2`) with this one (`-rtvn1`, `-rtvn2`), fitted per window at 1,800 draws: the draw zone 2.646 against 2.651 ms, its parts within 0.02 ms (bindings 0.499 against 0.516, textures 0.542 against 0.526, pipeline 0.143 against 0.151), the submit thread's recording 0.893 against 0.889 ms, p99 6.67 against 6.31 ms pooled; per draw 1,404 to 1,526 ns against 1,452 to 1,484 ns. The draw path with the cvar off costs the same.
 
 Increment 3 (the capture and the marking to about 0.1 ms, 17.6) is where the rest of the render thread's saving lies.
+
+### 17.9 Step 2, increment 3 results, 23 October 2026
+
+The capture and the marking of written registers, with `d3d12_draw_back_end=2` (still off by default):
+
+- **Marking per range.** The base command processor's `WriteRegistersFromMem` stores a range without marking each register (`WriteRegisterUnmarked`) and marks the range at once (`MarkRegistersWritten`). Single writes through `WriteRegisterFast` and hooked registers through `WriteRegister` still mark themselves.
+- **The groups in place.** The capture compares the front half's results with the list's state and writes the changed ones into it, without a temporary list state and its copy; the texture cache's answers are compared for the used textures only. The context registers are compared without a branch.
+- **The fetch constants per shader pair.** The capture takes only the fetch constant slots the draw's shaders read: their vertex fetch constants and the fetch constants of their textures and samplers, computed once per shader after its translation (`D3D12Shader::back_end_fetch_slots`). The other written slots stay pending until a draw reads them. The replay still fills the whole fetch constant buffer from its copy; the check compares the slots the shaders read.
+- **No zeroed arguments.** The deferred command list grows its stream without zeroing it (an allocator that default-initializes): every command's writer fills its arguments. This applies to every command, with the cvar off too.
+- **The trace's own cost.** The capture's time stamps run around every 16th capture (counted 16 times), and the written-register statistic only with the trace. `REX_N4_CAPTURE_SPLIT` times every capture by part.
+
+On `I:\FM4-build-usa` at 240 Hz and 1x with `-Native`'s cvars and the fast route, in two rounds: round 1 (`n4be6`, `rexgpu-xenos.dll` SHA-256 beginning `f66f31de2907ff9e`) without the branchless comparison and the sampled time stamps, round 2 (`n4be7`, `d11fe60c8279e7fc`) with them.
+
+| Check | Result |
+|---|---|
+| The check with perturbation 1,000 (`n4i-chk2-career`, `n4j-chk2-career`: race, replay, menus) | 40,276,214 and 41,874,077 draws; mismatches only in the 40,276 and 41,874 perturbed pipeline comparisons, none in the other six kinds; no draw dropped, no pipeline created on the replay, the error keys of RTV, no clear gray frame |
+
+The step gate, each round alternating off and the back end twice (`n4i-race-*`, `n4j-race-*`), fitted per window at 1,800 draws a race frame, next to increment 2's (`n4g-race-*`):
+
+| At 1,800 draws a race frame | Increment 2 | Increment 3, round 1 | Round 2 |
+|---|---|---|---|
+| Render thread busy, off | 3.383 ms | 3.440 | 3.521 |
+| Render thread busy, back end on the replay | 2.993 ms | 2.937 | 2.935 |
+| The difference | −0.39 ms | −0.50 | −0.59 |
+| Outside the draw zone, off and on | 1.016 and 1.062 ms | 1.048 and 1.041 | 1.067 and 1.037 |
+| The capture | 138 to 139 ns a draw | 127 to 131 | 137 to 143 (sampled) |
+| Bytes and constant slots a draw | 484, 22.0 | 409 to 432, 17.4 to 18.7 | 415 to 425, 17.8 to 18.4 |
+| Submit thread recording, on | 1.567 ms | 1.524 | 1.544 |
+| p99 pooled, off and on | 6.40 and 5.26 ms | 5.62 and 5.21 | 6.25 and 4.86 |
+
+- **The marking is gone.** Outside the draw zone the back end now costs no more than off (1.041 against 1.048, 1.037 against 1.067), where increment 2 cost 0.046 ms more.
+- **The capture.** 127 to 131 ns a draw in round 1, about 10 ns less than increment 2, for 11 to 15% fewer bytes: the fetch slots fall from about 8 to 3.7 a draw. The split (`n4i-csplit-csplit1`, 1,621 draws a frame, its own seven time stamps included): context registers 39.5 ns, constant masks 10.6, groups 33.4, the command's allocation 14.1, the record up to the constant slots 35.2, the rest 13.4. The work is spread over the comparison of about 30 written context registers a draw (2.1 change), the five groups, and the copy of 17.7 constant slots (13.9 float, 3.7 fetch, 0.2 bool and loop); no part dominates. Round 2's sampled time stamps include the same interval, so they do not show its saving.
+- **Round 2** does not show beyond the noise: its off runs ran 2 to 3% slower in every zone than round 1's (the laptop warmer), and the back end's equal.
+
+The render thread is at 2.94 ms at 1,800 draws, against the main session's target of about 2.8 ms; the capture at about 0.23 ms against about 0.1, the marking at about 0. What would take the capture further is structural: the constant writes recorded into the list where they are written (the capture then copies no constant slot, about 30 ns a draw by the split, while every written constant is copied whether a draw reads it or not), or the comparison of the context registers moved to the replay (more bytes). Neither is more than about 0.05 ms a race frame. The levers for the remaining 0.14 ms are the next items of 17.6's budget: the bulk register-write path (0.1 to 0.2 ms) and the texture keys (0.19 to 0.21 ms).
