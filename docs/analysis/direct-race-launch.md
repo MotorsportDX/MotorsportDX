@@ -2,6 +2,8 @@
 
 Research for a switch that starts a Quick Race without the menus, to shorten e2e runs. The research took place on 21 October 2026. **The switch has not been built.** The menus write the race into three places that have no known entry point yet (see [What a direct launch needs](#what-a-direct-launch-needs)), so a hook that skips them would be only partial. This note records what was found, what is missing and an estimate.
 
+Instead, since 22 October 2026 the e2e harness takes the menus at the title's own pace: [the fast route](#the-fast-route-22-october-2026) waits for the title's screen events rather than fixed delays and saves about 57 s per run. Against it, a direct launch would save at most the 25 s from the main menu to GO RACE.
+
 ## The menu route
 
 The quickrace scenario was run on 21 October 2026 in I:\FM4-build-pass with fm4_rex.exe sha256 `1011e073...`, `engageaionstart` and `FM4_FIXED_SEED=1`. The times are harness seconds; the game's own trace runs about 0.3 s earlier.
@@ -19,6 +21,33 @@ The quickrace scenario was run on 21 October 2026 in I:\FM4-build-pass with fm4_
 | (142.5 s) | LAPS on the HUD. Not from this run: it comes from the freeze scenario's seed-a run of the same day |
 
 The menus, from the main menu to GO RACE, take about 52 s. Launch to LAPS took 142.5 s in the freeze scenario's seed-a run, not the run in the table. A direct launch from the main menu could save at most the 52 s; the boot to the title (about 24 s) and the title plus main menu (about 4 s more) are not in that bound.
+
+## The fast route (22 October 2026)
+
+`e2e.py --fast-route` ([fast route](../e2e/README.md#fast-route)) drives the same menus with the same defaults, but each press waits for an event of the title instead of a fixed delay. The title writes the events with `FM4_TEST_EVENTS_FILE` ([`fm4-test-events.cpp`](../../work/fm4-rex/src/fm4-test-events.cpp)): every UI scene the frontend creates (`sub_824B8EE0`, with its name from the scene registry), every render scenario push and pop, and the countdown's placing of the cars and its 3-2-1.
+
+The runs: `I:\FM4-build-usa`, `game-build-route` (fm4_rex.exe sha256 `e4f78753...`), 240 Hz, `engageaionstart`, `FM4_FIXED_SEED=1`, `--profile copy`. Seconds from the launch, medians of 5 `photo` runs of the fast route and 3 `race` runs of the menu route:
+
+| Event | Menu route | Fast route |
+| --- | --- | --- |
+| Title scene (`120_P_PRE_SPLASH`) | 20.9 | 20.9 |
+| Main menu (`push UI_Homespace`) | 24.9 | 24.4 |
+| GO RACE (scene 95, `17_DYNAMIC_LOADING_FREEPLAY`) | 79.5 | 49.7 |
+| Pre-race menu (`4_C_INI_PRERACE`) | 96.8 | 66.9 |
+| START RACE (`947_HUD`) | 128.0 | 71.3 |
+| The cars placed (`countdown placed`) | 129.0 | 72.3 |
+| Race (`push 12-Car_Race`) | 138.0 | 81.1 |
+| Race phase starts | 147.2 | 90.4 |
+
+Every milestone varied by at most 0.4 s between the runs of a route. The `photo` runs of the fast route took 191.6 s to 193.9 s; the menu route's `photo` runs at 1x and 240 Hz took 249.9 s to 252.5 s on 22 October 2026 (the same steps after the race phase). One `race` run of each route without the seed took 137.1 s and 193.4 s.
+
+What the events show:
+
+- Every screen from QUICK RACE to the track creates its scene as it takes the A that opens it, within 0.1 s. In the fast route each screen took the first A, 1.5 s after the scene before it, in every run.
+- The track screen's A is GO RACE: it creates scene 95, the race event controller. The pre-race menu's scene (`4_C_INI_PRERACE`) follows 17.1 s to 17.3 s later in both routes; that is the loading, and the route does not change it. The menu slides in for about 2 s.
+- START RACE creates the HUD (`947_HUD`) at once and places the cars about 1 s later; the race scenario (`12-Car_Race`) follows 8.5 s after the 3-2-1 starts. The fast route starts the race phase 9.3 s after that push, where the menu route's fixed delays put it (9.1 s to 9.2 s after it).
+- The splash videos do not get shorter. With A every 2.5 s from the launch, the title scene (`120_P_PRE_SPLASH`) came at 20.9 s to 22.4 s, as in the menu route (20.9 s to 21.8 s): the Turn 10 part of `T10_MS_Combined.wmv` does not take A, only its Microsoft Studios part does.
+- With the seed, the race is the same race: in the race phase the fast route drew 1,914 to 1,968 draws per frame (median 1,947) at 212.8 to 220.7 fps (median 218.6, p99 6.0 ms to 6.8 ms), the menu route 1,902 to 1,956 (median 1,913) at 211.7 to 219.6 fps (median 216.7, p99 6.3 ms to 7.1 ms), with the same GPU time per frame (2.93 ms to 2.98 ms) and the same three error keys. Without the seed the menu route's race phase spreads over 1,462 to 2,441 draws per frame and 200 to 238 fps (27 `photo` and `race` runs on RTV at 1x and 240 Hz of 21 and 22 October 2026, several binaries).
 
 ## What GO RACE does
 
@@ -66,11 +95,9 @@ After that come the implementation and the checks of the UI flow after the race:
 
 The total is about 2 to 3 days. The risk is that the scene stack rejects a jump from the main menu, or that the race needs state left behind by the car select screen, such as the loaded car model.
 
-The saving is at most about 52 s per run: the menu span only, not the boot or the title.
+The saving was at most about 52 s per run against the menu route of 21 October 2026: the menu span only, not the boot or the title. Against the fast route it is at most the 25 s from the main menu's render scenario to GO RACE, of which the main menu's OCR checks and `select:FREE PLAY` take about 13 s.
 
 ## Cheaper options
 
-- **Harness side** (not done here; the validation session owns `e2e.py`): the quickrace steps use fixed delays.
-  - Waiting for each screen's text instead would remove most of the 20 s idle at the pre-race menu, and some of the menu time, with no game change. The texts are MANUFACTURER SELECT, CAR SELECT, ENVIRONMENT SELECT, TRACK SELECT or GO RACE, and START RACE.
-  - The pre-race menu shows about 19 s after GO RACE, but the harness waits 40 s.
-- **Splash videos and title**: tests on 16 October 2026 found that `disablesplashintro` and `noattractvideo` do not change the boot. Skipping the videos would need a hook on the movie player and would save at most about 10 s to 15 s. Not done.
+- **Harness side**: done on 22 October 2026 as [the fast route](#the-fast-route-22-october-2026), with the title's screen events in place of the screen texts that this note proposed (OCR sees a screen only every 2 s).
+- **Splash videos and title**: tests on 16 October 2026 found that `disablesplashintro` and `noattractvideo` do not change the boot. Skipping the videos would need a hook on the movie player and would save at most about 10 s to 15 s. Not done. A pressed every 2.5 s from the launch does not skip them sooner (see [the fast route](#the-fast-route-22-october-2026)).

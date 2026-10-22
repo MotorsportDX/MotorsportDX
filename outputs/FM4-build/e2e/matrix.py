@@ -24,6 +24,7 @@ from pathlib import Path
 HERE = Path(__file__).resolve().parent
 sys.path.insert(0, str(HERE.parent))
 import pipeline  # noqa: E402
+from e2e import FAST_SCENARIOS  # noqa: E402
 
 TIERS = {
     'smoke': (('photo', 'photo_view', 'career'), (240,), 1),
@@ -52,10 +53,12 @@ def snapshot(root, source, name):
     return target.relative_to(root)
 
 
-def cell_args(root, name, hz, scenario, repeat, build, extra):
+def cell_args(root, name, hz, scenario, repeat, build, extra, fast_route=False):
     args = [sys.executable, HERE / 'e2e.py', '--build-root', root, '--game-build', build,
             '--out', root / 'e2e' / f'{name}-{hz}-{scenario}', '--scenario', scenario,
             '--repeat', str(repeat)]
+    if fast_route and scenario in FAST_SCENARIOS:
+        args += ['--fast-route']
     if hz != 60:
         args += [f'--arg=--video_mode_refresh_rate={hz}', '--env', f'FM4_FRAME_RATE={hz}']
     if scenario == 'quickrace':
@@ -113,6 +116,9 @@ def main():
     parser.add_argument('--msaa', action='store_true',
                         help='every cell keeps the tiles and MSAA of the quality with a look that has TAA '
                              '(Build.ps1 -Msaa)')
+    parser.add_argument('--fast-route', action='store_true',
+                        help='cells with a fast route reach their race through the title\'s screen events '
+                             '(e2e.py --fast-route); the others keep their menus')
     options = parser.parse_args()
     root = options.build_root.resolve()
     scenarios, rates, repeat = TIERS[options.tier]
@@ -142,7 +148,8 @@ def main():
             out = root / 'e2e' / cell
             t = time.time()
             with open(root / 'e2e' / f'{cell}.log', 'w', encoding='utf-8', errors='replace') as output:
-                code = subprocess.call([str(a) for a in cell_args(root, options.name, hz, scenario, repeat, build, extra)],
+                code = subprocess.call([str(a) for a in cell_args(root, options.name, hz, scenario, repeat, build,
+                                                                  extra, options.fast_route)],
                                        stdout=output, stderr=subprocess.STDOUT)
             verdict = ''
             if options.baseline:

@@ -15,6 +15,8 @@ The harness runs on Windows x64 with the D3D12 runtime only. The runtime fork ha
                                                      (FM4_CAPTURE_DIR)
  reads   <out>\perf.jsonl  <----------------------  perf_trace.h: one JSON line per second
                                                      (REX_PERF_TRACE_FILE)
+ reads   <out>\events.txt  <----------------------  FM4TestEvent: one line per UI scene and
+                                                     render scenario (FM4_TEST_EVENTS_FILE)
  reads   <out>\runtime.log, stderr.log  <---------  runtime log (log_file cvar), stderr
  watches the process exit code
 
@@ -45,7 +47,7 @@ Environment:
 
 1. The parent environment without the `FM4_*` and `REX_*` variables.
 2. `pipeline.launch_env()` (`FM4_HALF_RATE_MIRROR=1`).
-3. `FM4_CAPTURE_DIR=<out>\capture`, `FM4_TEST_INPUT_FILE=<out>\input.txt`, `REX_PERF_TRACE_FILE=<out>\perf.jsonl`.
+3. `FM4_CAPTURE_DIR=<out>\capture`, `FM4_TEST_INPUT_FILE=<out>\input.txt`, `REX_PERF_TRACE_FILE=<out>\perf.jsonl`, `FM4_TEST_EVENTS_FILE=<out>\events.txt`.
 4. `FM4_RACE_SETTINGS` of the quality preset (`pipeline.race_settings`), and `FM4_TRACK_SETTINGS` of the look's track lighting knobs (`pipeline.look_track_settings`).
 5. The `--env` items.
 6. `FM4_INFO` (the settings overlay text, `pipeline.info_overlay`) and `FM4_INFO_SHOW=1` unless `--env` sets it.
@@ -61,6 +63,7 @@ All hooks are opt-in. Without their variable they do nothing, and a normal launc
 | `FM4_TEST_INPUT_FILE` | [`fm4-test-input.h`](../../work/fm4-rex/src/fm4-test-input.h), registered in `OnPostSetup` of [`fm4_rex_app.h`](../../work/fm4-rex/src/fm4_rex_app.h) | adds a synthetic controller (an `InputDriver`) next to the SDL input |
 | `FM4_CAPTURE_DIR` | [`fm4-frame-capture.h`](../../work/fm4-rex/src/fm4-frame-capture.h), thread started in `OnPostLaunchModule` of `fm4_rex_app.h` | writes the guest output as PPM files every 2 s |
 | `FM4_CAPTURE_DIR` (side effects) | `fm4-crash-diagnostics.cpp`, `fm4-ui-diagnostics.cpp`, `fm4-jpeg-diagnostics.cpp`, `fm4-gpu-probe.cpp` | crash handler with a minidump, UI and input traces on stderr, photo JPEG diagnostics, a GPU register probe per capture |
+| `FM4_TEST_EVENTS_FILE` | [`fm4-test-events.cpp`](../../work/fm4-rex/src/fm4-test-events.cpp), with calls in `fm4-vblank-rate.cpp` and `fm4-race-clock.cpp` | appends one line per UI scene the frontend creates, per render scenario push and pop and per countdown step ([screen events](#screen-events-fm4_test_events_file)) |
 | `REX_PERF_TRACE_FILE` | [`perf_trace.h`](../../work/runtime/src/graphics/util/perf_trace.h) and its callers | one JSON line per second of command-processor waits, zones, counts and GPU times ([traces.md](traces.md#performance-trace-rex_perf_trace_file)) |
 | `FM4_INFO`, `FM4_INFO_SHOW` | [`fm4-info-overlay.h`](../../work/fm4-rex/src/fm4-info-overlay.h) | settings overlay drawn by the presenter over the guest output, so never in the captures |
 | `FM4_GAME_CMDLINE` | [`fm4-command-line.cpp`](../../work/fm4-rex/src/fm4-command-line.cpp) | the title's developer options, for example `engageaionstart` |
@@ -98,6 +101,24 @@ The harness writes the file through a temporary file and `os.replace`, retrying 
 
 On Windows the same thread also serves RenderDoc capture requests (`renderdoc-request.txt`, see [experiments.md](experiments.md)).
 
+### Screen events (FM4_TEST_EVENTS_FILE)
+
+The title appends one line per event and flushes it:
+
+```
+<unix ms> <steady ms> <kind> <detail>
+```
+
+The unix time is the wall clock of the harness timeline (`time.time()`), the steady time the clock of `captures.txt` and the runtime traces. The kinds:
+
+| Line | Source | When |
+| --- | --- | --- |
+| `scene <id> <name>` | the UI scene factory `sub_824B8EE0` (registry, id, parent) | the frontend creates a UI scene: a screen, a dialog, the HUD. The name comes from the scene registry (249 entries of factory and name). Every screen of the Quick Race menus creates its scene as it takes the A that opens it |
+| `push <name>`, `pop <name>` | `CRenderThreadLink::PushDynamicRenderSettings` and `PopDynamicRenderSettings` ([`fm4-vblank-rate.cpp`](../../work/fm4-rex/src/fm4-vblank-rate.cpp)) | a render scenario is pushed or popped: `UI_NoCar`, `UI_Homespace`, `12-Car_PreRace`, `12-Car_321_and_PostRace` (the countdown), `12-Car_Race` (the race starts), photo mode, replays |
+| `countdown placed`, `countdown start <n>` | the countdown's update `sub_8239D450` ([`fm4-race-clock.cpp`](../../work/fm4-rex/src/fm4-race-clock.cpp)) | the countdown places the cars on the grid (after START RACE), and its 3-2-1 starts `n` session updates later |
+
+The writer only observes: it changes no guest register or memory. `e2e.py` sets the variable in every run, reads the file for `@` checks and copies the events into `summary.json` (`events`, in seconds from the launch). A binary without the writer ignores the variable and writes no file, so the `@` checks of `--fast-route` time out.
+
 The harness treats a capture as complete only when its size matches the PPM header (`complete_ppm`), and uses the newest complete one written after the last input (`newest_capture`).
 
 ### Performance trace (REX_PERF_TRACE_FILE)
@@ -128,6 +149,7 @@ A scenario is a list of steps (the syntax is in [README.md](README.md#scenario-s
 
 - a plain step waits, then sets or taps the input;
 - a checked step (`checked_step`) repeats the action until one of its texts shows in a capture taken after it;
+- a checked step whose text starts with `@` (`event_step`) repeats the action until a screen event matching that regular expression is written after it (for `wait`, after the run's last press), polling `events.txt` every 50 ms;
 - `select:<label>` (`select_label`) moves the menu highlight to a label;
 - `phase:<name>` records the current number of perf lines, so `summary.json` `phases` covers the perf windows between two marks.
 

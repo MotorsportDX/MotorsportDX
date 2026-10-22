@@ -1,5 +1,6 @@
 """Offline tests of the frozen-frame tools: frame_diff.py, parity.py, the summary fields of
-e2e.py they read and the input file of the freeze scenario's pulses.
+e2e.py they read, the input file of the freeze scenario's pulses and the screen events of the
+fast route.
 Run: python outputs/FM4-build/e2e/test_e2e_tools.py"""
 import contextlib, io, json, os, sys, tempfile, time, unittest
 from pathlib import Path
@@ -201,6 +202,62 @@ class InputTests(unittest.TestCase):
             self.assertEqual(path.read_text().split(), '0 0 0 0 0 0 0 32768'.split())
             e2e.set_input(path, **e2e.parse_action('~y@720'))
             self.assertEqual(path.read_text().split(), '0 0 0 0 0 0 0 32768 720'.split())
+
+
+class EventTests(unittest.TestCase):
+    """Screen events (FM4_TEST_EVENTS_FILE), '@' checks and the fast route's scenarios."""
+    class Process:
+        def poll(self):
+            return None
+
+    def write(self, path, lines):
+        path.write_text(''.join(f'{int(t * 1000)} 123 {text}\n' for t, text in lines))
+
+    def test_read_events(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            path = Path(tmp) / 'events.txt'
+            self.assertEqual(e2e.read_events(path), [])
+            path.write_text('1000 5 scene 95 17_DYNAMIC_LOADING_FREEPLAY\npartial\n2500 6 push 12-Car_Race\n')
+            self.assertEqual(e2e.read_events(path),
+                             [(1.0, 'scene 95 17_DYNAMIC_LOADING_FREEPLAY'), (2.5, 'push 12-Car_Race')])
+
+    def test_event_step(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            events, input_file = root / 'events.txt', root / 'input.txt'
+            screen = e2e.Screen(root, self.Process(), root / 'steps.jsonl', events)
+            now = time.time()
+            e2e.LAST_PRESS[0] = now - 10
+            # 'wait' takes the events since the last press; an older one does not count.
+            self.write(events, [(now - 20, 'push 12-Car_Race'), (now - 5, 'scene 208 4_C_INI_PRERACE')])
+            self.assertTrue(e2e.checked_step(screen, input_file, 1, 'wait', 0, '@scene \\d+ 4_C_INI_PRERACE'))
+            self.assertFalse(e2e.checked_step(screen, input_file, 0.2, 'wait', 0, '@push \\S+_Race$'))
+            # '?' skips the press when a matching event follows the last press.
+            pressed = e2e.LAST_PRESS[0]
+            self.assertTrue(e2e.checked_step(screen, input_file, 1, '?a', 0.12, '@4_C_INI_PRERACE'))
+            self.assertEqual(e2e.LAST_PRESS[0], pressed)
+            # A press counts only the events written after it, and is repeated every retry.
+            started = time.time()
+            self.assertFalse(e2e.checked_step(screen, input_file, 1.6, 'a', 0.05, '@4_C_INI_PRERACE', 0.7))
+            self.assertGreater(e2e.LAST_PRESS[0], started + 0.5)
+            screen.close()
+
+    def test_fast_scenarios(self):
+        fast, menus = e2e.FAST_SCENARIOS, e2e.SCENARIOS
+        for name, steps in fast.items():
+            e2e.check_actions(steps)
+            if name != 'career':
+                self.assertEqual(steps[:len(fast['quickrace']) - 3], fast['quickrace'][:-3], name)
+        start = menus['career'].index([1, 'phase:race', 0])
+        self.assertEqual(fast['career'][-(len(menus['career']) - start):], menus['career'][start:])
+        self.assertEqual(fast['career'][:len(e2e._FAST_TO_MAIN_MENU)], e2e._FAST_TO_MAIN_MENU)
+        # After the race starts, the steps are those of the menu route.
+        for name in ('race', 'photo'):
+            self.assertEqual(fast[name][len(fast['quickrace']):], menus[name][len(menus['quickrace']) + 1:])
+            self.assertEqual(fast[name][len(fast['quickrace'])], [1, 'phase:race', 0])
+        self.assertEqual(fast['freeze'][len(fast['quickrace']) - 3], [0.5, '~y@720', 0])
+        self.assertEqual(fast['freeze'][len(fast['quickrace']) - 3:],
+                         menus['freeze'][len(menus['quickrace']) - 1:])
 
 
 class SummaryTests(unittest.TestCase):

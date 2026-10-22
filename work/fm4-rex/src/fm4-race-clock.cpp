@@ -96,9 +96,13 @@ REX_HOOK_RAW(sub_8239D450) {
   const bool waiting = base[self + 0x18] != 0;
   __imp__sub_8239D450(ctx, base);
   const uint32_t update = fm4_diagnostic_updates.load(std::memory_order_relaxed);
-  if (!placed && base[self + 0x1C]) countdown_placed.store(update, std::memory_order_relaxed);
+  if (!placed && base[self + 0x1C]) {
+    countdown_placed.store(update, std::memory_order_relaxed);
+    FM4TestEvent("countdown placed");
+  }
   if (waiting && !base[self + 0x18]) {
     const uint32_t waited = update - countdown_placed.load(std::memory_order_relaxed);
+    FM4TestEvent("countdown start %u", waited);
     if (FixedFrameTime())
       std::fprintf(stderr, "FM4 fixed frame time: the 3-2-1 starts %u session updates after the "
                    "cars were placed%s\n", waited,

@@ -120,6 +120,7 @@ void Apply(const char* event, const std::string& name) {
                  fm4_diagnostic_swaps.load(std::memory_order_relaxed),
                  fm4_diagnostic_updates.load(std::memory_order_relaxed),
                  fm4_diagnostic_session_time.load(std::memory_order_relaxed));
+  FM4TestEvent("%s %s", event, name.c_str());
 }
 }  // namespace
 

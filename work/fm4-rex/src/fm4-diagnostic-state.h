@@ -14,3 +14,7 @@ inline std::atomic<double> fm4_diagnostic_session_time{0.0};
 // on (fm4-vblank-rate.cpp); 0 outside a race (the pre-race already updates the session).
 // FM4TestInput counts race frames from it.
 inline std::atomic<uint32_t> fm4_diagnostic_race_update{0};
+// Screen events for the e2e harness (fm4-test-events.cpp): one line in FM4_TEST_EVENTS_FILE,
+// nothing without the variable.
+bool FM4TestEventsOn();
+void FM4TestEvent(const char* format, ...);

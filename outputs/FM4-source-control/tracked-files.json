@@ -1065,6 +1065,10 @@
       "provenance": "Original compatibility fix source; guest function addresses only, no game function bodies"
     },
     {
+      "path": "work/fm4-rex/src/fm4-test-events.cpp",
+      "provenance": "Original integration source; e2e screen events, guest function addresses and structure offsets only, no game function bodies"
+    },
+    {
       "path": "work/fm4-rex/src/fm4-test-input.h",
       "provenance": "Reviewed integration/helper source; SDK-derived portions retain upstream notice"
     },

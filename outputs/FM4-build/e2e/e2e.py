@@ -31,6 +31,10 @@ BUTTONS = {'up': 0x1, 'down': 0x2, 'left': 0x4, 'right': 0x8, 'start': 0x10, 'ba
 # so checked presses are the reliable way; give screens that load a retry longer than the load.
 # A '?' before the action skips it when the text already shows (in a capture taken after the
 # step starts). A text starting with '=' must be a whole OCR line; '!' checks that none shows.
+# A text starting with '@' is a regular expression on the title's screen events instead of OCR
+# (FM4_TEST_EVENTS_FILE, fm4-test-events.cpp: 'scene <id> <name>', 'push <name>', 'pop <name>',
+# 'countdown placed', 'countdown start <n>'): the step passes when a matching event is written
+# after its press, or for 'wait' after the run's last press; '?' skips the action when one was.
 
 # Boot to the main menu. A skips the Microsoft Studios and Dolby splash videos (the main menu
 # shows after about 30 s instead of 47), one press per screen read: presses at a fixed rate
@@ -184,6 +188,68 @@ SCENARIOS.update({
         [1, 'phase:freeze', 0], [20, 'wait', 0], [1, 'phase:end', 0],
     ],
 })
+# The fast route (--fast-route): the same races, reached through the title's screen events
+# (FM4_TEST_EVENTS_FILE, '@' checks) instead of fixed delays. Every screen of the Quick Race
+# menus creates its UI scene as it takes the A, so each A waits only until the screen before
+# has settled and is repeated when the next scene does not follow.
+# Boot: A until the title scene exists (A skips the Microsoft Studios part of the splash video;
+# the Turn 10 part and the legal notice before it ignore A, so the boot is not shorter), then A
+# on the title once it has faded in, until the main menu's render scenario is pushed.
+_FAST_TO_MAIN_MENU = [
+    [60, 'a', 0.12, '@scene \\d+ 120_P_PRE_SPLASH', 2.5],
+    [2.5, 'wait', 0], [20, 'a', 0.12, '@push UI_Homespace', 3],
+]
+_FAST_QUICKRACE_MENUS = [
+    # The main menu: FREE PLAY is three Rights from PLAY CAREER; the select checks it.
+    [30, 'wait', 0, 'PLAY CAREER'], [1, 'right,right,right', 0.12], [20, 'select:FREE PLAY', 0],
+    [15, 'a', 0.12, 'QUICK RACE', 6],
+    # QUICK RACE, then the defaults of manufacturer, car, paint color, difficulty, location
+    # and track; the track's A is GO RACE (the race event controller, scene 95).
+    [1, 'wait', 0], [15, 'a', 0.12, '@scene \\d+ 115_C_BUY_MFRSELECT', 3],
+    [1.5, 'wait', 0], [15, 'a', 0.12, '@scene \\d+ 108_C_BUY_CARSELECT', 3],
+    [1.5, 'wait', 0], [15, 'a', 0.12, '@scene \\d+ 114_C_BUY_BUYCAR_COLOR', 3],
+    [1.5, 'wait', 0], [15, 'a', 0.12, '@scene \\d+ 838_I_PRO_OPTIONS_SET_DIFFICULTY', 3],
+    [1.5, 'wait', 0], [15, 'a', 0.12, '@scene \\d+ 122_F_TRK_LOCSELECT', 3],
+    [1.5, 'wait', 0], [15, 'a', 0.12, '@scene \\d+ 123_F_TRK_TRACKSELECT', 3],
+    [1.5, 'wait', 0], [15, 'a', 0.12, '@scene \\d+ 17_DYNAMIC_LOADING_FREEPLAY', 3],
+    # Loading, then the pre-race menu (its scene; it slides in for about 2 s). It ignores A
+    # until its focus has moved once; START RACE creates the HUD at once and places the cars
+    # for the countdown about 1 s later.
+    [90, 'wait', 0, '@scene \\d+ 4_C_INI_PRERACE'], [3, 'wait', 0],
+    [30, 'down,up,a', 0.12, '@scene \\d+ 947_HUD|countdown placed', 5],
+]
+# The race phase starts 9.2 s after the race scenario is pushed (the end of the 3-2-1), where
+# the quickrace route's 8 s of throttle and 10 s of driving after START RACE put it (22 October
+# 2026).
+_FAST_TO_RACE = [
+    [0.1, 'rt=255', 0], [60, 'wait', 0, '@push \\S+_Race$'], [8.2, 'wait', 0],
+]
+# Career: PLAY CAREER is the main menu's default (scene 102_H_CAR_HOME), GO RACE > WORLD TOUR
+# (scene 200_WORLD_TOUR, a globe that zooms to the next event for about 10 s), A until the
+# event's screen (scene 204_C_RACE_INFO), START RACE (the event's race event controller, scene
+# 92), then the pre-race menu as in a Quick Race. The menu route's race phase starts 2 s after
+# OCR reads LAPS, 5.1 s after the race scenario is pushed (22 October 2026).
+_FAST_CAREER_TO_RACE = [
+    [30, 'wait', 0, 'PLAY CAREER'], [1, 'wait', 0], [15, 'a', 0.12, '@scene \\d+ 102_H_CAR_HOME', 4],
+    [40, 'up', 0.12, 'MY PROFILE'], [30, 'up,a', 0.12, 'WORLD TOUR|EVENT LIST', 10],
+    [60, 'up,a', 0.12, '@scene \\d+ 200_WORLD_TOUR', 10],
+    [60, 'a', 0.12, '@scene \\d+ 204_C_RACE_INFO', 3],
+    [20, 'wait', 0, 'START RACE'], [20, 'select:START RACE', 0],
+    [15, 'a', 0.12, '@scene \\d+ 19_DYNAMIC_LOADING_WORLDTOUR', 5],
+    [90, 'wait', 0, '@scene \\d+ 4_C_INI_PRERACE'], [3, 'wait', 0],
+    [30, 'down,up,a', 0.12, '@scene \\d+ 947_HUD|countdown placed', 5],
+    [0.1, 'rt=255', 0], [60, 'wait', 0, '@push \\S+_Race$'], [4.1, 'wait', 0],
+]
+FAST_SCENARIOS = {
+    'quickrace': _FAST_TO_MAIN_MENU + _FAST_QUICKRACE_MENUS + _FAST_TO_RACE,
+    'career': _FAST_TO_MAIN_MENU + _FAST_CAREER_TO_RACE
+    + SCENARIOS['career'][SCENARIOS['career'].index([1, 'phase:race', 0]):],
+}
+FAST_SCENARIOS.update({
+    'race': FAST_SCENARIOS['quickrace'] + SCENARIOS['race'][len(SCENARIOS['quickrace']) + 1:],
+    'photo': FAST_SCENARIOS['quickrace'] + SCENARIOS['photo'][len(SCENARIOS['quickrace']) + 1:],
+    'freeze': _FAST_TO_MAIN_MENU + _FAST_QUICKRACE_MENUS + SCENARIOS['freeze'][len(SCENARIOS['quickrace']) - 1:],
+})
 RETRY_S = 5
 # What the freeze scenario pins unless --look or --arg says otherwise: the title's own picture
 # (no mods, no TAA, so the tiles and MSAA of --quality), the occlusion reports (awaited ones
@@ -307,7 +373,14 @@ def percentile(values, fraction):
     return values[min(len(values) - 1, int(round(fraction * (len(values) - 1))))]
 
 
+# When the harness last pressed anything (time.time()): event checks of 'wait' steps take the
+# events written since then.
+LAST_PRESS = [0.0]
+
+
 def set_input(path, buttons=0, lt=0, rt=0, lx=0, ly=0, rx=0, ry=0, pulse=0, pulse_from=None):
+    if buttons or lt or rt or lx or ly or rx or ry or pulse:
+        LAST_PRESS[0] = time.time()
     tmp = path.with_suffix('.tmp')
     # The pulsed buttons and their race frame (FM4TestInput) are written only when set.
     extra = (f' {pulse}' + ('' if pulse_from is None else f' {pulse_from}')) if pulse else ''
@@ -561,13 +634,34 @@ def press(input_file, sequence, hold):
         time.sleep(0.5)
 
 
+def read_events(path):
+    """The title's screen events (FM4_TEST_EVENTS_FILE): [(unix seconds, '<kind> <detail>')]."""
+    events = []
+    try:
+        text = path.read_text(encoding='utf-8', errors='replace')
+    except OSError:
+        return events
+    for line in text.splitlines():
+        parts = line.split(' ', 2)
+        if len(parts) == 3 and parts[0].isdigit():
+            events.append((int(parts[0]) / 1000, parts[2]))
+    return events
+
+
 class Screen:
     """OCR of the newest capture for checked steps; starts the OCR server on first use.
-    steps.jsonl records what each check saw."""
-    def __init__(self, capture, process, log_path):
+    steps.jsonl records what each check saw. Event checks read the title's events file."""
+    def __init__(self, capture, process, log_path, events_path=None):
         self.capture, self.process, self.ocr = capture, process, None
         self.log_path, self.log_file = log_path, None
+        self.events_path = events_path
         self.frame = None
+
+    def events(self, after):
+        """The screen events written after `after` (time.time()); raises when the game exits."""
+        if self.process.poll() is not None:
+            raise RuntimeError(f'exited with {self.process.returncode}')
+        return [e for e in read_events(self.events_path) if e[0] > after] if self.events_path else []
 
     def log(self, **record):
         if not self.log_file:
@@ -613,8 +707,38 @@ def shows(lines, text):
                for l in lines for w in wanted)
 
 
+def event_step(screen, input_file, timeout, action, hold, pattern, retry):
+    """Repeats the action every `retry` seconds until a screen event matching the regular
+    expression is written after it ('wait': after the run's last press)."""
+    deadline = time.time() + timeout
+    def seen(after, until):
+        while True:
+            match = next((e for e in screen.events(after) if re.search(pattern, e[1])), None)
+            if match or time.time() >= until:
+                return match
+            time.sleep(0.05)
+    if action.startswith('?'):
+        action = action[1:]
+        match = seen(LAST_PRESS[0], 0)
+        if match:
+            screen.log(event=pattern, seen=match[1], skipped=action)
+            return True
+    while time.time() < deadline:
+        after = LAST_PRESS[0] if action == 'wait' else time.time()
+        if action != 'wait':
+            press(input_file, action, hold)
+        match = seen(after, deadline if action == 'wait' else min(deadline, after + retry))
+        if match:
+            screen.log(event=pattern, seen=match[1], after_s=round(match[0] - after, 2))
+            return True
+    screen.log(event=pattern, seen=None)
+    return False
+
+
 def checked_step(screen, input_file, timeout, action, hold, text, retry=RETRY_S):
     """Repeats the action every `retry` seconds until text shows in a capture taken after it."""
+    if text.startswith('@'):
+        return event_step(screen, input_file, timeout, action, hold, text[1:], retry)
     deadline = time.time() + timeout
     if action.startswith('?'):
         action = action[1:]
@@ -879,13 +1003,15 @@ def run_once(options, out):
     out.mkdir(parents=True, exist_ok=True)
     capture = out / 'capture'
     capture.mkdir(exist_ok=True)
+    events_file = out / 'events.txt'
     for old in list(capture.glob('*')) + [out / 'perf.jsonl', out / 'runtime.log', out / 'nav.jsonl',
-                                          out / 'steps.jsonl']:
+                                          out / 'steps.jsonl', events_file]:
         if old.is_file():
             old.unlink()
     state = json.loads((root / 'local.json').read_text())
     input_file = out / 'input.txt'
     set_input(input_file)
+    LAST_PRESS[0] = 0.0
 
     # Same cvars as Build.ps1 -Action run.
     sys.path.insert(0, str(HERE.parent))
@@ -912,7 +1038,8 @@ def run_once(options, out):
     env = {k: v for k, v in os.environ.items() if not k.startswith(('FM4_', 'REX_'))}
     env.update(pipeline.launch_env())
     env.update(FM4_CAPTURE_DIR=str(capture),
-               FM4_TEST_INPUT_FILE=str(input_file), REX_PERF_TRACE_FILE=str(out / 'perf.jsonl'))
+               FM4_TEST_INPUT_FILE=str(input_file), REX_PERF_TRACE_FILE=str(out / 'perf.jsonl'),
+               FM4_TEST_EVENTS_FILE=str(events_file))
     # The launcher's race render quality and tiling: one tile when the look has TAA on RTV
     # (--msaa keeps the tiles); --env FM4_TILING_SCENARIO keeps its tiling scenario.
     tiling_given = any(item.startswith('FM4_TILING_SCENARIO=') for item in options.env)
@@ -955,8 +1082,12 @@ def run_once(options, out):
     # With --goal, --steps run after the goal is reached (e.g. looking around in the race).
     if options.steps in STEP_PRESETS:
         steps = STEP_PRESETS[options.steps]
+    elif options.steps:
+        steps = json.loads(options.steps)
+    elif options.goal:
+        steps = []
     else:
-        steps = json.loads(options.steps) if options.steps else ([] if options.goal else SCENARIOS[options.scenario])
+        steps = (FAST_SCENARIOS if options.fast_route else SCENARIOS)[options.scenario]
     # With the title's AI driving the player's car (engageaionstart) the harness sends no
     # driving input, so a race does not depend on whether pad input reaches that car.
     ai_driving = 'engageaionstart' in env.get('FM4_GAME_CMDLINE', '')
@@ -978,7 +1109,7 @@ def run_once(options, out):
     phase_times = []
     phase_steady = []
     mod_defines = ModDefines(args.get('shader_mod_path'))
-    screen = Screen(capture, process, out / 'steps.jsonl')
+    screen = Screen(capture, process, out / 'steps.jsonl', events_file)
     try:
         if options.goal:
             goal_reached = navigate(options.goal, process, input_file, capture, out,
@@ -1076,6 +1207,9 @@ def run_once(options, out):
         'binary': {'path': str(exe), 'sha256': pipeline.digest(exe),
                    'mtime': time.strftime('%Y-%m-%d %H:%M:%S', time.localtime(exe.stat().st_mtime))},
         'seconds': round(time.time() - started, 1), 'timeline': timeline,
+        'route': 'fast' if options.fast_route and not options.steps and not options.goal else 'menus',
+        # The title's screen events, in seconds from the launch as the timeline.
+        'events': [[round(t - started, 2), text] for t, text in read_events(events_file)],
         'frames_captured': len(frames), 'perf_windows': len(perf),
         **summarize(perf, options.measure),
         'phases': phase_stats,
@@ -1117,7 +1251,8 @@ def aggregate(runs):
         'runs': [dict(crashed=r['crashed'], goal_reached=r['goal_reached'], fps_median=r.get('fps_median'))
                  for r in runs],
         'crashed': next((r['crashed'] for r in runs if r['crashed']), None),
-        'goal': runs[0]['goal'], 'scenario': runs[0].get('scenario'), 'args': runs[0]['args'],
+        'goal': runs[0]['goal'], 'scenario': runs[0].get('scenario'), 'route': runs[0].get('route'),
+        'args': runs[0]['args'],
         'look': runs[0].get('look'), 'binary': runs[0].get('binary'),
         'failed_steps': [r.get('failed_step') for r in runs],
         'goal_reached': None if runs[0]['goal_reached'] is None else all(r['goal_reached'] for r in runs),
@@ -1244,6 +1379,9 @@ def main():
                         help='fixed timeline (docs/e2e/README.md, "Gameplay scenarios")')
     parser.add_argument('--profile', help="copy this user-data root to <out>/user-data for the run "
                                           "('copy': the BuildRoot one); the BuildRoot profile stays as it is")
+    parser.add_argument('--fast-route', action='store_true',
+                        help='reach the race of the scenario through the title\'s screen events instead of '
+                             'fixed delays (docs/e2e/README.md, "Fast route"): ' + ', '.join(sorted(FAST_SCENARIOS)))
     parser.add_argument('--goal', choices=sorted(GOALS), help='navigate with Jev instead of a timeline')
     parser.add_argument('--goal-timeout', type=float, default=360)
     parser.add_argument('--env', action='append', default=[], help='extra NAME=value for the game process')
@@ -1277,6 +1415,8 @@ def main():
     # Captures and logs show game content; they must never land in the repository.
     if out == REPO or REPO in out.parents:
         parser.error('--out must be outside the repository, for example <BuildRoot>/e2e/<name>')
+    if options.fast_route and not options.steps and not options.goal and options.scenario not in FAST_SCENARIOS:
+        parser.error(f'--fast-route covers {", ".join(sorted(FAST_SCENARIOS))}, not {options.scenario}')
     if options.resummarize:
         summary = resummarize(out, options.measure)
     elif options.repeat <= 1:

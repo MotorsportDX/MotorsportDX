@@ -255,6 +255,7 @@
 !/work/fm4-rex/src/fm4-native-records.cpp
 !/work/fm4-rex/src/fm4-stream-trace.cpp
 !/work/fm4-rex/src/fm4-streaming-fixes.cpp
+!/work/fm4-rex/src/fm4-test-events.cpp
 !/work/fm4-rex/src/fm4-vblank-rate.cpp
 !/work/fm4-rex/src/fm4-vector-fixes.h
 !/work/fm4-rex/src/fm4_rex_app.h

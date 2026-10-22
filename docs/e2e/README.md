@@ -57,6 +57,7 @@ Without network access (Jev unreachable), `--scenario quickrace` drives the same
 | `--out` | required | result directory, outside the repository |
 | `--scenario` | `boot` | fixed timeline: `boot`, `quickrace`, `photo`, `photo_view`, `career`, `career_finish`, `career_progress`, `dlc`, `freeze` |
 | `--profile` | none | copy a user-data root to `<out>\user-data` and run on it; `copy` means the BuildRoot's `user-data`, otherwise a path |
+| `--fast-route` | off | reach the race of `quickrace`, `race`, `photo` or `freeze` through the title's screen events instead of fixed delays ([fast route](#fast-route)) |
 | `--goal` | none | navigate with Jev instead of a timeline (`quickrace`) |
 | `--goal-timeout` | 360 | seconds allowed for the goal |
 | `--env NAME=value` | none | extra variable for the game process; repeatable |
@@ -111,6 +112,7 @@ Every scenario except `boot` starts with one A per splash video read on screen (
 A step is `[timeout, action, hold, text(, retry)]`. It repeats the action until one of the `|`-separated texts shows in a capture taken after it, and fails the run (`goal_reached` false, `failed_step` in `summary.json`) otherwise.
 
 - `?action` skips the action when the text already shows.
+- A text starting with `@` is a regular expression on the title's screen events (`events.txt`, [architecture](architecture.md#screen-events-fm4_test_events_file)) instead of OCR: the step passes when a matching event is written after its press, or for `wait` after the run's last press. `?action` then skips the action when one was written since the last press. Events are read every 50 ms, against OCR's capture every 2 s.
 - `=TEXT` must be a whole OCR line. A leading `!` passes when none of the texts shows.
 - Give a step whose screen loads (taking a photo, a race loading) a retry longer than the load: a repeated A would act on the next screen.
 - `select:<label>` moves the menu highlight to an OCR'd label. The highlighted entry of a vertical menu is the one with red lines above and below it (`ocr-server.ps1` `red_above`/`red_below`) and a dark band (`bg`); of a horizontal menu, the red-framed tile. It moves only when two clear readings in a row agree, since menus slide and sway (the pause menu at 120 Hz most of all).
@@ -121,6 +123,21 @@ A step is `[timeout, action, hold, text(, retry)]`. It repeats the action until 
 - `steps.jsonl` records what each check and select saw.
 
 FM4 menus ignore the first press after some screens open, and the career and GO RACE menus hide after a few idle seconds (the next press only shows them again), so the scenarios press until the expected screen shows rather than counting.
+
+## Fast route
+
+`--fast-route` reaches the race of `quickrace`, `race`, `photo` and `freeze` through the title's screen events (`events.txt`, [architecture](architecture.md#screen-events-fm4_test_events_file)) instead of the fixed delays of the menu route. It needs a binary with the events writer (`fm4-test-events.cpp`, 22 October 2026). The race is the same Quick Race: the same screens accept the same defaults (Abarth, 1980 131 Abarth, its default paint, the default difficulty, Bernese Alps, Festival Circuit), so the render scenario, the tiling and the quality are those of the menu route, and `FM4_FIXED_SEED` pins the opponents and the grid as it does there.
+
+| Part | Menu route | Fast route |
+| --- | --- | --- |
+| Boot | waits for the Microsoft Studios video in OCR, then A per splash screen | A every 2.5 s until the title scene (`120_P_PRE_SPLASH`) is created, then A on the title until the main menu's render scenario (`UI_Homespace`) is pushed |
+| Main menu to GO RACE | three Rights and eight A presses 5 s to 8 s apart | three Rights, a `select:FREE PLAY` check, then A on each screen 1.5 s after the scene before it, repeated when the next scene does not follow (`115_C_BUY_MFRSELECT`, `108_C_BUY_CARSELECT`, `114_C_BUY_BUYCAR_COLOR`, `838_I_PRO_OPTIONS_SET_DIFFICULTY`, `122_F_TRK_LOCSELECT`, `123_F_TRK_TRACKSELECT`, then the race event controller `17_DYNAMIC_LOADING_FREEPLAY`) |
+| Loading to START RACE | a fixed 40 s wait after GO RACE, then A, Down, Up, A | the pre-race menu's scene (`4_C_INI_PRERACE`), 3 s for it to slide in, then Down, Up, A until START RACE creates the HUD |
+| Race phase | starts 19 s after START RACE | starts 9.2 s after the race scenario (`12-Car_Race`) is pushed, where the menu route put it |
+
+Measured on 22 October 2026 at 1x and 240 Hz with `FM4_FIXED_SEED=1` ([direct race launch](../analysis/direct-race-launch.md#the-fast-route-22-october-2026)): five `photo` runs of the fast route all reached their goal, in 191.6 s to 193.9 s against 249.9 s to 252.5 s for the menu route, about 57 s less per run. GO RACE comes at 49.7 s instead of 79.5 s and the race at 81.1 s instead of 138.0 s; one `race` run took 137.1 s against 193.4 s. The race phase matched the menu route's three seeded runs: 1,914 to 1,968 draws per frame against 1,902 to 1,956, 212.8 to 220.7 fps against 211.7 to 219.6, the same GPU time per frame and no new error key. The boot to the main menu (24 s, splash videos that A skips only in their last part) and the loading (17 s) stay as they are.
+
+`matrix.py --fast-route` passes `--fast-route` to the cells that have a fast route (`photo`) and leaves the others (`photo_view`, `career`) on their menus.
 
 ## Goal mode
 
@@ -223,11 +240,12 @@ Each run writes to its `--out` directory:
   steps.jsonl         what each check and select saw
   nav.jsonl           goal mode: every step with its judgments
   input.txt           the diagnostic controller's input file (FM4_TEST_INPUT_FILE)
+  events.txt          the title's screen events (FM4_TEST_EVENTS_FILE): UI scenes, render scenarios, countdown
   user-data\          the copied profile, with --profile
   run1..runN\         the runs of --repeat, each with the same files
 ```
 
-`captures.txt` holds the steady-clock time of each capture, to match frames in the runtime traces. Starting a run deletes the old `capture` files and the `perf.jsonl`, `runtime.log`, `nav.jsonl` and `steps.jsonl` of that directory.
+`captures.txt` holds the steady-clock time of each capture, to match frames in the runtime traces. Starting a run deletes the old `capture` files and the `perf.jsonl`, `runtime.log`, `nav.jsonl`, `steps.jsonl` and `events.txt` of that directory.
 
 ## Reading summary.json
 
@@ -242,6 +260,7 @@ The statistics come from the steady part of the perf trace: without `--measure`,
 | `args`, `profile`, `look` | the `--arg` items, the `--profile` given and the look that ran |
 | `binary` | path, SHA-256 and file time of the `fm4_rex.exe` that ran |
 | `seconds`, `timeline` | wall time, and the time and action of each step |
+| `route`, `events` | `fast` with `--fast-route`, otherwise `menus`; the title's screen events as `[seconds from the launch, text]` |
 | `frames_captured`, `perf_windows` | number of captures and of per-second perf windows |
 | `fps_median`, `fps_min` | per-second guest swap rate: median and lowest window |
 | `fps_mean` | frames over time across all measured windows (1000 divided by the mean frame time); steadier than the median of per-second FPS, which jumps between 20, 24 and 30 as frames snap to vblanks |
