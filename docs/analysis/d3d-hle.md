@@ -900,3 +900,30 @@ The gate on `I:\FM4-build-usa` at 240 Hz, against the same binary with only the 
 Step A is correct but saves nothing: writing the texture from the EDRAM buffer costs about what the load from the scaled resolve buffer cost (both move a 2560x1440 32bpp image), and the resolve copy and the dump stay. The saving of increment 1 needs work removed, not moved: a conversion straight from the host render target (with the dump's encoding of the guest formats, proven by the same byte check) in place of the dump, the resolve copy and the load, with step B's CPU readback for the rare guest reads.
 
 The main session decided on 22 October 2026 to close increment 1 at step A, off by default, and to go on with increment 3: step A shows that moving the work saves nothing, and the saving needs the resolve straight from a host render target. Increment 3 makes the render targets surface-keyed host targets, so a resolve becomes a copy or conversion from that host surface (section 8, the resolves row) rather than from the EDRAM buffer; building the conversion from today's render targets now would replicate the EDRAM dump's encodings (float24 or unorm24 depth with stencil, 7e3 color) that increment 3 replaces. The conversion therefore belongs to increment 3's design, which reuses step A's shader, check mode and target lookup.
+
+### 16.9 Increment 3 design: surface-keyed host targets, 22 October 2026
+
+Measured on `I:\FM4-build-usa` at 2x and 240 Hz with the readback on demand (`n3s3-career-2x`, the `career` scenario with `REX_FRAME_GRAPH` and `REX_TRANSFER_DRAW_TRACE` every 60th frame, 286 race frames with at least 1,000 draws), and the render target cache's CPU time at 1x from the step A gate's baseline (`n3a1x`):
+
+| Per race frame | |
+|---|---|
+| Passes | 85 |
+| Surfaces (distinct base, format, pitch, MSAA) | 16 (8 to 17) |
+| Resolves | 28 |
+| Ownership transfers | 20 (7 to 22), about 2,480 tiles |
+| Transfers whose draw overwrites the claimed rectangle (uniform draw check 9 or 10) | 95% of the tiles (2,364) |
+| Transfers whose draw may read the old contents (check 3, alpha; 11, not evaluated) | 5% of the tiles (114) |
+| GPU time in passes that only transfer, at 2x (16.1) | 0.25 ms |
+| Render target cache CPU time at 1x (`draw_render_targets`) | 0.31 ms, and 0.13 ms in the resolves (`copy`) |
+
+The surfaces seen in every race frame: the scene colour `2_10_10_10_FLOAT` at base 0 with pitch 1280 (also viewed as `2_10_10_10_FLOAT_AS_16_16_16_16`, and `2_10_10_10` / `2_10_10_10_AS_10_10_10_10` for the final image) and its depth `D24FS8` at base 720; 4x MSAA depth `D24S8` at base 0 with pitches 640 and 520 (with `16_16` 4x colour at base 832, the 512x512 resolve); the shadow and post chain at pitches 560 and 320 (`8_8_8_8` at bases 0 and 288, `D24FS8` at base 64, `D24S8` at base 0); a `32_FLOAT` 80-pitch surface at base 0 (the exposure); in some frames the mirror at pitch 400 (2x MSAA) and a 4x pitch 280 pass. Base 0 is shared by nine of them, which is where the transfers come from: the largest per frame are the 4x depth at base 0 into the scene colour (3.0, 158 tiles), the scene colour into the 4x depth (2.0, 160 tiles), the scene depth at 720 into the 4x `16_16` colour at 832 (1.0, 597 tiles) and the `2_10_10_10` final colour into the depths at base 0 (1.5, 556 tiles). The draws that trigger them are clears and full-screen passes that overwrite their rectangle; the transferred tiles are the parts of the claimed range outside it (the cutout already skips the overwritten rectangle).
+
+Every resolve's source is the surface bound at base and format, read today through the dump of its host render target into the EDRAM buffer (16.7).
+
+The design:
+
+1. **Surfaces keep their host targets; transfers become lazy.** The ownership map keeps which surface last wrote each EDRAM tile range. Binding a surface over tiles another surface wrote no longer copies them at once: the tiles are marked stale for that surface. A draw that overwrites its rectangle (the uniform draw check) clears the stale mark inside it without a copy; a draw or resolve that reads stale tiles (blending, a depth or stencil test, a resolve of them, a pass that samples nothing but keeps the old values) gets the transfer of exactly those tiles first. That keeps the EDRAM semantics for the 5% that read, and drops the copies nobody reads.
+2. **Resolves from the host surface.** A resolve reads its source surface's host target directly with a conversion to the guest format (step A's shader with a render target source, the dump's encodings of float24 and unorm24 depth with stencil and of 7e3 color, proven with step A's byte check), in place of the dump, the resolve copy and, through step A, the load; the scaled resolve buffer then comes from the host texture only when another reader needs it (step B of 16.7).
+3. **The N1 writers.** The title's resolve writer becomes a record that names the source surface (its object, base and format) and the destination, so the host knows the surface without decoding the copy registers; the tiling bracket writers belong to increment 4 (one-pass tiles).
+
+Steps, each behind `native_rt_surfaces` (off) with a step gate: (1) a count-only mode that marks stale tiles instead of nothing and counts, per transfer the cache performs today, whether its tiles are read before they are overwritten (the ceiling of the lazy transfers, as 16.4 did for the readbacks); (2) the lazy transfers; (3) the resolves from the host surface with the byte check; (4) the resolve writer as a record. The close gate follows step 4, or an earlier step if the numbers end the increment.
