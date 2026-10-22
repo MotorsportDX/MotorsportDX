@@ -4520,6 +4520,14 @@
     {
       "path": "work/runtime/src/graphics/host_render_oplists.cpp",
       "provenance": "runtime-fork"
+    },
+    {
+      "path": "work/runtime/src/graphics/util/read_trace.cpp",
+      "provenance": "runtime-fork"
+    },
+    {
+      "path": "work/runtime/src/graphics/util/read_trace.h",
+      "provenance": "runtime-fork"
     }
   ]
 }

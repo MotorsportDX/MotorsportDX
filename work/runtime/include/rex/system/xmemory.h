@@ -320,6 +320,20 @@ class PhysicalHeap : public BaseHeap {
                         uint32_t virtual_address, uint32_t length, bool is_write,
                         bool unwatch_exact_range, bool unprotect = true);
 
+  // Read trace (diagnostic, Memory::ArmReadTrace): system pages trapped, still
+  // trapped from an earlier arm, and found with their trap removed by another
+  // protection change.
+  struct ReadTraceArmResult {
+    uint32_t armed = 0, kept = 0, lost = 0;
+  };
+  void ArmReadTrace(uint32_t physical_address, uint32_t length, uint32_t tag,
+                    ReadTraceArmResult& result);
+  enum class ReadTraceFault { kNone, kTrapped, kLost };
+  // With the global lock held, for an access violation at the virtual address:
+  // kTrapped if the page was trapped (its protection is restored and tag is
+  // set), kLost if it was marked trapped but another change removed the trap.
+  ReadTraceFault HandleReadTraceFault(uint32_t virtual_address, uint32_t& tag);
+
   uint32_t GetPhysicalAddress(uint32_t address) const;
 
  protected:
@@ -345,6 +359,16 @@ class PhysicalHeap : public BaseHeap {
   // Protected by global_critical_region. Flags for each 64 system pages,
   // interleaved as blocks, so bit scan can be used to quickly extract ranges.
   std::vector<SystemPageFlagsBlock> system_page_flags_;
+
+  // Read trace, protected by global_critical_region, empty until the first arm:
+  // per system page 0 if not trapped, otherwise 1 + the rex::memory::PageAccess
+  // that the trap replaced (and that the write watches expect), and the tag of
+  // the arm.
+  std::vector<uint8_t> read_trace_saved_;
+  std::vector<uint32_t> read_trace_tags_;
+  bool IsReadTraceTrapped(uint32_t system_page) const {
+    return !read_trace_saved_.empty() && read_trace_saved_[system_page];
+  }
 };
 
 // Models the entire guest memory system on the console.
@@ -511,6 +535,19 @@ class Memory {
       std::unique_lock<std::recursive_mutex> global_lock_locked_once, uint32_t virtual_address,
       uint32_t length, bool is_write, bool unwatch_exact_range, bool unprotect = true);
 
+  // Read trace (diagnostic of resolve readbacks, docs/analysis/d3d-hle.md 16.4):
+  // ArmReadTrace makes the range inaccessible in the three physical views,
+  // remembering the protection of each system page. The first access to a
+  // trapped page restores that protection and calls the handler, on the
+  // faulting thread with the global lock held (the handler must not take it),
+  // and lets the access continue. A write then still meets its write watch.
+  enum class ReadTraceEvent { kRead, kWrite, kLost };
+  typedef void (*ReadTraceHandler)(void* context, uint32_t physical_address, uint32_t tag,
+                                   ReadTraceEvent event);
+  void SetReadTraceHandler(ReadTraceHandler handler, void* context);
+  PhysicalHeap::ReadTraceArmResult ArmReadTrace(uint32_t physical_address, uint32_t length,
+                                                uint32_t tag);
+
   // Diagnostics: for each physical memory view (A0000000, C0000000, E0000000)
   // in which the page is committed, "<view>:p<guest protect>w<write watched>
   // h<host access>" (host access is rex::memory::PageAccess).
@@ -633,6 +670,8 @@ class Memory {
   rex::thread::global_critical_region global_critical_region_;
   std::vector<std::pair<PhysicalMemoryInvalidationCallback, void*>*>
       physical_memory_invalidation_callbacks_;
+  ReadTraceHandler read_trace_handler_ = nullptr;
+  void* read_trace_context_ = nullptr;
 };
 
 }  // namespace rex::memory

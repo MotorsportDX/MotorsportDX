@@ -790,3 +790,23 @@ The order and the scope of increments 1 and 2 are the main session's decisions o
 | 3 | Surface-keyed host targets with virtual placement, the transfers only where a pass reads what another surface left (16.2, 3); the resolve and tiling writers of N1 as records. | Frozen frames within the image limit against RTV and against `-Rov` with `-Look "original,taa=0"`; transfers per frame measured. |
 | 4 | One-pass tiles and native MSAA (2x and 4x in one pass, TAA on top), so `-Quality`'s tiles leave the PM4 RTV path. | 4x MSAA in one pass; the tiled scenes in one pass within the image limit. |
 | 5 | The post passes anchored on surfaces; GTAO, TAA, motion vectors and the windshield checked at 2x on the native path. | The N3 gate of section 9. |
+
+### 16.4 Who reads the readbacks, 22 October 2026
+
+The count-only measurement of 16.3 is the diagnostic `readback_read_trace` (off by default; [traces.md](../e2e/traces.md)). After each resolve readback is published, its destination pages become inaccessible in the three guest views of physical memory until the next readback of the same destination; the first access to a trapped page restores the protection it had, counts the access with its thread and continues, without waiting. The readback stays on, so the guest reads the right data. The trap keeps the write watches intact: the protection it restores is the one the watch set (`kReadOnly`), so a write faults a second time into the watch; a watch enabled on a trapped page, or unwatched by a write elsewhere, updates the protection the trap restores instead of removing the trap; a trap that another protection change removed anyway is counted as lost. Readers through the runtime's physical view (the uploads into shared memory and the readback copy itself) are not trapped: they use the GPU's copy or write it.
+
+Measured on `I:\FM4-build-usa` at 2x and 240 Hz with the launcher defaults, one run each of `photo` (`n3r-photo-2x`, the race, photo mode and the photo save) and `career` (`n3r-career-2x`, the race and the replay); no new error key, the photo saved, no trap lost:
+
+| Phase | Readbacks a frame | Bytes a frame | Read by any thread | Written first |
+|---|---|---|---|---|
+| `photo` race (5,440 frames) | 24.4 | 13.35 MB | none | none |
+| `career` race (6,748 frames) | 25.3 | 13.72 MB | none | none |
+| `career` replay (2,936 frames) | 30.5 | 14.73 MB | none | none |
+| photo mode (1,312 frames) | 37.6 | 19.92 MB | the photo save only | none |
+
+- In the races and the replay not one trapped page was read, by a guest thread or a host thread: every page stayed trapped from one readback to the next (`kept_pages` 10,253 a frame in the `photo` race, the 13.35 MB in all three views). All readback bytes there are unread, so a readback on demand removes the readbacks of the race completely: the 0.81 ms of GPU time of the readback copies at 2x (16.1) and their copy into guest memory on the command processor.
+- The guest reads resolves in three places over both runs, all outside the race (132 destinations in `photo`, 130 in `career`, of about 300 each run): the photo save reads the full-screen destination at `1C0C1000` (3.77 MB, its latest of 10,337 readbacks, 920 page faults) and a 416 KB destination resolved once for it at `16709000`; during loading 128 destinations of 64 KB, each resolved once, are read once (2,048 faults); in the menus a 256 KB range at `1C0C1000` is read twice (64 faults each). Every first reader was a guest thread; no host thread of the runtime read a trapped page.
+- Guest writes over resolved ranges before any read (memory reused for other data) happen in the menus and loading, 15 to 2,008 page faults a window; the write watches then work as without the trace.
+- The trace costs little: the `photo` race ran at 164.3 fps with a p99 of 9.39 ms in this single run, against 172.1 fps and 8.71 ms in the perf gate `n3m2xp` (three runs); not a performance claim.
+
+By the rule of 16.3, most read-back bytes are never read by a guest thread, so increment 2 (readback on demand) goes next. Its design has to serve the photo save, the loading reads and the menu read from the trap, and the runtime's own readers through the physical view (a shared memory upload of a range that holds only GPU data, the texture replacement's exclusion of resolved ranges) from the runtime's copy, without a guest fault.

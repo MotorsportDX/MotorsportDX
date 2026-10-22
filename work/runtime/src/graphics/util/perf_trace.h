@@ -15,6 +15,8 @@
 #include <string>
 #include <vector>
 
+#include "read_trace.h"
+
 namespace rex::graphics::perf_trace {
 
 enum class Wait : uint32_t {
@@ -631,6 +633,7 @@ inline void OnSwap() {
                     << host_check_perturbed.exchange(0, std::memory_order_relaxed);
     }
   }
+  read_trace::WriteWindow(state->output, ms(now - state->origin) / 1000.0);
   // Every frame duration in the window, for run-wide percentiles and hitches.
   state->output << "},\"frame_ms\":[";
   for (size_t i = 0; i < state->frame_ms.size(); ++i) {

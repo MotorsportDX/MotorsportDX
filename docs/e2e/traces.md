@@ -72,6 +72,12 @@ Compare stall times as well as FPS: FPS varies with what happens in a race. Grou
 
 Next to the trace, the runtime rewrites `<REX_PERF_TRACE_FILE>.resolves.json` every 10 windows. It lists every resolve destination seen in the run (address, length, format, pitch and height), with the number of resolves, and the first and last time (seconds) each was seen. It is used to find which resolves the CPU actually needs. (The harness writes this file as `perf.jsonl.resolves.json` in the run directory.)
 
+### Read trace of resolve readbacks (readback_read_trace)
+
+With the cvar `readback_read_trace=true` (off by default) and the trace, every resolve readback published to guest memory makes its destination pages inaccessible in the three guest views of physical memory (`A0000000`, `C0000000`, `E0000000`) until the next readback of the same destination. The first access to a trapped page restores the protection it had (so a write still meets its write watch), is counted, and continues; nothing waits, and the readback itself is unchanged. Readers through the runtime's physical view (`TranslatePhysical`: the uploads into shared memory and the readback copy) are not trapped. Design and results: [d3d-hle.md 16.4](../analysis/d3d-hle.md).
+
+Each window then has a `read_trace` object: `readbacks` and `readback_kb` published and trapped; arms closed by the next readback of their destination as `read` (a read came first), `written_first` (a write came first) or `unread` (no access), with their bytes in `read_kb`, `written_kb` and `unread_kb`; `read_faults` and `write_faults` (one per page and view); `guest_first` and `host_first` (whether the first reader of an arm was a guest thread); `armed_pages` (trapped now), `kept_pages` (still trapped from an earlier arm) and `lost` (traps another protection change removed). Every 10 windows `<REX_PERF_TRACE_FILE>.reads.json` lists the same counts per destination (address and length) for the whole run, with the names of the first readers' threads.
+
 ## Command-processor profiler (REX_CP_PROFILE)
 
 `REX_CP_PROFILE=<file>` samples the stacks of the GPU command-processor thread about every millisecond ([`cp_sampler.h`](../../work/runtime/src/graphics/util/cp_sampler.h)). Sampling starts after `REX_CP_PROFILE_DELAY` seconds (default 0) and lasts `REX_CP_PROFILE_SECONDS` (default 30). The stacks are written as lines of `<count> <module>+0x<offset> ...`, innermost frame first, for offline symbolization.

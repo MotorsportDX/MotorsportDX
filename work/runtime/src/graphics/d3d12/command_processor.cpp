@@ -4784,6 +4784,9 @@ bool D3D12CommandProcessor::IssueCopy_ReadbackResolvePath() {
         TraceReadbackSkip(written_address, written_length, skipped);
       }
       perf_trace::CountReadback(written_length);
+      if (read_trace::Enabled(*memory_)) {
+        read_trace::OnReadback(*memory_, written_address, written_length);
+      }
       TraceResolvePublication(written_address, written_length,
                               static_cast<const uint8_t*>(rb.mapped_data[read_index]));
       DumpReadback(*register_file_, written_address, written_length,
