@@ -780,7 +780,7 @@ RTV with the launcher defaults (one tile with TAA), the `career` scenario with `
 
 ### 16.3 Increments
 
-The order and the scope of increments 1 and 2 are the main session's decision of 22 October 2026: increment 1 is on the critical path of N3 (the resolves as host copies of section 8 are what one-pass tiles and native MSAA build on), and its ceiling, 1.95 ms at 2x, is larger than the readbacks' 0.47 ms.
+The order and the scope of increments 1 and 2 are the main session's decisions of 22 October 2026. The first put increment 1 first: it is on the critical path of N3 (the resolves as host copies of section 8 are what one-pass tiles and native MSAA build on), and its ceiling, 1.95 ms at 2x by the frame graph, looked larger than the readbacks' 0.47 ms. The GPU timestamps of 16.1 then showed the readbacks as the largest part (0.81 ms a race frame at 2x) and the copies and loads of all 28 resolves at 1.12 ms, the two full-screen ones' about 0.4 to 0.6 ms, so the revised decision measures first which read-back bytes the CPU reads (a count-only diagnostic) and decides by it: if most of them are never read by a guest thread, increment 2 (readback on demand) goes next, otherwise increment 1 with its ceiling stated as about 0.5 ms. Increment 1 stays on the critical path either way.
 
 
 | Increment | Scope | Gate |
