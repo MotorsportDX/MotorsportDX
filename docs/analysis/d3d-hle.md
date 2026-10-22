@@ -267,6 +267,16 @@ The measurement part of N0 was done on 21 October 2026 (section 13). N0 to N4 to
 - A watchdog that logs any guest wait longer than a set time, and soak runs over menus, races, the career, replays and photo mode.
 - Success criteria (proposed targets, to be confirmed against the N0 baseline of the USA build with the launcher defaults): at 240 Hz and 1x in the race, the render thread busy at most 2.5 ms per frame (the CP took 3.2 to 3.4 ms) and p99 at most 5.0 ms (5.59 to 5.78 ms), both against the 20 October 2026 smoke runs on the Japan/Asia BuildRoot `I:\FM4-build-pass`; the guest render thread reported per frame; on the ROG Xbox Ally X the device targets of 8.1; at 2x a GPU time per frame not above the RTV path; frozen frames within the image limit of section 11 and no new error keys.
 
+### Gate tiers (the main session's decision of 22 October 2026)
+
+A full gate took 1.5 to 2 hours, too long to follow every step of an increment, so the stages from N3 on use two tiers:
+
+- **Step gate**, after each step or fix inside an increment, about 30 minutes or less: one `career` run on the native path with the check modes that apply (the identity check, the binding check or a conversion's byte check); one perf run each for RTV and the native path, at the resolution the change targets only (2x for GPU work, 1x for CPU work), with the `race` scenario (the `photo` scenario's race phase without photo mode, about 90 s shorter); the `parity.py` freeze only if the change can alter the image.
+- **Close gate**, once per increment before the fast-forward is asked for: smoke, perf with three runs, `parity.py` on the freeze at 1x and 2x, and the perturbation proof as one `career` run.
+- Performance is judged on the busy time per draw and the GPU time per frame, which the AI races' varying draw load moves less than the fps; so one run a side is enough at a step gate, and three runs are for the close gate.
+- A step gate reuses its RTV baseline while the step's diff changes only code behind a cvar that is off on RTV (checked with `git diff`); the close gate measures RTV again on the final binary.
+- Where a run's time goes (`photo` at 1x, 252 s): the boot to the main menu 28 s, the menus and loading to the race 120 s (with a fixed 40 s wait after GO RACE, about 20 s of it idle), the measured race 34 s, photo mode and the save about 70 s. The direct race launch ([direct-race-launch.md](direct-race-launch.md)) could save at most the 52 s of menus, but is not built; the `race` scenario drops photo mode instead.
+
 ## 11. Decisions
 
 Made by the project owner on 21 October 2026:
@@ -887,3 +897,5 @@ The gate on `I:\FM4-build-usa` at 240 Hz, against the same binary with only the 
 | `parity.py` on `freeze` | pass at 1x (35.1% of the image above 4) and 2x (28.4%) |
 
 Step A is correct but saves nothing: writing the texture from the EDRAM buffer costs about what the load from the scaled resolve buffer cost (both move a 2560x1440 32bpp image), and the resolve copy and the dump stay. The saving of increment 1 needs work removed, not moved: a conversion straight from the host render target (with the dump's encoding of the guest formats, proven by the same byte check) in place of the dump, the resolve copy and the load, with step B's CPU readback for the rare guest reads.
+
+The main session decided on 22 October 2026 to close increment 1 at step A, off by default, and to go on with increment 3: step A shows that moving the work saves nothing, and the saving needs the resolve straight from a host render target. Increment 3 makes the render targets surface-keyed host targets, so a resolve becomes a copy or conversion from that host surface (section 8, the resolves row) rather than from the EDRAM buffer; building the conversion from today's render targets now would replicate the EDRAM dump's encodings (float24 or unorm24 depth with stencil, 7e3 color) that increment 3 replaces. The conversion therefore belongs to increment 3's design, which reuses step A's shader, check mode and target lookup.

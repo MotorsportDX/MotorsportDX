@@ -84,6 +84,11 @@ SCENARIOS.update({
         [30, 'a', 0.12, 'SAVING|SAVE SUCCESSFUL', 10], [30, 'wait', 0, 'SAVE SUCCESSFUL'],
         [1, 'phase:end', 0],
     ],
+    # The race phase of 'photo' without photo mode, for the step gates of the native port
+    # (docs/analysis/d3d-hle.md, section 10): about 90 s shorter.
+    'race': SCENARIOS['quickrace'] + [
+        [10, 'wait', 0], [1, 'phase:race', 0], [30, 'wait', 0], [1, 'phase:end', 0],
+    ],
     # A new process loads the photo saved by 'photo': --profile <photo run>\user-data. Career >
     # MY PROFILE > MEDIA > MY PHOTOS > LOAD shows it full screen. OCR reads its watermark only
     # sometimes, so the check is that no menu, loading text or error follows (and final.png).
