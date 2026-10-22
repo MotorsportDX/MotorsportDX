@@ -14,6 +14,7 @@
 #include <rex/graphics/d3d12/command_processor.h>
 #include <rex/graphics/d3d12/draw_back_end.h>
 #include <rex/graphics/d3d12/post_pass_jitter.h>
+#include <rex/graphics/d3d12/shader_override.h>
 #include <rex/graphics/pipeline/render_target/cache.h>
 #include <rex/logging.h>
 #include <rex/math.h>
@@ -490,26 +491,134 @@ void ComputeBlendFactorAndStencilReference(const RegisterFile& regs, bool primit
 
 namespace rex::graphics::d3d12 {
 
+namespace draw_back_end {
+
+constexpr uint32_t kGroupFixedSizes[kGroupCount] = {
+    sizeof(GroupShaders), sizeof(GroupPrimitive), sizeof(GroupDraw), sizeof(GroupTargets),
+    sizeof(GroupFlags),   0,                      0,                 0,
+    kKnobCount * 4};
+
+uint32_t TexturesGroupSize(uint32_t texture_count) {
+  return uint32_t(sizeof(GroupTexturesHeader)) + ((texture_count + 3) & ~3u) + texture_count * 4;
+}
+
+void Decode(const uint8_t* arguments, RegisterFile& shadow, ListState& list, Decoded& decoded) {
+  std::memcpy(&decoded.header, arguments, sizeof(Header));
+  const Header& header = decoded.header;
+  const uint8_t* in = arguments + sizeof(Header);
+  uint64_t context_masks[kContextWords] = {};
+  for (uint32_t word = 0; word < kContextWords; ++word) {
+    if (header.context_words & (1u << word)) {
+      std::memcpy(&context_masks[word], in, 8);
+      in += 8;
+    }
+  }
+  std::memset(decoded.constant_slots, 0, sizeof(decoded.constant_slots));
+  for (uint32_t word = 0; word < deferred_constants::kMaskWords; ++word) {
+    if (header.constant_words & (1u << word)) {
+      std::memcpy(&decoded.constant_slots[word], in, 8);
+      in += 8;
+    }
+  }
+  uint32_t* context = shadow.values + kContextFirst;
+  for (uint32_t word = 0; word < kContextWords; ++word) {
+    uint64_t bits = context_masks[word];
+    while (bits) {
+      const uint32_t bit = uint32_t(__builtin_ctzll(bits));
+      bits &= bits - 1;
+      std::memcpy(context + (word << 6) + bit, in, 4);
+      in += 4;
+    }
+  }
+  uint32_t* constants = shadow.values + deferred_constants::kFirstRegister;
+  for (uint32_t word = 0; word < deferred_constants::kMaskWords; ++word) {
+    uint64_t bits = decoded.constant_slots[word];
+    while (bits) {
+      const uint32_t slot = (word << 6) + uint32_t(__builtin_ctzll(bits));
+      bits &= bits - 1;
+      std::memcpy(constants + slot * 4, in, 16);
+      in += 16;
+    }
+  }
+  const auto group = [&](Group index, void* out) {
+    if (header.groups & (1u << index)) {
+      std::memcpy(out, in, kGroupFixedSizes[index]);
+      in += kGroupFixedSizes[index];
+    }
+  };
+  group(kGroupShaders, &list.shaders);
+  group(kGroupPrimitive, &list.primitive);
+  group(kGroupDraw, &list.draw);
+  group(kGroupTargets, &list.targets);
+  group(kGroupFlags, &list.flags);
+  if (header.groups & (1u << kGroupTextures)) {
+    GroupTexturesHeader textures_header;
+    std::memcpy(&textures_header, in, sizeof(textures_header));
+    in += sizeof(textures_header);
+    list.used_texture_mask = textures_header.used_texture_mask;
+    list.textures_resolution_scaled = textures_header.textures_resolution_scaled;
+    const uint8_t* signs = in;
+    in += (header.texture_count + 3) & ~3u;
+    uint32_t remaining = list.used_texture_mask;
+    while (remaining) {
+      const uint32_t index = uint32_t(__builtin_ctz(remaining));
+      remaining &= remaining - 1;
+      list.texture_swizzled_signs[index] = *signs++;
+      std::memcpy(&list.texture_integer_scale_bits[index], in, 4);
+      in += 4;
+    }
+  }
+  for (uint32_t stage = 0; stage < 2; ++stage) {
+    decoded.texture_indices[stage] = nullptr;
+    if (header.groups & (1u << (kGroupTextureIndicesVertex + stage))) {
+      decoded.texture_indices[stage] = reinterpret_cast<const uint32_t*>(in);
+      in += header.texture_index_counts[stage] * 4;
+    }
+  }
+  decoded.knobs = nullptr;
+  if (header.groups & (1u << kGroupKnobs)) {
+    decoded.knobs = reinterpret_cast<const float*>(in);
+    in += kKnobCount * 4;
+  }
+  decoded.check = in;
+}
+
+}  // namespace draw_back_end
+
 namespace {
 
 constexpr const char* kMismatchNames[draw_back_end::kMismatchCount] = {
     "pipeline description", "viewport", "scissor", "blend factor or stencil reference",
-    "system constants", "sampler parameters"};
+    "system constants", "sampler parameters", "constant buffers"};
 
-constexpr uint32_t kGroupSizes[draw_back_end::kGroupCount] = {
-    sizeof(draw_back_end::GroupShaders),  sizeof(draw_back_end::GroupPrimitive),
-    sizeof(draw_back_end::GroupDraw),     sizeof(draw_back_end::GroupTargets),
-    sizeof(draw_back_end::GroupFlags),    0};
+void LogMismatch(draw_back_end::Mismatch kind, uint64_t vertex_shader_hash) {
+  static std::atomic<uint32_t> logged{0};
+  if (logged.fetch_add(1, std::memory_order_relaxed) < 16) {
+    REXGPU_ERROR("Draw back end: the {} differ from the draw's (vertex shader {:016X})",
+                 kMismatchNames[kind], vertex_shader_hash);
+  }
+}
 
-uint32_t TexturesGroupSize(uint32_t texture_count) {
-  return uint32_t(sizeof(draw_back_end::GroupTexturesHeader)) + ((texture_count + 3) & ~3u) +
-         texture_count * 4;
+// The float constants of a stage's map, packed from the register file.
+uint32_t PackFloatConstants(const RegisterFile& regs, uint32_t stage, const uint64_t map[4],
+                            uint8_t* out) {
+  return deferred_constants::PackFloatConstants(
+      regs.values + XE_GPU_REG_SHADER_CONSTANT_000_X + stage * 256 * 4, map, out);
 }
 
 }  // namespace
 
 void D3D12CommandProcessor::InitializeDrawBackEnd() {
   draw_back_end_ = uint32_t(REXCVAR_GET(d3d12_draw_back_end));
+  if (draw_back_end_ == 2 &&
+      (!bindless_resources_used_ ||
+       render_target_cache_->GetPath() != RenderTargetCache::Path::kHostRenderTargets ||
+       REXCVAR_GET(async_shader_compilation))) {
+    REXGPU_INFO(
+        "Draw back end: the replay needs bindless resources, host render targets and "
+        "async_shader_compilation off; off");
+    draw_back_end_ = 0;
+  }
   draw_back_end_check_ = draw_back_end_ && REXCVAR_GET(d3d12_draw_back_end_check);
   draw_back_end_perturb_ =
       draw_back_end_check_ ? uint32_t(REXCVAR_GET(d3d12_draw_back_end_check_perturb)) : 0;
@@ -517,18 +626,93 @@ void D3D12CommandProcessor::InitializeDrawBackEnd() {
   track_constants_ = deferred_constants_ || draw_back_end_;
   track_register_writes_ = draw_back_end_ != 0;
   back_end_list_captured_ = false;
+  if (draw_back_end_ == 2) {
+    back_end_constant_pool_ = std::make_unique<ui::d3d12::D3D12UploadBufferPool>(
+        GetD3D12Provider(),
+        std::max(ui::d3d12::D3D12UploadBufferPool::kDefaultPageSize,
+                 sizeof(float) * 4 * D3D12_REQ_CONSTANT_BUFFER_ELEMENT_COUNT));
+  }
   if (draw_back_end_) {
-    REXGPU_INFO("Draw back end: capture{}{}", draw_back_end_check_ ? ", checked" : "",
+    REXGPU_INFO("Draw back end: {}{}{}", draw_back_end_ == 2 ? "on the replay" : "capture",
+                draw_back_end_check_ ? ", checked" : "",
                 draw_back_end_perturb_ ? ", perturbed" : "");
   }
+}
+
+void D3D12CommandProcessor::PrepareDrawBackEndInputs(const D3D12Shader* vertex_shader,
+                                                     const D3D12Shader* pixel_shader) {
+  // The texture SRV indices of each stage, when the texture cache's bindings
+  // of its textures changed (as UpdateBindings decides for the bindless
+  // descriptor index buffer), and always at a list's first draw.
+  for (uint32_t stage = 0; stage < 2; ++stage) {
+    const D3D12Shader* shader = stage ? pixel_shader : vertex_shader;
+    std::vector<uint32_t>& indices = back_end_texture_indices_[stage];
+    const size_t layout_uid =
+        shader ? shader->GetTextureBindingLayoutUserUID() : PipelineCache::kLayoutUIDEmpty;
+    size_t& current_layout_uid =
+        stage ? current_texture_layout_uid_pixel_ : current_texture_layout_uid_vertex_;
+    std::vector<D3D12TextureCache::TextureSRVKey>& current_keys =
+        stage ? current_texture_srv_keys_pixel_ : current_texture_srv_keys_vertex_;
+    if (!shader) {
+      if (!back_end_list_captured_ || !indices.empty()) {
+        indices.clear();
+        back_end_texture_indices_changed_[stage] = true;
+      }
+      current_layout_uid = layout_uid;
+      continue;
+    }
+    const std::vector<D3D12Shader::TextureBinding>& textures =
+        shader->GetTextureBindingsAfterTranslation();
+    const size_t texture_count = textures.size();
+    if (back_end_list_captured_ && current_layout_uid == layout_uid &&
+        indices.size() == texture_count &&
+        (!texture_count || texture_cache_->AreActiveTextureSRVKeysUpToDate(
+                               current_keys.data(), textures.data(), texture_count))) {
+      continue;
+    }
+    indices.resize(texture_count);
+    for (size_t i = 0; i < texture_count; ++i) {
+      indices[i] = texture_cache_->GetActiveTextureBindlessSRVIndex(textures[i]) -
+                   uint32_t(SystemBindlessView::kUnboundedSRVsStart);
+    }
+    current_layout_uid = layout_uid;
+    if (texture_count) {
+      current_keys.resize(std::max(current_keys.size(), texture_count));
+      texture_cache_->WriteActiveTextureSRVKeys(current_keys.data(), textures.data(),
+                                                texture_count);
+    }
+    back_end_texture_indices_changed_[stage] = true;
+  }
+  // The shader mods' live knobs. The change flags stay set until a capture
+  // takes them (a draw may end before its capture).
+  if (shader_mod_knobs_source_ &&
+      shader_mod_knobs_source_->UpdateKnobs(shader_mod_knobs_, shader_mod_knobs_generation_)) {
+    back_end_knobs_changed_ = true;
+  }
+}
+
+void D3D12CommandProcessor::InvalidateStateAfterDrawBackEnd() {
+  // The replay set the graphics state of this draw; whatever the front half
+  // records next sets its own again.
+  current_graphics_root_signature_ = nullptr;
+  current_graphics_root_up_to_date_ = 0;
+  current_guest_pipeline_ = nullptr;
+  current_external_pipeline_ = nullptr;
+  primitive_topology_ = D3D_PRIMITIVE_TOPOLOGY_UNDEFINED;
+  ff_viewport_update_needed_ = true;
+  ff_scissor_update_needed_ = true;
+  ff_blend_factor_update_needed_ = true;
+  ff_stencil_ref_update_needed_ = true;
 }
 
 void D3D12CommandProcessor::CaptureDrawBackEnd(const DrawBackEndCapture& capture) {
   namespace be = draw_back_end;
   const uint64_t start = __rdtsc();
+  const bool replay_draw = draw_back_end_ == 2;
   const RegisterFile& regs = *register_file_;
   const uint32_t* context = regs.values + be::kContextFirst;
   constexpr uint32_t kFirstWord = be::kContextFirst >> 6;
+  const bool list_start = !back_end_list_captured_;
 
   // The context registers the back end reads that changed since they were
   // last captured into this list; all of them at the list's first capture.
@@ -536,27 +720,17 @@ void D3D12CommandProcessor::CaptureDrawBackEnd(const DrawBackEndCapture& capture
   uint16_t context_words = 0;
   uint32_t context_count = 0;
   uint32_t written_count = 0;
-  if (!back_end_list_captured_) {
-    std::memcpy(back_end_context_, context, sizeof(back_end_context_));
-    for (uint32_t word = 0; word < be::kContextWords; ++word) {
-      context_masks[word] = be::kBackEndRegisters[word];
-      written_registers_[kFirstWord + word] = 0;
-      if (context_masks[word]) {
-        context_words |= uint16_t(1u << word);
-        context_count += uint32_t(__builtin_popcountll(context_masks[word]));
-      }
-    }
-  } else {
-    for (uint32_t word = 0; word < be::kContextWords; ++word) {
-      uint64_t written = written_registers_[kFirstWord + word];
-      context_masks[word] = 0;
-      if (!written) {
-        continue;
-      }
-      written_registers_[kFirstWord + word] = 0;
-      written_count += uint32_t(__builtin_popcountll(written));
+  for (uint32_t word = 0; word < be::kContextWords; ++word) {
+    uint64_t written = written_registers_[kFirstWord + word];
+    written_registers_[kFirstWord + word] = 0;
+    written_count += uint32_t(__builtin_popcountll(written));
+    uint64_t changed;
+    if (list_start) {
+      changed = be::kBackEndRegisters[word];
+      std::memcpy(back_end_context_ + (word << 6), context + (word << 6), 64 * 4);
+    } else {
       written &= be::kBackEndRegisters[word];
-      uint64_t changed = 0;
+      changed = 0;
       while (written) {
         const uint32_t bit = uint32_t(__builtin_ctzll(written));
         written &= written - 1;
@@ -566,41 +740,74 @@ void D3D12CommandProcessor::CaptureDrawBackEnd(const DrawBackEndCapture& capture
           changed |= uint64_t(1) << bit;
         }
       }
-      context_masks[word] = changed;
-      if (changed) {
-        context_words |= uint16_t(1u << word);
-        context_count += uint32_t(__builtin_popcountll(changed));
-      }
+    }
+    context_masks[word] = changed;
+    if (changed) {
+      context_words |= uint16_t(1u << word);
+      context_count += uint32_t(__builtin_popcountll(changed));
     }
   }
 
-  // The fetch constants the samplers read, written since they were last
-  // captured into this list (the constant registers' pending mask is shared
-  // with d3d12_deferred_constants, whose commands fill the same copy).
+  // The constant registers the back end reads, written since they were last
+  // captured into this list (the pending mask is shared with
+  // d3d12_deferred_constants, whose commands fill the same copy): with the
+  // replay, the float constants of both shaders' maps, the fetch constants and
+  // the bool and loop constants; for increment 1's check, the fetch constants
+  // of the samplers.
   const auto& vertex_shader = static_cast<const D3D12Shader&>(capture.vertex_translation->shader());
   const D3D12Shader* pixel_shader =
       capture.pixel_translation
           ? &static_cast<const D3D12Shader&>(capture.pixel_translation->shader())
           : nullptr;
-  uint64_t fetch_needed = 0;
-  const auto add_samplers = [&fetch_needed](const D3D12Shader& shader) {
-    for (const D3D12Shader::SamplerBinding& binding : shader.GetSamplerBindingsAfterTranslation()) {
-      const uint32_t first = (binding.fetch_constant * 6) >> 2;
-      const uint32_t last = (binding.fetch_constant * 6 + 5) >> 2;
-      fetch_needed |= ((uint64_t(1) << (last - first + 1)) - 1) << first;
+  uint64_t constants_needed[deferred_constants::kMaskWords] = {};
+  if (replay_draw) {
+    const uint64_t* map_vertex = vertex_shader.constant_register_map().float_bitmap;
+    for (uint32_t i = 0; i < 4; ++i) {
+      constants_needed[i] = map_vertex[i];
     }
-  };
-  add_samplers(vertex_shader);
-  if (pixel_shader) {
-    add_samplers(*pixel_shader);
+    if (pixel_shader) {
+      const uint64_t* map_pixel = pixel_shader->constant_register_map().float_bitmap;
+      for (uint32_t i = 0; i < 4; ++i) {
+        constants_needed[4 + i] = map_pixel[i];
+      }
+    }
+    deferred_constants::SetSlots(
+        constants_needed, deferred_constants::kFetchFirstSlot,
+        deferred_constants::kFetchFirstSlot + deferred_constants::kFetchSlotCount - 1);
+    deferred_constants::SetSlots(
+        constants_needed, deferred_constants::kBoolLoopFirstSlot,
+        deferred_constants::kBoolLoopFirstSlot + deferred_constants::kBoolLoopSlotCount - 1);
+  } else {
+    uint64_t fetch_needed = 0;
+    const auto add_samplers = [&fetch_needed](const D3D12Shader& shader) {
+      for (const D3D12Shader::SamplerBinding& binding :
+           shader.GetSamplerBindingsAfterTranslation()) {
+        const uint32_t first = (binding.fetch_constant * 6) >> 2;
+        const uint32_t last = (binding.fetch_constant * 6 + 5) >> 2;
+        fetch_needed |= ((uint64_t(1) << (last - first + 1)) - 1) << first;
+      }
+    };
+    add_samplers(vertex_shader);
+    if (pixel_shader) {
+      add_samplers(*pixel_shader);
+    }
+    constants_needed[deferred_constants::kFetchFirstSlot >> 6] = fetch_needed;
   }
-  constexpr uint32_t kFetchWord = deferred_constants::kFetchFirstSlot >> 6;
-  const uint64_t fetch_slots = pending_constants_.slots[kFetchWord] & fetch_needed;
-  pending_constants_.slots[kFetchWord] &= ~fetch_slots;
-  const uint32_t fetch_count = uint32_t(__builtin_popcountll(fetch_slots));
+  uint64_t constant_masks[deferred_constants::kMaskWords];
+  uint16_t constant_words = 0;
+  uint32_t constant_count = 0;
+  for (uint32_t word = 0; word < deferred_constants::kMaskWords; ++word) {
+    constant_masks[word] = pending_constants_.slots[word] & constants_needed[word];
+    pending_constants_.slots[word] &= ~constant_masks[word];
+    if (constant_masks[word]) {
+      constant_words |= uint16_t(1u << word);
+      constant_count += uint32_t(__builtin_popcountll(constant_masks[word]));
+    }
+  }
 
   // The front half's groups.
-  be::ListState current = {};
+  be::ListState current;
+  std::memset(&current, 0, sizeof(current));
   current.shaders.vertex = capture.vertex_translation;
   current.shaders.pixel = capture.pixel_translation;
   const PrimitiveProcessor::ProcessingResult& primitive = *capture.primitive;
@@ -612,21 +819,31 @@ void D3D12CommandProcessor::CaptureDrawBackEnd(const DrawBackEndCapture& capture
   current.primitive.host_shader_index_endian = uint8_t(primitive.host_shader_index_endian);
   current.primitive.index_buffer_type = uint8_t(primitive.index_buffer_type);
   current.primitive.line_loop_closing_index = primitive.line_loop_closing_index;
-  // The index buffer's address is resolved later in IssueDraw; increment 1
-  // captures the guest index base in its place, with the same size.
-  current.draw.index_buffer_gpu_address = primitive.guest_index_base;
+  if (replay_draw) {
+    current.draw.index_buffer_gpu_address = capture.index_buffer.BufferLocation;
+    current.draw.index_buffer_size = capture.index_buffer.SizeInBytes;
+    current.draw.index_buffer_format = uint32_t(capture.index_buffer.Format);
+  } else {
+    // Increment 1 captures the guest index base in place of the address.
+    current.draw.index_buffer_gpu_address = primitive.guest_index_base;
+  }
   current.draw.host_draw_vertex_count = primitive.host_draw_vertex_count;
   current.targets.bits = capture.bound_render_target_bits;
   for (uint32_t i = 0; i < 5; ++i) {
     current.targets.formats[i] =
         (capture.bound_render_target_bits >> i) & 1 ? capture.bound_render_target_formats[i] : 0;
   }
-  current.flags.flags = capture.flags;
+  current.flags.flags = capture.flags | (shader_mod_knobs_source_ ? be::kFlagKnobs : 0);
   current.flags.draw_resolution_scale_x = uint16_t(texture_cache_->draw_resolution_scale_x());
   current.flags.draw_resolution_scale_y = uint16_t(texture_cache_->draw_resolution_scale_y());
   if (capture.flags & be::kFlagJitter) {
     current.flags.jitter[0] = capture.jitter[0];
     current.flags.jitter[1] = capture.jitter[1];
+  }
+  if (replay_draw) {
+    current.flags.frame = frame_current_;
+    current.flags.frame_completed = frame_completed_;
+    current.flags.submission = submission_current_;
   }
   const be::SystemConstantInputs& inputs = system_constant_inputs_;
   current.used_texture_mask = inputs.used_texture_mask;
@@ -642,9 +859,8 @@ void D3D12CommandProcessor::CaptureDrawBackEnd(const DrawBackEndCapture& capture
     }
   }
   uint16_t groups = 0;
-  const bool all_groups = !back_end_list_captured_;
-  const auto group_changed = [all_groups](const void* a, const void* b, size_t size) {
-    return all_groups || std::memcmp(a, b, size) != 0;
+  const auto group_changed = [list_start](const void* a, const void* b, size_t size) {
+    return list_start || std::memcmp(a, b, size) != 0;
   };
   if (group_changed(&current.shaders, &back_end_front_.shaders, sizeof(current.shaders))) {
     groups |= 1 << be::kGroupShaders;
@@ -661,7 +877,7 @@ void D3D12CommandProcessor::CaptureDrawBackEnd(const DrawBackEndCapture& capture
   if (group_changed(&current.flags, &back_end_front_.flags, sizeof(current.flags))) {
     groups |= 1 << be::kGroupFlags;
   }
-  if (all_groups || current.used_texture_mask != back_end_front_.used_texture_mask ||
+  if (list_start || current.used_texture_mask != back_end_front_.used_texture_mask ||
       current.textures_resolution_scaled != back_end_front_.textures_resolution_scaled ||
       std::memcmp(current.texture_swizzled_signs, back_end_front_.texture_swizzled_signs,
                   sizeof(current.texture_swizzled_signs)) ||
@@ -669,43 +885,74 @@ void D3D12CommandProcessor::CaptureDrawBackEnd(const DrawBackEndCapture& capture
                   sizeof(current.texture_integer_scale_bits))) {
     groups |= 1 << be::kGroupTextures;
   }
+  uint16_t texture_index_counts[2] = {};
+  if (replay_draw) {
+    for (uint32_t stage = 0; stage < 2; ++stage) {
+      if (back_end_texture_indices_changed_[stage]) {
+        groups |= 1 << (be::kGroupTextureIndicesVertex + stage);
+        texture_index_counts[stage] = uint16_t(back_end_texture_indices_[stage].size());
+      }
+    }
+    if (shader_mod_knobs_source_ && (list_start || back_end_knobs_changed_)) {
+      groups |= 1 << be::kGroupKnobs;
+    }
+  }
   uint32_t group_bytes = 0;
   for (uint32_t group = 0; group < be::kGroupCount; ++group) {
-    if (groups & (1 << group)) {
-      group_bytes +=
-          group == be::kGroupTextures ? TexturesGroupSize(texture_count) : kGroupSizes[group];
+    if (!(groups & (1 << group))) {
+      continue;
+    }
+    if (group == be::kGroupTextures) {
+      group_bytes += be::TexturesGroupSize(texture_count);
+    } else if (group == be::kGroupTextureIndicesVertex || group == be::kGroupTextureIndicesPixel) {
+      group_bytes += texture_index_counts[group - be::kGroupTextureIndicesVertex] * 4;
+    } else {
+      group_bytes += be::kGroupFixedSizes[group];
     }
   }
 
-  // The back end's results at the draw, for the check.
-  uint16_t check = 0;
+  // The check: the back end's results at the draw.
+  uint16_t flags = (list_start ? be::kListStart : 0) | (replay_draw ? be::kReplayDraw : 0);
   uint32_t sampler_count_vertex = 0, sampler_count_pixel = 0;
   uint32_t check_bytes = 0;
+  uint32_t constant_bytes[4] = {};
   if (draw_back_end_check_ &&
       pipeline_cache_->GetPipelineDescriptionSize() <= sizeof(be::Expected::pipeline_description)) {
-    check = be::kCheck;
+    flags |= be::kCheck;
     if (draw_back_end_perturb_ && ++draw_back_end_checks_ % draw_back_end_perturb_ == 0) {
-      check |= be::kCheckPerturb;
+      flags |= be::kCheckPerturb;
     }
     sampler_count_vertex = uint32_t(vertex_shader.GetSamplerBindingsAfterTranslation().size());
     sampler_count_pixel =
         pixel_shader ? uint32_t(pixel_shader->GetSamplerBindingsAfterTranslation().size()) : 0;
     check_bytes = uint32_t(sizeof(be::Expected)) + 4 * (sampler_count_vertex + sampler_count_pixel);
+    if (replay_draw) {
+      constant_bytes[0] =
+          16 * uint32_t(vertex_shader.constant_register_map().float_count);
+      constant_bytes[1] =
+          pixel_shader ? 16 * uint32_t(pixel_shader->constant_register_map().float_count) : 0;
+      constant_bytes[2] = deferred_constants::kBoolLoopSlotCount * 16;
+      constant_bytes[3] = deferred_constants::kFetchSlotCount * 16;
+      check_bytes += constant_bytes[0] + constant_bytes[1] + constant_bytes[2] + constant_bytes[3];
+    }
   }
 
-  const uint32_t context_word_count = uint32_t(__builtin_popcount(context_words));
-  const uint32_t bytes = uint32_t(sizeof(be::Header)) + context_word_count * 8 + context_count * 4 +
-                         fetch_count * 16 + group_bytes;
+  const uint32_t bytes = uint32_t(sizeof(be::Header)) +
+                         uint32_t(__builtin_popcount(context_words)) * 8 +
+                         uint32_t(__builtin_popcount(constant_words)) * 8 + context_count * 4 +
+                         constant_count * 16 + group_bytes;
   auto* arguments =
       static_cast<uint8_t*>(deferred_command_list_.DrawBackEnd(bytes + check_bytes));
-  be::Header header;
+  be::Header header = {};
   header.context_words = context_words;
+  header.constant_words = constant_words;
   header.groups = groups;
-  header.check = check;
-  header.texture_count = uint16_t(texture_count);
+  header.flags = flags;
   header.context_count = context_count;
-  header.fetch_count = fetch_count;
-  header.fetch_slots = fetch_slots;
+  header.constant_count = constant_count;
+  header.texture_count = uint16_t(texture_count);
+  header.texture_index_counts[0] = texture_index_counts[0];
+  header.texture_index_counts[1] = texture_index_counts[1];
   uint8_t* out = arguments;
   std::memcpy(out, &header, sizeof(header));
   out += sizeof(header);
@@ -715,16 +962,14 @@ void D3D12CommandProcessor::CaptureDrawBackEnd(const DrawBackEndCapture& capture
       out += 8;
     }
   }
+  for (uint32_t word = 0; word < deferred_constants::kMaskWords; ++word) {
+    if (constant_words & (1u << word)) {
+      std::memcpy(out, &constant_masks[word], 8);
+      out += 8;
+    }
+  }
   for (uint32_t word = 0; word < be::kContextWords; ++word) {
     uint64_t bits = context_masks[word];
-    if (!(context_words & (1u << word))) {
-      continue;
-    }
-    if (bits == ~uint64_t(0)) {
-      std::memcpy(out, back_end_context_ + (word << 6), 64 * 4);
-      out += 64 * 4;
-      continue;
-    }
     while (bits) {
       const uint32_t bit = uint32_t(__builtin_ctzll(bits));
       bits &= bits - 1;
@@ -732,35 +977,27 @@ void D3D12CommandProcessor::CaptureDrawBackEnd(const DrawBackEndCapture& capture
       out += 4;
     }
   }
-  {
-    uint64_t bits = fetch_slots;
+  const uint32_t* constants = regs.values + deferred_constants::kFirstRegister;
+  for (uint32_t word = 0; word < deferred_constants::kMaskWords; ++word) {
+    uint64_t bits = constant_masks[word];
     while (bits) {
-      const uint32_t slot = uint32_t(__builtin_ctzll(bits));
+      const uint32_t slot = (word << 6) + uint32_t(__builtin_ctzll(bits));
       bits &= bits - 1;
-      std::memcpy(out, regs.values + XE_GPU_REG_SHADER_CONSTANT_FETCH_00_0 + slot * 4, 16);
+      std::memcpy(out, constants + slot * 4, 16);
       out += 16;
     }
   }
-  if (groups & (1 << be::kGroupShaders)) {
-    std::memcpy(out, &current.shaders, sizeof(current.shaders));
-    out += sizeof(current.shaders);
-  }
-  if (groups & (1 << be::kGroupPrimitive)) {
-    std::memcpy(out, &current.primitive, sizeof(current.primitive));
-    out += sizeof(current.primitive);
-  }
-  if (groups & (1 << be::kGroupDraw)) {
-    std::memcpy(out, &current.draw, sizeof(current.draw));
-    out += sizeof(current.draw);
-  }
-  if (groups & (1 << be::kGroupTargets)) {
-    std::memcpy(out, &current.targets, sizeof(current.targets));
-    out += sizeof(current.targets);
-  }
-  if (groups & (1 << be::kGroupFlags)) {
-    std::memcpy(out, &current.flags, sizeof(current.flags));
-    out += sizeof(current.flags);
-  }
+  const auto write_group = [&](be::Group index, const void* data) {
+    if (groups & (1 << index)) {
+      std::memcpy(out, data, be::kGroupFixedSizes[index]);
+      out += be::kGroupFixedSizes[index];
+    }
+  };
+  write_group(be::kGroupShaders, &current.shaders);
+  write_group(be::kGroupPrimitive, &current.primitive);
+  write_group(be::kGroupDraw, &current.draw);
+  write_group(be::kGroupTargets, &current.targets);
+  write_group(be::kGroupFlags, &current.flags);
   if (groups & (1 << be::kGroupTextures)) {
     be::GroupTexturesHeader textures_header = {current.used_texture_mask,
                                                current.textures_resolution_scaled};
@@ -778,131 +1015,127 @@ void D3D12CommandProcessor::CaptureDrawBackEnd(const DrawBackEndCapture& capture
       out += 4;
     }
   }
-  if (check) {
+  for (uint32_t stage = 0; stage < 2; ++stage) {
+    if (groups & (1 << (be::kGroupTextureIndicesVertex + stage))) {
+      std::memcpy(out, back_end_texture_indices_[stage].data(), texture_index_counts[stage] * 4);
+      out += texture_index_counts[stage] * 4;
+    }
+  }
+  if (groups & (1 << be::kGroupKnobs)) {
+    static_assert(ShaderOverrides::kKnobCount == be::kKnobCount);
+    std::memcpy(out, shader_mod_knobs_, be::kKnobCount * 4);
+    out += be::kKnobCount * 4;
+  }
+  if (flags & be::kCheck) {
     be::Expected expected;
     std::memset(&expected, 0, sizeof(expected));
-    std::memcpy(expected.pipeline_description,
-                pipeline_cache_->GetPipelineDescription(capture.pipeline_handle),
-                pipeline_cache_->GetPipelineDescriptionSize());
-    expected.viewport = *capture.viewport;
-    expected.scissor = *capture.scissor;
-    std::memcpy(expected.blend_factor, ff_blend_factor_, sizeof(expected.blend_factor));
-    expected.stencil_reference = ff_stencil_ref_;
     expected.sampler_count_vertex = sampler_count_vertex;
     expected.sampler_count_pixel = sampler_count_pixel;
-    expected.system_constants = system_constants_;
+    std::memcpy(expected.constant_bytes, constant_bytes, sizeof(constant_bytes));
+    if (!replay_draw) {
+      // Increment 1: the results of the back end that ran at this draw.
+      std::memcpy(expected.pipeline_description,
+                  pipeline_cache_->GetPipelineDescription(capture.pipeline_handle),
+                  pipeline_cache_->GetPipelineDescriptionSize());
+      expected.viewport = *capture.viewport;
+      expected.scissor = *capture.scissor;
+      std::memcpy(expected.blend_factor, ff_blend_factor_, sizeof(expected.blend_factor));
+      expected.stencil_reference = ff_stencil_ref_;
+      expected.system_constants = system_constants_;
+    } else {
+      // Increment 2: the same functions on the live registers at the draw.
+      const reg::RB_DEPTHCONTROL depth_control = draw_util::GetNormalizedDepthControl(regs);
+      const uint32_t color_mask =
+          pixel_shader ? draw_util::GetNormalizedColorMask(regs, pixel_shader->writes_color_targets())
+                       : 0;
+      const bool polygonal = draw_util::IsPrimitivePolygonal(regs);
+      pipeline_cache_->ComputePipelineDescription(
+          regs, capture.vertex_translation, capture.pixel_translation, primitive, depth_control,
+          color_mask, current.targets.bits, current.targets.formats, expected.pipeline_description);
+      const uint32_t uniform_scale_x = (capture.flags >> be::kFlagUniformScaleShift) & 3;
+      const uint32_t uniform_scale_y = (capture.flags >> (be::kFlagUniformScaleShift + 2)) & 3;
+      const uint32_t scale_x = current.flags.draw_resolution_scale_x * uniform_scale_x;
+      const uint32_t scale_y = current.flags.draw_resolution_scale_y * uniform_scale_y;
+      draw_util::GetHostViewportInfo(regs, scale_x, scale_y, true, D3D12_VIEWPORT_BOUNDS_MAX,
+                                     D3D12_VIEWPORT_BOUNDS_MAX, false, depth_control,
+                                     (capture.flags & be::kFlagConvertZToFloat24) != 0,
+                                     (capture.flags & be::kFlagHostRenderTargets) != 0,
+                                     pixel_shader && pixel_shader->writes_depth(),
+                                     expected.viewport);
+      if (capture.flags & be::kFlagJitter) {
+        post_pass::AddJitterToNdcOffset(capture.jitter, expected.viewport.xy_extent,
+                                        expected.viewport.ndc_offset);
+      }
+      draw_util::GetScissor(regs, expected.scissor);
+      expected.scissor.offset[0] *= scale_x;
+      expected.scissor.offset[1] *= scale_y;
+      expected.scissor.extent[0] *= scale_x;
+      expected.scissor.extent[1] *= scale_y;
+      be::ComputeBlendFactorAndStencilReference(regs, polygonal, depth_control,
+                                                expected.blend_factor, expected.stencil_reference);
+      be::ComputeSystemConstants(regs, expected.viewport, inputs, system_constants_);
+      expected.system_constants = system_constants_;
+    }
     std::memcpy(out, &expected, sizeof(expected));
     out += sizeof(expected);
-    for (uint32_t i = 0; i < sampler_count_vertex; ++i) {
-      std::memcpy(out, &current_samplers_vertex_[i].value, 4);
-      out += 4;
+    for (uint32_t stage = 0; stage < 2; ++stage) {
+      if (stage && !pixel_shader) {
+        break;
+      }
+      const D3D12Shader& shader = stage ? *pixel_shader : vertex_shader;
+      const auto& samplers = shader.GetSamplerBindingsAfterTranslation();
+      for (size_t i = 0; i < samplers.size(); ++i) {
+        const uint32_t value =
+            replay_draw ? texture_cache_->GetSamplerParameters(regs, samplers[i]).value
+                        : (stage ? current_samplers_pixel_[i] : current_samplers_vertex_[i]).value;
+        std::memcpy(out, &value, 4);
+        out += 4;
+      }
     }
-    for (uint32_t i = 0; i < sampler_count_pixel; ++i) {
-      std::memcpy(out, &current_samplers_pixel_[i].value, 4);
-      out += 4;
+    if (replay_draw) {
+      std::memset(out, 0, constant_bytes[0]);
+      PackFloatConstants(regs, 0, vertex_shader.constant_register_map().float_bitmap, out);
+      out += constant_bytes[0];
+      if (pixel_shader) {
+        std::memset(out, 0, constant_bytes[1]);
+        PackFloatConstants(regs, 1, pixel_shader->constant_register_map().float_bitmap, out);
+        out += constant_bytes[1];
+      }
+      std::memcpy(out, regs.values + XE_GPU_REG_SHADER_CONSTANT_BOOL_000_031, constant_bytes[2]);
+      out += constant_bytes[2];
+      std::memcpy(out, regs.values + XE_GPU_REG_SHADER_CONSTANT_FETCH_00_0, constant_bytes[3]);
+      out += constant_bytes[3];
     }
   }
   assert_true(out == arguments + bytes + check_bytes);
 
   back_end_front_ = current;
   back_end_list_captured_ = true;
-  perf_trace::CountBackEndCapture(bytes, context_count, written_count, fetch_count, group_bytes,
+  if (replay_draw) {
+    back_end_texture_indices_changed_[0] = back_end_texture_indices_changed_[1] = false;
+    back_end_knobs_changed_ = false;
+  }
+  perf_trace::CountBackEndCapture(bytes, context_count, written_count, constant_count, group_bytes,
                                   __rdtsc() - start);
 }
 
 void D3D12CommandProcessor::ReplayDrawBackEnd(const uint8_t* arguments, RegisterFile& shadow,
-                                              draw_back_end::ListState& list) const {
+                                              draw_back_end::ReplayList& replay,
+                                              ID3D12GraphicsCommandList* command_list) {
   namespace be = draw_back_end;
   const uint64_t start = __rdtsc();
-  be::Header header;
-  std::memcpy(&header, arguments, sizeof(header));
-  const uint8_t* in = arguments + sizeof(header);
-  uint64_t context_masks[be::kContextWords] = {};
-  for (uint32_t word = 0; word < be::kContextWords; ++word) {
-    if (header.context_words & (1u << word)) {
-      std::memcpy(&context_masks[word], in, 8);
-      in += 8;
+  be::Decoded decoded;
+  be::Decode(arguments, shadow, replay.list, decoded);
+  const be::Header& header = decoded.header;
+  if (!(header.flags & (be::kReplayDraw | be::kCheck))) {
+    // Increment 1 without the check: only the copy.
+    if (perf_trace::Get()) {
+      perf_trace::back_end_replay.replays.fetch_add(1, std::memory_order_relaxed);
+      perf_trace::back_end_replay.tsc.fetch_add(__rdtsc() - start, std::memory_order_relaxed);
     }
-  }
-  uint32_t* context = shadow.values + be::kContextFirst;
-  for (uint32_t word = 0; word < be::kContextWords; ++word) {
-    uint64_t bits = context_masks[word];
-    if (bits == ~uint64_t(0)) {
-      std::memcpy(context + (word << 6), in, 64 * 4);
-      in += 64 * 4;
-      continue;
-    }
-    while (bits) {
-      const uint32_t bit = uint32_t(__builtin_ctzll(bits));
-      bits &= bits - 1;
-      std::memcpy(context + (word << 6) + bit, in, 4);
-      in += 4;
-    }
-  }
-  {
-    uint64_t bits = header.fetch_slots;
-    while (bits) {
-      const uint32_t slot = uint32_t(__builtin_ctzll(bits));
-      bits &= bits - 1;
-      std::memcpy(shadow.values + XE_GPU_REG_SHADER_CONSTANT_FETCH_00_0 + slot * 4, in, 16);
-      in += 16;
-    }
-  }
-  if (header.groups & (1 << be::kGroupShaders)) {
-    std::memcpy(&list.shaders, in, sizeof(list.shaders));
-    in += sizeof(list.shaders);
-  }
-  if (header.groups & (1 << be::kGroupPrimitive)) {
-    std::memcpy(&list.primitive, in, sizeof(list.primitive));
-    in += sizeof(list.primitive);
-  }
-  if (header.groups & (1 << be::kGroupDraw)) {
-    std::memcpy(&list.draw, in, sizeof(list.draw));
-    in += sizeof(list.draw);
-  }
-  if (header.groups & (1 << be::kGroupTargets)) {
-    std::memcpy(&list.targets, in, sizeof(list.targets));
-    in += sizeof(list.targets);
-  }
-  if (header.groups & (1 << be::kGroupFlags)) {
-    std::memcpy(&list.flags, in, sizeof(list.flags));
-    in += sizeof(list.flags);
-  }
-  if (header.groups & (1 << be::kGroupTextures)) {
-    be::GroupTexturesHeader textures_header;
-    std::memcpy(&textures_header, in, sizeof(textures_header));
-    in += sizeof(textures_header);
-    list.used_texture_mask = textures_header.used_texture_mask;
-    list.textures_resolution_scaled = textures_header.textures_resolution_scaled;
-    const uint8_t* signs = in;
-    in += (header.texture_count + 3) & ~3u;
-    uint32_t remaining = list.used_texture_mask;
-    while (remaining) {
-      const uint32_t index = uint32_t(__builtin_ctz(remaining));
-      remaining &= remaining - 1;
-      list.texture_swizzled_signs[index] = *signs++;
-      std::memcpy(&list.texture_integer_scale_bits[index], in, 4);
-      in += 4;
-    }
-  }
-  const uint64_t replayed = __rdtsc();
-  if (perf_trace::Get()) {
-    perf_trace::back_end_replay.replays.fetch_add(1, std::memory_order_relaxed);
-    perf_trace::back_end_replay.tsc.fetch_add(replayed - start, std::memory_order_relaxed);
-  }
-  if (!(header.check & be::kCheck)) {
     return;
   }
-
-  // The check: the back end's results again, from the copy of the registers.
-  be::Expected expected;
-  std::memcpy(&expected, in, sizeof(expected));
-  in += sizeof(expected);
-  const bool perturb = (header.check & be::kCheckPerturb) != 0;
-  if (perturb) {
-    expected.pipeline_description[0] ^= 1;
-  }
-  bool mismatches[be::kMismatchCount] = {};
+  const be::ListState& list = replay.list;
   const RegisterFile& regs = shadow;
   auto* vertex_translation = static_cast<D3D12Shader::D3D12Translation*>(list.shaders.vertex);
   auto* pixel_translation = static_cast<D3D12Shader::D3D12Translation*>(list.shaders.pixel);
@@ -915,7 +1148,6 @@ void D3D12CommandProcessor::ReplayDrawBackEnd(const uint8_t* arguments, Register
       pixel_shader ? draw_util::GetNormalizedColorMask(regs, pixel_shader->writes_color_targets())
                    : 0;
   const bool polygonal = draw_util::IsPrimitivePolygonal(regs);
-
   PrimitiveProcessor::ProcessingResult primitive = {};
   primitive.host_primitive_type = xenos::PrimitiveType(list.primitive.host_primitive_type);
   primitive.host_vertex_shader_type =
@@ -926,52 +1158,11 @@ void D3D12CommandProcessor::ReplayDrawBackEnd(const uint8_t* arguments, Register
   primitive.host_shader_index_endian = xenos::Endian(list.primitive.host_shader_index_endian);
   primitive.line_loop_closing_index = list.primitive.line_loop_closing_index;
   primitive.host_draw_vertex_count = list.draw.host_draw_vertex_count;
-  uint8_t description[sizeof(be::Expected::pipeline_description)] = {};
-  if (!pipeline_cache_->ComputePipelineDescription(
-          regs, vertex_translation, pixel_translation, primitive, depth_control, color_mask,
-          list.targets.bits, list.targets.formats, description)) {
-    mismatches[be::kMismatchPipeline] = true;
-  } else {
-    mismatches[be::kMismatchPipeline] =
-        std::memcmp(description, expected.pipeline_description,
-                    pipeline_cache_->GetPipelineDescriptionSize()) != 0;
-  }
-
   const uint32_t uniform_scale_x = (flags >> be::kFlagUniformScaleShift) & 3;
   const uint32_t uniform_scale_y = (flags >> (be::kFlagUniformScaleShift + 2)) & 3;
   const uint32_t scale_x = list.flags.draw_resolution_scale_x * uniform_scale_x;
   const uint32_t scale_y = list.flags.draw_resolution_scale_y * uniform_scale_y;
-  draw_util::ViewportInfo viewport;
-  draw_util::GetHostViewportInfo(regs, scale_x, scale_y, true, D3D12_VIEWPORT_BOUNDS_MAX,
-                                 D3D12_VIEWPORT_BOUNDS_MAX, false, depth_control,
-                                 (flags & be::kFlagConvertZToFloat24) != 0,
-                                 (flags & be::kFlagHostRenderTargets) != 0,
-                                 pixel_shader && pixel_shader->writes_depth(), viewport);
-  if (flags & be::kFlagJitter) {
-    post_pass::AddJitterToNdcOffset(list.flags.jitter, viewport.xy_extent, viewport.ndc_offset);
-  }
-  mismatches[be::kMismatchViewport] =
-      std::memcmp(&viewport, &expected.viewport, sizeof(viewport)) != 0;
-
-  draw_util::Scissor scissor;
-  draw_util::GetScissor(regs, scissor);
-  scissor.offset[0] *= scale_x;
-  scissor.offset[1] *= scale_y;
-  scissor.extent[0] *= scale_x;
-  scissor.extent[1] *= scale_y;
-  mismatches[be::kMismatchScissor] = std::memcmp(&scissor, &expected.scissor, sizeof(scissor)) != 0;
-
-  if (flags & be::kFlagHostRenderTargets) {
-    float blend_factor[4];
-    uint32_t stencil_reference;
-    be::ComputeBlendFactorAndStencilReference(regs, polygonal, depth_control, blend_factor,
-                                              stencil_reference);
-    mismatches[be::kMismatchFixedFunction] =
-        std::memcmp(blend_factor, expected.blend_factor, sizeof(blend_factor)) != 0 ||
-        stencil_reference != expected.stencil_reference;
-  }
-
-  be::SystemConstantInputs inputs = {};
+  be::SystemConstantInputs inputs;
   inputs.edram_rov_used = (flags & be::kFlagEdramRov) != 0;
   inputs.rov_occlusion_query = (flags & be::kFlagRovOcclusionQuery) != 0;
   inputs.host_render_targets_used = (flags & be::kFlagHostRenderTargets) != 0;
@@ -991,32 +1182,98 @@ void D3D12CommandProcessor::ReplayDrawBackEnd(const uint8_t* arguments, Register
   std::memcpy(inputs.texture_integer_scale_bits, list.texture_integer_scale_bits,
               sizeof(inputs.texture_integer_scale_bits));
   inputs.textures_resolution_scaled = list.textures_resolution_scaled;
-  be::ComputeSystemConstants(regs, viewport, inputs, back_end_replay_constants_);
-  mismatches[be::kMismatchSystemConstants] =
-      std::memcmp(&back_end_replay_constants_, &expected.system_constants,
-                  sizeof(back_end_replay_constants_)) != 0;
 
-  const auto& samplers_vertex = vertex_shader.GetSamplerBindingsAfterTranslation();
-  const size_t pixel_sampler_count =
-      pixel_shader ? pixel_shader->GetSamplerBindingsAfterTranslation().size() : 0;
-  if (samplers_vertex.size() != expected.sampler_count_vertex ||
-      pixel_sampler_count != expected.sampler_count_pixel) {
-    mismatches[be::kMismatchSamplers] = true;
-  } else {
+  const bool check = (header.flags & be::kCheck) != 0;
+  const bool perturb = (header.flags & be::kCheckPerturb) != 0;
+  be::Expected expected;
+  const uint8_t* check_in = decoded.check;
+  if (check) {
+    std::memcpy(&expected, check_in, sizeof(expected));
+    check_in += sizeof(expected);
+    if (perturb) {
+      expected.pipeline_description[0] ^= 1;
+    }
+  }
+  bool mismatches[be::kMismatchCount] = {};
+
+  if (!(header.flags & be::kReplayDraw)) {
+    // Increment 1: only the check, from the copy.
+    if (perf_trace::Get()) {
+      perf_trace::back_end_replay.replays.fetch_add(1, std::memory_order_relaxed);
+      perf_trace::back_end_replay.tsc.fetch_add(__rdtsc() - start, std::memory_order_relaxed);
+    }
+    if (!check) {
+      return;
+    }
+    uint8_t description[sizeof(be::Expected::pipeline_description)] = {};
+    mismatches[be::kMismatchPipeline] =
+        !pipeline_cache_->ComputePipelineDescription(regs, vertex_translation, pixel_translation,
+                                                     primitive, depth_control, color_mask,
+                                                     list.targets.bits, list.targets.formats,
+                                                     description) ||
+        std::memcmp(description, expected.pipeline_description,
+                    pipeline_cache_->GetPipelineDescriptionSize()) != 0;
+    draw_util::ViewportInfo viewport;
+    draw_util::GetHostViewportInfo(regs, scale_x, scale_y, true, D3D12_VIEWPORT_BOUNDS_MAX,
+                                   D3D12_VIEWPORT_BOUNDS_MAX, false, depth_control,
+                                   (flags & be::kFlagConvertZToFloat24) != 0,
+                                   (flags & be::kFlagHostRenderTargets) != 0,
+                                   pixel_shader && pixel_shader->writes_depth(), viewport);
+    if (flags & be::kFlagJitter) {
+      post_pass::AddJitterToNdcOffset(list.flags.jitter, viewport.xy_extent, viewport.ndc_offset);
+    }
+    mismatches[be::kMismatchViewport] =
+        std::memcmp(&viewport, &expected.viewport, sizeof(viewport)) != 0;
+    draw_util::Scissor scissor;
+    draw_util::GetScissor(regs, scissor);
+    scissor.offset[0] *= scale_x;
+    scissor.offset[1] *= scale_y;
+    scissor.extent[0] *= scale_x;
+    scissor.extent[1] *= scale_y;
+    mismatches[be::kMismatchScissor] =
+        std::memcmp(&scissor, &expected.scissor, sizeof(scissor)) != 0;
+    if (flags & be::kFlagHostRenderTargets) {
+      float blend_factor[4];
+      uint32_t stencil_reference;
+      be::ComputeBlendFactorAndStencilReference(regs, polygonal, depth_control, blend_factor,
+                                                stencil_reference);
+      mismatches[be::kMismatchFixedFunction] =
+          std::memcmp(blend_factor, expected.blend_factor, sizeof(blend_factor)) != 0 ||
+          stencil_reference != expected.stencil_reference;
+    }
+    be::ComputeSystemConstants(regs, viewport, inputs, back_end_replay_constants_);
+    mismatches[be::kMismatchSystemConstants] =
+        std::memcmp(&back_end_replay_constants_, &expected.system_constants,
+                    sizeof(back_end_replay_constants_)) != 0;
     for (uint32_t stage = 0; stage < 2; ++stage) {
-      if (stage && !pixel_shader) {
+      const uint32_t expected_count =
+          stage ? expected.sampler_count_pixel : expected.sampler_count_vertex;
+      const D3D12Shader* shader = stage ? pixel_shader : &vertex_shader;
+      const size_t count = shader ? shader->GetSamplerBindingsAfterTranslation().size() : 0;
+      if (count != expected_count) {
+        mismatches[be::kMismatchSamplers] = true;
         break;
       }
-      const auto& bindings =
-          stage ? pixel_shader->GetSamplerBindingsAfterTranslation() : samplers_vertex;
-      for (const D3D12Shader::SamplerBinding& binding : bindings) {
+      for (size_t i = 0; i < count; ++i) {
         uint32_t value;
-        std::memcpy(&value, in, 4);
-        in += 4;
-        if (texture_cache_->GetSamplerParameters(regs, binding).value != value) {
+        std::memcpy(&value, check_in, 4);
+        check_in += 4;
+        if (texture_cache_->GetSamplerParameters(regs, shader->GetSamplerBindingsAfterTranslation()[i])
+                .value != value) {
           mismatches[be::kMismatchSamplers] = true;
         }
       }
+    }
+  } else {
+    ReplayDrawBackEndDraw(decoded, regs, replay, command_list, vertex_shader, pixel_shader,
+                          primitive, depth_control, color_mask, polygonal, scale_x, scale_y,
+                          inputs, check ? &expected : nullptr, check_in, mismatches);
+    if (perf_trace::Get()) {
+      perf_trace::back_end_replay.replays.fetch_add(1, std::memory_order_relaxed);
+      perf_trace::back_end_replay.tsc.fetch_add(__rdtsc() - start, std::memory_order_relaxed);
+    }
+    if (!check) {
+      return;
     }
   }
 
@@ -1029,15 +1286,508 @@ void D3D12CommandProcessor::ReplayDrawBackEnd(const uint8_t* arguments, Register
       continue;
     }
     perf_trace::back_end_replay.mismatches[kind].fetch_add(1, std::memory_order_relaxed);
-    if (perturb && kind == be::kMismatchPipeline) {
-      continue;
-    }
-    static std::atomic<uint32_t> logged{0};
-    if (logged.fetch_add(1, std::memory_order_relaxed) < 16) {
-      REXGPU_ERROR("Draw back end: the {} differ from the draw's (vertex shader {:016X})",
-                   kMismatchNames[kind], vertex_shader.ucode_data_hash());
+    if (!(perturb && kind == be::kMismatchPipeline)) {
+      LogMismatch(be::Mismatch(kind), vertex_shader.ucode_data_hash());
     }
   }
+}
+
+void D3D12CommandProcessor::ReplayDrawBackEndDraw(
+    const draw_back_end::Decoded& decoded, const RegisterFile& regs,
+    draw_back_end::ReplayList& replay, ID3D12GraphicsCommandList* command_list,
+    const D3D12Shader& vertex_shader, const D3D12Shader* pixel_shader,
+    const PrimitiveProcessor::ProcessingResult& primitive, reg::RB_DEPTHCONTROL depth_control,
+    uint32_t color_mask, bool polygonal, uint32_t scale_x, uint32_t scale_y,
+    const draw_back_end::SystemConstantInputs& inputs, const draw_back_end::Expected* expected,
+    const uint8_t* check_in, bool* mismatches) {
+  namespace be = draw_back_end;
+  const be::Header& header = decoded.header;
+  const be::ListState& list = replay.list;
+  be::ReplayState& d3d = replay.d3d;
+  be::ReplayBindings& bindings = replay.bindings;
+  const ui::d3d12::D3D12Provider& provider = GetD3D12Provider();
+  const uint32_t flags = list.flags.flags;
+  auto* vertex_translation = static_cast<D3D12Shader::D3D12Translation*>(list.shaders.vertex);
+  auto* pixel_translation = static_cast<D3D12Shader::D3D12Translation*>(list.shaders.pixel);
+
+  // The front half's texture indices and knobs, and the buffers holding
+  // registers that changed.
+  for (uint32_t stage = 0; stage < 2; ++stage) {
+    if (decoded.texture_indices[stage]) {
+      replay.texture_indices[stage].assign(
+          decoded.texture_indices[stage],
+          decoded.texture_indices[stage] + header.texture_index_counts[stage]);
+      bindings.indices_valid[stage] = false;
+    }
+  }
+  if (decoded.knobs) {
+    std::memcpy(replay.knobs, decoded.knobs, sizeof(replay.knobs));
+    bindings.system_valid = false;
+  }
+  for (uint32_t i = 0; i < 4; ++i) {
+    if (decoded.constant_slots[i] & bindings.float_maps[0][i]) {
+      bindings.float_valid[0] = false;
+    }
+    if (decoded.constant_slots[4 + i] & bindings.float_maps[1][i]) {
+      bindings.float_valid[1] = false;
+    }
+  }
+  if (decoded.constant_slots[deferred_constants::kFetchFirstSlot >> 6] &
+      ((uint64_t(1) << deferred_constants::kFetchSlotCount) - 1)) {
+    bindings.fetch_valid = false;
+  }
+  if (decoded.constant_slots[deferred_constants::kBoolLoopFirstSlot >> 6] &
+      (((uint64_t(1) << deferred_constants::kBoolLoopSlotCount) - 1)
+       << (deferred_constants::kBoolLoopFirstSlot & 63))) {
+    bindings.bool_loop_valid = false;
+  }
+
+  // The constant buffer pool, reclaimed by frame.
+  if (list.flags.frame != back_end_pool_frame_) {
+    back_end_constant_pool_->Reclaim(list.flags.frame_completed);
+    back_end_pool_frame_ = list.flags.frame;
+  }
+  const auto request = [&](size_t size, uint64_t& address) -> uint8_t* {
+    D3D12_GPU_VIRTUAL_ADDRESS gpu_address;
+    uint8_t* mapping = back_end_constant_pool_->Request(
+        list.flags.frame, size, D3D12_CONSTANT_BUFFER_DATA_PLACEMENT_ALIGNMENT, nullptr, nullptr,
+        &gpu_address);
+    address = gpu_address;
+    return mapping;
+  };
+
+  // The pipeline.
+  void* pipeline_handle;
+  ID3D12RootSignature* root_signature;
+  bool created = false;
+  const uint64_t pipeline_start = __rdtsc();
+  if (!pipeline_cache_->ConfigurePipelineDescribed(
+          regs, vertex_translation, pixel_translation, primitive, depth_control, color_mask,
+          list.targets.bits, list.targets.formats, false, &pipeline_handle, &root_signature,
+          &created)) {
+    perf_trace::back_end_replay.dropped.fetch_add(1, std::memory_order_relaxed);
+    return;
+  }
+  if (created) {
+    perf_trace::back_end_replay.pipelines.fetch_add(1, std::memory_order_relaxed);
+    perf_trace::back_end_replay.pipeline_tsc.fetch_add(__rdtsc() - pipeline_start,
+                                                       std::memory_order_relaxed);
+  }
+  ID3D12PipelineState* pipeline = pipeline_cache_->GetD3D12PipelineByHandle(pipeline_handle);
+  if (pipeline && pipeline != d3d.pipeline) {
+    command_list->SetPipelineState(pipeline);
+    d3d.pipeline = pipeline;
+  }
+
+  // Viewport, scissor, blend factor and stencil reference.
+  draw_util::ViewportInfo viewport_info;
+  draw_util::GetHostViewportInfo(regs, scale_x, scale_y, true, D3D12_VIEWPORT_BOUNDS_MAX,
+                                 D3D12_VIEWPORT_BOUNDS_MAX, false, depth_control,
+                                 (flags & be::kFlagConvertZToFloat24) != 0,
+                                 (flags & be::kFlagHostRenderTargets) != 0,
+                                 pixel_shader && pixel_shader->writes_depth(), viewport_info);
+  if (flags & be::kFlagJitter) {
+    post_pass::AddJitterToNdcOffset(list.flags.jitter, viewport_info.xy_extent,
+                                    viewport_info.ndc_offset);
+  }
+  D3D12_VIEWPORT viewport;
+  viewport.TopLeftX = float(viewport_info.xy_offset[0]);
+  viewport.TopLeftY = float(viewport_info.xy_offset[1]);
+  viewport.Width = float(viewport_info.xy_extent[0]);
+  viewport.Height = float(viewport_info.xy_extent[1]);
+  viewport.MinDepth = viewport_info.z_min;
+  viewport.MaxDepth = viewport_info.z_max;
+  if (!d3d.viewport_set || std::memcmp(&viewport, &d3d.viewport, sizeof(viewport))) {
+    command_list->RSSetViewports(1, &viewport);
+    d3d.viewport = viewport;
+    d3d.viewport_set = true;
+  }
+  draw_util::Scissor scissor;
+  draw_util::GetScissor(regs, scissor);
+  scissor.offset[0] *= scale_x;
+  scissor.offset[1] *= scale_y;
+  scissor.extent[0] *= scale_x;
+  scissor.extent[1] *= scale_y;
+  D3D12_RECT scissor_rect;
+  scissor_rect.left = LONG(scissor.offset[0]);
+  scissor_rect.top = LONG(scissor.offset[1]);
+  scissor_rect.right = LONG(scissor.offset[0] + scissor.extent[0]);
+  scissor_rect.bottom = LONG(scissor.offset[1] + scissor.extent[1]);
+  if (!d3d.scissor_set || std::memcmp(&scissor_rect, &d3d.scissor, sizeof(scissor_rect))) {
+    command_list->RSSetScissorRects(1, &scissor_rect);
+    d3d.scissor = scissor_rect;
+    d3d.scissor_set = true;
+  }
+  float blend_factor[4];
+  uint32_t stencil_reference;
+  be::ComputeBlendFactorAndStencilReference(regs, polygonal, depth_control, blend_factor,
+                                            stencil_reference);
+  if (!d3d.blend_factor_set || std::memcmp(blend_factor, d3d.blend_factor, sizeof(blend_factor))) {
+    command_list->OMSetBlendFactor(blend_factor);
+    std::memcpy(d3d.blend_factor, blend_factor, sizeof(blend_factor));
+    d3d.blend_factor_set = true;
+  }
+  if (!d3d.stencil_reference_set || stencil_reference != d3d.stencil_reference) {
+    command_list->OMSetStencilRef(stencil_reference);
+    d3d.stencil_reference = stencil_reference;
+    d3d.stencil_reference_set = true;
+  }
+
+  // The system constants.
+  if (be::ComputeSystemConstants(regs, viewport_info, inputs, back_end_replay_constants_)) {
+    bindings.system_valid = false;
+  }
+  const bool knobs = (flags & be::kFlagKnobs) != 0;
+  if (!bindings.system_valid) {
+    const size_t size = knobs ? ShaderOverrides::kKnobsOffset + ShaderOverrides::kKnobsSize
+                              : sizeof(back_end_replay_constants_);
+    uint8_t* mapping = request(size, bindings.system);
+    if (!mapping) {
+      perf_trace::back_end_replay.dropped.fetch_add(1, std::memory_order_relaxed);
+      return;
+    }
+    std::memcpy(mapping, &back_end_replay_constants_, sizeof(back_end_replay_constants_));
+    if (knobs) {
+      std::memset(mapping + sizeof(back_end_replay_constants_), 0,
+                  ShaderOverrides::kKnobsOffset - sizeof(back_end_replay_constants_));
+      std::memcpy(mapping + ShaderOverrides::kKnobsOffset, replay.knobs,
+                  ShaderOverrides::kKnobsSize);
+    }
+    bindings.system_valid = true;
+  }
+
+  // The float, bool and loop, and fetch constant buffers, filled from the copy.
+  // The check's part: Expected, the sampler parameters, the constant bytes.
+  const uint8_t* expected_samplers = expected ? check_in : nullptr;
+  const uint8_t* expected_constants =
+      expected ? check_in + 4 * (expected->sampler_count_vertex + expected->sampler_count_pixel)
+               : nullptr;
+  alignas(16) uint8_t local[256 * 16];
+  uint32_t filled = 0;
+  for (uint32_t stage = 0; stage < 2; ++stage) {
+    static constexpr uint64_t kNoMap[4] = {};
+    const D3D12Shader* shader = stage ? pixel_shader : &vertex_shader;
+    const uint64_t* map = shader ? shader->constant_register_map().float_bitmap : kNoMap;
+    if (std::memcmp(map, bindings.float_maps[stage], sizeof(bindings.float_maps[stage]))) {
+      std::memcpy(bindings.float_maps[stage], map, sizeof(bindings.float_maps[stage]));
+      bindings.float_valid[stage] = false;
+    }
+    if (bindings.float_valid[stage]) {
+      continue;
+    }
+    const uint32_t count = shader ? shader->constant_register_map().float_count : 0;
+    uint8_t* mapping = request(16 * std::max(count, uint32_t(1)), bindings.float_buffers[stage]);
+    if (!mapping) {
+      perf_trace::back_end_replay.dropped.fetch_add(1, std::memory_order_relaxed);
+      return;
+    }
+    const uint32_t size = PackFloatConstants(regs, stage, map, expected ? local : mapping);
+    if (expected) {
+      std::memcpy(mapping, local, size);
+      if (size != expected->constant_bytes[stage] ||
+          std::memcmp(local, expected_constants + (stage ? expected->constant_bytes[0] : 0),
+                      size)) {
+        mismatches[be::kMismatchConstantBuffers] = true;
+      }
+    }
+    bindings.float_valid[stage] = true;
+    filled |= 1u << stage;
+  }
+  const uint8_t* expected_bool_loop =
+      expected ? expected_constants + expected->constant_bytes[0] + expected->constant_bytes[1]
+               : nullptr;
+  if (!bindings.bool_loop_valid) {
+    uint8_t* mapping = request(deferred_constants::kBoolLoopSlotCount * 16, bindings.bool_loop);
+    if (!mapping) {
+      perf_trace::back_end_replay.dropped.fetch_add(1, std::memory_order_relaxed);
+      return;
+    }
+    const uint32_t* source = regs.values + XE_GPU_REG_SHADER_CONSTANT_BOOL_000_031;
+    std::memcpy(mapping, source, deferred_constants::kBoolLoopSlotCount * 16);
+    if (expected && std::memcmp(source, expected_bool_loop, expected->constant_bytes[2])) {
+      mismatches[be::kMismatchConstantBuffers] = true;
+    }
+    bindings.bool_loop_valid = true;
+  }
+  if (!bindings.fetch_valid) {
+    uint8_t* mapping = request(deferred_constants::kFetchSlotCount * 16, bindings.fetch);
+    if (!mapping) {
+      perf_trace::back_end_replay.dropped.fetch_add(1, std::memory_order_relaxed);
+      return;
+    }
+    const uint32_t* source = regs.values + XE_GPU_REG_SHADER_CONSTANT_FETCH_00_0;
+    std::memcpy(mapping, source, deferred_constants::kFetchSlotCount * 16);
+    if (expected && std::memcmp(source, expected_bool_loop + expected->constant_bytes[2],
+                                expected->constant_bytes[3])) {
+      mismatches[be::kMismatchConstantBuffers] = true;
+    }
+    bindings.fetch_valid = true;
+  }
+  (void)filled;
+
+  // Samplers: their parameters from the copy's fetch constants, their
+  // descriptors in the bindless sampler heap the replay owns.
+  bool samplers_changed[2] = {};
+  for (uint32_t stage = 0; stage < 2; ++stage) {
+    const D3D12Shader* shader = stage ? pixel_shader : &vertex_shader;
+    const size_t layout_uid =
+        shader ? shader->GetSamplerBindingLayoutUserUID() : PipelineCache::kLayoutUIDEmpty;
+    std::vector<uint32_t>& current = bindings.samplers[stage];
+    const std::vector<D3D12Shader::SamplerBinding>* samplers =
+        shader ? &shader->GetSamplerBindingsAfterTranslation() : nullptr;
+    const size_t count = samplers ? samplers->size() : 0;
+    if (bindings.sampler_layout_uid[stage] != layout_uid || current.size() != count) {
+      bindings.sampler_layout_uid[stage] = layout_uid;
+      current.assign(count, UINT32_MAX);
+      samplers_changed[stage] = true;
+    }
+    for (size_t i = 0; i < count; ++i) {
+      const uint32_t value = texture_cache_->GetSamplerParameters(regs, (*samplers)[i]).value;
+      if (current[i] != value) {
+        current[i] = value;
+        samplers_changed[stage] = true;
+      }
+      if (expected_samplers) {
+        uint32_t expected_value;
+        std::memcpy(&expected_value,
+                    expected_samplers + 4 * (stage ? expected->sampler_count_vertex + i : i), 4);
+        if (value != expected_value) {
+          mismatches[be::kMismatchSamplers] = true;
+        }
+      }
+    }
+    if (expected && count != (stage ? expected->sampler_count_pixel
+                                    : expected->sampler_count_vertex)) {
+      mismatches[be::kMismatchSamplers] = true;
+    }
+    if (samplers_changed[stage]) {
+      bindings.indices_valid[stage] = false;
+    }
+  }
+  for (uint32_t attempt = 0; attempt < 2; ++attempt) {
+    bool overflowed = false;
+    for (uint32_t stage = 0; stage < 2 && !overflowed; ++stage) {
+      if (bindings.indices_valid[stage]) {
+        continue;
+      }
+      std::vector<uint32_t>& indices = bindings.sampler_indices[stage];
+      indices.resize(bindings.samplers[stage].size());
+      for (size_t i = 0; i < indices.size(); ++i) {
+        D3D12TextureCache::SamplerParameters parameters;
+        parameters.value = bindings.samplers[stage][i];
+        auto it = texture_cache_bindless_sampler_map_.find(parameters.value);
+        if (it != texture_cache_bindless_sampler_map_.end()) {
+          indices[i] = it->second;
+          continue;
+        }
+        if (sampler_bindless_heap_allocated_ >= kSamplerHeapSize) {
+          overflowed = true;
+          break;
+        }
+        const uint32_t index = sampler_bindless_heap_allocated_++;
+        texture_cache_->WriteSampler(
+            parameters, provider.OffsetSamplerDescriptor(sampler_bindless_heap_cpu_start_, index));
+        texture_cache_bindless_sampler_map_.emplace(parameters.value, index);
+        indices[i] = index;
+      }
+    }
+    if (!overflowed) {
+      break;
+    }
+    // A new sampler heap, as UpdateBindings switches after an overflow.
+    ID3D12DescriptorHeap* sampler_heap_new;
+    const uint64_t completed = submission_fence_->GetCompletedValue();
+    if (!sampler_bindless_heaps_overflowed_.empty() &&
+        sampler_bindless_heaps_overflowed_.front().second <= completed) {
+      sampler_heap_new = sampler_bindless_heaps_overflowed_.front().first;
+      sampler_bindless_heaps_overflowed_.pop_front();
+    } else {
+      D3D12_DESCRIPTOR_HEAP_DESC desc;
+      desc.Type = D3D12_DESCRIPTOR_HEAP_TYPE_SAMPLER;
+      desc.NumDescriptors = kSamplerHeapSize;
+      desc.Flags = D3D12_DESCRIPTOR_HEAP_FLAG_SHADER_VISIBLE;
+      desc.NodeMask = 0;
+      if (FAILED(provider.GetDevice()->CreateDescriptorHeap(&desc,
+                                                            IID_PPV_ARGS(&sampler_heap_new)))) {
+        REXGPU_ERROR("Draw back end: failed to create a sampler heap after an overflow");
+        perf_trace::back_end_replay.dropped.fetch_add(1, std::memory_order_relaxed);
+        return;
+      }
+    }
+    sampler_bindless_heaps_overflowed_.push_back(
+        std::make_pair(sampler_bindless_heap_current_, list.flags.submission));
+    sampler_bindless_heap_current_ = sampler_heap_new;
+    sampler_bindless_heap_cpu_start_ = sampler_heap_new->GetCPUDescriptorHandleForHeapStart();
+    sampler_bindless_heap_gpu_start_ = sampler_heap_new->GetGPUDescriptorHandleForHeapStart();
+    sampler_bindless_heap_allocated_ = 0;
+    texture_cache_bindless_sampler_map_.clear();
+    ID3D12DescriptorHeap* heaps[] = {view_bindless_heap_, sampler_bindless_heap_current_};
+    command_list->SetDescriptorHeaps(2, heaps);
+    d3d.view_heap = view_bindless_heap_;
+    d3d.sampler_heap = sampler_bindless_heap_current_;
+    d3d.root_parameters_set &= ~((1u << kRootParameter_Bindless_SamplerHeap) |
+                                 (1u << kRootParameter_Bindless_ViewHeap) |
+                                 (1u << kRootParameter_Bindless_SharedMemory));
+    bindings.indices_valid[0] = bindings.indices_valid[1] = false;
+  }
+  for (uint32_t stage = 0; stage < 2; ++stage) {
+    if (bindings.indices_valid[stage]) {
+      continue;
+    }
+    const D3D12Shader* shader = stage ? pixel_shader : &vertex_shader;
+    const size_t texture_count = shader ? shader->GetTextureBindingsAfterTranslation().size() : 0;
+    const size_t sampler_count = bindings.samplers[stage].size();
+    auto* mapping = reinterpret_cast<uint32_t*>(
+        request(std::max(texture_count + sampler_count, size_t(1)) * 4, bindings.indices[stage]));
+    if (!mapping) {
+      perf_trace::back_end_replay.dropped.fetch_add(1, std::memory_order_relaxed);
+      return;
+    }
+    if (replay.texture_indices[stage].size() != texture_count) {
+      REXGPU_ERROR("Draw back end: {} texture indices for {} textures",
+                   replay.texture_indices[stage].size(), texture_count);
+      perf_trace::back_end_replay.dropped.fetch_add(1, std::memory_order_relaxed);
+      return;
+    }
+    if (shader) {
+      const auto& textures = shader->GetTextureBindingsAfterTranslation();
+      for (size_t i = 0; i < texture_count; ++i) {
+        mapping[textures[i].bindless_descriptor_index] = replay.texture_indices[stage][i];
+      }
+      const auto& samplers = shader->GetSamplerBindingsAfterTranslation();
+      for (size_t i = 0; i < sampler_count; ++i) {
+        mapping[samplers[i].bindless_descriptor_index] = bindings.sampler_indices[stage][i];
+      }
+    }
+    bindings.indices_valid[stage] = true;
+  }
+
+  // The root signature and the root parameters.
+  if (d3d.root_signature != root_signature) {
+    command_list->SetGraphicsRootSignature(root_signature);
+    d3d.root_signature = root_signature;
+    d3d.root_parameters_set = 0;
+  }
+  const auto set_buffer = [&](uint32_t index, uint64_t address) {
+    if (!(d3d.root_parameters_set & (1u << index)) || d3d.root_parameters[index] != address) {
+      command_list->SetGraphicsRootConstantBufferView(index, address);
+      d3d.root_parameters[index] = address;
+      d3d.root_parameters_set |= 1u << index;
+    }
+  };
+  const auto set_table = [&](uint32_t index, D3D12_GPU_DESCRIPTOR_HANDLE handle) {
+    if (!(d3d.root_parameters_set & (1u << index)) || d3d.root_parameters[index] != handle.ptr) {
+      command_list->SetGraphicsRootDescriptorTable(index, handle);
+      d3d.root_parameters[index] = handle.ptr;
+      d3d.root_parameters_set |= 1u << index;
+    }
+  };
+  set_buffer(kRootParameter_Bindless_FetchConstants, bindings.fetch);
+  set_buffer(kRootParameter_Bindless_FloatConstantsVertex, bindings.float_buffers[0]);
+  set_buffer(kRootParameter_Bindless_FloatConstantsPixel, bindings.float_buffers[1]);
+  set_buffer(kRootParameter_Bindless_SystemConstants, bindings.system);
+  set_buffer(kRootParameter_Bindless_BoolLoopConstants, bindings.bool_loop);
+  set_table(kRootParameter_Bindless_SharedMemory,
+            provider.OffsetViewDescriptor(
+                view_bindless_heap_gpu_start_,
+                uint32_t((flags & be::kFlagMemexport)
+                             ? SystemBindlessView::kNullRawSRVAndSharedMemoryRawUAVStart
+                             : SystemBindlessView::kSharedMemoryRawSRVAndNullRawUAVStart)));
+  set_buffer(kRootParameter_Bindless_DescriptorIndicesPixel, bindings.indices[1]);
+  set_buffer(kRootParameter_Bindless_DescriptorIndicesVertex, bindings.indices[0]);
+  set_table(kRootParameter_Bindless_SamplerHeap, sampler_bindless_heap_gpu_start_);
+  set_table(kRootParameter_Bindless_ViewHeap, view_bindless_heap_gpu_start_);
+
+  // The topology and the draw.
+  D3D_PRIMITIVE_TOPOLOGY topology = D3D_PRIMITIVE_TOPOLOGY_UNDEFINED;
+  if (primitive.IsTessellated()) {
+    const bool adaptive =
+        regs.Get<reg::VGT_HOS_CNTL>().tess_mode == xenos::TessellationMode::kAdaptive;
+    switch (primitive.host_primitive_type) {
+      case xenos::PrimitiveType::kTriangleList:
+        topology = D3D_PRIMITIVE_TOPOLOGY_3_CONTROL_POINT_PATCHLIST;
+        break;
+      case xenos::PrimitiveType::kQuadList:
+        topology = D3D_PRIMITIVE_TOPOLOGY_4_CONTROL_POINT_PATCHLIST;
+        break;
+      case xenos::PrimitiveType::kTrianglePatch:
+        topology = adaptive ? D3D_PRIMITIVE_TOPOLOGY_3_CONTROL_POINT_PATCHLIST
+                            : D3D_PRIMITIVE_TOPOLOGY_1_CONTROL_POINT_PATCHLIST;
+        break;
+      case xenos::PrimitiveType::kQuadPatch:
+        topology = adaptive ? D3D_PRIMITIVE_TOPOLOGY_4_CONTROL_POINT_PATCHLIST
+                            : D3D_PRIMITIVE_TOPOLOGY_1_CONTROL_POINT_PATCHLIST;
+        break;
+      default:
+        break;
+    }
+  } else {
+    switch (primitive.host_primitive_type) {
+      case xenos::PrimitiveType::kPointList:
+        topology = D3D_PRIMITIVE_TOPOLOGY_POINTLIST;
+        break;
+      case xenos::PrimitiveType::kLineList:
+        topology = D3D_PRIMITIVE_TOPOLOGY_LINELIST;
+        break;
+      case xenos::PrimitiveType::kLineStrip:
+        topology = D3D_PRIMITIVE_TOPOLOGY_LINESTRIP;
+        break;
+      case xenos::PrimitiveType::kTriangleList:
+      case xenos::PrimitiveType::kRectangleList:
+        topology = D3D_PRIMITIVE_TOPOLOGY_TRIANGLELIST;
+        break;
+      case xenos::PrimitiveType::kTriangleStrip:
+        topology = D3D_PRIMITIVE_TOPOLOGY_TRIANGLESTRIP;
+        break;
+      case xenos::PrimitiveType::kQuadList:
+        topology = D3D_PRIMITIVE_TOPOLOGY_LINELIST_ADJ;
+        break;
+      default:
+        break;
+    }
+  }
+  if (topology == D3D_PRIMITIVE_TOPOLOGY_UNDEFINED) {
+    perf_trace::back_end_replay.dropped.fetch_add(1, std::memory_order_relaxed);
+    return;
+  }
+  if (d3d.topology != topology) {
+    command_list->IASetPrimitiveTopology(topology);
+    d3d.topology = topology;
+  }
+  if (list.draw.index_buffer_format != uint32_t(DXGI_FORMAT_UNKNOWN)) {
+    D3D12_INDEX_BUFFER_VIEW index_buffer;
+    index_buffer.BufferLocation = list.draw.index_buffer_gpu_address;
+    index_buffer.SizeInBytes = list.draw.index_buffer_size;
+    index_buffer.Format = DXGI_FORMAT(list.draw.index_buffer_format);
+    if (!d3d.index_buffer_set ||
+        std::memcmp(&index_buffer, &d3d.index_buffer, sizeof(index_buffer))) {
+      command_list->IASetIndexBuffer(&index_buffer);
+      d3d.index_buffer = index_buffer;
+      d3d.index_buffer_set = true;
+    }
+    command_list->DrawIndexedInstanced(list.draw.host_draw_vertex_count, 1, 0, 0, 0);
+  } else {
+    command_list->DrawInstanced(list.draw.host_draw_vertex_count, 1, 0, 0);
+  }
+
+  // The rest of the check: what this replay computed against the draw's.
+  if (!expected) {
+    return;
+  }
+  mismatches[be::kMismatchPipeline] =
+      std::memcmp(pipeline_cache_->GetPipelineDescription(pipeline_handle),
+                  expected->pipeline_description,
+                  pipeline_cache_->GetPipelineDescriptionSize()) != 0;
+  mismatches[be::kMismatchViewport] =
+      std::memcmp(&viewport_info, &expected->viewport, sizeof(viewport_info)) != 0;
+  mismatches[be::kMismatchScissor] =
+      std::memcmp(&scissor, &expected->scissor, sizeof(scissor)) != 0;
+  mismatches[be::kMismatchFixedFunction] =
+      std::memcmp(blend_factor, expected->blend_factor, sizeof(blend_factor)) != 0 ||
+      stencil_reference != expected->stencil_reference;
+  mismatches[be::kMismatchSystemConstants] =
+      std::memcmp(&back_end_replay_constants_, &expected->system_constants,
+                  sizeof(back_end_replay_constants_)) != 0;
 }
 
 }  // namespace rex::graphics::d3d12

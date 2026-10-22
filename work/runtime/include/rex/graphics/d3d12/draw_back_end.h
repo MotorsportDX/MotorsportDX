@@ -9,23 +9,27 @@
 // render target cache, the texture cache). Its register-reading functions take
 // the register file to read, so they can run on a copy.
 //
-// Increment 1 (d3d12_draw_back_end=1): every draw writes a kDrawBackEnd command
-// into the deferred command list with the context registers that changed since
-// the previous capture in the list, the fetch constants its samplers read, and
-// the front half's results that changed; the thread that replays the list
-// keeps a copy of the registers. With d3d12_draw_back_end_check the command also
-// carries the back end's results computed at the draw, and the replay computes
-// them again from its copy and compares. The back end itself still runs at the
-// draw.
+// Every draw writes a kDrawBackEnd command into the deferred command list with
+// the context registers that changed since the previous capture in the list,
+// the constant registers it reads that were written since, and the front half's
+// results that changed; the thread that replays the list keeps a copy of the
+// registers. d3d12_draw_back_end=1 (increment 1): the back end still runs at the
+// draw. d3d12_draw_back_end=2 (increment 2): the replay runs the back end from
+// the copy and records the draw. With d3d12_draw_back_end_check the command
+// also carries the back end's results computed at the draw from the live
+// registers, and the replay compares its own with them.
 
 #include <cstdint>
 #include <cstring>
+#include <vector>
 
+#include <rex/graphics/d3d12/deferred_constants.h>
 #include <rex/graphics/pipeline/shader/dxbc_translator.h>
 #include <rex/graphics/register_file.h>
 #include <rex/graphics/registers.h>
 #include <rex/graphics/util/draw.h>
 #include <rex/graphics/xenos.h>
+#include <rex/ui/d3d12/d3d12_api.h>
 
 namespace rex::graphics::d3d12::draw_back_end {
 
@@ -85,26 +89,35 @@ void ComputeBlendFactorAndStencilReference(const RegisterFile& regs, bool primit
                                            float blend_factor_out[4],
                                            uint32_t& stencil_reference_out);
 
-// The kDrawBackEnd command. After the header: the masks of the context
-// register words present in context_words (one uint64_t each), the context
-// registers set in them (one dword each, in register order), with fetch_slots
-// the 16-byte slots of fetch constants (from 0x4800, 48 slots) set in it, the
-// front half's groups present in groups (in Group order, each only when it
-// changed since the previous command of the list), and with kCheck the
-// back end's results at the draw (Expected, then the sampler parameters).
+// The kDrawBackEnd command, written by Encode and read by Decode only, so the
+// format can change without the back end. After the header: the masks of the
+// context register words present in context_words (one uint64_t each), the
+// masks of the constant register slot words (deferred_constants' 16-byte
+// slots) present in constant_words, the context registers set in them (one
+// dword each, in register order), the constant slots set in them (16 bytes
+// each), the front half's groups present in groups (in Group order, each only
+// when it changed since the previous command of the list), and with kCheck the
+// back end's results at the draw (Expected, the sampler parameters, and with
+// kReplayDraw the constant buffers' bytes).
 struct Header {
   uint16_t context_words;
+  uint16_t constant_words;
   uint16_t groups;
-  uint16_t check;
-  uint16_t texture_count;
+  uint16_t flags;
   uint32_t context_count;
-  uint32_t fetch_count;
-  uint64_t fetch_slots;
+  uint32_t constant_count;
+  uint16_t texture_count;
+  uint16_t texture_index_counts[2];
+  uint16_t padding;
 };
 constexpr uint16_t kCheck = 1;
 // With kCheck: the pipeline description's comparison is changed on purpose
 // (d3d12_draw_back_end_check_perturb).
 constexpr uint16_t kCheckPerturb = 2;
+// The first command of the list: the replay's bindings start over.
+constexpr uint16_t kListStart = 4;
+// d3d12_draw_back_end=2: the replay runs the back end and records the draw.
+constexpr uint16_t kReplayDraw = 8;
 
 enum Group : uint16_t {
   kGroupShaders,
@@ -113,6 +126,9 @@ enum Group : uint16_t {
   kGroupTargets,
   kGroupFlags,
   kGroupTextures,
+  kGroupTextureIndicesVertex,
+  kGroupTextureIndicesPixel,
+  kGroupKnobs,
   kGroupCount
 };
 
@@ -135,9 +151,12 @@ struct GroupPrimitive {
   uint32_t line_loop_closing_index;
   uint32_t padding_2;
 };
-// The draw call: the vertex or index count and the index buffer.
+// The draw call: the index buffer view (format DXGI_FORMAT_UNKNOWN without an
+// index buffer) and the vertex or index count.
 struct GroupDraw {
   uint64_t index_buffer_gpu_address;
+  uint32_t index_buffer_size;
+  uint32_t index_buffer_format;
   uint32_t host_draw_vertex_count;
   uint32_t padding;
 };
@@ -155,11 +174,17 @@ constexpr uint32_t kFlagFixed16Truncated = 1 << 5;
 constexpr uint32_t kFlagRovOcclusionQuery = 1 << 6;
 constexpr uint32_t kFlagJitter = 1 << 7;
 constexpr uint32_t kFlagUniformScaleShift = 8;  // 2 bits x, 2 bits y.
+constexpr uint32_t kFlagKnobs = 1 << 12;
 struct GroupFlags {
   uint32_t flags;
   uint16_t draw_resolution_scale_x;
   uint16_t draw_resolution_scale_y;
   float jitter[2];
+  // The frame and the submission the draw belongs to, and the last frame the
+  // GPU completed (the replay's constant buffer pool reclaims by them).
+  uint64_t frame;
+  uint64_t frame_completed;
+  uint64_t submission;
 };
 // The texture cache's answers for the used textures: the used mask, the
 // resolution scaled mask, then per used texture its swizzled signs (one byte
@@ -168,6 +193,10 @@ struct GroupTexturesHeader {
   uint32_t used_texture_mask;
   uint32_t textures_resolution_scaled;
 };
+// The texture groups of a stage: the bindless SRV index of each texture
+// binding, as the descriptor index buffer holds it (4 bytes each).
+// The knobs group: the shader mods' live knob values.
+constexpr uint32_t kKnobCount = 64;
 
 // The back end's results at the draw, with kCheck.
 struct Expected {
@@ -179,11 +208,14 @@ struct Expected {
   uint32_t stencil_reference;
   uint32_t sampler_count_vertex;
   uint32_t sampler_count_pixel;
+  // With kReplayDraw: the bytes of the float vertex, float pixel, bool and
+  // loop, and fetch constant buffers that follow the sampler parameters.
+  uint32_t constant_bytes[4];
   uint32_t padding;
   DxbcShaderTranslator::SystemConstants system_constants;
 };
 
-// What the replay of a list keeps between its kDrawBackEnd commands.
+// What the decoder keeps between the commands of a list.
 struct ListState {
   GroupShaders shaders;
   GroupPrimitive primitive;
@@ -204,7 +236,91 @@ enum Mismatch : uint32_t {
   kMismatchFixedFunction,
   kMismatchSystemConstants,
   kMismatchSamplers,
+  kMismatchConstantBuffers,
   kMismatchCount
+};
+
+// A decoded command: the list state (updated in place) and where the parts of
+// the command that are not kept start.
+struct Decoded {
+  Header header;
+  // The constant slots captured in this command (kSlotCount bits).
+  uint64_t constant_slots[deferred_constants::kMaskWords];
+  // The texture indices of the stages present in this command, the knobs if
+  // present, and the check's part.
+  const uint32_t* texture_indices[2];
+  const float* knobs;
+  const uint8_t* check;
+};
+// Applies a command to the register copy and the list state.
+void Decode(const uint8_t* arguments, RegisterFile& shadow, ListState& list, Decoded& decoded);
+
+// The replay's D3D12 state of the command list it records: what the list's
+// own commands set, and what the back end bound (d3d12_draw_back_end=2).
+struct ReplayState {
+  ID3D12RootSignature* root_signature;
+  // Root parameters the back end set since the root signature, and their
+  // values.
+  uint32_t root_parameters_set;
+  uint64_t root_parameters[16];
+  ID3D12PipelineState* pipeline;
+  D3D12_PRIMITIVE_TOPOLOGY topology;
+  bool viewport_set;
+  bool scissor_set;
+  bool blend_factor_set;
+  bool stencil_reference_set;
+  bool index_buffer_set;
+  D3D12_VIEWPORT viewport;
+  D3D12_RECT scissor;
+  float blend_factor[4];
+  uint32_t stencil_reference;
+  D3D12_INDEX_BUFFER_VIEW index_buffer;
+  ID3D12DescriptorHeap* view_heap;
+  ID3D12DescriptorHeap* sampler_heap;
+};
+
+// The back end's buffers in the list being recorded (d3d12_draw_back_end=2):
+// valid until the list ends or a register they hold changes.
+struct ReplayBindings {
+  bool system_valid;
+  bool float_valid[2];
+  bool bool_loop_valid;
+  bool fetch_valid;
+  bool indices_valid[2];
+  uint64_t system;
+  uint64_t float_buffers[2];
+  uint64_t bool_loop;
+  uint64_t fetch;
+  uint64_t indices[2];
+  uint64_t float_maps[2][4];
+  size_t sampler_layout_uid[2];
+  std::vector<uint32_t> samplers[2];
+  std::vector<uint32_t> sampler_indices[2];
+};
+
+// What the replay of one list keeps (a member of DeferredCommandList).
+struct ReplayList {
+  ListState list;
+  ReplayState d3d;
+  ReplayBindings bindings;
+  std::vector<uint32_t> texture_indices[2];
+  float knobs[kKnobCount];
+
+  // At the start of each Execute: a new D3D12 command list.
+  void BeginList() {
+    std::memset(&d3d, 0, sizeof(d3d));
+    d3d.topology = D3D_PRIMITIVE_TOPOLOGY_UNDEFINED;
+    bindings.system_valid = false;
+    bindings.float_valid[0] = bindings.float_valid[1] = false;
+    bindings.bool_loop_valid = bindings.fetch_valid = false;
+    bindings.indices_valid[0] = bindings.indices_valid[1] = false;
+    std::memset(bindings.float_maps, 0, sizeof(bindings.float_maps));
+    bindings.sampler_layout_uid[0] = bindings.sampler_layout_uid[1] = SIZE_MAX;
+    for (uint32_t stage = 0; stage < 2; ++stage) {
+      bindings.samplers[stage].clear();
+      bindings.sampler_indices[stage].clear();
+    }
+  }
 };
 
 }  // namespace rex::graphics::d3d12::draw_back_end

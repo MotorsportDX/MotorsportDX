@@ -460,9 +460,12 @@ inline void CountBackEndCapture(uint32_t bytes, uint32_t context_dwords, uint32_
 // time stamp counter ticks without the check, draws checked, mismatches by kind
 // (pipeline, viewport, scissor, fixed function, system constants, samplers)
 // and comparisons changed on purpose.
+// With d3d12_draw_back_end=2 also the pipelines the replay created (and its
+// time stamp counter ticks for them) and the draws it dropped.
 struct alignas(64) BackEndReplayCounts {
   std::atomic<uint64_t> replays{0}, tsc{0}, checks{0}, perturbed{0};
-  std::atomic<uint64_t> mismatches[6]{};
+  std::atomic<uint64_t> pipelines{0}, pipeline_tsc{0}, dropped{0};
+  std::atomic<uint64_t> mismatches[7]{};
 };
 inline BackEndReplayCounts back_end_replay;
 
@@ -792,8 +795,17 @@ inline void OnSwap() {
                   << ",\"checks\":" << back_end_replay.checks.exchange(0, std::memory_order_relaxed)
                   << ",\"perturbed\":"
                   << back_end_replay.perturbed.exchange(0, std::memory_order_relaxed)
+                  << ",\"pipelines\":"
+                  << back_end_replay.pipelines.exchange(0, std::memory_order_relaxed)
+                  << ",\"pipeline_ms\":"
+                  << (tsc_per_ms > 0 ? double(back_end_replay.pipeline_tsc.exchange(
+                                           0, std::memory_order_relaxed)) /
+                                           tsc_per_ms
+                                     : 0.0)
+                  << ",\"dropped\":"
+                  << back_end_replay.dropped.exchange(0, std::memory_order_relaxed)
                   << ",\"mismatches\":[";
-    for (size_t i = 0; i < 6; ++i) {
+    for (size_t i = 0; i < 7; ++i) {
       state->output << (i ? "," : "")
                     << back_end_replay.mismatches[i].exchange(0, std::memory_order_relaxed);
     }

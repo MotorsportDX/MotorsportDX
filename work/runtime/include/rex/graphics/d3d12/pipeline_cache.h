@@ -92,6 +92,22 @@ class PipelineCache {
                          const uint32_t* bound_depth_and_color_render_targets_formats,
                          void** pipeline_handle_out, ID3D12RootSignature** root_signature_out);
 
+  // d3d12_draw_back_end=2 (d3d-hle.md 17.6): ConfigurePipeline in two parts,
+  // the shaders' translation where the draw is issued, and the description,
+  // lookup and creation from a register file where the list is replayed
+  // (created_out: a pipeline was created there, synchronously).
+  bool TranslateShadersForDraw(D3D12Shader::D3D12Translation* vertex_shader,
+                               D3D12Shader::D3D12Translation* pixel_shader);
+  bool ConfigurePipelineDescribed(
+      const RegisterFile& regs, D3D12Shader::D3D12Translation* vertex_shader,
+      D3D12Shader::D3D12Translation* pixel_shader,
+      const PrimitiveProcessor::ProcessingResult& primitive_processing_result,
+      reg::RB_DEPTHCONTROL normalized_depth_control, uint32_t normalized_color_mask,
+      uint32_t bound_depth_and_color_render_target_bits,
+      const uint32_t* bound_depth_and_color_render_target_formats, bool use_async,
+      void** pipeline_handle_out, ID3D12RootSignature** root_signature_out,
+      bool* created_out = nullptr);
+
   // Returns a pipeline with deferred creation by its handle. May return nullptr
   // if failed to create the pipeline.
   ID3D12PipelineState* GetD3D12PipelineByHandle(void* handle) const {
@@ -415,11 +431,12 @@ class PipelineCache {
   // For only writing shaders to the currently open storage once, incremented
   // when switching the storage.
   uint32_t shader_storage_index_ = 0;
-  bool shader_storage_file_flush_needed_ = false;
+  // Atomic: with d3d12_draw_back_end=2 the replay creates pipelines.
+  std::atomic<bool> shader_storage_file_flush_needed_ = false;
 
   // Pipeline storage output stream, for preload in the next emulator runs.
   FILE* pipeline_storage_file_ = nullptr;
-  bool pipeline_storage_file_flush_needed_ = false;
+  std::atomic<bool> pipeline_storage_file_flush_needed_ = false;
 
   // Thread for asynchronous writing to the storage streams.
   void StorageWriteThread();

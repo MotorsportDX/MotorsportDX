@@ -1099,9 +1099,102 @@ bool PipelineCache::ConfigurePipeline(
     }
   }
 
+  return ConfigurePipelineDescribed(register_file_, vertex_shader, pixel_shader,
+                                    primitive_processing_result, normalized_depth_control,
+                                    normalized_color_mask, bound_depth_and_color_render_target_bits,
+                                    bound_depth_and_color_render_target_formats, use_async,
+                                    pipeline_handle_out, root_signature_out);
+}
+
+bool PipelineCache::TranslateShadersForDraw(D3D12Shader::D3D12Translation* vertex_shader,
+                                            D3D12Shader::D3D12Translation* pixel_shader) {
+  // The translation of ConfigurePipeline without asynchronous compilation
+  // (d3d12_draw_back_end=2 needs it off), for a pipeline the replay configures.
+  const bool use_async = false;
+  // Ensure shaders are translated - needed now for GetCurrentStateDescription.
+  // Edge flags are not supported yet (because polygon primitives are not).
+  assert_true(register_file_.Get<reg::SQ_PROGRAM_CNTL>().vs_export_mode !=
+                  xenos::VertexShaderExportMode::kPosition2VectorsEdge &&
+              register_file_.Get<reg::SQ_PROGRAM_CNTL>().vs_export_mode !=
+                  xenos::VertexShaderExportMode::kPosition2VectorsEdgeKill);
+  assert_false(register_file_.Get<reg::SQ_PROGRAM_CNTL>().gen_index_vtx);
+  // Ucode analysis is always needed on the main thread (for modification and
+  // hash computation). Translation can be deferred to background threads when
+  // async compilation is enabled.
+  if (!vertex_shader->shader().is_ucode_analyzed()) {
+    vertex_shader->shader().AnalyzeUcode(ucode_disasm_buffer_);
+  }
+  if (!vertex_shader->is_translated() && !use_async) {
+    std::lock_guard<std::mutex> lock(translation_request_lock_);
+    if (!vertex_shader->is_translated()) {
+      if (!TranslateAnalyzedShader(*shader_translator_, *vertex_shader, dxbc_converter_, dxc_utils_,
+                                   dxc_compiler_)) {
+        REXGPU_ERROR("Failed to translate the vertex shader!");
+        return false;
+      }
+      if (shader_storage_file_ &&
+          vertex_shader->shader().ucode_storage_index() != shader_storage_index_) {
+        vertex_shader->shader().set_ucode_storage_index(shader_storage_index_);
+        assert_not_null(storage_write_thread_);
+        shader_storage_file_flush_needed_ = true;
+        {
+          std::lock_guard<std::mutex> storage_lock(storage_write_request_lock_);
+          storage_write_shader_queue_.push_back(&vertex_shader->shader());
+        }
+        storage_write_request_cond_.notify_all();
+      }
+    }
+  }
+  if (!use_async && !vertex_shader->is_valid()) {
+    // Translation attempted previously, but not valid.
+    return false;
+  }
+  if (pixel_shader != nullptr) {
+    if (!pixel_shader->is_translated() && !use_async) {
+      std::lock_guard<std::mutex> lock(translation_request_lock_);
+      if (!pixel_shader->is_translated()) {
+        pixel_shader->shader().AnalyzeUcode(ucode_disasm_buffer_);
+        if (!TranslateAnalyzedShader(*shader_translator_, *pixel_shader, dxbc_converter_,
+                                     dxc_utils_, dxc_compiler_)) {
+          REXGPU_ERROR("Failed to translate the pixel shader!");
+          return false;
+        }
+        if (shader_storage_file_ &&
+            pixel_shader->shader().ucode_storage_index() != shader_storage_index_) {
+          pixel_shader->shader().set_ucode_storage_index(shader_storage_index_);
+          assert_not_null(storage_write_thread_);
+          shader_storage_file_flush_needed_ = true;
+          {
+            std::lock_guard<std::mutex> storage_lock(storage_write_request_lock_);
+            storage_write_shader_queue_.push_back(&pixel_shader->shader());
+          }
+          storage_write_request_cond_.notify_all();
+        }
+      }
+    }
+    if (pixel_shader->is_translated() && !pixel_shader->is_valid()) {
+      return false;
+    }
+  }
+
+  return true;
+}
+
+bool PipelineCache::ConfigurePipelineDescribed(
+    const RegisterFile& regs, D3D12Shader::D3D12Translation* vertex_shader,
+    D3D12Shader::D3D12Translation* pixel_shader,
+    const PrimitiveProcessor::ProcessingResult& primitive_processing_result,
+    reg::RB_DEPTHCONTROL normalized_depth_control, uint32_t normalized_color_mask,
+    uint32_t bound_depth_and_color_render_target_bits,
+    const uint32_t* bound_depth_and_color_render_target_formats, bool use_async,
+    void** pipeline_handle_out, ID3D12RootSignature** root_signature_out,
+    bool* created_out) {
+  if (created_out) {
+    *created_out = false;
+  }
   PipelineRuntimeDescription runtime_description;
   if (!GetCurrentStateDescription(
-          register_file_, vertex_shader, pixel_shader, primitive_processing_result,
+          regs, vertex_shader, pixel_shader, primitive_processing_result,
           normalized_depth_control,
           normalized_color_mask, bound_depth_and_color_render_target_bits,
           bound_depth_and_color_render_target_formats, runtime_description, use_async)) {
@@ -1156,6 +1249,9 @@ bool PipelineCache::ConfigurePipeline(
     creation_request_cond_.notify_one();
   } else {
     new_pipeline->state.store(CreateD3D12Pipeline(runtime_description), std::memory_order_release);
+    if (created_out) {
+      *created_out = true;
+    }
   }
 
   // Pipelines of the shader override A/B (DXBC instead of the override) are

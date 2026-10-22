@@ -1929,7 +1929,6 @@ bool D3D12CommandProcessor::SetupContext() {
   ID3D12CommandQueue* direct_queue = provider.GetDirectQueue();
 
   InitializeDeferredConstants();
-  InitializeDrawBackEnd();
   if (REXCVAR_GET(d3d12_submit_thread)) {
     submit_shutdown_ = false;
     submit_async_swap_ = REXCVAR_GET(d3d12_submit_thread_async_swap);
@@ -2742,6 +2741,8 @@ bool D3D12CommandProcessor::SetupContext() {
 
   post_passes_ = PostPasses::Create(*this);
 
+  InitializeDrawBackEnd();
+
   return true;
 }
 
@@ -2867,6 +2868,7 @@ void D3D12CommandProcessor::ShutdownContext() {
     view_bindful_heap_pool_.reset();
   }
   constant_buffer_pool_.reset();
+  back_end_constant_pool_.reset();
 
   render_target_cache_.reset();
 
@@ -3970,15 +3972,26 @@ bool D3D12CommandProcessor::IssueDraw(xenos::PrimitiveType primitive_type, uint3
   ID3D12RootSignature* root_signature;
   perf_trace::ZoneEnd(perf_trace::Zone::kDrawPrePipeline, pre_pipeline_start);
   perf_start = perf_trace::ZoneStart();
-  if (!pipeline_cache_->ConfigurePipeline(
-          vertex_shader_translation, pixel_shader_translation, primitive_processing_result,
-          normalized_depth_control, normalized_color_mask, bound_depth_and_color_render_target_bits,
-          bound_depth_and_color_render_target_formats, &pipeline_handle, &root_signature)) {
+  if (draw_back_end_ == 2) {
+    // d3d12_draw_back_end=2: the replay configures the pipeline; the shaders
+    // are translated here, for the textures they use.
+    pipeline_handle = nullptr;
+    root_signature = nullptr;
+    if (!pipeline_cache_->TranslateShadersForDraw(vertex_shader_translation,
+                                                  pixel_shader_translation)) {
+      return false;
+    }
+  } else if (!pipeline_cache_->ConfigurePipeline(
+                 vertex_shader_translation, pixel_shader_translation,
+                 primitive_processing_result, normalized_depth_control, normalized_color_mask,
+                 bound_depth_and_color_render_target_bits,
+                 bound_depth_and_color_render_target_formats, &pipeline_handle,
+                 &root_signature)) {
     return false;
   }
   perf_trace::ZoneEnd(perf_trace::Zone::kDrawPipeline, perf_start);
   const uint64_t pre_textures_start = perf_trace::DetailZoneStart();
-  if (REXCVAR_GET(async_shader_compilation) &&
+  if (draw_back_end_ != 2 && REXCVAR_GET(async_shader_compilation) &&
       pipeline_cache_->GetD3D12PipelineByHandle(pipeline_handle) == nullptr) {
     // The pipeline is still being created. Give it a short time before the draw
     // is dropped: dropped draws can leave whole passes empty (black photos).
@@ -4011,7 +4024,7 @@ bool D3D12CommandProcessor::IssueDraw(xenos::PrimitiveType primitive_type, uint3
 
   // Bind the pipeline after configuring it and doing everything that may bind
   // other pipelines.
-  if (current_guest_pipeline_ != pipeline_handle) {
+  if (draw_back_end_ != 2 && current_guest_pipeline_ != pipeline_handle) {
     deferred_command_list_.SetPipelineStateHandle(reinterpret_cast<void*>(pipeline_handle));
     current_guest_pipeline_ = pipeline_handle;
     current_external_pipeline_ = nullptr;
@@ -4043,7 +4056,9 @@ bool D3D12CommandProcessor::IssueDraw(xenos::PrimitiveType primitive_type, uint3
                        (uint32_t(regs.Get<reg::RB_DEPTH_INFO>().depth_format) << 8);
 
   draw_util::ViewportInfo viewport_info;
-  if (viewport_cache_valid_ && viewport_key == previous_viewport_key_) {
+  if (draw_back_end_ == 2) {
+    // Computed where the list is replayed.
+  } else if (viewport_cache_valid_ && viewport_key == previous_viewport_key_) {
     viewport_info = previous_viewport_info_;
   } else {
     draw_util::GetHostViewportInfo(regs, draw_resolution_scale_x * uniform_draw_scale_x,
@@ -4066,7 +4081,9 @@ bool D3D12CommandProcessor::IssueDraw(xenos::PrimitiveType primitive_type, uint3
                                    uniform_draw_set,
                                jitter);
   if (jitter_applied) {
-    post_pass::AddJitterToNdcOffset(jitter, viewport_info.xy_extent, viewport_info.ndc_offset);
+    if (draw_back_end_ != 2) {
+      post_pass::AddJitterToNdcOffset(jitter, viewport_info.xy_extent, viewport_info.ndc_offset);
+    }
     if (draw_list_entry.trace) {
       std::memcpy(&draw_list_entry.values[15], &jitter[0], sizeof(float));
       std::memcpy(&draw_list_entry.values[16], &jitter[1], sizeof(float));
@@ -4081,29 +4098,44 @@ bool D3D12CommandProcessor::IssueDraw(xenos::PrimitiveType primitive_type, uint3
   scissor.extent[1] *= draw_resolution_scale_y * uniform_draw_scale_y;
 
   // Update viewport, scissor, blend factor and stencil reference.
-  UpdateFixedFunctionState(viewport_info, scissor, primitive_polygonal, normalized_depth_control);
+  if (draw_back_end_ != 2) {
+    UpdateFixedFunctionState(viewport_info, scissor, primitive_polygonal,
+                             normalized_depth_control);
+  }
 
   // Update system constants before uploading them.
   // TODO(Triang3l): With ROV, pass the disabled render target mask for safety.
   perf_trace::ZoneEnd(perf_trace::Zone::kDrawState, state_start);
   CountContextRegisterDelta();
   perf_start = perf_trace::ZoneStart();
-  UpdateSystemConstantValues(memexport_used, primitive_polygonal,
+  if (draw_back_end_ == 2) {
+    // The replay computes the system constants and the bindings; the front
+    // half passes what only it knows.
+    FillSystemConstantInputs(memexport_used, primitive_polygonal,
                              primitive_processing_result.line_loop_closing_index,
-                             primitive_processing_result.host_shader_index_endian, viewport_info,
+                             primitive_processing_result.host_shader_index_endian,
                              used_texture_mask, normalized_depth_control, normalized_color_mask);
+    PrepareDrawBackEndInputs(vertex_shader, pixel_shader);
+  } else {
+    UpdateSystemConstantValues(memexport_used, primitive_polygonal,
+                               primitive_processing_result.line_loop_closing_index,
+                               primitive_processing_result.host_shader_index_endian,
+                               viewport_info, used_texture_mask, normalized_depth_control,
+                               normalized_color_mask);
 
-  // Update constant buffers, descriptors and root parameters.
-  if (!UpdateBindings(vertex_shader, pixel_shader, root_signature, memexport_used)) {
-    return false;
+    // Update constant buffers, descriptors and root parameters.
+    if (!UpdateBindings(vertex_shader, pixel_shader, root_signature, memexport_used)) {
+      return false;
+    }
   }
   perf_trace::ZoneEnd(perf_trace::Zone::kDrawBindings, perf_start);
+  DrawBackEndCapture back_end_capture;
   if (draw_back_end_) {
     // The back end's inputs into the deferred command list (N4 step 2,
     // increment 1, d3d-hle.md 17.6).
     namespace be = draw_back_end;
     const be::SystemConstantInputs& inputs = system_constant_inputs_;
-    DrawBackEndCapture capture;
+    DrawBackEndCapture& capture = back_end_capture;
     capture.vertex_translation = vertex_shader_translation;
     capture.pixel_translation = pixel_shader_translation;
     capture.primitive = &primitive_processing_result;
@@ -4124,7 +4156,10 @@ bool D3D12CommandProcessor::IssueDraw(xenos::PrimitiveType primitive_type, uint3
     capture.pipeline_handle = pipeline_handle;
     capture.viewport = &viewport_info;
     capture.scissor = &scissor;
-    CaptureDrawBackEnd(capture);
+    capture.index_buffer = {};
+    if (draw_back_end_ == 1) {
+      CaptureDrawBackEnd(capture);
+    }
   }
   // Must not call anything that can change the descriptor heap from now on!
 
@@ -4283,7 +4318,9 @@ bool D3D12CommandProcessor::IssueDraw(xenos::PrimitiveType primitive_type, uint3
         return false;
     }
   }
-  SetPrimitiveTopology(primitive_topology);
+  if (draw_back_end_ != 2) {
+    SetPrimitiveTopology(primitive_topology);
+  }
   // Must not call anything that may change the primitive topology from now on!
 
   DrawDump(
@@ -4319,8 +4356,15 @@ bool D3D12CommandProcessor::IssueDraw(xenos::PrimitiveType primitive_type, uint3
     PROFILE_DRAW_CALL();
     PROFILE_VERTICES(primitive_processing_result.host_draw_vertex_count);
     const bool draw_stats = BeginDrawStats(draw_stats_values);
-    deferred_command_list_.D3DDrawInstanced(primitive_processing_result.host_draw_vertex_count, 1,
-                                            0, 0);
+    if (draw_back_end_ == 2) {
+      // The replay sets the state and records the draw.
+      back_end_capture.index_buffer.Format = DXGI_FORMAT_UNKNOWN;
+      CaptureDrawBackEnd(back_end_capture);
+      InvalidateStateAfterDrawBackEnd();
+    } else {
+      deferred_command_list_.D3DDrawInstanced(primitive_processing_result.host_draw_vertex_count,
+                                              1, 0, 0);
+    }
     if (draw_stats)
       EndDrawStats();
   } else {
@@ -4371,7 +4415,9 @@ bool D3D12CommandProcessor::IssueDraw(xenos::PrimitiveType primitive_type, uint3
         assert_unhandled_case(primitive_processing_result.index_buffer_type);
         return false;
     }
-    deferred_command_list_.D3DIASetIndexBuffer(&index_buffer_view);
+    if (draw_back_end_ != 2) {
+      deferred_command_list_.D3DIASetIndexBuffer(&index_buffer_view);
+    }
     if (memexport_used) {
       shared_memory_->UseForWriting();
     } else {
@@ -4381,8 +4427,14 @@ bool D3D12CommandProcessor::IssueDraw(xenos::PrimitiveType primitive_type, uint3
     PROFILE_DRAW_CALL();
     PROFILE_VERTICES(primitive_processing_result.host_draw_vertex_count);
     const bool draw_stats = BeginDrawStats(draw_stats_values);
-    deferred_command_list_.D3DDrawIndexedInstanced(
-        primitive_processing_result.host_draw_vertex_count, 1, 0, 0, 0);
+    if (draw_back_end_ == 2) {
+      back_end_capture.index_buffer = index_buffer_view;
+      CaptureDrawBackEnd(back_end_capture);
+      InvalidateStateAfterDrawBackEnd();
+    } else {
+      deferred_command_list_.D3DDrawIndexedInstanced(
+          primitive_processing_result.host_draw_vertex_count, 1, 0, 0, 0);
+    }
     if (draw_stats)
       EndDrawStats();
     if (scratch_index_buffer != nullptr) {
@@ -5153,8 +5205,10 @@ bool D3D12CommandProcessor::BeginSubmission(bool is_guest_command) {
     current_graphics_root_signature_ = nullptr;
     current_graphics_root_up_to_date_ = 0;
     if (bindless_resources_used_) {
-      deferred_command_list_.SetDescriptorHeaps(view_bindless_heap_,
-                                                sampler_bindless_heap_current_);
+      // With d3d12_draw_back_end=2 the replay owns the sampler heap and sets it
+      // in place of nullptr.
+      deferred_command_list_.SetDescriptorHeaps(
+          view_bindless_heap_, draw_back_end_ == 2 ? nullptr : sampler_bindless_heap_current_);
     } else {
       view_bindful_heap_current_ = nullptr;
       sampler_bindful_heap_current_ = nullptr;
@@ -5398,6 +5452,10 @@ bool D3D12CommandProcessor::EndSubmission(bool is_swap) {
         view_bindful_heap_pool_->ClearCache();
       }
       constant_buffer_pool_->ClearCache();
+      if (back_end_constant_pool_) {
+        back_end_constant_pool_->ClearCache();
+        back_end_pool_frame_ = UINT64_MAX;
+      }
 
       texture_cache_->ClearCache();
 
@@ -5497,6 +5555,25 @@ void D3D12CommandProcessor::UpdateSystemConstantValues(
 
   // The values come from draw_back_end::ComputeSystemConstants, which reads
   // the register file it is given (N4 step 2, d3d-hle.md 17.6).
+  FillSystemConstantInputs(shared_memory_is_uav, primitive_polygonal, line_loop_closing_index,
+                           index_endian, used_texture_mask, normalized_depth_control,
+                           normalized_color_mask);
+  bool dirty = draw_back_end::ComputeSystemConstants(*register_file_, viewport_info,
+                                                     system_constant_inputs_, system_constants_);
+
+  // Live knobs of the shader mods, changed by shader_mod_set.
+  if (shader_mod_knobs_source_ &&
+      shader_mod_knobs_source_->UpdateKnobs(shader_mod_knobs_, shader_mod_knobs_generation_)) {
+    dirty = true;
+  }
+
+  cbuffer_binding_system_.up_to_date &= !dirty;
+}
+
+void D3D12CommandProcessor::FillSystemConstantInputs(
+    bool shared_memory_is_uav, bool primitive_polygonal, uint32_t line_loop_closing_index,
+    xenos::Endian index_endian, uint32_t used_texture_mask,
+    reg::RB_DEPTHCONTROL normalized_depth_control, uint32_t normalized_color_mask) {
   draw_back_end::SystemConstantInputs& inputs = system_constant_inputs_;
   inputs.edram_rov_used =
       render_target_cache_->GetPath() == RenderTargetCache::Path::kPixelShaderInterlock;
@@ -5527,16 +5604,6 @@ void D3D12CommandProcessor::UpdateSystemConstantValues(
     inputs.textures_resolution_scaled |=
         uint32_t(texture_cache_->IsActiveTextureResolutionScaled(texture_index)) << texture_index;
   }
-  bool dirty = draw_back_end::ComputeSystemConstants(*register_file_, viewport_info, inputs,
-                                                     system_constants_);
-
-  // Live knobs of the shader mods, changed by shader_mod_set.
-  if (shader_mod_knobs_source_ &&
-      shader_mod_knobs_source_->UpdateKnobs(shader_mod_knobs_, shader_mod_knobs_generation_)) {
-    dirty = true;
-  }
-
-  cbuffer_binding_system_.up_to_date &= !dirty;
 }
 
 bool D3D12CommandProcessor::UpdateBindings(const D3D12Shader* vertex_shader,

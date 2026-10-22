@@ -422,18 +422,46 @@ class D3D12CommandProcessor : public CommandProcessor {
     const uint32_t* bound_render_target_formats;
     uint32_t flags;
     float jitter[2];
-    // For the check.
+    // The draw call, with d3d12_draw_back_end=2 (Format DXGI_FORMAT_UNKNOWN
+    // without an index buffer).
+    D3D12_INDEX_BUFFER_VIEW index_buffer;
+    // Increment 1's check: the results of the back end that ran at the draw.
     void* pipeline_handle;
     const draw_util::ViewportInfo* viewport;
     const draw_util::Scissor* scissor;
   };
   void InitializeDrawBackEnd();
+  // d3d12_draw_back_end=2: the front half's results the replay needs (the
+  // texture SRV indices, the live knobs), and the front half's state caches
+  // forgotten after a draw the replay records.
+  void PrepareDrawBackEndInputs(const D3D12Shader* vertex_shader, const D3D12Shader* pixel_shader);
+  void InvalidateStateAfterDrawBackEnd();
   void CaptureDrawBackEnd(const DrawBackEndCapture& capture);
+  // UpdateSystemConstantValues's inputs besides the registers and the viewport.
+  void FillSystemConstantInputs(bool shared_memory_is_uav, bool primitive_polygonal,
+                                uint32_t line_loop_closing_index, xenos::Endian index_endian,
+                                uint32_t used_texture_mask,
+                                reg::RB_DEPTHCONTROL normalized_depth_control,
+                                uint32_t normalized_color_mask);
+  void ReplayDrawBackEndDraw(const draw_back_end::Decoded& decoded, const RegisterFile& regs,
+                             draw_back_end::ReplayList& replay,
+                             ID3D12GraphicsCommandList* command_list,
+                             const D3D12Shader& vertex_shader, const D3D12Shader* pixel_shader,
+                             const PrimitiveProcessor::ProcessingResult& primitive,
+                             reg::RB_DEPTHCONTROL depth_control, uint32_t color_mask,
+                             bool polygonal, uint32_t scale_x, uint32_t scale_y,
+                             const draw_back_end::SystemConstantInputs& inputs,
+                             const draw_back_end::Expected* expected, const uint8_t* check_in,
+                             bool* mismatches);
 
  public:
-  // Called by DeferredCommandList::Execute for a kDrawBackEnd command.
+  // Called by DeferredCommandList::Execute (on the thread that replays the
+  // lists) for a kDrawBackEnd command, and for the sampler heap a list sets.
   void ReplayDrawBackEnd(const uint8_t* arguments, RegisterFile& shadow,
-                         draw_back_end::ListState& list) const;
+                         draw_back_end::ReplayList& replay,
+                         ID3D12GraphicsCommandList* command_list);
+  bool draw_back_end_replays() const { return draw_back_end_ == 2; }
+  ID3D12DescriptorHeap* back_end_sampler_heap() const { return sampler_bindless_heap_current_; }
 
  private:
   bool UpdateConstantBuffersDeferred(const D3D12Shader* vertex_shader,
@@ -1064,7 +1092,15 @@ class D3D12CommandProcessor : public CommandProcessor {
   bool back_end_list_captured_ = false;
   // The replay's system constants, kept across lists like system_constants_
   // (only the thread that replays the lists touches them).
-  mutable DxbcShaderTranslator::SystemConstants back_end_replay_constants_ = {};
+  DxbcShaderTranslator::SystemConstants back_end_replay_constants_ = {};
+  // d3d12_draw_back_end=2: the replay's constant buffer pool and the frame it
+  // last reclaimed at (the replaying thread only); the front half's texture
+  // SRV indices per stage, whether they changed, whether the knobs changed.
+  std::unique_ptr<ui::d3d12::D3D12UploadBufferPool> back_end_constant_pool_;
+  uint64_t back_end_pool_frame_ = UINT64_MAX;
+  std::vector<uint32_t> back_end_texture_indices_[2];
+  bool back_end_texture_indices_changed_[2] = {};
+  bool back_end_knobs_changed_ = false;
 
   // Whether the latest shared memory and EDRAM buffer binding contains the
   // shared memory UAV rather than the SRV.

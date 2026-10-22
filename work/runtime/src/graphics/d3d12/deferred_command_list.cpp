@@ -45,6 +45,16 @@ void DeferredCommandList::Execute(ID3D12GraphicsCommandList* command_list,
   uint64_t split_tsc[kKinds] = {};
   uint32_t split_counts[kKinds] = {};
   const uint64_t execute_start = split ? __rdtsc() : 0;
+  // d3d12_draw_back_end=2: the replay records draws and tracks what the
+  // list's own commands set.
+  draw_back_end::ReplayState* back_end = nullptr;
+  if (command_processor_.draw_back_end_replays()) {
+    if (!back_end_replay_) {
+      back_end_replay_ = std::make_unique<draw_back_end::ReplayList>();
+    }
+    back_end_replay_->BeginList();
+    back_end = &back_end_replay_->d3d;
+  }
   while (stream_remaining != 0) {
     const CommandHeader& header = *reinterpret_cast<const CommandHeader*>(stream);
     stream += kCommandHeaderSizeElements;
@@ -127,10 +137,16 @@ void DeferredCommandList::Execute(ID3D12GraphicsCommandList* command_list,
       case Command::kD3DIASetIndexBuffer: {
         auto view = reinterpret_cast<const D3D12_INDEX_BUFFER_VIEW*>(stream);
         command_list->IASetIndexBuffer(view->Format != DXGI_FORMAT_UNKNOWN ? view : nullptr);
+        if (back_end) {
+          back_end->index_buffer_set = false;
+        }
       } break;
       case Command::kD3DIASetPrimitiveTopology: {
         command_list->IASetPrimitiveTopology(
             *reinterpret_cast<const D3D12_PRIMITIVE_TOPOLOGY*>(stream));
+        if (back_end) {
+          back_end->topology = *reinterpret_cast<const D3D12_PRIMITIVE_TOPOLOGY*>(stream);
+        }
       } break;
       case Command::kD3DIASetVertexBuffers: {
         static_assert(alignof(D3D12_VERTEX_BUFFER_VIEW) <= alignof(uintmax_t));
@@ -143,6 +159,9 @@ void DeferredCommandList::Execute(ID3D12GraphicsCommandList* command_list,
       } break;
       case Command::kD3DOMSetBlendFactor: {
         command_list->OMSetBlendFactor(reinterpret_cast<const FLOAT*>(stream));
+        if (back_end) {
+          back_end->blend_factor_set = false;
+        }
       } break;
       case Command::kD3DOMSetRenderTargets: {
         auto& args = *reinterpret_cast<const D3DOMSetRenderTargetsArguments*>(stream);
@@ -153,6 +172,9 @@ void DeferredCommandList::Execute(ID3D12GraphicsCommandList* command_list,
       } break;
       case Command::kD3DOMSetStencilRef: {
         command_list->OMSetStencilRef(*reinterpret_cast<const UINT*>(stream));
+        if (back_end) {
+          back_end->stencil_reference_set = false;
+        }
       } break;
       case Command::kD3DResourceBarrier: {
         static_assert(alignof(D3D12_RESOURCE_BARRIER) <= alignof(uintmax_t));
@@ -164,9 +186,15 @@ void DeferredCommandList::Execute(ID3D12GraphicsCommandList* command_list,
       } break;
       case Command::kRSSetScissorRect: {
         command_list->RSSetScissorRects(1, reinterpret_cast<const D3D12_RECT*>(stream));
+        if (back_end) {
+          back_end->scissor_set = false;
+        }
       } break;
       case Command::kRSSetViewport: {
         command_list->RSSetViewports(1, reinterpret_cast<const D3D12_VIEWPORT*>(stream));
+        if (back_end) {
+          back_end->viewport_set = false;
+        }
       } break;
       case Command::kD3DSetComputeRoot32BitConstants: {
         auto args = reinterpret_cast<const SetRoot32BitConstantsHeader*>(stream);
@@ -179,6 +207,9 @@ void DeferredCommandList::Execute(ID3D12GraphicsCommandList* command_list,
         command_list->SetGraphicsRoot32BitConstants(args->root_parameter_index,
                                                     args->num_32bit_values_to_set, args + 1,
                                                     args->dest_offset_in_32bit_values);
+        if (back_end) {
+          back_end->root_parameters_set &= ~(1u << args->root_parameter_index);
+        }
       } break;
       case Command::kD3DSetComputeRootConstantBufferView: {
         auto& args = *reinterpret_cast<const SetRootConstantBufferViewArguments*>(stream);
@@ -189,6 +220,9 @@ void DeferredCommandList::Execute(ID3D12GraphicsCommandList* command_list,
         auto& args = *reinterpret_cast<const SetRootConstantBufferViewArguments*>(stream);
         command_list->SetGraphicsRootConstantBufferView(args.root_parameter_index,
                                                         args.buffer_location);
+        if (back_end) {
+          back_end->root_parameters_set &= ~(1u << args.root_parameter_index);
+        }
       } break;
       case Command::kD3DSetComputeRootDescriptorTable: {
         auto& args = *reinterpret_cast<const SetRootDescriptorTableArguments*>(stream);
@@ -199,6 +233,9 @@ void DeferredCommandList::Execute(ID3D12GraphicsCommandList* command_list,
         auto& args = *reinterpret_cast<const SetRootDescriptorTableArguments*>(stream);
         command_list->SetGraphicsRootDescriptorTable(args.root_parameter_index,
                                                      args.base_descriptor);
+        if (back_end) {
+          back_end->root_parameters_set &= ~(1u << args.root_parameter_index);
+        }
       } break;
       case Command::kD3DSetComputeRootShaderResourceView: {
         auto& args = *reinterpret_cast<const SetRootConstantBufferViewArguments*>(stream);
@@ -209,6 +246,9 @@ void DeferredCommandList::Execute(ID3D12GraphicsCommandList* command_list,
         auto& args = *reinterpret_cast<const SetRootConstantBufferViewArguments*>(stream);
         command_list->SetGraphicsRootShaderResourceView(args.root_parameter_index,
                                                         args.buffer_location);
+        if (back_end) {
+          back_end->root_parameters_set &= ~(1u << args.root_parameter_index);
+        }
       } break;
       case Command::kD3DSetComputeRootSignature: {
         command_list->SetComputeRootSignature(
@@ -217,6 +257,10 @@ void DeferredCommandList::Execute(ID3D12GraphicsCommandList* command_list,
       case Command::kD3DSetGraphicsRootSignature: {
         command_list->SetGraphicsRootSignature(
             *reinterpret_cast<ID3D12RootSignature* const*>(stream));
+        if (back_end) {
+          back_end->root_signature = *reinterpret_cast<ID3D12RootSignature* const*>(stream);
+          back_end->root_parameters_set = 0;
+        }
       } break;
       case Command::kD3DSetComputeRootUnorderedAccessView: {
         auto& args = *reinterpret_cast<const SetRootConstantBufferViewArguments*>(stream);
@@ -227,6 +271,9 @@ void DeferredCommandList::Execute(ID3D12GraphicsCommandList* command_list,
         auto& args = *reinterpret_cast<const SetRootConstantBufferViewArguments*>(stream);
         command_list->SetGraphicsRootUnorderedAccessView(args.root_parameter_index,
                                                          args.buffer_location);
+        if (back_end) {
+          back_end->root_parameters_set &= ~(1u << args.root_parameter_index);
+        }
       } break;
       case Command::kSetDescriptorHeaps: {
         auto& args = *reinterpret_cast<const SetDescriptorHeapsArguments*>(stream);
@@ -235,15 +282,28 @@ void DeferredCommandList::Execute(ID3D12GraphicsCommandList* command_list,
         if (args.cbv_srv_uav_descriptor_heap != nullptr) {
           descriptor_heaps[num_descriptor_heaps++] = args.cbv_srv_uav_descriptor_heap;
         }
-        if (args.sampler_descriptor_heap != nullptr) {
-          descriptor_heaps[num_descriptor_heaps++] = args.sampler_descriptor_heap;
+        ID3D12DescriptorHeap* sampler_heap = args.sampler_descriptor_heap;
+        if (back_end && !sampler_heap) {
+          // The replay owns the bindless sampler heap.
+          sampler_heap = command_processor_.back_end_sampler_heap();
+        }
+        if (sampler_heap != nullptr) {
+          descriptor_heaps[num_descriptor_heaps++] = sampler_heap;
         }
         command_list->SetDescriptorHeaps(num_descriptor_heaps, descriptor_heaps);
+        if (back_end) {
+          back_end->view_heap = args.cbv_srv_uav_descriptor_heap;
+          back_end->sampler_heap = sampler_heap;
+          back_end->root_parameters_set = 0;
+        }
       } break;
       case Command::kD3DSetPipelineState: {
         current_pipeline_state = *reinterpret_cast<ID3D12PipelineState* const*>(stream);
         if (current_pipeline_state) {
           command_list->SetPipelineState(current_pipeline_state);
+          if (back_end) {
+            back_end->pipeline = current_pipeline_state;
+          }
         }
       } break;
       case Command::kSetPipelineStateHandle: {
@@ -251,6 +311,9 @@ void DeferredCommandList::Execute(ID3D12GraphicsCommandList* command_list,
             command_processor_.GetD3D12PipelineByHandle(*reinterpret_cast<void* const*>(stream));
         if (current_pipeline_state) {
           command_list->SetPipelineState(current_pipeline_state);
+          if (back_end) {
+            back_end->pipeline = current_pipeline_state;
+          }
         }
       } break;
       case Command::kD3DSetSamplePositions: {
@@ -289,8 +352,13 @@ void DeferredCommandList::Execute(ID3D12GraphicsCommandList* command_list,
         if (!register_shadow_) {
           register_shadow_ = std::make_unique<RegisterFile>();
         }
-        command_processor_.ReplayDrawBackEnd(reinterpret_cast<const uint8_t*>(stream),
-                                             *register_shadow_, back_end_list_state_);
+        if (!back_end_replay_) {
+          back_end_replay_ = std::make_unique<draw_back_end::ReplayList>();
+        }
+        // The replay's state belongs to the thread that replays the lists.
+        const_cast<D3D12CommandProcessor&>(command_processor_)
+            .ReplayDrawBackEnd(reinterpret_cast<const uint8_t*>(stream), *register_shadow_,
+                               *back_end_replay_, command_list);
       } break;
       default:
         assert_unhandled_case(header.command);

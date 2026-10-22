@@ -669,7 +669,7 @@ class DeferredCommandList {
   // the last kDrawBackEnd. Each list captures every register and result it
   // reads, so they carry nothing from one list to the next.
   std::unique_ptr<RegisterFile> register_shadow_;
-  draw_back_end::ListState back_end_list_state_ = {};
+  std::unique_ptr<draw_back_end::ReplayList> back_end_replay_;
 };
 
 }  // namespace rex::graphics::d3d12
