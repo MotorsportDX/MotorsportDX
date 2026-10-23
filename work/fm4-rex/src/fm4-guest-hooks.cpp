@@ -127,9 +127,13 @@ REX_EXTERN(__imp__sub_82311080);
 REX_HOOK_RAW(sub_82311080) {  // D3DDevice_DrawIndexedVertices
   D3DTraceCount(0x82311080, ctx);
   N0Thread(N0Entry::kDrawIndexedVertices);
+  // The draw writer runs thousands of times a frame: only the latest ranges.
+  const LateWriteSnapshot late = LateWriteCheckPre(32);
+  const uint32_t late_lr = uint32_t(ctx.lr), late_sp = ctx.r1.u32;
   NativeCheckPre(0x82311080, base);
   __imp__sub_82311080(ctx, base);
   NativeCheckPost(base);
+  LateWriteCheckPost(late, 0x82311080, late_lr, late_sp, ctx.r13.u32, base);
 }
 REX_EXTERN(__imp__sub_8233AC60);
 REX_HOOK_RAW(sub_8233AC60) {  // D3DDevice_DrawVertices
@@ -215,9 +219,34 @@ FM4_THREAD_HOOK(822E2120, kResolve)
 FM4_THREAD_HOOK(82310FC8, kQueueCommandBuffer)
 FM4_THREAD_HOOK(8294D100, kRecordCommandBuffers)
 FM4_THREAD_HOOK(82371B80, kBeginTiling)
-FM4_THREAD_HOOK(8236FA20, kEndTiling)
-FM4_THREAD_HOOK(826ED978, kTileStreamInterpreter)
-FM4_THREAD_HOOK(826EDCE8, kTileStreamDrain)
+// The tiling bracket's functions also run the late write check
+// (FM4_LATE_WRITE_TRACE, fm4-native-check.cpp).
+#define FM4_LATE_WRITE_HOOK(address, entry)                                         \
+  REX_EXTERN(__imp__sub_##address);                                                 \
+  REX_HOOK_RAW(sub_##address) {                                                     \
+    N0Thread(N0Entry::entry);                                                       \
+    const LateWriteSnapshot late = LateWriteCheckPre();                             \
+    const uint32_t late_lr = uint32_t(ctx.lr), late_sp = ctx.r1.u32;                \
+    __imp__sub_##address(ctx, base);                                                \
+    LateWriteCheckPost(late, 0x##address, late_lr, late_sp, ctx.r13.u32, base);                  \
+  }
+FM4_LATE_WRITE_HOOK(8236FA20, kEndTiling)
+FM4_LATE_WRITE_HOOK(826ED978, kTileStreamInterpreter)
+FM4_LATE_WRITE_HOOK(826EDCE8, kTileStreamDrain)
+// The tiling bracket's list helper and the other readers of the device's draw
+// list (device+13600): only the late write check.
+#define FM4_LATE_WRITE_ONLY_HOOK(address)                                           \
+  REX_EXTERN(__imp__sub_##address);                                                 \
+  REX_HOOK_RAW(sub_##address) {                                                     \
+    const LateWriteSnapshot late = LateWriteCheckPre();                             \
+    const uint32_t late_lr = uint32_t(ctx.lr), late_sp = ctx.r1.u32;                \
+    __imp__sub_##address(ctx, base);                                                \
+    LateWriteCheckPost(late, 0x##address, late_lr, late_sp, ctx.r13.u32, base);                  \
+  }
+FM4_LATE_WRITE_ONLY_HOOK(823719A8)
+FM4_LATE_WRITE_ONLY_HOOK(827E6758)
+FM4_LATE_WRITE_ONLY_HOOK(827E6DC8)
+FM4_LATE_WRITE_ONLY_HOOK(827E5468)
 FM4_THREAD_HOOK(826EDFA8, kTileStreamWorker)
 
 REX_EXTERN(__imp__sub_822B95D8);

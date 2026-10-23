@@ -5,7 +5,9 @@
 // order around the original body. Add native-path hooks there as well.
 #include <rex/hook.h>
 
+#include <array>
 #include <cstdint>
+#include <vector>
 
 namespace fm4::hooks {
 
@@ -89,6 +91,22 @@ void NativeCheckPost(uint8_t* base, uint32_t pointer = 0);
 void NativeCheckSplitPre(uint8_t* base);
 void NativeCheckSplitPost(uint8_t* base);
 bool NativeCheckEnabled();
+
+// FM4_LATE_WRITE_TRACE (fm4-native-check.cpp): the last dwords of the latest
+// checked ranges before a function, compared after it.
+struct LateWriteSnapshot {
+  struct Entry {
+    uint32_t first = 0, dwords = 0, writer = 0;
+    uint64_t sequence = 0;
+    std::array<uint32_t, 4> tail{};
+  };
+  std::vector<Entry> entries;
+};
+// latest: how many of the latest ranges (all 1,024 by default).
+LateWriteSnapshot LateWriteCheckPre(uint32_t latest = 1024);
+// pcr: the guest r13 (the thread's PCR, which holds its stack bounds).
+void LateWriteCheckPost(const LateWriteSnapshot& snapshot, uint32_t function, uint32_t lr,
+                        uint32_t sp, uint32_t pcr, uint8_t* base);
 
 // fm4-native-records.cpp (host_render_native in the runtime): the converted
 // dirty state writers. Returns true when the writer left a marker and a record

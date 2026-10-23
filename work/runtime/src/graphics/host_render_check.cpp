@@ -175,17 +175,24 @@ void CommandProcessor::HostCheckFinish() {
            memory::load_and_swap<uint32_t>(&state.entry.dwords[i - 1]) ==
                system::native_records::kMarkerTag;
   };
+  uint32_t changed_dwords = 0;
   for (size_t i = 0; !marker && i < state.entry.dwords.size(); ++i) {
     if (guest[i] != state.entry.dwords[i] && !sequence_dword(i)) {
+      if (!state.bytes_changed) state.first_changed = uint32_t(i);
       state.bytes_changed = true;
-      state.first_changed = uint32_t(i);
-      break;
+      ++changed_dwords;
     }
   }
   if (state.bytes_changed) {
     reason = perf_trace::HostCheckReason::kBytes;
-    difference = fmt::format("the PM4 changed after the writer returned (dword {})",
-                             state.first_changed);
+    // The changed dword's guest physical address and values, for a search of
+    // the late write (FM4_LATE_WRITE_TRACE, d3d-hle-n4.md 17.20).
+    const size_t i = state.first_changed;
+    difference = fmt::format(
+        "the PM4 changed after the writer returned (dword {} at {:08X}: {:08X} -> {:08X}; {} "
+        "dwords changed)",
+        i, state.begin + uint32_t(i * 4), memory::load_and_swap<uint32_t>(&state.entry.dwords[i]),
+        memory::load_and_swap<uint32_t>(&guest[i]), changed_dwords);
   }
   // Every Nth range is changed on purpose (host_render_check_perturb).
   const bool perturb = state.perturb && ++state.compared % state.perturb == 0;
@@ -281,6 +288,13 @@ void CommandProcessor::HostCheckFinish() {
                   writer, state.begin, state.entry.dwords.size(), state.entry.sequence,
                   marker ? ", marker" : "", difference);
     }
+  }
+  // The late write trace's notes of this range (FM4_LATE_WRITE_TRACE, d3d-hle-n4.md
+  // 17.20): printed when its PM4 changed, dropped otherwise.
+  const std::vector<std::string> notes = system::native_checks::TakeLateWrites(state.entry.sequence);
+  if (reason == perf_trace::HostCheckReason::kBytes) {
+    for (const std::string& note : notes) REXGPU_WARN("Native check: late write: {}", note);
+    if (notes.empty()) REXGPU_WARN("Native check: late write: no hooked function noted one");
   }
 }
 

@@ -9,6 +9,7 @@
 // nothing in a normal run.
 
 #include <cstdint>
+#include <string>
 #include <vector>
 
 namespace rex::system::native_checks {
@@ -27,6 +28,16 @@ bool Active();
 void Record(uint32_t packet_address, Entry&& entry);
 // Takes the entry of a packet address, false without one.
 bool Take(uint32_t packet_address, Entry* entry);
+// Whether the entry of this sequence still waits at the packet address: the
+// host render thread has not reached the range yet. An entry whose range never
+// runs also waits, until a newer one at its address replaces it.
+bool Pending(uint32_t packet_address, uint64_t sequence);
+// The late write trace (FM4_LATE_WRITE_TRACE): a hook's note that a function
+// rewrote a dword of the pending range of this sequence. The identity check
+// prints the notes of a range whose PM4 changed and drops the others; the
+// latest 8,192 sequences with notes are kept.
+void NoteLateWrite(uint64_t sequence, std::string text);
+std::vector<std::string> TakeLateWrites(uint64_t sequence);
 // Entries replaced by a newer one at the same address before they were taken,
 // since the last call.
 uint64_t TakeOverwritten();

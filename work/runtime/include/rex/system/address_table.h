@@ -55,6 +55,19 @@ class AddressTable {
     return true;
   }
 
+  // Calls f with the entry at the address, under its shard's lock; false
+  // without one.
+  template <typename F>
+  bool Peek(uint32_t address, F&& f) {
+    if (!MayHave(address)) return false;
+    Shard& shard = ShardOf(address);
+    std::lock_guard<std::mutex> lock(shard.mutex);
+    auto it = shard.entries.find(address);
+    if (it == shard.entries.end()) return false;
+    f(it->second);
+    return true;
+  }
+
   bool Allocated() const { return filter_.load(std::memory_order_relaxed) != nullptr; }
 
  private:
