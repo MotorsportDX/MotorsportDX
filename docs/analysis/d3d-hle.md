@@ -1236,7 +1236,13 @@ One pass with 2x MSAA costs about 0.04 ms of GPU time a frame more than today's 
 | grow stress with the resolve byte check, `career` (`n4g-grow-career`) | | 19,422 byte checks, 0 mismatches, 39 resizes; 16.1 M draws, 25,049 resolves and 19,187 clears of the private depth, 0 violations | pass |
 | render target memory, `career` | 589.8 MB at 1x, 2,142.2 MB at 2x | 203.5 MB at 1x (207.5 MB at the peak of the grow stress), 596.5 MB at 2x | |
 
-The transfer inventory of one pass at 2x (`n4g-inventory-2x`) did not run. The first attempt ran out of disk space on `I:`. The two retries stopped before the race, because the Disc 2 content imported into the BuildRoot profile had been removed in the meantime.
+**The transfer inventory of one pass at 2x** (`n4g-inventory-2x`, the gate's binary from `snapshots\n4g2xpn`, `race`, rerun after the gate because the first attempt ran out of disk space). The race has 20.5 transfers and 2,800 tiles a frame, steady from window to window. They take 0.34 to 0.35 ms of GPU time a frame, 0.27 ms of that into depth targets. One tile at 2x had 19.5 transfers, 2,384 tiles and 0.346 ms (`n3i-race-2x`, 16.13). Tiled RTV at 2x had 0.31 ms in the smoke cell `n4g2x-240-photo`. The kinds are those of 16.13, with the same tiles, plus one:
+
+| Destination (format, samples, base, pitch) | Source | Transfers | Tiles | Columns, rows |
+|---|---|---|---|---|
+| format 3 (the scene colour), 2x, base 0, pitch 16 | the 16_16 shadow map, 4x, base 832, pitch 13 | 1 | 416 | all 16, rows 64 to 89 |
+
+The one-pass scene colour spans 90 tile rows from base 0. Its rows 64 to 89 overlap the shadow map's tiles from 832, which the title writes before the scene each frame. So taking the scene colour back copies its bottom 208 lines (416 at 2x scale) from the shadow map. Whether the scene's clear overwrites them before anything reads them is not checked; a lazy transfer (bit 4) copies only the tiles a draw touches without overwriting them. The copy is into a colour target, one pass over its rectangles, so it adds little time. The scene depth stays private and has no transfer. The remaining cost, as in 16.13, is the stencil bit passes of the transfers into depth targets.
 
 **The main session's decisions of 23 October 2026**, applied after this gate:
 

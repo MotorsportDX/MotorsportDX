@@ -106,7 +106,7 @@ Increment 4 of stage N3 of the [native port](../analysis/d3d-hle.md#1617-increme
 | grow stress with the resolve byte check | | 19,422 checks, 0 mismatches, 0 violations of the private depth |
 | render target memory, `career` | 589.8 MB at 1x, 2,142.2 MB at 2x | 203.5 MB, 596.5 MB |
 
-RTV's defaults (one tile) at 2x run at 158.6 fps with 6.14 ms of GPU time a frame against 160.1 fps and 6.08 ms at the close of increment 3 (`n4g2xpd`, `n3c2xpr`). No cvar of stage N4 was on. The transfer inventory of one pass did not run: the Disc 2 content imported into the BuildRoot profile was removed during the gate. 4x MSAA in one pass is the next item of increment 4.
+RTV's defaults (one tile) at 2x run at 158.6 fps with 6.14 ms of GPU time a frame against 160.1 fps and 6.08 ms at the close of increment 3 (`n4g2xpd`, `n3c2xpr`). No cvar of stage N4 was on. The race in one pass has 20.5 ownership transfers and 2,800 tiles a frame (0.35 ms of GPU time), against 19.5 and 2,384 in one tile. The one addition is a copy from the shadow map into the bottom 208 lines of the scene colour, where the two alias in EDRAM ([d3d-hle.md 16.17](../analysis/d3d-hle.md#1617-increment-4-step-0-the-one-pass-probe-23-october-2026)). 4x MSAA in one pass is the next item of increment 4.
 
 ### Resolves from the host render target, stage N3, 22 October 2026
 
