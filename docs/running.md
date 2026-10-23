@@ -346,6 +346,10 @@ path, and the render targets stay on RTV.
   instead. With `-Native -Msaa` the tiles of `-Quality` stay on the PM4 RTV path, and the
   launcher says so. `-MsaaSamples` without `-Native` is refused; RTV and `-Rov` keep the
   title's tiles.
+- One pass uses 2x MSAA also with a look without TAA, such as the comparison look
+  `original,taa=0`, where RTV and `-Rov` render the tiles and MSAA of `-Quality` (4x at
+  `high`). Until one pass has 4x, compare the native path against RTV and `-Rov` in the
+  title's 2x scenario (`FM4_TILING_SCENARIO=1`), as the gates of section 16.17 do.
 - `-Native` with `-Rov` is refused: `-Rov` stays the uncorrected reference.
 - `-Native` also sets `readback_resolve_on_demand=true` (stage N3,
   [section 16.5](analysis/d3d-hle.md)): resolves skip their readback to guest
