@@ -566,11 +566,17 @@ class RenderTargetCache {
   // sized to the tile rows their surfaces use.
   bool IsSizingEnabled() const;
   // native_one_pass_msaa (docs/analysis/d3d-hle.md 16.17): the one-pass
-  // scene's depth surface (base 1024, 16 tiles of pitch at 32bpp, the one-pass
-  // sample count) has a private host target outside the EDRAM tile map: no
-  // ownership, transfers or dumps of other targets reach it.
+  // scene's depth surface has a private host target outside the EDRAM tile
+  // map: no ownership, transfers or dumps of other targets reach it. At 2x:
+  // base 1024, 16 tiles of pitch at 32bpp. At 4x: base 2880 (832 in the 11
+  // bits of the key), 32 tiles of pitch.
   bool IsPrivateDepth(uint32_t base_tiles, uint32_t pitch_tiles_at_32bpp,
                       xenos::MsaaSamples msaa_samples) const;
+  // native_one_pass_msaa=4: the scene colour (base 0, 32 tiles of pitch, 4x,
+  // the resource format of 2_10_10_10_FLOAT and of its 16_16_16_16 view) is
+  // private too, with the 2,880 tiles of 1280x720 that the EDRAM cannot hold.
+  bool IsPrivateColor(uint32_t base_tiles, uint32_t pitch_tiles_at_32bpp,
+                      xenos::MsaaSamples msaa_samples, uint32_t resource_format) const;
   // With native_rt_surfaces bit 8, the target has at least tile_rows rows
   // (grown if needed).
   RenderTarget* GetOrCreateRenderTarget(RenderTargetKey key, uint32_t tile_rows = 0);
@@ -578,6 +584,15 @@ class RenderTargetCache {
     return key.is_depth &&
            IsPrivateDepth(key.base_tiles, key.pitch_tiles_at_32bpp, key.msaa_samples);
   }
+  bool IsPrivateKey(RenderTargetKey key) const {
+    return key.is_depth ? IsPrivateDepthKey(key)
+                        : IsPrivateColor(key.base_tiles, key.pitch_tiles_at_32bpp,
+                                         key.msaa_samples, key.resource_format);
+  }
+  // The height in pixels of a target of the surface: the EDRAM's rows, or for
+  // a private 4x surface twice that, which holds the 720 lines of the scene.
+  uint32_t GetSurfaceHeight(uint32_t pitch_tiles_at_32bpp, xenos::MsaaSamples msaa_samples,
+                            bool is_private) const;
   // The tile rows of an EDRAM-sized target of the key.
   uint32_t GetFullTileRows(RenderTargetKey key) const;
   // Creates a target with the rows, and counts its memory.

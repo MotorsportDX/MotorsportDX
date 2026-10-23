@@ -14,6 +14,7 @@
 #include "../util/perf_trace.h"
 
 #include <algorithm>
+#include <cstdio>
 #include <cstdlib>
 #include <fstream>
 #include <array>
@@ -62,6 +63,12 @@ REXCVAR_DEFINE_BOOL(native_rt_surfaces_unscaled_msaa, false, "GPU/D3D12",
                     "Diagnostic: with native_rt_surfaces bit 2, also resolve the unscaled fast "
                     "copies of multisampled sources from the host render target (they differ in "
                     "the byte check, docs/analysis/d3d-hle.md 16.11)")
+    .lifecycle(rex::cvar::Lifecycle::kRequiresRestart);
+REXCVAR_DEFINE_STRING(native_rt_surfaces_depth_dump, "", "GPU/D3D12",
+                      "Diagnostic: a directory into which every unscaled 4x MSAA depth fast copy "
+                      "writes its destination bytes when it completes, one file per destination "
+                      "address (the last copy wins), on any render target path, for the -Rov "
+                      "depth sample comparison (docs/analysis/d3d-hle-n3.md 16.17). Empty: off")
     .lifecycle(rex::cvar::Lifecycle::kRequiresRestart);
 REXCVAR_DECLARE(int32_t, native_rt_resolve_check);
 REXCVAR_DEFINE_BOOL(native_rt_surfaces_transfer_inventory, false, "GPU/D3D12",
@@ -1501,15 +1508,22 @@ bool D3D12RenderTargetCache::Resolve(const memory::Memory& memory, D3D12SharedMe
       const bool host_resolve = GetPath() == Path::kHostRenderTargets &&
                                 (REXCVAR_GET(native_rt_surfaces) & 2) &&
                                 FindHostResolveSource(resolve_info, copy_shader, host_source);
-      // native_one_pass_msaa: the private scene depth is dumped alone.
-      RenderTarget* private_depth = GetResolvePrivateDepth(resolve_info);
-      if (private_depth) {
+      // native_one_pass_msaa: a private scene surface is dumped alone. At 4x
+      // its 2,880 tiles do not fit the dump, so it has no byte check, and a
+      // dump of it is counted as a violation.
+      RenderTarget* private_surface = GetResolvePrivateSurface(resolve_info);
+      const bool private_4x =
+          private_surface && private_surface->key().msaa_samples >= xenos::MsaaSamples::k4X;
+      if (private_surface) {
         perf_trace::CountOnePass(perf_trace::one_pass_resolves);
       }
       const int32_t host_check_every = REXCVAR_GET(native_rt_surfaces_check);
       const bool host_check =
-          host_resolve && host_check_every > 0 &&
+          host_resolve && host_check_every > 0 && !private_4x &&
           command_processor_.GetCurrentFrame() % uint64_t(host_check_every) == 0;
+      if (private_4x && !host_resolve) {
+        perf_trace::CountOnePass(perf_trace::one_pass_violations);
+      }
       if (GetPath() == Path::kHostRenderTargets && (!host_resolve || host_check)) {
         if (REXCVAR_GET(direct_host_resolve)) {
           direct_resolved =
@@ -1529,7 +1543,7 @@ bool D3D12RenderTargetCache::Resolve(const memory::Memory& memory, D3D12SharedMe
           uint32_t dump_pitch;
           resolve_info.GetCopyEdramTileSpan(dump_base, dump_row_length_used, dump_rows, dump_pitch);
           if (!DumpRenderTargets(dump_base, dump_row_length_used, dump_rows, dump_pitch,
-                                 private_depth)) {
+                                 private_surface)) {
             REXGPU_ERROR("D3D12RenderTargetCache: Failed to dump host render targets for resolve");
             return false;
           }
@@ -1602,7 +1616,7 @@ bool D3D12RenderTargetCache::Resolve(const memory::Memory& memory, D3D12SharedMe
           uint32_t dump_base, dump_row_length_used, dump_rows, dump_pitch;
           resolve_info.GetCopyEdramTileSpan(dump_base, dump_row_length_used, dump_rows,
                                             dump_pitch);
-          DumpRenderTargets(dump_base, dump_row_length_used, dump_rows, dump_pitch, private_depth);
+          DumpRenderTargets(dump_base, dump_row_length_used, dump_rows, dump_pitch, private_surface);
         }
         if (dispatched_from_host ||
             command_processor_.RequestOneUseSingleViewDescriptors(
@@ -1682,6 +1696,13 @@ bool D3D12RenderTargetCache::Resolve(const memory::Memory& memory, D3D12SharedMe
           if (resolve_texture_pipeline_ && !dispatched_from_host) {
             ResolveIntoHostTextures(texture_cache, resolve_info, copy_shader,
                                     copy_shader_constants);
+          }
+          // native_rt_surfaces_depth_dump (16.17): the bytes of the 4x depth
+          // fast copies, written to a file when the submission completes.
+          if (copy_shader == draw_util::ResolveCopyShaderIndex::kFast32bpp4xMSAA &&
+              !draw_resolution_scaled && resolve_info.IsCopyingDepth() &&
+              !REXCVAR_GET(native_rt_surfaces_depth_dump).empty()) {
+            QueueResolveDump(shared_memory, resolve_info);
           }
           written_address_out = resolve_info.copy_dest_extent_start;
           written_length_out = resolve_info.copy_dest_extent_length;
@@ -6141,7 +6162,7 @@ bool D3D12RenderTargetCache::TryResolveCopyDirectly(const draw_util::ResolveInfo
   // Dedicated direct resolve dispatches are staged behind the same preflight;
   // keep using the existing dump path until source-image direct shaders land.
   return DumpRenderTargets(dump_base, dump_row_length_used, dump_rows, dump_pitch,
-                           GetResolvePrivateDepth(resolve_info));
+                           GetResolvePrivateSurface(resolve_info));
 }
 
 bool D3D12RenderTargetCache::FindHostResolveSource(const draw_util::ResolveInfo& resolve_info,
@@ -6162,9 +6183,10 @@ bool D3D12RenderTargetCache::FindHostResolveSource(const draw_util::ResolveInfo&
   if (!is_depth && edram_info.format_is_64bpp) {
     return false;
   }
-  // The render target that owns every tile of the span, or the private scene
-  // depth (16.17).
-  RenderTarget* render_target = GetResolvePrivateDepth(resolve_info);
+  // The render target that owns every tile of the span, or a private scene
+  // surface (16.17).
+  RenderTarget* render_target = GetResolvePrivateSurface(resolve_info);
+  const bool is_private = render_target != nullptr;
   if (!render_target) {
     uint32_t dump_base, dump_row_length_used, dump_rows, dump_pitch;
     resolve_info.GetCopyEdramTileSpan(dump_base, dump_row_length_used, dump_rows, dump_pitch);
@@ -6187,9 +6209,11 @@ bool D3D12RenderTargetCache::FindHostResolveSource(const draw_util::ResolveInfo&
   }
   // The unscaled fast copies of 4x MSAA depth differ from the dump in the byte
   // check by a sample's depth, for a cause not found (16.11): they keep the
-  // dump unless the diagnostic native_rt_surfaces_unscaled_msaa is on.
+  // dump unless the diagnostic native_rt_surfaces_unscaled_msaa is on. A
+  // private 4x surface has more tiles than the dump can hold, so it is always
+  // read from the host.
   if (bitwise && key.msaa_samples >= xenos::MsaaSamples::k4X && !IsDrawResolutionScaled() &&
-      !REXCVAR_GET(native_rt_surfaces_unscaled_msaa)) {
+      !REXCVAR_GET(native_rt_surfaces_unscaled_msaa) && !is_private) {
     return false;
   }
   uint32_t format;
@@ -6438,6 +6462,32 @@ bool D3D12RenderTargetCache::DispatchHostResolve(
   return true;
 }
 
+void D3D12RenderTargetCache::QueueResolveDump(D3D12SharedMemory& shared_memory,
+                                              const draw_util::ResolveInfo& resolve_info) {
+  const ui::d3d12::D3D12Provider& provider = command_processor_.GetD3D12Provider();
+  const uint64_t length = resolve_info.copy_dest_extent_length;
+  D3D12_RESOURCE_DESC readback_desc;
+  ui::d3d12::util::FillBufferResourceDesc(readback_desc, length, D3D12_RESOURCE_FLAG_NONE);
+  Microsoft::WRL::ComPtr<ID3D12Resource> readback;
+  if (FAILED(provider.GetDevice()->CreateCommittedResource(
+          &ui::d3d12::util::kHeapPropertiesReadback, provider.GetHeapFlagCreateNotZeroed(),
+          &readback_desc, D3D12_RESOURCE_STATE_COPY_DEST, nullptr, IID_PPV_ARGS(&readback)))) {
+    return;
+  }
+  shared_memory.UseAsCopySource();
+  command_processor_.SubmitBarriers();
+  command_processor_.GetDeferredCommandList().D3DCopyBufferRegion(
+      readback.Get(), 0, shared_memory.GetBuffer(), resolve_info.copy_dest_extent_start, length);
+  shared_memory.UseForWriting();
+  HostResolveCheck& dump = host_resolve_checks_.emplace_back();
+  dump.readback[0] = readback;
+  dump.length = length;
+  dump.dest = resolve_info.copy_dest_extent_start;
+  dump.submission = command_processor_.GetCurrentSubmission();
+  dump.dump_file = fmt::format("{}/depth-{:08X}.bin", REXCVAR_GET(native_rt_surfaces_depth_dump),
+                               resolve_info.copy_dest_extent_start);
+}
+
 void D3D12RenderTargetCache::PollHostResolveChecks(uint64_t completed_submission,
                                                    uint32_t& checked_out,
                                                    uint32_t& mismatched_out) {
@@ -6446,6 +6496,20 @@ void D3D12RenderTargetCache::PollHostResolveChecks(uint64_t completed_submission
   for (auto it = host_resolve_checks_.begin(); it != host_resolve_checks_.end();) {
     if (it->submission > completed_submission) {
       ++it;
+      continue;
+    }
+    if (!it->dump_file.empty()) {
+      void* mapping = nullptr;
+      D3D12_RANGE read_range = {0, SIZE_T(it->length)};
+      if (SUCCEEDED(it->readback[0]->Map(0, &read_range, &mapping))) {
+        if (std::FILE* file = std::fopen(it->dump_file.c_str(), "wb")) {
+          std::fwrite(mapping, 1, size_t(it->length), file);
+          std::fclose(file);
+        }
+        D3D12_RANGE write_range = {};
+        it->readback[0]->Unmap(0, &write_range);
+      }
+      it = host_resolve_checks_.erase(it);
       continue;
     }
     const uint32_t* data[2] = {};
@@ -6627,22 +6691,35 @@ void D3D12RenderTargetCache::ResolveIntoHostTextures(
   }
 }
 
-RenderTargetCache::RenderTarget* D3D12RenderTargetCache::GetResolvePrivateDepth(
+RenderTargetCache::RenderTarget* D3D12RenderTargetCache::GetResolvePrivateSurface(
     const draw_util::ResolveInfo& resolve_info) {
-  if (!resolve_info.IsCopyingDepth()) {
-    return nullptr;
-  }
-  const draw_util::ResolveEdramInfo& edram_info = resolve_info.depth_edram_info;
-  if (!IsPrivateDepth(resolve_info.depth_original_base, edram_info.pitch_tiles,
-                      edram_info.msaa_samples)) {
-    return nullptr;
-  }
   RenderTargetKey key;
-  key.base_tiles = resolve_info.depth_original_base;
-  key.pitch_tiles_at_32bpp = edram_info.pitch_tiles;
-  key.msaa_samples = edram_info.msaa_samples;
-  key.is_depth = 1;
-  key.resource_format = edram_info.format;
+  if (resolve_info.IsCopyingDepth()) {
+    const draw_util::ResolveEdramInfo& edram_info = resolve_info.depth_edram_info;
+    if (!IsPrivateDepth(resolve_info.depth_original_base, edram_info.pitch_tiles,
+                        edram_info.msaa_samples)) {
+      return nullptr;
+    }
+    key.base_tiles = resolve_info.depth_original_base;
+    key.pitch_tiles_at_32bpp = edram_info.pitch_tiles;
+    key.msaa_samples = edram_info.msaa_samples;
+    key.is_depth = 1;
+    key.resource_format = edram_info.format;
+  } else {
+    const draw_util::ResolveEdramInfo& edram_info = resolve_info.color_edram_info;
+    // The private colour's format has no separate gamma storage.
+    const uint32_t resource_format =
+        uint32_t(xenos::GetStorageColorFormat(xenos::ColorRenderTargetFormat(edram_info.format)));
+    if (edram_info.format_is_64bpp ||
+        !IsPrivateColor(resolve_info.color_original_base, edram_info.pitch_tiles,
+                        edram_info.msaa_samples, resource_format)) {
+      return nullptr;
+    }
+    key.base_tiles = resolve_info.color_original_base;
+    key.pitch_tiles_at_32bpp = edram_info.pitch_tiles;
+    key.msaa_samples = edram_info.msaa_samples;
+    key.resource_format = resource_format;
+  }
   // Created on first use: a resolve before any draw reads a cleared target.
   return GetOrCreateRenderTarget(key);
 }
@@ -6661,7 +6738,7 @@ bool D3D12RenderTargetCache::DumpRenderTargets(uint32_t dump_base, uint32_t dump
     GetResolveCopyRectanglesToDump(dump_base, dump_row_length_used, dump_rows, dump_pitch,
                                    dump_rectangles_);
     for (const ResolveCopyDumpRectangle& rectangle : dump_rectangles_) {
-      if (IsPrivateDepthKey(rectangle.render_target->key())) {
+      if (IsPrivateKey(rectangle.render_target->key())) {
         perf_trace::CountOnePass(perf_trace::one_pass_violations);
       }
     }

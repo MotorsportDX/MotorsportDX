@@ -502,3 +502,36 @@ The one-pass scene colour spans 90 tile rows from base 0. Its rows 64 to 89 over
 - **The scene.** One 4x surface, pitch 32 tiles: colour at base 0 (format 3, for some draws 12), depth (D24FS8) at base 2880, after the colour's 2,880 tiles, with bit 11 of `RB_DEPTH_INFO` set. The cache masks it to 832, inside the colour and over the shadow map; the middle half of the picture is wrong.
 - **The transfers**: 21.5 and 3,824 tiles a race frame (20.5 and 2,800 at 2x), the kinds of 16.13 plus the scene depth (at 832, pitch 32) into the scene colour (1,216 tiles, rows 26 to 63) and into the 16_16 shadow map (224 tiles, rows 46 to 63). No transfer reads the scene colour into another surface; the surfaces at base 0 with pitches 4 to 16 keep their transfers among themselves.
 - **The space.** Colour and depth need 5,760 tiles, more than the 4,096 the 12-bit bases address, so option A would have to move the depth anyway.
+
+**The 4x design (the main session's decision of 23 October 2026): a private colour and a private depth.** The no-wrap space cannot hold the scene's 5,760 tiles. With `native_one_pass_msaa=4`, two surfaces have private host targets outside the tile map, as the 2x depth does:
+
+- the scene depth: depth, 4x, pitch 32 tiles, base 2880 (832 in the 11 bits of the key);
+- the scene colour: 4x, base 0, pitch 32, the storage format of `2_10_10_10_FLOAT`. Formats 3 and 12 share that storage, so they are one surface with no transfer between them.
+
+Update binds them without claiming tiles and without shortening the other targets' ranges. Their targets are twice the EDRAM's height (1,024 lines at 4x, of which the scene uses 720). Clears of them claim no tiles. Their resolves always come from the host render target, the unscaled 4x depth fast copies included, because the dump into the EDRAM buffer cannot hold 2,880 tiles. A dump of a private 4x surface counts as a violation. The private colour key also serves entry 0's 4x colour at base 0 (the pre-race and car screens). In the whole probe run, no transfer read that surface through the EDRAM.
+
+The limit: resolves from the private 4x surfaces have no byte check, since there is no dump to compare them with. The `-Rov` depth sample comparison and the 1:1 image checks stand in for it.
+
+**The 4x step gate** (snapshot `n3q-fix`, 1x, 240 Hz, the fast route; native one pass 4x is `FM4_ONE_PASS_MSAA=4` with `FM4_TILING_SCENARIO=3` and `native_one_pass_msaa=4`):
+
+| Check | Native one pass 4x | RTV tiled 4x |
+|---|---|---|
+| `race`, one run each (`n3x-race-native`, `n3x-race-rtv`) | 219.3 fps, GPU 2.37 ms a frame, 1.83 µs of render thread time a draw | 190.2 fps, GPU 3.32 ms |
+| render target memory (`n3x-native-4x`, `n3x-rtv-4x`) | 231.5 MB | 577.8 MB |
+| transfers a race frame (`n3x-native-4x`) | 19.5 and 2,384 tiles (0.110 ms), the one-tile set of 16.13 | |
+| `career` with the resolve byte check and the identity check with perturbation 1,000 (`n3x-check-career`) | 11,430 byte checks, 0 mismatches; 34,573 private resolves and 29,778 clears, 0 violations; 12,464 ranges perturbed, 12,465 reported | |
+| 1:1 images, the same steps | the race correct; the 2D menus identical (0.0% above 4); the car select (entry 0, 4x tiles, the private colour) without seams at lines 256 and 512 | |
+
+The extra identity mismatch is one range of writer `82311080` (`DrawIndexedVertices`), 16 dwords and no marker: its last dword changed after the writer returned. It happened in the menus or the load. A career at the 2x default with the same check (`n3d-idchk-career`) reported exactly the 12,085 perturbed ranges. The main session's decision: it does not block 4x. It is an open item of N1's record path (the record would carry the old dword), and the perturbed identity check stays in every close gate. A second sighting is chased with the guest call stack of the late write. It came in the combination check below, at the 2x default without 4x: writer `82311080`, a range of 17 dwords, dword 15. So it belongs to N1's record path, not to one pass.
+
+**The `-Rov` depth sample comparison (16.11's open item).** The diagnostic `native_rt_surfaces_depth_dump=<directory>` (off by default, any render target path) writes the destination bytes of every unscaled 4x depth fast copy to a file when its submission completes. The 4x tiled race freezes (`n3d-*`) made no such copy. Photo mode at 1x makes three a frame, its tile depths of 1280x256, 1280x256 and 1280x208 (`n3p-*`: `-Rov`, RTV with the dump, RTV with the host resolve and `native_rt_surfaces_unscaled_msaa`). Every pair of runs differed in 83 to 100% of the words, RTV's two variants included. Despite `FM4_FIXED_SEED` and `FM4_FIXED_FRAME_TIME`, the runs freeze photo mode on different race moments, so the comparison is inconclusive. A native 4x race with the dump on (`n3c-race-native`) showed that one pass makes these copies too: the scene depth resolve of 1280x720, 8,940 times in a race. They come from the private depth through `resolve_host_32bpp`'s sample 0, with no byte check and no dump to fall back on. In the tiled race the same destination is written per tile by other copies. The main session's decision: the question is open, and it blocks making 4x a default. It is settled next by computing the dump and the host resolve of the same copy within one tiled RTV run in photo mode, and by checking which corner of a sloped surface sample 0 takes. If they differ, `resolve_host_32bpp` follows the dump.
+
+**The combination check** (snapshot `n3m`: the 4x commit rebased onto N4's close gate at `93bb4dc`, with N4's switches on in `-Native`; launched without `guest_ring_wait_sleep`). The `-Native` default race at 2x (`n3m-race-2x`) runs at 187.8 fps with 5.20 ms of GPU time a frame, against 181.5 fps and 5.36 ms for N4's `n4be14`. One pass is engaged: 12,402 private resolves and 11,273 clears, 580.5 MB. N4's combined-check career with perturbation and the resolve byte check (`n3m-check-career`) shows:
+
+- the binding check: 18,798 perturbed, 18,798 reported;
+- the update guard: 18,627 perturbed, 18,627 reported;
+- the back end: 21,437 perturbed;
+- the resolve byte check: 11,806 checks, 0 mismatches;
+- the identity check: 11,937 perturbed, 11,938 reported, the extra being the second sighting above.
+
+RTV at 1x (`n3m-race-rtv`) runs at 217.9 fps and 2.81 ms with 577.8 MB, as N4's RTV races on `n4be19` (213.6 to 221.1 fps). The 2x race is correct at 1:1.

@@ -248,6 +248,9 @@ class D3D12RenderTargetCache final : public RenderTargetCache {
     bool is_depth = false;
     uint32_t msaa = 0, sample_select = 0, host_offset = 0, width = 0, height = 0;
     std::string where;
+    // native_rt_surfaces_depth_dump: the file readback[0] is written to,
+    // instead of a comparison.
+    std::string dump_file;
   };
   std::vector<HostResolveCheck> host_resolve_checks_;
   ID3D12RootSignature* resolve_texture_root_signature_ = nullptr;
@@ -753,6 +756,9 @@ class D3D12RenderTargetCache final : public RenderTargetCache {
  public:
   // At each frame's start: the byte checks whose submission completed;
   // returns the compared resolves and those that differed.
+  // native_rt_surfaces_depth_dump: reads back a resolve's destination bytes.
+  void QueueResolveDump(D3D12SharedMemory& shared_memory,
+                        const draw_util::ResolveInfo& resolve_info);
   void PollHostResolveChecks(uint64_t completed_submission, uint32_t& checked_out,
                              uint32_t& mismatched_out);
 
@@ -766,12 +772,13 @@ class D3D12RenderTargetCache final : public RenderTargetCache {
 
   // Writes contents of host render targets within rectangles from
   // ResolveInfo::GetCopyEdramTileSpan to edram_buffer_.
-  // With only set, dumps that target alone over the span (the private scene
-  // depth of native_one_pass_msaa), not the owners of the tile map.
+  // With only set, dumps that target alone over the span (a private scene
+  // surface of native_one_pass_msaa), not the owners of the tile map.
   bool DumpRenderTargets(uint32_t dump_base, uint32_t dump_row_length_used, uint32_t dump_rows,
                          uint32_t dump_pitch, RenderTarget* only = nullptr);
-  // The private scene depth a resolve reads, or nullptr.
-  RenderTarget* GetResolvePrivateDepth(const draw_util::ResolveInfo& resolve_info);
+  // The private scene surface (depth, or the 4x colour) a resolve reads, or
+  // nullptr.
+  RenderTarget* GetResolvePrivateSurface(const draw_util::ResolveInfo& resolve_info);
 
   bool use_stencil_reference_output_ = false;
 

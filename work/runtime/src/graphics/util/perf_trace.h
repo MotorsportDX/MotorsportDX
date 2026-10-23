@@ -356,9 +356,10 @@ inline void SetRenderTargetMemory(uint64_t bytes, uint64_t peak, uint32_t target
   rt_targets.store(targets, std::memory_order_relaxed);
 }
 inline void CountRenderTargetResize() { rt_resizes.fetch_add(1, std::memory_order_relaxed); }
-// native_one_pass_msaa (d3d-hle.md 16.17): draws and resolves of the private
-// scene depth, and the check's violations (the scene depth's guest tiles
-// reached through the EDRAM tile map).
+// native_one_pass_msaa (d3d-hle.md 16.17): draws, resolves and clears of the
+// private scene surfaces (the depth, and at 4x the colour), and the
+// violations (their guest tiles reached through the EDRAM tile map, or a 4x
+// resolve of them left to the dump).
 inline std::atomic<uint64_t> one_pass_draws{0}, one_pass_resolves{0}, one_pass_clears{0},
     one_pass_violations{0};
 inline void CountOnePass(std::atomic<uint64_t>& counter, uint64_t count = 1) {

@@ -1093,14 +1093,16 @@ def run_once(options, out):
             raise SystemExit('--native runs on RTV; it cannot be combined with -Rov')
         tiling = [item.split('=', 1)[1] for item in options.env
                   if item.startswith('FM4_TILING_SCENARIO=')]
-        # One pass with 2x MSAA (d3d-hle.md 16.17): the 2x scenario made one tile by the
-        # title's FM4_ONE_PASS_MSAA=2, with the runtime's private scene depth.
+        # One pass with MSAA (d3d-hle.md 16.17): the 2x scenario made one tile by the
+        # title's FM4_ONE_PASS_MSAA=2, with the runtime's private scene depth, or scenario 3
+        # made one 4x tile by FM4_ONE_PASS_MSAA=4, with a private depth and colour.
         one_pass = [item.split('=', 1)[1] for item in options.env
                     if item.startswith('FM4_ONE_PASS_MSAA=')]
-        one_pass_2x = bool(one_pass) and one_pass[-1] == '2' and bool(tiling) and tiling[-1] == '1'
-        if one_pass_2x:
+        one_pass_samples = (one_pass[-1] if one_pass and tiling and
+                            (one_pass[-1], tiling[-1]) in (('2', '1'), ('4', '3')) else None)
+        if one_pass_samples:
             # Bit 8: the host render targets sized to the tiles the title uses (16.15).
-            args.setdefault('native_one_pass_msaa', '2')
+            args.setdefault('native_one_pass_msaa', one_pass_samples)
             args.setdefault('native_rt_surfaces', '10')
         elif not (single_tile if not tiling else tiling[-1] == '2'):
             cause = ('--msaa' if options.msaa else f'--env FM4_TILING_SCENARIO={tiling[-1]}'
