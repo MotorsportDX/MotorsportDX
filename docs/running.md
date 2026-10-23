@@ -337,7 +337,7 @@ of the title is still on the fallback, so the PM4 is the same as on the default
 path, and the render targets stay on RTV.
 
 - Races render in one pass with 2x MSAA (stage N3, increment 4,
-  [section 16.17](analysis/d3d-hle.md)). The title's 2x tiling scenario becomes one 1280x720
+  [section 16.17](analysis/d3d-hle-n3.md)). The title's 2x tiling scenario becomes one 1280x720
   tile (`FM4_ONE_PASS_MSAA=2`), the scene depth gets a private host render target
   (`native_one_pass_msaa=2`), and the host render targets are sized to the tiles the title
   uses (`native_rt_surfaces=10`). TAA and the post passes read the title's resolves of the
@@ -352,12 +352,12 @@ path, and the render targets stay on RTV.
   title's 2x scenario (`FM4_TILING_SCENARIO=1`), as the gates of section 16.17 do.
 - `-Native` with `-Rov` is refused: `-Rov` stays the uncorrected reference.
 - `-Native` also sets `readback_resolve_on_demand=true` (stage N3,
-  [section 16.5](analysis/d3d-hle.md)): resolves skip their readback to guest
+  [section 16.5](analysis/d3d-hle-n3.md)): resolves skip their readback to guest
   memory, and the first access by the CPU to a resolved range waits for the
   readback of the latest resolve to it. On RTV without `-Native` it is off unless
   passed as a cvar; the ROV path never uses it.
 - `-Native` also sets `native_rt_surfaces=2`, or 10 in one pass (stage N3,
-  [section 16.11](analysis/d3d-hle.md)): a resolve whose source one host render
+  [section 16.11](analysis/d3d-hle-n3.md)): a resolve whose source one host render
   target holds reads it directly instead of its dump into the EDRAM buffer. Off on
   RTV without `-Native` unless passed as a cvar; never on the ROV path.
 - `host_render_queue_capacity` (default 256) is the queue length at which a new

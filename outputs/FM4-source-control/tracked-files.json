@@ -89,6 +89,14 @@
       "provenance": "Project documentation; feasibility analysis and plan for a D3D-level HLE of the GPU path (call-site and trace counts, device object offsets, function addresses, design options; no decompiled code, no third-party code and no game content)"
     },
     {
+      "path": "docs/analysis/d3d-hle-n3.md",
+      "provenance": "Project documentation; section 16 of the D3D-level HLE design, stage N3 of the native port (host render targets, resolves, one-pass MSAA: design notes, measurements and table addresses; no decompiled code, no third-party code and no game content)"
+    },
+    {
+      "path": "docs/analysis/d3d-hle-n4.md",
+      "provenance": "Project documentation; section 17 of the D3D-level HLE design, stage N4 of the native port (the render thread's CPU time: design notes and measurements; no decompiled code, no third-party code and no game content)"
+    },
+    {
       "path": "docs/analysis/fsr-plan.md",
       "provenance": "Project documentation; plan for AMD FSR 3.1 beside TAA (version and license review, integration design, stages; no third-party code and no game content)"
     },
