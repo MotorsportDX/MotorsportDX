@@ -6,6 +6,12 @@ and the cores' power. At each phase mark and at the end it also takes the CPU ti
 of the process by its name (SetThreadDescription), so a phase shows which threads used the CPU:
 a thread that spins shows CPU time without the work. Without the counters the power stays None;
 on another platform the sampler records nothing.
+
+With an affinity mask it also confines the process to those logical processors, as a proxy for a
+smaller CPU: at once and again each second where the mask changed (the runtime sets the
+system's mask once at its start). It then also samples those processors' clock and busy share
+(the "Processor Information" counters), since a power plan lowers the clock of lightly loaded
+cores.
 """
 import ctypes
 import json
@@ -116,9 +122,10 @@ class Counters:
 class Sampler:
     """Samples a subprocess.Popen once a second until stop(); mark(name) starts a phase."""
 
-    def __init__(self, process, path):
-        self.process, self.path = process, path
-        self.samples = []  # (time, process CPU ms, package mW, cores mW)
+    def __init__(self, process, path, affinity=None):
+        self.process, self.path, self.affinity = process, path, affinity
+        self.affinity_sets = 0
+        self.samples = []  # (time, process CPU ms, package mW, cores mW, mean MHz, mean busy %)
         self.marks = []  # (name, time, {thread name: [CPU ms, threads]})
         self.stopping = threading.Event()
         self.thread = None
@@ -137,22 +144,45 @@ class Sampler:
                                               ctypes.POINTER(wintypes.HANDLE)]
         pdh.PdhGetFormattedCounterValue.argtypes = [wintypes.HANDLE, wintypes.DWORD, ctypes.c_void_p,
                                                     ctypes.POINTER(PDH_FMT_COUNTERVALUE)]
+        kernel32.GetProcessAffinityMask.argtypes = [wintypes.HANDLE, ctypes.POINTER(ctypes.c_size_t),
+                                                    ctypes.POINTER(ctypes.c_size_t)]
+        kernel32.SetProcessAffinityMask.argtypes = [wintypes.HANDLE, ctypes.c_size_t]
+        self._apply_affinity()
         self.thread = threading.Thread(target=self._run, daemon=True)
         self.thread.start()
+
+    def _apply_affinity(self):
+        if not self.affinity:
+            return
+        handle = wintypes.HANDLE(int(self.process._handle))
+        current, system = ctypes.c_size_t(), ctypes.c_size_t()
+        if kernel32.GetProcessAffinityMask(handle, ctypes.byref(current), ctypes.byref(system)) and                 current.value != self.affinity and kernel32.SetProcessAffinityMask(handle, self.affinity):
+            self.affinity_sets += 1
 
     def _process_ms(self):
         return _times(kernel32.GetProcessTimes, wintypes.HANDLE(int(self.process._handle)))
 
     def _run(self):
-        counters = Counters([PACKAGE, CORES])
+        processors = [i for i in range(64) if self.affinity and self.affinity >> i & 1]
+        clocks = [rf'\Processor Information(0,{i})\Actual Frequency' for i in processors]
+        busy = [rf'\Processor Information(0,{i})\% Processor Time' for i in processors]
+        counters = Counters([PACKAGE, CORES] + clocks + busy)
+
+        def mean(paths):
+            values = [counters.value(path) for path in paths]
+            values = [value for value in values if value is not None]
+            return sum(values) / len(values) if values else None
         try:
             with open(self.path, 'w') as output:
                 while not self.stopping.wait(1.0) and self.process.poll() is None:
+                    self._apply_affinity()
                     counters.collect()
-                    sample = (time.time(), self._process_ms(), counters.value(PACKAGE), counters.value(CORES))
+                    sample = (time.time(), self._process_ms(), counters.value(PACKAGE), counters.value(CORES),
+                              mean(clocks), mean(busy))
                     self.samples.append(sample)
                     output.write(json.dumps({'t': round(sample[0], 3), 'process_cpu_ms': sample[1],
-                                             'package_mw': sample[2], 'cores_mw': sample[3]}) + '\n')
+                                             'package_mw': sample[2], 'cores_mw': sample[3],
+                                             'affinity_mhz': sample[4], 'affinity_busy_pct': sample[5]}) + '\n')
         finally:
             counters.close()
 
@@ -187,6 +217,11 @@ class Sampler:
                 'process_cpu_ms_per_s': round((inside[-1][1] - inside[0][1]) / seconds, 1),
                 'package_w': mean([s[2] for s in inside if s[2] is not None]),
                 'cores_w': mean([s[3] for s in inside if s[3] is not None]),
+                # With an affinity mask: its processors' mean clock (MHz) and busy share (%).
+                'affinity_mhz': (lambda v: round(sum(v) / len(v)) if v else None)(
+                    [s[4] for s in inside if len(s) > 4 and s[4] is not None]),
+                'affinity_busy_pct': (lambda v: round(sum(v) / len(v), 1) if v else None)(
+                    [s[5] for s in inside if len(s) > 5 and s[5] is not None]),
                 'threads': {thread: [round(ms, 1), count] for thread, (ms, count) in top},
             }
         return result

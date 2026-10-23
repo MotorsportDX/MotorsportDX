@@ -25,6 +25,7 @@ set(REXGPU_XENOS_SOURCES
     util/draw_extent_estimator.cpp
     util/draw.cpp
     util/read_trace.cpp
+    util/process_cpu.cpp
     packet_disassembler.cpp
     primitive_processor.cpp
     pipeline/render_target/cache.cpp

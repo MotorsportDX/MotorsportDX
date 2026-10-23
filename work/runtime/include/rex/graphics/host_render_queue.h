@@ -28,6 +28,9 @@ class HostRenderQueue {
     uint32_t begin = 0;
     uint32_t end = 0;
     std::function<void()> call;
+    // perf_trace::Now() when it was pushed (the oldest kick of a merged span),
+    // with the perf trace only: the record's wait in the queue.
+    uint64_t pushed = 0;
   };
   // capacity: the queue length above which a new PM4 span merges into the last
   // record, when that is a span, instead of being appended. Calls are not

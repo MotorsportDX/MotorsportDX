@@ -64,6 +64,7 @@ void HostRenderQueue::PushPm4Span(uint32_t end_index) {
       record.kind = Kind::kPm4Span;
       record.begin = span_end_;
       record.end = end_index;
+      record.pushed = perf_trace::Get() ? perf_trace::Now() : 0;
     }
     span_end_ = end_index;
   }
@@ -77,6 +78,7 @@ void HostRenderQueue::PushCall(std::function<void()> fn) {
     record.sequence = next_sequence_++;
     record.kind = Kind::kCall;
     record.call = std::move(fn);
+    record.pushed = perf_trace::Get() ? perf_trace::Now() : 0;
   }
   event_->Set();
 }
@@ -147,7 +149,7 @@ void CommandProcessor::HostRenderThreadMain() {
       perf_trace::AddWait(perf_start, perf_trace::Wait::kGuestIdle);
       continue;
     }
-    perf_trace::CountHostRecord(depth);
+    perf_trace::CountHostRecord(depth, record.pushed);
     switch (record.kind) {
       case HostRenderQueue::Kind::kCall:
         record.call();

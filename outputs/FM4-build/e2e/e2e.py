@@ -1147,7 +1147,8 @@ def run_once(options, out):
     started = time.time()
     process = subprocess.Popen(command, cwd=root, env=env, stdout=stderr, stderr=subprocess.STDOUT)
     # The process's CPU time and the CPU package's power each second, the threads' CPU time per phase.
-    sampler = cpu_power.Sampler(process, out / 'cpu_power.jsonl')
+    sampler = cpu_power.Sampler(process, out / 'cpu_power.jsonl',
+                                int(options.affinity, 0) if options.affinity else None)
     timeline = []
     crashed = None
     goal_reached = None
@@ -1282,6 +1283,7 @@ def run_once(options, out):
         'clear_gray_frames': clear_gray_frames,
         'washed_out_frames': washed_out_frames,
         'cpu_power': sampler.summary(),
+        'affinity': {'mask': options.affinity, 'sets': sampler.affinity_sets} if options.affinity else None,
         'errors': errors,
         'top_errors': sorted(errors.items(), key=lambda kv: -kv[1])[:10],
     }
@@ -1524,6 +1526,8 @@ def main():
                         help='run N times into <out>/run1..runN and aggregate into <out>/summary.json')
     parser.add_argument('--resummarize', action='store_true',
                         help='recompute summary.json of existing runs in --out from their perf.jsonl')
+    parser.add_argument('--affinity', help='confine the game to these logical processors, a mask such as '
+                        '0xC3, as a proxy for a smaller CPU (cpu_power.py)')
     parser.add_argument('--min-free-gb', type=float, default=MIN_FREE_GB,
                         help='refuse to run with less free space on the drive of --out')
     options = parser.parse_args()

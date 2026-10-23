@@ -3,6 +3,7 @@
 // its time, written as JSON lines to REX_PERF_TRACE_FILE. Diagnostic only: when
 // the variable is unset every helper returns immediately.
 
+#include <algorithm>
 #include <array>
 #include <atomic>
 #include <chrono>
@@ -17,6 +18,7 @@
 
 #include <rex/system/gpu_progress.h>
 
+#include "process_cpu.h"
 #include "read_trace.h"
 
 namespace rex::graphics::perf_trace {
@@ -149,6 +151,11 @@ struct State {
   // Host render thread (host_render_thread): records taken, and the sum and
   // maximum of the queue depth when each was taken.
   uint64_t host_records = 0, host_depth_sum = 0, host_depth_max = 0;
+  // And each record's wait in the queue, from its push to its take (d3d-hle-n4.md
+  // 17.18): sum, maximum and 0.25 ms bins (the last holds 16 ms and more), in ns.
+  static constexpr uint32_t kHostWaitBins = 65;
+  uint64_t host_waited = 0, host_wait_sum = 0, host_wait_max = 0;
+  uint32_t host_wait_bins[kHostWaitBins]{};
 };
 
 // Every resolve destination seen in the run, rewritten as JSON next to the
@@ -571,12 +578,20 @@ inline std::atomic<uint64_t> host_check_mismatches{0}, host_check_overwritten{0}
 inline void CountHostMergedSpan() {
   if (Get()) host_merged_spans.fetch_add(1, std::memory_order_relaxed);
 }
-inline void CountHostRecord(uint64_t depth) {
+inline void CountHostRecord(uint64_t depth, uint64_t pushed) {
   State* state = Get();
   if (!state) return;
   ++state->host_records;
   state->host_depth_sum += depth;
   state->host_depth_max = depth > state->host_depth_max ? depth : state->host_depth_max;
+  if (pushed) {
+    const uint64_t now = Now();
+    const uint64_t wait = now > pushed ? now - pushed : 0;
+    ++state->host_waited;
+    state->host_wait_sum += wait;
+    state->host_wait_max = wait > state->host_wait_max ? wait : state->host_wait_max;
+    ++state->host_wait_bins[std::min<uint64_t>(wait / 250000, State::kHostWaitBins - 1)];
+  }
 }
 
 // Submit thread (its own thread): jobs finished, and wall time per job in
@@ -932,6 +947,7 @@ inline void OnSwap() {
   state->output << ",\"vblanks\":{\"grid\":" << vblanks[0].exchange(0, std::memory_order_relaxed)
                 << ",\"late\":" << vblanks[1].exchange(0, std::memory_order_relaxed)
                 << ",\"forced\":" << vblanks[2].exchange(0, std::memory_order_relaxed) << '}';
+  if (ProcessCpuEnabled()) WriteProcessCpu(state->output);
   // The title's ring index waits that slept (guest_ring_wait_sleep, d3d-hle-n4.md 17.16).
   {
     const rex::system::gpu_progress::WaitStats ring = rex::system::gpu_progress::TakeWaitStats();
@@ -1048,8 +1064,26 @@ inline void OnSwap() {
     state->output << "},\"render_thread_busy_ms\":"
                   << ms(elapsed > wait_ticks ? elapsed - wait_ticks : 0) << ",\"queue_depth_mean\":"
                   << (state->host_records ? double(state->host_depth_sum) / state->host_records : 0.0)
-                  << ",\"queue_depth_max\":" << state->host_depth_max
-                  << ",\"host_render\":{\"records\":" << state->host_records
+                  << ",\"queue_depth_max\":" << state->host_depth_max;
+    // The records' wait in the queue: mean, median, p99 (the upper edge of
+    // their 0.25 ms bin) and maximum.
+    {
+      auto quantile = [state](double fraction) {
+        const uint64_t target = uint64_t(fraction * double(state->host_waited));
+        uint64_t seen = 0;
+        for (uint32_t i = 0; i < State::kHostWaitBins; ++i) {
+          seen += state->host_wait_bins[i];
+          if (seen > target) return (i + 1) * 0.25;
+        }
+        return State::kHostWaitBins * 0.25;
+      };
+      state->output << ",\"queue_wait_ms\":{\"mean\":"
+                    << (state->host_waited ? state->host_wait_sum / 1e6 / state->host_waited : 0.0)
+                    << ",\"p50\":" << (state->host_waited ? quantile(0.5) : 0.0)
+                    << ",\"p99\":" << (state->host_waited ? quantile(0.99) : 0.0)
+                    << ",\"max\":" << state->host_wait_max / 1e6 << '}';
+    }
+    state->output << ",\"host_render\":{\"records\":" << state->host_records
                   << ",\"merged_spans\":" << host_merged_spans.exchange(0, std::memory_order_relaxed);
     if (host_records.load(std::memory_order_relaxed)) {
       state->output << ",\"records_applied\":" << host_records_applied
