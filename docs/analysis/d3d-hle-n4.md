@@ -641,3 +641,9 @@ The render thread of RTV is the command processor (the window less its waits). O
 - `high_resolution_timing` on (the default): no measurable effect either way.
 
 So the data supports one change of default for the Ally X: render scale 1x instead of the 2x the launcher picks for a 1080p panel, by a device or GPU class rule or the Ally X profile. The panel's 1.5x and an upscaler stay N5's (8.1).
+
+**The main session's decisions of 24 October 2026.**
+- **N4's CPU half on the Ally X is met in substance.** The device is GPU bound in every mode, the render thread's busy time follows the CPU's clock and does not limit, and no thread is saturated. The 2.5 ms busy time a frame is a criterion of the main PC.
+- **The device target at the panel's resolution moves to N5**, the native-resolution work the project owner approved on 24 October 2026: a fractional 1.5x render scale for 1080p, widescreen and up to 4K, on the native path ([d3d-hle-n5.md](d3d-hle-n5.md)).
+- **N4 closes** once the host presents item (17.22) is finished.
+- **The Ally X default for now: render scale 1x** through a launcher rule for integrated GPUs (a UMA adapter, or under about 1 GB of dedicated video memory) on a 1080p panel, until N5's 1.5x is measured on the device; the user can still choose another scale. The render path's default stays RTV everywhere; the native path stays an option in the GUI launcher, and flipping the global default is a separate decision after N5.
