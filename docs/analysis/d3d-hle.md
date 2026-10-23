@@ -265,7 +265,7 @@ The measurement part of N0 was done on 21 October 2026 (section 13). N0 to N4 to
 - The harness for these rules exists since 21 October 2026 ([frozen-frame parity](../e2e/frozen-frames.md)): the `freeze` scenario (a Quick Race rewound to its oldest frame, 2x, the pinned look and occlusion), `frame_diff.py` (the share of pixels above a level, 1:1 crops), `parity.py` (FAIL on draws and predicated packets per frame, the image difference and new error keys) and the backend-neutral `summary.json` fields. Within a run the frozen frame is byte-identical. With the fixed seed of the race setup (`FM4_FIXED_SEED`) and the rewind's first press pinned to race frame 720, four baseline runs (two RTV, two `-Rov`) differ by up to 1.6% in draws and predicated packets per frame, and RTV and `-Rov` at about the same moment agree within 0.1%; `parity.py` fails above 3%. Their frozen frames still differ in 19 to 34% of the pixels (race frames counted in pad polls; up to 48% with the earlier presses on the wall clock): the race advances by wall time, so the same race frame is another moment in each run. `parity.py` fails above 60% of the pixels, which catches a broken frame only; that is the image limit of the native path (section 11), and wrong details are left to the state-level dual run and the 1:1 crops. The race clock is found (the main loop's step; `FM4_FIXED_FRAME_TIME=1` fixes it, and the 3-2-1 starts on a fixed update), but the race still diverges from a last-bit difference during the revving before the start, so a pair with it differs in 25.6% of the pixels; a tighter image limit would need that input found as well (see [what pinning the moment needs](../e2e/frozen-frames.md#what-pinning-the-moment-needs)).
 - RTV against `-Rov` stays the reference comparison (AGENTS.md); no stage changes `-Rov`.
 - A watchdog that logs any guest wait longer than a set time, and soak runs over menus, races, the career, replays and photo mode.
-- Success criteria (proposed targets, to be confirmed against the N0 baseline of the USA build with the launcher defaults): at 240 Hz and 1x in the race, the render thread busy at most 2.5 ms per frame (the CP took 3.2 to 3.4 ms) and p99 at most 5.0 ms (5.59 to 5.78 ms), both against the 20 October 2026 smoke runs on the Japan/Asia BuildRoot `I:\FM4-build-pass`; the guest render thread reported per frame; on the ROG Xbox Ally X the device targets of 8.1; at 2x a GPU time per frame not above the RTV path; frozen frames within the image limit of section 11 and no new error keys.
+- Success criteria (proposed targets, to be confirmed against the N0 baseline of the USA build with the launcher defaults; the main PC's CPU criterion was judged met on 23 October 2026, [17.14](#1714-the-main-pcs-cpu-target-the-main-sessions-decision-of-23-october-2026)): at 240 Hz and 1x in the race, the render thread busy at most 2.5 ms per frame (the CP took 3.2 to 3.4 ms) and p99 at most 5.0 ms (5.59 to 5.78 ms), both against the 20 October 2026 smoke runs on the Japan/Asia BuildRoot `I:\FM4-build-pass`; the guest render thread reported per frame; on the ROG Xbox Ally X the device targets of 8.1; at 2x a GPU time per frame not above the RTV path; frozen frames within the image limit of section 11 and no new error keys.
 
 ### Gate tiers (the main session's decision of 22 October 2026)
 
@@ -1527,3 +1527,14 @@ The A/B (`n4p-race-goff*` against `-gon*`, fitted at 1,800 draws a race frame; 8
 | p99 over 2,400 draws a frame | 5.10 ms (5 windows) | | 6.34 ms |
 
 At 240 Hz the race now runs at the refresh rate in most windows; p99 holds 5.0 ms up to 2,000 draws a frame and exceeds it by 0.3 ms above that.
+
+### 17.14 The main PC's CPU target (the main session's decision of 23 October 2026)
+
+The main session judged the CPU criterion of section 10 met on the main PC with the switches of 17.8 to 17.13 (the back end on the replay, `texture_bindings_keep_same_dwords`, `render_target_update_guard`):
+
+- The render thread is busy 2.72 ms per race frame at 1,800 draws, against the 2.5 ms of section 10.
+- The race runs at the refresh rate at 240 Hz (238.6 fps in the median window, 1.05% of the frames over 5 ms), with p99 5.02 ms pooled, at most 5.0 ms up to 2,000 draws a frame and 5.1 to 5.3 ms above (17.13).
+- The 2.5 ms stood in for p99 at 240 Hz, and that purpose holds within 0.02 ms pooled. Most of what remains is the dispatch of about 28,000 PM4 packets a frame, about 0.4 ms (17.11), which only fewer packets reduce: it moves to the API-level stage, where draws become records.
+- The criterion's other half, the ROG Xbox Ally X (8.1), stays open.
+
+Next: N4's close gate, which turns the three switches on in `-Native`, then the other items of N4's row (section 9) with their own step gates.
