@@ -223,7 +223,7 @@ python outputs\FM4-build\e2e\compare.py <BuildRoot>\e2e\baseline-v2 <BuildRoot>\
 - `frame_ms_p99` up more than 20%;
 - an error key that the baseline does not have.
 
-A wait cause up more than 20% and more than 5 ms/s, or different capture statistics (luma, black and saturated share, luma histogram), only WARN. So does a rise in `clear_gray_frames`. Races are not deterministic, so check captures by eye.
+A wait cause up more than 20% and more than 5 ms/s, or different capture statistics (luma, black and saturated share, luma histogram), only WARN. So does a rise in `clear_gray_frames` or `washed_out_frames`. Races are not deterministic, so check captures by eye.
 
 For image, draw and predication parity of one scene, use the `freeze` scenario and `parity.py` ([frozen-frames.md](frozen-frames.md)); a stage of the native port runs both gates.
 
@@ -284,6 +284,7 @@ The statistics come from the steady part of the perf trace: without `--measure`,
 | `phase_steady_ms`, `n0_trace`, `n0_trace_offset` | each phase on the steady clock (ms), and the `FM4_N0_TRACE` file of the run and where its lines start in it, whose seconds give the phases `guest_render_thread_ms_per_frame_median` ([frozen-frames.md](frozen-frames.md#backend-neutral-fields)) |
 | `final_capture` | `luma_mean`, `black_pct` (luma below 8), `saturated_pct` (luma 248 and above) and `luma_hist16` (16 bins) of the last capture |
 | `clear_gray_frames` | captures in which the exact FM4 clear color (102,102,102) covers at least 1% more than the mean of the neutral grays 97-101 and 103-107 do, i.e. geometry such as the road surface was not drawn; asphalt smoothed by TAA spreads over those grays and is not counted |
+| `washed_out_frames` | the race's captures with a horizontal band (a quarter of the height) washed out to white, with the bands (0 at the top): a luma mean of 240 or more with a standard deviation under 20; a build that lost the scene showed its upper half white ([d3d-hle-n4.md 17.15](../analysis/d3d-hle-n4.md#1715-the-close-gate-23-october-2026)). `e2e.py` prints a WARN line when there are any. Over 5,098 race captures of 478 earlier runs it flags only that build's |
 | `errors`, `top_errors` | runtime log lines that match an error marker, keyed by their text (first 90 characters, numbers replaced by `#`) with counts; `top_errors` lists the ten most frequent |
 
 With `--repeat`, `summary.json` is an aggregate (`repeat`, `runs`, and the same keys): `fps_median` is the median of the runs' medians, `fps_min` the minimum of their minimums, `errors` the union with summed counts, `goal_reached` true only when every run reached it, and `final_captures` lists each run's final statistics. `--resummarize` recomputes these from the `perf.jsonl` files of finished runs, for example after the harness gained new fields.

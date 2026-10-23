@@ -227,8 +227,12 @@ runtime edits need only this stage. It then:
 - runs the arithmetic instruction tests, the post pass tests (the GTAO passes on WARP)
   and the shader-mod CPU tests (no GPU needed; see the
   [post pass framework](analysis/post-pass-framework.md));
-- writes `build-result.json`, which lists the SHA-256 hashes of the artifacts and
-  records `gameplay_verified: false`;
+- writes `build-result.json`, which lists the SHA-256 hashes of the artifacts, records
+  `gameplay_verified: false`, and records in `source` what was compiled: the `head` of the
+  checkout that ran the build, `dirty` when its `work/runtime` or `work/fm4-rex` differ from
+  it, and `tree`, a SHA-256 over the BuildRoot's `runtime-source` and the project's title
+  sources, which another checkout may have left there (a `matrix.py` snapshot keeps the file,
+  and each e2e run's `summary.json` copies `source` into `binary`);
 - builds the [GUI launcher](running.md#gui-launcher), `game-build\fm4_launcher.exe`,
   from [work/fm4-launcher](../work/fm4-launcher) with the runtime's SDL3, Dear ImGui
   and JSON header, writes its tables to `launcher.json` and copies the look mods and

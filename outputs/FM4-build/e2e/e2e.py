@@ -280,6 +280,25 @@ def is_clear_gray(rgb, width, height):
     around = [rgb.count(bytes([v, v, v])) for v in (*range(97, 102), *range(103, 108))]
     return clear - sum(around) / len(around) >= 0.01 * width * height
 
+
+def washed_out_bands(rgb, width, height, bands=4):
+    """The horizontal bands (quarters of the height, from the top) of a capture that are washed
+    out to white: a luma mean of 240 or more with a standard deviation under 20, on a grid of
+    about 320x180 samples. A race capture has detail in every band (sky, scenery, road, the
+    HUD); a build that lost the scene showed its upper half white (d3d-hle-n4.md 17.15)."""
+    step_x, step_y = max(1, width // 320), max(1, height // 180)
+    result = []
+    for band in range(bands):
+        values = []
+        for y in range(band * height // bands, (band + 1) * height // bands, step_y):
+            row = rgb[y * width * 3:(y + 1) * width * 3]
+            values += [(299 * r + 587 * g + 114 * b) // 1000
+                       for r, g, b in zip(row[0::3 * step_x], row[1::3 * step_x], row[2::3 * step_x])]
+        mean = sum(values) / len(values)
+        if mean >= 240 and sum((v - mean) ** 2 for v in values) / len(values) < 20 ** 2:
+            result.append(band)
+    return result
+
 # Goals for Jev-driven navigation. The route is guidance for the judgment, not a script.
 GOALS = {
     'quickrace': {
@@ -1200,10 +1219,15 @@ def run_once(options, out):
         ppm_to_png(frames[-1], out / 'final.png')
         final_stats = capture_stats(frames[-1])
     clear_gray_frames = []
+    # The race's captures with a band washed out to white: {frame stem: [bands]}.
+    washed_out_frames = {}
+    race_frames = set(phase_frames.get('race', []))
     for frame in frames:
         width, height, rgb = read_ppm(frame)
         if is_clear_gray(rgb, width, height):
             clear_gray_frames.append(frame.stem)
+        if frame.stem in race_frames and (bands := washed_out_bands(rgb, width, height)):
+            washed_out_frames[frame.stem] = bands
         ppm_to_png(frame, frame.with_suffix('.png'))
         if not options.keep_ppm and not freeze:
             frame.unlink()
@@ -1222,13 +1246,20 @@ def run_once(options, out):
     phase_windows = windows_by_phase(phases, len(perf))
     phase_stats = {name: summarize(perf[start:end], end - start) for name, (start, end) in phase_windows.items()}
     exe = root / options.game_build / 'fm4_rex.exe'
+    # The source the binary was built from, when its build result is next to it (a snapshot)
+    # or it is the BuildRoot's game-build.
+    build_result = root / options.game_build / 'build-result.json'
+    if not build_result.is_file() and Path(options.game_build) == Path('game-build'):
+        build_result = root / 'build-result.json'
+    source = json.loads(build_result.read_text()).get('source') if build_result.is_file() else None
     summary = {
         'crashed': crashed, 'goal': options.goal, 'scenario': None if options.steps else options.scenario,
         'goal_reached': goal_reached, 'failed_step': failed_step, 'args': options.arg, 'profile': options.profile,
         'look': look,
         # The binary the run used: a baseline variance or a parity verdict holds for one binary.
         'binary': {'path': str(exe), 'sha256': pipeline.digest(exe),
-                   'mtime': time.strftime('%Y-%m-%d %H:%M:%S', time.localtime(exe.stat().st_mtime))},
+                   'mtime': time.strftime('%Y-%m-%d %H:%M:%S', time.localtime(exe.stat().st_mtime)),
+                   'source': source},
         'seconds': round(time.time() - started, 1), 'timeline': timeline,
         'route': 'fast' if options.fast_route and not options.steps and not options.goal else 'menus',
         # The title's screen events, in seconds from the launch as the timeline.
@@ -1242,6 +1273,7 @@ def run_once(options, out):
         'n0_trace': n0_trace, 'n0_trace_offset': n0_offset,
         'final_capture': final_stats,
         'clear_gray_frames': clear_gray_frames,
+        'washed_out_frames': washed_out_frames,
         'errors': errors,
         'top_errors': sorted(errors.items(), key=lambda kv: -kv[1])[:10],
     }
@@ -1294,6 +1326,7 @@ def aggregate(runs):
         'submit_thread_counts_per_s_median': nested('submit_thread_counts_per_s_median'),
         'final_captures': [r['final_capture'] for r in runs],
         'clear_gray_frames': sum(len(r.get('clear_gray_frames', [])) for r in runs),
+        'washed_out_frames': sum(len(r.get('washed_out_frames', {})) for r in runs),
         'errors': errors,
         'top_errors': sorted(errors.items(), key=lambda kv: -kv[1])[:10],
     }
@@ -1509,6 +1542,10 @@ def main():
         summary = aggregate(runs)
         (out / 'summary.json').write_text(json.dumps(summary, indent=2))
     print(json.dumps({k: v for k, v in summary.items() if k != 'errors'}, indent=2))
+    washed = summary.get('washed_out_frames')
+    if washed:
+        print(f'WARN: {washed if isinstance(washed, int) else len(washed)} race captures have a band '
+              f'washed out to white (washed_out_frames); look at the captures', flush=True)
     if summary['crashed'] or summary['goal_reached'] is False:
         sys.exit(1)
 

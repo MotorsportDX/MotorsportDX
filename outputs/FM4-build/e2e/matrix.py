@@ -50,6 +50,8 @@ def snapshot(root, source, name):
     for item in (root / source).iterdir():
         if item.is_file() and item.suffix.lower() in ('.exe', '.dll', '.pdb', '.map'):
             shutil.copy2(item, target / item.name)
+    # The snapshot keeps what it was built from (the source's HEAD, dirty flag and tree hash).
+    shutil.copy2(root / 'build-result.json', target / 'build-result.json')
     return target.relative_to(root)
 
 

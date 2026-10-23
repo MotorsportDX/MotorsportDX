@@ -165,6 +165,11 @@ def check_warn(b, c):
     if gray(c) > gray(b):
         warn.append(f"captures showing the clear color (missing geometry) {gray(b)} -> {gray(c)}; "
                     f"{CAPTURE_NOTE}")
+    washed = lambda d: d.get("washed_out_frames") if isinstance(d.get("washed_out_frames"), int) \
+        else len(d.get("washed_out_frames") or {})
+    if washed(c) > washed(b):
+        warn.append(f"race captures with a band washed out to white {washed(b)} -> {washed(c)}; "
+                    f"{CAPTURE_NOTE}")
     bp, cp = b.get("phases") or {}, c.get("phases") or {}
     for name in [n for n in bp if n in cp]:
         p = pair(bp[name], cp[name], "frame_ms_p99")

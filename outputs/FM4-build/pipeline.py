@@ -56,10 +56,37 @@ def digest(path):
         return hashlib.file_digest(stream, 'sha256').hexdigest()
 
 def copy_source(source, destination):
-    """Keep timestamps stable when regenerating an unchanged private project."""
+    """Keep timestamps stable when regenerating an unchanged private project. A copied file
+    gets the current time, so an object compiled from another checkout's newer version of it
+    does not look up to date."""
     source, destination = Path(source), Path(destination)
     if not destination.is_file() or source.read_bytes() != destination.read_bytes():
         shutil.copyfile(source, destination)
+        os.utime(destination)
+
+def source_state(root):
+    """What a build compiled: the HEAD of the checkout that ran it, whether its work/runtime or
+    work/fm4-rex differ from HEAD, and a SHA-256 over the paths and contents of the BuildRoot's
+    runtime-source (its mirror listing) and the project's title sources (src, tests,
+    CMakeLists.txt), which another checkout may have left there."""
+    def git(*args):
+        result=subprocess.run(['git','-C',REPO,*args],capture_output=True,text=True)
+        return result.stdout.strip() if result.returncode==0 else None
+    source,project=root/'runtime-source',root/'project'
+    listing=source/'.fm4-runtime-files.json'
+    files=[('runtime-source/'+relative,source/relative)
+           for relative in (json.loads(listing.read_text()) if listing.is_file() else [])]
+    for directory in ('src','tests'):
+        files+=[(path.relative_to(root).as_posix(),path)
+                for path in (project/directory).rglob('*') if path.is_file()]
+    if (project/'CMakeLists.txt').is_file():
+        files.append(('project/CMakeLists.txt',project/'CMakeLists.txt'))
+    tree=hashlib.sha256()
+    for name,path in sorted(files):
+        if path.is_file():
+            tree.update(name.encode()+b'\0'+bytes.fromhex(digest(path)))
+    status=git('status','--porcelain','--','work/runtime','work/fm4-rex')
+    return {'head':git('rev-parse','HEAD'),'dirty':bool(status),'tree':tree.hexdigest()}
 
 def run(args, cwd=None, log=None, env=None):
     args = [str(x) for x in args]
@@ -387,7 +414,8 @@ def build_game(root,fxc,jobs,flavor=()):
     run([build/'fm4_instruction_tests.exe'],cwd=build,log=root/f'logs/instruction-tests{suffix}.log')
     post_pass_tests(root,jobs)
     artifacts = ['fm4_rex.exe','fm4_rex_XMediaFacade_default.dll','fm4_rex_SpeechFacade_default.dll','rexruntime.dll','rexgpu-xenos.dll']
-    report = {'artifacts':{name:digest(build/name) for name in artifacts},'gameplay_verified':False}
+    report = {'artifacts':{name:digest(build/name) for name in artifacts},'gameplay_verified':False,
+              'source':source_state(root)}
     (root/f'build-result{suffix}.json').write_text(json.dumps(report,indent=2))
     if not flavor:
         build_launcher(root,jobs)

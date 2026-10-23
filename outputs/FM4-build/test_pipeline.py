@@ -1,8 +1,10 @@
 """Synthetic tests: no FM4 bytes or original game assets are needed."""
 import json
+import os
 from pathlib import Path
 import struct
 import tempfile
+import time
 import unittest
 from unittest.mock import patch
 
@@ -10,7 +12,7 @@ import pipeline
 from prepare import switches, BASE
 import sys
 sys.path.insert(0,str(Path(__file__).resolve().parent/'e2e'))
-from e2e import is_clear_gray
+from e2e import is_clear_gray, washed_out_bands
 
 class PipelineTests(unittest.TestCase):
     def dispatch(self):
@@ -425,6 +427,38 @@ class PipelineTests(unittest.TestCase):
             self.assertEqual(set(recipe),{'start','end','address','register','count'})
             self.assertNotIn('labels',recipe)
 
+    def test_copy_source_replaces_newer_destination(self):
+        # Another checkout compiled its own, newer version of a file: older source content
+        # replaces it with the current time, so the build recompiles; equal content keeps the time.
+        with tempfile.TemporaryDirectory() as directory:
+            directory=Path(directory)
+            source,destination=directory/'source.cpp',directory/'mirror.cpp'
+            source.write_text('old')
+            destination.write_text('newer elsewhere')
+            os.utime(source,(1_000_000,1_000_000))
+            os.utime(destination,(2_000_000_000,2_000_000_000))
+            before=time.time()
+            pipeline.copy_source(source,destination)
+            self.assertEqual(destination.read_text(),'old')
+            self.assertGreaterEqual(destination.stat().st_mtime,before-2)
+            self.assertLess(destination.stat().st_mtime,2_000_000_000)
+            os.utime(destination,(1_500_000_000,1_500_000_000))
+            pipeline.copy_source(source,destination)
+            self.assertEqual(destination.stat().st_mtime,1_500_000_000)
+
+    def test_source_state(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root=Path(directory)
+            (root/'runtime-source/src').mkdir(parents=True)
+            (root/'runtime-source/src/a.cpp').write_text('a')
+            (root/'runtime-source/.fm4-runtime-files.json').write_text(json.dumps(['src/a.cpp']))
+            (root/'project/src').mkdir(parents=True)
+            (root/'project/src/b.cpp').write_text('b')
+            state=pipeline.source_state(root)
+            self.assertEqual(set(state),{'head','dirty','tree'})
+            (root/'project/src/b.cpp').write_text('changed')
+            self.assertNotEqual(pipeline.source_state(root)['tree'],state['tree'])
+
     def test_clear_gray(self):
         """The e2e clear color check: smooth neutral grays that pass 102 (asphalt under TAA) are no
         missing geometry; 102 over 1% of the capture more than the grays around it is."""
@@ -438,5 +472,19 @@ class PipelineTests(unittest.TestCase):
             missing[-rows*width*3:]=bytes([102]*3)*(rows*width)
             self.assertTrue(is_clear_gray(bytes(missing),width,height),rows)
         self.assertFalse(is_clear_gray(bytes([30,30,30])*width*height,width,height))
+
+    def test_washed_out_bands(self):
+        """A race capture with detail everywhere has no washed-out band; one whose upper half is
+        flat white (a build that lost the scene) has bands 0 and 1; a bright band with detail
+        (a sunlit sky with clouds) is not washed out."""
+        width,height=640,360
+        detail=b''.join(bytes([(x*7+y*3)%256]*3) for y in range(height) for x in range(width))
+        self.assertEqual(washed_out_bands(detail,width,height),[])
+        half=bytearray(detail)
+        half[:height//2*width*3]=bytes([250,248,240])*(height//2*width)
+        self.assertEqual(washed_out_bands(bytes(half),width,height),[0,1])
+        bright=bytearray(detail)
+        bright[:height//4*width*3]=b''.join(bytes([200+(x%2)*55]*3) for y in range(height//4) for x in range(width))
+        self.assertEqual(washed_out_bands(bytes(bright),width,height),[])
 
 if __name__=='__main__': unittest.main()

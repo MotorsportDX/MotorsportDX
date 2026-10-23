@@ -203,7 +203,7 @@ The scenario texts (`SCENARIOS` in `e2e.py`) were tuned against what Windows OCR
 After the game exits or is killed, `run_once`:
 
 1. converts every PPM to a PNG at half size (`ppm_to_png`, its own PNG writer, no image library), and deletes the PPM unless `--keep-ppm` is given;
-2. computes luma statistics of the last capture (`capture_stats`) and counts captures in which the FM4 clear color (102,102,102) covers at least 1% (`clear_gray_frames`);
+2. computes luma statistics of the last capture (`capture_stats`) and counts captures in which the FM4 clear color (102,102,102) covers at least 1% (`clear_gray_frames`) and the race's captures with a band washed out to white (`washed_out_frames`);
 3. reads `perf.jsonl` and `runtime.log`, and writes `summary.json` (fields in [README.md](README.md#reading-summaryjson)).
 
 ### Gates and comparison
