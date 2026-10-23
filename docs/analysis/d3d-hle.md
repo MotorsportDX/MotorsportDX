@@ -1196,6 +1196,25 @@ It also counts the private target's draws, resolves and clears. The unscaled fas
 
 Columns 0 to 11 are overwritten before anything reads them, so the pass's first draws cover the target; the thirteenth column (pixels 480 to 520 at 4x) is only partly inside the target's 512 pixels, so it is copied and the overwrite covers its part up to pixel 512. The depth's bytes therefore survive only in pixels 512 to 520, which the 512x512 resolve never reads. The alias carries nothing to the screen, so the private depth needs no alias copy. In the tiled modes the 2x tiles are drawn in order (window offsets 0, then -512 lines), and the tiles before the last one end with a resolve that clears the depth, so the depth tiles past 1024 hold the last tile's rows or the clear value at that point. Either way they reach only those pixels.
 
+**Steps 3 and 4.** `Build.ps1 -Native -MsaaSamples 2` (`pipeline.py --msaa-samples 2`) runs the races in one pass with 2x MSAA. It sets `FM4_ONE_PASS_MSAA=2`, the 2x scenario and `native_one_pass_msaa=2` with the native cvars. The launcher and `e2e.py` refuse it with `-Rov`, and the launcher refuses it without `-Native`; on RTV the variable stays a probe of the title. The GUI launcher has no `-Native`, so it gets the option only when one pass becomes a choice there.
+
+On the multisampled scene, TAA and the post passes need no change:
+
+- The title resolves the scene colour (an average of the samples) and the scene depth (sample 0, bitwise; 16.11's 2x copies all matched) as in the tiled modes.
+- The post passes read those resolves: GTAO, the motion vectors, the cockpit window's stencil and TAA at the final point. So they see depth from sample 0 without a pass of their own.
+
+The host's 2x MSAA uses the standard Direct3D pattern, two samples on the diagonal at a quarter pixel from the centre. Per the runtime's notes this is the same shape as the Xenos pattern (top left and bottom right), and `GetD3D10SampleIndexForGuest2xMSAA` maps the order. That is read from the code, not measured.
+
+The look (`n4t-*`, the race at 2x and 240 Hz, the default look `aces` with TAA, one run each): the 1:1 crops of the left window's edge and the A-pillar, the rear-view mirror, and the dashboard and wheel (GTAO) show the same depth effects in the one-pass and the tiled RTV 2x frames, without edge artefacts. A pop-up that looks grey in one pass is fading in (it appears in that frame).
+
+| Run, race at 2x with TAA | Race fps | GPU ms a frame | Resolves, ms | Draws a frame |
+|---|---|---|---|---|
+| RTV tiled 2x (`n4t-tiled-taa-2x`) | 153.3 | 6.37 | 0.855 | 1,834 |
+| Native one pass 2x (`n4t-onepass-taa-2x`) | 188.1 | 5.21 | 0.545 | 1,666 |
+| Native one tile without MSAA, today's `-Native` (`n4t-onetile-taa-2x`) | 190.2 | 5.17 | 0.509 | 1,717 |
+
+One pass with 2x MSAA costs about 0.04 ms of GPU time a frame more than today's one tile without MSAA, and 1.16 ms less than the tiled 2x on RTV.
+
 **What option A touches** (the scope list for 4x):
 
 - the transfer shaders' address constant, one 32-bit word with a signed 12-bit base adjustment and two 10-bit pitches, and their masks with the tile count (also on the host depth path);
