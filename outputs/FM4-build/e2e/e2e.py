@@ -1065,6 +1065,14 @@ def run_once(options, out):
     # --native without a tiling scenario, FM4_ONE_PASS_MSAA or --msaa runs the races in one pass
     # with 2x MSAA, like Build.ps1 -Native (d3d-hle.md 16.17); --env FM4_TILING_SCENARIO=2 keeps
     # one tile without MSAA (-MsaaSamples 0).
+    # --msaa-samples, as Build.ps1 -MsaaSamples: 2 or 4 for one pass with that MSAA, 0 for one tile.
+    if options.msaa_samples is not None:
+        if not options.native or args.get('render_target_path_d3d12') == 'rov':
+            raise SystemExit("--msaa-samples is the native path's one-pass MSAA: use it with --native")
+        options.env = ({0: ['FM4_TILING_SCENARIO=2'], 2: ['FM4_TILING_SCENARIO=1', 'FM4_ONE_PASS_MSAA=2'],
+                        4: ['FM4_TILING_SCENARIO=3', 'FM4_ONE_PASS_MSAA=4']}[options.msaa_samples] +
+                       options.env)
+        tiling_given = True
     one_pass_default = (options.native and not tiling_given and not options.msaa and
                         args.get('render_target_path_d3d12') != 'rov' and
                         not any(item.startswith('FM4_ONE_PASS_MSAA=') for item in options.env))
@@ -1512,6 +1520,9 @@ def main():
                                           '(default: the launcher\'s), e.g. xbox')
     parser.add_argument('--native', action='store_true',
                         help='stage N1 of the native path (host_render_thread) like Build.ps1 -Native')
+    parser.add_argument('--msaa-samples', type=int, choices=[0, 2, 4],
+                        help='with --native, like Build.ps1 -MsaaSamples: races in one pass with 2x '
+                             '(the default) or 4x MSAA, or 0 for one tile without MSAA')
     parser.add_argument('--msaa', action='store_true',
                         help='keep the tiles and MSAA of --quality with a look that has TAA, like '
                              'Build.ps1 -Msaa (default: one tile, as the launcher)')

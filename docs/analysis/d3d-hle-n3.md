@@ -562,3 +562,15 @@ The main session's decisions of 23 October 2026: `resolve_host_32bpp` stays, and
 | 1:1 image of `-Rov`'s photo mode | | correct |
 
 **Photo mode under `-Native`.** With bit 2, the unscaled fast copies of 4x MSAA sources now come from the host render target too, and the exclusion of 16.11 is gone. `native_rt_surfaces_unscaled_msaa` only logs the multisampled checks that match. A `-Native` photo run with the byte check at every frame (`n3f-native-photo`) compared 190,899 resolves without a mismatch.
+
+**2x at 2x against 4x at 1x** (the defaults of decision 3; snapshot `n3z`, `13393dc`; `-Native` with N4's switches, the launcher's look, 240 Hz, the perf tier of 3 runs; this laptop's RTX 5070 Ti Laptop GPU):
+
+| One pass | Race fps | p99 | GPU ms a frame (runs) | Render thread busy a frame |
+|---|---|---|---|---|
+| 2x at 2x (`n3d-2x2`) | 181.2 | 7.57 ms | 5.17 to 5.44 | 4.25 ms |
+| 4x at 1x (`n3d-4x1`) | 238.2 (the 240 Hz cap) | 4.95 ms | 2.22 to 2.49 | 3.78 ms |
+| 2x at 1x (`n3d-2x1`) | 238.4 (the 240 Hz cap) | 4.96 ms | 2.23 to 2.42 | 3.78 ms |
+
+At 1x, 4x costs about 0.1 to 0.15 ms of GPU time a frame more than 2x; 2x at 2x costs about 2.2 times the GPU time of 4x at 1x. At 1:1 (`n3d-img-*`, `original,taa=0`), 2x at 2x is clearly sharper in the textures and the far terrain, while the geometric edges of 4x at 1x are as clean.
+
+The assumption for the ROG Xbox Ally X, not measured: its Radeon 890M is about 4 times slower than this GPU here (3 to 5 times), so a race frame would take about 21 ms (16 to 27) at 2x at 2x and about 10 ms (7 to 12) at 4x at 1x. The main session's decision of 24 October 2026: 4x at 1x is the Ally X candidate, to be confirmed on the device; `-Native` keeps one pass 2x as its default, and `-MsaaSamples 4` selects 4x in `Build.ps1`, `pipeline.py`, `e2e.py --msaa-samples 4` and the GUI launcher's "Native MSAA" choice.

@@ -371,8 +371,9 @@ class PipelineTests(unittest.TestCase):
     def test_one_pass_msaa(self):
         """-Native runs races in one pass with 2x MSAA by default: the title's 2x scenario made
         one tile, the runtime's private scene depth, and the native cvars with the sized host
-        render targets (bit 8). -MsaaSamples 0 and -SingleTile keep one tile without MSAA, -Msaa
-        the tiles of -Quality; without -Native or with -Rov, -MsaaSamples is refused."""
+        render targets (bit 8). -MsaaSamples 4 runs scenario 3 in one pass with 4x MSAA.
+        -MsaaSamples 0 and -SingleTile keep one tile without MSAA, -Msaa the tiles of -Quality;
+        without -Native or with -Rov, -MsaaSamples is refused."""
         with tempfile.TemporaryDirectory(prefix='fm4 one pass test ') as directory:
             root=Path(directory)
             for samples in (None,2):
@@ -384,6 +385,12 @@ class PipelineTests(unittest.TestCase):
                 self.assertEqual(cvars['native_one_pass_msaa'],'2')
                 self.assertEqual(cvars['native_rt_surfaces'],'10')
                 self.assertEqual(cvars['host_render_thread'],'true')
+            cvars,env,_=pipeline.launch_plan(root,r'C:\FM4 test\Disc 1',native=True,
+                                             msaa_samples=4,monitor=(1920,1080,1.0))
+            self.assertEqual(env['FM4_TILING_SCENARIO'],'3')
+            self.assertEqual(env['FM4_ONE_PASS_MSAA'],'4')
+            self.assertEqual(cvars['native_one_pass_msaa'],'4')
+            self.assertEqual(cvars['native_rt_surfaces'],'10')
             for options in ({'msaa_samples':0},{'single_tile':True}):
                 cvars,env,_=pipeline.launch_plan(root,r'C:\FM4 test\Disc 1',native=True,
                                                  monitor=(1920,1080,1.0),**options)
@@ -398,7 +405,7 @@ class PipelineTests(unittest.TestCase):
             cvars,env,_=pipeline.launch_plan(root,r'C:\FM4 test\Disc 1',monitor=(1920,1080,1.0))
             self.assertNotIn('FM4_ONE_PASS_MSAA',env)
             self.assertNotIn('native_one_pass_msaa',cvars)
-            for samples in (0,2):
+            for samples in (0,2,4):
                 with self.assertRaises(ValueError):
                     pipeline.launch_plan(root,r'C:\FM4 test\Disc 1',msaa_samples=samples,
                                          monitor=(1920,1080,1.0))

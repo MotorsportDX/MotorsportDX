@@ -991,7 +991,8 @@ def launch_plan(root,disc1,single_tile=False,fixed_vblank=False,frame_rate=None,
     look=DEFAULT_LOOK if look is None else look
     # One pass with 2x MSAA on the native path (d3d-hle.md 16.17): the title's 2x scenario made
     # one 1280x720 tile, and the runtime's private scene depth. -Native runs it unless
-    # -MsaaSamples 0 (one tile without MSAA), -SingleTile or -Msaa says otherwise.
+    # -MsaaSamples 4 (one pass with 4x), 0 (one tile without MSAA), -SingleTile or -Msaa says
+    # otherwise.
     if msaa_samples is not None and rov:
         raise ValueError("-MsaaSamples is the native path's one-pass MSAA; -Rov cannot run it.")
     if msaa_samples is not None and not native:
@@ -1009,7 +1010,10 @@ def launch_plan(root,disc1,single_tile=False,fixed_vblank=False,frame_rate=None,
         env.update(tiling_env)
         cvars.update(tiling_cvars)
     if one_pass:
-        env.update({'FM4_TILING_SCENARIO':'1','FM4_ONE_PASS_MSAA':str(msaa_samples)})
+        # 2x: the title's 2x scenario (1); 4x: scenario 3, Small2xMSAA, which the title patch makes
+        # one 4x tile (entry 0's 4x also serves the user interface; d3d-hle-n3.md 16.17).
+        env.update({'FM4_TILING_SCENARIO':'1' if msaa_samples==2 else '3',
+                    'FM4_ONE_PASS_MSAA':str(msaa_samples)})
     if fixed_vblank:
         cvars['vblank_vrr']='false'
     if rov:
@@ -1124,6 +1128,7 @@ def launcher_test_options(root):
             {'rov':True},
             {'native':True},
             {'native':True,'msaa_samples':0},
+            {'native':True,'msaa_samples':4},
             {'native':True,'single_tile':True,'look':'original,taa=0'},
             {'native':True,'msaa':True},
             {'native':True,'look':'gt','frame_rate':240,'fixed_vblank':True},
@@ -1266,9 +1271,10 @@ def main():
                              'TAA, then with FXAA (a look with TAA, every preset, has one tile anyway)')
     parser.add_argument('--msaa',action='store_true',
                         help='run: races keep the tiles and MSAA of --quality with a look that has TAA')
-    parser.add_argument('--msaa-samples',type=int,choices=[0,2],
+    parser.add_argument('--msaa-samples',type=int,choices=[0,2,4],
                         help='run with --native: races in one pass with this MSAA (2x, the default '
-                             'of --native), or 0 for one tile without MSAA (docs/analysis/d3d-hle.md 16.17)')
+                             'of --native, or 4x), or 0 for one tile without MSAA '
+                             '(docs/analysis/d3d-hle-n3.md 16.17)')
     parser.add_argument('--fixed-vblank',action='store_true',
                         help='run: hold every swap to the fixed 60 Hz vblank grid (vblank_vrr=false)')
     parser.add_argument('--frame-rate',type=int,choices=range(30,241),metavar='30-240',

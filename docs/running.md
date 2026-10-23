@@ -63,7 +63,7 @@ the environment and the display description of sixteen sets of options (RTV, `-R
 | Look | The preset (`aces`, `gt`, `neutral`, `original`, `original` without TAA, or a saved look), the tone curve, TAA, and a slider for each [look knob](#look) in five groups: picture, lighting, car, sky and foliage, road. A changed knob is marked and has a Reset button. **Save as look** keeps the current value under a name. The `-Look` value is shown and can be edited. |
 | Controls | The keyboard bindings of the controller (the runtime's `keybind_*` settings). **Set** waits for a key; several keys are separated by commas, modifiers are written as `Shift+Up`. Unknown key names are marked and block Play. A connected controller needs no setup. |
 | Game data | Disc 1 and Disc 2, checked as `generate` checks them, the downloadable content folders and files, and the content packages found, with their import state. **Remove import** deletes an imported package from the user data (see [Data directories](#data-directories)). The texture pack is the `-TextureReplace` folder. |
-| Advanced | Fixed vblank, the shadow workaround, `-SingleTile`, `--ao`, `-Rov`, the native path (`-Native`, and `-MsaaSamples 0` as "one tile without MSAA"), the performance trace, extra cvars, the texture dump folder, the user data folder, and buttons that open the logs and the user data and copy the command line. |
+| Advanced | Fixed vblank, the shadow workaround, `-SingleTile`, `--ao`, `-Rov`, the native path (`-Native`, and its MSAA: one pass with 2x, the default, one pass with 4x as `-MsaaSamples 4`, or one tile without MSAA as `-MsaaSamples 0`), the performance trace, extra cvars, the texture dump folder, the user data folder, and buttons that open the logs and the user data and copy the command line. |
 
 A **profile** is one set of run options; the Discs, content, saved looks and key
 bindings are shared by all profiles. The launcher saves its settings in
@@ -100,7 +100,7 @@ Runs 1 to 6 use render scale 1x (Display page). On the Ally X's 1080p panel the 
 | 3 | Native path, render scale 1x, extra cvars `--guest_ring_wait_sleep=false` |
 | 4 | Native path, render scale 1x, extra cvars `--high_resolution_timing=false` |
 | 5 | RTV, render scale 1x, extra cvars `--guest_ring_wait_sleep=false` (if time allows) |
-| 6 | Native path, MSAA 4x, render scale 1x (once the launcher offers `-MsaaSamples 4`) |
+| 6 | Native path, Native MSAA "One pass with 4x MSAA" (`-MsaaSamples 4`), render scale 1x |
 | 7 | Native path at the default render scale, 2x (optional: the GPU-bound frame rate) |
 
 - Run each as a Quick Race with the default car and track: let the race run for at least three minutes, then quit to the menu and close the game, so the trace covers the race and its end.
@@ -229,7 +229,7 @@ takes a value.
 | `-Native` | off | The native path: a host render thread consumes the guest's commands from a record queue instead of the command processor thread, and races render in one pass with 2x MSAA. See [-Native](#-native). |
 | `-SingleTile` | with TAA | Render races as one 720p tile without MSAA also with a look without TAA, then with FXAA on the swap. A look with TAA (every preset) renders one tile anyway. |
 | `-Msaa` | off | Keep the tiles and MSAA of `-Quality` with a look that has TAA. |
-| `-MsaaSamples 0` | 2 with `-Native` | With `-Native`: 0 renders races in one tile without MSAA instead of one pass with 2x MSAA. See [-Native](#-native). |
+| `-MsaaSamples 4` or `0` | 2 with `-Native` | With `-Native`: 4 renders races in one pass with 4x MSAA, 0 in one tile without MSAA, instead of one pass with 2x MSAA. See [-Native](#-native). |
 | `-FixedVblank` | off | Hold every swap to the fixed 60 Hz vblank grid. |
 | `-FullRateMirror` | off | Render the rear-view mirror in every frame of every race. |
 | `-ShadowWorkaround` | off | Render the shadow map only with the cockpit camera, as the old Xenia workaround did. |
@@ -374,14 +374,19 @@ path, and the render targets stay on RTV.
   (`native_one_pass_msaa=2`), and the host render targets are sized to the tiles the title
   uses (`native_rt_surfaces=10`). TAA and the post passes read the title's resolves of the
   multisampled scene. Photo mode, replays and split screen keep their own scenarios.
+- `-Native -MsaaSamples 4` renders races in one pass with 4x MSAA: the title's scenario 3
+  becomes one 1280x720 4x tile, and its colour and depth get private host targets
+  (`native_one_pass_msaa=4`, [section 16.17](analysis/d3d-hle-n3.md)). It is the candidate
+  for the ROG Xbox Ally X at 1x, where it costs about as much GPU time as 2x.
 - `-Native -MsaaSamples 0` or `-Native -SingleTile` renders races in one tile without MSAA
   instead. With `-Native -Msaa` the tiles of `-Quality` stay on the PM4 RTV path, and the
   launcher says so. `-MsaaSamples` without `-Native` is refused; RTV and `-Rov` keep the
   title's tiles.
 - One pass uses 2x MSAA also with a look without TAA, such as the comparison look
   `original,taa=0`, where RTV and `-Rov` render the tiles and MSAA of `-Quality` (4x at
-  `high`). Until one pass has 4x, compare the native path against RTV and `-Rov` in the
-  title's 2x scenario (`FM4_TILING_SCENARIO=1`), as the gates of section 16.17 do.
+  `high`). Compare one pass 2x against RTV and `-Rov` in the title's 2x scenario
+  (`FM4_TILING_SCENARIO=1`), as the gates of section 16.17 do; `-MsaaSamples 4` is chosen
+  explicitly, never by `-Quality`.
 - `-Native` with `-Rov` is refused: `-Rov` stays the uncorrected reference.
 - `-Native` also sets `readback_resolve_on_demand=true` (stage N3,
   [section 16.5](analysis/d3d-hle-n3.md)): resolves skip their readback to guest

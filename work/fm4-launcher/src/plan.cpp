@@ -519,8 +519,11 @@ Plan LaunchPlan(const LauncherData& data, const std::string& root, const std::st
   const std::string look =
       options.look.empty() ? data.Look().at("default").get<std::string>() : options.look;
   const Pairs knobs = LookKnobs(data, look);
-  // One pass with 2x MSAA on the native path: -Native runs it unless -MsaaSamples 0 (one tile
-  // without MSAA), -SingleTile or -Msaa says otherwise.
+  // One pass with MSAA on the native path: -Native runs it with 2x unless -MsaaSamples 4 (4x),
+  // -MsaaSamples 0 (one tile without MSAA), -SingleTile or -Msaa says otherwise.
+  if (options.msaa_samples != -1 && options.msaa_samples != 0 && options.msaa_samples != 2 &&
+      options.msaa_samples != 4)
+    throw PlanError("-MsaaSamples takes 0, 2 or 4.");
   if (options.msaa_samples >= 0 && options.rov)
     throw PlanError("-MsaaSamples is the native path's one-pass MSAA; -Rov cannot run it.");
   if (options.msaa_samples >= 0 && !options.native)
@@ -548,7 +551,8 @@ Plan LaunchPlan(const LauncherData& data, const std::string& root, const std::st
     if (!TaaEnabled(knobs)) cvars.Set("swap_post_effect", "fxaa");
   }
   if (one_pass) {
-    env.Set("FM4_TILING_SCENARIO", "1");
+    // 2x: the title's 2x scenario (1); 4x: scenario 3, which the title patch makes one 4x tile.
+    env.Set("FM4_TILING_SCENARIO", msaa_samples == 2 ? "1" : "3");
     env.Set("FM4_ONE_PASS_MSAA", std::to_string(msaa_samples));
   }
   if (options.fixed_vblank) cvars.Set("vblank_vrr", "false");

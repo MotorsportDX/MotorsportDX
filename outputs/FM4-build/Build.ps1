@@ -11,7 +11,7 @@ param(
     [string]$Out,
     [switch]$SingleTile,
     [switch]$Msaa,
-    [ValidateSet(0,2)][int]$MsaaSamples,
+    [ValidateSet(0,2,4)][int]$MsaaSamples,
     [switch]$FixedVblank,
     [switch]$Rov,
     [switch]$Native,

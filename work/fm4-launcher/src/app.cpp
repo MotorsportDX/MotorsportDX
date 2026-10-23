@@ -1413,11 +1413,16 @@ void App::AdvancedPage() {
   ImGui::Checkbox("One tile without MSAA also with a look without TAA (then FXAA)", &o.single_tile);
   ImGui::Checkbox("Ambient occlusion pass also without the look's ao knob", &o.ao);
   ImGui::Checkbox("ROV render path (the uncorrected reference, slower)", &o.rov);
-  ImGui::Checkbox("Native path (races in one pass with 2x MSAA, the native port's stages)",
+  ImGui::Checkbox("Native path (races in one pass with MSAA, the native port's stages)",
                   &o.native);
   ImGui::BeginDisabled(!o.native);
-  bool no_msaa = o.msaa_samples == 0;
-  if (ImGui::Checkbox("Native path in one tile without MSAA", &no_msaa)) o.msaa_samples = no_msaa ? 0 : -1;
+  // -MsaaSamples: -1 (unset) is one pass with 2x, the default.
+  const char* msaa_labels[] = {"One pass with 2x MSAA (default)", "One pass with 4x MSAA",
+                               "One tile without MSAA"};
+  int msaa_choice = o.msaa_samples == 4 ? 1 : o.msaa_samples == 0 ? 2 : 0;
+  ImGui::SetNextItemWidth(320 * scale_);
+  if (ImGui::Combo("Native MSAA", &msaa_choice, msaa_labels, IM_ARRAYSIZE(msaa_labels)))
+    o.msaa_samples = msaa_choice == 1 ? 4 : msaa_choice == 2 ? 0 : -1;
   ImGui::EndDisabled();
   ImGui::Checkbox("Performance trace (logs\\perf-<profile>-<time>.jsonl)", &o.perf_trace);
   ImGui::SetNextItemWidth(420 * scale_);
