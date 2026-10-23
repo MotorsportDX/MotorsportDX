@@ -1043,6 +1043,15 @@ def run_once(options, out):
     # The launcher's race render quality and tiling: one tile when the look has TAA on RTV
     # (--msaa keeps the tiles); --env FM4_TILING_SCENARIO keeps its tiling scenario.
     tiling_given = any(item.startswith('FM4_TILING_SCENARIO=') for item in options.env)
+    # --native without a tiling scenario, FM4_ONE_PASS_MSAA or --msaa runs the races in one pass
+    # with 2x MSAA, like Build.ps1 -Native (d3d-hle.md 16.17); --env FM4_TILING_SCENARIO=2 keeps
+    # one tile without MSAA (-MsaaSamples 0).
+    one_pass_default = (options.native and not tiling_given and not options.msaa and
+                        args.get('render_target_path_d3d12') != 'rov' and
+                        not any(item.startswith('FM4_ONE_PASS_MSAA=') for item in options.env))
+    if one_pass_default:
+        options.env = ['FM4_TILING_SCENARIO=1', 'FM4_ONE_PASS_MSAA=2'] + options.env
+        tiling_given = True
     single_tile = not tiling_given and pipeline.auto_single_tile(
         look, args.get('render_target_path_d3d12') == 'rov', options.msaa)
     if single_tile:
@@ -1068,7 +1077,9 @@ def run_once(options, out):
                     if item.startswith('FM4_ONE_PASS_MSAA=')]
         one_pass_2x = bool(one_pass) and one_pass[-1] == '2' and bool(tiling) and tiling[-1] == '1'
         if one_pass_2x:
+            # Bit 8: the host render targets sized to the tiles the title uses (16.15).
             args.setdefault('native_one_pass_msaa', '2')
+            args.setdefault('native_rt_surfaces', '10')
         elif not (single_tile if not tiling else tiling[-1] == '2'):
             cause = ('--msaa' if options.msaa else f'--env FM4_TILING_SCENARIO={tiling[-1]}'
                      if tiling else f'the look {look!r} (no TAA)')

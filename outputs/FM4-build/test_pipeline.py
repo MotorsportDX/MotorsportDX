@@ -367,27 +367,42 @@ class PipelineTests(unittest.TestCase):
             self.assertEqual(pipeline.look_knob_defaults()['FM4_LOOK_COCKPIT_LIGHT'],'0.0')
 
     def test_one_pass_msaa(self):
-        """-Native -MsaaSamples 2 runs races in one pass with 2x MSAA: the title's 2x scenario
-        made one tile, the runtime's private scene depth, and the native cvars; without -Native
-        it is refused."""
+        """-Native runs races in one pass with 2x MSAA by default: the title's 2x scenario made
+        one tile, the runtime's private scene depth, and the native cvars with the sized host
+        render targets (bit 8). -MsaaSamples 0 and -SingleTile keep one tile without MSAA, -Msaa
+        the tiles of -Quality; without -Native or with -Rov, -MsaaSamples is refused."""
         with tempfile.TemporaryDirectory(prefix='fm4 one pass test ') as directory:
             root=Path(directory)
-            cvars,env,_=pipeline.launch_plan(root,r'C:\FM4 test\Disc 1',native=True,msaa_samples=2,
+            for samples in (None,2):
+                cvars,env,_=pipeline.launch_plan(root,r'C:\FM4 test\Disc 1',native=True,
+                                                 msaa_samples=samples,monitor=(1920,1080,1.0))
+                self.assertEqual(env['FM4_TILING_SCENARIO'],'1')
+                self.assertEqual(env['FM4_ONE_PASS_MSAA'],'2')
+                self.assertNotIn('TilingScenario',env.get('FM4_RACE_SETTINGS',''))
+                self.assertEqual(cvars['native_one_pass_msaa'],'2')
+                self.assertEqual(cvars['native_rt_surfaces'],'10')
+                self.assertEqual(cvars['host_render_thread'],'true')
+            for options in ({'msaa_samples':0},{'single_tile':True}):
+                cvars,env,_=pipeline.launch_plan(root,r'C:\FM4 test\Disc 1',native=True,
+                                                 monitor=(1920,1080,1.0),**options)
+                self.assertEqual(env['FM4_TILING_SCENARIO'],'2')
+                self.assertNotIn('FM4_ONE_PASS_MSAA',env)
+                self.assertNotIn('native_one_pass_msaa',cvars)
+                self.assertEqual(cvars['native_rt_surfaces'],'2')
+            cvars,env,_=pipeline.launch_plan(root,r'C:\FM4 test\Disc 1',native=True,msaa=True,
                                              monitor=(1920,1080,1.0))
-            self.assertEqual(env['FM4_TILING_SCENARIO'],'1')
-            self.assertEqual(env['FM4_ONE_PASS_MSAA'],'2')
-            self.assertNotIn('TilingScenario',env.get('FM4_RACE_SETTINGS',''))
-            self.assertEqual(cvars['native_one_pass_msaa'],'2')
-            self.assertEqual(cvars['host_render_thread'],'true')
+            self.assertNotIn('FM4_ONE_PASS_MSAA',env)
+            self.assertNotIn('host_render_thread',cvars)
             cvars,env,_=pipeline.launch_plan(root,r'C:\FM4 test\Disc 1',monitor=(1920,1080,1.0))
             self.assertNotIn('FM4_ONE_PASS_MSAA',env)
             self.assertNotIn('native_one_pass_msaa',cvars)
-            with self.assertRaises(ValueError):
-                pipeline.launch_plan(root,r'C:\FM4 test\Disc 1',msaa_samples=2,
-                                     monitor=(1920,1080,1.0))
-            with self.assertRaises(ValueError):
-                pipeline.launch_plan(root,r'C:\FM4 test\Disc 1',msaa_samples=2,native=True,
-                                     rov=True,monitor=(1920,1080,1.0))
+            for samples in (0,2):
+                with self.assertRaises(ValueError):
+                    pipeline.launch_plan(root,r'C:\FM4 test\Disc 1',msaa_samples=samples,
+                                         monitor=(1920,1080,1.0))
+                with self.assertRaises(ValueError):
+                    pipeline.launch_plan(root,r'C:\FM4 test\Disc 1',msaa_samples=samples,native=True,
+                                         rov=True,monitor=(1920,1080,1.0))
 
     def test_full_rate(self):
         """Replays and the countdown run at the race frame rate (FM4_FULL_RATE), shared with

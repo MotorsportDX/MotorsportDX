@@ -1222,6 +1222,28 @@ One pass with 2x MSAA costs about 0.04 ms of GPU time a frame more than today's 
 - the resolve spans of the draw utilities, `GetRangeRectangles`, the extent splitting of the ownership map, and about 59 wrap sites in the common cache;
 - `RenderTargetKey::base_tiles` (11 bits; the key has room for 13).
 
+**The close gate of increment 4 at 2x** (`n4g*`, `I:\FM4-build-usa`, commit `2850567`, 240 Hz, the fast route, the launcher's default look with TAA unless noted). Native one pass 2x (`FM4_ONE_PASS_MSAA=2`, the 2x scenario, `native_one_pass_msaa=2`, `native_rt_surfaces=10`, the other cvars of `-Native`) is compared against RTV tiled 2x (`FM4_TILING_SCENARIO=1`). No cvar of stage N4 was on: all are off by default, and the gate passed none.
+
+| Check | RTV tiled | Native one pass | Verdict |
+|---|---|---|---|
+| smoke 1x (`n4g1x`, `n4g1xn`), races | `photo` 175.1, `career` 203.0 fps | 227.0, 225.6 fps | every cell reaches its goal |
+| smoke 2x (`n4g2x`, `n4g2xn`), races | `photo` 151.3, `career` 151.3 fps | 178.3, 177.8 fps | every cell reaches its goal; `photo_view` FAILs only on the XAM error key the other cells also log, and its luma WARN is another photo on screen |
+| perf 1x, 3 runs (`n4g1xp`, `n4g1xpn`), race | 197.8 fps, GPU 3.15 ms a frame, 2.31 µs of render thread time a draw | 219.1 fps, GPU 2.32 ms, 1.92 µs | pass |
+| perf 2x, 3 runs (`n4g2xp`, `n4g2xpn`), race | 148.7 fps, GPU 6.51 ms, 2.33 µs a draw, resolves 0.86 ms | 179.9 fps, GPU 5.42 ms, 2.16 µs, resolves 0.56 ms | pass |
+| RTV's defaults (one tile) at 2x, 3 runs (`n4g2xpd` against `n3c2xpr`), race | 158.6 fps, GPU 6.14 ms (160.1 fps, 6.08 ms before) | | RTV not slower |
+| `parity.py` on `freeze`, 1x and 2x (`n4g-freeze-*`) | `-Rov` against RTV passes: 37.1% and 26.0% of the image above 4 | against RTV and `-Rov`: draws -14%, predicated packets -25%, FAIL by design ([frozen-frames.md](../e2e/frozen-frames.md)); 31.3% and 25.4% of the image above 4 against RTV | within the spread of two race moments; the 1:1 crops of the old tile seam (line 1024 at 2x) and of the top 416 lines show no artefact |
+| identity check with perturbation 1,000, `career` (`n4g-perturb-career`) | | 12,847 ranges perturbed, 12,847 reported | pass |
+| grow stress with the resolve byte check, `career` (`n4g-grow-career`) | | 19,422 byte checks, 0 mismatches, 39 resizes; 16.1 M draws, 25,049 resolves and 19,187 clears of the private depth, 0 violations | pass |
+| render target memory, `career` | 589.8 MB at 1x, 2,142.2 MB at 2x | 203.5 MB at 1x (207.5 MB at the peak of the grow stress), 596.5 MB at 2x | |
+
+The transfer inventory of one pass at 2x (`n4g-inventory-2x`) did not run. The first attempt ran out of disk space on `I:`. The two retries stopped before the race, because the Disc 2 content imported into the BuildRoot profile had been removed in the meantime.
+
+**The main session's decisions of 23 October 2026**, applied after this gate:
+
+1. `-Native` runs races in one pass with 2x MSAA by default, with `native_rt_surfaces=10` (bit 8, the sized host render targets, beside bit 2). `-MsaaSamples 0` and `-SingleTile` keep one tile without MSAA; `-Msaa` keeps the tiles of `-Quality` on the PM4 RTV path. `e2e.py --native` does the same unless `FM4_TILING_SCENARIO`, `FM4_ONE_PASS_MSAA` or `--msaa` is given. Photo mode, replays and split screen keep their own scenarios. The GUI launcher (`plan.cpp`) has no `-Native` yet, so `-MsaaSamples` comes to it with `-Native`.
+2. 4x stays in stage N3. Its gate is 4x MSAA in one pass that works. It starts with a probe: a scenario entry of its own (not entry 0, which the UI and the pre-race screens share), and the transfer inventory of 4x. Then the design chooses between a private colour and depth (alias copies only where something reads an alias) and the no-wrap space of option A. The `-Rov` depth sample comparison of 16.11 belongs to 4x at 1x.
+3. After 4x works, the defaults are compared: 2x MSAA at 2x against 4x MSAA at 1x, with the GPU time of both at 1x, which sets the default of the ROG Xbox Ally X.
+
 ## 17. Stage N4 design, 22 October 2026
 
 Stage N4 (section 9) brings the render thread to the CPU targets of section 10: busy at most 2.5 ms per race frame and p99 at most 5.0 ms at 240 Hz, on the main PC and on the ROG Xbox Ally X. The native path's render thread is busy 3.1 to 3.4 ms per race frame at 1x (15.7, 15.12), so N4 has to remove 0.6 to 0.9 ms. The main session's order: first the descriptor and constant buffer work leaves the render thread, which the profile of 15.10 points at ([CP draw offload](cp-draw-offload.md), options 1 and 2).

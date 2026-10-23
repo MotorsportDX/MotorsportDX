@@ -890,13 +890,14 @@ def native_cvars(single_tile,rov=False):
     """Cvars of -Native: stage N1 of the native path, the host render thread fed by a record
     queue, with the converted PM4 writers leaving records (docs/analysis/d3d-hle.md, section
     14), and the resolve readbacks on demand and the resolves from the host render targets of
-    stage N3 (sections 16.5 and 16.11). It covers races in one tile; the tiles and MSAA of -Quality stay on the PM4 RTV path
-    until stage N3, and -Rov, the uncorrected reference, is never combined with it."""
+    stage N3 (sections 16.5 and 16.11). It covers races in one tile or in one pass with MSAA
+    (16.17); the tiles of -Quality (-Msaa) stay on the PM4 RTV path, and -Rov, the uncorrected
+    reference, is never combined with it."""
     if rov:
         raise ValueError('-Native runs on the host render target path (RTV); it cannot be combined with -Rov.')
     if not single_tile:
         print('-Native: races keep the tiles of -Quality here, so the PM4 RTV path runs instead '
-              '(the native path covers one tile until stage N3).')
+              '(the native path covers one tile and one pass).')
         return {}
     return {'host_render_thread':'true','host_render_native':'true',
             'readback_resolve_on_demand':'true','native_rt_surfaces':'2'}
@@ -953,13 +954,16 @@ def launch_plan(root,disc1,single_tile=False,fixed_vblank=False,frame_rate=None,
         env['FM4_SHADOW_WORKAROUND']='1'
     look=DEFAULT_LOOK if look is None else look
     # One pass with 2x MSAA on the native path (d3d-hle.md 16.17): the title's 2x scenario made
-    # one 1280x720 tile, and the runtime's private scene depth.
+    # one 1280x720 tile, and the runtime's private scene depth. -Native runs it unless
+    # -MsaaSamples 0 (one tile without MSAA), -SingleTile or -Msaa says otherwise.
+    if msaa_samples is not None and rov:
+        raise ValueError("-MsaaSamples is the native path's one-pass MSAA; -Rov cannot run it.")
+    if msaa_samples is not None and not native:
+        raise ValueError("-MsaaSamples is the native path's one-pass MSAA: use it with -Native.")
+    if native and msaa_samples is None and not single_tile and not msaa and not rov:
+        msaa_samples=2
     one_pass=bool(msaa_samples)
-    if one_pass and rov:
-        raise ValueError("-MsaaSamples 2 is the native path's one-pass MSAA; -Rov cannot run it.")
-    if one_pass and not native:
-        raise ValueError("-MsaaSamples 2 is the native path's one-pass MSAA: use it with -Native.")
-    single_tile=not one_pass and (single_tile or auto_single_tile(look,rov,msaa))
+    single_tile=not one_pass and (single_tile or msaa_samples==0 or auto_single_tile(look,rov,msaa))
     settings=race_settings(DEFAULT_QUALITY if quality is None else quality,single_tile or one_pass)
     if settings:
         env['FM4_RACE_SETTINGS']=settings
@@ -980,7 +984,8 @@ def launch_plan(root,disc1,single_tile=False,fixed_vblank=False,frame_rate=None,
     if native:
         cvars.update(native_cvars(single_tile or one_pass,rov))
         if one_pass:
-            cvars['native_one_pass_msaa']=str(msaa_samples)
+            # Bit 8: the host render targets sized to the tiles the title uses (16.15).
+            cvars.update({'native_one_pass_msaa':str(msaa_samples),'native_rt_surfaces':'10'})
     screen,description=display_settings(display,fullscreen,supersample,resolution_scale,monitor)
     cvars.update(screen)
     if frame_rate:
@@ -1213,9 +1218,9 @@ def main():
                              'TAA, then with FXAA (a look with TAA, every preset, has one tile anyway)')
     parser.add_argument('--msaa',action='store_true',
                         help='run: races keep the tiles and MSAA of --quality with a look that has TAA')
-    parser.add_argument('--msaa-samples',type=int,choices=[2],
-                        help='run with --native: races in one pass with this MSAA (2x), on the '
-                             'native path (docs/analysis/d3d-hle.md 16.17)')
+    parser.add_argument('--msaa-samples',type=int,choices=[0,2],
+                        help='run with --native: races in one pass with this MSAA (2x, the default '
+                             'of --native), or 0 for one tile without MSAA (docs/analysis/d3d-hle.md 16.17)')
     parser.add_argument('--fixed-vblank',action='store_true',
                         help='run: hold every swap to the fixed 60 Hz vblank grid (vblank_vrr=false)')
     parser.add_argument('--frame-rate',type=int,choices=range(30,241),metavar='30-240',

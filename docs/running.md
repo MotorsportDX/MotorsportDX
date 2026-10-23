@@ -194,10 +194,10 @@ takes a value.
 | `-TextureReplace <dir>` | off | Use `<hash>.dds` files from this directory instead of the game textures with that hash. See [Texture replacement](#texture-replacement). |
 | `-Info` | off | Show the settings overlay at start. F2 toggles it in any run. |
 | `-Rov` | off | Use the earlier pixel shader interlock render target path, for comparisons. |
-| `-Native` | off | Stage N1 of the native path: a host render thread consumes the guest's commands from a record queue instead of the command processor thread. Races in one tile only. See [-Native](#-native). |
+| `-Native` | off | The native path: a host render thread consumes the guest's commands from a record queue instead of the command processor thread, and races render in one pass with 2x MSAA. See [-Native](#-native). |
 | `-SingleTile` | with TAA | Render races as one 720p tile without MSAA also with a look without TAA, then with FXAA on the swap. A look with TAA (every preset) renders one tile anyway. |
 | `-Msaa` | off | Keep the tiles and MSAA of `-Quality` with a look that has TAA. |
-| `-MsaaSamples 2` | off | With `-Native`: races in one pass with 2x MSAA instead of tiles. A development option of stage N3, see [-Native](#-native). |
+| `-MsaaSamples 0` | 2 with `-Native` | With `-Native`: 0 renders races in one tile without MSAA instead of one pass with 2x MSAA. See [-Native](#-native). |
 | `-FixedVblank` | off | Hold every swap to the fixed 60 Hz vblank grid. |
 | `-FullRateMirror` | off | Render the rear-view mirror in every frame of every race. |
 | `-ShadowWorkaround` | off | Render the shadow map only with the cockpit camera, as the old Xenia workaround did. |
@@ -336,22 +336,23 @@ executes them in order, waiting on the queue instead of spinning. Every PM4 writ
 of the title is still on the fallback, so the PM4 is the same as on the default
 path, and the render targets stay on RTV.
 
-- Races must render in one tile (a look with TAA, every preset, or `-SingleTile`).
-  With `-Msaa` or a look without TAA the tiles stay on the PM4 RTV path, and the
-  launcher says so.
-- `-Native -MsaaSamples 2` renders races in one pass with 2x MSAA (stage N3, increment 4,
+- Races render in one pass with 2x MSAA (stage N3, increment 4,
   [section 16.17](analysis/d3d-hle.md)). The title's 2x tiling scenario becomes one 1280x720
-  tile (`FM4_ONE_PASS_MSAA=2`), and the scene depth gets a private host render target
-  (`native_one_pass_msaa=2`). Without `-Native` the option is refused; RTV and `-Rov` keep
-  the title's tiles. TAA on the multisampled scene is not done yet, so judge the look with
-  `-Look "original,taa=0"`.
+  tile (`FM4_ONE_PASS_MSAA=2`), the scene depth gets a private host render target
+  (`native_one_pass_msaa=2`), and the host render targets are sized to the tiles the title
+  uses (`native_rt_surfaces=10`). TAA and the post passes read the title's resolves of the
+  multisampled scene. Photo mode, replays and split screen keep their own scenarios.
+- `-Native -MsaaSamples 0` or `-Native -SingleTile` renders races in one tile without MSAA
+  instead. With `-Native -Msaa` the tiles of `-Quality` stay on the PM4 RTV path, and the
+  launcher says so. `-MsaaSamples` without `-Native` is refused; RTV and `-Rov` keep the
+  title's tiles.
 - `-Native` with `-Rov` is refused: `-Rov` stays the uncorrected reference.
 - `-Native` also sets `readback_resolve_on_demand=true` (stage N3,
   [section 16.5](analysis/d3d-hle.md)): resolves skip their readback to guest
   memory, and the first access by the CPU to a resolved range waits for the
   readback of the latest resolve to it. On RTV without `-Native` it is off unless
   passed as a cvar; the ROV path never uses it.
-- `-Native` also sets `native_rt_surfaces=2` (stage N3,
+- `-Native` also sets `native_rt_surfaces=2`, or 10 in one pass (stage N3,
   [section 16.11](analysis/d3d-hle.md)): a resolve whose source one host render
   target holds reads it directly instead of its dump into the EDRAM buffer. Off on
   RTV without `-Native` unless passed as a cvar; never on the ROV path.
