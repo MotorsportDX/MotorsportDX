@@ -337,3 +337,93 @@ The main session judged the CPU criterion of section 10 met on the main PC with 
 - The criterion's other half, the ROG Xbox Ally X (8.1), stays open.
 
 Next: N4's close gate, which turns the three switches on in `-Native`, then the other items of N4's row (section 9) with their own step gates.
+
+### 17.15 The close gate, 23 October 2026
+
+From the close gate on, `-Native` sets the three switches of 17.8 to 17.13 beside N1's native cvars: `d3d12_draw_back_end=2`, `texture_bindings_keep_same_dwords` and `render_target_update_guard`. `d3d12_deferred_constants` stays off: with the back end on the replay, the replay fills the constant buffers itself (17.8).
+
+**The gate** ran on `n4be12` (85cf1fb's code, with the three switches), with the fast route at 240 Hz. `-Native` ran one tile, as before e2e's one-pass default of the same day.
+
+| Check | Result |
+|---|---|
+| The combined checks (`n4r-check-career`: identity, back end, bindings and guard, each perturbed every 1,000th; race, replay, menus) | back end 21.2 million draws, bindings 17.3 million, guard 18.1 million skips, identity 14.3 million ranges: mismatches only the perturbed |
+| The same in one pass with 2x MSAA (`n4r-check-career-2x`) | 21.3, 17.4, 18.3 and 14.5 million: mismatches only the perturbed; two new pipelines created on the replay (none in one tile) |
+| Frozen frames, RTV against `-Native`, both with `FM4_TILING_SCENARIO=2` (`n4r-parity-1x`, `-2x`, `parity.py`) | 1x passes: 2,236.43 against 2,236.94 draws a frame (+0.02%), the predicated packets +0.01%, 19.26% of the pixels above 4; on the frozen frame the render thread is 28% less busy than RTV's command processor. 2x passes: 2,234.45 against 2,236.93 draws (+0.1%), 21.09%. RTV's first 2x freeze timed out waiting for the rewind menu and passed when run again (`n4r2-freeze-rtv-2x`) |
+| Smokes at 1x with `-Look "original,taa=0"` on RTV and `-Rov` (`n4r-rtv`, `n4r-rov`) | 6 of 6 cells reached their goals, the photos saved and loaded, no clear gray frame, the error keys of RTV; the warnings are capture statistics (other photo moments, checked by eye) and one wait timing |
+
+The races, three runs each way, alternating (`n4r-race-*`):
+
+| Race at 240 Hz | RTV, 1x | `-Native`, 1x | RTV, 2x | `-Native`, 2x |
+|---|---|---|---|---|
+| Frames per second (the race phase, mean) | 218.3 | 237.7 | 165.6 | 198.3 |
+| GPU time a frame | 2.88 to 2.98 ms | 2.21 to 2.27 | 5.80 to 6.15 | 4.89 to 5.00 |
+| p99 pooled | 6.36 ms | 5.01 | 8.98 | 6.75 |
+| Command processor (RTV) or render thread busy at 1,800 draws a frame | 3.659 ms | 2.687 | 3.951 | 2.826 |
+| Both threads together at 1,800 draws | 4.676 ms | 4.343 | 6.727 | 5.382 |
+
+At 1x, `-Native`'s p99 lies at 4.73 to 5.18 ms in every band of draw load. At 2x its GPU time stays under RTV's, as section 10 requires.
+
+**RTV with the switches off.** In the gate, RTV's command processor was 3% busier than on local main's build before step 2 (`n4main`, 43c7a2c): 3.659 against 3.552 ms at 1,800 draws, and the draw zone 2.688 against 2.613 ms. A bisect, three races per binary, alternating in one session:
+
+| Binary | Command processor busy at 1,800 draws | Draw zone |
+|---|---|---|
+| `n4main` (43c7a2c) | 3.608 ms | 2.644 |
+| `n4bis1` (7ffba4f: increments 1 to 3 and the texture keys) | 3.649 (+0.041) | 2.658 |
+| `n4bis2` (dc996eb: with N1's four commits of that day) | 3.639 | 2.668 |
+| `n4be12` (with the guard) | 3.647 (+0.039) | 2.668 |
+
+That is +1.1%, all of it from N4's increments. Per run, `n4main` took 1.969 to 2.037 µs per draw and `n4be12` 1.969 to 2.040, so the difference sits at the edge of the noise. The gate's 3% was the session's drift.
+
+By zone, the same in every build:
+- the pipeline +0.007 to 0.009 ms: the split of `ConfigurePipeline` for the back end, a call of `ConfigurePipelineDescribed` with 12 arguments;
+- the textures +0.009 ms: the copy of the fetch dwords and the larger `TextureBinding`, with the switch off too;
+- outside the draw zone +0.015 ms.
+
+Two cheap changes, neither of which changes behaviour:
+- `ConfigurePipelineDescribed` is inlined into `ConfigurePipeline` (`[[gnu::always_inline]]`);
+- the texture cache compares and copies the fetch dwords only with `texture_bindings_keep_same_dwords` on.
+
+The re-measure on `n4be13` (with both changes), three runs each, alternating with `n4main`:
+- 3.751 against 3.660 ms at 1,800 draws (+2.5% by the fit);
+- per run, 1.981 to 2.204 µs per draw against 1.963 to 2.108, at 1,465 to 2,589 draws a frame, so the ranges overlap;
+- the fit moves by about 2% between sessions.
+
+The changes show no measurable effect. The main session accepted RTV's cost as at the edge of the noise, without a further round. Both RTV tables may be affected by the stale title objects described below, since `n4bis1`, `n4bis2`, `n4be12` and `n4be13` were all built with the same copy of the title's sources. On `n4be13`, RTV rendered correctly.
+
+**Stale title objects: `n4be13`'s `-Native` numbers are void.** On `n4be13`, `-Native` with e2e's one-pass default (`FM4_TILING_SCENARIO=1`, `FM4_ONE_PASS_MSAA=2`, `native_one_pass_msaa=2`, `native_rt_surfaces=10`) made no one-pass resolve. A race on `n4be12` and one on N1's `n4g2xpn` with the same settings and N4's switches off made 6,530 and 6,842. Its races at 1x and 2x showed the upper half of the screen washed out to white and the scene missing. Its numbers (230.6 fps at 1x, 199.7 at 2x) measure that broken rendering and are void.
+
+The combined check passed, since it compares the paths with each other, not with the image, and no clear gray frame was counted. `n4be13` and the corrected `n4be14` have the same `rexgpu-xenos.dll` and `rexruntime.dll` and differ in `fm4_rex.exe` only.
+
+The cause: N4's build script (outside the repository) copied the title's sources into the BuildRoot's `project\src` with `Copy-Item`, which keeps a file's time. Objects that another session had compiled minutes earlier from its uncommitted title change were newer than the copied sources, so the build linked them. The runtime was not affected: `Build.ps1` mirrors it with `pipeline.copy_source`, which writes a changed file with the current time.
+
+Since then:
+- **The copy.** N4's build script copies a changed file with the current time, and `copy_source` sets the time explicitly.
+- **The source of a build.** `build-result.json` records `source`: the HEAD of the checkout that built, whether its `work/runtime` or `work/fm4-rex` differ from it, and a SHA-256 over the BuildRoot's `runtime-source` and the project's title sources. A `matrix.py` snapshot keeps the file, and each e2e run copies `source` into `binary` in `summary.json`.
+- **The image in every step gate** (the main session's rule): a native race or photo capture at 1:1 beside the reference, N1's runs or RTV.
+- **A WARN for washed-out captures.** `e2e.py` counts the race's captures with a horizontal band washed out to white (`washed_out_frames`), and `compare.py` warns when the count rises. Over 5,098 race captures of 478 earlier runs, it flags only `n4be13`'s five `-Native` runs, in 82 of their 83 race captures.
+
+**The step gate on `n4be14`** (f766d0f's code, the title compiled again; `rexgpu-xenos.dll` SHA-256 beginning `90f2ed4a8c03c569`, `fm4_rex.exe` `63b7567f902d236a`) ran with e2e's `-Native` default, one pass with 2x MSAA and the three switches, one run each. The references are N1's `n4g1xpn` and `n4g2xpn` (`-Native` without N4's switches, three runs each, the race phase of `photo`):
+
+| Race at 240 Hz | `n4be14`, 1x | `n4g1xpn` | `n4be14`, 2x | `n4g2xpn` |
+|---|---|---|---|---|
+| Frames per second (the race phase, mean) | 238.2 | 215.1 to 236.0 | 181.5 | 177.8 to 181.9 |
+| GPU time a frame | 2.25 ms | 2.17 to 2.32 | 5.36 | 5.36 to 5.50 |
+| p99 | 4.96 ms | 5.10 to 5.84 | 7.90 | 7.98 to 8.19 |
+| Draws a frame | 1,581 | 1,472 to 2,043 | 1,890 | 2,065 to 2,370 |
+| Render thread busy per draw | 1.61 µs | 1.85 to 1.94 | 1.74 | 2.04 to 2.09 |
+| One-pass resolves in the race | 7,398 | 7,332 to 8,043 | 5,643 | 5,884 to 6,019 |
+| Render target memory | 199.5 MB | 199.5 | 580.5 | 580.5 |
+
+- **The render thread** takes 13 to 17% less time per draw at 1x and 14 to 16% less at 2x. `n4be14`'s runs had fewer draws a frame, which raises the time per draw (the frame's fixed costs are spread over fewer draws), so the comparison is conservative.
+- **The GPU** time is the same as without N4's switches. At 2x the race is bound by the GPU.
+- **The one pass** shows in the one-pass resolves and the render target memory, as in N1's runs. With the guard, `one_pass.draws` counts the render target updates in one pass, not the draws, because the skipped draws repeat the last update: 1.4% of the race's draws against 39 to 41% without the guard.
+- **The image.** The 2x captures (2560x1440, `--keep-ppm`) sit at 1:1 beside RTV's on the same binary (`n4w-race-rtv2k1`: 164.5 fps, 5.93 ms of GPU time). The scene is complete in every band, with the same detail on the cockpit, the hood, the road, the mirror and the glass roof. No capture is washed out or shows the clear color.
+- **The combined checks** (`n4w-check-career`, e2e's `-Native` default: identity, back end, bindings and guard, each perturbed every 1,000th): back end 21,251,886 draws, bindings 17,814,546, guard 18,299,170 skips of 19,382,660 keyed draws (94%), identity 14,203,182 ranges: mismatches only the perturbed. No draw was dropped; two new pipelines were created on the replay (none in one tile, `n4r-check-career`). The run counted 10,414,321 one-pass updates, no clear gray or washed-out capture, and the error keys of RTV and of the perturbed checks.
+
+N4's close gate is done. Next are the other items of N4's row (section 9), each with its own step gate:
+1. event waits in place of spins, measured by the process's CPU time and the package power;
+2. the vblank interrupt and the readback copies on the host render thread;
+3. the queue depth and the latency;
+4. a proxy for a smaller CPU: the affinity set to 4 physical cores without SMT, and to 8 threads.
+
+Then comes the ROG Xbox Ally X export.

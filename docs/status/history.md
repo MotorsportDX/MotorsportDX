@@ -387,6 +387,12 @@ Superseded the same day as the current 240 Hz baseline by the RTV perf gate of t
 
 Three `photo` runs without counters (`n0-p1x`) on `I:\FM4-build-usa`, on build 3 of the N0 measurements (`8d987f5` with the counters, all off; [D3D-level HLE, 13.1](../analysis/d3d-hle.md#131-runs)), with the launcher defaults at 240 Hz and 1x: the race ran at 196.6 to 220.0 fps (median of the runs 217.5), p99 6.91 ms, command processor busy 803 ms/s and GPU 2.89 ms per frame (medians of the three runs), 1,546 to 2,065 draws per frame. The races of the smoke gates of 20 October 2026 (other binaries, one run each) had 217.5 to 225.9 fps. The later `n1rtvp2` runs, on another build at about the same draw load (1,517 to 1,981 draws per frame), ran at 226.5 to 237.5 fps; the difference between the two builds is not explained.
 
+### 23 October 2026: RTV with N4's switches off, at increment 3
+
+Superseded the same day by the close gate's bisect ([D3D-level HLE, 17.15](../analysis/d3d-hle-n4.md#1715-the-close-gate-23-october-2026)), which put RTV's command processor 1.1% above local main's build before step 2, at the edge of the noise.
+
+With the cvar off, RTV's draw path cost the same as on local main (race at 1x, two runs each way: draw zone 2.65 ms at 1,800 draws on both), and 1x smokes with `-Look "original,taa=0"` on RTV and `-Rov` passed (6 of 6 cells).
+
 ## 5. Superseded settings and decisions
 
 Each row gives the date of the change, the setting that was replaced, and what happened later. The current values are in [running](../running.md) and [current status](current.md).
