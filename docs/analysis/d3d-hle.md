@@ -1362,3 +1362,40 @@ The second item of 17.6's budget: the base command processor's `WriteRegistersFr
 - **No saving.** Alternating `n4be7` and `n4be8` at 1x (`n4l-race-repp*` against `-repn*` with the back end on the replay, `-offp1` against `-offn1` without), the render thread's time outside the draw zone at 1,500 draws a race frame (where `n4be8`'s runs lay) was 0.876 against 0.941 ms with the back end and 0.878 against 0.906 ms without; the draw zone 1.906 against 1.894 ms at 1,800 draws. RTV's race (`n4l-race-rtvs*` against `-rtvp*`) kept the command processor's busy time: 3.657 against 3.660 ms at 1,800 draws.
 
 The stores of the registers are not where the register packets' time (17.7) goes: a call per run of unhooked registers costs about what the loop did. The change is not kept, and the 0.1 to 0.2 ms the budget gave it is not there.
+
+### 17.11 The texture keys, 23 October 2026
+
+The third item of 17.6's budget. With `REX_N4_TEXTURE_KEYS=1` the texture cache counts what `RequestTextures` computes again for the used bindings out of sync (`n4m-tkeys-tkeys1`, `n4be9`, the back end on the replay, with `REX_CP_SPLIT`, 1,544 draws a race frame): 2,327 keys a frame (1.51 a draw). 44.1% of them come from a fetch constant with the six dwords of the binding's last one: the title wrote it again, often with other values in between that no draw used, which is why the write-time filter of `d3d12_reuse_draw_bindings` saved nothing in N2 (15.12). 0.6% keep the binding with other dwords (the sampler's fields only), so a compare of the key's bits alone would gain nothing. 55.7% change the key, and 36% of these return to one of the binding's last four keys.
+
+`texture_bindings_keep_same_dwords` (off by default; with `-Native` from the close gate on): each binding keeps the fetch constant it was made from, and a binding out of sync whose fetch constant has the same six dwords is put back in sync without computing anything (no key, signs, swizzle or scale bits, no texture lookup, no change of the bindings; an unchanged key loads nothing either). A binding's reset (each frame, when a texture is destroyed or becomes outdated) clears its dwords. The main session decided against a per-binding list of recent keys (about 0.02 to 0.03 ms for a generation count on the textures' lifetime).
+
+On `I:\FM4-build-usa` at 240 Hz and 1x with `-Native`'s cvars, the back end on the replay and the fast route (`n4be10`):
+
+- **The binding check** (`d3d12_reuse_draw_bindings_check`, perturbation 1,000, `n4n-tkchk-career`: race, replay, menus) compared 34,992,998 bindings kept in sync with keys computed fresh: mismatches only the 34,992 perturbed.
+- **The A/B** on the same binary (`n4n-race-tkoff*` against `-tkon*`, fitted at 1,800 draws): the textures zone 0.331 against 0.312 ms, the render thread busy 2.961 against 2.879 ms, both threads together 4.676 against 4.557 ms, p99 5.43 against 4.99 ms pooled. The runs' draw loads differ (2,132 to 2,363 draws a frame off, 1,710 to 1,816 on) and their busy time per draw overlaps (1.565 to 1.608 against 1.591 to 1.616 us), so the textures zone's −0.02 ms is the measure of the change.
+
+The keys that change still cost most of the keys zone: decoding the new fetch constant, the texture lookup and the load's check.
+
+**The render thread re-profiled** (`n4n-split-tksplit1`, `REX_CP_SPLIT` with the step on, 1,633 draws a race frame; the split's timers raise the busy time to 3.22 ms, so the values are read as proportions):
+
+| Part | ms a race frame |
+|---|---|
+| Draw zone | 2.04 |
+| Textures | 0.40 (keys 0.17, loads 0.05, binding update 0.07, the rest 0.12) |
+| Render targets (`RenderTargetCache::Update`) | 0.26 |
+| The draw call, with the capture | 0.24 |
+| Primitives | 0.18 |
+| Between the primitives and the render targets (draw traces, shader modifications, the uniform targets' overwrite) | 0.15 |
+| Setup before the primitives | 0.10 |
+| Bindings (the system constants' inputs and the texture SRV indices) | 0.09 |
+| Vertex buffers | 0.09 |
+| Between the render targets and the pipeline | 0.07 |
+| State, pipeline, before the textures | 0.04, 0.03, 0.02 |
+| Not in a part (mostly the timers) | 0.38 |
+| Outside the draw zone | 1.18 |
+| Register packets | 0.41 (0.38 in the op lists' replays) |
+| Other packets (the converted writers' records) | 0.20 (696 records, 87,785 registers) |
+| Shader loads | 0.12 |
+| Copies, swap, draw packets beyond the draw zone | 0.12, 0.03, 0.05 |
+| Untimed: dispatch, parse, indirect buffers, the record queue | 0.41 |
+| `WAIT_REG_MEM` (a wait, not busy time) | 1.11 |
