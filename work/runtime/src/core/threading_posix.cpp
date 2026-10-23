@@ -173,6 +173,8 @@ void install_signal_handler(SignalType type) {
 // TODO(dougvj)
 void EnableAffinityConfiguration() {}
 
+void EnableHighResolutionTiming() {}
+
 // uint64_t ticks() { return mach_absolute_time(); }
 
 uint32_t current_thread_system_id() {

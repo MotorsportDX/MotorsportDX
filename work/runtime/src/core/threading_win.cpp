@@ -13,6 +13,8 @@ static_assert(REX_PLATFORM_WIN32, "This file is Windows-only");
 
 #include "platform_win.h"
 
+#include <timeapi.h>
+
 #include <spdlog/spdlog.h>
 
 #include <rex/assert.h>
@@ -31,6 +33,19 @@ void EnableAffinityConfiguration() {
   DWORD_PTR system_affinity_mask;
   GetProcessAffinityMask(process_handle, &process_affinity_mask, &system_affinity_mask);
   SetProcessAffinityMask(process_handle, system_affinity_mask);
+}
+
+void EnableHighResolutionTiming() {
+  // Without a request of its own the process's Sleep(1) takes the default tick
+  // of about 15.6 ms, and Windows may ignore a request and lower the clock of a
+  // process it throttles: on four slow cores a race fell to about 20 to 45 fps.
+  timeBeginPeriod(1);
+  PROCESS_POWER_THROTTLING_STATE state{};
+  state.Version = PROCESS_POWER_THROTTLING_CURRENT_VERSION;
+  state.ControlMask =
+      PROCESS_POWER_THROTTLING_EXECUTION_SPEED | PROCESS_POWER_THROTTLING_IGNORE_TIMER_RESOLUTION;
+  state.StateMask = 0;  // Never throttled: full speed, timer requests honored.
+  SetProcessInformation(GetCurrentProcess(), ProcessPowerThrottling, &state, sizeof(state));
 }
 
 uint32_t current_thread_system_id() {

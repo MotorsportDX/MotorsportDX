@@ -92,6 +92,12 @@ uint32_t logical_processor_count();
 // Must be called at startup before attempting to set thread affinity.
 void EnableAffinityConfiguration();
 
+// Asks for 1 ms timer resolution for the process and opts it out of power
+// throttling (EcoQoS: a lower clock and the timer resolution ignored), so the
+// guest's 1 ms sleeps stay 1 ms when the process uses few cores. On Windows only
+// (docs/analysis/d3d-hle-n4.md 17.19).
+void EnableHighResolutionTiming();
+
 // Gets a stable thread-specific ID, but may not be. Use for informative
 // purposes only.
 uint32_t current_thread_system_id();

@@ -28,6 +28,10 @@
 #include <rex/system/xthread.h>
 #include <rex/thread.h>
 
+REXCVAR_DEFINE_BOOL(high_resolution_timing, true, "Runtime",
+                    "Ask for 1 ms timer resolution and opt the process out of power throttling, so "
+                    "the guest's short sleeps keep their length on a few slow cores "
+                    "(docs/analysis/d3d-hle-n4.md 17.19)");
 REXCVAR_DEFINE_STRING(game_data_root, "", "Runtime", "Override game data path");
 REXCVAR_DEFINE_STRING(user_data_root, "", "Runtime", "Override user data path");
 REXCVAR_DEFINE_STRING(update_data_root, "", "Runtime", "Override update data path");
@@ -111,6 +115,9 @@ X_STATUS Runtime::Setup(RuntimeConfig config) {
 
   // Enable threading affinity configuration
   thread::EnableAffinityConfiguration();
+  if (REXCVAR_GET(high_resolution_timing)) {
+    thread::EnableHighResolutionTiming();
+  }
 
   tool_mode_ = config.tool_mode;
 
