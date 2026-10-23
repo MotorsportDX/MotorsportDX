@@ -560,3 +560,5 @@ The main session's decisions of 23 October 2026: `resolve_host_32bpp` stays, and
 | `parity.py` on `freeze`, `-Rov` against RTV, 4x tiles (`n3f-freeze-*`) | | PASS: draws −0.2%, predicated packets −0.2%, 32.55% of the image above 4 |
 | `-Rov` smoke, `original,taa=0` (`n3f-rovsmoke`) | | 3 of 3 cells, the race at 102.9 fps |
 | 1:1 image of `-Rov`'s photo mode | | correct |
+
+**Photo mode under `-Native`.** With bit 2, the unscaled fast copies of 4x MSAA sources now come from the host render target too, and the exclusion of 16.11 is gone. `native_rt_surfaces_unscaled_msaa` only logs the multisampled checks that match. A `-Native` photo run with the byte check at every frame (`n3f-native-photo`) compared 190,899 resolves without a mismatch.

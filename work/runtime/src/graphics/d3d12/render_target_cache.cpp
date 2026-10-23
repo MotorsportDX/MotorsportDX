@@ -60,9 +60,8 @@ REXCVAR_DEFINE_INT32(native_rt_surfaces_check, 0, "GPU/D3D12",
     .range(0, 100000)
     .lifecycle(rex::cvar::Lifecycle::kRequiresRestart);
 REXCVAR_DEFINE_BOOL(native_rt_surfaces_unscaled_msaa, false, "GPU/D3D12",
-                    "Diagnostic: with native_rt_surfaces bit 2, also resolve the unscaled fast "
-                    "copies of multisampled sources from the host render target (they differ in "
-                    "the byte check, docs/analysis/d3d-hle.md 16.11)")
+                    "Diagnostic: with native_rt_surfaces_check, log every multisampled resolve "
+                    "the byte check finds equal (docs/analysis/d3d-hle-n3.md 16.11, 16.17)")
     .lifecycle(rex::cvar::Lifecycle::kRequiresRestart);
 REXCVAR_DEFINE_STRING(native_rt_surfaces_depth_dump, "", "GPU/D3D12",
                       "Diagnostic: a directory into which every unscaled 4x MSAA depth fast copy "
@@ -6208,16 +6207,10 @@ bool D3D12RenderTargetCache::FindHostResolveSource(const draw_util::ResolveInfo&
       key.GetPitchTiles() != edram_info.pitch_tiles) {
     return false;
   }
-  const bool is_private = render_target != nullptr;
-  // The unscaled fast copies of 4x MSAA depth differ from the dump in the byte
-  // check by a sample's depth, for a cause not found (16.11): they keep the
-  // dump unless the diagnostic native_rt_surfaces_unscaled_msaa is on. A
-  // private 4x surface has more tiles than the dump can hold, so it is always
-  // read from the host.
-  if (bitwise && key.msaa_samples >= xenos::MsaaSamples::k4X && !IsDrawResolutionScaled() &&
-      !REXCVAR_GET(native_rt_surfaces_unscaled_msaa) && !is_private) {
-    return false;
-  }
+  // The unscaled fast copies of 4x MSAA depth come from the host as well: the
+  // dump's shared fast copy reads guest sample 1 instead of 0 in pixel columns
+  // 20 to 23 of every tile, and the host resolve's sample 0 is consistent
+  // across the tile (d3d-hle-n3.md 16.17).
   uint32_t format;
   uint32_t kind;
   if (is_depth) {
