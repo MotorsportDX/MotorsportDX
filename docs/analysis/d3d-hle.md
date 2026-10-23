@@ -758,7 +758,7 @@ On `I:\FM4-build-usa`, the native path at 240 Hz and 1x (build of 22 October 202
 
 ## 16. Stage N3 design, 22 October 2026
 
-Moved to [d3d-hle-n3.md](d3d-hle-n3.md#16-stage-n3-design-22-october-2026) (stage N3: resolves, readback on demand, host render targets and one-pass MSAA, sections 16.1 to 16.17).
+Moved to [d3d-hle-n3.md](d3d-hle-n3.md#16-stage-n3-design-22-october-2026) (stage N3: resolves, readback on demand, host render targets and one-pass MSAA, sections 16.1 to 16.18).
 
 ## 17. Stage N4 design, 22 October 2026
 

@@ -574,3 +574,31 @@ The main session's decisions of 23 October 2026: `resolve_host_32bpp` stays, and
 At 1x, 4x costs about 0.1 to 0.15 ms of GPU time a frame more than 2x; 2x at 2x costs about 2.2 times the GPU time of 4x at 1x. At 1:1 (`n3d-img-*`, `original,taa=0`), 2x at 2x is clearly sharper in the textures and the far terrain, while the geometric edges of 4x at 1x are as clean.
 
 The assumption for the ROG Xbox Ally X, not measured: its Radeon 890M is about 4 times slower than this GPU here (3 to 5 times), so a race frame would take about 21 ms (16 to 27) at 2x at 2x and about 10 ms (7 to 12) at 4x at 1x. The main session's decision of 24 October 2026: 4x at 1x is the Ally X candidate, to be confirmed on the device; `-Native` keeps one pass 2x as its default, and `-MsaaSamples 4` selects 4x in `Build.ps1`, `pipeline.py`, `e2e.py --msaa-samples 4` and the GUI launcher's "Native MSAA" choice.
+
+### 16.18 The close gate of stage N3, 24 October 2026
+
+The close gate of increment 4 and stage N3, on `I:\FM4-build-usa` at 240 Hz with the fast route. The frozen frames, the checks and the inventories ran on snapshot `n3z` (`13393dc`). The smokes and the perf tier ran on the game build of local main `de4e9bd` (the snapshots `n3z-*`): `matrix.py` refused `n3z` once `build-result.json` named the newer build. `work/runtime` and `work/fm4-rex` are identical between the two commits; only the launcher, the tools and the docs changed. The artifacts of the two builds differ, because the builds are not bit-reproducible. Their source tree hashes differ too, `7349c895` against `4b8312f9`. The reason is line endings: two runtime files (`graphics_system.h` and `graphics_system.cpp`) had CRLF in the main checkout's working tree, under `eol=lf`, and LF in the worktree. The main session restored them, and three launcher files, from the index.
+
+The native cells run `-Native`'s settings with N4's three switches: one pass 2x (`FM4_TILING_SCENARIO=1`, `FM4_ONE_PASS_MSAA=2`, `native_one_pass_msaa=2`) or one pass 4x (`-MsaaSamples 4`: scenario 3, `native_one_pass_msaa=4`). RTV runs its defaults (one tile without MSAA under the default look), and `-Rov` runs with `-Look "original,taa=0"`.
+
+| Cell | RTV | Native one pass 2x | Native one pass 4x |
+|---|---|---|---|
+| perf 1x, race (3 runs; `n3z-rtv1xp`, `n3z-nat1xp`, `n3z-nat4x1xp`) | 225.4 fps, p99 5.78 ms, GPU 2.79 ms a frame | 239.3 fps (the 240 Hz cap), p99 4.92 ms, GPU 2.23 ms | 236.4 fps, p99 5.18 ms, GPU 2.49 ms |
+| perf 2x, race (`n3z-rtv2xp`, `n3z-nat2xp`) | 167.0 fps, p99 8.79 ms, GPU 5.81 ms | 190.1 fps, p99 7.24 ms, GPU 5.14 ms | |
+| smoke 1x, races of `photo` and `career` | 225.9 and 223.6 fps | 239.4 and 238.0 fps | 236.1 and 238.1 fps |
+| smoke 2x, races of `photo` and `career` | 172.5 and 168.2 fps | 190.2 and 192.9 fps | |
+| smoke 1x on `-Rov` (`n3z-rov1x`) | `photo` 104.7, `career` 101.7 fps; 3 of 3 cells | | |
+
+Every cell reached its goal (18 smoke cells, 15 perf runs). No cell has a new error key. The WARNs are capture statistics (`photo_view` shows the photo of its own run, at another race moment; its menus are identical) and the guest's idle and register waits, which rise when the race reaches the 240 Hz cap. The one FAIL, the 4x `career` cell, is the overall p99 (33.24 ms against RTV's 17.11 ms), which mixes the menus and the 30 fps screens. Its race (p99 5.03 ms against 6.22 ms) and its replay (119.6 fps against 114.6) are better than RTV's.
+
+| Check | Result |
+|---|---|
+| `parity.py` on `freeze` (`n3z-freeze-*`, 1x and 2x) | `-Rov` against RTV passes: 30.5% and 13.0% of the image above 4. Native one pass against RTV and `-Rov`: draws -14.4%, predicated packets -26%, FAIL by design ([frozen-frames.md](../e2e/frozen-frames.md)); 23.9% and 24.6% of the image above 4 against RTV, 29.6% and 25.1% against `-Rov` |
+| 1:1 images, the 2x `freeze` frames | the old tile seam (lines 896 to 1152, three crops across the width) and the top 416 lines, native against RTV and against `-Rov`: no artefact, two race moments |
+| combined checks, `career` with one pass 2x (`n3z-check-nat2x`), each perturbed every 1,000th | identity 14,014,384 ranges, 12,594 perturbed and 12,594 reported; bindings 19,243,976 and guard 19,028,022, mismatches only the perturbed; back end 21,913,688 draws; resolve byte check 12,317 resolves, 0 mismatches |
+| the same with one pass 4x (`n3z-check-nat4x`) | identity 14,545,309 ranges, 13,005 perturbed and 13,005 reported; bindings 17,963,093 and guard 18,377,393, mismatches only the perturbed; back end 21,464,988 draws; resolve byte check 11,733 resolves, 0 mismatches |
+| the late write trace (`FM4_NATIVE_CHECK`) | no late write in either career |
+| transfer inventory, `race` (`n3z-inventory-*`) | one pass 2x at 2x: 20.5 transfers and 2,800 tiles a frame, as `n4g-inventory-2x`; one pass 4x at 1x: 19.5 and 2,384, as the 4x step gate (`n3x-native-4x`) |
+
+Against the close gate of increment 4's 2x (`n4g*`, commit `2850567`, against RTV with the title's tiles), the native race is faster at 2x (190.1 fps and 5.14 ms against 179.9 fps and 5.42 ms) and at 1x (239.3 fps and 2.23 ms against 219.1 fps and 2.32 ms); RTV's defaults at 2x run at 167.0 fps and 5.81 ms against 158.6 fps and 6.14 ms (`n4g2xpd`). The gate closes stage N3: races render in one pass with 2x MSAA under `-Native`, or with 4x under `-MsaaSamples 4`, with resolves, transfers and copies checked against the EDRAM path.
+

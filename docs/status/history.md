@@ -393,6 +393,22 @@ Superseded the same day by the close gate's bisect ([D3D-level HLE, 17.15](../an
 
 With the cvar off, RTV's draw path cost the same as on local main (race at 1x, two runs each way: draw zone 2.65 ms at 1,800 draws on both), and 1x smokes with `-Look "original,taa=0"` on RTV and `-Rov` passed (6 of 6 cells).
 
+### 23 October 2026: the close gate of one pass 2x
+
+Superseded on 24 October 2026 by the close gate of stage N3 ([current status](current.md#one-pass-with-2x-msaa-stage-n3-23-october-2026), [D3D-level HLE, 16.18](../analysis/d3d-hle-n3.md#1618-the-close-gate-of-stage-n3-24-october-2026)).
+
+| Close gate, 240 Hz, commit `2850567` | RTV tiled 2x | Native one pass 2x |
+|---|---|---|
+| perf 2x (`n4g2xp`, `n4g2xpn`), race | 148.7 fps, GPU 6.51 ms a frame | 179.9 fps, GPU 5.42 ms |
+| perf 1x (`n4g1xp`, `n4g1xpn`), race | 197.8 fps, GPU 3.15 ms | 219.1 fps, GPU 2.32 ms |
+| smoke 1x and 2x, races | `photo` 175.1 and 151.3, `career` 203.0 and 151.3 fps | 227.0 and 178.3, 225.6 and 177.8 fps |
+| `parity.py` on `freeze`, 1x and 2x | | FAIL by design on draws and predicated packets; 31.3% and 25.4% of the image above 4, `-Rov` against RTV 37.1% and 26.0% |
+| identity check with perturbation | | 12,847 ranges perturbed, 12,847 reported |
+| grow stress with the resolve byte check | | 19,422 checks, 0 mismatches, 0 violations of the private depth |
+| render target memory, `career` | 589.8 MB at 1x, 2,142.2 MB at 2x | 203.5 MB, 596.5 MB |
+
+RTV's defaults (one tile) at 2x ran at 158.6 fps with 6.14 ms of GPU time a frame against 160.1 fps and 6.08 ms at the close of increment 3 (`n4g2xpd`, `n3c2xpr`), with no cvar of stage N4 on. The step gate of one pass 4x at 1x, then a development setting (`FM4_TILING_SCENARIO=3`, `FM4_ONE_PASS_MSAA=4`), ran the race at 219.3 fps with 2.37 ms of GPU time a frame, against 190.2 fps and 3.32 ms for RTV with the title's 4x tiles, and its career's 11,430 resolve byte checks showed no mismatch.
+
 ### 23 October 2026: `-Rov` output changed by the 4x fast copy fix
 
 `-Rov`'s output changed on 23 October 2026, with the project owner's approval, through a fix of the emulation, not a title correction. Before it, the shared fast copy of 4x MSAA surfaces read the vertical sample (guest sample 1) instead of sample 0 in pixel columns 20 to 23 of every 40-pixel tile, at 1x and 3x resolution scale. This affected photo mode's 4x depth copies on `-Rov` and on RTV (`n3p-rov-b`: the band in 2,242 of 2,666 tile rows of one depth). FM4-PC's own fast copy computes each pixel's EDRAM address, and the band is gone (`n3f-rov-photo`: 0 rows) ([D3D-level HLE, 16.17](../analysis/d3d-hle-n3.md)).
