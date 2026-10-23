@@ -602,3 +602,17 @@ Every cell reached its goal (18 smoke cells, 15 perf runs). No cell has a new er
 
 Against the close gate of increment 4's 2x (`n4g*`, commit `2850567`, against RTV with the title's tiles), the native race is faster at 2x (190.1 fps and 5.14 ms against 179.9 fps and 5.42 ms) and at 1x (239.3 fps and 2.23 ms against 219.1 fps and 2.32 ms); RTV's defaults at 2x run at 167.0 fps and 5.81 ms against 158.6 fps and 6.14 ms (`n4g2xpd`). The gate closes stage N3: races render in one pass with 2x MSAA under `-Native`, or with 4x under `-MsaaSamples 4`, with resolves, transfers and copies checked against the EDRAM path.
 
+The main session's decision of 24 October 2026 on the rest of N3's row in [section 9](d3d-hle.md#9-stages): the look mods and GTAO already run on the native path, on the post passes' resolve-based anchors. Anchoring the post passes on native surfaces instead moves to N5, together with the upscalers that need it.
+
+**GTAO, TAA, motion vectors and the windshield at 2x** (N3's row criterion; snapshot `n3z-nat2x`, local main `de4e9bd`; the launcher's look, `aces` with GTAO, TAA, the motion vectors and the windshield; native one pass 2x against RTV's defaults; full-size captures):
+
+| Check | Native one pass 2x | RTV |
+|---|---|---|
+| `freeze` at 2x (`n3v-freeze-*`, the cockpit camera) | goal reached | goal reached |
+| 1:1 crops: the dashboard and the steering wheel, the A pillar and the door, the roof lining, the car ahead (its bumper and wheel arches), the windshield over the sky and the cable car | GTAO's shading in the same places and strength, the windshield's tint and light the same; the edges smoother through 2x MSAA | |
+| TAA on the still picture: the last six frozen frames | 0.0% of the image changes above 4 from frame to frame | 0.0% |
+| `race` at 2x with `MOTION_DEBUG` 0, 1 and 4 cycled every second (`n3v-mv-*`) | 188.1 fps; motion and history valid from the first race scene, the same camera sources and fields of view | 168.1 fps; the same |
+| The debug views at 1:1 | the colour-coded motion and the object motion alone match RTV's: the same hues by screen direction, the cockpit and the cars that move with the camera white, the same object outlines | |
+
+Both runs log the same single warning (no single-sampled colour render target at the final point, once) and no new error key. N3's row criterion is met, and N3 is closed.
+

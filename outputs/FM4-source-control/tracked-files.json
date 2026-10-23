@@ -97,6 +97,10 @@
       "provenance": "Project documentation; section 17 of the D3D-level HLE design, stage N4 of the native port (the render thread's CPU time: design notes and measurements; no decompiled code, no third-party code and no game content)"
     },
     {
+      "path": "docs/analysis/d3d-hle-n5.md",
+      "provenance": "Project documentation; section 18 of the D3D-level HLE design, stage N5 of the native port (native resolution and aspect: design notes, source locations and estimates; no decompiled code, no third-party code and no game content)"
+    },
+    {
       "path": "docs/analysis/fsr-plan.md",
       "provenance": "Project documentation; plan for AMD FSR 3.1 beside TAA (version and license review, integration design, stages; no third-party code and no game content)"
     },
