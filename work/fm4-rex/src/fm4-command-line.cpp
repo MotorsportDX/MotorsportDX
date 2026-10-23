@@ -65,9 +65,14 @@ void FM4InstallCommandLine() {
   std::fprintf(stderr, "FM4 developer options:%s\n", joined.c_str());
 }
 
+// fm4-guest-hooks.cpp: the one-pass patch of the tiling scenarios; 4x is applied
+// here, before the renderer reads the table.
+void FM4PatchTilingScenarios(uint8_t* base, bool early);
+
 // CForzaCommandLineParameters constructor (this).
 REX_EXTERN(__imp__sub_823E2338);
 REX_HOOK_RAW(sub_823E2338) {
+  FM4PatchTilingScenarios(base, true);
   const uint32_t self = ctx.r3.u32;
   __imp__sub_823E2338(ctx, base);
   if (!options.empty()) Apply(ctx, base, self, "constructor");

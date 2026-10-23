@@ -303,25 +303,32 @@ REX_HOOK_RAW(sub_8273B290) { TracePhotoCopy(ctx, base, __imp__sub_8273B290); }
 REX_EXTERN(__imp__sub_82BB96E0);
 REX_HOOK_RAW(sub_82BB96E0) { TracePhotoEncoder(ctx, base, __imp__sub_82BB96E0); }
 
-// CTileBuffer::SetScenario (this, scenario). FM4_ONE_PASS_MSAA=2 or 4 makes
-// the tiling scenario of that sample count (1, two tiles with 2x MSAA; 0,
-// three tiles with 4x) one tile of 1280x720 before the title first reads the
-// table at 0x82D883C8 (stride 0x4D0: the sample count at +4, the tile count
-// at +8 and +16, the tile rectangles from +24), so that the races render in
-// one pass with MSAA: increment 4 of stage N3 (docs/analysis/d3d-hle.md 16.17).
-// A probe of the native path only; RTV and -Rov run the title's table.
-REX_EXTERN(__imp__sub_82883948);
-REX_HOOK_RAW(sub_82883948) {
-  static const bool patched = [base]() {
-    const char* value = std::getenv("FM4_ONE_PASS_MSAA");
-    const uint32_t samples = value ? uint32_t(std::atoi(value)) : 0;
-    if (samples != 2 && samples != 4) {
-      return false;
-    }
-    const uint32_t entry = 0x82D883C8u + (samples == 2 ? 1u : 0u) * 0x4D0u;
+// FM4_ONE_PASS_MSAA=2 makes the title's 2x tiling scenario (1, two tiles) one
+// tile of 1280x720, and FM4_ONE_PASS_MSAA=4 makes scenario 3 (Small2xMSAA, one
+// 1120x584 tile; the 4x scenario 0 also serves the user interface) one 1280x720
+// tile with 4x MSAA, for races with FM4_TILING_SCENARIO=3. The table at
+// 0x82D883C8 (stride 0x4D0: the sample count at +4, the tile count at +8 and
+// +16, the tile rectangles from +24) is patched once, so that the races render
+// in one pass with MSAA: increment 4 of stage N3 (docs/analysis/d3d-hle-n3.md
+// 16.17). 4x is patched from the command line constructor (fm4-command-line.cpp,
+// early): at the first CTileBuffer::SetScenario the title has already sized the
+// entry's surface. 2x stays at SetScenario, where the scene keeps its depth at
+// base 1024 (the private depth's); patched early, a race drew no private depth
+// (the title probably places it after the 1280x720 colour, as at 4x). The native
+// path only; RTV and -Rov run the title's table.
+void FM4PatchTilingScenarios(uint8_t* base, bool early) {
+  const char* value = std::getenv("FM4_ONE_PASS_MSAA");
+  const uint32_t samples = value ? uint32_t(std::atoi(value)) : 0;
+  if ((samples != 2 && samples != 4) || early != (samples == 4)) {
+    return;
+  }
+  static const bool patched = [base, samples]() {
+    const uint32_t scenario = samples == 2 ? 1u : 3u;
+    const uint32_t entry = 0x82D883C8u + scenario * 0x4D0u;
     auto store = [base](uint32_t address, uint32_t word) {
       rex::memory::store_and_swap<uint32_t>(base + address, word);
     };
+    store(entry + 4, samples == 2 ? 1u : 2u);
     store(entry + 8, 1);
     store(entry + 16, 1);
     const uint32_t rectangle[4] = {0, 0, 1280, 720};
@@ -329,9 +336,15 @@ REX_HOOK_RAW(sub_82883948) {
       store(entry + 24 + 4 * i, i < 4 ? rectangle[i] : 0);
     }
     std::fprintf(stderr, "FM4 one pass: tiling scenario %u is one 1280x720 tile with %ux MSAA\n",
-                 samples == 2 ? 1u : 0u, samples);
+                 scenario, samples);
     return true;
   }();
   (void)patched;
+}
+
+// CTileBuffer::SetScenario (this, scenario).
+REX_EXTERN(__imp__sub_82883948);
+REX_HOOK_RAW(sub_82883948) {
+  FM4PatchTilingScenarios(base, false);
   __imp__sub_82883948(ctx, base);
 }
