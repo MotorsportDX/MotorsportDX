@@ -385,6 +385,9 @@ class PipelineTests(unittest.TestCase):
             with self.assertRaises(ValueError):
                 pipeline.launch_plan(root,r'C:\FM4 test\Disc 1',msaa_samples=2,
                                      monitor=(1920,1080,1.0))
+            with self.assertRaises(ValueError):
+                pipeline.launch_plan(root,r'C:\FM4 test\Disc 1',msaa_samples=2,native=True,
+                                     rov=True,monitor=(1920,1080,1.0))
 
     def test_full_rate(self):
         """Replays and the countdown run at the race frame rate (FM4_FULL_RATE), shared with

@@ -1049,6 +1049,11 @@ def run_once(options, out):
         tiling_env, tiling_cvars = pipeline.single_tile_settings(look)
         env.update(tiling_env)
         args.update({k: v for k, v in tiling_cvars.items() if k not in args})
+    # One-pass MSAA is a probe of the native path (d3d-hle.md 16.17): -Rov, the uncorrected
+    # reference, never runs it.
+    if (args.get('render_target_path_d3d12') == 'rov' and
+            any(item.startswith('FM4_ONE_PASS_MSAA=') for item in options.env)):
+        raise SystemExit("FM4_ONE_PASS_MSAA is the native path's one-pass MSAA; -Rov cannot run it")
     if options.native:
         # One tile only, like Build.ps1 -Native, which runs the PM4 RTV path in tiles; here a
         # tiled run is refused instead, so a --native result is always the native path. The

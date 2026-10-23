@@ -955,6 +955,8 @@ def launch_plan(root,disc1,single_tile=False,fixed_vblank=False,frame_rate=None,
     # One pass with 2x MSAA on the native path (d3d-hle.md 16.17): the title's 2x scenario made
     # one 1280x720 tile, and the runtime's private scene depth.
     one_pass=bool(msaa_samples)
+    if one_pass and rov:
+        raise ValueError("-MsaaSamples 2 is the native path's one-pass MSAA; -Rov cannot run it.")
     if one_pass and not native:
         raise ValueError("-MsaaSamples 2 is the native path's one-pass MSAA: use it with -Native.")
     single_tile=not one_pass and (single_tile or auto_single_tile(look,rov,msaa))
