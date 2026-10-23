@@ -41,6 +41,8 @@ class DeferredCommandList {
   // Exchanges the recorded commands, so a finished list can be handed to the
   // submission thread while recording continues into this object.
   void Swap(DeferredCommandList& other) { command_stream_.swap(other.command_stream_); }
+  // The commands recorded so far, in elements of the stream.
+  size_t GetStreamSize() const { return command_stream_.size(); }
 
   D3D12_RECT* ClearDepthStencilViewAllocatedRects(D3D12_CPU_DESCRIPTOR_HANDLE depth_stencil_view,
                                                   D3D12_CLEAR_FLAGS clear_flags, FLOAT depth,

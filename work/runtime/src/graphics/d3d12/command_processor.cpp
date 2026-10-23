@@ -56,6 +56,17 @@ REXCVAR_DEFINE_INT32(d3d12_reuse_draw_bindings_check_perturb, 0, "GPU/D3D12",
                      "Test of d3d12_reuse_draw_bindings_check: change every Nth fresh key so "
                      "that it must be reported (0: off)")
     .range(0, 1000000);
+REXCVAR_DEFINE_BOOL(render_target_update_guard, false, "GPU/D3D12",
+                    "Skip the render target cache's update at a draw whose render target "
+                    "registers, draw extent registers and cache state are those of the last "
+                    "update (host render targets; N4 of docs/analysis/d3d-hle.md, section 17.13)");
+REXCVAR_DEFINE_BOOL(render_target_update_guard_check, false, "GPU/D3D12",
+                    "With render_target_update_guard: update anyway at every draw that would "
+                    "skip, and check that the update changed nothing");
+REXCVAR_DEFINE_INT32(render_target_update_guard_check_perturb, 0, "GPU/D3D12",
+                     "Test of render_target_update_guard_check: change every Nth verdict so that "
+                     "it must be reported (0: off)")
+    .range(0, 1000000);
 REXCVAR_DEFINE_BOOL(d3d12_reuse_draw_bindings, false, "GPU/D3D12",
                     "Keep the texture bindings, the fetch constant buffer and the vertex buffer "
                     "residency of fetch constants rewritten with their previous values (N2 step 2 "
@@ -2742,6 +2753,20 @@ bool D3D12CommandProcessor::SetupContext() {
   post_passes_ = PostPasses::Create(*this);
 
   InitializeDrawBackEnd();
+  render_target_update_guard_ =
+      REXCVAR_GET(render_target_update_guard) &&
+      render_target_cache_->GetPath() == RenderTargetCache::Path::kHostRenderTargets;
+  render_target_update_check_ =
+      render_target_update_guard_ && REXCVAR_GET(render_target_update_guard_check);
+  render_target_update_perturb_ =
+      render_target_update_check_
+          ? uint32_t(REXCVAR_GET(render_target_update_guard_check_perturb))
+          : 0;
+  render_target_update_key_valid_ = false;
+  if (render_target_update_guard_) {
+    REXGPU_INFO("Render target update guard: on{}{}", render_target_update_check_ ? ", checked" : "",
+                render_target_update_perturb_ ? ", perturbed" : "");
+  }
 
   return true;
 }
@@ -3936,8 +3961,8 @@ bool D3D12CommandProcessor::IssueDraw(xenos::PrimitiveType primitive_type, uint3
   }
   perf_trace::ZoneEnd(perf_trace::Zone::kDrawPreTargets, pre_targets_start);
   perf_start = perf_trace::ZoneStart();
-  if (!render_target_cache_->Update(is_rasterization_done, normalized_depth_control,
-                                    normalized_color_mask, *vertex_shader)) {
+  if (!UpdateRenderTargets(is_rasterization_done, normalized_depth_control, normalized_color_mask,
+                           *vertex_shader)) {
     return false;
   }
   FrameGraphRenderTargets(*render_target_cache_);
@@ -5567,6 +5592,98 @@ void D3D12CommandProcessor::UpdateSystemConstantValues(
   }
 
   cbuffer_binding_system_.up_to_date &= !dirty;
+}
+
+bool D3D12CommandProcessor::UpdateRenderTargets(bool is_rasterization_done,
+                                                reg::RB_DEPTHCONTROL normalized_depth_control,
+                                                uint32_t normalized_color_mask,
+                                                const Shader& vertex_shader) {
+  RenderTargetUpdateKey key;
+  bool keyed = false;
+  if (render_target_update_guard_) {
+    const RegisterFile& regs = *register_file_;
+    // Without clipping, the draw extent may come from the vertices (executed
+    // on the CPU): not a function of the registers.
+    if (!regs.Get<reg::PA_CL_CLIP_CNTL>().clip_disable) {
+      keyed = true;
+      std::memset(&key, 0, sizeof(key));
+      key.rasterization_done = is_rasterization_done;
+      key.depth_control = normalized_depth_control.value;
+      key.color_mask = normalized_color_mask;
+      key.surface_info = regs[XE_GPU_REG_RB_SURFACE_INFO];
+      key.depth_info = regs[XE_GPU_REG_RB_DEPTH_INFO];
+      for (uint32_t i = 0; i < 4; ++i) {
+        key.color_info[i] = regs[reg::RB_COLOR_INFO::rt_register_indices[i]];
+      }
+      key.window_offset = regs[XE_GPU_REG_PA_SC_WINDOW_OFFSET];
+      key.window_offset_disable = regs.Get<reg::PA_SC_WINDOW_SCISSOR_TL>().window_offset_disable;
+      key.window_scissor_br = regs[XE_GPU_REG_PA_SC_WINDOW_SCISSOR_BR];
+      key.screen_scissor_br = regs[XE_GPU_REG_PA_SC_SCREEN_SCISSOR_BR];
+      key.vte_cntl = regs[XE_GPU_REG_PA_CL_VTE_CNTL];
+      key.vtx_window_offset_enable = regs.Get<reg::PA_SU_SC_MODE_CNTL>().vtx_window_offset_enable;
+      key.vtx_cntl = regs[XE_GPU_REG_PA_SU_VTX_CNTL];
+      key.vport_yscale = regs[XE_GPU_REG_PA_CL_VPORT_YSCALE];
+      key.vport_yoffset = regs[XE_GPU_REG_PA_CL_VPORT_YOFFSET];
+    }
+  }
+  perf_trace::RenderTargetGuardCounts& counts = perf_trace::render_target_guard;
+  if (keyed) {
+    ++counts.draws;
+  }
+  if (keyed && render_target_update_key_valid_ &&
+      !std::memcmp(&key, &render_target_update_key_, sizeof(key)) &&
+      RenderTargetCache::update_epoch() == render_target_update_epoch_ &&
+      render_target_cache_->CanRepeatLastUpdate()) {
+    ++counts.skips;
+    if (!render_target_update_check_) {
+      return true;
+    }
+    // The check: the update this draw skips must change nothing - no command
+    // recorded, no state the epoch counts, the same render targets bound, and
+    // nothing left for the next update.
+    uint32_t formats_before[1 + xenos::kMaxColorRenderTargets];
+    const uint32_t bound_before = render_target_cache_->GetLastUpdateBoundRenderTargets(formats_before);
+    const size_t stream_before = deferred_command_list_.GetStreamSize();
+    if (!render_target_cache_->Update(is_rasterization_done, normalized_depth_control,
+                                      normalized_color_mask, vertex_shader)) {
+      render_target_update_key_valid_ = false;
+      return false;
+    }
+    uint32_t formats_after[1 + xenos::kMaxColorRenderTargets];
+    const uint32_t bound_after = render_target_cache_->GetLastUpdateBoundRenderTargets(formats_after);
+    bool same = deferred_command_list_.GetStreamSize() == stream_before &&
+                RenderTargetCache::update_epoch() == render_target_update_epoch_ &&
+                bound_after == bound_before &&
+                !std::memcmp(formats_after, formats_before, sizeof(formats_after)) &&
+                render_target_cache_->CanRepeatLastUpdate();
+    ++counts.checks;
+    if (render_target_update_perturb_ &&
+        ++render_target_update_checks_ % render_target_update_perturb_ == 0) {
+      same = !same;
+      ++counts.perturbed;
+    }
+    if (!same) {
+      ++counts.mismatches;
+      static uint32_t messages = 0;
+      if (messages < 16) {
+        ++messages;
+        REXGPU_ERROR("Render target update guard: a skipped update changed the state");
+      }
+    }
+    render_target_update_epoch_ = RenderTargetCache::update_epoch();
+    return true;
+  }
+  if (!render_target_cache_->Update(is_rasterization_done, normalized_depth_control,
+                                    normalized_color_mask, vertex_shader)) {
+    render_target_update_key_valid_ = false;
+    return false;
+  }
+  render_target_update_key_valid_ = keyed;
+  if (keyed) {
+    render_target_update_key_ = key;
+    render_target_update_epoch_ = RenderTargetCache::update_epoch();
+  }
+  return true;
 }
 
 void D3D12CommandProcessor::FillSystemConstantInputs(

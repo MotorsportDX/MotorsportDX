@@ -529,6 +529,14 @@ inline void AddReplaySplit(const uint64_t* tsc, const uint32_t* counts, size_t k
   }
 }
 
+// render_target_update_guard: the draws keyed (clipping on), those that
+// skipped the render target cache's update, and with its check the updates
+// run anyway and compared, the verdicts changed on purpose and the mismatches.
+struct RenderTargetGuardCounts {
+  uint64_t draws = 0, skips = 0, checks = 0, perturbed = 0, mismatches = 0;
+};
+inline RenderTargetGuardCounts render_target_guard;
+
 // REX_N4_TEXTURE_KEYS=1 (with the trace): the keys that RequestTextures
 // computes again for used bindings out of sync: all of them, those whose fetch
 // constant has the dwords of the binding's last one, those whose binding stayed
@@ -871,6 +879,14 @@ inline void OnSwap() {
     }
     state->output << "]}";
     back_end_capture = BackEndCaptureCounts{};
+    if (render_target_guard.draws) {
+      state->output << ",\"rt_update_guard\":{\"draws\":" << render_target_guard.draws
+                    << ",\"skips\":" << render_target_guard.skips
+                    << ",\"checks\":" << render_target_guard.checks
+                    << ",\"perturbed\":" << render_target_guard.perturbed
+                    << ",\"mismatches\":" << render_target_guard.mismatches << '}';
+      render_target_guard = RenderTargetGuardCounts{};
+    }
     if (TextureKeysEnabled()) {
       state->output << ",\"texture_keys\":{\"recomputes\":" << texture_keys.recomputes
                     << ",\"same_dwords\":" << texture_keys.same_dwords

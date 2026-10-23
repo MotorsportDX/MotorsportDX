@@ -411,7 +411,28 @@ RenderTargetCache::~RenderTargetCache() {
   ShutdownCommon();
 }
 
+bool RenderTargetCache::IsLastUpdateRepeatable() const {
+  if (GetPath() != Path::kHostRenderTargets || (REXCVAR_GET(native_rt_surfaces) & 1) ||
+      lazy_held_tiles_ || pending_uniform_draw_signature_) {
+    return false;
+  }
+  const auto is_plain = [](const UniformDraw& uniform_draw) {
+    return !uniform_draw.signature && !uniform_draw.overwritten_slots &&
+           uniform_draw.scale_x == 1 && uniform_draw.scale_y == 1 && !uniform_draw.bounds_valid;
+  };
+  if (!is_plain(uniform_draw_) || !is_plain(last_update_uniform_draw_)) {
+    return false;
+  }
+  for (const std::vector<Transfer>& transfers : last_update_transfers_) {
+    if (!transfers.empty()) {
+      return false;
+    }
+  }
+  return true;
+}
+
 void RenderTargetCache::InitializeCommon() {
+  BumpUpdateEpoch();
   assert_true(ownership_ranges_.empty());
   ownership_ranges_.emplace(std::piecewise_construct, std::forward_as_tuple(uint32_t(0)),
                             std::forward_as_tuple(xenos::kEdramTileCount, RenderTargetKey(),
@@ -419,6 +440,7 @@ void RenderTargetCache::InitializeCommon() {
 }
 
 void RenderTargetCache::DestroyAllRenderTargets(bool shutting_down) {
+  BumpUpdateEpoch();
   ownership_ranges_.clear();
   if (!shutting_down) {
     ownership_ranges_.emplace(std::piecewise_construct, std::forward_as_tuple(uint32_t(0)),
@@ -439,6 +461,7 @@ void RenderTargetCache::ShutdownCommon() {
 }
 
 void RenderTargetCache::ClearCache() {
+  BumpUpdateEpoch();
   // Keep only render targets currently owning any EDRAM data.
   if (!render_targets_.empty()) {
     std::unordered_set<RenderTargetKey, RenderTargetKey::Hasher> used_render_targets;
@@ -1926,6 +1949,7 @@ bool RenderTargetCache::PrepareHostRenderTargetsResolveClear(
 }
 
 void RenderTargetCache::PixelShaderInterlockFullEdramBarrierPlaced() {
+  BumpUpdateEpoch();
   assert_true(GetPath() == Path::kPixelShaderInterlock);
   // Clear ownership - any overlap of data written before the barrier is safe.
   OwnershipRange empty_range(xenos::kEdramTileCount, RenderTargetKey(), RenderTargetKey(),
@@ -1976,6 +2000,7 @@ RenderTargetCache::RenderTarget* RenderTargetCache::CreateSizedRenderTarget(Rend
 }
 
 void RenderTargetCache::ReplaceRenderTarget(RenderTarget* old_rt, RenderTarget* new_rt) {
+  BumpUpdateEpoch();
   render_targets_[old_rt->key()] = new_rt;
   new_rt->lazy_owned_held_tiles_ = old_rt->lazy_owned_held_tiles_;
   new_rt->last_bound_ = old_rt->last_bound_;
@@ -2016,6 +2041,7 @@ bool RenderTargetCache::IsOverMemoryCap() const {
 }
 
 void RenderTargetCache::EvictRenderTargets() {
+  BumpUpdateEpoch();
   if (!IsOverMemoryCap()) {
     return;
   }
@@ -2079,6 +2105,7 @@ RenderTargetCache::RenderTarget* RenderTargetCache::GetOrCreateRenderTarget(Rend
   if (it_rt == render_targets_.end() && grow_stress) {
     render_target = CreateSizedRenderTarget(key, std::min(rows, uint32_t(8)));
     render_targets_.emplace(key, render_target);
+    BumpUpdateEpoch();
     it_rt = render_targets_.find(key);
   }
   if (it_rt != render_targets_.end()) {
@@ -2119,6 +2146,7 @@ RenderTargetCache::RenderTarget* RenderTargetCache::GetOrCreateRenderTarget(Rend
     }
     // Insert even if failed to create, not to try to create again.
     render_targets_.emplace(key, render_target);
+    BumpUpdateEpoch();
   }
   if (render_target) {
     render_target->last_bound_ = render_target_update_clock_;
@@ -2220,6 +2248,7 @@ void RenderTargetCache::ChangeOwnership(RenderTargetKey dest, uint32_t start_til
       if (it_pre->second.end_tiles > extent_start &&
           !it_pre->second.IsOwnedBy(dest, host_depth_encoding_different)) {
         // Different render target overlapping the range - split the head.
+        BumpUpdateEpoch();
         ownership_ranges_.emplace(extent_start, it_pre->second);
         it_pre->second.end_tiles = extent_start;
         // Let the next loop do the transfer and needed merging and splitting
@@ -2240,6 +2269,7 @@ void RenderTargetCache::ChangeOwnership(RenderTargetKey dest, uint32_t start_til
       }
       // Take over the current range. Handle the tail - may be outside the range
       // (split in this case) or within it.
+      BumpUpdateEpoch();
       if (it->second.end_tiles > extent_end) {
         // Split the tail.
         ownership_ranges_.emplace(extent_end, it->second);

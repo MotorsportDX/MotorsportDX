@@ -2110,6 +2110,7 @@ void D3D12RenderTargetCache::FlushLazyHolder(RenderTarget* holder) {
   if (!lazy_held_tiles()) {
     return;
   }
+  BumpUpdateEpoch();
   lazy_flush_groups_.clear();
   TakeDeferredTransfers(0, 0, 0, 0, nullptr,
                         uint32_t(perf_trace::LazyTileOutcome::kFlushedOther),
@@ -5190,6 +5191,7 @@ void D3D12RenderTargetCache::FlushLazyTransfers(const draw_util::ResolveInfo* re
   if (GetPath() != Path::kHostRenderTargets || !lazy_held_tiles()) {
     return;
   }
+  BumpUpdateEpoch();
   lazy_flush_groups_.clear();
   if (resolve_info) {
     auto take_span = [&](const draw_util::ResolveEdramInfo& edram_info,

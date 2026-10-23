@@ -431,6 +431,18 @@ class D3D12CommandProcessor : public CommandProcessor {
     const draw_util::Scissor* scissor;
   };
   void InitializeDrawBackEnd();
+  // render_target_update_guard (N4, d3d-hle.md 17.13): RenderTargetCache::Update
+  // at the draw, skipped while the registers and arguments it reads and the
+  // cache's update epoch are those of the last Update and that Update left
+  // nothing for the next one.
+  struct RenderTargetUpdateKey {
+    uint32_t rasterization_done, depth_control, color_mask, surface_info, depth_info,
+        color_info[4], window_offset, window_offset_disable, window_scissor_br, screen_scissor_br,
+        vte_cntl, vtx_window_offset_enable, vtx_cntl, vport_yscale, vport_yoffset;
+  };
+  bool UpdateRenderTargets(bool is_rasterization_done,
+                           reg::RB_DEPTHCONTROL normalized_depth_control,
+                           uint32_t normalized_color_mask, const Shader& vertex_shader);
   // d3d12_draw_back_end=2: the front half's results the replay needs (the
   // texture SRV indices, the live knobs), and the front half's state caches
   // forgotten after a draw the replay records.
@@ -1096,6 +1108,14 @@ class D3D12CommandProcessor : public CommandProcessor {
   uint64_t draw_back_end_checks_ = 0;
   // The captures counted for the trace's sampled capture time.
   uint32_t back_end_capture_samples_ = 0;
+  // render_target_update_guard: the key and the epoch after the last Update.
+  bool render_target_update_guard_ = false;
+  bool render_target_update_check_ = false;
+  uint32_t render_target_update_perturb_ = 0;
+  uint64_t render_target_update_checks_ = 0;
+  bool render_target_update_key_valid_ = false;
+  RenderTargetUpdateKey render_target_update_key_ = {};
+  uint64_t render_target_update_epoch_ = 0;
   uint32_t back_end_context_[draw_back_end::kContextCount] = {};
   draw_back_end::ListState back_end_front_ = {};
   bool back_end_list_captured_ = false;

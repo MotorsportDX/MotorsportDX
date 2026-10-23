@@ -122,6 +122,8 @@ With `REX_N4_REPLAY_SPLIT=1` each window also has a `replay_split` object: the r
 
 With `REX_N4_CAPTURE_SPLIT=1` and the draw back end on, each window also has a `capture_split` object: `ms`, the capture's time on the render thread in six parts (the context registers, the constant masks, the front half's groups, the command's allocation in the deferred command list, the record up to the constant slots, the rest with the check's part; the split's own time stamps add to them), and the captured constant slots by kind: `float_slots`, `fetch_slots` and `bool_loop_slots`.
 
+With `render_target_update_guard` (or its check) each window has an `rt_update_guard` object: the draws keyed (clipping on), those that skipped the render target cache's update (`skips`), and with `render_target_update_guard_check` the updates run anyway and compared (`checks`), the verdicts changed on purpose (`perturbed`) and the mismatches. A perturbed run passes when `mismatches` equals `perturbed`.
+
 With `REX_N4_TEXTURE_KEYS=1` each window also has a `texture_keys` object: the keys that `RequestTextures` computed again for the used bindings out of sync (`recomputes`), those whose fetch constant had the six dwords of the binding's last one (`same_dwords`), those that kept the binding with other dwords (`same_binding`), those whose key changed (`key_changes`), and of these the keys equal to one of the binding's last four (`recent_keys`). The counting decodes each fetch constant a second time, so the keys zone runs slower with it.
 
 ### Readbacks on demand (readback_resolve_on_demand)

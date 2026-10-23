@@ -238,6 +238,17 @@ class RenderTargetCache {
   // tiles of all render targets.
   uint32_t lazy_held_tiles() const { return lazy_held_tiles_; }
 
+  // render_target_update_guard (N4, docs/analysis/d3d-hle.md 17.13): a count of
+  // the changes to what Update finds besides the registers and arguments it
+  // reads (the ownership of the EDRAM, render targets made, replaced or
+  // evicted, the host render targets' resource states); one render target
+  // cache exists per process. And whether the last Update left nothing for the
+  // next one: host render targets, no uniform draw before or now, no transfers,
+  // no deferred tiles and no bit 1 of native_rt_surfaces (its counts run per
+  // Update).
+  static uint64_t update_epoch() { return update_epoch_; }
+  bool IsLastUpdateRepeatable() const;
+
  protected:
   RenderTargetCache(const RegisterFile& register_file, const memory::Memory& memory,
                     uint32_t draw_resolution_scale_x, uint32_t draw_resolution_scale_y)
@@ -589,6 +600,7 @@ class RenderTargetCache {
   // bound targets that own no tile and are not bound now.
   void EvictRenderTargets();
   bool IsOverMemoryCap() const;
+  static void BumpUpdateEpoch() { ++update_epoch_; }
 
   // Whether depth buffer is encoded differently on the host, thus after
   // aliasing naively, precision may be lost - host depth must only be
@@ -872,6 +884,7 @@ class RenderTargetCache {
   // The render targets of the last uniform draw (keys with 1x MSAA), until a
   // draw that isn't uniform uses one of them.
   uint64_t pending_uniform_draw_signature_ = 0;
+  static inline uint64_t update_epoch_ = 0;
   RenderTargetKey pending_uniform_draw_keys_[1 + xenos::kMaxColorRenderTargets];
   std::unordered_map<uint64_t, xenos::MsaaSamples> uniform_draw_next_msaa_;
 };

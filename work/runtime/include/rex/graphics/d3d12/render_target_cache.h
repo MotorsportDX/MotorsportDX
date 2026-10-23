@@ -64,6 +64,14 @@ class D3D12RenderTargetCache final : public RenderTargetCache {
   void InvalidateCommandListRenderTargets() {
     are_current_command_list_render_targets_valid_ = false;
   }
+  // render_target_update_guard: the last Update can stand for the next draw's
+  // when the registers it reads and update_epoch() are the same - it left
+  // nothing for the next one, the command list has its render targets bound,
+  // and nothing waits in the pending transfers or over the memory cap.
+  bool CanRepeatLastUpdate() const {
+    return are_current_command_list_render_targets_valid_ && !pending_transfers_.slots &&
+           IsLastUpdateRepeatable() && !IsOverMemoryCap();
+  }
 
   bool msaa_2x_supported() const { return msaa_2x_supported_; }
 
@@ -285,6 +293,10 @@ class D3D12RenderTargetCache final : public RenderTargetCache {
     D3D12_RESOURCE_STATES SetResourceState(D3D12_RESOURCE_STATES new_state) {
       D3D12_RESOURCE_STATES old_state = resource_state_;
       resource_state_ = new_state;
+      if (new_state != old_state) {
+        // A draw that skips Update would not set the state back.
+        BumpUpdateEpoch();
+      }
       return old_state;
     }
 
