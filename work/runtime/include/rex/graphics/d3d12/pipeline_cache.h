@@ -92,12 +92,17 @@ class PipelineCache {
                          const uint32_t* bound_depth_and_color_render_targets_formats,
                          void** pipeline_handle_out, ID3D12RootSignature** root_signature_out);
 
-  // d3d12_draw_back_end=2 (d3d-hle.md 17.6): ConfigurePipeline in two parts,
+  // d3d12_draw_back_end=2 (d3d-hle-n4.md 17.6): ConfigurePipeline in two parts,
   // the shaders' translation where the draw is issued, and the description,
   // lookup and creation from a register file where the list is replayed
   // (created_out: a pipeline was created there, synchronously).
   bool TranslateShadersForDraw(D3D12Shader::D3D12Translation* vertex_shader,
                                D3D12Shader::D3D12Translation* pixel_shader);
+  // Inlined into ConfigurePipeline, so the PM4 RTV path pays no call for the
+  // split the draw back end needs (d3d-hle-n4.md 17.15).
+#if defined(__clang__) || defined(__GNUC__)
+  [[gnu::always_inline]]
+#endif
   bool ConfigurePipelineDescribed(
       const RegisterFile& regs, D3D12Shader::D3D12Translation* vertex_shader,
       D3D12Shader::D3D12Translation* pixel_shader,
@@ -114,7 +119,7 @@ class PipelineCache {
     return reinterpret_cast<const Pipeline*>(handle)->state.load(std::memory_order_acquire);
   }
 
-  // The draw back end's check (d3d12_draw_back_end_check, d3d-hle.md 17.6): the
+  // The draw back end's check (d3d12_draw_back_end_check, d3d-hle-n4.md 17.6): the
   // size and the bytes of a pipeline's description, and the description for
   // the given register file, without a root signature, a geometry shader or a
   // pipeline (any thread; the translations must be valid).

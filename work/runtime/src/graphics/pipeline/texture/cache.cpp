@@ -575,15 +575,14 @@ void TextureCache::RequestTextures(uint32_t used_texture_mask) {
     if (trace_keys) {
       TraceTextureKey(index, fetch);
     }
-    const uint32_t fetch_dwords[6] = {fetch.dword_0, fetch.dword_1, fetch.dword_2,
-                                      fetch.dword_3, fetch.dword_4, fetch.dword_5};
+    static_assert(sizeof(fetch) == sizeof(binding.fetch_dwords));
     if (keep_same_dwords) {
       // The fetch constant was written again, but with the dwords this binding
       // was made from: the key, the signs, the swizzle and the scale bits would
       // come out the same, and an unchanged key loads nothing. A binding reset
       // (each frame, when a texture is destroyed or becomes outdated) has no
       // dwords to match.
-      if (!std::memcmp(fetch_dwords, binding.fetch_dwords, sizeof(fetch_dwords))) {
+      if (!std::memcmp(&fetch, binding.fetch_dwords, sizeof(fetch))) {
         texture_bindings_in_sync_ |= index_bit;
         continue;
       }
@@ -598,10 +597,14 @@ void TextureCache::RequestTextures(uint32_t used_texture_mask) {
         bindings_changed |= index_bit;
       }
       binding.Reset();
-      std::memcpy(binding.fetch_dwords, fetch_dwords, sizeof(fetch_dwords));
+      if (keep_same_dwords) {
+        std::memcpy(binding.fetch_dwords, &fetch, sizeof(fetch));
+      }
       continue;
     }
-    std::memcpy(binding.fetch_dwords, fetch_dwords, sizeof(fetch_dwords));
+    if (keep_same_dwords) {
+      std::memcpy(binding.fetch_dwords, &fetch, sizeof(fetch));
+    }
     uint32_t old_host_swizzle = binding.host_swizzle;
     binding.host_swizzle = GuestToHostSwizzle(fetch.swizzle, GetHostFormatSwizzle(binding.key));
     binding.integer_scale_bits = FormatInfo::Get(fetch.format)->GetIntegerScaleBits(
