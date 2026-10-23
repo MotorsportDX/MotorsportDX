@@ -905,7 +905,7 @@ def launch(root,single_tile=False,fixed_vblank=False,frame_rate=None,rov=False,
            resolution_scale=None,full_rate_mirror=False,look=None,shadow_workaround=False,
            quality=None,display=DEFAULT_DISPLAY,fullscreen=False,supersample=False,info=False,
            ao=False,shader_dev=False,texture_dump=None,texture_replace=None,msaa=False,
-           native=False):
+           native=False,msaa_samples=None):
     state = json.loads((root/'local.json').read_text())
     disc1,disc2 = validate_discs(state['disc1'],state['disc2'])
     report=json.loads((root/'build-result.json').read_text())
@@ -922,7 +922,8 @@ def launch(root,single_tile=False,fixed_vblank=False,frame_rate=None,rov=False,
         resolution_scale=resolution_scale,full_rate_mirror=full_rate_mirror,look=look,
         shadow_workaround=shadow_workaround,quality=quality,display=display,fullscreen=fullscreen,
         supersample=supersample,info=info,ao=ao,shader_dev=shader_dev,texture_dump=texture_dump,
-        texture_replace=texture_replace,msaa=msaa,content_manifest=manifest,native=native)
+        texture_replace=texture_replace,msaa=msaa,content_manifest=manifest,native=native,
+        msaa_samples=msaa_samples)
     print(description)
     if texture_dump:
         print(f'Texture dump: {cvars["texture_dump_path"]}')
@@ -937,7 +938,7 @@ def launch_plan(root,disc1,single_tile=False,fixed_vblank=False,frame_rate=None,
                 resolution_scale=None,full_rate_mirror=False,look=None,shadow_workaround=False,
                 quality=None,display=DEFAULT_DISPLAY,fullscreen=False,supersample=False,info=False,
                 ao=False,shader_dev=False,texture_dump=None,texture_replace=None,msaa=False,
-                content_manifest=None,monitor=None,native=False):
+                content_manifest=None,monitor=None,native=False,msaa_samples=None):
     """The cvars, the FM4_ environment and the display description of a run of the options of
     launch. The GUI launcher (work/fm4-launcher, plan.cpp) ports this function; launcher_tests
     compares the two. monitor: the primary monitor's (width, height, DPI scale) instead of the
@@ -951,8 +952,13 @@ def launch_plan(root,disc1,single_tile=False,fixed_vblank=False,frame_rate=None,
         # xenia-canary/game-patches#398 workaround, no longer needed on this runtime.
         env['FM4_SHADOW_WORKAROUND']='1'
     look=DEFAULT_LOOK if look is None else look
-    single_tile=single_tile or auto_single_tile(look,rov,msaa)
-    settings=race_settings(DEFAULT_QUALITY if quality is None else quality,single_tile)
+    # One pass with 2x MSAA on the native path (d3d-hle.md 16.17): the title's 2x scenario made
+    # one 1280x720 tile, and the runtime's private scene depth.
+    one_pass=bool(msaa_samples)
+    if one_pass and not native:
+        raise ValueError("-MsaaSamples 2 is the native path's one-pass MSAA: use it with -Native.")
+    single_tile=not one_pass and (single_tile or auto_single_tile(look,rov,msaa))
+    settings=race_settings(DEFAULT_QUALITY if quality is None else quality,single_tile or one_pass)
     if settings:
         env['FM4_RACE_SETTINGS']=settings
     cvars=launch_cvars(root,disc1,root/'logs/runtime.log')
@@ -960,6 +966,8 @@ def launch_plan(root,disc1,single_tile=False,fixed_vblank=False,frame_rate=None,
         tiling_env,tiling_cvars=single_tile_settings(look)
         env.update(tiling_env)
         cvars.update(tiling_cvars)
+    if one_pass:
+        env.update({'FM4_TILING_SCENARIO':'1','FM4_ONE_PASS_MSAA':str(msaa_samples)})
     if fixed_vblank:
         cvars['vblank_vrr']='false'
     if rov:
@@ -968,7 +976,9 @@ def launch_plan(root,disc1,single_tile=False,fixed_vblank=False,frame_rate=None,
         cvars.pop('edram_single_rt_no_wrap')
         cvars.update({'render_target_path_d3d12':'rov','rov_occlusion_async':'all'})
     if native:
-        cvars.update(native_cvars(single_tile,rov))
+        cvars.update(native_cvars(single_tile or one_pass,rov))
+        if one_pass:
+            cvars['native_one_pass_msaa']=str(msaa_samples)
     screen,description=display_settings(display,fullscreen,supersample,resolution_scale,monitor)
     cvars.update(screen)
     if frame_rate:
@@ -1201,6 +1211,9 @@ def main():
                              'TAA, then with FXAA (a look with TAA, every preset, has one tile anyway)')
     parser.add_argument('--msaa',action='store_true',
                         help='run: races keep the tiles and MSAA of --quality with a look that has TAA')
+    parser.add_argument('--msaa-samples',type=int,choices=[2],
+                        help='run with --native: races in one pass with this MSAA (2x), on the '
+                             'native path (docs/analysis/d3d-hle.md 16.17)')
     parser.add_argument('--fixed-vblank',action='store_true',
                         help='run: hold every swap to the fixed 60 Hz vblank grid (vblank_vrr=false)')
     parser.add_argument('--frame-rate',type=int,choices=range(30,241),metavar='30-240',
@@ -1279,7 +1292,7 @@ def main():
                                      args.shadow_workaround,args.quality,args.display,
                                      args.fullscreen,args.supersample,args.info,args.ao,
                                      args.shader_dev,args.texture_dump,args.texture_replace,args.msaa,
-                                     args.native)
+                                     args.native,args.msaa_samples)
     if args.action=='warmcache': warm_cache(root)
     if args.action=='profbuild': build_profiling(root,fxc,args.jobs)
     if args.action=='export':

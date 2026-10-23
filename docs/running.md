@@ -197,6 +197,7 @@ takes a value.
 | `-Native` | off | Stage N1 of the native path: a host render thread consumes the guest's commands from a record queue instead of the command processor thread. Races in one tile only. See [-Native](#-native). |
 | `-SingleTile` | with TAA | Render races as one 720p tile without MSAA also with a look without TAA, then with FXAA on the swap. A look with TAA (every preset) renders one tile anyway. |
 | `-Msaa` | off | Keep the tiles and MSAA of `-Quality` with a look that has TAA. |
+| `-MsaaSamples 2` | off | With `-Native`: races in one pass with 2x MSAA instead of tiles. A development option of stage N3, see [-Native](#-native). |
 | `-FixedVblank` | off | Hold every swap to the fixed 60 Hz vblank grid. |
 | `-FullRateMirror` | off | Render the rear-view mirror in every frame of every race. |
 | `-ShadowWorkaround` | off | Render the shadow map only with the cockpit camera, as the old Xenia workaround did. |
@@ -338,6 +339,12 @@ path, and the render targets stay on RTV.
 - Races must render in one tile (a look with TAA, every preset, or `-SingleTile`).
   With `-Msaa` or a look without TAA the tiles stay on the PM4 RTV path, and the
   launcher says so.
+- `-Native -MsaaSamples 2` renders races in one pass with 2x MSAA (stage N3, increment 4,
+  [section 16.17](analysis/d3d-hle.md)). The title's 2x tiling scenario becomes one 1280x720
+  tile (`FM4_ONE_PASS_MSAA=2`), and the scene depth gets a private host render target
+  (`native_one_pass_msaa=2`). Without `-Native` the option is refused; RTV and `-Rov` keep
+  the title's tiles. TAA on the multisampled scene is not done yet, so judge the look with
+  `-Look "original,taa=0"`.
 - `-Native` with `-Rov` is refused: `-Rov` stays the uncorrected reference.
 - `-Native` also sets `readback_resolve_on_demand=true` (stage N3,
   [section 16.5](analysis/d3d-hle.md)): resolves skip their readback to guest

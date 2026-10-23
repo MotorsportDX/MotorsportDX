@@ -366,6 +366,26 @@ class PipelineTests(unittest.TestCase):
                                  None if look=='original' else '0.5')
             self.assertEqual(pipeline.look_knob_defaults()['FM4_LOOK_COCKPIT_LIGHT'],'0.0')
 
+    def test_one_pass_msaa(self):
+        """-Native -MsaaSamples 2 runs races in one pass with 2x MSAA: the title's 2x scenario
+        made one tile, the runtime's private scene depth, and the native cvars; without -Native
+        it is refused."""
+        with tempfile.TemporaryDirectory(prefix='fm4 one pass test ') as directory:
+            root=Path(directory)
+            cvars,env,_=pipeline.launch_plan(root,r'C:\FM4 test\Disc 1',native=True,msaa_samples=2,
+                                             monitor=(1920,1080,1.0))
+            self.assertEqual(env['FM4_TILING_SCENARIO'],'1')
+            self.assertEqual(env['FM4_ONE_PASS_MSAA'],'2')
+            self.assertNotIn('TilingScenario',env.get('FM4_RACE_SETTINGS',''))
+            self.assertEqual(cvars['native_one_pass_msaa'],'2')
+            self.assertEqual(cvars['host_render_thread'],'true')
+            cvars,env,_=pipeline.launch_plan(root,r'C:\FM4 test\Disc 1',monitor=(1920,1080,1.0))
+            self.assertNotIn('FM4_ONE_PASS_MSAA',env)
+            self.assertNotIn('native_one_pass_msaa',cvars)
+            with self.assertRaises(ValueError):
+                pipeline.launch_plan(root,r'C:\FM4 test\Disc 1',msaa_samples=2,
+                                     monitor=(1920,1080,1.0))
+
     def test_full_rate(self):
         """Replays and the countdown run at the race frame rate (FM4_FULL_RATE), shared with
         e2e.py, and the overlay says so; without the variable the line is gone."""

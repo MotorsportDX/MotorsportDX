@@ -11,6 +11,7 @@ param(
     [string]$Out,
     [switch]$SingleTile,
     [switch]$Msaa,
+    [ValidateSet(2)][int]$MsaaSamples,
     [switch]$FixedVblank,
     [switch]$Rov,
     [switch]$Native,
@@ -46,6 +47,7 @@ if ($Flavor) { $arguments += @('--flavor', $Flavor) }
 if ($Out) { $arguments += @('--out', $Out) }
 if ($SingleTile) { $arguments += @('--single-tile') }
 if ($Msaa) { $arguments += @('--msaa') }
+if ($MsaaSamples) { $arguments += @('--msaa-samples', "$MsaaSamples") }
 if ($FixedVblank) { $arguments += @('--fixed-vblank') }
 if ($Rov) { $arguments += @('--rov') }
 if ($Native) { $arguments += @('--native') }
