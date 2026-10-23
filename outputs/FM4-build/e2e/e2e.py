@@ -1392,6 +1392,56 @@ def resummarize(out, measure):
     return summary
 
 
+# A run writes its logs, perf trace, captures (2560x1440 PPMs for the freeze scenario) and a copy
+# of the profile; on a full drive every write fails and a gate's cells fail one after another.
+MIN_FREE_GB = 15.0
+
+
+def check_free_space(out, min_free_gb):
+    """Exits with a message when the drive that holds out has less than min_free_gb free."""
+    probe = out
+    while not probe.exists() and probe != probe.parent:
+        probe = probe.parent
+    free_gb = shutil.disk_usage(probe).free / 2**30
+    if free_gb < min_free_gb:
+        raise SystemExit(f'Only {free_gb:.1f} GB free on the drive of {out} (at least {min_free_gb:g} GB '
+                         'needed for a run): free space first, or pass --min-free-gb.')
+
+
+BUILD_PROCESSES = ('cl.exe', 'link.exe', 'lld-link.exe', 'clang-cl.exe', 'clang.exe', 'clang++.exe',
+                   'ninja.exe', 'cmake.exe', 'msbuild.exe')
+
+
+def warn_if_building():
+    """Warns when a build runs beside the run: its CPU load moves the perf numbers."""
+    try:
+        listing = subprocess.run(['tasklist', '/fo', 'csv', '/nh'], capture_output=True, text=True,
+                                 timeout=20).stdout.lower()
+    except (OSError, subprocess.SubprocessError):
+        return
+    running = sorted({name for name in BUILD_PROCESSES if f'"{name}"' in listing})
+    if running:
+        print(f'Warning: a build runs beside this run ({", ".join(running)}); its CPU load moves '
+              'the perf numbers.', flush=True)
+
+
+def check_content(build_root):
+    """Exits with a message when a content package that an import marker in the BuildRoot
+    profile names (<user-data>/<package>.import-complete) is missing or empty in
+    <user-data>/0000000000000000/4D530910/00000002: the races would run without it."""
+    user_data = build_root / 'user-data'
+    installed = user_data / '0000000000000000' / '4D530910' / '00000002'
+    missing = []
+    for marker in sorted(user_data.glob('*.import-complete')):
+        package = installed / marker.name[:-len('.import-complete')]
+        if not package.is_dir() or not any(f.is_file() for f in package.rglob('*')):
+            missing.append(package.name)
+    if missing:
+        raise SystemExit(f'{len(missing)} imported content package(s) missing or empty in {installed} '
+                         f'({", ".join(missing[:4])}{", ..." if len(missing) > 4 else ""}): restore '
+                         'them or import them again (Build.ps1 -Content) first.')
+
+
 def main():
     parser = argparse.ArgumentParser()
     parser.add_argument('--build-root', required=True, help='BuildRoot used by Build.ps1')
@@ -1432,6 +1482,8 @@ def main():
                         help='run N times into <out>/run1..runN and aggregate into <out>/summary.json')
     parser.add_argument('--resummarize', action='store_true',
                         help='recompute summary.json of existing runs in --out from their perf.jsonl')
+    parser.add_argument('--min-free-gb', type=float, default=MIN_FREE_GB,
+                        help='refuse to run with less free space on the drive of --out')
     options = parser.parse_args()
 
     out = Path(options.out).resolve()
@@ -1440,6 +1492,10 @@ def main():
         parser.error('--out must be outside the repository, for example <BuildRoot>/e2e/<name>')
     if options.fast_route and not options.steps and not options.goal and options.scenario not in FAST_SCENARIOS:
         parser.error(f'--fast-route covers {", ".join(sorted(FAST_SCENARIOS))}, not {options.scenario}')
+    if not options.resummarize:
+        check_free_space(out, options.min_free_gb)
+        check_content(Path(options.build_root).resolve())
+        warn_if_building()
     if options.resummarize:
         summary = resummarize(out, options.measure)
     elif options.repeat <= 1:

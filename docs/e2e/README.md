@@ -73,6 +73,7 @@ Without network access (Jev unreachable), `--scenario quickrace` drives the same
 | `--measure` | 0 | summarize only the last N perf seconds |
 | `--repeat` | 1 | run N times into `<out>\run1..runN` and aggregate into `<out>\summary.json` |
 | `--resummarize` | off | recompute `summary.json` of existing runs in `--out` from their `perf.jsonl` |
+| `--min-free-gb` | 15 | refuse to start a run with less free space on the drive of `--out` (logs, perf trace, captures and the profile copy); `matrix.py` checks the same once before its first cell. Both also refuse when a content package that an import marker of the BuildRoot profile names (`<user-data>\<package>.import-complete`) is missing or empty under `<user-data>\0000000000000000\4D530910\00000002`, and `e2e.py` warns when a build process (compiler, linker, ninja, CMake, MSBuild) runs beside the run |
 
 The harness passes `--cvar` values from `pipeline.launch_cvars`, the look (`pipeline.look_cvars`) and `pipeline.ao_cvars`, then the `--arg` items, so an `--arg` overrides them.
 
