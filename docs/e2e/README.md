@@ -238,6 +238,7 @@ Each run writes to its `--out` directory:
   capture\            frame-NNN.png (and frame-NNN.ppm with --keep-ppm), captures.txt
   perf.jsonl          per-second performance trace (REX_PERF_TRACE_FILE)
   perf.jsonl.resolves.json   resolve destinations, written with the perf trace (see traces.md)
+  cpu_power.jsonl     each second: the game process's CPU time and the CPU package's and cores' power
   runtime.log         runtime log; error counts come from here
   stderr.log          standard error of the game process
   steps.jsonl         what each check and select saw
@@ -285,9 +286,10 @@ The statistics come from the steady part of the perf trace: without `--measure`,
 | `final_capture` | `luma_mean`, `black_pct` (luma below 8), `saturated_pct` (luma 248 and above) and `luma_hist16` (16 bins) of the last capture |
 | `clear_gray_frames` | captures in which the exact FM4 clear color (102,102,102) covers at least 1% more than the mean of the neutral grays 97-101 and 103-107 do, i.e. geometry such as the road surface was not drawn; asphalt smoothed by TAA spreads over those grays and is not counted |
 | `washed_out_frames` | the race's captures with a horizontal band (a quarter of the height) washed out to white, with the bands (0 at the top): a luma mean of 240 or more with a standard deviation under 20; a build that lost the scene showed its upper half white ([d3d-hle-n4.md 17.15](../analysis/d3d-hle-n4.md#1715-the-close-gate-23-october-2026)). `e2e.py` prints a WARN line when there are any. Over 5,098 race captures of 478 earlier runs it flags only that build's |
+| `cpu_power` | per phase, from its mark to the next (`cpu_power.py`): `seconds`; `process_cpu_ms_per_s`, the CPU time of all the game process's threads per second; `package_w` and `cores_w`, the mean power of the CPU package and of its cores, from the Windows "Energy Meter" counters (RAPL; `null` where Windows does not have them); and `threads`, the twelve thread names with the most CPU time, as `[ms per second, threads of that name]`. A thread that spins shows CPU time without the work |
 | `errors`, `top_errors` | runtime log lines that match an error marker, keyed by their text (first 90 characters, numbers replaced by `#`) with counts; `top_errors` lists the ten most frequent |
 
-With `--repeat`, `summary.json` is an aggregate (`repeat`, `runs`, and the same keys): `fps_median` is the median of the runs' medians, `fps_min` the minimum of their minimums, `errors` the union with summed counts, `goal_reached` true only when every run reached it, and `final_captures` lists each run's final statistics. `--resummarize` recomputes these from the `perf.jsonl` files of finished runs, for example after the harness gained new fields.
+With `--repeat`, `summary.json` is an aggregate (`repeat`, `runs`, and the same keys): `fps_median` is the median of the runs' medians, `fps_min` the minimum of their minimums, `errors` the union with summed counts, `goal_reached` true only when every run reached it, and `final_captures` and `cpu_power` list each run's own. `--resummarize` recomputes these from the `perf.jsonl` files of finished runs, for example after the harness gained new fields.
 
 ## Helper scripts
 

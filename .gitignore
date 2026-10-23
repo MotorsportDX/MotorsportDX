@@ -33,6 +33,7 @@
 !/outputs/FM4-build/texture-extract.cpp
 !/outputs/FM4-build/texture_extract.py
 !/outputs/FM4-build/e2e/compare.py
+!/outputs/FM4-build/e2e/cpu_power.py
 !/outputs/FM4-build/e2e/cp_profile.py
 !/outputs/FM4-build/e2e/inventory.py
 !/outputs/FM4-build/e2e/matrix.py

@@ -380,6 +380,12 @@ class XThread : public XObject {
   uint32_t SelfSuspend();
 #endif
   X_STATUS Delay(uint32_t processor_mode, uint32_t alertable, uint64_t interval);
+  // REX_GUEST_YIELD_TRACE=<path> (N4, docs/analysis/d3d-hle-n4.md): per thread name and
+  // guest caller (the link register at the call), the guest's delays and yields
+  // (KeDelayExecutionThread, NtYieldExecution) with the delay asked for, how often and how
+  // long they took. A loop that yields without sleeping spins on its core.
+  static bool guest_yield_trace();
+  void TraceGuestYield(uint32_t timeout_ms, uint64_t start_ns);
 
   rex::thread::Thread* thread() { return thread_.get(); }
   runtime::ThreadState* thread_state() { return thread_state_.get(); }

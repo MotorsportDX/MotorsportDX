@@ -59,7 +59,7 @@ REXCVAR_DEFINE_INT32(d3d12_reuse_draw_bindings_check_perturb, 0, "GPU/D3D12",
 REXCVAR_DEFINE_BOOL(render_target_update_guard, false, "GPU/D3D12",
                     "Skip the render target cache's update at a draw whose render target "
                     "registers, draw extent registers and cache state are those of the last "
-                    "update (host render targets; N4 of docs/analysis/d3d-hle.md, section 17.13)");
+                    "update (host render targets; N4 of docs/analysis/d3d-hle-n4.md, section 17.13)");
 REXCVAR_DEFINE_BOOL(render_target_update_guard_check, false, "GPU/D3D12",
                     "With render_target_update_guard: update anyway at every draw that would "
                     "skip, and check that the update changed nothing");
@@ -4157,7 +4157,7 @@ bool D3D12CommandProcessor::IssueDraw(xenos::PrimitiveType primitive_type, uint3
   DrawBackEndCapture back_end_capture;
   if (draw_back_end_) {
     // The back end's inputs into the deferred command list (N4 step 2,
-    // increment 1, d3d-hle.md 17.6).
+    // increment 1, d3d-hle-n4.md 17.6).
     namespace be = draw_back_end;
     const be::SystemConstantInputs& inputs = system_constant_inputs_;
     DrawBackEndCapture& capture = back_end_capture;
@@ -5578,7 +5578,7 @@ void D3D12CommandProcessor::UpdateSystemConstantValues(
 #endif  // XE_GPU_FINE_GRAINED_DRAW_SCOPES
 
   // The values come from draw_back_end::ComputeSystemConstants, which reads
-  // the register file it is given (N4 step 2, d3d-hle.md 17.6).
+  // the register file it is given (N4 step 2, d3d-hle-n4.md 17.6).
   FillSystemConstantInputs(shared_memory_is_uav, primitive_polygonal, line_loop_closing_index,
                            index_endian, used_texture_mask, normalized_depth_control,
                            normalized_color_mask);
@@ -7000,6 +7000,8 @@ void D3D12CommandProcessor::ServiceDemandReadbacks() {
 }
 
 void D3D12CommandProcessor::SubmitThreadMain() {
+  // Named for the e2e harness's CPU time per thread (cpu_power.py).
+  rex::thread::set_current_thread_name("GPU Submit");
   ID3D12CommandQueue* direct_queue = GetD3D12Provider().GetDirectQueue();
   std::unique_lock<std::mutex> lock(submit_mutex_);
   while (true) {
@@ -7070,6 +7072,7 @@ void D3D12CommandProcessor::FlushSubmitThread() {
 }
 
 void D3D12CommandProcessor::ReadbackPublishThreadMain() {
+  rex::thread::set_current_thread_name("GPU Readback Publish");
   std::unique_lock<std::mutex> lock(readback_publish_mutex_);
   while (true) {
     readback_publish_request_cond_.wait(

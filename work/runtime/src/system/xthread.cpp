@@ -11,7 +11,14 @@
 
 #include <algorithm>
 #include <atomic>
+#include <chrono>
+#include <cstdlib>
 #include <cstring>
+#include <fstream>
+#include <map>
+#include <mutex>
+#include <string>
+#include <tuple>
 
 #include <fmt/format.h>
 
@@ -997,7 +1004,45 @@ uint32_t XThread::SelfSuspend() {
 }
 #endif
 
+bool XThread::guest_yield_trace() {
+  static const char* path = std::getenv("REX_GUEST_YIELD_TRACE");
+  return path && *path;
+}
+
+void XThread::TraceGuestYield(uint32_t timeout_ms, uint64_t start_ns) {
+  // Rewritten every 65536 calls, keyed by thread name, caller and delay.
+  struct Entry {
+    uint64_t calls = 0, ns = 0;
+  };
+  static std::mutex mutex;
+  static std::map<std::tuple<std::string, uint32_t, uint32_t>, Entry> entries;
+  static uint64_t calls = 0;
+  const uint64_t now_ns = std::chrono::duration_cast<std::chrono::nanoseconds>(
+                              std::chrono::steady_clock::now().time_since_epoch())
+                              .count();
+  const uint32_t caller =
+      thread_state() && thread_state()->context()
+          ? static_cast<uint32_t>(thread_state()->context()->lr)
+          : 0;
+  std::lock_guard<std::mutex> lock(mutex);
+  Entry& entry = entries[{thread_name_, caller, timeout_ms}];
+  ++entry.calls;
+  entry.ns += now_ns - start_ns;
+  if (++calls % 65536) return;
+  std::ofstream output(std::getenv("REX_GUEST_YIELD_TRACE"), std::ios::trunc);
+  for (const auto& [key, e] : entries) {
+    output << std::get<0>(key) << "\tcaller " << std::hex << std::get<1>(key) << std::dec
+           << "\tdelay_ms " << std::get<2>(key) << "\tcalls " << e.calls << "\tms "
+           << e.ns / 1000000 << "\n";
+  }
+}
+
 X_STATUS XThread::Delay(uint32_t processor_mode, uint32_t alertable, uint64_t interval) {
+  const uint64_t trace_start_ns =
+      guest_yield_trace() ? std::chrono::duration_cast<std::chrono::nanoseconds>(
+                                std::chrono::steady_clock::now().time_since_epoch())
+                                .count()
+                          : 0;
   int64_t timeout_ticks = interval;
   uint32_t timeout_ms;
   if (timeout_ticks > 0) {
@@ -1016,6 +1061,9 @@ X_STATUS XThread::Delay(uint32_t processor_mode, uint32_t alertable, uint64_t in
   if (alertable) {
     auto result = rex::thread::AlertableSleep(std::chrono::milliseconds(timeout_ms));
     CheckTitleTermination();
+    if (trace_start_ns) {
+      TraceGuestYield(timeout_ms, trace_start_ns);
+    }
     switch (result) {
       default:
       case rex::thread::SleepResult::kSuccess:
@@ -1034,6 +1082,9 @@ X_STATUS XThread::Delay(uint32_t processor_mode, uint32_t alertable, uint64_t in
       rex::thread::Sleep(std::chrono::milliseconds(timeout_ms));
     }
     CheckTitleTermination();
+    if (trace_start_ns) {
+      TraceGuestYield(timeout_ms, trace_start_ns);
+    }
   }
 
   return X_STATUS_SUCCESS;

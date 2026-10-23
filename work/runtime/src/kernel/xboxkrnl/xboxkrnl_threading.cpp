@@ -390,6 +390,17 @@ u32 KeDelayExecutionThread_entry(u32 processor_mode, u32 alertable, mapped_u64 i
 }
 
 u32 NtYieldExecution_entry() {
+  if (XThread::guest_yield_trace()) {
+    const uint64_t start_ns = std::chrono::duration_cast<std::chrono::nanoseconds>(
+                                  std::chrono::steady_clock::now().time_since_epoch())
+                                  .count();
+    rex::thread::MaybeYield();
+    if (XThread* thread = XThread::GetCurrentThread()) {
+      // A yield, recorded with the delay UINT32_MAX to tell it from KeDelayExecutionThread.
+      thread->TraceGuestYield(UINT32_MAX, start_ns);
+    }
+    return X_STATUS_SUCCESS;
+  }
   rex::thread::MaybeYield();
   return X_STATUS_SUCCESS;
 }

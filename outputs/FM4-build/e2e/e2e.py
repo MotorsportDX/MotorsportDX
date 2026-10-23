@@ -1033,8 +1033,8 @@ def run_once(options, out):
     LAST_PRESS[0] = 0.0
 
     # Same cvars as Build.ps1 -Action run.
-    sys.path.insert(0, str(HERE.parent))
-    import pipeline
+    sys.path[:0] = [str(HERE), str(HERE.parent)]
+    import cpu_power, pipeline
     args = {k: str(v) for k, v in pipeline.launch_cvars(root, state['disc1'], out / 'runtime.log').items()}
     # Nobody can type into the host keyboard dialog: XAM prompts answer with their defaults.
     args['headless'] = 'true'
@@ -1143,6 +1143,8 @@ def run_once(options, out):
     stderr = open(out / 'stderr.log', 'w', encoding='utf-8', errors='replace')
     started = time.time()
     process = subprocess.Popen(command, cwd=root, env=env, stdout=stderr, stderr=subprocess.STDOUT)
+    # The process's CPU time and the CPU package's power each second, the threads' CPU time per phase.
+    sampler = cpu_power.Sampler(process, out / 'cpu_power.jsonl')
     timeline = []
     crashed = None
     goal_reached = None
@@ -1176,6 +1178,7 @@ def run_once(options, out):
                     phases.append((action[6:], perf_lines(out / 'perf.jsonl')))
                     phase_times.append((action[6:], time.time()))
                     phase_steady.append((action[6:], time.perf_counter() * 1000))
+                    sampler.mark(action[6:])
                 elif action.startswith('defines:'):
                     mod_defines.write(action[8:])
                 elif ',' in action:
@@ -1205,6 +1208,7 @@ def run_once(options, out):
     finally:
         screen.close()
         mod_defines.restore()
+        sampler.stop()
         if process.poll() is None:
             process.kill()
             process.wait()
@@ -1274,6 +1278,7 @@ def run_once(options, out):
         'final_capture': final_stats,
         'clear_gray_frames': clear_gray_frames,
         'washed_out_frames': washed_out_frames,
+        'cpu_power': sampler.summary(),
         'errors': errors,
         'top_errors': sorted(errors.items(), key=lambda kv: -kv[1])[:10],
     }
@@ -1325,6 +1330,7 @@ def aggregate(runs):
         'submit_thread_ms_per_s_median': nested('submit_thread_ms_per_s_median'),
         'submit_thread_counts_per_s_median': nested('submit_thread_counts_per_s_median'),
         'final_captures': [r['final_capture'] for r in runs],
+        'cpu_power': [r.get('cpu_power') for r in runs],
         'clear_gray_frames': sum(len(r.get('clear_gray_frames', [])) for r in runs),
         'washed_out_frames': sum(len(r.get('washed_out_frames', {})) for r in runs),
         'errors': errors,

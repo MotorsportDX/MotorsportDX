@@ -8,6 +8,7 @@ from pathlib import Path
 HERE = Path(__file__).resolve().parent
 sys.path.insert(0, str(HERE))
 import compare  # noqa: E402
+import cpu_power  # noqa: E402
 import e2e  # noqa: E402
 import frame_diff  # noqa: E402
 import parity  # noqa: E402
@@ -390,6 +391,26 @@ class CoverageTests(unittest.TestCase):
                              [18, 72])
             self.assertEqual(result['race']['allocations']['sub_82000100']['overflow'], [8, 0])
             self.assertEqual(result['race']['checks'], {'sub_82000100': 50})
+
+
+class CpuPowerTest(unittest.TestCase):
+    def test_summary(self):
+        # A phase from its mark to the next: the process's CPU per second from the samples inside
+        # it, the mean power in W, and each thread name's CPU per second over the phase.
+        sampler = cpu_power.Sampler.__new__(cpu_power.Sampler)
+        sampler.samples = [(10.0, 1000.0, 40000.0, 30000.0), (11.0, 1600.0, 42000.0, 32000.0),
+                           (12.0, 2200.0, 44000.0, None), (13.0, 2500.0, 20000.0, 10000.0)]
+        sampler.marks = [('race', 9.9, {'GPU Host Render': [100.0, 1], 'XThread0001': [50.0, 1]}),
+                         ('end', 12.1, {'GPU Host Render': [1200.0, 1], 'XThread0001': [600.0, 1],
+                                        'D3D12 Pipelines': [10.0, 4]})]
+        race = sampler.summary()['race']
+        self.assertEqual(race['seconds'], 2.0)
+        self.assertEqual(race['process_cpu_ms_per_s'], 600.0)
+        self.assertEqual(race['package_w'], 42.0)
+        self.assertEqual(race['cores_w'], 31.0)
+        self.assertEqual(list(race['threads']), ['GPU Host Render', 'XThread0001', 'D3D12 Pipelines'])
+        self.assertEqual(race['threads']['GPU Host Render'], [500.0, 1])
+        self.assertEqual(race['threads']['D3D12 Pipelines'], [4.5, 4])
 
 
 if __name__ == '__main__':

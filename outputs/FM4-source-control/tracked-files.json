@@ -189,6 +189,10 @@
       "provenance": "Original test tooling for this project; no game content or original game function bodies"
     },
     {
+      "path": "outputs/FM4-build/e2e/cpu_power.py",
+      "provenance": "Original test tooling for this project; no game content or original game function bodies"
+    },
+    {
       "path": "outputs/FM4-build/e2e/frame_diff.py",
       "provenance": "Original test tooling for this project; no game content or original game function bodies"
     },

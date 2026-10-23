@@ -11,6 +11,7 @@ Summary of the variables on this page:
 | `REX_PERF_TRACE_FILE` | one JSON line per second (and `.resolves.json`) | every second | [Performance trace](#performance-trace-rex_perf_trace_file) |
 | `REX_CP_PROFILE` | stack samples of the command-processor thread | about every millisecond | [Command-processor profiler](#command-processor-profiler-rex_cp_profile) |
 | `REX_WAIT_REG_MEM_TRACE` | summary of WAIT_REG_MEM conditions | per run | [WAIT_REG_MEM](#wait_reg_mem-rex_wait_reg_mem_trace) |
+| `REX_GUEST_YIELD_TRACE` | the guest's delays and yields per thread and caller | every 65,536 calls | [Guest yields](#guest-yields-rex_guest_yield_trace) |
 | `REX_OCCLUSION_SEGMENT_TRACE`, `REX_OCCLUSION_DRAW_TRACE`, `REX_DRAW_DEPTH_HIST` | occlusion and depth state | per snapshot or frame | [Occlusion and depth](#occlusion-and-depth) |
 | `REX_DRAW_LIST_TRACE` | every draw of a sampled frame | `REX_DRAW_LIST_EVERY`, default 10 | [Draw traces](#draw-traces) |
 | `REX_IB_TRACE` | indirect buffers | every 60th frame | [Draw traces](#draw-traces) |
@@ -147,6 +148,10 @@ python outputs\FM4-build\e2e\cp_profile.py stacks.txt <BuildRoot>\game-build-pro
 ## WAIT_REG_MEM (REX_WAIT_REG_MEM_TRACE)
 
 `REX_WAIT_REG_MEM_TRACE=<file>` summarizes the WAIT_REG_MEM conditions of the command processor ([`work/runtime/src/graphics/command_processor.cpp`](../../work/runtime/src/graphics/command_processor.cpp)): how often each condition was waited on, its polls, how many sleeps a vblank ended early, and its wait time.
+
+## Guest yields (REX_GUEST_YIELD_TRACE)
+
+`REX_GUEST_YIELD_TRACE=<file>` summarizes the guest's `KeDelayExecutionThread` and `NtYieldExecution` calls ([`work/runtime/src/system/xthread.cpp`](../../work/runtime/src/system/xthread.cpp)): one line per thread name, guest caller (the link register at the call) and delay asked for, with the calls and their time. `delay_ms 4294967295` is a yield; a delay of 0 yields too. A thread with many of them and its CPU time in `cpu_power` (e2e) spins; the title's `Sleep` wrapper (`sub_8238C6E8`) is the caller of its sleeps, not their origin ([d3d-hle-n4.md 17.16](../analysis/d3d-hle-n4.md#1716-event-waits-in-place-of-the-remaining-spins-23-october-2026)).
 
 ## Occlusion and depth
 
