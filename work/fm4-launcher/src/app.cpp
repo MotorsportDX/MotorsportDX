@@ -8,14 +8,17 @@
 #include <SDL3/SDL_main.h>
 
 #include <atomic>
+#include <cctype>
 #include <chrono>
 #include <cmath>
 #include <cstdio>
+#include <ctime>
 #include <fstream>
 #include <map>
 #include <mutex>
 #include <optional>
 #include <set>
+#include <sstream>
 #include <thread>
 
 #include "imgui.h"
@@ -693,6 +696,13 @@ std::vector<std::string> App::GameArgs(const Plan& plan) {
   if (!settings_.user_data.empty()) cvars.Set("user_data_root", settings_.user_data);
   for (const auto& [name, value] : settings_.binds.Items()) cvars.Set(name, value);
   if (settings_.mouse_right_stick) cvars.Set("mnk_mouse", "true");
+  // Extra cvars, last: --name=value (or name=value) separated by spaces.
+  std::istringstream extra(settings_.Active().options.extra_cvars);
+  for (std::string item; extra >> item;) {
+    if (item.starts_with("--")) item = item.substr(2);
+    const size_t equals = item.find('=');
+    if (equals != std::string::npos && equals > 0) cvars.Set(item.substr(0, equals), item.substr(equals + 1));
+  }
   std::vector<std::string> args = {Utf8(root_ / "game-build" / "fm4_rex.exe")};
   for (const auto& [name, value] : cvars.Items()) args.push_back("--" + name + "=" + value);
   return args;
@@ -730,7 +740,20 @@ void App::Play() {
       for (const auto& package : content_.packages) manifest << Utf8(package.path) << '\n';
     }
     SaveSettings();
-    void* process = StartProcess(GameArgs(*plan), plan->env, root_, root_ / "logs" / "play.log");
+    Pairs env = plan->env;
+    if (settings_.Active().options.perf_trace) {
+      // The performance trace: one JSON line a second (docs/e2e/traces.md).
+      const std::time_t now = std::time(nullptr);
+      std::tm local{};
+      localtime_s(&local, &now);
+      char stamp[32];
+      std::strftime(stamp, sizeof(stamp), "%Y%m%d-%H%M%S", &local);
+      std::string profile;
+      for (const char c : settings_.Active().name) profile += std::isalnum(static_cast<unsigned char>(c)) ? c : '_';
+      fs::create_directories(root_ / "logs");
+      env.Set("REX_PERF_TRACE_FILE", Utf8(root_ / "logs" / ("perf-" + profile + "-" + stamp + ".jsonl")));
+    }
+    void* process = StartProcess(GameArgs(*plan), env, root_, root_ / "logs" / "play.log");
     banner_.clear();
     running_ = true;
     started_ = std::chrono::steady_clock::now();
@@ -1390,6 +1413,17 @@ void App::AdvancedPage() {
   ImGui::Checkbox("One tile without MSAA also with a look without TAA (then FXAA)", &o.single_tile);
   ImGui::Checkbox("Ambient occlusion pass also without the look's ao knob", &o.ao);
   ImGui::Checkbox("ROV render path (the uncorrected reference, slower)", &o.rov);
+  ImGui::Checkbox("Native path (races in one pass with 2x MSAA, the native port's stages)",
+                  &o.native);
+  ImGui::BeginDisabled(!o.native);
+  bool no_msaa = o.msaa_samples == 0;
+  if (ImGui::Checkbox("Native path in one tile without MSAA", &no_msaa)) o.msaa_samples = no_msaa ? 0 : -1;
+  ImGui::EndDisabled();
+  ImGui::Checkbox("Performance trace (logs\\perf-<profile>-<time>.jsonl)", &o.perf_trace);
+  ImGui::SetNextItemWidth(420 * scale_);
+  ImGui::InputTextWithHint("Extra cvars", "--name=value --name=value", &o.extra_cvars);
+  ImGui::SetCursorPosX(ImGui::GetCursorPosX() + 190 * scale_);
+  ImGui::TextColored(kMuted, "Applied last, for A/B runs (docs/running.md, Ally X run set)");
   ImGui::Dummy(ImVec2(0, 6 * scale_));
   PathRow("Texture dump", "dump", o.texture_dump, kTextureDump, true);
   ImGui::SetCursorPosX(ImGui::GetCursorPosX() + 190 * scale_);

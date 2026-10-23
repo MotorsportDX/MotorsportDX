@@ -51,6 +51,8 @@ struct Options {
   bool info = false;
   bool ao = false;
   bool msaa = false;
+  bool native = false;       // -Native
+  int msaa_samples = -1;     // -MsaaSamples; -1: unset (2 with -Native)
   int frame_rate = 0;        // 0: the title's 60
   int resolution_scale = 0;  // 0: from the display
   std::string look;          // empty: the default look
@@ -58,6 +60,10 @@ struct Options {
   std::string display;       // empty: the default display
   std::string texture_dump;     // empty: off
   std::string texture_replace;  // empty: off
+  // Applied at Play, outside the launch plan (pipeline.py has no counterpart): the performance
+  // trace into logs\perf-<profile>-<time>.jsonl, and cvars given as --name=value, applied last.
+  bool perf_trace = false;
+  std::string extra_cvars;
 };
 
 struct Monitor {

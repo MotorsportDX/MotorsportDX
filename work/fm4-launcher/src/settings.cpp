@@ -15,6 +15,10 @@ Json OptionsToJson(const Options& o) {
               {"quality", o.quality},
               {"look", o.look},
               {"msaa", o.msaa},
+              {"native", o.native},
+              {"msaa_samples", o.msaa_samples},
+              {"perf_trace", o.perf_trace},
+              {"extra_cvars", o.extra_cvars},
               {"single_tile", o.single_tile},
               {"full_rate_mirror", o.full_rate_mirror},
               {"info", o.info},
@@ -44,6 +48,10 @@ Options OptionsFromJson(const Json& json) {
   get("quality", o.quality);
   get("look", o.look);
   get("msaa", o.msaa);
+  get("native", o.native);
+  get("msaa_samples", o.msaa_samples);
+  get("perf_trace", o.perf_trace);
+  get("extra_cvars", o.extra_cvars);
   get("single_tile", o.single_tile);
   get("full_rate_mirror", o.full_rate_mirror);
   get("info", o.info);

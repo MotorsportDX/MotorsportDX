@@ -1068,6 +1068,7 @@ def launcher_data():
     defaults={knob:value for knob,define in LOOK_KNOBS.items()
               for name,value in look_knob_defaults().items() if name==define}
     return {'cvars':{name:str(value) for name,value in cvars.items()},'env':launch_env(),
+            'native_cvars':native_cvars(True),
             'look':{'knobs':LOOK_KNOBS,'runtime_knobs':list(LOOK_RUNTIME_KNOBS),
                     'pass_knobs':list(LOOK_PASS_KNOBS),'track_knobs':LOOK_TRACK_KNOBS,
                     'names':LOOK_NAMES,'presets':LOOK_PRESETS,'aliases':LOOK_ALIASES,
@@ -1118,6 +1119,11 @@ def launcher_test_options(root):
             {'look':'original','msaa':True,'display':'720p','fullscreen':True},
             {'rov':True,'fixed_vblank':True,'full_rate_mirror':True,'shadow_workaround':True,'info':True},
             {'rov':True},
+            {'native':True},
+            {'native':True,'msaa_samples':0},
+            {'native':True,'single_tile':True,'look':'original,taa=0'},
+            {'native':True,'msaa':True},
+            {'native':True,'look':'gt','frame_rate':240,'fixed_vblank':True},
             {'look':'aces,foliage_hue=-60,sky=1.2,road_gloss=0.5,sun=0,tonemap=filmic,taa_point=1',
              'supersample':True},
             {'look':'neutral,windshield=2,ao=0','resolution_scale':3,'display':'4k'},

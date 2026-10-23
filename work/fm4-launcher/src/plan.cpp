@@ -257,6 +257,7 @@ std::string InfoOverlay(const LauncherData& data, const Pairs& cvars, const Pair
   const std::string mirror = env.Get("FM4_HALF_RATE_MIRROR") == "1" ? "half rate" : "every frame";
   std::string path = cvars.Get("render_target_path_d3d12", "rtv");
   std::transform(path.begin(), path.end(), path.begin(), ::toupper);
+  if (cvars.Get("host_render_thread") == "true") path += " (host render thread)";
   lines.push_back("Races: " + rate + " fps, " + pacing + "; mirror " + mirror + "; " + path +
                   " render targets");
   std::vector<std::string> full;
@@ -518,12 +519,23 @@ Plan LaunchPlan(const LauncherData& data, const std::string& root, const std::st
   const std::string look =
       options.look.empty() ? data.Look().at("default").get<std::string>() : options.look;
   const Pairs knobs = LookKnobs(data, look);
+  // One pass with 2x MSAA on the native path: -Native runs it unless -MsaaSamples 0 (one tile
+  // without MSAA), -SingleTile or -Msaa says otherwise.
+  if (options.msaa_samples >= 0 && options.rov)
+    throw PlanError("-MsaaSamples is the native path's one-pass MSAA; -Rov cannot run it.");
+  if (options.msaa_samples >= 0 && !options.native)
+    throw PlanError("-MsaaSamples is the native path's one-pass MSAA: use it with -Native.");
+  int msaa_samples = options.msaa_samples;
+  if (options.native && msaa_samples < 0 && !options.single_tile && !options.msaa && !options.rov)
+    msaa_samples = 2;
+  const bool one_pass = msaa_samples > 0;
   const bool single_tile =
-      options.single_tile || (TaaEnabled(knobs) && !options.rov && !options.msaa);
+      !one_pass && (options.single_tile || msaa_samples == 0 ||
+                    (TaaEnabled(knobs) && !options.rov && !options.msaa));
   const std::string quality = options.quality.empty()
                                   ? data.json.at("quality").at("default").get<std::string>()
                                   : options.quality;
-  const std::string settings = RaceSettings(data, quality, single_tile);
+  const std::string settings = RaceSettings(data, quality, single_tile || one_pass);
   if (!settings.empty()) env.Set("FM4_RACE_SETTINGS", settings);
   for (const auto& [name, value] : data.json.at("cvars").items()) {
     std::string text = value.get<std::string>();
@@ -535,6 +547,10 @@ Plan LaunchPlan(const LauncherData& data, const std::string& root, const std::st
     env.Set("FM4_TILING_SCENARIO", "2");
     if (!TaaEnabled(knobs)) cvars.Set("swap_post_effect", "fxaa");
   }
+  if (one_pass) {
+    env.Set("FM4_TILING_SCENARIO", "1");
+    env.Set("FM4_ONE_PASS_MSAA", std::to_string(msaa_samples));
+  }
   if (options.fixed_vblank) cvars.Set("vblank_vrr", "false");
   if (options.rov) {
     cvars.Erase("edram_single_rt_no_wrap");
@@ -543,6 +559,21 @@ Plan LaunchPlan(const LauncherData& data, const std::string& root, const std::st
     // The uncorrected reference keeps the title's ring index wait as it is
     // (docs/analysis/d3d-hle-n4.md 17.16).
     cvars.Set("guest_ring_wait_sleep", "false");
+  }
+  if (options.native) {
+    if (options.rov)
+      throw PlanError(
+          "-Native runs on the host render target path (RTV); it cannot be combined with -Rov.");
+    // The native path covers one tile and one pass; the tiles of the quality (MSAA tiles) stay
+    // on the PM4 RTV path.
+    if (single_tile || one_pass)
+      for (const auto& [name, value] : data.json.at("native_cvars").items())
+        cvars.Set(name, value.get<std::string>());
+    if (one_pass) {
+      // Bit 8: the host render targets sized to the tiles the title uses.
+      cvars.Set("native_one_pass_msaa", std::to_string(msaa_samples));
+      cvars.Set("native_rt_surfaces", "10");
+    }
   }
   const std::string display = options.display.empty()
                                   ? data.json.at("default_display").get<std::string>()
