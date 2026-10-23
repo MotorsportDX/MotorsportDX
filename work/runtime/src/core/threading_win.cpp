@@ -37,8 +37,9 @@ void EnableAffinityConfiguration() {
 
 void EnableHighResolutionTiming() {
   // Without a request of its own the process's Sleep(1) takes the default tick
-  // of about 15.6 ms, and Windows may ignore a request and lower the clock of a
-  // process it throttles: on four slow cores a race fell to about 20 to 45 fps.
+  // of about 15.6 ms: the guest's 1 ms sleeps would depend on another component
+  // of the process asking for the resolution, and Windows may ignore such a
+  // request and lower the clock of a process it throttles (d3d-hle-n4.md 17.19).
   timeBeginPeriod(1);
   PROCESS_POWER_THROTTLING_STATE state{};
   state.Version = PROCESS_POWER_THROTTLING_CURRENT_VERSION;

@@ -94,8 +94,8 @@ void EnableAffinityConfiguration();
 
 // Asks for 1 ms timer resolution for the process and opts it out of power
 // throttling (EcoQoS: a lower clock and the timer resolution ignored), so the
-// guest's 1 ms sleeps stay 1 ms when the process uses few cores. On Windows only
-// (docs/analysis/d3d-hle-n4.md 17.19).
+// guest's 1 ms sleeps stay 1 ms without depending on another component's
+// request. On Windows only (docs/analysis/d3d-hle-n4.md 17.19).
 void EnableHighResolutionTiming();
 
 // Gets a stable thread-specific ID, but may not be. Use for informative
