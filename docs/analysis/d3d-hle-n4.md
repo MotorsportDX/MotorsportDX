@@ -556,3 +556,37 @@ That is as expected: the resolution was already 1 ms through another component, 
 The perf trace now carries the process's CPU time and its threads' by name in each window (`process_cpu`, `perf_trace_cpu`). A sampler thread of its own measures each second. The first version sampled at the swap on the render thread, and its thread snapshot every tenth second held a frame for 45 to 48 ms (`n4be20`).
 
 **Item 4 closes** with the P-core masks as the only valid proxy on this laptop. A proxy for slower cores would need the power plan's maximum processor state lowered, a system setting left to the user. The ROG Xbox Ally X runs are the real test of a slower CPU: `-Native` and RTV with the defaults, then `-Native` with `guest_ring_wait_sleep=false` and with `high_resolution_timing=false`.
+
+### 17.20 The identity check's late write, 23 October 2026
+
+N3's careers with the identity check saw a non-marker range change after its writer returned twice, in the menus or the load ([16.17](d3d-hle-n3.md#1617-increment-4-step-0-the-one-pass-probe-23-october-2026)):
+- in `n3x-check-career` (4x): writer `82311080`, `DrawIndexedVertices`, a range of 16 dwords, dword 15;
+- in `n3m-check-career` (the 2x default): the same writer, 17 dwords, dword 15.
+
+N1's record path would carry the old dword, so the late write is chased.
+
+**The writer.** In a tiling bracket (device+11068 bit 0), `DrawIndexedVertices` stores the draw's address in the device's draw list (device+13600: entries of 16 bytes in chunks allocated from the ring by `sub_823719A8`). After its register writes it writes a tail of 14 dwords:
+- `SET_BIN_MASK_LO` `0xFFFFFFFF`;
+- `DRAW_INDX` with its four dwords;
+- `SET_BIN_MASK_LO` `0x80000000`;
+- `EVENT_WRITE_EXT`, which writes the draw's screen extents into its list entry;
+- `EVENT_WRITE` `25`, which closes the tail.
+
+Dword 15 lies in the closing `EVENT_WRITE`: its data in a range of 16 dwords, its header in one of 17. `EndTiling` (`sub_8236FA20`) passes a pointer to the list to the tile stream interpreter (`sub_826ED978`), which writes only its own context. The runtime's `EVENT_WRITE_EXT` writes exactly the 12 bytes of an entry's extents.
+
+**The diagnostic.**
+- The identity check reports a changed range with the dword's guest physical address, its old and new value and the number of changed dwords.
+- The late write trace (with `FM4_NATIVE_CHECK`, off with `FM4_LATE_WRITE_TRACE=0`; [traces](../e2e/traces.md#identity-check-of-the-native-path-fm4_native_check-host_render_check)) keeps the last four dwords of the 1,024 latest checked ranges.
+- The trace hooks `EndTiling`, the tile stream interpreter and its drain (`sub_826EDCE8`), the list helper, the three other readers of the list (`sub_827E6758`, `sub_827E6DC8`, `sub_827E5468`) and `DrawIndexedVertices` itself (its 32 latest ranges). Each compares the dwords of ranges the host render thread has not reached before and after the original body.
+- A change is noted with the function, the dword and the guest call chain (the link register and the saved link registers of the stack's back chain). The identity check prints the notes of a range whose PM4 it found changed and drops the others.
+- Printing every note (`FM4_LATE_WRITE_TRACE=2`) gave 1,461 to 4,542 notes a career. All were of ranges that never ran: entries that wait until a newer one replaces them (`check_overwritten`) while the ring reuses their memory, for example for `EndTiling`'s stream and the list helper's chunk links.
+- The trace costs no visible frame rate in the check careers (the race at 103 to 116 fps, as before).
+
+**The search.** The search ran 14 `-Native` careers with the identity check on `n4be22` to `n4be24` (`n4lw-career-lw1` to `-lw14`). It compared 206,032,485 ranges and found no mismatch, where the earlier rate of about one in 12 million would have given about 17.
+
+Both sightings ran without `guest_ring_wait_sleep` (`n3m` was launched without it, and `n3x` came before it). Four careers without it (`n4lw-career-ls1` to `-ls4`): 60,248,600 ranges, no mismatch either. The sleep is not shown to matter: 266,281,085 ranges without a mismatch in all.
+
+The late write did not come back in the time box, so it stays open:
+- **The candidates** are the code that touches the tiling bracket's draws after the writer returned: `EndTiling` and its list, the list helper `sub_823719A8` (which links a new chunk into ring memory), and the tile stream interpreter. The trace hooks all of them, and also catches the case that none of them wrote the dword.
+- **The residual risk** concerns N1's record path only, which would carry the old dword of such a range. The defaults (RTV and `-Native`) run with the ring wait's sleep; `-Rov` runs without it but does not use the record path.
+- **The diagnostic stays on** with `FM4_NATIVE_CHECK` in every close gate's career. A further sighting then names the function that rewrote the dword, or rules out the hooked ones. The fix follows from that: the record reads the dword again at the hand-over if the rewrite is the title's own, or the writer side changes if it is not.
