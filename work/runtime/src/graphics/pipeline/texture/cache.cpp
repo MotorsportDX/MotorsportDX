@@ -80,6 +80,10 @@ REXCVAR_DEFINE_INT32(resolution_scale, 1, "GPU",
 
 REXCVAR_DEFINE_BOOL(pre_mask_resolve_l2_block, true, "GPU",
                     "Pre-mask scaled resolve L2 blocks to the write range before iterating");
+REXCVAR_DEFINE_BOOL(texture_bindings_keep_same_dwords, false, "GPU",
+                    "Keep a texture binding out of sync whose fetch constant has the dwords "
+                    "that made it, without computing its key again (N4 of "
+                    "docs/analysis/d3d-hle.md, section 17.11)");
 
 // DEFINE_int32(
 //     draw_resolution_scale_x, 1,
@@ -555,6 +559,12 @@ void TextureCache::RequestTextures(uint32_t used_texture_mask) {
   // bindings out of sync (with FindOrCreateTexture timed apart), the loads, and
   // the binding update.
   const uint64_t keys_start = perf_trace::DetailZoneStart();
+  const bool trace_keys = perf_trace::TextureKeysEnabled();
+  if (trace_keys && !key_trace_) {
+    key_trace_ = std::make_unique<KeyTrace[]>(32);
+    std::memset(key_trace_.get(), 0, sizeof(KeyTrace) * 32);
+  }
+  const bool keep_same_dwords = REXCVAR_GET(texture_bindings_keep_same_dwords);
   uint32_t textures_remaining = used_texture_mask & ~texture_bindings_in_sync_;
   uint32_t index = 0;
   while (rex::bit_scan_forward(textures_remaining, &index)) {
@@ -562,6 +572,22 @@ void TextureCache::RequestTextures(uint32_t used_texture_mask) {
     textures_remaining &= ~index_bit;
     TextureBinding& binding = texture_bindings_[index];
     xenos::xe_gpu_texture_fetch_t fetch = regs.GetTextureFetch(index);
+    if (trace_keys) {
+      TraceTextureKey(index, fetch);
+    }
+    const uint32_t fetch_dwords[6] = {fetch.dword_0, fetch.dword_1, fetch.dword_2,
+                                      fetch.dword_3, fetch.dword_4, fetch.dword_5};
+    if (keep_same_dwords) {
+      // The fetch constant was written again, but with the dwords this binding
+      // was made from: the key, the signs, the swizzle and the scale bits would
+      // come out the same, and an unchanged key loads nothing. A binding reset
+      // (each frame, when a texture is destroyed or becomes outdated) has no
+      // dwords to match.
+      if (!std::memcmp(fetch_dwords, binding.fetch_dwords, sizeof(fetch_dwords))) {
+        texture_bindings_in_sync_ |= index_bit;
+        continue;
+      }
+    }
     TextureKey old_key = binding.key;
     uint32_t old_integer_scale_bits = binding.integer_scale_bits;
     uint8_t old_swizzled_signs = binding.swizzled_signs;
@@ -572,8 +598,10 @@ void TextureCache::RequestTextures(uint32_t used_texture_mask) {
         bindings_changed |= index_bit;
       }
       binding.Reset();
+      std::memcpy(binding.fetch_dwords, fetch_dwords, sizeof(fetch_dwords));
       continue;
     }
+    std::memcpy(binding.fetch_dwords, fetch_dwords, sizeof(fetch_dwords));
     uint32_t old_host_swizzle = binding.host_swizzle;
     binding.host_swizzle = GuestToHostSwizzle(fetch.swizzle, GetHostFormatSwizzle(binding.key));
     binding.integer_scale_bits = FormatInfo::Get(fetch.format)->GetIntegerScaleBits(
@@ -1019,6 +1047,45 @@ bool TextureCache::LoadTextureData(Texture& texture) {
   }
 
   return CommitPreparedTextureLoad(pending_load);
+}
+
+void TextureCache::TraceTextureKey(uint32_t index, const xenos::xe_gpu_texture_fetch_t& fetch) {
+  // Before the binding is updated: what its update will find.
+  KeyTrace& trace = key_trace_[index];
+  const TextureBinding& binding = texture_bindings_[index];
+  perf_trace::TextureKeyCounts& counts = perf_trace::texture_keys;
+  ++counts.recomputes;
+  const uint32_t dwords[6] = {fetch.dword_0, fetch.dword_1, fetch.dword_2,
+                              fetch.dword_3, fetch.dword_4, fetch.dword_5};
+  const bool same_dwords = !std::memcmp(dwords, trace.dwords, sizeof(dwords));
+  std::memcpy(trace.dwords, dwords, sizeof(dwords));
+  if (same_dwords) {
+    ++counts.same_dwords;
+  }
+  TextureKey key;
+  uint8_t swizzled_signs = 0;
+  BindingInfoFromFetchConstant(fetch, key, &swizzled_signs);
+  if (key != binding.key) {
+    ++counts.key_changes;
+    for (const TextureKey& recent : trace.keys) {
+      if (key == recent) {
+        ++counts.recent_keys;
+        break;
+      }
+    }
+    trace.keys[trace.next_key++ & 3] = key;
+    return;
+  }
+  if (same_dwords || !key.is_valid) {
+    return;
+  }
+  const uint32_t host_swizzle = GuestToHostSwizzle(fetch.swizzle, GetHostFormatSwizzle(key));
+  if (swizzled_signs == binding.swizzled_signs && host_swizzle == binding.host_swizzle &&
+      FormatInfo::Get(fetch.format)
+              ->GetIntegerScaleBits(fetch.num_format, host_swizzle, swizzled_signs) ==
+          binding.integer_scale_bits) {
+    ++counts.same_binding;
+  }
 }
 
 void TextureCache::BindingInfoFromFetchConstant(const xenos::xe_gpu_texture_fetch_t& fetch,

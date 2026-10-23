@@ -487,6 +487,9 @@ class TextureCache {
     // Signed version of the texture if the data in the signed version is
     // different on the host.
     Texture* texture_signed;
+    // The fetch constant the binding was made from (with
+    // texture_bindings_keep_same_dwords; zero after a reset).
+    uint32_t fetch_dwords[6];
 
     TextureBinding() { Reset(); }
 
@@ -675,6 +678,16 @@ class TextureCache {
   bool binding_check_ = false;
   uint32_t binding_check_perturb_ = 0;
   uint64_t binding_check_count_ = 0;
+  // REX_N4_TEXTURE_KEYS (with the perf trace): each binding's last fetch
+  // constant and last four keys, for the counts of what the keys of out of
+  // sync bindings recompute (N4, d3d-hle.md 17.6, the texture keys).
+  struct KeyTrace {
+    uint32_t dwords[6];
+    TextureKey keys[4];
+    uint32_t next_key;
+  };
+  std::unique_ptr<KeyTrace[]> key_trace_;
+  void TraceTextureKey(uint32_t index, const xenos::xe_gpu_texture_fetch_t& fetch);
 };
 
 }  // namespace rex::graphics

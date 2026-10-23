@@ -517,6 +517,23 @@ inline void AddReplaySplit(const uint64_t* tsc, const uint32_t* counts, size_t k
   }
 }
 
+// REX_N4_TEXTURE_KEYS=1 (with the trace): the keys that RequestTextures
+// computes again for used bindings out of sync: all of them, those whose fetch
+// constant has the dwords of the binding's last one, those whose binding stayed
+// the same with other dwords, those whose key changed, and of these the keys
+// equal to one of the binding's last four.
+struct TextureKeyCounts {
+  uint64_t recomputes = 0, same_dwords = 0, same_binding = 0, key_changes = 0, recent_keys = 0;
+};
+inline TextureKeyCounts texture_keys;
+inline bool TextureKeysEnabled() {
+  static const bool enabled = [] {
+    const char* value = std::getenv("REX_N4_TEXTURE_KEYS");
+    return Get() && value && *value && *value != '0';
+  }();
+  return enabled;
+}
+
 // The binding check (d3d12_reuse_draw_bindings_check): bindings kept in sync
 // compared with fresh keys, mismatches, comparisons changed on purpose.
 inline std::atomic<uint64_t> binding_checks{0}, binding_check_mismatches{0},
@@ -829,6 +846,14 @@ inline void OnSwap() {
     }
     state->output << "]}";
     back_end_capture = BackEndCaptureCounts{};
+    if (TextureKeysEnabled()) {
+      state->output << ",\"texture_keys\":{\"recomputes\":" << texture_keys.recomputes
+                    << ",\"same_dwords\":" << texture_keys.same_dwords
+                    << ",\"same_binding\":" << texture_keys.same_binding
+                    << ",\"key_changes\":" << texture_keys.key_changes
+                    << ",\"recent_keys\":" << texture_keys.recent_keys << '}';
+      texture_keys = TextureKeyCounts{};
+    }
     if (CaptureSplitEnabled()) {
       state->output << ",\"capture_split\":{\"ms\":[";
       for (size_t i = 0; i < kCaptureSplitParts; ++i) {
