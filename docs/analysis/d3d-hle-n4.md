@@ -486,3 +486,73 @@ The RTV step gate ran on `n4be17` (9d26366's code; the switch is the same as on 
 - **The image.** At 2x with the switch (`n4rw-race-rtv2kon`: 156.4 fps, 6.19 ms of GPU time), the 2560x1440 captures at 1:1 beside RTV's without it (`n4w-race-rtv2k1`) show the same rendering in frames of the same light. The race's light changes over time (the gauges lit by the sun early in the lap, dark later), so frames are matched by their light, not their number.
 
 Next: the vblank interrupt and the readback copies on the host render thread.
+
+### 17.17 The vblank interrupt and the readback copies, 23 October 2026
+
+Section 9's row planned to move the vblank interrupt and the resolve readbacks' copies onto the host render thread (14.2), so that one thread would make every guest-visible write. Measured with the `-Native` default on `n4be16` and `n4be17`:
+- **No readback copy runs.** Every resolve's readback waits for the CPU's first access (16.5): about 6,960 resolves a second are deferred in the race, and none is requested, served or forced, in the race or in the replay of a career (`n4z-oncareer`).
+- **The vblank interrupt** costs the vsync thread about 7.5 ms a second (`cpu_power`), for 215 to 233 vblanks a second on the grid and 5 to 21 late ones. The swap's wait for the vblank sleeps on its event (17.16).
+- **The ordering** that the move was for holds without it: the identity, back end, binding and guard checks stay exact (17.15).
+
+The move has nothing to gain; the item is dropped.
+
+### 17.18 The queue depth and the latency, 23 October 2026
+
+The perf trace now times each record's wait in the host render queue, from its push by the guest thread that kicked the ring to its take by the host render thread (`queue_wait_ms`, [traces](../e2e/traces.md#performance-trace-rex_perf_trace_file)). In the 240 Hz race at 1x on `n4be17` with the `-Native` default (`n4af-race-on1` and the affinity runs of 17.19):
+- a record waits 0.73 to 0.86 ms on average, 0.5 to 1 ms at the median, 3 to 3.75 ms at p99 and 6.5 to 12.4 ms at most;
+- about 690 to 800 records are taken a second, with 18.5 to 20.4 queued when one is taken, and no span merged (the capacity is 256).
+
+Even at p99 a record waits less than a frame (4.17 ms): the queue adds at most a frame to the latency, as designed (one frame of depth, 14.6). A smaller capacity would merge spans without shortening the wait, and the guest's run-ahead is bounded by its own ring index waits and the swap. Nothing is tuned; the item is closed with the measure.
+
+### 17.19 A smaller CPU, and the timer resolution, 23 October 2026
+
+The last item before the ROG Xbox Ally X: a run with fewer cores as a quick proxy for a slower CPU. `e2e.py --affinity <mask>` confines the game process to some logical processors ([e2e harness](../e2e/README.md)). `cpu_power.py` sets the mask after the launch and again each second, since the runtime sets the system's mask once at its start, and records the processors' clock and busy share. The laptop's Core Ultra 7 255HX has 8 performance cores (P; logical 0, 1, 6, 7, 8, 9, 18 and 19) and 12 efficient cores (E; logical 2 to 5 and 10 to 17), without SMT.
+
+**The P-cores** (`n4be17`, the 240 Hz race at 1x, one run each; `n4af-race-*`), p99 and the share of frames over 5 ms in the bands of draw load the runs share:
+
+| Race at 240 Hz, 1x | 1,600 to 2,000 draws a frame | Frames per second |
+|---|---|---|
+| All cores, `-Native` (three runs, 17.16) | p99 4.94 to 5.09 ms, 0.8 to 1.2% over 5 ms | 237.3 |
+| 4 P-cores (`0xC3`), `-Native` with the ring wait's sleep | p99 5.01 to 5.40 ms, 1.3 to 2.2% | 238.2 |
+| 4 P-cores, `-Native` without it | p99 6.49 to 6.88 ms, 7.8 to 8.8% | 225.6 |
+| 4 P-cores, RTV without it | p99 7.72 to 8.31 ms, 15 to 30% | 219.1 |
+| 8 P-cores (`0xC03C3`), `-Native` with it | p99 4.74 to 4.96 ms, 0.7 to 1.0% | 239.3 |
+| 8 P-cores, RTV without it | p99 5.83 to 6.59 ms, 5 to 16% | 220.5 |
+
+- **Four P-cores** hold `-Native` at the refresh rate when the ring wait sleeps. Without the sleep the waiting thread takes one of the four cores, and p99 rises by about 1.5 ms. The CPU time falls from 3,314 to 2,926 ms a second and the package from 71.7 to 66.1 W.
+- **Eight P-cores** behave like the whole CPU.
+- The P-cores run at about 5 GHz, so they stand in for fewer cores, not slower ones.
+
+**The E-cores are not a valid proxy here.** Races confined to E-cores fell to 12 to 56 fps with p99 of 76 to 942 ms, on `-Native` and RTV, with the ring wait's sleep and without it, on `n4be17`, `n4be18` and `n4be19`. One run without the sleep recovered after three windows (17 to 24 fps, then about 228). In such a run:
+- the processors stayed at about 4.4 GHz but were 28 to 45% busy;
+- almost every vblank was forced (89 to 108 a second, 0 to 15 on the grid);
+- the host render thread waited for the guest (guest_idle 800 to 860 ms a second);
+- the guest's `Sleep(0)` took up to 35.8 ms a call and `Sleep(1)` 9.05 ms (`REX_GUEST_YIELD_TRACE`, `n4qs-race-trace18`).
+
+Ready threads waited for a core. Spinning processes confined the same way show why (the processors' busy share each second, without the game):
+
+| Spinning processes, mask | Busy share of the masked processors |
+|---|---|
+| 4 on 4 E-cores (`0x3C`) | 98/2/2/3, 100/33/33/33, then 100/0/0/0 with the other three at 0 MHz |
+| 8 on 8 E-cores (`0x3C3C`) | 100/100/100/100 and 0/0/0/0: one cluster of four runs, the other stays parked |
+| 4 on 4 P-cores (`0xC3`) | 100/100/100/100 |
+
+Windows parks E-cores inside an affinity mask, so a mask of four E-cores gives one to four cores, as the parking decides. The collapse is that of a single core, with or without the ring wait's sleep; the sleep only lowers the load and so makes the parked state last. Without a mask the scheduler unparks cores as the load needs. The E-core runs are recorded as invalid, and a bounded spin before the sleep (100 µs, `n4be18`) did not change them and was removed.
+
+**The timer resolution.** Without a request of its own, a process's `Sleep(1)` takes the default tick, 15.66 ms on this laptop, and 1.5 to 2 ms with `timeBeginPeriod(1)`. The guest's `Sleep(1)` took 1.58 ms on average in the races, so some other component of the process asks for the resolution today. `high_resolution_timing` (on by default, every path, `-Rov` included: a host platform setting, not a title correction) asks for 1 ms at the runtime's start and opts the process out of power throttling (`ProcessPowerThrottling`: the execution speed and the timer resolution kept), which a Windows handheld may apply. It removes the hidden dependency. It does not change the E-core collapse (`n4be19`).
+
+Its cost at full CPU, with the setting off and on in pairs at 240 Hz and 1x (`n4qs-race-fulltoff` and `-fullon`, `-fullrtvtoff` and `-fullrtvon` on `n4be19`; `n4fn-race-*` on `n4be20`):
+- the package's power differs by −3.6 to +3.7 W across five pairs, +0.3 W on average and +0.2 W at the median, as the races' draw loads (1,511 to 2,308 draws a frame) move it more than the setting;
+- the render thread's and the command processor's time per draw stay the same (1.50 to 1.60 µs on `-Native`, 1.84 to 2.01 µs on RTV);
+- on `-Rov` (`n4fn-race-rovtoff1`, `-rovton1`) the pair's draw loads differ too much to compare frame rates (1,988 and 3,205 draws a frame). The command processor's time per draw (2.00 and 1.89 µs) and the GPU's (4.3 and 3.5 µs) follow the load.
+
+That is as expected: the resolution was already 1 ms through another component, and Windows does not throttle a foreground process on AC power. The cost is under the 1 W the main session set, so the setting stays on.
+
+**For the Ally X runs**, without Python on the handheld:
+- the GUI launcher runs the native path (`-Native`, `-MsaaSamples 0`);
+- it writes the performance trace to the logs folder;
+- it applies extra cvars for the A/B runs ([running](../running.md#ally-x-run-set)).
+
+The perf trace now carries the process's CPU time and its threads' by name in each window (`process_cpu`, `perf_trace_cpu`). A sampler thread of its own measures each second. The first version sampled at the swap on the render thread, and its thread snapshot every tenth second held a frame for 45 to 48 ms (`n4be20`).
+
+**Item 4 closes** with the P-core masks as the only valid proxy on this laptop. A proxy for slower cores would need the power plan's maximum processor state lowered, a system setting left to the user. The ROG Xbox Ally X runs are the real test of a slower CPU: `-Native` and RTV with the defaults, then `-Native` with `guest_ring_wait_sleep=false` and with `high_resolution_timing=false`.

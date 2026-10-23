@@ -53,9 +53,9 @@ writes their tables (the runtime settings, the look presets and knobs, the quali
 presets, the releases and the content package checks) into `BuildRoot\launcher.json`,
 and the launcher's code ([work/fm4-launcher](../work/fm4-launcher)) is a port of
 `launch_plan`. Every `build` compares the two: the launcher tests compute the cvars,
-the environment and the display description of ten sets of options on four monitor
-sizes with both, and check the Discs and content packages of `local.json` with both.
-A difference fails the build.
+the environment and the display description of sixteen sets of options (RTV, `-Rov` and
+`-Native`) on four monitor sizes with both, and check the Discs and content packages of
+`local.json` with both. A difference fails the build.
 
 | Page | Contents |
 | --- | --- |
@@ -63,12 +63,16 @@ A difference fails the build.
 | Look | The preset (`aces`, `gt`, `neutral`, `original`, `original` without TAA, or a saved look), the tone curve, TAA, and a slider for each [look knob](#look) in five groups: picture, lighting, car, sky and foliage, road. A changed knob is marked and has a Reset button. **Save as look** keeps the current value under a name. The `-Look` value is shown and can be edited. |
 | Controls | The keyboard bindings of the controller (the runtime's `keybind_*` settings). **Set** waits for a key; several keys are separated by commas, modifiers are written as `Shift+Up`. Unknown key names are marked and block Play. A connected controller needs no setup. |
 | Game data | Disc 1 and Disc 2, checked as `generate` checks them, the downloadable content folders and files, and the content packages found, with their import state. **Remove import** deletes an imported package from the user data (see [Data directories](#data-directories)). The texture pack is the `-TextureReplace` folder. |
-| Advanced | Fixed vblank, the shadow workaround, `-SingleTile`, `--ao`, `-Rov`, the texture dump folder, the user data folder, and buttons that open the logs and the user data and copy the command line. |
+| Advanced | Fixed vblank, the shadow workaround, `-SingleTile`, `--ao`, `-Rov`, the native path (`-Native`, and `-MsaaSamples 0` as "one tile without MSAA"), the performance trace, extra cvars, the texture dump folder, the user data folder, and buttons that open the logs and the user data and copy the command line. |
 
 A **profile** is one set of run options; the Discs, content, saved looks and key
 bindings are shared by all profiles. The launcher saves its settings in
 `launcher-settings.json` beside `launcher.json` when Play is pressed and when it closes.
 In a BuildRoot it starts with the Disc and content paths of `local.json`.
+
+Two options of the Advanced page apply at Play, outside the launch plan:
+- **Performance trace** writes the perf trace (one JSON line a second, [traces](e2e/traces.md#performance-trace-rex_perf_trace_file)) to `logs\perf-<profile>-<time>.jsonl`. It carries the process's CPU time and its threads' (`process_cpu`), so a run without the e2e harness still shows where the CPU goes.
+- **Extra cvars** are runtime settings written as `--name=value`, separated by spaces, and applied after all the others: for A/B runs such as `--guest_ring_wait_sleep=false`.
 
 When Play is pressed, the launcher checks the Discs and content, the key bindings and
 the options, compares the build artifacts with `build-result.json` once per session,
@@ -82,6 +86,22 @@ harness, which need the repository. The look mods and post passes that the launc
 uses are the copies in `BuildRoot\look` and `BuildRoot\passes` that `build` makes;
 after editing `work/fm4-rex/look` or `work/fm4-rex/passes`, run `build` or use
 `Build.ps1 -Action run`.
+
+### Ally X run set
+
+The runs of stage N4 on the ROG Xbox Ally X ([D3D-level HLE, 17.19](analysis/d3d-hle-n4.md)), from an export, with the GUI launcher. Make one profile per run, all with **Performance trace** on, the default display and the default look, the race frame rate the screen allows (120 on the Ally X's panel), and otherwise the defaults:
+
+| Run | Profile settings |
+| --- | --- |
+| 1 | RTV, the defaults |
+| 2 | Native path |
+| 3 | Native path, extra cvars `--guest_ring_wait_sleep=false` |
+| 4 | Native path, extra cvars `--high_resolution_timing=false` |
+| 5 | RTV, extra cvars `--guest_ring_wait_sleep=false` (if time allows) |
+
+- Run each as a Quick Race with the default car and track: let the race run for at least three minutes, then quit to the menu and close the game, so the trace covers the race and its end.
+- Run the set once on AC power and once on battery: a handheld changes its power plan on battery, and that is where Windows parks cores and throttles processes.
+- Send back only these files from the export's `logs` folder: the `perf-<profile>-<time>.jsonl` files (timings, draw counts and the CPU time per thread), `play.log` and `runtime.log` (the game's log). Note for each trace whether it ran on AC or battery. The logs show the paths of the export and of the Discs, which may include the Windows user name; nothing from `user-data` (the profile, the saves and the imported content) is needed or included.
 
 ### Export to another computer
 
@@ -171,6 +191,10 @@ The launcher uses these runtime settings (set in `launch_cvars` in
   again instead of polling it on a whole core (`guest_ring_wait_sleep=true`, RTV and `-Native`;
   [section 17.16](analysis/d3d-hle-n4.md)). `-Rov`, the unchanged reference, keeps the title's
   wait.
+- The runtime asks for 1 ms timer resolution and opts the process out of power throttling
+  (`high_resolution_timing=true`, a runtime default on every path, `-Rov` included, since it is a
+  host setting and not a title correction; [section 17.19](analysis/d3d-hle-n4.md)): the guest's
+  1 ms sleeps keep their length, also where Windows would throttle the process.
 - The road sections that this path used to leave undrawn came from the title's track
   streaming. They are fixed for every render path.
 
