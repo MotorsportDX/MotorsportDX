@@ -89,15 +89,19 @@ after editing `work/fm4-rex/look` or `work/fm4-rex/passes`, run `build` or use
 
 ### Ally X run set
 
-The runs of stage N4 on the ROG Xbox Ally X ([D3D-level HLE, 17.19](analysis/d3d-hle-n4.md)), from an export, with the GUI launcher. Make one profile per run, all with **Performance trace** on, the default display and the default look, the race frame rate the screen allows (120 on the Ally X's panel), and otherwise the defaults:
+The runs of stage N4 on the ROG Xbox Ally X ([D3D-level HLE, 17.19](analysis/d3d-hle-n4.md)), from an export, with the GUI launcher. Make one profile per run, all with **Performance trace** on, the default look, the race frame rate the screen allows (120 on the Ally X's panel), and otherwise the defaults.
+
+Runs 1 to 6 use render scale 1x (Display page). On the Ally X's 1080p panel the launcher picks 2x, and its GPU then takes about 21 ms a race frame (about 47 fps, N1's estimate), which would hide what the CPU A/B runs measure:
 
 | Run | Profile settings |
 | --- | --- |
-| 1 | RTV, the defaults |
-| 2 | Native path |
-| 3 | Native path, extra cvars `--guest_ring_wait_sleep=false` |
-| 4 | Native path, extra cvars `--high_resolution_timing=false` |
-| 5 | RTV, extra cvars `--guest_ring_wait_sleep=false` (if time allows) |
+| 1 | RTV, render scale 1x |
+| 2 | Native path, render scale 1x |
+| 3 | Native path, render scale 1x, extra cvars `--guest_ring_wait_sleep=false` |
+| 4 | Native path, render scale 1x, extra cvars `--high_resolution_timing=false` |
+| 5 | RTV, render scale 1x, extra cvars `--guest_ring_wait_sleep=false` (if time allows) |
+| 6 | Native path, MSAA 4x, render scale 1x (once the launcher offers `-MsaaSamples 4`) |
+| 7 | Native path at the default render scale, 2x (optional: the GPU-bound frame rate) |
 
 - Run each as a Quick Race with the default car and track: let the race run for at least three minutes, then quit to the menu and close the game, so the trace covers the race and its end.
 - Run the set once on AC power and once on battery: a handheld changes its power plan on battery, and that is where Windows parks cores and throttles processes.
