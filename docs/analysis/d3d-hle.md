@@ -1495,3 +1495,35 @@ The main session's next candidate after the re-profile: `PrimitiveProcessor::Pro
 The work a reused draw saves is small next to what every draw keeps (the shared memory request), and the lookup and the store cost the other 69% of the draws more than the 31% save. The change is not kept.
 
 With every kept switch on (the back end on the replay, `texture_bindings_keep_same_dwords`), the render thread is busy 2.92 ms at 1,800 draws a race frame and both threads together 4.63 ms (`n4o-race-proff*`).
+
+### 17.13 The render target cache's update at the draw, 23 October 2026
+
+`render_target_update_guard` (off by default; with `-Native` from the close gate on; host render targets only, never `-Rov`): `D3D12CommandProcessor::UpdateRenderTargets` skips `RenderTargetCache::Update` at a draw when all of these hold, without changing `Update` itself (the main session's decision, so that it does not collide with N1's increment 4):
+
+- **The key** equals the last update's: `Update`'s arguments (rasterization, the normalized depth control and colour mask) and the registers that it and `DrawExtentEstimator::EstimateMaxY` read: `RB_SURFACE_INFO`, `RB_DEPTH_INFO`, `RB_COLOR_INFO` 0 to 3, `PA_SC_WINDOW_OFFSET`, the window scissor's offset switch and bottom right, the screen scissor's bottom right, `PA_CL_VTE_CNTL`, the vertex window offset switch, `PA_SU_VTX_CNTL`, and the viewport's Y scale and offset. With clipping off (`PA_CL_CLIP_CNTL.clip_disable`) the draw extent may come from the vertices, so such a draw always updates.
+- **The cache's update epoch** is unchanged since the last update. It counts every change to what `Update` finds besides the key: a change of the EDRAM's ownership (`ChangeOwnership`, where it takes a range over), render targets made, replaced (the growth of native_rt_surfaces bit 8), evicted or destroyed, `ClearCache`, the deferred tiles flushed (bit 4), and every change of a host render target's resource state (`D3D12RenderTarget::SetResourceState`), which covers the resolves, the resolves from the host render target (16.11), the transfers, the dumps and the post passes' `TransitionLastColorRenderTarget` (N1's answer: GTAO, the motion vectors, the cockpit window mask and the mod passes read resolved textures, not host render targets).
+- **The last update left nothing for the next one** (`CanRepeatLastUpdate`): the command list has its render targets bound (a new submission, a retired target or `InvalidateCommandListRenderTargets` clear that), no pending transfers, no transfers in the last update, no uniform draw before or now and no uniform draw signature waiting, no deferred tiles, not over the memory cap, and native_rt_surfaces bit 1 off (its counts run per update).
+
+`render_target_update_guard_check` updates anyway at every draw that would skip and checks that the update changed nothing: no command recorded in the deferred command list, the epoch unchanged, the same render targets and formats bound, and nothing left for the next update; `render_target_update_guard_check_perturb=N` changes every N-th verdict.
+
+On `I:\FM4-build-usa` at 240 Hz and 1x with `-Native`'s cvars, the back end on the replay, `texture_bindings_keep_same_dwords` and the fast route (`n4be12`, `rexgpu-xenos.dll` SHA-256 beginning `d8e7b8f3dfca29a8`):
+
+| Check (perturbation 1,000; race, replay, menus) | Result |
+|---|---|
+| `-Native` (`n4p-gchk-career`) | 36,302,177 of 38,259,615 keyed draws would skip (95%); mismatches only the 36,302 perturbed |
+| `-Native` with the one pass in 2x MSAA and the private depth (`FM4_ONE_PASS_MSAA=2`, `n4p-gchk-career-2x`) | 38,094,707 of 40,105,287 (95%; 23,187,228 one-pass updates); mismatches only the 38,094 perturbed |
+
+The A/B (`n4p-race-goff*` against `-gon*`, fitted at 1,800 draws a race frame; 85 to 88% of the race's draws skip): the render targets zone 0.297 against 0.112 ms, the render thread busy 2.952 against 2.720 ms, both threads together 4.660 against 4.399 ms, the submit thread's recording 1.580 against 1.551 ms.
+
+**The race's frame times with the final `-Native` set** (the back end on the replay, `texture_bindings_keep_same_dwords`, the guard; deferred constants left out, the back end fills the buffers itself), three runs (`n4p-race-gon1` to `-gon3`, 1,914 draws a frame, 21,448 frames), against the same switches without the guard and against `-Native` without the back end (`n4i-race-off*`, `n4j-race-off*`, earlier the same day):
+
+| | Final set | Without the guard | Without the back end |
+|---|---|---|---|
+| Frames per second (per window: mean, 5th percentile) | 237.8, 232.5 | 235.7, 226.4 | 217.8, 198.0 |
+| Frame time p50, p99, p99.9 | 4.14, 5.02, 7.52 ms | 4.19, 5.11, 7.87 ms | 4.50, 6.04, 9.22 ms |
+| Frames over 5 ms | 1.05% | 1.31% | 14.98% |
+| p99 at 1,400 to 2,000 draws a frame | 4.93 to 4.97 ms | 4.96 to 5.00 ms | 5.19 to 5.86 ms |
+| p99 at 2,000 to 2,400 draws a frame | 5.29 to 5.33 ms | 5.25 to 5.71 ms | 5.93 to 6.55 ms |
+| p99 over 2,400 draws a frame | 5.10 ms (5 windows) | | 6.34 ms |
+
+At 240 Hz the race now runs at the refresh rate in most windows; p99 holds 5.0 ms up to 2,000 draws a frame and exceeds it by 0.3 ms above that.
