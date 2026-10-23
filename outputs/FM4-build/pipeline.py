@@ -26,6 +26,9 @@ THIRDPARTY_VENDORED = ('aes_128','crypto','disasm','disruptorplus','dxbc','dxc',
 THIRDPARTY_SUBMODULES = ('cli11','libmspack','FFmpeg','tomlplusplus','simde','xxHash','spdlog','fmt',
                          'utfcpp','imgui','sdl3','inja','o1heap')
 RESOLVE_SHADERS = [f'resolve_full_{bits}bpp{suffix}' for bits in (8,16,32,64) for suffix in ('','_scaled')]
+# The fast copy of 32bpp 4x MSAA surfaces with a per-pixel EDRAM address, in place of upstream's
+# precompiled one, which read the vertical sample at the depth tile's half swap (d3d-hle-n3.md 16.17).
+RESOLVE_SHADERS += ['resolve_fast_32bpp_4xmsaa', 'resolve_fast_32bpp_4xmsaa_scaled']
 # Resolves straight into host textures (stage N3 increment 1, docs/analysis/d3d-hle.md 16.7).
 RESOLVE_SHADERS.append('resolve_texture_32bpp')
 # Resolves straight from the host render targets (stage N3 increment 3, d3d-hle.md 16.9): one

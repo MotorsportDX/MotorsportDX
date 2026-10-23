@@ -393,6 +393,10 @@ Superseded the same day by the close gate's bisect ([D3D-level HLE, 17.15](../an
 
 With the cvar off, RTV's draw path cost the same as on local main (race at 1x, two runs each way: draw zone 2.65 ms at 1,800 draws on both), and 1x smokes with `-Look "original,taa=0"` on RTV and `-Rov` passed (6 of 6 cells).
 
+### 23 October 2026: `-Rov` output changed by the 4x fast copy fix
+
+`-Rov`'s output changed on 23 October 2026, with the project owner's approval, through a fix of the emulation, not a title correction. Before it, the shared fast copy of 4x MSAA surfaces read the vertical sample (guest sample 1) instead of sample 0 in pixel columns 20 to 23 of every 40-pixel tile, at 1x and 3x resolution scale. This affected photo mode's 4x depth copies on `-Rov` and on RTV (`n3p-rov-b`: the band in 2,242 of 2,666 tile rows of one depth). FM4-PC's own fast copy computes each pixel's EDRAM address, and the band is gone (`n3f-rov-photo`: 0 rows) ([D3D-level HLE, 16.17](../analysis/d3d-hle-n3.md)).
+
 ## 5. Superseded settings and decisions
 
 Each row gives the date of the change, the setting that was replaced, and what happened later. The current values are in [running](../running.md) and [current status](current.md).

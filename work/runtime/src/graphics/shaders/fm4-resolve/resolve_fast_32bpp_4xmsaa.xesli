@@ -1,0 +1,81 @@
+/**
+ ******************************************************************************
+ * Xenia : Xbox 360 Emulator Research Project                                 *
+ ******************************************************************************
+ * Copyright 2022 Ben Vanik. All rights reserved.                             *
+ * Released under the BSD license - see LICENSE in the root for more details. *
+ ******************************************************************************
+ */
+
+// The bitwise copy of one sample of a 32bpp 4x MSAA surface (the fast resolve).
+// It replaces upstream Xenia's precompiled shader, which computed the EDRAM
+// address once for a group of 8 pixels: a group that straddles the depth
+// tile's 40-sample half swap (pixels 16 to 23 of a 40-pixel tile at 1x and 3x
+// resolution scale) read its second half from the next sample row, the
+// vertical sample (docs/analysis/d3d-hle-n3.md 16.17). Every pixel's address is
+// computed by XeEdramOffsetBytes here, as in the full copies.
+
+#include "endian.xesli"
+#include "pixel_formats.xesli"
+#define XE_RESOLVE_COPY_EDRAM_BYTE_BUFFER_ALIGNMENT 4
+#include "resolve.xesli"
+
+byte_buffer_align16_wo_declare_xe(xe_resolve_dest, set=1, binding=0, u0, space0)
+#define LOCAL_SIZE_X_XE 8
+#define LOCAL_SIZE_Y_XE 8
+#define LOCAL_SIZE_Z_XE 1
+entry_bindings_begin_compute_xe
+  XE_RESOLVE_PUSH_CONST_BINDING
+  entry_binding_next_xe
+  byte_buffer_wo_binding_xe(xe_resolve_dest, buffer(1))
+  entry_binding_next_xe
+  XE_RESOLVE_COPY_EDRAM_BINDING
+entry_bindings_end_inputs_begin_compute_xe
+  entry_in_global_thread_id_xe
+entry_inputs_end_code_begin_compute_xe
+{
+  // 1 thread = 4 host pixels.
+  XeResolveInfo resolve_info = XeResolveGetInfo(pass_push_consts_xe);
+  uint2_xe pixel_index = in_global_thread_id_xe.xy << uint2_xe(2u, 0u);
+  // Group height can't cross resolve granularity, Y overflow check not needed.
+  dont_flatten_xe
+  if (pixel_index.x >= resolve_info.width_div_8_scaled << 3u) {
+    return;
+  }
+  uint4_xe packed = uint4_xe(
+      byte_buffer_align4_load4_xe(
+          xe_resolve_edram,
+          XeResolveCopySourceFirstSampleAddressBytes(resolve_info, pixel_index)),
+      byte_buffer_align4_load4_xe(
+          xe_resolve_edram,
+          XeResolveCopySourceFirstSampleAddressBytes(
+              resolve_info, pixel_index + uint2_xe(1u, 0u))),
+      byte_buffer_align4_load4_xe(
+          xe_resolve_edram,
+          XeResolveCopySourceFirstSampleAddressBytes(
+              resolve_info, pixel_index + uint2_xe(2u, 0u))),
+      byte_buffer_align4_load4_xe(
+          xe_resolve_edram,
+          XeResolveCopySourceFirstSampleAddressBytes(
+              resolve_info, pixel_index + uint2_xe(3u, 0u))));
+  // The fast copy's red and blue swap of color.
+  dont_flatten_xe if (!resolve_info.edram_is_depth) {
+    uint4_xe unused = uint_x4_xe(0u);
+    XeResolveSwap8PixelsRedBlue32bpp(resolve_info, packed, unused);
+  }
+  dont_flatten_xe
+  if (pixel_index.x == 0u &&
+      resolve_info.half_pixel_offset_fill_source.x != 0u) {
+    if (resolve_info.half_pixel_offset_fill_source.x >= 2u) {
+      if (resolve_info.half_pixel_offset_fill_source.x >= 3u) {
+        packed.z = packed.w;
+      }
+      packed.y = packed.z;
+    }
+    packed.x = packed.y;
+  }
+  byte_buffer_align16_store16_xe(
+      xe_resolve_dest, XeResolveDestPixelAddress(resolve_info, pixel_index, 2u),
+      XeEndianSwap32(packed, resolve_info.dest_endian_128));
+}
+entry_code_end_compute_xe

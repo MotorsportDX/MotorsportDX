@@ -757,7 +757,9 @@ void GetResolveEdramTileSpan(ResolveEdramInfo edram_info, ResolveCoordinateInfo 
 
 const ResolveCopyShaderInfo resolve_copy_shader_info[size_t(ResolveCopyShaderIndex::kCount)] = {
     {"Resolve Copy Fast 32bpp 1x/2xMSAA", false, 4, 4, 6, 3},
-    {"Resolve Copy Fast 32bpp 4xMSAA", false, 4, 4, 6, 3},
+    // FM4-PC: per-pixel EDRAM addresses from the raw buffer, 4 pixels a thread,
+    // as the full copies (fm4-resolve/resolve_fast_32bpp_4xmsaa.xesli).
+    {"Resolve Copy Fast 32bpp 4xMSAA", true, 2, 4, 5, 3},
     {"Resolve Copy Fast 64bpp 1x/2xMSAA", false, 4, 4, 5, 3},
     {"Resolve Copy Fast 64bpp 4xMSAA", false, 3, 4, 5, 3},
     {"Resolve Copy Full 8bpp", true, 2, 3, 6, 3},

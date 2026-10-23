@@ -68,7 +68,9 @@ REXCVAR_DEFINE_STRING(native_rt_surfaces_depth_dump, "", "GPU/D3D12",
                       "Diagnostic: a directory into which every unscaled 4x MSAA depth fast copy "
                       "writes its destination bytes when it completes, one file per destination "
                       "address (the last copy wins), on any render target path, for the -Rov "
-                      "depth sample comparison (docs/analysis/d3d-hle-n3.md 16.17). Empty: off")
+                      "depth sample comparison; with native_rt_surfaces_check, also the first 24 "
+                      "checked 4x depth copies from both sides (docs/analysis/d3d-hle-n3.md "
+                      "16.17). Empty: off")
     .lifecycle(rex::cvar::Lifecycle::kRequiresRestart);
 REXCVAR_DECLARE(int32_t, native_rt_resolve_check);
 REXCVAR_DEFINE_BOOL(native_rt_surfaces_transfer_inventory, false, "GPU/D3D12",
@@ -6186,7 +6188,6 @@ bool D3D12RenderTargetCache::FindHostResolveSource(const draw_util::ResolveInfo&
   // The render target that owns every tile of the span, or a private scene
   // surface (16.17).
   RenderTarget* render_target = GetResolvePrivateSurface(resolve_info);
-  const bool is_private = render_target != nullptr;
   if (!render_target) {
     uint32_t dump_base, dump_row_length_used, dump_rows, dump_pitch;
     resolve_info.GetCopyEdramTileSpan(dump_base, dump_row_length_used, dump_rows, dump_pitch);
@@ -6207,6 +6208,7 @@ bool D3D12RenderTargetCache::FindHostResolveSource(const draw_util::ResolveInfo&
       key.GetPitchTiles() != edram_info.pitch_tiles) {
     return false;
   }
+  const bool is_private = render_target != nullptr;
   // The unscaled fast copies of 4x MSAA depth differ from the dump in the byte
   // check by a sample's depth, for a cause not found (16.11): they keep the
   // dump unless the diagnostic native_rt_surfaces_unscaled_msaa is on. A
@@ -6536,6 +6538,29 @@ void D3D12RenderTargetCache::PollHostResolveChecks(uint64_t completed_submission
           if (differing <= 6) {
             examples += fmt::format(" +{:X}:{:08X}/{:08X}", i << 2, data[0][i], data[1][i]);
           }
+        }
+      }
+      // native_rt_surfaces_depth_dump with the check: the first differing 4x
+      // depth copies' bytes from both sides, for the sample comparison (16.17).
+      static uint32_t pairs_written = 0;
+      const std::string& dump_dir = REXCVAR_GET(native_rt_surfaces_depth_dump);
+      if (differing && it->is_depth && it->msaa == 2 && !dump_dir.empty() && pairs_written < 24) {
+        ++pairs_written;
+        const char* const sides[] = {"dump", "host"};
+        for (uint32_t i = 0; i < 2; ++i) {
+          const std::string path = fmt::format("{}/pair-{:02}-{:08X}-{}.bin", dump_dir,
+                                               pairs_written, it->dest, sides[i]);
+          if (std::FILE* file = std::fopen(path.c_str(), "wb")) {
+            std::fwrite(data[i], 1, size_t(it->length), file);
+            std::fclose(file);
+          }
+        }
+        if (std::FILE* file = std::fopen(
+                fmt::format("{}/pair-{:02}-{:08X}.txt", dump_dir, pairs_written, it->dest).c_str(),
+                "w")) {
+          std::fprintf(file, "sample select %u, host offset %08X, %ux%u, %s\n", it->sample_select,
+                       it->host_offset, it->width, it->height, it->where.c_str());
+          std::fclose(file);
         }
       }
       ++checked_out;

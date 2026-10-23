@@ -535,3 +535,28 @@ The extra identity mismatch is one range of writer `82311080` (`DrawIndexedVerti
 - the identity check: 11,937 perturbed, 11,938 reported, the extra being the second sighting above.
 
 RTV at 1x (`n3m-race-rtv`) runs at 217.9 fps and 2.81 ms with 577.8 MB, as N4's RTV races on `n4be19` (213.6 to 221.1 fps). The 2x race is correct at 1:1.
+
+**The 4x depth sample, settled (16.11's open item).** With the resolve byte check, `native_rt_surfaces_depth_dump` also writes the first 24 differing 4x depth copies from both sides. `n3b2-photo` is RTV photo mode at 1x, with the host resolve of these copies and the check at every frame. In each pair the two sides differ in about 10% of the pixels, always the same ones: pixel columns 20 to 23 of every 40-pixel tile (4x), in every row. These are the first 8 samples after the depth tile's 40-sample half boundary, the halves that EDRAM swaps for depth.
+
+On a sloped surface the host side steps evenly along a row (−575 a pixel). The dump side jumps by +112 inside the band and back after it. A least-squares fit of dump minus host over the band gives a position difference of (−0.250, +0.499) pixels, which is Direct3D's 4x sample 2 minus sample 0. So inside the band the copy returns the vertical sample (guest sample 1), and everywhere else sample 0, as the host resolve does.
+
+`-Rov` has the same band. The photo depth dumps of `n3p-*` show the jump in 2,592 of 2,666 tile rows on `-Rov` and on RTV with the dump, against 27 on RTV with the host resolve. The cause is the shared 4x depth fast copy's addressing at the half-tile boundary, not RTV's dump. The host resolve's sample 0 is consistent across the tile, so the one-pass 4x race's depth resolves are right.
+
+The cause, from the disassembly in `shaders/bytecode/d3d12_5_1/resolve_fast_32bpp_4xmsaa_cs.h` (upstream Xenia's fast copy, which this tree has as bytecode only):
+
+- One thread copies 8 pixels of a 4x row (16 samples wide) with four loads from consecutive EDRAM addresses after one address computation.
+- The depth half-tile swap (`uge r1.y, r0.x, l(40)` / `movc l(-40), l(40)`) is applied once, to the group's first sample.
+- The group of pixels 16 to 23 in a 40-pixel tile (samples 32 to 47) straddles the swap at sample 40. Its second half is read from the swapped address of sample 32 onward, samples 80 to 87, which is the next sample row of the tile: the vertical sample.
+- At 2x and 4x resolution scale the half (80 or 160 samples) is a multiple of a group's 16 samples, which is why the scaled copies matched; at 3x it is not. The 1x/2x MSAA fast copies read one sample a pixel, and their 8-pixel groups divide every half. Depth is never 64bpp.
+
+The main session's decisions of 23 October 2026: `resolve_host_32bpp` stays, and the open item on the one-pass race's depth sample is closed. The project owner approved fixing the shared fast copy on 23 October 2026, knowing that it changes `-Rov`'s output. It is an emulation bug, not a title correction.
+
+**The fix.** `fm4-resolve/resolve_fast_32bpp_4xmsaa.xesli` replaces the precompiled 4x fast copy, together with its `_scaled` variant. It works like the full copies: 4 pixels a thread, every pixel's address from `XeEdramOffsetBytes`, the raw EDRAM buffer, the fast copy's red and blue swap of colour, and the bitwise store. `pipeline.py` compiles it with the other FM4 resolve shaders. The upstream headers left the repository, and `resolve_copy_shader_info` binds the raw buffer for it. Proof on snapshot `n3f`:
+
+| Check | Before | After |
+|---|---|---|
+| RTV photo at 1x with the host resolve, the byte check at every frame and the pair dump (`n3f-rtv-photo`) | 3,552 differing 4x depth copies | 158,835 checks, 0 mismatches, no differing pair |
+| the strict band test on `-Rov`'s photo depth copies (steady steps, a jump at pixel 20 cancelled at 24), the three tile depths | 2,242, 1,622 and 314 rows (`n3p-rov-b`) | 0, 0 and 0 rows (`n3f-rov-photo`); RTV's host resolve had 0 before |
+| `parity.py` on `freeze`, `-Rov` against RTV, 4x tiles (`n3f-freeze-*`) | | PASS: draws −0.2%, predicated packets −0.2%, 32.55% of the image above 4 |
+| `-Rov` smoke, `original,taa=0` (`n3f-rovsmoke`) | | 3 of 3 cells, the race at 102.9 fps |
+| 1:1 image of `-Rov`'s photo mode | | correct |
