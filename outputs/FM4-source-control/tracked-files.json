@@ -4530,7 +4530,15 @@
       "provenance": "runtime-fork"
     },
     {
+      "path": "work/runtime/include/rex/system/gpu_progress.h",
+      "provenance": "runtime-fork"
+    },
+    {
       "path": "work/runtime/include/rex/system/native_records.h",
+      "provenance": "runtime-fork"
+    },
+    {
+      "path": "work/runtime/src/system/gpu_progress.cpp",
       "provenance": "runtime-fork"
     },
     {

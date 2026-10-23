@@ -15,6 +15,8 @@
 #include <string>
 #include <vector>
 
+#include <rex/system/gpu_progress.h>
+
 #include "read_trace.h"
 
 namespace rex::graphics::perf_trace {
@@ -929,8 +931,14 @@ inline void OnSwap() {
   }
   state->output << ",\"vblanks\":{\"grid\":" << vblanks[0].exchange(0, std::memory_order_relaxed)
                 << ",\"late\":" << vblanks[1].exchange(0, std::memory_order_relaxed)
-                << ",\"forced\":" << vblanks[2].exchange(0, std::memory_order_relaxed) << '}'
-                << ",\"wait_ms\":{";
+                << ",\"forced\":" << vblanks[2].exchange(0, std::memory_order_relaxed) << '}';
+  // The title's ring index waits that slept (guest_ring_wait_sleep, d3d-hle-n4.md 17.16).
+  {
+    const rex::system::gpu_progress::WaitStats ring = rex::system::gpu_progress::TakeWaitStats();
+    state->output << ",\"guest_ring_waits\":{\"waits\":" << ring.waits
+                  << ",\"timeouts\":" << ring.timeouts << ",\"ms\":" << ring.ns / 1000000.0 << '}';
+  }
+  state->output << ",\"wait_ms\":{";
   for (size_t i = 0; i < size_t(Wait::kCount); ++i) {
     state->output << (i ? "," : "") << '"' << kNames[i] << "\":" << ms(state->wait_ticks[i]);
   }

@@ -10,6 +10,7 @@
 #include "fm4-diagnostic-state.h"
 
 #include <rex/memory.h>
+#include <rex/system/gpu_progress.h>
 
 #include <cstdio>
 #include <cstdlib>
@@ -296,8 +297,48 @@ REX_EXTERN(__imp__sub_82859218);
 REX_HOOK_RAW(sub_82859218) { TracePhotoSave(ctx, base, __imp__sub_82859218); }
 REX_EXTERN(__imp__sub_826DEF78);
 REX_HOOK_RAW(sub_826DEF78) { TracePhotoTextureLock(ctx, base, __imp__sub_826DEF78); }
+// The ring index wait (sub_822B0788, Resource::WaitForFence) polls the read
+// pointer that the command processor writes back, in a loop around the timed
+// poll sub_826E8358, without sleeping: a thread waiting on the GPU spun on its
+// core. With guest_ring_wait_sleep each poll first sleeps until the read pointer
+// has passed the awaited index or is published again, at most 1 ms, then runs as
+// before (its GPU hang timeout included): N4 of docs/analysis/d3d-hle-n4.md,
+// section 17.16. The other callers of the timed poll keep polling.
+namespace {
+struct RingWait {
+  uint32_t device;
+  uint32_t index;
+};
+thread_local const RingWait* ring_wait = nullptr;
+
+void SleepUntilRingIndex(uint8_t* base, const RingWait& wait) {
+  namespace progress = rex::system::gpu_progress;
+  const uint32_t seen = progress::ReadPointerPublications();
+  // As the guest's loop: the index is passed once it lies before the read
+  // pointer, counted back from the issued index (the device's +11036).
+  const uint32_t issued = rex::memory::load_and_swap<uint32_t>(base + wait.device + 11036);
+  const uint32_t pointer = rex::memory::load_and_swap<uint32_t>(base + wait.device + 11024);
+  const uint32_t read = rex::memory::load_and_swap<uint32_t>(base + pointer);
+  if (uint32_t(issued - wait.index) >= uint32_t(issued - read)) {
+    return;
+  }
+  progress::WaitReadPointerPublication(seen, 1000);
+}
+}  // namespace
+
 REX_EXTERN(__imp__sub_822B0788);
-REX_HOOK_RAW(sub_822B0788) { TracePhotoFenceWait(ctx, base, __imp__sub_822B0788); }
+REX_HOOK_RAW(sub_822B0788) {
+  const RingWait wait{ctx.r3.u32, ctx.r4.u32};
+  const bool sleep = wait.index && rex::system::gpu_progress::GuestRingWaitSleep();
+  if (sleep) ring_wait = &wait;
+  TracePhotoFenceWait(ctx, base, __imp__sub_822B0788);
+  if (sleep) ring_wait = nullptr;
+}
+REX_EXTERN(__imp__sub_826E8358);
+REX_HOOK_RAW(sub_826E8358) {  // The timed poll of the ring index waits.
+  if (ring_wait) SleepUntilRingIndex(base, *ring_wait);
+  __imp__sub_826E8358(ctx, base);
+}
 REX_EXTERN(__imp__sub_8273B290);
 REX_HOOK_RAW(sub_8273B290) { TracePhotoCopy(ctx, base, __imp__sub_8273B290); }
 REX_EXTERN(__imp__sub_82BB96E0);

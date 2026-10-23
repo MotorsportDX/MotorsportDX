@@ -33,6 +33,7 @@
 #include <rex/graphics/flags.h>
 #include <rex/graphics/graphics_system.h>
 #include <rex/graphics/host_render_queue.h>
+#include <rex/system/gpu_progress.h>
 #include <rex/system/native_records.h>
 #include <rex/graphics/pipeline/texture/info.h>
 #include <rex/graphics/sampler_info.h>
@@ -337,6 +338,7 @@ void CommandProcessor::WorkerThreadMain() {
     if (read_ptr_writeback_ptr_) {
       memory::store_and_swap<uint32_t>(memory_->TranslatePhysical(read_ptr_writeback_ptr_),
                                        read_ptr_index_);
+      rex::system::gpu_progress::PublishReadPointer();
     }
 
     // FIXME: We're supposed to process the WAIT_UNTIL register at this point,

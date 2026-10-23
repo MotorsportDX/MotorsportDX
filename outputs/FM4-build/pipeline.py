@@ -918,11 +918,13 @@ def native_cvars(single_tile,rov=False):
     """Cvars of -Native: stage N1 of the native path, the host render thread fed by a record
     queue, with the converted PM4 writers leaving records (docs/analysis/d3d-hle.md, section
     14), the resolve readbacks on demand and the resolves from the host render targets of
-    stage N3 (sections 16.5 and 16.11), and stage N4's draw back end on the replay of the
-    deferred command list, the texture bindings kept for rewritten fetch constants and the
-    render target cache's update skipped where it would repeat (sections 17.8 to 17.13). It
-    covers races in one tile or in one pass with MSAA (16.17); the tiles of -Quality (-Msaa)
-    stay on the PM4 RTV path, and -Rov, the uncorrected reference, is never combined with it."""
+    stage N3 (docs/analysis/d3d-hle-n3.md, sections 16.5 and 16.11), and stage N4's draw back
+    end on the replay of the deferred command list, the texture bindings kept for rewritten
+    fetch constants, the render target cache's update skipped where it would repeat and the
+    title's ring index wait sleeping until the read pointer moves (docs/analysis/d3d-hle-n4.md,
+    sections 17.8 to 17.13 and 17.16). It covers races in one tile or in one pass with MSAA
+    (16.17); the tiles of -Quality (-Msaa) stay on the PM4 RTV path, and -Rov, the uncorrected
+    reference, is never combined with it."""
     if rov:
         raise ValueError('-Native runs on the host render target path (RTV); it cannot be combined with -Rov.')
     if not single_tile:
@@ -932,7 +934,7 @@ def native_cvars(single_tile,rov=False):
     return {'host_render_thread':'true','host_render_native':'true',
             'readback_resolve_on_demand':'true','native_rt_surfaces':'2',
             'd3d12_draw_back_end':'2','texture_bindings_keep_same_dwords':'true',
-            'render_target_update_guard':'true'}
+            'render_target_update_guard':'true','guest_ring_wait_sleep':'true'}
 
 def launch(root,single_tile=False,fixed_vblank=False,frame_rate=None,rov=False,
            resolution_scale=None,full_rate_mirror=False,look=None,shadow_workaround=False,

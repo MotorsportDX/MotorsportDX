@@ -40,6 +40,7 @@ Each line (one window) has:
 - `fps`: guest swaps per second in the window. `frame_max_ms`, and `frame_ms` (the time of every frame in the window).
 - `draws`, `copies` (resolves), `readbacks`, `readback_kb`, `upload_kb`.
 - `invalidations`, `invalidated_kb`: shared memory invalidations by guest CPU writes (any thread; with the pages around the written one).
+- `guest_ring_waits`: the title's ring index waits that slept with `guest_ring_wait_sleep` ([d3d-hle-n4.md 17.16](../analysis/d3d-hle-n4.md#1716-event-waits-in-place-of-the-remaining-spins-23-october-2026)): `waits`, the ones that ended at their 1 ms limit (`timeouts`), and their time (`ms`).
 - `vblanks`: guest vblanks the vsync thread delivered. `grid` is on the refresh grid, `late` is a grid vblank that passed while the command processor worked and was delivered when it waited (`vblank_vrr`), and `forced` is a vblank delivered after two intervals without a wait.
 - `wait_ms`: time per cause for the GPU command-processor thread, and `waits`: the number of waits per cause. The causes are:
   - `guest_idle`: waiting for guest commands, i.e. CPU-bound.

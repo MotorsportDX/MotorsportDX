@@ -16,6 +16,7 @@
 #include <rex/graphics/host_render_queue.h>
 #include <rex/logging.h>
 #include <rex/memory.h>
+#include <rex/system/gpu_progress.h>
 #include <rex/system/xthread.h>
 
 #include "util/cp_sampler.h"
@@ -157,6 +158,7 @@ void CommandProcessor::HostRenderThreadMain() {
         if (read_ptr_writeback_ptr_) {
           memory::store_and_swap<uint32_t>(memory_->TranslatePhysical(read_ptr_writeback_ptr_),
                                            read_ptr_index_);
+          rex::system::gpu_progress::PublishReadPointer();
         }
         break;
     }

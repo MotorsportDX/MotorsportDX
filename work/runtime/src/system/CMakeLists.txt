@@ -24,6 +24,7 @@ set(REXSYSTEM_SOURCES
     pm4_emissions.cpp
     native_checks.cpp
     native_records.cpp
+    gpu_progress.cpp
 
     # Utilities
     util/object_table.cpp
