@@ -334,7 +334,7 @@ The main session judged the CPU criterion of section 10 met on the main PC with 
 - The render thread is busy 2.72 ms per race frame at 1,800 draws, against the 2.5 ms of section 10.
 - The race runs at the refresh rate at 240 Hz (238.6 fps in the median window, 1.05% of the frames over 5 ms), with p99 5.02 ms pooled, at most 5.0 ms up to 2,000 draws a frame and 5.1 to 5.3 ms above (17.13).
 - The 2.5 ms stood in for p99 at 240 Hz, and that purpose holds within 0.02 ms pooled. Most of what remains is the dispatch of about 28,000 PM4 packets a frame, about 0.4 ms (17.11), which only fewer packets reduce: it moves to the API-level stage, where draws become records.
-- The criterion's other half, the ROG Xbox Ally X (8.1), stays open.
+- The criterion's other half, the ROG Xbox Ally X (8.1), stays open (measured in [17.21](#1721-the-rog-xbox-ally-x-runs-24-october-2026)).
 
 Next: N4's close gate, which turns the three switches on in `-Native`, then the other items of N4's row (section 9) with their own step gates.
 
@@ -590,3 +590,54 @@ The late write did not come back in the time box, so it stays open:
 - **The candidates** are the code that touches the tiling bracket's draws after the writer returned: `EndTiling` and its list, the list helper `sub_823719A8` (which links a new chunk into ring memory), and the tile stream interpreter. The trace hooks all of them, and also catches the case that none of them wrote the dword.
 - **The residual risk** concerns N1's record path only, which would carry the old dword of such a range. The defaults (RTV and `-Native`) run with the ring wait's sleep; `-Rov` runs without it but does not use the record path.
 - **The diagnostic stays on** with `FM4_NATIVE_CHECK` in every close gate's career. A further sighting then names the function that rewrote the dword, or rules out the hooked ones. The fix follows from that: the record reads the dword again at the hand-over if the rewrite is the title's own, or the writer side changes if it is not.
+
+### 17.21 The ROG Xbox Ally X runs, 24 October 2026
+
+The user ran the [Ally X run set](../running.md#ally-x-run-set) on the handheld (AMD Radeon 890M, the 1080p panel at 120 Hz) from an export of `de4e9bd`, once on AC power at a 35 W TDP and once on battery at 17 W, with runs 1 to 4, 6 and 7 (not 5). Each is a Quick Race of about 160 s with the race at 120 fps. The traces carry no phase marks: the race is taken as the windows after the countdown (the vblank at 240 Hz) while a frame has more than 400 draws, without the first two. The draw load is the same in every run, 1,220 to 1,270 draws a frame (1,250 to 1,370 at 2x).
+
+| Run | Power | fps | p99 ms | frames > 8.33 ms | > 16.7 ms | GPU ms a frame | render thread ms a frame | µs a draw | process CPU ms/s |
+| --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |
+| 1 RTV | 35 W | 106.5 | 18.22 | 89.1% | 1.17% | 7.95 | 4.60 (CP) | 3.67 | 2,886 |
+| 2 Native | 35 W | 112.5 | 14.34 | 72.9% | 0.73% | 7.54 | 4.36 | 3.45 | 2,933 |
+| 3 Native, sleep off | 35 W | 110.3 | 14.61 | 78.9% | 0.74% | 7.70 | 4.36 | 3.49 | 3,149 |
+| 4 Native, timer off | 35 W | 113.2 | 13.49 | 68.3% | 0.62% | 7.46 | 4.35 | 3.48 | 2,914 |
+| 6 Native, 4x | 35 W | 103.4 | 15.26 | 94.0% | 0.85% | 8.33 | 4.35 | 3.53 | 2,736 |
+| 7 Native, 2x scale | 35 W | 39.1 | 40.71 | 99.8% | 97.6% | 23.91 | 8.09 | 5.91 | 2,437 |
+| 1 RTV | 17 W | 91.6 | 24.45 | 96.7% | 2.39% | 9.21 | 6.90 (CP) | 5.62 | 3,277 |
+| 2 Native | 17 W | 93.3 | 19.52 | 97.9% | 1.52% | 9.35 | 6.11 | 4.99 | 3,237 |
+| 3 Native, sleep off | 17 W | 90.5 | 19.59 | 98.2% | 1.72% | 9.66 | 6.18 | 5.05 | 3,512 |
+| 4 Native, timer off | 17 W | 92.4 | 19.32 | 98.1% | 1.60% | 9.43 | 6.28 | 4.96 | 3,209 |
+| 6 Native, 4x | 17 W | 85.7 | 20.73 | 98.8% | 1.85% | 10.20 | 6.39 | 5.05 | 3,089 |
+| 7 Native, 2x scale | 17 W | 34.6 | 45.09 | 100% | 98.5% | 27.15 | 9.28 | 7.41 | 2,517 |
+
+The render thread of RTV is the command processor (the window less its waits). One run a side, so differences of a few percent are within the noise of a race (17.15).
+
+**The threads** (`perf_trace_cpu`, ms a second, run 2 at 35 W): the busiest guest thread 735, the next two 473 and 410, the host render thread 461, the submit thread 279 (its replay 168), the timer queue 125. At 17 W the host render thread takes 14% more and the submit thread 10% more, at 17% fewer frames. No thread is saturated.
+
+**(a) Native against RTV** (2 against 1): at 35 W 5.6% more fps and p99 21% lower (14.34 against 18.22 ms), the GPU 0.41 ms a frame less; at 17 W 1.9% more fps and p99 20% lower, the GPU 0.14 ms a frame more. The render thread is busy 0.24 ms (35 W) and 0.79 ms (17 W) a frame less than RTV's command processor, 6 to 11% a draw.
+
+**(b) The switches.**
+- The ring wait's sleep (2 against 3) saves 216 ms of CPU a second at 35 W and 275 ms at 17 W: the busiest guest thread spins without it (998 and 975 ms a second against 735 and 649). With the sleep the race runs 2.0% (35 W) and 3.1% (17 W) faster, and the GPU takes 0.16 and 0.31 ms a frame less: the power the spin leaves goes to the GPU, as 8.1 expected.
+- The timer (2 against 4) changes nothing beyond the noise: fps +0.6% and -1.0%, p99 -0.85 and -0.20 ms, CPU -19 and -28 ms a second without it.
+- On battery there is no collapse or parking signature: the slowest windows (64 to 74 fps) are those of the highest draw load, with the GPU at 10 to 14 ms a frame and the render thread busy as usual; the process's CPU time stays at 2,500 to 4,400 ms a second. The CPU is slower on battery (5.0 against 3.45 µs a draw, +45%), the GPU less so (+24% a frame).
+
+**(c) MSAA and the render scale.**
+- One pass with 4x against 2x at 1x (6 against 2): the GPU takes 0.79 ms (35 W) and 0.85 ms (17 W) a frame more, +9 to 10%; fps -8.1% and -8.1%, p99 +0.9 and +1.2 ms. N1's estimate of about 10 ms at 4x and 1x matches: 8.33 ms at 35 W, 10.20 ms at 17 W.
+- At the default render scale, 2x (7): 23.91 ms at 35 W and 27.15 ms at 17 W a frame, 14% and 29% above N1's estimate of about 21 ms. The race runs at 39.1 and 34.6 fps with p99 41 and 45 ms.
+
+**(d) GPU bound in every mode.** At 1x the GPU is busy 85% (35 W) to 87% (17 W) of the frame interval, and 93 to 94% at 2x. The render thread waits for the frame latency 270 to 490 ms a second at 1x and about 675 at 2x, and is busy 49 to 57% of the wall time. Neither the replay (155 to 190 ms a second) nor the submit thread (274 to 333) is critical: the hand-over of 17.5 has room on the Ally X as on the main PC. The GPU time of the host's own presents is not in the trace's GPU time; the presenter repaints at each of the panel's vblanks besides the guest frames, which is the host presents item of N4.
+
+**(e) Section 10 on the Ally X.**
+- The device target of 8.1 at the panel's resolution (2x, 60 fps or more with p99 at most 16.7 ms) is not met: 39.1 and 34.6 fps.
+- At 1x it holds at 35 W (112.5 fps, p99 14.34 ms). At 17 W the frame rate holds (93.3 fps) but p99 does not (19.52 ms, 1.5% of the frames over 16.7 ms).
+- The CPU criterion (the render thread busy at most 2.5 ms a race frame) is not met as such: 4.36 ms at 35 W and 6.11 ms at 17 W at 1x. It does not limit the Ally X, which waits for its GPU; the busy time a frame there follows the CPU's clock.
+- No new error key: the runtime logs (which keep every run of a folder, five and six launches) have the three keys of the main PC (`BaseHeap::Release`, the unimplemented XAM message, `update:\media.zip`), and their GPU warnings are the post passes' and the shader overrides' of the main PC, plus the 2x run's unscaled swap source, which the main PC's 2x runs log as well.
+
+**The recommended Ally X default** (a proposal, the main session decides):
+- render scale 1x, not the launcher's 2x for a 1080p panel: 2x is GPU bound at 35 to 39 fps;
+- the native path: the best frame rate and p99 in both power modes;
+- one pass with 2x MSAA (the default): 4x costs 8%, which the 120 Hz cap does not leave at 35 W either;
+- `guest_ring_wait_sleep` on (the default): 2 to 3% more fps and a quarter of a core less;
+- `high_resolution_timing` on (the default): no measurable effect either way.
+
+So the data supports one change of default for the Ally X: render scale 1x instead of the 2x the launcher picks for a 1080p panel, by a device or GPU class rule or the Ally X profile. The panel's 1.5x and an upscaler stay N5's (8.1).
