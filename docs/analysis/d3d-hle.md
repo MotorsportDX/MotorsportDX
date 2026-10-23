@@ -1393,9 +1393,11 @@ The keys that change still cost most of the keys zone: decoding the new fetch co
 | State, pipeline, before the textures | 0.04, 0.03, 0.02 |
 | Not in a part (mostly the timers) | 0.38 |
 | Outside the draw zone | 1.18 |
-| Register packets | 0.41 (0.38 in the op lists' replays) |
+| Register packets | 0.41 (0.38 in the replays of recorded command buffers) |
 | Other packets (the converted writers' records) | 0.20 (696 records, 87,785 registers) |
 | Shader loads | 0.12 |
 | Copies, swap, draw packets beyond the draw zone | 0.12, 0.03, 0.05 |
 | Untimed: dispatch, parse, indirect buffers, the record queue | 0.41 |
 | `WAIT_REG_MEM` (a wait, not busy time) | 1.11 |
+
+The split's timers cost most where the parts are small and many. The register packets are 23,635 a frame at 17.2 ns each with the split's two time stamps around each, so most of their 0.41 ms is the split itself: without it they take about 0.15 ms, which is also why copying the registers at once saved nothing (17.10). The shader loads (2,165 a frame) and the other packets (896) are less affected; the draw zone's detail timers add about 0.2 ms. Without the split the render thread spends about 1.04 ms a race frame outside the draw zone at 1,800 draws (17.9), of which the packet handlers, copies and swap take about 0.6 ms; the rest, about 0.4 ms, is the dispatch and parse of about 28,000 packets a frame, the indirect buffers (519 replays, 238,912 dwords a frame) and the record queue.
