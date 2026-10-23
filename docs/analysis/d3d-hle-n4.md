@@ -427,3 +427,45 @@ N4's close gate is done. Next are the other items of N4's row (section 9), each 
 4. a proxy for a smaller CPU: the affinity set to 4 physical cores without SMT, and to 8 threads.
 
 Then comes the ROG Xbox Ally X export.
+
+### 17.16 Event waits in place of the remaining spins, 23 October 2026
+
+The first item after the close gate.
+
+**Where the CPU goes.** e2e now records the game process's CPU time and the CPU package's and cores' power each second, and the CPU time of each thread per phase (`cpu_power`, [e2e harness](../e2e/README.md); the power from the Windows "Energy Meter" counters, RAPL on this laptop). In the 240 Hz race at 1x on `n4be14` (`n4x-race-natp1`, `n4x-race-rtvp1`):
+- the process used 3.61 cores on `-Native` and on RTV, and the package 77 and 76 W;
+- one guest thread used a whole core, 978 and 969 ms a second;
+- the host render thread used 704 ms a second, which is its busy time: it does not spin.
+
+**What spins.** A sampling profiler (the instruction pointers of the busiest threads mapped to the title's functions; `n4y-race-prof1`) and the new `REX_GUEST_YIELD_TRACE` ([traces](../e2e/traces.md#guest-yields-rex_guest_yield_trace)) on `n4be15`:
+- The thread with the whole core runs the title's command buffers (`D3DDevice_RunCommandBuffer`). It waits for the GPU in the ring index wait (`sub_822B0788`, `Resource::WaitForFence`), a loop around the timed poll `sub_826E8358` that reads the read pointer the command processor writes back, without sleeping.
+- The guest's yields cost little. `NtYieldExecution` from a spin lock (`sub_822B96E0`) ran 3.5 million times in a race on the main thread, about 3 ms a second, and `Sleep(0)` about 6 ms a second.
+- `WAIT_REG_MEM`'s polls without a sleep time never wait: 3.8 million packets, none waited (`REX_WAIT_REG_MEM_TRACE`). The swap's vblank wait sleeps on its event.
+
+**The change.** `guest_ring_wait_sleep` is off by default, and on with `-Native`:
+- the command processor and the host render thread count a publication after each write-back of the read pointer (`rex::system::gpu_progress`);
+- the title's hook of the ring index wait marks the awaited index, and each timed poll first sleeps until the read pointer has passed it or is published again, at most 1 ms;
+- the timed poll then runs as before, its GPU hang timeout included;
+- the perf trace counts the sleeps (`guest_ring_waits`).
+
+**The step gate** ran on `n4be16` (ca7c690's code) at 240 Hz and 1x with e2e's `-Native` default, the switch off and on, twice each, alternating (`n4z-race-off1`, `-on1`, `-off2`, `-on2`):
+
+| Race at 240 Hz, 1x | Off | On |
+|---|---|---|
+| The process's CPU time | 3,608 and 3,456 ms a second | 3,318 and 3,241 |
+| The package's power | 74.1 and 72.2 W | 70.8 and 69.8 |
+| The waiting thread's CPU time | 972 and 980 ms a second | 788 and 793 |
+| Frames per second | 236.6 and 239.0 | 238.3 and 238.8 |
+| p99 | 5.04 and 4.97 ms | 5.05 and 4.97 |
+| Render thread busy per draw | 1.47 and 1.54 µs | 1.48 and 1.52 |
+| GPU time a frame | 2.35 and 2.24 ms | 2.33 and 2.27 |
+| Ring waits that slept | | 205 to 213 a second, 182 to 192 ms a second; 45 to 49 a second ended at the limit |
+
+- **The CPU.** The process uses 0.22 to 0.29 cores less (6 to 8%), and the package 2.4 to 3.3 W less. The render thread, the frame rate, p99 and the GPU time do not change.
+- **The waiting thread** now sleeps about a fifth of its time. The rest is work: a profile with the switch (`n4z-race-prof2`) shows the command buffers, vector math and the native records, and the condition variable's wait where it slept.
+- **The image.** At 2x with the switch (`n4z-race-on2k`): 182.9 fps, 5.37 ms of GPU time, p99 7.5 ms. The 2560x1440 captures at 1:1 beside RTV's (`n4w-race-rtv2k1`) show the whole scene with the same detail, and none is washed out.
+- **A career with the switch** (`n4z-oncareer`) reached its goal through the race and the replay, with the error keys of RTV.
+- **RTV** keeps the switch off; only the publication's count runs there. Its command processor took 1.98 µs per draw at 2,098 draws a frame (`n4z-race-rtv1`), against 2.03 µs at 1,988 on `n4be14` (`n4x-race-rtvp1`). RTV's own waiting thread spins the same way (969 ms a second), so the switch would serve it too.
+- **The power counters** compare alternating runs to within about 1 W between runs of one setting. A run with the profiler, which suspends the threads it samples, read 87.7 W.
+
+Next: the vblank interrupt and the readback copies on the host render thread.
