@@ -1117,6 +1117,7 @@ def launcher_test_options(root):
             {'look':'original,taa=0','single_tile':True},
             {'look':'original','msaa':True,'display':'720p','fullscreen':True},
             {'rov':True,'fixed_vblank':True,'full_rate_mirror':True,'shadow_workaround':True,'info':True},
+            {'rov':True},
             {'look':'aces,foliage_hue=-60,sky=1.2,road_gloss=0.5,sun=0,tonemap=filmic,taa_point=1',
              'supersample':True},
             {'look':'neutral,windshield=2,ao=0','resolution_scale':3,'display':'4k'},

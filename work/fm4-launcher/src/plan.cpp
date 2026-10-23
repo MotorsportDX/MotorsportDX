@@ -540,6 +540,9 @@ Plan LaunchPlan(const LauncherData& data, const std::string& root, const std::st
     cvars.Erase("edram_single_rt_no_wrap");
     cvars.Set("render_target_path_d3d12", "rov");
     cvars.Set("rov_occlusion_async", "all");
+    // The uncorrected reference keeps the title's ring index wait as it is
+    // (docs/analysis/d3d-hle-n4.md 17.16).
+    cvars.Set("guest_ring_wait_sleep", "false");
   }
   const std::string display = options.display.empty()
                                   ? data.json.at("default_display").get<std::string>()
