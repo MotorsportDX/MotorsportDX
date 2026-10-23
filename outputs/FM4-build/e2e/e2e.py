@@ -1057,7 +1057,14 @@ def run_once(options, out):
             raise SystemExit('--native runs on RTV; it cannot be combined with -Rov')
         tiling = [item.split('=', 1)[1] for item in options.env
                   if item.startswith('FM4_TILING_SCENARIO=')]
-        if not (single_tile if not tiling else tiling[-1] == '2'):
+        # One pass with 2x MSAA (d3d-hle.md 16.17): the 2x scenario made one tile by the
+        # title's FM4_ONE_PASS_MSAA=2, with the runtime's private scene depth.
+        one_pass = [item.split('=', 1)[1] for item in options.env
+                    if item.startswith('FM4_ONE_PASS_MSAA=')]
+        one_pass_2x = bool(one_pass) and one_pass[-1] == '2' and bool(tiling) and tiling[-1] == '1'
+        if one_pass_2x:
+            args.setdefault('native_one_pass_msaa', '2')
+        elif not (single_tile if not tiling else tiling[-1] == '2'):
             cause = ('--msaa' if options.msaa else f'--env FM4_TILING_SCENARIO={tiling[-1]}'
                      if tiling else f'the look {look!r} (no TAA)')
             raise SystemExit(f'--native covers one tile, but {cause} renders races in tiles: '

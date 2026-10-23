@@ -1501,6 +1501,11 @@ bool D3D12RenderTargetCache::Resolve(const memory::Memory& memory, D3D12SharedMe
       const bool host_resolve = GetPath() == Path::kHostRenderTargets &&
                                 (REXCVAR_GET(native_rt_surfaces) & 2) &&
                                 FindHostResolveSource(resolve_info, copy_shader, host_source);
+      // native_one_pass_msaa: the private scene depth is dumped alone.
+      RenderTarget* private_depth = GetResolvePrivateDepth(resolve_info);
+      if (private_depth) {
+        perf_trace::CountOnePass(perf_trace::one_pass_resolves);
+      }
       const int32_t host_check_every = REXCVAR_GET(native_rt_surfaces_check);
       const bool host_check =
           host_resolve && host_check_every > 0 &&
@@ -1523,7 +1528,8 @@ bool D3D12RenderTargetCache::Resolve(const memory::Memory& memory, D3D12SharedMe
           uint32_t dump_rows;
           uint32_t dump_pitch;
           resolve_info.GetCopyEdramTileSpan(dump_base, dump_row_length_used, dump_rows, dump_pitch);
-          if (!DumpRenderTargets(dump_base, dump_row_length_used, dump_rows, dump_pitch)) {
+          if (!DumpRenderTargets(dump_base, dump_row_length_used, dump_rows, dump_pitch,
+                                 private_depth)) {
             REXGPU_ERROR("D3D12RenderTargetCache: Failed to dump host render targets for resolve");
             return false;
           }
@@ -1596,7 +1602,7 @@ bool D3D12RenderTargetCache::Resolve(const memory::Memory& memory, D3D12SharedMe
           uint32_t dump_base, dump_row_length_used, dump_rows, dump_pitch;
           resolve_info.GetCopyEdramTileSpan(dump_base, dump_row_length_used, dump_rows,
                                             dump_pitch);
-          DumpRenderTargets(dump_base, dump_row_length_used, dump_rows, dump_pitch);
+          DumpRenderTargets(dump_base, dump_row_length_used, dump_rows, dump_pitch, private_depth);
         }
         if (dispatched_from_host ||
             command_processor_.RequestOneUseSingleViewDescriptors(
@@ -5138,32 +5144,42 @@ void D3D12RenderTargetCache::CountTransferInventory(RenderTargetKey dest,
                                                     const std::vector<Transfer>& transfers,
                                                     bool stencil_bits) {
   auto describe = [](RenderTargetKey key) {
-    return fmt::format("{}{}x{}", key.is_depth ? "depth " : "color ",
+    return fmt::format("{}{}x{} at {} pitch {}", key.is_depth ? "depth " : "color ",
                        key.is_depth ? uint32_t(key.GetDepthFormat())
                                     : uint32_t(key.GetColorFormat()),
-                       1u << uint32_t(key.msaa_samples));
+                       1u << uint32_t(key.msaa_samples), uint32_t(key.base_tiles),
+                       key.GetPitchTiles());
   };
   for (const Transfer& transfer : transfers) {
     std::string name = fmt::format(
         "{} <- {}{}{}", describe(dest), transfer.source ? describe(transfer.source->key()) : "?",
         transfer.host_depth_source ? " + host depth" : "", stencil_bits ? " + stencil bits" : "");
-    auto& entry = transfer_inventory_[name];
-    ++entry.first;
-    entry.second += transfer.end_tiles - transfer.start_tiles;
+    TransferInventoryEntry& entry = transfer_inventory_[name];
+    ++entry.transfers;
+    entry.tiles += transfer.end_tiles - transfer.start_tiles;
+    const uint32_t pitch = std::max(dest.GetPitchTiles(), uint32_t(1));
+    for (uint32_t tile = transfer.start_tiles; tile < transfer.end_tiles; ++tile) {
+      const uint32_t relative = (tile - dest.base_tiles) & (xenos::kEdramTileCount - 1);
+      entry.columns |= uint64_t(1) << std::min(relative % pitch, uint32_t(63));
+      entry.row_first = std::min(entry.row_first, relative / pitch);
+      entry.row_last = std::max(entry.row_last, relative / pitch);
+    }
   }
   const uint64_t frame = command_processor_.GetCurrentFrame();
   if (frame < transfer_inventory_frame_ + 600) {
     return;
   }
-  std::vector<std::pair<std::string, std::pair<uint64_t, uint64_t>>> entries(
+  std::vector<std::pair<std::string, TransferInventoryEntry>> entries(
       transfer_inventory_.begin(), transfer_inventory_.end());
   std::sort(entries.begin(), entries.end(), [](const auto& a, const auto& b) {
-    return a.second.second > b.second.second;
+    return a.second.tiles > b.second.tiles;
   });
   for (const auto& entry : entries) {
-    REXGPU_INFO("Transfer inventory, frames {} to {}: {}: {} transfers, {} tiles",
-                transfer_inventory_frame_, frame, entry.first, entry.second.first,
-                entry.second.second);
+    REXGPU_INFO(
+        "Transfer inventory, frames {} to {}: {}: {} transfers, {} tiles, columns {:X}, rows {} "
+        "to {}",
+        transfer_inventory_frame_, frame, entry.first, entry.second.transfers, entry.second.tiles,
+        entry.second.columns, entry.second.row_first, entry.second.row_last);
   }
   transfer_inventory_.clear();
   transfer_inventory_frame_ = frame;
@@ -6122,7 +6138,8 @@ bool D3D12RenderTargetCache::TryResolveCopyDirectly(const draw_util::ResolveInfo
 
   // Dedicated direct resolve dispatches are staged behind the same preflight;
   // keep using the existing dump path until source-image direct shaders land.
-  return DumpRenderTargets(dump_base, dump_row_length_used, dump_rows, dump_pitch);
+  return DumpRenderTargets(dump_base, dump_row_length_used, dump_rows, dump_pitch,
+                           GetResolvePrivateDepth(resolve_info));
 }
 
 bool D3D12RenderTargetCache::FindHostResolveSource(const draw_util::ResolveInfo& resolve_info,
@@ -6143,18 +6160,22 @@ bool D3D12RenderTargetCache::FindHostResolveSource(const draw_util::ResolveInfo&
   if (!is_depth && edram_info.format_is_64bpp) {
     return false;
   }
-  // The render target that owns every tile of the span.
-  uint32_t dump_base, dump_row_length_used, dump_rows, dump_pitch;
-  resolve_info.GetCopyEdramTileSpan(dump_base, dump_row_length_used, dump_rows, dump_pitch);
-  GetResolveCopyRectanglesToDump(dump_base, dump_row_length_used, dump_rows, dump_pitch,
-                                 dump_rectangles_);
-  if (dump_rectangles_.empty()) {
-    return false;
-  }
-  RenderTarget* render_target = dump_rectangles_.front().render_target;
-  for (const ResolveCopyDumpRectangle& rectangle : dump_rectangles_) {
-    if (rectangle.render_target != render_target) {
+  // The render target that owns every tile of the span, or the private scene
+  // depth (16.17).
+  RenderTarget* render_target = GetResolvePrivateDepth(resolve_info);
+  if (!render_target) {
+    uint32_t dump_base, dump_row_length_used, dump_rows, dump_pitch;
+    resolve_info.GetCopyEdramTileSpan(dump_base, dump_row_length_used, dump_rows, dump_pitch);
+    GetResolveCopyRectanglesToDump(dump_base, dump_row_length_used, dump_rows, dump_pitch,
+                                   dump_rectangles_);
+    if (dump_rectangles_.empty()) {
       return false;
+    }
+    render_target = dump_rectangles_.front().render_target;
+    for (const ResolveCopyDumpRectangle& rectangle : dump_rectangles_) {
+      if (rectangle.render_target != render_target) {
+        return false;
+      }
     }
   }
   const RenderTargetKey key = render_target->key();
@@ -6165,7 +6186,7 @@ bool D3D12RenderTargetCache::FindHostResolveSource(const draw_util::ResolveInfo&
   // The unscaled fast copies of 4x MSAA depth differ from the dump in the byte
   // check by a sample's depth, for a cause not found (16.11): they keep the
   // dump unless the diagnostic native_rt_surfaces_unscaled_msaa is on.
-  if (bitwise && key.msaa_samples != xenos::MsaaSamples::k1X && !IsDrawResolutionScaled() &&
+  if (bitwise && key.msaa_samples >= xenos::MsaaSamples::k4X && !IsDrawResolutionScaled() &&
       !REXCVAR_GET(native_rt_surfaces_unscaled_msaa)) {
     return false;
   }
@@ -6604,12 +6625,45 @@ void D3D12RenderTargetCache::ResolveIntoHostTextures(
   }
 }
 
+RenderTargetCache::RenderTarget* D3D12RenderTargetCache::GetResolvePrivateDepth(
+    const draw_util::ResolveInfo& resolve_info) {
+  if (!resolve_info.IsCopyingDepth()) {
+    return nullptr;
+  }
+  const draw_util::ResolveEdramInfo& edram_info = resolve_info.depth_edram_info;
+  if (!IsPrivateDepth(resolve_info.depth_original_base, edram_info.pitch_tiles,
+                      edram_info.msaa_samples)) {
+    return nullptr;
+  }
+  RenderTargetKey key;
+  key.base_tiles = resolve_info.depth_original_base;
+  key.pitch_tiles_at_32bpp = edram_info.pitch_tiles;
+  key.msaa_samples = edram_info.msaa_samples;
+  key.is_depth = 1;
+  key.resource_format = edram_info.format;
+  // Created on first use: a resolve before any draw reads a cleared target.
+  return GetOrCreateRenderTarget(key);
+}
+
 bool D3D12RenderTargetCache::DumpRenderTargets(uint32_t dump_base, uint32_t dump_row_length_used,
-                                               uint32_t dump_rows, uint32_t dump_pitch) {
+                                               uint32_t dump_rows, uint32_t dump_pitch,
+                                               RenderTarget* only) {
   assert_true(GetPath() == Path::kHostRenderTargets);
 
-  GetResolveCopyRectanglesToDump(dump_base, dump_row_length_used, dump_rows, dump_pitch,
-                                 dump_rectangles_);
+  if (only) {
+    dump_rectangles_.clear();
+    if (dump_rows) {
+      dump_rectangles_.emplace_back(only, 0, dump_rows, 0, dump_row_length_used);
+    }
+  } else {
+    GetResolveCopyRectanglesToDump(dump_base, dump_row_length_used, dump_rows, dump_pitch,
+                                   dump_rectangles_);
+    for (const ResolveCopyDumpRectangle& rectangle : dump_rectangles_) {
+      if (IsPrivateDepthKey(rectangle.render_target->key())) {
+        perf_trace::CountOnePass(perf_trace::one_pass_violations);
+      }
+    }
+  }
   if (dump_rectangles_.empty()) {
     return true;
   }

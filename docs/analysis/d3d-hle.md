@@ -1162,6 +1162,47 @@ The main session approved the outline of increment 4 on 23 October 2026, with th
 4. **TAA and the post passes.** TAA runs on the resolved scene. The motion vectors and the cockpit window get depth and stencil from sample 0 through a shader pass. The host's 2x sample positions are checked against the Xenos pattern first.
 5. **Gates.** Step gates: the `career` check run with the resolve byte check, one 2x race perf run per side, and the freeze parity. The close gate is as in the outline, with `native_rt_surfaces` bits 2, 4 and 8 on in `-Native`, the growth stress run, and the transfer inventory against 16.13.
 
+**The private scene depth (the main session's decision of 23 October 2026).** Steps 1 and 2 above became one narrower step for 2x. The scene depth of one-pass 2x gets a private host target outside the shared tile map; that is also where the port is going, with surfaces as host objects rather than EDRAM tiles. The no-wrap tile space (option A) waits for 4x, where the 2,880-tile scene colour, aliased by other surfaces at base 0, needs it or a private colour with explicit copies for its aliases. The choice is made from the 4x inventory.
+
+With `native_one_pass_msaa=2` (set by `e2e.py --native` with `FM4_ONE_PASS_MSAA=2` and the 2x scenario), the depth key with base 1024, a pitch of 16 tiles and 2x MSAA is private. Every consumer of that depth:
+
+- **Draws:** bind the private target, which claims no tiles and does not shorten the colour's range (the colour then owns its 1,440 tiles).
+- **Resolves of the depth:** read the private target. A resolve from the host render target takes it as its source (`FindHostResolveSource`). The dump, the direct resolve and the byte check's dump dump that target alone, never the owners of the tile map.
+- **Clears of the depth:** clear the private target in place, with no ownership change and without the colour's overlap clamp.
+- **Post passes (GTAO, the motion vectors for TAA, the cockpit window's stencil, the mod passes):** read the scene depth and stencil only through resolved textures (`RequestResolvedTexture` on the depth group's resolve destinations). No post pass binds a depth render target, so they get the private depth through its resolves. The pass of step 4 that takes depth from sample 0 is to read the private target too.
+- **Memory, sizing and eviction:** the private target is created on first use through the sizing rule, with exactly the rows of the draw at the current scale and 2x MSAA, and it is counted in `rt_memory`. The eviction skips it, `ClearCache` keeps it, and shutdown destroys it with the other targets.
+- **Lazy transfers:** it is never an owner or a holder.
+
+The check counts as violations (`one_pass.violations`, which must stay 0):
+
+- an ownership change into the private key;
+- a dump through the tile map that names the private target.
+
+It also counts the private target's draws, resolves and clears. The unscaled fast copies of 2x MSAA sources now resolve from the host render target; only 4x keeps the dump. The transfer inventory names each surface's base and pitch, for the aliasing proof.
+
+**The step gate of the private depth** (`n4a-*`, `I:\FM4-build-usa`, 240 Hz, `-Look "original,taa=0"`, the 2x scenario, the fast route; native one pass 2x against RTV tiled 2x):
+
+| Run | Result |
+|---|---|
+| Native one pass, `race` with the resolve byte check and the transfer inventory (`n4a-inv-onepass`) | 0 violations; 11,440 byte checks, 0 mismatches; 13,252 resolves and 12,180 clears of the private depth |
+| Native one pass, `career` with the byte check (`n4a-check-career`) | 0 violations; 19,233 byte checks, 0 mismatches; 25,020 resolves and 18,972 clears of the private depth |
+| `freeze` at 2x, RTV tiled against native one pass (`n4a-freeze-*`) | draws -15.5%, predicated run packets -27%, predicated skipped packets -100%: FAIL by design, the expected difference of one pass ([frozen-frames.md](../e2e/frozen-frames.md)); 29.5% of the image above 4, two different race moments. The 1:1 crops of the top 416 lines and of the old tile seam (line 1024 at 2x) show no artefact. |
+| `race` at 2x, one run each (`n4a-race-2x-*`) | RTV tiled 175.0 fps, GPU 4.65 ms a frame, 2,740 draws, resolves 0.784 ms; native one pass 218.8 fps, GPU 3.24 ms (-30%), 1,844 draws (-33%), resolves 0.462 ms |
+
+**The aliasing proof.** The transfer inventory of RTV tiled 2x names one transfer from the scene depth into another surface: about once a race frame, into the 16_16 colour with 4x MSAA at base 832 (pitch 13 tiles), whose 832 tiles overlap the depth's from 1024. That surface is the 512x512 shadow map of the cars ([render path](ghidra-render-path.md)), resolved every frame and sampled by the scene, so it reaches the screen.
+
+- Eagerly, the transfer copies 224 tiles a frame: all 13 tile columns, rows 46 to 63 (`n4c-tiled-eager`).
+- With lazy transfers, which copy only the tiles a draw touches without overwriting them (`n4c-tiled-lazy`), 18 tiles a frame remain, all in the thirteenth column (bit 12 of the column mask).
+
+Columns 0 to 11 are overwritten before anything reads them, so the pass's first draws cover the target; the thirteenth column (pixels 480 to 520 at 4x) is only partly inside the target's 512 pixels, so it is copied and the overwrite covers its part up to pixel 512. The depth's bytes therefore survive only in pixels 512 to 520, which the 512x512 resolve never reads. The alias carries nothing to the screen, so the private depth needs no alias copy. In the tiled modes the 2x tiles are drawn in order (window offsets 0, then -512 lines), and the tiles before the last one end with a resolve that clears the depth, so the depth tiles past 1024 hold the last tile's rows or the clear value at that point. Either way they reach only those pixels.
+
+**What option A touches** (the scope list for 4x):
+
+- the transfer shaders' address constant, one 32-bit word with a signed 12-bit base adjustment and two 10-bit pitches, and their masks with the tile count (also on the host depth path);
+- the dump shaders and the EDRAM buffer of 2,048 tiles, which is also the host depth store of depth transfers;
+- the resolve spans of the draw utilities, `GetRangeRectangles`, the extent splitting of the ownership map, and about 59 wrap sites in the common cache;
+- `RenderTargetKey::base_tiles` (11 bits; the key has room for 13).
+
 ## 17. Stage N4 design, 22 October 2026
 
 Stage N4 (section 9) brings the render thread to the CPU targets of section 10: busy at most 2.5 ms per race frame and p99 at most 5.0 ms at 240 Hz, on the main PC and on the ROG Xbox Ally X. The native path's render thread is busy 3.1 to 3.4 ms per race frame at 1x (15.7, 15.12), so N4 has to remove 0.6 to 0.9 ms. The main session's order: first the descriptor and constant buffer work leaves the render thread, which the profile of 15.10 points at ([CP draw offload](cp-draw-offload.md), options 1 and 2).

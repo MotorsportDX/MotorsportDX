@@ -347,6 +347,14 @@ inline void SetRenderTargetMemory(uint64_t bytes, uint64_t peak, uint32_t target
   rt_targets.store(targets, std::memory_order_relaxed);
 }
 inline void CountRenderTargetResize() { rt_resizes.fetch_add(1, std::memory_order_relaxed); }
+// native_one_pass_msaa (d3d-hle.md 16.17): draws and resolves of the private
+// scene depth, and the check's violations (the scene depth's guest tiles
+// reached through the EDRAM tile map).
+inline std::atomic<uint64_t> one_pass_draws{0}, one_pass_resolves{0}, one_pass_clears{0},
+    one_pass_violations{0};
+inline void CountOnePass(std::atomic<uint64_t>& counter, uint64_t count = 1) {
+  counter.fetch_add(count, std::memory_order_relaxed);
+}
 inline void CountRenderTargetEvictions(uint32_t count) {
   rt_evictions.fetch_add(count, std::memory_order_relaxed);
 }
@@ -806,7 +814,11 @@ inline void OnSwap() {
                 << double(rt_memory_peak_bytes.load(std::memory_order_relaxed)) / 1048576.0
                 << ",\"resizes\":" << rt_resizes.exchange(0, std::memory_order_relaxed)
                 << ",\"evictions\":" << rt_evictions.exchange(0, std::memory_order_relaxed)
-                << '}';
+                << '}' << ",\"one_pass\":{\"draws\":"
+                << one_pass_draws.exchange(0, std::memory_order_relaxed) << ",\"resolves\":"
+                << one_pass_resolves.exchange(0, std::memory_order_relaxed) << ",\"clears\":"
+                << one_pass_clears.exchange(0, std::memory_order_relaxed) << ",\"violations\":"
+                << one_pass_violations.exchange(0, std::memory_order_relaxed) << '}';
   {
     const double tsc_per_ms = double(__rdtsc() - state->window_tsc) / ms(elapsed);
     const uint64_t replay_tsc = constant_replay.tsc.exchange(0, std::memory_order_relaxed);

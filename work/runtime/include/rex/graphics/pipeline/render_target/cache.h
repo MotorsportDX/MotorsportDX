@@ -554,6 +554,19 @@ class RenderTargetCache {
   // native_rt_surfaces bit 8 (docs/analysis/d3d-hle.md 16.15): host targets
   // sized to the tile rows their surfaces use.
   bool IsSizingEnabled() const;
+  // native_one_pass_msaa (docs/analysis/d3d-hle.md 16.17): the one-pass
+  // scene's depth surface (base 1024, 16 tiles of pitch at 32bpp, the one-pass
+  // sample count) has a private host target outside the EDRAM tile map: no
+  // ownership, transfers or dumps of other targets reach it.
+  bool IsPrivateDepth(uint32_t base_tiles, uint32_t pitch_tiles_at_32bpp,
+                      xenos::MsaaSamples msaa_samples) const;
+  // With native_rt_surfaces bit 8, the target has at least tile_rows rows
+  // (grown if needed).
+  RenderTarget* GetOrCreateRenderTarget(RenderTargetKey key, uint32_t tile_rows = 0);
+  bool IsPrivateDepthKey(RenderTargetKey key) const {
+    return key.is_depth &&
+           IsPrivateDepth(key.base_tiles, key.pitch_tiles_at_32bpp, key.msaa_samples);
+  }
   // The tile rows of an EDRAM-sized target of the key.
   uint32_t GetFullTileRows(RenderTargetKey key) const;
   // Creates a target with the rows, and counts its memory.
@@ -751,9 +764,6 @@ class RenderTargetCache {
     return xenos::GetStorageColorFormat(format);
   }
 
-  // With native_rt_surfaces bit 8, the target has at least tile_rows rows
-  // (grown if needed).
-  RenderTarget* GetOrCreateRenderTarget(RenderTargetKey key, uint32_t tile_rows = 0);
   // Moves every reference of the cache from old_rt to new_rt, and retires
   // old_rt.
   void ReplaceRenderTarget(RenderTarget* old_rt, RenderTarget* new_rt);

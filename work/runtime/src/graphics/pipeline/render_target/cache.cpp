@@ -67,6 +67,13 @@ REXCVAR_DEFINE_INT32(native_rt_surfaces_memory_cap_mb, 0, "GPU",
                      "EDRAM tile")
     .range(0, 65536)
     .lifecycle(rex::cvar::Lifecycle::kRequiresRestart);
+REXCVAR_DEFINE_INT32(native_one_pass_msaa, 0, "GPU",
+                     "With the title's one-pass MSAA races (FM4_ONE_PASS_MSAA): their sample "
+                     "count (2; 0 off). The scene's depth (EDRAM base 1024, pitch 16 tiles) "
+                     "then has a private host render target outside the EDRAM tile map "
+                     "(docs/analysis/d3d-hle.md 16.17). RTV path only")
+    .range(0, 2)
+    .lifecycle(rex::cvar::Lifecycle::kRequiresRestart);
 REXCVAR_DEFINE_BOOL(native_rt_surfaces_grow_stress, false, "GPU",
                     "With native_rt_surfaces bit 8: create every host render target with 8 tile "
                     "rows and grow it only to the rows asked for, so that every surface grows "
@@ -447,10 +454,16 @@ void RenderTargetCache::ClearCache() {
         used_render_targets.emplace(ownership_range.host_depth_render_target_float24);
       }
     }
-    // The holders of deferred transfers (native_rt_surfaces bit 4).
+    // The holders of deferred transfers (native_rt_surfaces bit 4), and the
+    // private scene depth (16.17).
     for (RenderTarget* holder : lazy_holders_) {
       if (holder) {
         used_render_targets.emplace(holder->key());
+      }
+    }
+    for (const auto& render_target_pair : render_targets_) {
+      if (IsPrivateDepthKey(render_target_pair.first)) {
+        used_render_targets.emplace(render_target_pair.first);
       }
     }
     if (render_targets_.size() != used_render_targets.size()) {
@@ -701,7 +714,11 @@ bool RenderTargetCache::Update(bool is_rasterization_done,
   // multiple render targets are bound.
   std::pair<uint32_t, uint32_t> edram_bases_sorted[1 + xenos::kMaxColorRenderTargets];
   uint32_t edram_bases_sorted_count = 0;
-  rts_remaining = depth_and_color_rts_used_bits;
+  // native_one_pass_msaa: the one-pass scene's depth is bound but claims no
+  // EDRAM tiles, and does not shorten the colour's range.
+  const bool private_depth = !interlock_barrier_only && (depth_and_color_rts_used_bits & 1) &&
+                             IsPrivateDepth(edram_bases[0], pitch_tiles_at_32bpp, msaa_samples);
+  rts_remaining = depth_and_color_rts_used_bits & ~uint32_t(private_depth);
   while (rex::bit_scan_forward(rts_remaining, &rt_index)) {
     rts_remaining &= ~(uint32_t(1) << rt_index);
     edram_bases_sorted[edram_bases_sorted_count++] =
@@ -743,6 +760,24 @@ bool RenderTargetCache::Update(bool is_rasterization_done,
       ((height_used << uint32_t(msaa_samples >= xenos::MsaaSamples::k2X)) +
        (xenos::kEdramTileHeightSamples - 1)) /
       xenos::kEdramTileHeightSamples * pitch_tiles_at_32bpp;
+  if (private_depth) {
+    RenderTargetKey& rt_key = rt_keys[0];
+    rt_key.base_tiles = edram_bases[0];
+    rt_key.pitch_tiles_at_32bpp = pitch_tiles_at_32bpp;
+    rt_key.msaa_samples = msaa_samples;
+    rt_key.is_depth = 1;
+    rt_key.resource_format = resource_formats[0];
+    RenderTarget* render_target = GetOrCreateRenderTarget(
+        rt_key, ((height_used << uint32_t(msaa_samples >= xenos::MsaaSamples::k2X)) +
+                 (xenos::kEdramTileHeightSamples - 1)) /
+                    xenos::kEdramTileHeightSamples);
+    if (!render_target) {
+      return false;
+    }
+    rts[0] = render_target;
+    last_update_ranges_[0] = {uint32_t(rt_key.base_tiles), 0};
+    perf_trace::CountOnePass(perf_trace::one_pass_draws);
+  }
   for (uint32_t i = 0; i < edram_bases_sorted_count; ++i) {
     const std::pair<uint32_t, uint32_t>& rt_base_index = edram_bases_sorted[i];
     uint32_t rt_base = rt_base_index.first;
@@ -1788,7 +1823,12 @@ bool RenderTargetCache::PrepareHostRenderTargetsResolveClear(
                                         xenos::kEdramTileCount) -
                                color_clear_start_tiles_base_relative;
   }
-  if (depth_clear_length_tiles && color_clear_length_tiles) {
+  // native_one_pass_msaa: the private scene depth shares no tile with the
+  // colour.
+  const bool private_depth_clear =
+      depth_clear_length_tiles &&
+      IsPrivateDepth(resolve_info.depth_original_base, pitch_tiles_at_32bpp, msaa_samples);
+  if (depth_clear_length_tiles && color_clear_length_tiles && !private_depth_clear) {
     // Prevent overlap - clear the depth only until the color, the color only
     // until the depth, in the current or the next 11 bits of the tile index.
     uint32_t depth_clear_start_tiles_wrapped =
@@ -1855,7 +1895,7 @@ bool RenderTargetCache::PrepareHostRenderTargetsResolveClear(
   clear_rectangle_out = clear_rectangle;
   // native_rt_surfaces bit 4: the deferred tiles the clears claim leave their
   // holder, which their transfers then copy from (d3d-hle.md 16.12).
-  if (depth_render_target) {
+  if (depth_render_target && !private_depth_clear) {
     DetachLazyHolders(depth_render_target_key, depth_clear_start_tiles_base_relative,
                       depth_clear_length_tiles);
   }
@@ -1865,7 +1905,9 @@ bool RenderTargetCache::PrepareHostRenderTargetsResolveClear(
   }
   depth_render_target_out = depth_render_target;
   depth_transfers_out.clear();
-  if (depth_render_target) {
+  if (depth_render_target && private_depth_clear) {
+    perf_trace::CountOnePass(perf_trace::one_pass_clears);
+  } else if (depth_render_target) {
     ChangeOwnership(depth_render_target_key, depth_clear_start_tiles_base_relative,
                     depth_clear_length_tiles, &depth_transfers_out, &clear_rectangle);
     SubstituteDetachedHolders(depth_render_target, depth_transfers_out);
@@ -1901,6 +1943,13 @@ void RenderTargetCache::PixelShaderInterlockFullEdramBarrierPlaced() {
   }
   ownership_ranges_.clear();
   ownership_ranges_.emplace(0, empty_range);
+}
+
+bool RenderTargetCache::IsPrivateDepth(uint32_t base_tiles, uint32_t pitch_tiles_at_32bpp,
+                                       xenos::MsaaSamples msaa_samples) const {
+  return REXCVAR_GET(native_one_pass_msaa) == 2 && GetPath() == Path::kHostRenderTargets &&
+         base_tiles == 1024 && pitch_tiles_at_32bpp == 16 &&
+         msaa_samples == xenos::MsaaSamples::k2X;
 }
 
 bool RenderTargetCache::IsSizingEnabled() const {
@@ -1985,7 +2034,8 @@ void RenderTargetCache::EvictRenderTargets() {
   }
   std::vector<RenderTarget*> candidates;
   for (const auto& render_target_pair : render_targets_) {
-    if (render_target_pair.second && used.find(render_target_pair.first) == used.end()) {
+    if (render_target_pair.second && used.find(render_target_pair.first) == used.end() &&
+        !IsPrivateDepthKey(render_target_pair.first)) {
       candidates.push_back(render_target_pair.second);
     }
   }
@@ -2147,6 +2197,11 @@ void RenderTargetCache::ChangeOwnership(RenderTargetKey dest, uint32_t start_til
   assert_true(start_tiles_base_relative <= (xenos::kEdramTileCount - uint32_t(length_tiles != 0)));
   assert_true(length_tiles <= xenos::kEdramTileCount);
   if (length_tiles == 0) {
+    return;
+  }
+  if (IsPrivateDepthKey(dest)) {
+    // The private scene depth is outside the tile map (16.17).
+    perf_trace::CountOnePass(perf_trace::one_pass_violations);
     return;
   }
   uint32_t dest_pitch_tiles = dest.GetPitchTiles();

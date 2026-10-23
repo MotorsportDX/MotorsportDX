@@ -66,6 +66,8 @@ FAIL when:
 - the last frozen captures differ in more than `--image-pct` (default 60%) of the pixels above `--level` (default 4);
 - either run's own freeze did not hold: its captures differ in more than `--stable-pct` (default 0.05%).
 
+One-pass MSAA against the tiled reference (increment 4 of stage N3, [d3d-hle.md 16.17](../analysis/d3d-hle.md)) fails the draw and predicated packet rules by design. The title runs the scene's body once instead of once per tile, so the draws fall by about 15% and the predicated run packets by about 27%, and the predicated skipped packets go to 0. These FAILs are an expected difference; such a pair is judged on the image share, the crops and the counters of the check runs.
+
 The draws and the predicated packets are averaged over all frames of the phase (`draws_per_frame_mean`, `counts_per_frame_mean`). Per one-second window they alternate by about 0.5% with the number of frames in the window, because the half-rate mirror draws every other frame.
 
 Performance stays with `compare.py`: a stage of the native port runs both. Repeated runs (`run1..runN`) are compared run by run. The limits sit above the largest differences between seeded baseline runs, which come from the frozen moment, not the rendering ([Baseline variance](#baseline-variance)): the image rule catches a broken frame, and a wrong detail shows only in the image share and the crops read against that variance.

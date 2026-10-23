@@ -754,8 +754,12 @@ class D3D12RenderTargetCache final : public RenderTargetCache {
 
   // Writes contents of host render targets within rectangles from
   // ResolveInfo::GetCopyEdramTileSpan to edram_buffer_.
+  // With only set, dumps that target alone over the span (the private scene
+  // depth of native_one_pass_msaa), not the owners of the tile map.
   bool DumpRenderTargets(uint32_t dump_base, uint32_t dump_row_length_used, uint32_t dump_rows,
-                         uint32_t dump_pitch);
+                         uint32_t dump_pitch, RenderTarget* only = nullptr);
+  // The private scene depth a resolve reads, or nullptr.
+  RenderTarget* GetResolvePrivateDepth(const draw_util::ResolveInfo& resolve_info);
 
   bool use_stencil_reference_output_ = false;
 
@@ -847,7 +851,14 @@ class D3D12RenderTargetCache final : public RenderTargetCache {
   // their submission has completed.
   std::vector<std::pair<uint64_t, RenderTarget*>> retired_render_targets_;
   // native_rt_surfaces_transfer_inventory: transfers and tiles by kind.
-  std::map<std::string, std::pair<uint64_t, uint64_t>> transfer_inventory_;
+  struct TransferInventoryEntry {
+    uint64_t transfers = 0, tiles = 0;
+    // The destination-relative tile columns (bit per column, the last bit for
+    // 63 and above) and the first and last tile rows the transfers wrote.
+    uint64_t columns = 0;
+    uint32_t row_first = UINT32_MAX, row_last = 0;
+  };
+  std::map<std::string, TransferInventoryEntry> transfer_inventory_;
   uint64_t transfer_inventory_frame_ = 0;
   void CountTransferInventory(RenderTargetKey dest, const std::vector<Transfer>& transfers,
                               bool stencil_bits);
