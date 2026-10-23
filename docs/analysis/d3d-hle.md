@@ -1484,3 +1484,14 @@ The keys that change still cost most of the keys zone: decoding the new fetch co
 | `WAIT_REG_MEM` (a wait, not busy time) | 1.11 |
 
 The split's timers cost most where the parts are small and many. The register packets are 23,635 a frame at 17.2 ns each with the split's two time stamps around each, so most of their 0.41 ms is the split itself: without it they take about 0.15 ms, which is also why copying the registers at once saved nothing (17.10). The shader loads (2,165 a frame) and the other packets (896) are less affected; the draw zone's detail timers add about 0.2 ms. Without the split the render thread spends about 1.04 ms a race frame outside the draw zone at 1,800 draws (17.9), of which the packet handlers, copies and swap take about 0.6 ms; the rest, about 0.4 ms, is the dispatch and parse of about 28,000 packets a frame, the indirect buffers (519 replays, 238,912 dwords a frame) and the record queue.
+
+### 17.12 The primitive processor's reuse, 23 October 2026
+
+The main session's next candidate after the re-profile: `PrimitiveProcessor::Process` took 106 to 111 ns a draw in the race. `primitive_processor_reuse` kept the results of the frame's earlier draws in a table of 256 entries keyed by the registers `Process` reads (the draw initiator, the index buffer's base and size, the output path, the tessellation mode, the primitive reset's switch and index), valid until the frame's cache was cleared or a cached index range invalidated; a guest index buffer was still requested in the shared memory at each draw (`n4be11`, on top of the texture keys' step).
+
+- **The check** (`primitive_processor_reuse_check`, perturbation 1,000, `n4o-prchk-career`: race, replay, menus): 11,667,589 reused draws processed again, mismatches only the 11,667 perturbed. 32.7% of the draws reused an earlier draw's processing (30.7% in the race).
+- **No saving.** The A/B with every native switch on (`n4o-race-proff*` against `-pron*`): the primitives zone took 106 to 111 ns a draw without the reuse and 121 to 122 ns with it, 0.195 against 0.215 ms at 1,800 draws; the render thread 2.920 against 2.968 ms.
+
+The work a reused draw saves is small next to what every draw keeps (the shared memory request), and the lookup and the store cost the other 69% of the draws more than the 31% save. The change is not kept.
+
+With every kept switch on (the back end on the replay, `texture_bindings_keep_same_dwords`), the render thread is busy 2.92 ms at 1,800 draws a race frame and both threads together 4.63 ms (`n4o-race-proff*`).
