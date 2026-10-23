@@ -442,7 +442,7 @@ The first item after the close gate.
 - The guest's yields cost little. `NtYieldExecution` from a spin lock (`sub_822B96E0`) ran 3.5 million times in a race on the main thread, about 3 ms a second, and `Sleep(0)` about 6 ms a second.
 - `WAIT_REG_MEM`'s polls without a sleep time never wait: 3.8 million packets, none waited (`REX_WAIT_REG_MEM_TRACE`). The swap's vblank wait sleeps on its event.
 
-**The change.** `guest_ring_wait_sleep` is off by default, and on with `-Native`:
+**The change.** `guest_ring_wait_sleep` is off by default; the launcher turns it on for RTV and `-Native` and off for `-Rov` (below):
 - the command processor and the host render thread count a publication after each write-back of the read pointer (`rex::system::gpu_progress`);
 - the title's hook of the ring index wait marks the awaited index, and each timed poll first sleeps until the read pointer has passed it or is published again, at most 1 ms;
 - the timed poll then runs as before, its GPU hang timeout included;
@@ -465,7 +465,24 @@ The first item after the close gate.
 - **The waiting thread** now sleeps about a fifth of its time. The rest is work: a profile with the switch (`n4z-race-prof2`) shows the command buffers, vector math and the native records, and the condition variable's wait where it slept.
 - **The image.** At 2x with the switch (`n4z-race-on2k`): 182.9 fps, 5.37 ms of GPU time, p99 7.5 ms. The 2560x1440 captures at 1:1 beside RTV's (`n4w-race-rtv2k1`) show the whole scene with the same detail, and none is washed out.
 - **A career with the switch** (`n4z-oncareer`) reached its goal through the race and the replay, with the error keys of RTV.
-- **RTV** keeps the switch off; only the publication's count runs there. Its command processor took 1.98 µs per draw at 2,098 draws a frame (`n4z-race-rtv1`), against 2.03 µs at 1,988 on `n4be14` (`n4x-race-rtvp1`). RTV's own waiting thread spins the same way (969 ms a second), so the switch would serve it too.
+- **RTV with the switch off** runs only the publication's count. Its command processor took 1.98 µs per draw at 2,098 draws a frame (`n4z-race-rtv1`), against 2.03 µs at 1,988 on `n4be14` (`n4x-race-rtvp1`).
 - **The power counters** compare alternating runs to within about 1 W between runs of one setting. A run with the profiler, which suspends the threads it samples, read 87.7 W.
+
+**On RTV as well (the main session's decision of 23 October 2026).** RTV's own waiting thread spun the same way (969 ms a second). RTV is the launcher's default path and the ROG Xbox Ally X gains from the lower power, so the launcher now turns the switch on for RTV as well as `-Native`. `-Rov` stays off: it remains the unchanged reference and runs no new title hook (`Build.ps1 -Rov`, and `e2e.py` with `render_target_path_d3d12=rov`).
+
+The RTV step gate ran on `n4be17` (9d26366's code; the switch is the same as on `n4be16`) at 240 Hz and 1x, off and on twice each, alternating (`n4rw-race-rtvoff1`, `-rtvon1`, `-rtvoff2`, `-rtvon2`):
+
+| RTV race at 240 Hz, 1x | Off | On |
+|---|---|---|
+| The process's CPU time | 3,625 and 3,641 ms a second | 3,316 and 3,249 |
+| The package's power | 75.5 and 75.5 W | 72.9 and 72.7 |
+| The waiting thread's CPU time | 965 and 979 ms a second | 732 and 732 |
+| Command processor busy per draw | 2.00 and 2.02 µs | 1.98 and 1.99 |
+| GPU time a frame | 3.01 and 2.94 ms | 3.01 and 2.94 |
+| Frames per second, p99 | 204.2 at 2,175 draws and 228.6 at 1,630; 6.83 and 5.90 ms | 219.8 at 1,802 and 225.8 at 1,675; 6.16 and 5.96 ms |
+
+- **The CPU.** On RTV the process uses 0.31 to 0.39 cores less (9 to 11%), and the package 2.6 to 2.8 W less. The command processor's time per draw and the GPU time do not change; the frame rates follow the runs' draw loads.
+- **A career with the switch** (`n4rw-rtvcareer`) reached its goal through the race and the replay, with the error keys of RTV.
+- **The image.** At 2x with the switch (`n4rw-race-rtv2kon`: 156.4 fps, 6.19 ms of GPU time), the 2560x1440 captures at 1:1 beside RTV's without it (`n4w-race-rtv2k1`) show the same rendering in frames of the same light. The race's light changes over time (the gauges lit by the sun early in the lap, dark later), so frames are matched by their light, not their number.
 
 Next: the vblank interrupt and the readback copies on the host render thread.

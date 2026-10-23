@@ -920,11 +920,10 @@ def native_cvars(single_tile,rov=False):
     14), the resolve readbacks on demand and the resolves from the host render targets of
     stage N3 (docs/analysis/d3d-hle-n3.md, sections 16.5 and 16.11), and stage N4's draw back
     end on the replay of the deferred command list, the texture bindings kept for rewritten
-    fetch constants, the render target cache's update skipped where it would repeat and the
-    title's ring index wait sleeping until the read pointer moves (docs/analysis/d3d-hle-n4.md,
-    sections 17.8 to 17.13 and 17.16). It covers races in one tile or in one pass with MSAA
-    (16.17); the tiles of -Quality (-Msaa) stay on the PM4 RTV path, and -Rov, the uncorrected
-    reference, is never combined with it."""
+    fetch constants and the render target cache's update skipped where it would repeat
+    (docs/analysis/d3d-hle-n4.md, sections 17.8 to 17.13). It covers races in one tile or in one
+    pass with MSAA (16.17); the tiles of -Quality (-Msaa) stay on the PM4 RTV path, and -Rov,
+    the uncorrected reference, is never combined with it."""
     if rov:
         raise ValueError('-Native runs on the host render target path (RTV); it cannot be combined with -Rov.')
     if not single_tile:
@@ -934,7 +933,7 @@ def native_cvars(single_tile,rov=False):
     return {'host_render_thread':'true','host_render_native':'true',
             'readback_resolve_on_demand':'true','native_rt_surfaces':'2',
             'd3d12_draw_back_end':'2','texture_bindings_keep_same_dwords':'true',
-            'render_target_update_guard':'true','guest_ring_wait_sleep':'true'}
+            'render_target_update_guard':'true'}
 
 def launch(root,single_tile=False,fixed_vblank=False,frame_rate=None,rov=False,
            resolution_scale=None,full_rate_mirror=False,look=None,shadow_workaround=False,
@@ -1014,7 +1013,9 @@ def launch_plan(root,disc1,single_tile=False,fixed_vblank=False,frame_rate=None,
         # The earlier pixel shader interlock path: GPU about 7 ms a race frame
         # instead of 2.5, for comparisons when the host render target path misbehaves.
         cvars.pop('edram_single_rt_no_wrap')
-        cvars.update({'render_target_path_d3d12':'rov','rov_occlusion_async':'all'})
+        # The uncorrected reference keeps the title's ring index wait as it is.
+        cvars.update({'render_target_path_d3d12':'rov','rov_occlusion_async':'all',
+                      'guest_ring_wait_sleep':'false'})
     if native:
         cvars.update(native_cvars(single_tile or one_pass,rov))
         if one_pass:
@@ -1217,6 +1218,9 @@ def launch_cvars(root,disc1,log_file):
             # stay the same, so a run with a look seen before skips FXC.
             'shader_override_cache_path':root/'cache/shader-overrides',
             'rov_occlusion_async':'previous','vblank_vrr':'true',
+            # The title's ring index wait sleeps until the read pointer is published again
+            # instead of spinning on a core (docs/analysis/d3d-hle-n4.md 17.16); -Rov turns it off.
+            'guest_ring_wait_sleep':'true',
             # 16x anisotropic filtering for every mipmapped linear texture: the title asks for
             # none on most and 2x-16x on a few, and the runtime default forces 4x.
             'anisotropic_override':'5',

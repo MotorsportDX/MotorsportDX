@@ -167,6 +167,10 @@ The launcher uses these runtime settings (set in `launch_cvars` in
   (`readback_resolve=fast`).
 - A frame that misses a guest vblank gets it as soon as it is ready
   (`vblank_vrr=true`). See [-FixedVblank](#-fixedvblank).
+- The title's ring index wait sleeps until the command processor publishes the read pointer
+  again instead of polling it on a whole core (`guest_ring_wait_sleep=true`, RTV and `-Native`;
+  [section 17.16](analysis/d3d-hle-n4.md)). `-Rov`, the unchanged reference, keeps the title's
+  wait.
 - The road sections that this path used to leave undrawn came from the title's track
   streaming. They are fixed for every render path.
 
@@ -360,15 +364,13 @@ path, and the render targets stay on RTV.
   [section 16.11](analysis/d3d-hle-n3.md)): a resolve whose source one host render
   target holds reads it directly instead of its dump into the EDRAM buffer. Off on
   RTV without `-Native` unless passed as a cvar; never on the ROV path.
-- `-Native` also sets `d3d12_draw_back_end=2`, `texture_bindings_keep_same_dwords=true`,
-  `render_target_update_guard=true` and `guest_ring_wait_sleep=true` (stage N4,
-  [sections 17.8 to 17.13 and 17.16](analysis/d3d-hle-n4.md)): the draws' back half (pipeline,
-  fixed function state, system constants, samplers, constant buffers, root parameters) is
-  recorded by the thread that replays the deferred command list instead of the host render
-  thread, a texture binding whose fetch constant is written again with the same dwords keeps its
-  key, the render target cache's update is skipped at draws that would repeat it, and the
-  title's ring index wait sleeps until the command processor publishes the read pointer again
-  instead of polling it on its core. The draw back end needs
+- `-Native` also sets `d3d12_draw_back_end=2`, `texture_bindings_keep_same_dwords=true` and
+  `render_target_update_guard=true` (stage N4,
+  [sections 17.8 to 17.13](analysis/d3d-hle-n4.md)): the draws' back half (pipeline, fixed
+  function state, system constants, samplers, constant buffers, root parameters) is recorded by
+  the thread that replays the deferred command list instead of the host render thread, a texture
+  binding whose fetch constant is written again with the same dwords keeps its key, and the
+  render target cache's update is skipped at draws that would repeat it. The draw back end needs
   bindless resources, host render targets and `async_shader_compilation` off (the launcher's
   setting) and turns itself off otherwise. Off on RTV without `-Native` unless passed as cvars;
   never on the ROV path.
