@@ -259,4 +259,13 @@ GPU time a frame on this PC (RTX 5070 Ti Laptop), the same build, one run each (
 
 3/2 costs 0.75 to 1.43 ms more than 1x, and 4% to 7% more than the line through 1x and 2x (the surfaces kept at k are part of the fixed cost of every scale, 18.8). The passes of `aces` at 3/2: GTAO 0.38 ms, TAA 0.27, windshield 0.19, motion vectors 0.03.
 
+RTV and `-Rov` on the 4c binary (`3213732`), against the 4b binary (`c122016`) built and run in the same session (`n5z`). Every part of 4c is gated on a fractional scene scale or the `scene_scale` modification, which RTV and `-Rov` never have:
+
+| Check | Result |
+|---|---|
+| RTV `freeze` parity, real 1x with `original,taa=0` and 2x with `aces`, 4b against 4c | PASS: draws -0.2% and +0.5%, 21.9% and 30.6% of the image above 4. A second 4c run against the first (the same binary): +1.6% and -0.5%, 29.7% and 18.3%; against 4b: +1.4% and -0.0%, 32.2% and 32.2%. The freeze holds at a slightly different race moment from run to run (the car ahead and the cars in the mirror move), so the 4b against 4c values are within the run-to-run range |
+| the look mods' DXBC at whole scales | unchanged: the RTV runs with `aces` on 4b and 4c load the same 221 overrides from the shader override cache and compile none |
+| RTV smoke at 1x and 2x (`n5z-rtv1x`, `n5z-rtv2x`, against N4's `n5r`) | 6 of 6 cells reached their goal; races 215.6 and 212.7 fps at 1x, 167.9 and 158.2 at 2x; the WARNs are capture statistics and the 2x `career` p99 |
+| `-Rov` smoke at 1x (`n5z-rov1x` against `n5r-rov1x`) | 3 of 3 cells reached their goal; `career` PASS. `photo` FAIL on the race's fps, 108.4 against 131.7 (GPU 9.73 ms against 7.56): N3's close gate measured 104.7 fps and 9.77 ms on the same cell (`n3z-rov1x`), and the captures differ by 37 points of black, so the baseline's race is the outlier. A repeat (`n5z-rov1x-photo2`) raced at 118.1 fps and timed out later at SAVE PHOTO |
+
 Open items for step 5: in photo mode the post passes see a 1280x720 scene depth (photo mode's depth resolve is not a scene destination yet), so they log "final size 1920x1080 differs from the scene's 1280x720" and leave its frames without the look's passes, which photo mode's picture shows correctly otherwise; TAA's thresholds in guest pixels; the box filter of the small destinations sampled for the picture (18.13, 4b); then 20/9 and 3.
