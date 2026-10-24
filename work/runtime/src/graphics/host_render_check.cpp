@@ -52,6 +52,9 @@ struct CommandProcessor::HostCheckState {
   uint32_t perturb = 0;
   uint32_t messages[size_t(perf_trace::HostCheckReason::kCount)] = {};
   uint32_t incomplete_messages = 0;
+  // Messages of mismatches in ranges the check did not perturb, beside the
+  // first kMaxMessages of each kind.
+  uint32_t unperturbed_messages = 0;
 };
 
 namespace {
@@ -226,8 +229,12 @@ void CommandProcessor::HostCheckFinish() {
     for (uint32_t index : order) {
       const uint32_t value = register_file_->values[index];
       if (value != last[index]) {
-        difference = fmt::format("register {:04X} is {:08X}, the record has {:08X}", index,
-                                 value, last[index]);
+        const size_t writes = size_t(std::count_if(
+            decoded.registers.begin(), decoded.registers.end(),
+            [index](const auto& write) { return write.first == index; }));
+        difference = fmt::format("register {:04X} is {:08X}, the record has {:08X} ({} writes of it "
+                                 "in the range)",
+                                 index, value, last[index], writes);
         reason = perf_trace::HostCheckReason::kRegisters;
         ++perf_trace::host_check_registers[index];
         break;
@@ -276,17 +283,20 @@ void CommandProcessor::HostCheckFinish() {
     perf_trace::host_check_mismatches.fetch_add(1, std::memory_order_relaxed);
     ++perf_trace::host_check_reasons[size_t(reason)];
     // The first messages of each kind, so that a frequent kind does not hide
-    // the others.
-    if (state.messages[size_t(reason)] < kMaxMessages) {
-      ++state.messages[size_t(reason)];
+    // the others; a mismatch in a range the check did not perturb always
+    // (d3d-hle-n4.md 17.26: the perturbed ones had filled the 64 lines).
+    if (perturb ? state.messages[size_t(reason)] < kMaxMessages
+                : state.unperturbed_messages < 4 * kMaxMessages) {
+      ++(perturb ? state.messages[size_t(reason)] : state.unperturbed_messages);
       // One fixed error line per kind keeps the error keys of the gates stable;
       // the details go into a warning beside it.
       static const char* const kKinds[] = {"PM4 changed", "register mismatch",
                                            "type-3 packet mismatch", "draw mismatch"};
       REXGPU_ERROR("Native check: {}", kKinds[size_t(reason)]);
-      REXGPU_WARN("Native check: writer {:08X}, range at {:08X} ({} dwords, record {}{}): {}",
+      REXGPU_WARN("Native check: writer {:08X}, range at {:08X} ({} dwords, record {}{}{}): {}",
                   writer, state.begin, state.entry.dwords.size(), state.entry.sequence,
-                  marker ? ", marker" : "", difference);
+                  marker ? ", marker" : "", state.perturb && !perturb ? ", not perturbed" : "",
+                  difference);
     }
   }
   // The late write trace's notes of this range (FM4_LATE_WRITE_TRACE, d3d-hle-n4.md

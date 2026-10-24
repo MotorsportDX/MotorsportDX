@@ -820,3 +820,14 @@ The gate on the main PC (`n4pth*`, the players' path `present_skip_superseded=fa
 - The native path becomes the default render path with integrated GPUs only, by the rule of the 1x render scale (`-Rtv` and the GUI launcher's render path keep RTV available; `-Rov` and `-Msaa` keep RTV as before). RTV stays the default elsewhere until after N5.
 - VSync Auto, render scale 1x, one pass with 2x MSAA, the ring wait's sleep and the timer stay as they are.
 - GTAO (0.7 to 0.9 ms) and the windshield (0.6 ms, almost as much as GTAO) are candidates for an "Ally X performance" look preset, later.
+
+### 17.26 The identity check's third extra mismatch, 24 October 2026
+
+N1's step 4b gate counted one more identity mismatch than perturbations in a 2x check career (`n5k-check-2x`: 11,836 mismatches, 11,835 perturbed), and the late write trace of 17.20 printed nothing. The perf trace places it: in the window at 62 s (the menus and the loading, before the race phase at 85.8 s) the reasons count 13 register mismatches for 12 perturbations, and the registers 044B (`CP_PROG_COUNTER`) once, beside the perturbed 2102, 2200, 4000 and 4200.
+
+- It is a register mismatch, not a change of the PM4: the range's bytes matched the copy, and after it ran the register file held another value of `CP_PROG_COUNTER` than the range's last write of it. The late write trace watches the PM4's bytes, so it had nothing to note; this is another mechanism than 17.20's.
+- Its message was not printed: the check printed the first 64 mismatches of each kind, and the perturbed ones of the career had filled them.
+- No other run of `I:\FM4-build-usa\e2e` has a mismatch of 044B. The guest never writes it through the registers' memory window (no "Unknown GPU register" line), and `REG_RMW` and `COND_WRITE`, which could change it during the range, make the check skip the registers.
+- `CP_PROG_COUNTER` is a command processor register that no draw reads, so the picture does not depend on it; the open question is what wrote it between the range's write and the check.
+
+The check now prints every mismatch of a range it did not perturb (up to 256, marked "not perturbed"), apart from the 64 of each kind, and a register mismatch names how often the range wrote that register. The next sighting then shows the values and the writer's range.
