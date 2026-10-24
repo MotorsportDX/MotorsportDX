@@ -1200,8 +1200,9 @@ def launch_plan(root,disc1,single_tile=False,fixed_vblank=False,frame_rate=None,
     if native:
         cvars.update(native_cvars(single_tile or one_pass,rov))
         if one_pass:
-            # Bit 8: the host render targets sized to the tiles the title uses (16.15).
-            cvars.update({'native_one_pass_msaa':str(msaa_samples),'native_rt_surfaces':'10'})
+            # Bit 8: the host render targets sized to the tiles the title uses (16.15); bit 16:
+            # every 1280-wide race surface private (d3d-hle-n5.md 18.11).
+            cvars.update({'native_one_pass_msaa':str(msaa_samples),'native_rt_surfaces':'26'})
     screen,description=display_settings(display,fullscreen,supersample,resolution_scale,monitor)
     cvars.update(screen)
     present,frame_rate,present_description=present_settings(vsync,frame_rate,monitor)

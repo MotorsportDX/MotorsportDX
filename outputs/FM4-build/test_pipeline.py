@@ -383,14 +383,14 @@ class PipelineTests(unittest.TestCase):
                 self.assertEqual(env['FM4_ONE_PASS_MSAA'],'2')
                 self.assertNotIn('TilingScenario',env.get('FM4_RACE_SETTINGS',''))
                 self.assertEqual(cvars['native_one_pass_msaa'],'2')
-                self.assertEqual(cvars['native_rt_surfaces'],'10')
+                self.assertEqual(cvars['native_rt_surfaces'],'26')
                 self.assertEqual(cvars['host_render_thread'],'true')
             cvars,env,_=pipeline.launch_plan(root,r'C:\FM4 test\Disc 1',native=True,
                                              msaa_samples=4,monitor=(1920,1080,1.0))
             self.assertEqual(env['FM4_TILING_SCENARIO'],'3')
             self.assertEqual(env['FM4_ONE_PASS_MSAA'],'4')
             self.assertEqual(cvars['native_one_pass_msaa'],'4')
-            self.assertEqual(cvars['native_rt_surfaces'],'10')
+            self.assertEqual(cvars['native_rt_surfaces'],'26')
             for options in ({'msaa_samples':0},{'single_tile':True}):
                 cvars,env,_=pipeline.launch_plan(root,r'C:\FM4 test\Disc 1',native=True,
                                                  monitor=(1920,1080,1.0),**options)

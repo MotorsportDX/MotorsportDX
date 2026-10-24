@@ -393,7 +393,8 @@ path, and the render targets stay on RTV.
   [section 16.17](analysis/d3d-hle-n3.md)). The title's 2x tiling scenario becomes one 1280x720
   tile (`FM4_ONE_PASS_MSAA=2`), the scene depth gets a private host render target
   (`native_one_pass_msaa=2`), and the host render targets are sized to the tiles the title
-  uses (`native_rt_surfaces=10`). TAA and the post passes read the title's resolves of the
+  uses, and every 1280-wide race surface gets a private host target (`native_rt_surfaces=26`,
+  [D3D-level HLE, 18.11](analysis/d3d-hle-n5.md)). TAA and the post passes read the title's resolves of the
   multisampled scene. Photo mode, replays and split screen keep their own scenarios.
 - `-Native -MsaaSamples 4` renders races in one pass with 4x MSAA: the title's scenario 3
   becomes one 1280x720 4x tile, and its colour and depth get private host targets

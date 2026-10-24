@@ -1147,9 +1147,10 @@ def run_once(options, out):
         one_pass_samples = (one_pass[-1] if one_pass and tiling and
                             (one_pass[-1], tiling[-1]) in (('2', '1'), ('4', '3')) else None)
         if one_pass_samples:
-            # Bit 8: the host render targets sized to the tiles the title uses (16.15).
+            # Bit 8: the host render targets sized to the tiles the title uses (16.15); bit 16:
+            # every 1280-wide race surface private (d3d-hle-n5.md 18.11).
             args.setdefault('native_one_pass_msaa', one_pass_samples)
-            args.setdefault('native_rt_surfaces', '10')
+            args.setdefault('native_rt_surfaces', '26')
         elif not (single_tile if not tiling else tiling[-1] == '2'):
             cause = ('--msaa' if options.msaa else f'--env FM4_TILING_SCENARIO={tiling[-1]}'
                      if tiling else f'the look {look!r} (no TAA)')

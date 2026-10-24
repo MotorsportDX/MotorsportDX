@@ -619,9 +619,10 @@ Plan LaunchPlan(const LauncherData& data, const std::string& root, const std::st
       for (const auto& [name, value] : data.json.at("native_cvars").items())
         cvars.Set(name, value.get<std::string>());
     if (one_pass) {
-      // Bit 8: the host render targets sized to the tiles the title uses.
+      // Bit 8: the host render targets sized to the tiles the title uses; bit
+      // 16: every 1280-wide race surface private.
       cvars.Set("native_one_pass_msaa", std::to_string(msaa_samples));
-      cvars.Set("native_rt_surfaces", "10");
+      cvars.Set("native_rt_surfaces", "26");
     }
   }
   const std::string display = options.display.empty()
