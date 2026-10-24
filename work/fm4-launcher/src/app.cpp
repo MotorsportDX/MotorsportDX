@@ -1023,6 +1023,14 @@ void App::DisplayPage() {
   ImGui::SetNextItemWidth(320 * scale_);
   if (ImGui::SliderInt("##rate", &rate, 30, 240, "%d fps")) o.frame_rate = rate == 60 ? 0 : rate;
 
+  // -VSync: auto (the default), on or off.
+  const char* vsyncs[] = {"auto", "on", "off"};
+  int vsync = o.vsync == "on" ? 1 : o.vsync == "off" ? 2 : 0;
+  Label("VSync", "Auto: on a variable refresh rate screen, frames as they come but at most one a refresh, "
+                 "races just under the refresh; otherwise On. On: on the screen's refresh, no tearing. "
+                 "Off: at once, tearing allowed.");
+  if (Segment("vsync", vsync, {"Auto", "On", "Off"})) o.vsync = vsync == 0 ? "" : vsyncs[vsync];
+
   const char* qualities[] = {"xbox", "high", "ultra"};
   int quality = 1;
   for (int i = 0; i < 3; ++i)

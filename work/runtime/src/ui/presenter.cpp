@@ -33,8 +33,10 @@ REXCVAR_DEFINE_BOOL(host_present_from_non_ui_thread, true, "UI/Presenter",
                     "Allow presentation from non-UI thread");
 
 REXCVAR_DEFINE_INT32(present_min_interval_us, 0, "UI/Presenter",
-                     "Hold each host present until this many microseconds after the previous "
-                     "one (0: off): a stand-in for an external frame limiter");
+                     "Hold the presenting thread after each host present until this many "
+                     "microseconds after the previous one (0: off): the launcher's VSync Auto "
+                     "on a variable refresh rate display (one refresh), or a stand-in for an "
+                     "external frame limiter");
 
 REXCVAR_DEFINE_BOOL(present_letterbox, true, "UI/Presenter",
                     "Enable letterboxing for non-native aspect ratios");
@@ -1537,9 +1539,10 @@ Presenter::PaintResult Presenter::PaintAndPresent(bool execute_ui_drawers) {
   PaintResult result = PaintAndPresentImpl(execute_ui_drawers);
   if (const int32_t interval = REXCVAR_GET(present_min_interval_us);
       interval > 0 && (result == PaintResult::kPresented || result == PaintResult::kPresentedSuboptimal)) {
-    // As a limiter that blocks in the present call (d3d-hle-n4.md 17.22): hold the
-    // presenting thread until the interval after the previous present has passed,
-    // sleeping to about 1 ms before the time, then yielding up to it.
+    // As a limiter that blocks in the present call (d3d-hle-n4.md 17.22 and
+    // 17.23): hold the presenting thread until the interval after the previous
+    // present has passed, sleeping to about 1 ms before the time, then yielding
+    // up to it.
     const auto due = last_present_time_ + std::chrono::microseconds(interval);
     if (due - std::chrono::steady_clock::now() > std::chrono::microseconds(1500)) {
       std::this_thread::sleep_until(due - std::chrono::microseconds(1000));

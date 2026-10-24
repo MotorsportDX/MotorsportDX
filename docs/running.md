@@ -215,6 +215,7 @@ takes a value.
 | Option | Default | Description |
 | --- | --- | --- |
 | `-FrameRate 30-240` | 60 | Race frame rate, also for replays and the 3-2-1 countdown. Values above 60 lift the race limit; menus, post-race and photo mode keep their own timing. |
+| `-VSync auto\|on\|off` | auto | How the host presents: see [-VSync](#-vsync). |
 | `-Display native\|720p\|1080p\|1440p\|4k` | `native` | Screen and render size. `native` is borderless fullscreen on the primary monitor. Other values are a window of that size. |
 | `-Fullscreen` | off | Fullscreen with the `-Display` size and its render scale. |
 | `-Supersample` | off | Render one scale above the screen (up to 4x), then average the result down to the screen. |
@@ -269,6 +270,20 @@ Measured with Quick Race, three runs: 118 to 120 fps, frame p99 8.8 to 9.8 ms, a
 every frame fully rendered. At 240, races run at 220 to 235 fps (p99 5.3 to 6.2 ms).
 At 240 the command processor sets the limit: it needs about 4.3 ms per race frame,
 against about 2.2 ms of GPU time. Values from 30 to 240 are accepted.
+
+#### -VSync
+
+`auto` (the default): on a screen with a variable refresh rate range up to its refresh (read
+from its EDID: DisplayID's Adaptive-Sync block, or EDID 1.4's range limits with continuous
+frequency), frames are presented as they come with tearing allowed, but at most one a refresh
+(`present_min_interval_us`), and races run 3 fps under the refresh (117 at 120 Hz, 237 at 240
+Hz), inside the range. On another screen it is `on`. The launcher prints which ("VSync auto:
+VRR 48-120 Hz, ...", or "VSync on (no VRR range)").
+
+`on` presents on the screen's refresh without tearing (`present_vsync`). `off` presents at
+once with tearing allowed, the runtime's default, which `e2e.py` keeps. Below the range's
+floor the presenter still presents each frame once; low frame rate compensation is the
+driver's. Measured on 24 October 2026: [D3D-level HLE, 17.23](analysis/d3d-hle-n4.md#1723-vsync-24-october-2026).
 
 #### -Display and render scale
 

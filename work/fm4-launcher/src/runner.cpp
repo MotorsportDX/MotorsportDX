@@ -6,6 +6,8 @@
 #include <tlhelp32.h>
 
 #include <algorithm>
+#include <tuple>
+#include <utility>
 
 namespace fm4 {
 
@@ -25,6 +27,82 @@ std::string LastError(const std::string& what) {
   return what + " (Windows error " + std::to_string(GetLastError()) + ")";
 }
 
+// pipeline.py vrr_range: DisplayID's Adaptive-Sync data block, else EDID 1.4's range limits
+// with the continuous frequency bit.
+std::pair<int, int> VrrRange(const std::vector<unsigned char>& edid) {
+  std::pair<int, int> best{0, 0};
+  for (size_t start = 128; start + 128 <= edid.size(); start += 128) {
+    const unsigned char* ext = edid.data() + start;
+    if (ext[0] != 0x70) continue;
+    const size_t end = std::min<size_t>(5 + ext[2], 127);
+    for (size_t i = 5; i + 3 <= end; i += 3 + ext[i + 2]) {
+      if (ext[i] != 0x2B) continue;
+      const size_t blocks_end = std::min<size_t>(i + 3 + ext[i + 2], end);
+      for (size_t d = i + 3; d + 6 <= blocks_end; d += 6) {
+        const int low = ext[d + 2], high = (ext[d + 3] | ((ext[d + 4] & 3) << 8)) + 1;
+        if (high > best.second) best = {low, high};
+      }
+    }
+  }
+  if (best.second) return best;
+  if (edid.size() >= 128 && edid[19] >= 4 && (edid[0x18] & 1)) {
+    for (size_t d = 54; d < 126; d += 18) {
+      const unsigned char* block = edid.data() + d;
+      if (!block[0] && !block[1] && !block[2] && block[3] == 0xFD) {
+        return {block[5] + ((block[4] & 1) ? 255 : 0), block[6] + ((block[4] & 2) ? 255 : 0)};
+      }
+    }
+  }
+  return {0, 0};
+}
+
+// pipeline.py primary_display: the primary monitor's refresh rate and the VRR range of its
+// EDID in the registry.
+void PrimaryDisplay(Monitor& monitor) {
+  DISPLAY_DEVICEW adapter{};
+  adapter.cb = sizeof(adapter);
+  bool found = false;
+  for (DWORD index = 0; EnumDisplayDevicesW(nullptr, index, &adapter, 0); ++index) {
+    if (adapter.StateFlags & DISPLAY_DEVICE_PRIMARY_DEVICE) {
+      found = true;
+      break;
+    }
+  }
+  if (!found) return;
+  DEVMODEW mode{};
+  mode.dmSize = sizeof(mode);
+  if (EnumDisplaySettingsW(adapter.DeviceName, ENUM_CURRENT_SETTINGS, &mode))
+    monitor.refresh = static_cast<int>(mode.dmDisplayFrequency);
+  DISPLAY_DEVICEW display{};
+  display.cb = sizeof(display);
+  // \\?\DISPLAY#<model>#<instance>#{guid}.
+  if (!EnumDisplayDevicesW(adapter.DeviceName, 0, &display, EDD_GET_DEVICE_INTERFACE_NAME)) return;
+  std::vector<std::wstring> parts;
+  std::wstring part;
+  for (const wchar_t c : std::wstring(display.DeviceID)) {
+    if (c == L'#') {
+      parts.push_back(part);
+      part.clear();
+    } else {
+      part += c;
+    }
+  }
+  parts.push_back(part);
+  if (parts.size() < 3) return;
+  const std::wstring key =
+      L"SYSTEM\\CurrentControlSet\\Enum\\DISPLAY\\" + parts[1] + L"\\" + parts[2] + L"\\Device Parameters";
+  DWORD size = 0;
+  if (RegGetValueW(HKEY_LOCAL_MACHINE, key.c_str(), L"EDID", RRF_RT_REG_BINARY, nullptr, nullptr,
+                   &size) != ERROR_SUCCESS)
+    return;
+  std::vector<unsigned char> edid(size);
+  if (RegGetValueW(HKEY_LOCAL_MACHINE, key.c_str(), L"EDID", RRF_RT_REG_BINARY, nullptr, edid.data(),
+                   &size) != ERROR_SUCCESS)
+    return;
+  edid.resize(size);
+  std::tie(monitor.vrr_min, monitor.vrr_max) = VrrRange(edid);
+}
+
 }  // namespace
 
 Monitor PrimaryMonitor() {
@@ -34,6 +112,7 @@ Monitor PrimaryMonitor() {
   UINT dpi_x = 96, dpi_y = 96;
   const HMONITOR handle = MonitorFromPoint(POINT{0, 0}, MONITOR_DEFAULTTOPRIMARY);
   monitor.dpi = GetDpiForMonitor(handle, MDT_EFFECTIVE_DPI, &dpi_x, &dpi_y) == S_OK ? dpi_x / 96.0 : 1.0;
+  PrimaryDisplay(monitor);
   return monitor;
 }
 

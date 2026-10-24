@@ -752,8 +752,85 @@ DISPLAYS={'720p':(1280,720),'1080p':(1920,1080),'1440p':(2560,1440),'4k':(3840,2
 DEFAULT_DISPLAY='native'
 MAX_RESOLUTION_SCALE=4
 
+def vrr_range(edid):
+    """The variable refresh rate range (min Hz, max Hz) an EDID reports, or (0, 0): DisplayID's
+    Adaptive-Sync data block (tag 0x2B) in a DisplayID extension, else EDID 1.4's range limits
+    descriptor when its continuous frequency bit is set (as DisplayPort Adaptive-Sync panels
+    report it)."""
+    best=(0,0)
+    for start in range(128,len(edid)-127,128):
+        ext=edid[start:start+128]
+        if ext[0]!=0x70:
+            continue
+        end=min(5+ext[2],127)
+        i=5
+        while i+3<=end:
+            tag,size=ext[i],ext[i+2]
+            if tag==0x2B:
+                for d in range(i+3,min(i+3+size,end)-5,6):
+                    low,high=ext[d+2],(ext[d+3]|((ext[d+4]&3)<<8))+1
+                    if high>best[1]:
+                        best=(low,high)
+            i+=3+size
+    if best[1]:
+        return best
+    if len(edid)>=128 and edid[19]>=4 and edid[0x18]&1:
+        for d in range(54,126,18):
+            block=edid[d:d+18]
+            if block[0:3]==b'\0\0\0' and block[3]==0xFD:
+                offsets=block[4]
+                return (block[5]+(255 if offsets&1 else 0),block[6]+(255 if offsets&2 else 0))
+    return (0,0)
+
+def primary_display():
+    """The primary monitor's refresh rate (Hz) and variable refresh rate range (vrr_range of its
+    EDID in the registry), or 0 and (0, 0) when they cannot be read."""
+    import ctypes
+    import winreg
+    from ctypes import wintypes
+    class DISPLAY_DEVICE(ctypes.Structure):
+        _fields_=[('cb',wintypes.DWORD),('DeviceName',wintypes.WCHAR*32),('DeviceString',wintypes.WCHAR*128),
+                  ('StateFlags',wintypes.DWORD),('DeviceID',wintypes.WCHAR*128),('DeviceKey',wintypes.WCHAR*128)]
+    class DEVMODE(ctypes.Structure):
+        _fields_=[('dmDeviceName',wintypes.WCHAR*32),('dmSpecVersion',wintypes.WORD),('dmDriverVersion',wintypes.WORD),
+                  ('dmSize',wintypes.WORD),('dmDriverExtra',wintypes.WORD),('dmFields',wintypes.DWORD),
+                  ('dmPosition',ctypes.c_long*2),('dmDisplayOrientation',wintypes.DWORD),
+                  ('dmDisplayFixedOutput',wintypes.DWORD),('dmColor',ctypes.c_short),('dmDuplex',ctypes.c_short),
+                  ('dmYResolution',ctypes.c_short),('dmTTOption',ctypes.c_short),('dmCollate',ctypes.c_short),
+                  ('dmFormName',wintypes.WCHAR*32),('dmLogPixels',wintypes.WORD),('dmBitsPerPel',wintypes.DWORD),
+                  ('dmPelsWidth',wintypes.DWORD),('dmPelsHeight',wintypes.DWORD),('dmDisplayFlags',wintypes.DWORD),
+                  ('dmDisplayFrequency',wintypes.DWORD),('dmICMMethod',wintypes.DWORD),('dmICMIntent',wintypes.DWORD),
+                  ('dmMediaType',wintypes.DWORD),('dmDitherType',wintypes.DWORD),('dmReserved1',wintypes.DWORD),
+                  ('dmReserved2',wintypes.DWORD),('dmPanningWidth',wintypes.DWORD),('dmPanningHeight',wintypes.DWORD)]
+    user32=ctypes.windll.user32
+    adapter=DISPLAY_DEVICE(cb=ctypes.sizeof(DISPLAY_DEVICE))
+    index=0
+    while user32.EnumDisplayDevicesW(None,index,ctypes.byref(adapter),0):
+        index+=1
+        if adapter.StateFlags&4:  # DISPLAY_DEVICE_PRIMARY_DEVICE
+            break
+    else:
+        return 0,(0,0)
+    mode=DEVMODE(dmSize=ctypes.sizeof(DEVMODE))
+    refresh=mode.dmDisplayFrequency if user32.EnumDisplaySettingsW(adapter.DeviceName,-1,ctypes.byref(mode)) else 0
+    monitor=DISPLAY_DEVICE(cb=ctypes.sizeof(DISPLAY_DEVICE))
+    # EDD_GET_DEVICE_INTERFACE_NAME: \\?\DISPLAY#<model>#<instance>#{guid}.
+    if not user32.EnumDisplayDevicesW(adapter.DeviceName,0,ctypes.byref(monitor),1):
+        return refresh,(0,0)
+    parts=monitor.DeviceID.split('#')
+    if len(parts)<3:
+        return refresh,(0,0)
+    try:
+        with winreg.OpenKey(winreg.HKEY_LOCAL_MACHINE,
+                            rf'SYSTEM\CurrentControlSet\Enum\DISPLAY\{parts[1]}\{parts[2]}\Device Parameters') as key:
+            edid,_=winreg.QueryValueEx(key,'EDID')
+    except OSError:
+        return refresh,(0,0)
+    return refresh,vrr_range(bytes(edid))
+
 def primary_monitor():
-    """Width and height in pixels and the DPI scale of the primary monitor."""
+    """Width and height in pixels and the DPI scale of the primary monitor, then its refresh rate
+    and variable refresh rate range (primary_display)."""
     import ctypes
     from ctypes import wintypes
     user32,shcore=ctypes.windll.user32,ctypes.windll.shcore
@@ -762,9 +839,10 @@ def primary_monitor():
     width,height=user32.GetSystemMetrics(0),user32.GetSystemMetrics(1)
     monitor=user32.MonitorFromPoint(wintypes.POINT(0,0),1)
     dpi_x,dpi_y=wintypes.UINT(),wintypes.UINT()
+    refresh,(vrr_min,vrr_max)=primary_display()
     if shcore.GetDpiForMonitor(monitor,0,ctypes.byref(dpi_x),ctypes.byref(dpi_y)):
-        return width,height,1.0
-    return width,height,dpi_x.value/96
+        return width,height,1.0,refresh,vrr_min,vrr_max
+    return width,height,dpi_x.value/96,refresh,vrr_min,vrr_max
 
 def display_settings(display=DEFAULT_DISPLAY,fullscreen=False,supersample=False,
                      resolution_scale=None,monitor=None):
@@ -775,8 +853,8 @@ def display_settings(display=DEFAULT_DISPLAY,fullscreen=False,supersample=False,
     2x, 4k 3x; a 2560x1600 monitor 2x), one more with -Supersample (up to 4x), or
     -ResolutionScale. The presenter fits the picture to the window, averaging the render
     over each screen pixel when it is larger (present_area_downscale). monitor: (width, height,
-    DPI scale) instead of the primary monitor's."""
-    monitor_width,monitor_height,dpi=monitor or primary_monitor()
+    DPI scale, ...) instead of the primary monitor's."""
+    monitor_width,monitor_height,dpi,*_=monitor or primary_monitor()
     if display=='native':
         width,height,fullscreen=monitor_width,monitor_height,True
     else:
@@ -796,6 +874,31 @@ def display_settings(display=DEFAULT_DISPLAY,fullscreen=False,supersample=False,
     screen=(f'fullscreen {monitor_width}x{monitor_height}' if fullscreen
             else f'window {width}x{height}')
     return cvars,f'Display {display}: {screen}, render {scale}x ({1280*scale}x{720*scale})'
+
+VSYNC_MODES=('auto','on','off')
+DEFAULT_VSYNC='auto'
+
+def present_settings(vsync,frame_rate,monitor):
+    """Cvars, the race frame rate and a description of -VSync (docs/analysis/d3d-hle-n4.md 17.23).
+    off: the host presents at once, tearing allowed (the runtime's default, and e2e's). on: on the
+    display's refresh without tearing (present_vsync). auto: on a display with a variable
+    refresh rate range up to its refresh (vrr_range), tearing presents held at least a refresh
+    apart (present_min_interval_us) and races at most 3 fps under the refresh, inside the range;
+    otherwise as on. monitor: (width, height, DPI scale, refresh Hz, VRR min Hz, VRR max Hz)."""
+    refresh,vrr_min,vrr_max=(list(monitor[3:6])+[0,0,0])[:3]
+    if vsync not in VSYNC_MODES:
+        raise ValueError(f"Unknown VSync mode '{vsync}'; use {', '.join(VSYNC_MODES)}.")
+    if vsync=='off':
+        return {},frame_rate,'VSync off'
+    vrr=refresh>3 and vrr_min<vrr_max and vrr_max>=refresh-1
+    if vsync=='on' or not vrr:
+        return {'present_vsync':'true'},frame_rate,'VSync on'+('' if vsync=='on' else ' (no VRR range)')
+    cap=refresh-3
+    description=f'VSync auto: VRR {vrr_min}-{vrr_max} Hz, presents at most {refresh} a second'
+    if (frame_rate or 60)>cap:
+        frame_rate=cap
+        description+=f', races at {cap} fps'
+    return {'present_min_interval_us':str(1000000//refresh)},frame_rate,description
 
 def info_overlay(cvars,env,look,quality,display=None):
     """FM4_INFO, the lines of the settings overlay (work/fm4-rex/src/fm4-info-overlay.h): what
@@ -942,7 +1045,7 @@ def launch(root,single_tile=False,fixed_vblank=False,frame_rate=None,rov=False,
            resolution_scale=None,full_rate_mirror=False,look=None,shadow_workaround=False,
            quality=None,display=DEFAULT_DISPLAY,fullscreen=False,supersample=False,info=False,
            ao=False,shader_dev=False,texture_dump=None,texture_replace=None,msaa=False,
-           native=False,msaa_samples=None):
+           native=False,msaa_samples=None,vsync=DEFAULT_VSYNC):
     state = json.loads((root/'local.json').read_text())
     disc1,disc2 = validate_discs(state['disc1'],state['disc2'])
     report=json.loads((root/'build-result.json').read_text())
@@ -960,7 +1063,7 @@ def launch(root,single_tile=False,fixed_vblank=False,frame_rate=None,rov=False,
         shadow_workaround=shadow_workaround,quality=quality,display=display,fullscreen=fullscreen,
         supersample=supersample,info=info,ao=ao,shader_dev=shader_dev,texture_dump=texture_dump,
         texture_replace=texture_replace,msaa=msaa,content_manifest=manifest,native=native,
-        msaa_samples=msaa_samples)
+        msaa_samples=msaa_samples,vsync=vsync)
     print(description)
     if texture_dump:
         print(f'Texture dump: {cvars["texture_dump_path"]}')
@@ -975,11 +1078,13 @@ def launch_plan(root,disc1,single_tile=False,fixed_vblank=False,frame_rate=None,
                 resolution_scale=None,full_rate_mirror=False,look=None,shadow_workaround=False,
                 quality=None,display=DEFAULT_DISPLAY,fullscreen=False,supersample=False,info=False,
                 ao=False,shader_dev=False,texture_dump=None,texture_replace=None,msaa=False,
-                content_manifest=None,monitor=None,native=False,msaa_samples=None):
+                content_manifest=None,monitor=None,native=False,msaa_samples=None,
+                vsync=DEFAULT_VSYNC):
     """The cvars, the FM4_ environment and the display description of a run of the options of
     launch. The GUI launcher (work/fm4-launcher, plan.cpp) ports this function; launcher_tests
-    compares the two. monitor: the primary monitor's (width, height, DPI scale) instead of the
-    real one."""
+    compares the two. monitor: the primary monitor's (width, height, DPI scale, refresh Hz, VRR
+    min Hz, VRR max Hz) instead of the real one."""
+    monitor=monitor or primary_monitor()
     env={}
     env.update(launch_env())
     if full_rate_mirror:
@@ -1030,6 +1135,9 @@ def launch_plan(root,disc1,single_tile=False,fixed_vblank=False,frame_rate=None,
             cvars.update({'native_one_pass_msaa':str(msaa_samples),'native_rt_surfaces':'10'})
     screen,description=display_settings(display,fullscreen,supersample,resolution_scale,monitor)
     cvars.update(screen)
+    present,frame_rate,present_description=present_settings(vsync,frame_rate,monitor)
+    cvars.update(present)
+    description+=f'; {present_description}'
     if frame_rate:
         # The display refresh the title sees and the FrameRate of its race scenarios
         # (60). The guest vblank runs at 60 Hz, and at this rate only while a race
@@ -1084,6 +1192,7 @@ def launcher_data():
             'quality':{'presets':QUALITY_PRESETS,'default':DEFAULT_QUALITY},
             'displays':{name:list(size) for name,size in DISPLAYS.items()},
             'default_display':DEFAULT_DISPLAY,'max_resolution_scale':MAX_RESOLUTION_SCALE,
+            'vsync':{'modes':list(VSYNC_MODES),'default':DEFAULT_VSYNC},
             'gtao':passes_settings(PASSES_DIRECTORY,{}),
             'releases':{name:{'media_id':info['media_id'],'executables':info['executables']}
                         for name,info in RELEASES.items()},
@@ -1117,8 +1226,11 @@ def build_launcher(root,jobs):
     shutil.copyfile(build/'fm4_launcher.exe',root/'game-build/fm4_launcher.exe')
     stage_launcher_files(root)
 
-# Options of the launcher tests: each with each monitor (width, height, DPI scale).
-LAUNCHER_TEST_MONITORS=((2560,1600,1.5),(1920,1080,1.0),(3840,2160,2.0),(1280,800,1.25))
+# Options of the launcher tests: each with each monitor (width, height, DPI scale, refresh Hz,
+# VRR min Hz, VRR max Hz; the main PC's panel, a fixed 60 Hz screen, a 144 Hz VRR screen, a
+# fixed 1280x800 screen, the ROG Xbox Ally X's panel).
+LAUNCHER_TEST_MONITORS=((2560,1600,1.5,240,60,240),(1920,1080,1.0,60,0,0),(3840,2160,2.0,144,48,144),
+                        (1280,800,1.25,60,0,0),(1920,1080,1.5,120,48,120))
 def launcher_test_options(root):
     return [{},
             {'look':'gt','quality':'ultra','frame_rate':120,'display':'1080p'},
@@ -1132,6 +1244,8 @@ def launcher_test_options(root):
             {'native':True,'single_tile':True,'look':'original,taa=0'},
             {'native':True,'msaa':True},
             {'native':True,'look':'gt','frame_rate':240,'fixed_vblank':True},
+            {'frame_rate':120,'vsync':'on'},
+            {'native':True,'frame_rate':240,'vsync':'off'},
             {'look':'aces,foliage_hue=-60,sky=1.2,road_gloss=0.5,sun=0,tonemap=filmic,taa_point=1',
              'supersample':True},
             {'look':'neutral,windshield=2,ao=0','resolution_scale':3,'display':'4k'},
@@ -1290,6 +1404,10 @@ def main():
     parser.add_argument('--info',action='store_true',
                         help='run: show the settings overlay (display, quality, look, ...) at start; '
                              'F2 toggles it in any run')
+    parser.add_argument('--vsync',choices=VSYNC_MODES,default=DEFAULT_VSYNC,
+                        help='run: auto (default: on a VRR display, tearing presents held a refresh '
+                             'apart and races under the refresh; else on), on (the refresh, no '
+                             'tearing) or off (at once, tearing allowed)')
     parser.add_argument('--resolution-scale',type=int,choices=range(1,MAX_RESOLUTION_SCALE+1),
                         metavar=f'1-{MAX_RESOLUTION_SCALE}',
                         help='run: render at this multiple of 1280x720 instead of the --display one')
@@ -1353,7 +1471,7 @@ def main():
                                      args.shadow_workaround,args.quality,args.display,
                                      args.fullscreen,args.supersample,args.info,args.ao,
                                      args.shader_dev,args.texture_dump,args.texture_replace,args.msaa,
-                                     args.native,args.msaa_samples)
+                                     args.native,args.msaa_samples,args.vsync)
     if args.action=='warmcache': warm_cache(root)
     if args.action=='profbuild': build_profiling(root,fxc,args.jobs)
     if args.action=='export':

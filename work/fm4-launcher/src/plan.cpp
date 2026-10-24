@@ -507,6 +507,50 @@ std::pair<Pairs, std::string> DisplaySettings(const LauncherData& data, const st
                      "x (" + std::to_string(1280 * scale) + "x" + std::to_string(720 * scale) + ")"};
 }
 
+// pipeline.py present_settings: the cvars of -VSync, the race frame rate it leaves, and its
+// description.
+struct PresentSettings {
+  Pairs cvars;
+  int frame_rate = 0;
+  std::string description;
+};
+
+PresentSettings PresentSettingsOf(const LauncherData& data, const std::string& option, int frame_rate,
+                                  const Monitor& monitor) {
+  const Json& vsync = data.json.at("vsync");
+  const std::string mode = option.empty() ? vsync.at("default").get<std::string>() : option;
+  bool known = false;
+  std::string names;
+  for (const auto& name : vsync.at("modes")) {
+    known = known || name.get<std::string>() == mode;
+    names += (names.empty() ? "" : ", ") + name.get<std::string>();
+  }
+  if (!known) throw PlanError("Unknown VSync mode '" + mode + "'; use " + names + ".");
+  PresentSettings settings;
+  settings.frame_rate = frame_rate;
+  if (mode == "off") {
+    settings.description = "VSync off";
+    return settings;
+  }
+  const bool vrr = monitor.refresh > 3 && monitor.vrr_min < monitor.vrr_max &&
+                   monitor.vrr_max >= monitor.refresh - 1;
+  if (mode == "on" || !vrr) {
+    settings.cvars.Set("present_vsync", "true");
+    settings.description = std::string("VSync on") + (mode == "on" ? "" : " (no VRR range)");
+    return settings;
+  }
+  const int cap = monitor.refresh - 3;
+  settings.description = "VSync auto: VRR " + std::to_string(monitor.vrr_min) + "-" +
+                         std::to_string(monitor.vrr_max) + " Hz, presents at most " +
+                         std::to_string(monitor.refresh) + " a second";
+  if ((frame_rate ? frame_rate : 60) > cap) {
+    settings.frame_rate = cap;
+    settings.description += ", races at " + std::to_string(cap) + " fps";
+  }
+  settings.cvars.Set("present_min_interval_us", std::to_string(1000000 / monitor.refresh));
+  return settings;
+}
+
 Plan LaunchPlan(const LauncherData& data, const std::string& root, const std::string& disc1,
                 const Options& options, const Monitor& monitor,
                 const std::string& content_manifest) {
@@ -586,10 +630,12 @@ Plan LaunchPlan(const LauncherData& data, const std::string& root, const std::st
                                                options.supersample, options.resolution_scale,
                                                monitor);
   Update(cvars, screen);
-  plan.description = description;
-  if (options.frame_rate) {
-    cvars.Set("video_mode_refresh_rate", std::to_string(options.frame_rate));
-    env.Set("FM4_FRAME_RATE", std::to_string(options.frame_rate));
+  const PresentSettings present = PresentSettingsOf(data, options.vsync, options.frame_rate, monitor);
+  Update(cvars, present.cvars);
+  plan.description = description + "; " + present.description;
+  if (present.frame_rate) {
+    cvars.Set("video_mode_refresh_rate", std::to_string(present.frame_rate));
+    env.Set("FM4_FRAME_RATE", std::to_string(present.frame_rate));
   }
   Update(cvars, LookCvars(data, root, look));
   const std::string track = LookTrackSettings(data, knobs);
@@ -603,7 +649,7 @@ Plan LaunchPlan(const LauncherData& data, const std::string& root, const std::st
     cvars.Set("texture_replace_path", ResolvePath(options.texture_replace));
   }
   if (!content_manifest.empty()) env.Set("FM4_CONTENT_MANIFEST", content_manifest);
-  env.Set("FM4_INFO", InfoOverlay(data, cvars, env, look, quality, description));
+  env.Set("FM4_INFO", InfoOverlay(data, cvars, env, look, quality, plan.description));
   if (options.info) env.Set("FM4_INFO_SHOW", "1");
   return plan;
 }

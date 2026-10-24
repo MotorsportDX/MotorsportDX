@@ -413,6 +413,30 @@ class PipelineTests(unittest.TestCase):
                     pipeline.launch_plan(root,r'C:\FM4 test\Disc 1',msaa_samples=samples,native=True,
                                          rov=True,monitor=(1920,1080,1.0))
 
+    def test_vrr_range_and_vsync(self):
+        # The main PC's panel: a DisplayID 2.0 extension with Adaptive-Sync descriptors of 60 to
+        # 240 Hz and 50 to 60 Hz.
+        base = bytearray(128)
+        base[18:20] = b'\x01\x04'
+        displayid = bytearray(128)
+        displayid[0:5] = bytes([0x70, 0x20, 0x20, 0x00, 0x00])
+        displayid[5:20] = bytes([0x2B, 0x00, 0x0C, 0x27, 0x00, 0x3C, 0xEF, 0x00, 0x00,
+                                 0x27, 0x00, 0x32, 0x3B, 0x00, 0x00])
+        self.assertEqual(pipeline.vrr_range(bytes(base + displayid)), (60, 240))
+        # EDID 1.4 range limits of 48 to 120 Hz count only with the continuous frequency bit.
+        base[0x18] = 0
+        base[54:72] = bytes([0, 0, 0, 0xFD, 0, 48, 120, 30, 140, 30]) + bytes(8)
+        self.assertEqual(pipeline.vrr_range(bytes(base)), (0, 0))
+        base[0x18] = 1
+        self.assertEqual(pipeline.vrr_range(bytes(base)), (48, 120))
+        ally = (1920, 1080, 1.5, 120, 48, 120)
+        self.assertEqual(pipeline.present_settings('auto', 120, ally),
+                         ({'present_min_interval_us': '8333'}, 117,
+                          'VSync auto: VRR 48-120 Hz, presents at most 120 a second, races at 117 fps'))
+        self.assertEqual(pipeline.present_settings('auto', None, (1920, 1080, 1.0, 60, 0, 0))[0],
+                         {'present_vsync': 'true'})
+        self.assertEqual(pipeline.present_settings('off', 240, ally), ({}, 240, 'VSync off'))
+
     def test_full_rate(self):
         """Replays and the countdown run at the race frame rate (FM4_FULL_RATE), shared with
         e2e.py, and the overlay says so; without the variable the line is gone."""

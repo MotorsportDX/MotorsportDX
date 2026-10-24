@@ -54,6 +54,7 @@ struct Options {
   bool native = false;       // -Native
   int msaa_samples = -1;     // -MsaaSamples; -1: unset (2 with -Native)
   int frame_rate = 0;        // 0: the title's 60
+  std::string vsync;         // -VSync auto, on or off; empty: the default (auto)
   int resolution_scale = 0;  // 0: from the display
   std::string look;          // empty: the default look
   std::string quality;       // empty: the default quality
@@ -70,6 +71,11 @@ struct Monitor {
   int width = 1280;
   int height = 720;
   double dpi = 1.0;
+  // The refresh rate and the variable refresh rate range of its EDID (pipeline.py
+  // primary_display); 0 when unknown.
+  int refresh = 0;
+  int vrr_min = 0;
+  int vrr_max = 0;
 };
 
 struct Plan {

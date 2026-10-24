@@ -700,3 +700,27 @@ The earlier results stay valid as measurements of the guest side: its frame rate
 **For the ROG Xbox Ally X**, with one GPU and a VRR panel at 120 Hz: the menus present once a guest frame instead of twice, the presents no longer add the UI's ticks, and a frame limiter gives as many guest frames as presents. Its next run shows whether its presents are capped too.
 
 **Open.** The cause of the main PC's cap (PresentMon, or the laptop's MUX or dGPU-only mode, both the user's). `present_letterbox` matters for the fullscreen fill of N5; it is left to N1.
+
+### 17.23 VSync, 24 October 2026
+
+The host presented at once with tearing allowed (sync interval 0 with `DXGI_PRESENT_ALLOW_TEARING`), relying on a variable refresh rate (VRR) display; the runtime's `vsync` cvar is guest timing. That tears on a fixed refresh display, and on a VRR display whenever presents come faster than the refresh: the ROG Xbox Ally X's traces at the 120 cap have 1 to 4.5% of the frames under 8.0 ms at 35 W, catch-up frames after a long one.
+
+**The option.** The launchers' `-VSync` (`Build.ps1`, `pipeline.py --vsync`, the GUI launcher's Display page; [running](../running.md#-vsync)):
+- `auto`, the default: on a display with a VRR range up to its refresh, tearing presents held at least a refresh apart (`present_min_interval_us`, which holds the presenting thread after a present, so a catch-up frame waits instead of tearing), and races at most 3 fps under the refresh (117 at 120 Hz, 237 at 240 Hz), inside the range. Without a range it is `on`.
+- `on`: the display's refresh without tearing (`present_vsync`, sync interval 1).
+- `off`: the earlier presents, which `e2e.py` keeps, so the gates stay comparable.
+
+**The VRR range.** DXGI reports only whether tearing presents are supported (`DXGI_FEATURE_PRESENT_ALLOW_TEARING`), not whether the display has a VRR range. The launchers read it from the primary display's EDID in the registry (`pipeline.vrr_range`, `VrrRange` in `runner.cpp`): DisplayID's Adaptive-Sync data block, else EDID 1.4's range limits with the continuous frequency bit, which DisplayPort Adaptive-Sync panels use. The main PC's panel reports 60 to 240 Hz in DisplayID. The Ally X's panel is sold as FreeSync Premium (8.1); its range shows in the launcher's description on the next run ("VSync auto: VRR 48-120 Hz, ..." or "VSync on (no VRR range)"). Below the range's floor the presenter still presents each frame once; low frame rate compensation, which FreeSync Premium requires, is the driver's.
+
+**The gate** (`n4vs-*`, `I:\FM4-build-usa`, `menu_race`, `-Native`, 1x, the players' path `present_skip_superseded=false`, one run a side; the race phase):
+
+| Mode | Race at 240 fps: fps, p50, p95, p99 | Race at 120 fps: fps, p50, p95, p99 |
+| --- | --- | --- |
+| off | 120.0, 8.25, 12.78, 13.20 ms | 120.0, 8.32, 8.73, 8.89 ms |
+| on | 120.0, 8.29, 11.53, 13.09 ms | 120.0, 8.33, 8.71, 8.89 ms |
+| auto (237 fps, a present at least 4.17 ms apart) | 120.0, 8.35, 9.15, 9.77 ms | 120.0, 8.33, 8.71, 8.92 ms |
+
+- Every mode presents 120 times a second on this PC, its display cap (17.22), so none of them changes the frame rate here, and no present came sooner than 4.17 ms after the previous one in any cell. Auto's hold evens out the paired presents at 240: p95 9.15 and p99 9.77 ms against 12.78 and 13.20 ms.
+- At 120 fps the three modes do not differ, and the menus not at all (60 presents for 60 frames).
+- Not measured here: the latency of `on` (it queues a frame for the refresh; PresentMon would measure it), and a 120 Hz panel setting, which is the user's. The Ally X's run shows auto at work below the cap: its race frames under 8.33 ms are counted by `host_presents.under_8_33_ms`.
+- `launcher_tests` passes with the VSync modes on five test displays (the main PC's, a fixed 60 Hz screen, a 144 Hz VRR screen, a fixed 1280x800 screen and the Ally X's panel): 95 plans, no failure.

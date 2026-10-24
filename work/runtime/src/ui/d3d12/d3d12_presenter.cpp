@@ -33,6 +33,10 @@
 REXCVAR_DEFINE_BOOL(d3d12_allow_variable_refresh_rate_and_tearing, true, "UI/D3D12",
                     "Allow variable refresh rate and tearing");
 
+REXCVAR_DEFINE_BOOL(present_vsync, false, "UI/D3D12",
+                    "Present on the display's refresh without tearing (sync interval 1), instead "
+                    "of at once with tearing allowed for variable refresh rate");
+
 REXCVAR_DEFINE_BOOL(present_skip_superseded, false, "UI/D3D12",
                     "A deferred present (d3d12_submit_thread_async_swap) skips its frame while a "
                     "newer one is not submitted yet, as before 24 October 2026: the guest renders "
@@ -1259,9 +1263,16 @@ Presenter::PaintResult D3D12Presenter::PaintAndPresentImpl(bool execute_ui_drawe
   // fullscreen is ever used in, the allow tearing flag must not be passed in
   // fullscreen, but DXGI fullscreen is largely unneeded with the flip
   // presentation model used in Direct3D 12).
-  HRESULT present_result = paint_context_.swap_chain->Present(
-      0, DXGI_PRESENT_RESTART |
-             (paint_context_.swap_chain_allows_tearing ? DXGI_PRESENT_ALLOW_TEARING : 0));
+  // With present_vsync, on the display's refresh instead, without tearing (the
+  // launcher's VSync On, or Auto without a variable refresh rate range;
+  // d3d-hle-n4.md 17.23).
+  const bool vsync = REXCVAR_GET(present_vsync);
+  HRESULT present_result =
+      vsync ? paint_context_.swap_chain->Present(1, 0)
+            : paint_context_.swap_chain->Present(
+                  0, DXGI_PRESENT_RESTART | (paint_context_.swap_chain_allows_tearing
+                                                 ? DXGI_PRESENT_ALLOW_TEARING
+                                                 : 0));
   // Even if presentation has failed, work might have been enqueued anyway
   // internally before the failure according to Jesse Natalie from the DirectX
   // Discord server.
