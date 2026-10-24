@@ -302,3 +302,38 @@ GPU time a frame on this PC, the race of `photo` at 240 Hz with `aces`, one run 
 20/9 at 16:9 costs 6.8 ms against the 6.0 ms that 18.8 estimated; 3 costs 9.4 ms against 10.0. `freeze` with `aces`: 6.97 ms at 20/9 and 9.83 ms at 3.
 
 Increment 1's step gates are done; its close gate is next, then increment 3 (the order above).
+
+### 18.18 Increment 1's close gate, 25 October 2026
+
+The full tier of the main session's list on `I:\FM4-build-usa`, main `bccfeb0` (snapshot `n6z-nat1x`), one pass 2x with `native_rt_surfaces=58` on the native path and the scales passed explicitly, at 240 Hz:
+
+| Check | Result |
+|---|---|
+| smoke, RTV at 1x and 2x (`n6z-rtv1x`, `n6z-rtv2x`, against 4c's `n5z`) | 6 of 6 cells reached their goal; races 224.0 and 226.3 fps at 1x, 177.3 and 164.0 at 2x; WARNs are capture statistics |
+| smoke, native at 1x, 3/2 and 2x (`n6z-nat1x`, `n6z-nat32`, `n6z-nat2x`) | 9 of 9 reached their goal. In the matrix the 1x and 2x `photo` cells timed out at the boot (`@push UI_Homespace`: the title pushed it before the step watched for it, a fast route timing flake) and their `photo_view` cells had no photo; the reruns (`-r`) passed. Races 234.6 and 238.4 fps at 1x, 237.7 and 234.8 at 3/2, 197.3 and 188.1 at 2x; no new error key |
+| smoke, `-Rov` at 1x with `original,taa=0` (`n6z-rov1x`) | 3 of 3; races 128.5 and 90.4 fps; `career` PASS |
+| combined checks with perturbation, `career` at 2x and 3/2 (`n6z-check-2x`, `n6z-check-32`) | both reached their goal; the resolve byte check 11,235 and 5,519 resolves and the texture byte check 5,803 and 2,395 textures, 0 mismatches; identity (with the late write trace) 10,636 and 13,149, bindings 16,102 and 17,388, guard 16,167 and 18,310, back end 18,683 and 21,346: mismatches only the perturbed; the error keys of every earlier check run |
+| `freeze` parity against the previous build's runs | native at real 1x -0.0% draws (27.5% of the image above 4), native at 2x with `aces` -0.6% (37.4%), RTV at real 1x -1.5% (32.1%), RTV at 2x with `aces` -0.9% (33.0%): PASS, within the range of one binary (18.16: +1.6% and -0.5%); `-Rov` against RTV at real 1x +0.7% (30.2%) PASS; native against RTV -14.2% and -14.4% draws, FAIL by design as at every earlier gate |
+| still pictures | 0.0% of the image above 4 from capture to capture in every `freeze` run |
+| images at 1:1 | `freeze` with `aces` at 3/2 and 20/9 against 2x: the car ahead, the gauges, the mirror, the stands and the cable car the same picture, with the detail of each scale. `career` at 3/2 against 2x: the race HUD (the place, the gear and speed) sharp at 1920x1080; photo mode at k by design (18.17) |
+| render target memory (`rt_memory` in a race) | native 203.5 MB at 1x, 331.2 MB at 3/2, 600.5 MB at 2x, 797.7 MB at 20/9; RTV 577.8 MB at 1x and 2,102.2 MB at 2x |
+
+Perf, the race of `photo` with `aces`, 3 runs each (20/9 by `e2e.py` runs, since the drive had 14.8 GB free and the matrix needs 15):
+
+| Path and scale | GPU ms a race frame | Race fps | Race p99 | Draw zone a draw |
+|---|---|---|---|---|
+| RTV 1x | 2.92, 2.83, 2.84 | 210.7, 229.0, 224.4 | 6.18, 5.43, 5.68 ms | 1.36 to 1.37 µs |
+| RTV 2x | 5.59, 5.78, 5.80 | 174.6, 168.4, 166.7 | 8.46, 8.78, 8.83 ms | 2.21 to 2.90 µs |
+| native 1x | 2.17, 2.28, 2.24 | 239.4, 238.4, 239.0 | 4.81, 5.01, 4.98 ms | 0.89 to 0.90 µs |
+| native 3/2 | 3.69, 3.63, 3.77 | 237.2, 237.8, 234.9 | 5.18, 5.07, 5.30 ms | 0.84 to 0.89 µs |
+| native 2x | 5.02, 5.07, 5.11 | 194.5, 191.5, 191.1 | 7.44, 7.45, 7.44 ms | 1.82 to 2.04 µs |
+| native 20/9 | 6.59, 6.45, 6.58 | 148.2, 150.7, 147.8 | 9.16, 8.91, 9.04 ms | 2.87 to 3.43 µs |
+
+The native path takes 21% less GPU time than RTV at 1x and 12% less at 2x. The draw zone grows with the scale where the GPU sets the frame rate (2x, 20/9): the command processor waits for the GPU inside it.
+
+Two findings:
+
+- **The front-end menus render at k.** In `career` at 3/2, 20 of 98 captures are 1280x720 (the career home, MY PROFILE, the event list): those menus draw into surfaces that are not private, so at 3/2 they render at 1x and are scaled up to the panel, where at 2x they render at 2x. The races, their HUD, the replays and the post-race screens are 1920x1080. The menus at the scene's scale need their surfaces private, as the races' are; an open item for the main session.
+- **The mirror's last row** is red in this gate's 2x `freeze` too, without the box filter: it is the track behind at that race moment, so 18.17's "white as at 2x" compared different moments and shows nothing either way. The box of 18.17 stays as it is, correct by its construction (the rasterizer's edges).
+
+Increment 1 is closed.
