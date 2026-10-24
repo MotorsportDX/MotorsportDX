@@ -1087,6 +1087,12 @@ def run_once(options, out):
     for item in options.arg:
         key, value = item.lstrip('-').split('=', 1)
         args[key] = value
+    # With the skip, the UI thread presents, as in those gates (where the settings overlay kept
+    # it): a present on the submit thread blocks it where the host presents slower than the guest
+    # renders, and RTV's resolve readbacks then wait (readback_publish 25 to 55 ms/s instead of
+    # about 1 on the main PC; docs/analysis/d3d-hle-n4.md 17.22).
+    if args.get('present_skip_superseded') == 'true':
+        args.setdefault('host_present_from_non_ui_thread', 'false')
     # The render scale the run uses, in its summary and on the console: the freeze scenario pins
     # 2x unless --arg says otherwise, so a run named "1x" without it renders at 2x.
     draw_scale = f"{args.get('draw_resolution_scale_x', '1')}x{args.get('draw_resolution_scale_y', '1')}"
