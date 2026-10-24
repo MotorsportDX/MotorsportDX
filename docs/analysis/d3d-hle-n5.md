@@ -123,6 +123,8 @@ The main session approved this note on 24 October 2026, with the scale per surfa
 3. **The launcher.** The display choice renders at the panel's own resolution and aspect in a borderless fullscreen that fills it; RTV and `-Rov` fall back to their integer 16:9 behaviour. `Build.ps1`, `pipeline.py`, `e2e.py` and `launcher_tests` get the options. Effort, inferred: under 1 person-week.
 4. **The Ally X export** at 1080p native, for the user's runs.
 
+The project owner set the order after increment 1 on 25 October 2026: (1) finish increment 1 (step 5: the box filter, the TAA check, 20/9 and 3x); (2) increment 3, the launcher's resolution choice at the panel's own resolution, which sets the scale and the matching `native_rt_surfaces` together; (3) increment 2, widescreen (the logical width, Hor+ FOV, culling, the centred HUD first); (4) FSR 3.1 as [fsr-plan.md](fsr-plan.md) plans it, native AA first, then upscaling on top of this section's scales per resolve destination; (5) photo mode at native resolution (one pass with the private 4x pair, 18.17), with its own parity gate.
+
 ### 18.10 Increment 1, step 1: the rational type, 24 October 2026
 
 - **TAA's size mismatch.** TAA leaves the frame as it is when the final size is not the scene's (`taa.hlsl:198`). The post pass framework now logs that as an error, once per pair of sizes, so the scale work cannot hide a mismatch (`post_pass.cpp`, at the final point).
@@ -269,3 +271,34 @@ RTV and `-Rov` on the 4c binary (`3213732`), against the 4b binary (`c122016`) b
 | `-Rov` smoke at 1x (`n5z-rov1x` against `n5r-rov1x`) | 3 of 3 cells reached their goal; `career` PASS. `photo` FAIL on the race's fps, 108.4 against 131.7 (GPU 9.73 ms against 7.56): N3's close gate measured 104.7 fps and 9.77 ms on the same cell (`n3z-rov1x`), and the captures differ by 37 points of black, so the baseline's race is the outlier. A repeat (`n5z-rov1x-photo2`) raced at 118.1 fps and timed out later at SAVE PHOTO |
 
 Open items for step 5: in photo mode the post passes see a 1280x720 scene depth (photo mode's depth resolve is not a scene destination yet), so they log "final size 1920x1080 differs from the scene's 1280x720" and leave its frames without the look's passes, which photo mode's picture shows correctly otherwise; TAA's thresholds in guest pixels; the box filter of the small destinations sampled for the picture (18.13, 4b); then 20/9 and 3.
+
+### 18.17 Increment 1, step 5: the box filter, photo mode, TAA, 20/9 and 3, 25 October 2026
+
+- **The box filter.** A small destination of the scene's surfaces resolves down to the integer scale k (18.4). The nearest sample of 4b aliased what the title samples for the picture (the bloom chain's regions, the rear-view mirror). At a fractional ratio of the source's scale over k, `resolve_host_32bpp` (float colour) now takes the mean of the host pixels the rasterizer gave each destination pixel: those between its edges rounded half up as `DrawScale::ScaleEdge` rounds them. The shader needs the exact position of the resolve's first pixel, of which `xe_resolve_host_offset` is the rounded value, so `xe_resolve_host_source_phase` carries the difference in 1/256 of a source pixel. A box over the exact edges (the first version) took up to half a row of the next draw's pixels: a red line under the mirror's picture at 3/2 and 20/9. The rule of 18.13 applies the box where the picture samples the destination and the nearest sample where only readbacks read it; every float colour downscale gets the box, since the reductions are means as well. Uint colour and depth keep the nearest sample. Whole ratios (1:1 at every whole scale and for the textures at the scene's scale) do not change. Cost: the resolves take about 0.1 ms more a frame at 3/2 (0.71 ms against 0.61 in `freeze`).
+- **Photo mode** (the main session's decision of 25 October 2026, option B). Photo mode renders its scene with 4x MSAA in the title's three tiles (the depth at base 1024, pitch 32, resolved as 1280x256, 1280x256 and 1280x208 into the range of the race's scene depth; 16.17). Those surfaces are not private, so at a fractional scale photo mode renders at k and is scaled up to the panel; it is not native resolution yet. The post passes take that scene depth at k, so at a fractional scale a scene depth not at the scene's scale leaves its frame without scene passes. The log says so once ("a scene depth of 1280x720, not at the scene's scale 3/2 (photo mode), runs no scene passes"), instead of 4c's "final size" error. Photo mode at native resolution (one pass with the private 4x pair) is item 5 of the order above, with its own parity gate.
+- **TAA's thresholds stay in host pixels** (the main session's decision of 25 October 2026). `TAA_STILL_PIXELS` (0.05), `TAA_MOTION_PIXELS` (16) and the jitter gate's `TAA_JITTER_MOTION` are in host pixels, as the jitter is. In guest pixels they would change 1x or 2x, whichever they were not tuned at; in host pixels, 3/2 sits between 1x and 2x as 1x and 2x already differ. The check: the race's captures in motion at 1x, 3/2 and 2x with `aces` (`n6e-photo-*`) show no ghosting at the moving car, the cables or the poles at 3/2, and every still picture holds (0.0% from capture to capture at 1x, 3/2, 2x, 20/9 and 3).
+- **20/9 and 3.** `native_draw_scale=20/9` with `draw_resolution_scale_x` and `_y` of 2 renders the scene at 2845x1600 (`ScaleUp` of 1280 is 2845, of 720 1600) and the other surfaces at 2x. 3 is a whole scale: the existing integer path at 3x (3840x2160). Both run with no new error; the 1:1 crops at 20/9 against 2x (the car ahead, the gauges, the mirror) show the same picture with more detail. The offsets of 18.13's open item (a texture at k sampled with fetch offsets by a scene draw at 20/9) show no visible error in these crops.
+
+The gate on `I:\FM4-build-usa` (one pass 2x, `native_rt_surfaces=58`, the scales passed explicitly), against 4c's runs (`n5x`, `n5z`):
+
+| Check | Result |
+|---|---|
+| no change at whole scales: `freeze` parity, native at real 1x with `original,taa=0` and at 2x with `aces` against `n5x`, RTV at 2x with `aces` against `n5z-freeze-2x-aces-rtv-4c` | PASS: draws +0.1%, +0.6% and +0.4%, 24.8%, 37.0% and 25.4% of the image above 4, within the range of two runs of the same binary (18.16) |
+| combined checks with perturbation, `career` at 2x, 3/2 and 20/9 (`n6h-check-*`) | all reached their goal; the resolve byte check 11,639, 5,521 and 4,947 resolves and the texture byte check 6,072, 2,430 and 5,076 textures, 0 mismatches; identity, bindings and guard only the perturbed; the error keys of 4c's 2x baseline |
+| the mirror's last row, `freeze` with `aces` | white as at 2x, at 3/2 and 20/9 (`n6g`) |
+| photo mode at 3/2 and 20/9 | the photo saved, no error; one "runs no scene passes" line |
+| scene variants with a warm storage | 1 pipeline a run at runtime in `photo`, 1 translation and 1 pipeline in `career` |
+
+GPU time a frame on this PC, the race of `photo` at 240 Hz with `aces`, one run each (`n6e`, `n6h` with the final box):
+
+| Scale | Scene | GPU ms | Race fps, p99 |
+|---|---|---|---|
+| 1x | 1280x720 | 2.25 | 239.0, 4.92 ms |
+| 3/2 | 1920x1080 | 3.78 | 237.3, 5.14 ms |
+| 2x | 2560x1440 | 5.29 | 186.4, 7.71 ms |
+| 20/9 | 2845x1600 | 6.76 | 147.4, 9.12 ms |
+| 3 | 3840x2160 | 9.36 | 103.9, 12.81 ms |
+
+20/9 at 16:9 costs 6.8 ms against the 6.0 ms that 18.8 estimated; 3 costs 9.4 ms against 10.0. `freeze` with `aces`: 6.97 ms at 20/9 and 9.83 ms at 3.
+
+Increment 1's step gates are done; its close gate is next, then increment 3 (the order above).

@@ -1494,6 +1494,23 @@ void PostPasses::OnResolve(const RegisterFile& regs, uint32_t address, uint32_t 
     if (!RequestExternal(depth_group_, ExternalKind::kDepth, scene_depth_)) {
       return;
     }
+    // At a fractional scene scale, a scene depth at the whole scale (photo
+    // mode's 4x MSAA tiles, d3d-hle-n5.md 18.17) leaves the frame without a
+    // scene: the passes need the final's size.
+    const DrawScale scene_scale = command_processor_.texture_cache_->scene_draw_scale();
+    if (command_processor_.render_target_cache_->scene_textures() && !scene_scale.IsWhole() &&
+        scene_depth_.width != scene_scale.ScaleUp(depth_group_.pitch)) {
+      if (!logged_unscaled_scene_) {
+        logged_unscaled_scene_ = true;
+        REXGPU_INFO(
+            "Post passes: a scene depth of {}x{}, not at the scene's scale {}/{} (photo mode), "
+            "runs no scene passes (logged once)",
+            scene_depth_.width, scene_depth_.height, scene_scale.numerator,
+            scene_scale.denominator);
+      }
+      scene_depth_ = {};
+      return;
+    }
     scene_frame_ = frame;
     scene_width_ = scene_depth_.width;
     scene_height_ = scene_depth_.height;

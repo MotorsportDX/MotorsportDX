@@ -556,6 +556,8 @@ class PostPasses {
 
   uint64_t runs_ = 0;
   bool warned_no_camera_ = false;
+  // A scene depth not at a fractional scene scale (photo mode, 18.17), once.
+  bool logged_unscaled_scene_ = false;
   bool warned_write_back_ = false;
   // The guest's use of the last complete write-back (until the one after it),
   // for the log.

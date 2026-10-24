@@ -76,6 +76,8 @@ FSR accumulates still pictures itself and expects the jitter in every frame. Wit
 
 ## 5. Upscaling (stage 3, a separate project)
 
+Since 25 October 2026, upscaling builds on the scales of N5's native resolution ([d3d-hle-n5.md, section 18](d3d-hle-n5.md#18-native-resolution-and-aspect-design-24-october-2026)): the native path already renders the scene's surfaces at a rational scale and every other surface at the integer scale, chosen per resolve destination, which removes the one-scale blocker below. The project owner placed FSR 3.1 after N5's widescreen step, with native AA first and upscaling on top of those scales.
+
 - The runtime's single draw resolution scale would become two: one for the scene tiles (and the depth and color resolves that feed the post passes) and one for the post chain, the HUD and the swap; the texture cache serves the upscaled scene to the bloom and final combine fetches.
 - The render scales are whole multiples of 1280x720, so the ratios available are 2.0 (1x to 2x, 2x to 4x), 1.5 (2x to 3x) and 1.33 (3x to 4x).
 - What it can gain: at 2x the GPU sets the frame rate above about 160 fps, and 3x costs 8.9 ms a frame against 5.4 ms at 2x ([current status](../status/current.md)); a 2x scene upscaled to 4K would take most of that back. At 1x and 240 Hz the command processor sets the frame rate, so upscaling gains nothing there.

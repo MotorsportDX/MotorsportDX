@@ -71,6 +71,11 @@ push_const_begin_xe(b0, space0)
       // when its pixels are the source's (a texture at the scene's scale),
       // otherwise 0.
       uint xe_resolve_host_texture_size;
+      // The source's exact position of the resolve's first pixel minus
+      // xe_resolve_host_offset, in source pixels, signed 8.8 fixed point,
+      // 16:16 (nonzero at a fractional scale, where xe_resolve_host_offset is
+      // rounded; for the box filter, docs/analysis/d3d-hle-n5.md 18.17).
+      uint xe_resolve_host_source_phase;
     #endif
   #endif
 push_const_end_xe

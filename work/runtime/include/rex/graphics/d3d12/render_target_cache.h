@@ -746,6 +746,9 @@ class D3D12RenderTargetCache final : public RenderTargetCache {
     uint32_t multisampled = 0;
     uint32_t host_info = 0;
     uint32_t host_offset = 0;
+    // The exact source position of the first pixel minus host_offset, signed
+    // 8.8 fixed point, 16:16 (xe_resolve_host_source_phase, 18.17).
+    uint32_t host_phase = 0;
     // The render target's scale: the scene's for a private surface (18.15).
     DrawScale scale;
   };

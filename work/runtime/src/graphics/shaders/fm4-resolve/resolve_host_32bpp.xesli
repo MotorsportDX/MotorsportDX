@@ -120,11 +120,41 @@ uint XeHostEdramWord(uint2_xe pixel_index, uint guest_sample, uint host_info,
     // 16_16 and 16_16_FLOAT.
     return (value.x & 0xFFFFu) | (value.y << 16u);
   #else
-    #ifdef XE_HOST_SOURCE_MS
-      float4 value = xe_resolve_host_source.Load(position, host_sample);
-    #else
-      float4 value = xe_resolve_host_source.Load(int3(position, 0));
-    #endif
+    float4 value;
+    uint source_scale = push_const_xe(xe_resolve_host_source_scale);
+    uint scale_n = source_scale & 0xFFFFu, scale_d = source_scale >> 16u;
+    dont_flatten_xe
+    if (scale_n > scale_d && scale_n % scale_d != 0u) {
+      // A fractional downscale (a small destination of the scene's surfaces at
+      // the integer scale, d3d-hle-n5.md 18.17): the mean of the host pixels
+      // the rasterizer gave the destination pixel, between its edges rounded
+      // half up as DrawScale::ScaleEdge rounds them, so the box never reaches
+      // into a neighbouring draw's pixels.
+      float ratio = float(scale_n) / float(scale_d);
+      uint phase_packed = push_const_xe(xe_resolve_host_source_phase);
+      float2 phase =
+          float2(int2(int(phase_packed << 16u) >> 16, int(phase_packed) >> 16)) * (1.0f / 256.0f);
+      int2 first = int2(floor(float2(pixel_index) * ratio + phase + 0.5f));
+      int2 end = int2(floor(float2(pixel_index + 1u) * ratio + phase + 0.5f));
+      value = float4(0.0f, 0.0f, 0.0f, 0.0f);
+      [loop] for (int y = first.y; y < end.y; ++y) {
+        [loop] for (int x = first.x; x < end.x; ++x) {
+          int2 source = int2(x, y) + int2(host_offset);
+          #ifdef XE_HOST_SOURCE_MS
+            value += xe_resolve_host_source.Load(source, host_sample);
+          #else
+            value += xe_resolve_host_source.Load(int3(source, 0));
+          #endif
+        }
+      }
+      value /= float(max((end.x - first.x) * (end.y - first.y), 1));
+    } else {
+      #ifdef XE_HOST_SOURCE_MS
+        value = xe_resolve_host_source.Load(position, host_sample);
+      #else
+        value = xe_resolve_host_source.Load(int3(position, 0));
+      #endif
+    }
     if (format == kXenosColorRenderTargetFormat_2_10_10_10_FLOAT ||
         format == kXenosColorRenderTargetFormat_2_10_10_10_FLOAT_AS_16_16_16_16) {
       uint alpha = uint(mad(saturate(value.a), 3.0f, 0.5f));

@@ -423,7 +423,7 @@ bool D3D12RenderTargetCache::Initialize() {
         (draw_resolution_scaled ? sizeof(draw_util::ResolveCopyShaderConstants::DestRelative)
                                 : sizeof(draw_util::ResolveCopyShaderConstants)) /
             sizeof(uint32_t) +
-        4;
+        5;
     // The resolve copy's parameters, and the stencil (t1) in a table of its
     // own: one-use descriptors are not contiguous with bindless resources.
     std::array<D3D12_ROOT_PARAMETER, 4> host_parameters;
@@ -476,7 +476,7 @@ bool D3D12RenderTargetCache::Initialize() {
     // texture's info, then the host resolve's two.
     if (REXCVAR_GET(native_rt_surfaces) & 32) {
       host_parameters[0].Constants.Num32BitValues =
-          sizeof(draw_util::ResolveCopyShaderConstants::DestRelative) / sizeof(uint32_t) + 5;
+          sizeof(draw_util::ResolveCopyShaderConstants::DestRelative) / sizeof(uint32_t) + 6;
       host_texture_root_signature_ =
           ui::d3d12::util::CreateRootSignature(provider, host_root_signature_desc);
 #define XE_HOST_TEXTURE_CODE(name) {shaders::name, sizeof(shaders::name)}
@@ -6382,6 +6382,19 @@ bool D3D12RenderTargetCache::FindHostResolveSource(const draw_util::ResolveInfo&
       (draw_util::GetD3D10SampleIndexForGuest2xMSAA(0, msaa_2x_supported_) << 8) |
       (draw_util::GetD3D10SampleIndexForGuest2xMSAA(1, msaa_2x_supported_) << 10);
   source_out.host_offset = offset_x | (offset_y << 16);
+  source_out.host_phase = 0;
+  if (!source_scale.IsWhole()) {
+    // guest * n / d - host, in 1/256 of a source pixel.
+    auto phase = [&source_scale](uint32_t guest, uint32_t host) {
+      const int64_t exact = int64_t(guest) * source_scale.numerator * 256;
+      const int64_t value =
+          (exact * 2 + source_scale.denominator) / (2 * int64_t(source_scale.denominator)) -
+          int64_t(host) * 256;
+      return uint32_t(uint16_t(int16_t(value)));
+    };
+    source_out.host_phase =
+        phase(guest_offset_x, offset_x) | (phase(guest_offset_y, offset_y) << 16);
+  }
   source_out.scale = source_scale.IsWhole() ? DrawScale::Whole(draw_resolution_scale_x())
                                             : source_scale;
   return host_resolve_pipelines_[kind][source_out.multisampled] != nullptr;
@@ -6422,7 +6435,7 @@ bool D3D12RenderTargetCache::DispatchHostResolve(
       D3D12_DESCRIPTOR_HEAP_TYPE_CBV_SRV_UAV);
 
   // The destination, or the scratch initialized with its bytes.
-  uint32_t root_constants[sizeof(draw_util::ResolveCopyShaderConstants) / sizeof(uint32_t) + 4];
+  uint32_t root_constants[sizeof(draw_util::ResolveCopyShaderConstants) / sizeof(uint32_t) + 5];
   uint32_t constant_count;
   if (scaled) {
     std::memcpy(root_constants, &constants.dest_relative, sizeof(constants.dest_relative));
@@ -6502,6 +6515,7 @@ bool D3D12RenderTargetCache::DispatchHostResolve(
   root_constants[constant_count++] =
       HostSourceScale(source.scale, DrawScale::Whole(draw_resolution_scale_x()));
   root_constants[constant_count++] = 0;
+  root_constants[constant_count++] = source.host_phase;
   command_list.D3DSetComputeRootSignature(host_resolve_root_signature_);
   command_list.D3DSetComputeRoot32BitConstants(0, constant_count, root_constants, 0);
   command_list.D3DSetComputeRootDescriptorTable(1, descriptors[0].second);
@@ -6925,7 +6939,7 @@ void D3D12RenderTargetCache::ResolveHostIntoTextures(
                                                     : render_target.descriptor_srv())
                                       .GetHandle(),
                                   D3D12_DESCRIPTOR_HEAP_TYPE_CBV_SRV_UAV);
-    uint32_t root_constants[sizeof(constants.dest_relative) / sizeof(uint32_t) + 5];
+    uint32_t root_constants[sizeof(constants.dest_relative) / sizeof(uint32_t) + 6];
     std::memcpy(root_constants, &constants.dest_relative, sizeof(constants.dest_relative));
     uint32_t constant_count = sizeof(constants.dest_relative) / sizeof(uint32_t);
     root_constants[constant_count++] =
@@ -6942,6 +6956,7 @@ void D3D12RenderTargetCache::ResolveHostIntoTextures(
     const uint32_t texture_height = scene_texture ? dest_scale.ScaleUp(height) : 0;
     root_constants[constant_count++] = HostSourceScale(source.scale, dest_scale);
     root_constants[constant_count++] = texture_width | (texture_height << 16);
+    root_constants[constant_count++] = source.host_phase;
     command_list.D3DSetComputeRootSignature(host_texture_root_signature_);
     command_list.D3DSetComputeRoot32BitConstants(0, constant_count, root_constants, 0);
     command_list.D3DSetComputeRootDescriptorTable(1, descriptors[0].second);
