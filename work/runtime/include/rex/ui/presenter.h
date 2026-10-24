@@ -13,6 +13,7 @@
 #include <algorithm>
 #include <array>
 #include <atomic>
+#include <chrono>
 #include <climits>
 #include <cmath>
 #include <condition_variable>
@@ -418,6 +419,8 @@ class Presenter {
     uint32_t display_aspect_ratio_x;
     uint32_t display_aspect_ratio_y;
     bool is_8bpc;
+    // The guest_output_refresh_count_ of this image (1 for the first refresh).
+    uint64_t refresh = 0;
 
     GuestOutputProperties() { SetToInactive(); }
 
@@ -734,6 +737,17 @@ class Presenter {
   // implementation must not wait for it there, but may skip the paint: the
   // presentation of that image follows.
   bool is_in_deferred_guest_output_paint() const { return is_in_deferred_guest_output_paint_; }
+  // Called by the guest output thread after a successful refresh of the image
+  // at the mailbox index, before it is published as the ready one.
+  virtual void OnGuestOutputRefreshed(uint32_t mailbox_index,
+                                      const GuestOutputProperties& properties) {
+    (void)mailbox_index;
+    (void)properties;
+  }
+  // Set by PaintAndPresentImpl: the refresh number of the guest output image it
+  // painted (GuestOutputProperties::refresh), 0 for none (the perf trace's new
+  // and repeated presents, d3d-hle-n4.md 17.22).
+  uint64_t painted_refresh_ = 0;
 
   // For calling from the painting implementations if requested.
   void ExecuteUIDrawersFromUIThread(UIDrawContext& ui_draw_context);
@@ -1001,6 +1015,10 @@ class Presenter {
   // rather than being blank.
   bool guest_output_active_last_refresh_ = false;
   std::atomic<uint64_t> guest_output_refresh_count_{0};
+  // guest_output_refresh_count_ at the last present (rex/ui/present_stats.h).
+  std::atomic<uint64_t> last_presented_refresh_{UINT64_MAX};
+  // The end of the last PaintAndPresent, for present_min_interval_us.
+  std::chrono::steady_clock::time_point last_present_time_{};
 
   // Ordered by the Z order, and then by the time of addition.
   // Note: All the iteration logic involving this Z ordering must be the same as

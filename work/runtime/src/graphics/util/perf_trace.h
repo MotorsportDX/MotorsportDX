@@ -17,6 +17,7 @@
 #include <vector>
 
 #include <rex/system/gpu_progress.h>
+#include <rex/ui/present_stats.h>
 
 #include "process_cpu.h"
 #include "read_trace.h"
@@ -949,6 +950,15 @@ inline void OnSwap() {
                 << ",\"late\":" << vblanks[1].exchange(0, std::memory_order_relaxed)
                 << ",\"forced\":" << vblanks[2].exchange(0, std::memory_order_relaxed) << '}';
   if (ProcessCpuEnabled()) WriteProcessCpu(state->output);
+  // The host presents: new guest frames, the same frame again, and those of the UI
+  // thread (d3d-hle-n4.md 17.22).
+  {
+    const rex::ui::PresentStats presents = rex::ui::TakePresentStats();
+    state->output << ",\"host_presents\":{\"new_frames\":" << presents.new_frames
+                  << ",\"repeats\":" << presents.repeats << ",\"ui_thread\":" << presents.ui_thread
+                  << ",\"under_8_33_ms\":" << presents.under_8_33_ms
+                  << ",\"under_4_17_ms\":" << presents.under_4_17_ms << '}';
+  }
   // The title's ring index waits that slept (guest_ring_wait_sleep, d3d-hle-n4.md 17.16).
   {
     const rex::system::gpu_progress::WaitStats ring = rex::system::gpu_progress::TakeWaitStats();

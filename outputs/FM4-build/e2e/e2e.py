@@ -128,6 +128,11 @@ SCENARIOS.update({
         [60, 'wait', 0, 'START RACE'],
     ],
 })
+# 30 s measured on the main menu (phase menu; the main menu renders the selected car in 3D), then
+# the race of 'race': the menus' frame rate, host presents and power next to the race's
+# (docs/analysis/d3d-hle-n4.md, section 17.22).
+_MENU_PHASE = [[5, 'wait', 0], [1, 'phase:menu', 0], [30, 'wait', 0], [1, 'phase:end', 0]]
+SCENARIOS['menu_race'] = _TO_MAIN_MENU + _MENU_PHASE + SCENARIOS['race'][len(_TO_MAIN_MENU):]
 SCENARIOS.update({
     # The career race to its rewards; needs the AI driver (--env FM4_GAME_CMDLINE=engageaionstart,
     # the matrix.py default): the Ford Ka wins the 3 laps of Tsukuba Short Circuit in about 3
@@ -250,6 +255,8 @@ FAST_SCENARIOS.update({
     'photo': FAST_SCENARIOS['quickrace'] + SCENARIOS['photo'][len(SCENARIOS['quickrace']) + 1:],
     'freeze': _FAST_TO_MAIN_MENU + _FAST_QUICKRACE_MENUS + SCENARIOS['freeze'][len(SCENARIOS['quickrace']) - 1:],
 })
+FAST_SCENARIOS['menu_race'] = (_FAST_TO_MAIN_MENU + [[30, 'wait', 0, 'PLAY CAREER']] + _MENU_PHASE
+                               + FAST_SCENARIOS['race'][len(_FAST_TO_MAIN_MENU):])
 RETRY_S = 5
 # What the freeze scenario pins unless --look or --arg says otherwise: the title's own picture
 # (no mods, no TAA, so the tiles and MSAA of --quality), the occlusion reports (awaited ones
@@ -942,6 +949,15 @@ def summarize(perf, measure):
     # when frames alternate (the half-rate mirror), by about 0.5% in a frozen frame.
     all_frames = max(1, sum(len(p.get('frame_ms', [])) for p in steady))
     result['draws_per_frame_mean'] = round(sum(p['draws'] for p in steady) / all_frames, 2)
+    if 'host_presents' in steady[0]:
+        # The host's presents (docs/analysis/d3d-hle-n4.md 17.22): of a guest output frame no
+        # earlier present showed, of the same frame again, and those the UI thread made, per
+        # second over all measured windows; and all presents per guest frame.
+        seconds = sum(p['window_ms'] for p in steady) / 1000
+        presents = {k: sum(p['host_presents'][k] for p in steady) for k in steady[0]['host_presents']}
+        result['host_presents_per_s'] = {k: round(v / seconds, 1) for k, v in presents.items()}
+        result['host_presents_per_frame'] = round(
+            (presents['new_frames'] + presents['repeats']) / all_frames, 2)
     # Backend-neutral names for the native path (docs/e2e/frozen-frames.md): the thread that
     # turns the guest's commands into host work, the guest thread that records them, and the
     # queue between the two. Each comes only from a trace that has it, except the render
@@ -1051,6 +1067,11 @@ def run_once(options, out):
         # sets the awaited scale and limit).
         args.update({k: v for k, v in FREEZE_ARGS.items()
                      if options.look is None or k not in look_args})
+    # The earlier deferred present skip, so the guest throughput stays comparable with the gates
+    # before 24 October 2026 where the host presents slower than the guest renders (about 120
+    # presents a second on the main PC at 240 Hz); --arg present_skip_superseded=false runs the
+    # players' present path (docs/analysis/d3d-hle-n4.md 17.22).
+    args['present_skip_superseded'] = 'true'
     for item in options.arg:
         key, value = item.lstrip('-').split('=', 1)
         args[key] = value
@@ -1130,10 +1151,11 @@ def run_once(options, out):
         env['FM4_TRACK_SETTINGS'] = track_settings
     # Diagnostic variables, e.g. REX_RESOLVE_PUBLICATION_TRACE=<path>.
     env.update(item.split('=', 1) for item in options.env)
-    # The settings overlay at start (the presenter draws it: never in the captures); --env
-    # FM4_INFO_SHOW=0 hides it.
+    # The settings overlay (the presenter draws it: never in the captures), at start with --info.
+    # Off by default as in the launcher: while it shows, the UI thread presents every frame,
+    # which is not the players' present path (docs/analysis/d3d-hle-n4.md 17.22).
     env['FM4_INFO'] = pipeline.info_overlay(args, env, look, options.quality or pipeline.DEFAULT_QUALITY)
-    env.setdefault('FM4_INFO_SHOW', '1')
+    env.setdefault('FM4_INFO_SHOW', '1' if options.info else '0')
     # With --goal, --steps run after the goal is reached (e.g. looking around in the race).
     if options.steps in STEP_PRESETS:
         steps = STEP_PRESETS[options.steps]
@@ -1534,6 +1556,9 @@ def main():
                              'every look knob live (--arg shader_mod_path=<dir> for another directory)')
     parser.add_argument('--tail', type=float, default=10, help='seconds to keep running after the last step')
     parser.add_argument('--keep-ppm', action='store_true', help='keep full-resolution captures')
+    parser.add_argument('--info', action='store_true',
+                        help='show the settings overlay from the start (F2 toggles it); it moves the '
+                             'host presents to the UI thread')
     parser.add_argument('--measure', type=int, default=0, help='summarize only the last N perf seconds')
     parser.add_argument('--repeat', type=int, default=1,
                         help='run N times into <out>/run1..runN and aggregate into <out>/summary.json')

@@ -327,6 +327,25 @@ class D3D12Presenter final : public Presenter {
   void SignalGuestOutputRefresher(UINT64 submission);
   bool IsGuestOutputRefresherSignalEnqueued(UINT64 submission);
   void AwaitGuestOutputRefresherSignal(UINT64 submission);
+  // The latest refreshed images with their properties and refresher submission
+  // (d3d-hle-n4.md 17.22). A deferred paint that finds the newest image not
+  // yet submitted presents the newest submitted one of these, the image of its
+  // own refresh if no later one is submitted, instead of skipping the frame:
+  // its command list is submitted before the work of the later refreshes,
+  // which may already reuse the image's mailbox slot.
+  struct RecentGuestOutput {
+    UINT64 submission = 0;
+    Microsoft::WRL::ComPtr<ID3D12Resource> resource;
+    GuestOutputProperties properties;
+  };
+  void OnGuestOutputRefreshed(uint32_t mailbox_index,
+                              const GuestOutputProperties& properties) override;
+  std::mutex recent_guest_outputs_mutex_;
+  std::array<RecentGuestOutput, 4> recent_guest_outputs_;
+  uint32_t recent_guest_output_next_ = 0;
+  // The refresh number of the image the last deferred paint presented, so an
+  // older submitted image is never presented after a newer one.
+  uint64_t last_deferred_painted_refresh_ = 0;
   std::mutex guest_output_refresher_signal_mutex_;
   std::condition_variable guest_output_refresher_signal_cond_;
   UINT64 guest_output_refresher_signal_enqueued_ = 0;

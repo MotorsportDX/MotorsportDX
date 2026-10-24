@@ -9,6 +9,7 @@
  * @modified    Tom Clay, 2026 - Adapted for ReXGlue runtime
  */
 
+#include <algorithm>
 #include <cfloat>
 #include <cstring>
 #include <filesystem>
@@ -16,6 +17,7 @@
 
 #include <rex/assert.h>
 #include <rex/chrono/clock.h>
+#include <rex/cvar.h>
 #include <rex/logging.h>
 #include <rex/ui/imgui_dialog.h>
 #include <rex/ui/imgui_drawer.h>
@@ -23,6 +25,10 @@
 #include <rex/ui/window.h>
 
 #include <imgui.h>
+
+REXCVAR_DEFINE_BOOL(ui_repaint_idle_dialogs, false, "UI",
+                    "Repaint the ImGui dialogs at every UI tick even while all of them are idle "
+                    "(the earlier behaviour, for comparison)");
 
 namespace rex {
 namespace ui {
@@ -98,6 +104,7 @@ ImGuiDrawer::ImGuiDrawer(rex::ui::Window* window, size_t z_order, FontSetupCallb
 }
 
 ImGuiDrawer::~ImGuiDrawer() {
+  *alive_ = false;
   SetPresenter(nullptr);
   SetWindowTextInputActive(false);
   if (!dialogs_.empty()) {
@@ -127,11 +134,30 @@ void ImGuiDrawer::AddDialog(ImGuiDialog* dialog) {
     // a dialog's Draw function, re-registering the ImGuiDrawer may result in
     // ImGui being drawn multiple times in the current frame.
     window_->AddInputListener(this, z_order_);
+    detached_while_empty_ = false;
     if (presenter_) {
       presenter_->AddUIDrawerFromUIThread(this, z_order_);
     }
   }
   dialogs_.push_back(dialog);
+  // A new dialog may draw something: it is drawn from the next paint on.
+  AttachIfDetachedWhileEmpty();
+}
+
+void ImGuiDrawer::WakeFromAnyThread() {
+  window_->app_context().CallInUIThread([this, alive = alive_] {
+    if (*alive) AttachIfDetachedWhileEmpty();
+  });
+}
+
+void ImGuiDrawer::AttachIfDetachedWhileEmpty() {
+  if (!detached_while_empty_ || dialogs_.empty()) {
+    return;
+  }
+  detached_while_empty_ = false;
+  if (presenter_) {
+    presenter_->AddUIDrawerFromUIThread(this, z_order_);
+  }
 }
 
 void ImGuiDrawer::RemoveDialog(ImGuiDialog* dialog) {
@@ -351,6 +377,7 @@ void ImGuiDrawer::SetPresenter(Presenter* new_presenter) {
     }
   }
   presenter_ = new_presenter;
+  detached_while_empty_ = false;
   if (presenter_) {
     if (!dialogs_.empty()) {
       presenter_->AddUIDrawerFromUIThread(this, z_order_);
@@ -437,9 +464,19 @@ void ImGuiDrawer::Draw(UIDrawContext& ui_draw_context) {
   DetachIfLastDialogRemoved();
 
   if (!dialogs_.empty()) {
-    // Repaint (and handle input) continuously if still active. In detached mode
+    // Repaint (and handle input) continuously if still active, unless every
+    // dialog is idle: then the guest output's frames repaint it. In detached mode
     // there is no presenter; the app drives repaint via its own present loop.
-    if (presenter_) {
+    const bool idle = std::all_of(dialogs_.begin(), dialogs_.end(),
+                                  [](const ImGuiDialog* dialog) { return dialog->IsIdle(); });
+    const bool empty = std::all_of(dialogs_.begin(), dialogs_.end(),
+                                   [](const ImGuiDialog* dialog) { return dialog->IsEmpty(); });
+    if (presenter_ && empty && !REXCVAR_GET(ui_repaint_idle_dialogs)) {
+      // Nothing to draw: the guest output thread presents by itself until a
+      // dialog wakes the drawer.
+      presenter_->RemoveUIDrawerFromUIThread(this);
+      detached_while_empty_ = true;
+    } else if (presenter_ && (!idle || REXCVAR_GET(ui_repaint_idle_dialogs))) {
       presenter_->RequestUIPaintFromUIThread();
     }
   }

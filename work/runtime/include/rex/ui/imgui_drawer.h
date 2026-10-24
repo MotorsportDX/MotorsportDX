@@ -52,6 +52,10 @@ class ImGuiDrawer : public WindowInputListener, public UIDrawer {
   // UI thread can skip the round trip entirely.
   bool HasDialogs() const { return !dialogs_.empty(); }
 
+  // A dialog that was empty (ImGuiDialog::IsEmpty) has something to draw:
+  // attaches the drawer to the presenter again. Callable from any thread.
+  void WakeFromAnyThread();
+
   // SetPresenter may be called from the destructor.
   void SetPresenter(Presenter* new_presenter);
   void SetImmediateDrawer(ImmediateDrawer* new_immediate_drawer);
@@ -88,6 +92,7 @@ class ImGuiDrawer : public WindowInputListener, public UIDrawer {
 
   bool IsDrawingDialogs() const { return dialog_loop_next_index_ != SIZE_MAX; }
   void DetachIfLastDialogRemoved();
+  void AttachIfDetachedWhileEmpty();
 
   std::optional<ImGuiKey> VirtualKeyToImGuiKey(VirtualKey vkey);
 
@@ -108,6 +113,10 @@ class ImGuiDrawer : public WindowInputListener, public UIDrawer {
   size_t dialog_loop_next_index_ = SIZE_MAX;
 
   Presenter* presenter_ = nullptr;
+  // Out of the presenter's drawers while every dialog is empty.
+  bool detached_while_empty_ = false;
+  // Cleared on destruction, for WakeFromAnyThread's call on the UI thread.
+  std::shared_ptr<bool> alive_ = std::make_shared<bool>(true);
 
   ImmediateDrawer* immediate_drawer_ = nullptr;
   // Resources specific to an immediate drawer - must be destroyed before

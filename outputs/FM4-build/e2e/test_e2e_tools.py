@@ -247,7 +247,7 @@ class EventTests(unittest.TestCase):
         fast, menus = e2e.FAST_SCENARIOS, e2e.SCENARIOS
         for name, steps in fast.items():
             e2e.check_actions(steps)
-            if name != 'career':
+            if name not in ('career', 'menu_race'):
                 self.assertEqual(steps[:len(fast['quickrace']) - 3], fast['quickrace'][:-3], name)
         start = menus['career'].index([1, 'phase:race', 0])
         self.assertEqual(fast['career'][-(len(menus['career']) - start):], menus['career'][start:])
@@ -256,6 +256,13 @@ class EventTests(unittest.TestCase):
         for name in ('race', 'photo'):
             self.assertEqual(fast[name][len(fast['quickrace']):], menus[name][len(menus['quickrace']) + 1:])
             self.assertEqual(fast[name][len(fast['quickrace'])], [1, 'phase:race', 0])
+        # menu_race: the menu phase on the main menu, then the steps of race.
+        for scenarios, boot in ((fast, e2e._FAST_TO_MAIN_MENU), (menus, e2e._TO_MAIN_MENU)):
+            steps = scenarios['menu_race']
+            self.assertEqual(steps[:len(boot)], boot)
+            menu = steps.index([1, 'phase:menu', 0])
+            self.assertEqual(steps[menu:menu + 3], [[1, 'phase:menu', 0], [30, 'wait', 0], [1, 'phase:end', 0]])
+            self.assertEqual(steps[menu + 3:], scenarios['race'][len(boot):])
         self.assertEqual(fast['freeze'][len(fast['quickrace']) - 3], [0.5, '~y@720', 0])
         self.assertEqual(fast['freeze'][len(fast['quickrace']) - 3:],
                          menus['freeze'][len(menus['quickrace']) - 1:])
@@ -280,6 +287,13 @@ class SummaryTests(unittest.TestCase):
         self.assertEqual(result['render_thread_busy_ms_per_frame_median'], 2)
         self.assertEqual(result['guest_render_thread_ms_per_frame_median'], 5)
         self.assertEqual((result['queue_depth_median'], result['queue_depth_max']), (0.5, 2))
+
+    def test_host_presents(self):
+        result = e2e.summarize([self.window(host_presents={'new_frames': 50, 'repeats': 150, 'ui_thread': 200}),
+                                self.window(host_presents={'new_frames': 50, 'repeats': 0, 'ui_thread': 0})], 0)
+        self.assertEqual(result['host_presents_per_s'], {'new_frames': 50, 'repeats': 75, 'ui_thread': 100})
+        self.assertEqual(result['host_presents_per_frame'], 2.5)
+        self.assertNotIn('host_presents_per_s', e2e.summarize([self.window()] * 3, 0))
 
     def test_aggregate_keeps_new_fields(self):
         run = e2e.summarize([self.window()] * 3, 0)

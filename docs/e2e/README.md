@@ -7,7 +7,7 @@
 - crash status and error counts from the runtime log;
 - `summary.json` with median FPS and GPU-thread stall times.
 
-The game window shows the settings overlay of the run (render scale, quality, look, shadows, frame rate, shader A/B, ...; [`pipeline.py`](../../outputs/FM4-build/pipeline.py) `info_overlay`) from the start. The presenter draws it over the guest output, so the captures, OCR and `compare.py` never see it. `--env FM4_INFO_SHOW=0` hides it, and F2 toggles it.
+With `--info` the game window shows the settings overlay of the run (render scale, quality, look, shadows, frame rate, shader A/B, ...; [`pipeline.py`](../../outputs/FM4-build/pipeline.py) `info_overlay`) from the start, and F2 toggles it in any run. The presenter draws it over the guest output, so the captures, OCR and `compare.py` never see it. It is off by default since 24 October 2026, as in the launcher: while it shows, the UI thread presents every frame, at most 120 presents a second on the main PC, which is not the players' present path ([d3d-hle-n4.md 17.22](../analysis/d3d-hle-n4.md#1722-host-presents-24-october-2026)).
 
 Results go to `--out`, which must be outside this repository: captures and logs show game content. Use a directory under the BuildRoot, for example `<BuildRoot>\e2e\<name>`. `e2e.py` rejects an `--out` inside the repository. Never commit results.
 
@@ -55,7 +55,7 @@ Without network access (Jev unreachable), `--scenario quickrace` drives the same
 | `--build-root` | required | BuildRoot used by `Build.ps1` |
 | `--game-build` | `game-build` | build directory under the BuildRoot, for example `game-build-prof` (see [traces.md](traces.md)) or `game-build-thinlto` (`pipeline.py --flavor`) |
 | `--out` | required | result directory, outside the repository |
-| `--scenario` | `boot` | fixed timeline: `boot`, `quickrace`, `photo`, `photo_view`, `career`, `career_finish`, `career_progress`, `dlc`, `freeze` |
+| `--scenario` | `boot` | fixed timeline: `boot`, `quickrace`, `photo`, `photo_view`, `career`, `career_finish`, `career_progress`, `dlc`, `freeze`, `menu_race` |
 | `--profile` | none | copy a user-data root to `<out>\user-data` and run on it; `copy` means the BuildRoot's `user-data`, otherwise a path |
 | `--fast-route` | off | reach the race of `quickrace`, `race`, `photo`, `freeze` or `career` through the title's screen events instead of fixed delays and OCR ([fast route](#fast-route)) |
 | `--goal` | none | navigate with Jev instead of a timeline (`quickrace`) |
@@ -70,6 +70,7 @@ Without network access (Jev unreachable), `--scenario quickrace` drives the same
 | `--ao` | off | the runtime's ambient occlusion pass (the GTAO post pass, `post_pass_path`), as `pipeline.py --ao` |
 | `--tail` | 10 | seconds to keep running after the last step |
 | `--keep-ppm` | off | keep the full-resolution PPM captures next to the PNG files |
+| `--info` | off | show the settings overlay from the start (`FM4_INFO_SHOW=1`); it moves the host presents to the UI thread |
 | `--measure` | 0 | summarize only the last N perf seconds |
 | `--repeat` | 1 | run N times into `<out>\run1..runN` and aggregate into `<out>\summary.json` |
 | `--resummarize` | off | recompute `summary.json` of existing runs in `--out` from their `perf.jsonl` |
@@ -85,6 +86,7 @@ Fixed timelines with screen checks, no network access:
 | Scenario | What it does |
 | --- | --- |
 | `photo` | Quick Race, 10 s of driving, then a 30 s measured race phase, pause > PHOTO MODE, take a photo, save it as a new file; checks SAVE SUCCESSFUL. |
+| `menu_race` | the main menu for 30 s measured (phase `menu`; it renders the selected car in 3D), then the race of `race` (phase `race`): the menus' frame rate, host presents and power next to the race's ([d3d-hle-n4.md 17.22](../analysis/d3d-hle-n4.md#1722-host-presents-24-october-2026)). |
 | `photo_view` | a new process opens Career > MY PROFILE > MEDIA > MY PHOTOS and loads the saved photo; checks that it replaces the menus without an error (OCR reads its watermark only sometimes; see `final.png`). |
 | `career` | Career > GO RACE > WORLD TOUR, the profile's next event (Tsukuba Short Circuit with the Ford Ka for the BuildRoot profile), 40 s of driving, QUIT RACE, 30 s of the replay, CONTINUE to the event. |
 | `career_finish` | the same event to the end, driven by the title's AI (`engageaionstart`, needed): it wins the 3 laps in about 3 minutes; CONTINUE, then A every 6 s through YOU PLACED (Total), the driver and Ford affinity level 2 rewards (a gift car: the default) up to EVENT COMPLETE, after the save. |
@@ -128,7 +130,7 @@ FM4 menus ignore the first press after some screens open, and the career and GO 
 
 ## Fast route
 
-`--fast-route` reaches the race of `quickrace`, `race`, `photo`, `freeze` and `career` through the title's screen events (`events.txt`, [architecture](architecture.md#screen-events-fm4_test_events_file)) instead of the fixed delays and OCR checks of the menu route. It needs a binary with the events writer (`fm4-test-events.cpp`, 22 October 2026). The steps after the race starts are those of the menu route. In `quickrace`, `race`, `photo` and `freeze` the race is the same Quick Race: the same screens accept the same defaults (Abarth, 1980 131 Abarth, its default paint, the default difficulty, Bernese Alps, Festival Circuit), so the render scenario, the tiling and the quality are those of the menu route, and `FM4_FIXED_SEED` pins the opponents and the grid as it does there.
+`--fast-route` reaches the race of `quickrace`, `race`, `photo`, `freeze`, `menu_race` and `career` through the title's screen events (`events.txt`, [architecture](architecture.md#screen-events-fm4_test_events_file)) instead of the fixed delays and OCR checks of the menu route. It needs a binary with the events writer (`fm4-test-events.cpp`, 22 October 2026). The steps after the race starts are those of the menu route. In `quickrace`, `race`, `photo` and `freeze` the race is the same Quick Race: the same screens accept the same defaults (Abarth, 1980 131 Abarth, its default paint, the default difficulty, Bernese Alps, Festival Circuit), so the render scenario, the tiling and the quality are those of the menu route, and `FM4_FIXED_SEED` pins the opponents and the grid as it does there. `menu_race` waits for PLAY CAREER after the boot, measures its menu phase, then takes the steps of `race`.
 
 | Part | Menu route | Fast route |
 | --- | --- | --- |
@@ -209,6 +211,14 @@ The guest vblank then runs at 60 Hz, and at `<n>` Hz only while a race scenario 
 
 At 240 Hz (`--arg=--video_mode_refresh_rate=240 --env FM4_FRAME_RATE=240`) the command processor, not the vblank, sets the frame rate.
 
+## Host presents
+
+What the perf trace and the gates measure is the guest side: its frames, their times and the host work behind them. What reaches the screen is the host's presents (`host_presents` in the perf trace, `host_presents_per_s` in `summary.json`), which can be fewer ([d3d-hle-n4.md 17.22](../analysis/d3d-hle-n4.md#1722-host-presents-24-october-2026)):
+
+- `e2e.py` sets `present_skip_superseded=true`: a frame presented from the submit thread is skipped while a newer one is not submitted yet, as every gate before 24 October 2026 did. Where the host presents slower than the guest renders, the guest keeps its throughput and the frames between are not shown. On the main PC the host presents at most about 120 times a second at 240 Hz (a property of the hybrid laptop), so its 240 Hz races show about half of their frames.
+- `--arg present_skip_superseded=false` runs the players' path: every frame is presented, and the guest follows the display's pacing. A close gate adds one such cell, a race at 1x: its presents equal its guest frames, and on the main PC it runs at about 120 fps with a p99 of about 12.7 ms, which the paired presents at a 60 Hz rhythm set (display limited, not a regression).
+- The settings overlay (`--info`) moves the presents to the UI thread.
+
 ## Comparing runs
 
 Single runs vary by about 10-20% in FPS, and a hot laptop drifts: the same binary measured 53.4 and then 48.8 fps (3 runs each) half an hour apart. Bracket a candidate with baseline runs before and after it. Measure each configuration with `--repeat 3`: runs go to `<out>\run1..run3`, and `<out>\summary.json` aggregates them (median of medians, minimum of minimums, union of errors). A/B a cvar on the same binary with `--arg`, for example `--arg=--readback_resolve=fast`. Then:
@@ -275,6 +285,7 @@ The statistics come from the steady part of the perf trace: without `--measure`,
 | `cp_busy_ms_per_s_median` | window time minus all waits: wall time the command-processor thread works |
 | `readbacks_per_s_median`, `draws_per_s_median` | resolve readbacks and draws per second |
 | `draws_per_frame_mean` | draws over all measured frames |
+| `host_presents_per_s`, `host_presents_per_frame` | the host's presents per second over the measured windows (`new_frames`, `repeats`, `ui_thread`, from the trace's `host_presents`), and all presents per guest frame ([d3d-hle-n4.md 17.22](../analysis/d3d-hle-n4.md#1722-host-presents-24-october-2026)) |
 | `render_thread_busy_ms_per_frame_median`, `render_thread_source`, `guest_render_thread_ms_per_frame_median`, `queue_depth_median`, `queue_depth_max` | backend-neutral thread and queue metrics; on the PM4 path the render thread is the command processor (`render_thread_source` `cp`); the others only when the trace has them ([frozen-frames.md](frozen-frames.md#backend-neutral-fields)) |
 | `cpu_ms_per_s_median` | command-processor time per zone, per second |
 | `occlusion_samples_median` | mean passing samples per occlusion interval, unawaited and awaited |

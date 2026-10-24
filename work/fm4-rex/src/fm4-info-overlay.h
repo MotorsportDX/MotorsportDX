@@ -2,7 +2,7 @@
 // e2e.py set up (display and render scale, race quality, look, shadows, frame rate, ...),
 // from FM4_INFO ("line|line|..."), above the window size and the game's frame rate (guest
 // output refreshes). The presenter draws it over the guest output, so captures
-// (FM4_CAPTURE_DIR) never contain it. FM4_INFO_SHOW=1 shows it at start (e2e.py,
+// (FM4_CAPTURE_DIR) never contain it. FM4_INFO_SHOW=1 shows it at start (e2e.py --info,
 // Build.ps1 -Info); F2 toggles it.
 
 #pragma once
@@ -28,6 +28,11 @@ class FM4InfoOverlay : public rex::ui::ImGuiDialog {
         lines_(std::move(lines)),
         rate_time_(std::chrono::steady_clock::now()),
         rate_frames_(frames_()) {}
+
+ public:
+  // The text changes only with the guest frames, which repaint it: the overlay
+  // does not make the host present at every UI tick (d3d-hle-n4.md 17.22).
+  bool IsIdle() const override { return true; }
 
  protected:
   void OnDraw(ImGuiIO& io) override {

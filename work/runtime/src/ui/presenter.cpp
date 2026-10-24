@@ -11,6 +11,8 @@
 
 #include <algorithm>
 #include <atomic>
+#include <chrono>
+#include <thread>
 #include <cctype>
 #include <utility>
 
@@ -19,6 +21,7 @@
 #include <rex/logging.h>
 #include <rex/platform.h>
 #include <rex/ui/presenter.h>
+#include <rex/ui/present_stats.h>
 #include <rex/ui/window.h>
 
 #if defined(REX_HAS_FIDELITYFX_RUNTIME) && REX_HAS_FIDELITYFX_RUNTIME
@@ -28,6 +31,10 @@
 
 REXCVAR_DEFINE_BOOL(host_present_from_non_ui_thread, true, "UI/Presenter",
                     "Allow presentation from non-UI thread");
+
+REXCVAR_DEFINE_INT32(present_min_interval_us, 0, "UI/Presenter",
+                     "Hold each host present until this many microseconds after the previous "
+                     "one (0: off): a stand-in for an external frame limiter");
 
 REXCVAR_DEFINE_BOOL(present_letterbox, true, "UI/Presenter",
                     "Enable letterboxing for non-native aspect ratios");
@@ -558,6 +565,7 @@ bool Presenter::RefreshGuestOutput(
   writable_properties.display_aspect_ratio_x = display_aspect_ratio_x;
   writable_properties.display_aspect_ratio_y = display_aspect_ratio_y;
   writable_properties.is_8bpc = false;
+  writable_properties.refresh = guest_output_refresh_count_.load(std::memory_order_relaxed) + 1;
   bool is_active = writable_properties.IsActive();
   if (is_active) {
     if (!RefreshGuestOutputImpl(guest_output_mailbox_writable_, frontbuffer_width,
@@ -567,6 +575,7 @@ bool Presenter::RefreshGuestOutput(
       // output either though because the failure may be something transient.
       return false;
     }
+    OnGuestOutputRefreshed(guest_output_mailbox_writable_, writable_properties);
     guest_output_active_last_refresh_ = true;
     guest_output_refresh_count_.fetch_add(1, std::memory_order_relaxed);
   } else {
@@ -1506,10 +1515,57 @@ bool Presenter::InSurfaceOnMonitorFromUIThread() const {
 #endif  // XE_PLATFORM
 }
 
+namespace {
+std::atomic<uint64_t> present_new_frames{0}, present_repeats{0}, present_ui_thread{0};
+std::atomic<uint64_t> present_under_8_33_ms{0}, present_under_4_17_ms{0};
+}  // namespace
+
+PresentStats TakePresentStats() {
+  PresentStats stats;
+  stats.new_frames = present_new_frames.exchange(0, std::memory_order_relaxed);
+  stats.repeats = present_repeats.exchange(0, std::memory_order_relaxed);
+  stats.ui_thread = present_ui_thread.exchange(0, std::memory_order_relaxed);
+  stats.under_8_33_ms = present_under_8_33_ms.exchange(0, std::memory_order_relaxed);
+  stats.under_4_17_ms = present_under_4_17_ms.exchange(0, std::memory_order_relaxed);
+  return stats;
+}
+
 Presenter::PaintResult Presenter::PaintAndPresent(bool execute_ui_drawers) {
   assert_false(execute_ui_drawers && !is_in_ui_thread_paint_);
   assert_true(surface_paint_connection_state_ == SurfacePaintConnectionState::kConnectedPaintable);
+  painted_refresh_ = 0;
   PaintResult result = PaintAndPresentImpl(execute_ui_drawers);
+  if (const int32_t interval = REXCVAR_GET(present_min_interval_us);
+      interval > 0 && (result == PaintResult::kPresented || result == PaintResult::kPresentedSuboptimal)) {
+    // As a limiter that blocks in the present call (d3d-hle-n4.md 17.22): hold the
+    // presenting thread until the interval after the previous present has passed,
+    // sleeping to about 1 ms before the time, then yielding up to it.
+    const auto due = last_present_time_ + std::chrono::microseconds(interval);
+    if (due - std::chrono::steady_clock::now() > std::chrono::microseconds(1500)) {
+      std::this_thread::sleep_until(due - std::chrono::microseconds(1000));
+    }
+    while (std::chrono::steady_clock::now() < due) {
+      std::this_thread::yield();
+    }
+  }
+  const auto previous_present_time = last_present_time_;
+  last_present_time_ = std::chrono::steady_clock::now();
+  if (result == PaintResult::kPresented || result == PaintResult::kPresentedSuboptimal) {
+    // A present of a guest output frame no earlier present showed, or of the same
+    // one again (perf trace, d3d-hle-n4.md 17.22).
+    const uint64_t refresh = painted_refresh_;
+    const bool new_frame =
+        last_presented_refresh_.exchange(refresh, std::memory_order_relaxed) != refresh;
+    (new_frame ? present_new_frames : present_repeats).fetch_add(1, std::memory_order_relaxed);
+    if (is_in_ui_thread_paint_) present_ui_thread.fetch_add(1, std::memory_order_relaxed);
+    const auto interval = last_present_time_ - previous_present_time;
+    if (interval < std::chrono::microseconds(8333)) {
+      present_under_8_33_ms.fetch_add(1, std::memory_order_relaxed);
+    }
+    if (interval < std::chrono::microseconds(4167)) {
+      present_under_4_17_ms.fetch_add(1, std::memory_order_relaxed);
+    }
+  }
   switch (result) {
     case PaintResult::kPresented:
       surface_paint_connection_was_optimal_at_successful_paint_ = true;

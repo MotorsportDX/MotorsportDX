@@ -647,3 +647,56 @@ So the data supports one change of default for the Ally X: render scale 1x inste
 - **The device target at the panel's resolution moves to N5**, the native-resolution work the project owner approved on 24 October 2026: a fractional 1.5x render scale for 1080p, widescreen and up to 4K, on the native path ([d3d-hle-n5.md](d3d-hle-n5.md)).
 - **N4 closes** once the host presents item (17.22) is finished.
 - **The Ally X default for now: render scale 1x** through a launcher rule for integrated GPUs (a UMA adapter, or under about 1 GB of dedicated video memory) on a 1080p panel, until N5's 1.5x is measured on the device; the user can still choose another scale. The render path's default stays RTV everywhere; the native path stays an option in the GUI launcher, and flipping the global default is a separate decision after N5.
+
+### 17.22 Host presents, 24 October 2026
+
+Armoury Crate's monitor on the ROG Xbox Ally X showed more than 150 fps in the menus and more than 120 fps on every screen with the race at 120: the host presented more often than the guest swapped.
+
+**The counter.** The perf trace counts the presenter's presents in each window (`host_presents`, [traces](../e2e/traces.md)):
+- `new_frames`, of a guest output frame no earlier present showed, and `repeats`, of the same frame again;
+- `ui_thread`, those the UI thread made (the others come from the thread that produced the frame, or the submit thread with `d3d12_submit_thread_async_swap`);
+- `under_8_33_ms` and `under_4_17_ms`, presents sooner after the previous one than a refresh at 120 and 240 Hz.
+
+`e2e.py` sums them per phase (`host_presents_per_s`, `host_presents_per_frame`), and the `menu_race` scenario measures 30 s on the main menu before the race of `race`.
+
+**The cause.** The runtime creates the achievement toast at the launch, whether an achievement ever shows or not, so the ImGui drawer is always one of the presenter's UI drawers. That has two effects:
+- every frame is presented by the UI thread (`kUIThreadOnRequest`) instead of the guest output thread, which the presenter does only while a UI drawer exists;
+- the drawer asks for a repaint at every UI tick, so the UI thread presents the same guest frame again between the guest's frames. In the menus at 60 fps that gave 60 new and 60 repeated presents a second.
+
+**The fix.**
+- An ImGui dialog says whether it is idle (`ImGuiDialog::IsIdle`): it shows nothing that changes on its own. The toast is idle while nothing is queued, and the settings overlay (F2) is always idle, since its text follows the guest frames. While every dialog is idle, the drawer is painted with the guest frames only.
+- A dialog says whether it is empty (`IsEmpty`), drawing nothing at all, as the toast with nothing queued. While every dialog is empty, the drawer leaves the presenter, which presents from the guest output thread again, as without a user interface; the toast brings the drawer back when an achievement arrives (`ImGuiDrawer::WakeFromAnyThread`).
+- `ui_repaint_idle_dialogs=true` restores the earlier repaint for comparisons. Both changes are generic presenter behaviour, so `-Rov` has them too; nothing in them is specific to the title.
+
+**The e2e runs had the overlay on.** `e2e.py` showed the settings overlay from the start (`FM4_INFO_SHOW=1`), so every e2e run presented from the UI thread. The overlay was there for whoever watches the window; the captures, OCR and `compare.py` never see it. Since 24 October 2026 `e2e.py` shows it only with `--info`, as the launcher does with `-Info`, and the gates measure the players' present path.
+
+The earlier results stay valid as measurements of the guest side: its frame rate, p99, the GPU and CPU times. What reached the screen in those runs was limited by the UI thread's presents (below).
+
+**The deferred present.** With the drawer gone, the frames come from the submit thread (`d3d12_submit_thread_async_swap`, on in the launcher): each frame's present runs after its submission. It skipped its frame when a newer one had been refreshed but not yet submitted, expecting that frame's own present to follow. While the host presents slower than the guest renders, that newer frame's present found a newer one again, so frames were dropped: at 2x the race presented 75 of 186 frames a second (`n4pt-kf`), fewer than the UI thread's 120 before. A deferred present now shows the newest frame whose work is submitted, at least its own, instead of dropping it, and never one older than the last it showed (`D3D12Presenter::OnGuestOutputRefreshed` keeps the four latest images with their submission; the present's command list goes to the queue before the later refreshes' work, which may already reuse the image's mailbox slot).
+
+`present_skip_superseded=true` restores the skip. `e2e.py` sets it by default, so the guest throughput of its gates stays comparable with every earlier gate on this PC; `--arg present_skip_superseded=false` runs the players' path ([e2e](../e2e/README.md#host-presents)).
+
+**The display's cap on the main PC.** Every path presents at most about 120 times a second at 240 Hz on this laptop: the UI thread, the guest output thread, the submit thread, RTV and `-Native`. With `d3d12_submit_thread_async_swap=false` the present blocks the command processor and the race runs at 120 fps (`n4pu-fna`, against 238 fps with it). Half of the intervals between presents are under 8.33 ms: they come in pairs at a 60 Hz rhythm. The desktop compositor reports its 240 Hz refresh (a period of 4.17 ms) and composes about once a second during the race, so the frames are not composed by it. The cap is taken as a property of this hybrid laptop (the NVIDIA GPU renders, the Intel GPU drives the panel), not of the runtime; PresentMon, which would show the present mode, waits for the user's approval. At `-FrameRate 120` the presents match the frames.
+
+**Results** (`I:\FM4-build-usa`, `menu_race` on the fast route, 1x unless noted, one run a side; the menu values are medians of five runs a side without the overlay, round `n4pt`; the race and the limiter of rounds `n4pt` to `n4pw`):
+
+| | Before | After |
+| --- | --- | --- |
+| Menu presents a guest frame | 2.0 (60 new, 60 repeated) | 1.0 |
+| Menu process CPU | 537 ms/s | 404 ms/s |
+| Menu package power | 31.5 W | 29.8 W |
+| Menu GPU power (NVIDIA, `nvidia-smi`) | 22 to 27 W at 950 to 1,660 MHz | about 21 W at 665 to 810 MHz |
+| Race at 240 Hz, `-Native`: guest fps, presents a second | 239 fps, 120 | 120 fps, 120 (p99 12.7 ms, the paired presents) |
+| Race at 240 Hz, 2x: guest fps, presents a second | 193 fps, 120 (75 before the deferred fix) | 120 fps, 120 |
+| Race at 120 Hz | 120 fps, 120, p99 8.9 ms | the same |
+| A limiter at 30 (`present_min_interval_us=33333`) | the guest at 239 fps, 29 presents | 29.8 guest frames, 29.8 presents |
+
+- What reaches the screen does not change on this PC (120 a second before and after); the guest no longer renders frames that are never shown, and it follows the display's pacing.
+- The limiter stand-in holds the presenting thread after each present, as a driver or overlay limiter that blocks in the present call. Before, the UI thread's presents decoupled the guest from it, and a limiter's 30 presents a second also carried the UI's repeated frames (60 a second in the menus): the Ally X's "under 30" with Armoury Crate's limiter at 30.
+- The 1:1 image check at 2x (`n4pt-kb` against `n4pt-kf`, the menu and a race frame): the same picture; the change is in the presents only, and the captures are taken on the guest side.
+- The settings overlay keeps the UI thread's presents (`n4pw-fno`: 239 fps, 120 presents).
+- On the final build (`n4px`, 1x at 240 Hz): e2e's default, with the skip, races at 239.1 fps with 120 presents a second (RTV 231.2 fps); the players' path at 120.0 fps with 120 presents and p99 12.0 ms (RTV 120.0 fps, 12.5 ms).
+
+**For the ROG Xbox Ally X**, with one GPU and a VRR panel at 120 Hz: the menus present once a guest frame instead of twice, the presents no longer add the UI's ticks, and a frame limiter gives as many guest frames as presents. Its next run shows whether its presents are capped too.
+
+**Open.** The cause of the main PC's cap (PresentMon, or the laptop's MUX or dGPU-only mode, both the user's). `present_letterbox` matters for the fullscreen fill of N5; it is left to N1.

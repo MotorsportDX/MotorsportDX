@@ -52,6 +52,23 @@ class ImGuiDialog {
   virtual void OnClose() {}
   virtual void OnDraw(ImGuiIO& io) { (void)io; }
 
+ public:
+  // An idle dialog shows nothing that changes on its own: a toast with nothing
+  // queued, or an overlay whose text follows the guest frames. While every
+  // dialog is idle, the drawer is painted only with the guest output's frames
+  // instead of at every UI tick (the monitor's refresh), so the host presents
+  // as often as the guest renders (docs/analysis/d3d-hle-n4.md 17.22). Called
+  // on the UI thread.
+  virtual bool IsIdle() const { return false; }
+  // An empty dialog draws nothing at all, such as a toast with nothing queued.
+  // While every dialog is empty, the drawer leaves the presenter, which then
+  // presents the guest output from the thread that produced it, as without a
+  // user interface; the dialog calls ImGuiDrawer::WakeFromAnyThread when it
+  // gets something to draw. Called on the UI thread.
+  virtual bool IsEmpty() const { return false; }
+
+ protected:
+
  private:
   ImGuiDrawer* imgui_drawer_ = nullptr;
   bool has_close_pending_ = false;

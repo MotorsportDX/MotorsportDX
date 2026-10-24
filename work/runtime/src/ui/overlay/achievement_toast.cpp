@@ -25,8 +25,17 @@ AchievementToastDialog::AchievementToastDialog(ImGuiDrawer* drawer,
 AchievementToastDialog::~AchievementToastDialog() {}
 
 void AchievementToastDialog::Push(const rex::system::AchievementEvent& event) {
+  {
+    std::lock_guard<std::mutex> lock(mutex_);
+    queue_.push_back({event, std::chrono::steady_clock::now()});
+  }
+  // The drawer may have left the presenter while the queue was empty.
+  imgui_drawer()->WakeFromAnyThread();
+}
+
+bool AchievementToastDialog::IsIdle() const {
   std::lock_guard<std::mutex> lock(mutex_);
-  queue_.push_back({event, std::chrono::steady_clock::now()});
+  return queue_.empty();
 }
 
 void AchievementToastDialog::OnDraw(ImGuiIO& io) {

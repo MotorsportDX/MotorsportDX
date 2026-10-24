@@ -50,7 +50,7 @@ Environment:
 3. `FM4_CAPTURE_DIR=<out>\capture`, `FM4_TEST_INPUT_FILE=<out>\input.txt`, `REX_PERF_TRACE_FILE=<out>\perf.jsonl`, `FM4_TEST_EVENTS_FILE=<out>\events.txt`.
 4. `FM4_RACE_SETTINGS` of the quality preset (`pipeline.race_settings`), and `FM4_TRACK_SETTINGS` of the look's track lighting knobs (`pipeline.look_track_settings`).
 5. The `--env` items.
-6. `FM4_INFO` (the settings overlay text, `pipeline.info_overlay`) and `FM4_INFO_SHOW=1` unless `--env` sets it.
+6. `FM4_INFO` (the settings overlay text, `pipeline.info_overlay`) and `FM4_INFO_SHOW` (1 with `--info`, else 0) unless `--env` sets it.
 
 With `FM4_GAME_CMDLINE` containing `engageaionstart`, the title's AI drives the player's car, and `without_driving_input` removes throttle, brake and steering from the steps.
 

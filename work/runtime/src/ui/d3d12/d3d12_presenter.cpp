@@ -33,6 +33,12 @@
 REXCVAR_DEFINE_BOOL(d3d12_allow_variable_refresh_rate_and_tearing, true, "UI/D3D12",
                     "Allow variable refresh rate and tearing");
 
+REXCVAR_DEFINE_BOOL(present_skip_superseded, false, "UI/D3D12",
+                    "A deferred present (d3d12_submit_thread_async_swap) skips its frame while a "
+                    "newer one is not submitted yet, as before 24 October 2026: the guest renders "
+                    "faster than the host can present, and the frames between are not shown "
+                    "(e2e's guest throughput)");
+
 // FM4 PC: guest output shrunk to the window (a render scale above the window
 // size) is averaged over each pixel's footprint instead of one bilinear tap.
 REXCVAR_DEFINE_BOOL(present_area_downscale, true, "UI/D3D12",
@@ -572,6 +578,18 @@ void D3D12Presenter::SignalGuestOutputRefresher(UINT64 submission) {
   guest_output_refresher_signal_cond_.notify_all();
 }
 
+void D3D12Presenter::OnGuestOutputRefreshed(uint32_t mailbox_index,
+                                            const GuestOutputProperties& properties) {
+  // On the guest output thread, which alone writes guest_output_resources_.
+  RecentGuestOutput recent;
+  recent.submission = guest_output_resources_[mailbox_index].first;
+  recent.resource = guest_output_resources_[mailbox_index].second;
+  recent.properties = properties;
+  std::lock_guard<std::mutex> lock(recent_guest_outputs_mutex_);
+  recent_guest_outputs_[recent_guest_output_next_++ % recent_guest_outputs_.size()] =
+      std::move(recent);
+}
+
 bool D3D12Presenter::IsGuestOutputRefresherSignalEnqueued(UINT64 submission) {
   std::lock_guard<std::mutex> lock(guest_output_refresher_signal_mutex_);
   return guest_output_refresher_signal_enqueued_ >= submission;
@@ -619,12 +637,42 @@ Presenter::PaintResult D3D12Presenter::PaintAndPresentImpl(bool execute_ui_drawe
   }
   if (guest_output_resource &&
       !IsGuestOutputRefresherSignalEnqueued(guest_output_refresher_submission)) {
-    if (is_in_deferred_guest_output_paint()) {
-      // A newer image whose work this thread submits later: its own deferred
-      // presentation follows that.
+    if (is_in_deferred_guest_output_paint() && REXCVAR_GET(present_skip_superseded)) {
       return PaintResult::kNotPresented;
     }
-    AwaitGuestOutputRefresherSignal(guest_output_refresher_submission);
+    if (is_in_deferred_guest_output_paint()) {
+      // A newer image whose work this thread submits later. Its own deferred
+      // presentation follows that, but may find a newer one again while
+      // presenting is slower than the guest: present the newest image whose
+      // work is submitted (at least this paint's own) rather than dropping it.
+      Microsoft::WRL::ComPtr<ID3D12Resource> submitted_resource;
+      {
+        std::lock_guard<std::mutex> lock(recent_guest_outputs_mutex_);
+        const RecentGuestOutput* newest = nullptr;
+        for (const RecentGuestOutput& recent : recent_guest_outputs_) {
+          if (recent.resource && IsGuestOutputRefresherSignalEnqueued(recent.submission) &&
+              (!newest || recent.properties.refresh > newest->properties.refresh)) {
+            newest = &recent;
+          }
+        }
+        if (newest && newest->properties.refresh > last_deferred_painted_refresh_) {
+          submitted_resource = newest->resource;
+          guest_output_properties = newest->properties;
+        }
+      }
+      if (!submitted_resource) {
+        return PaintResult::kNotPresented;
+      }
+      guest_output_resource = std::move(submitted_resource);
+    } else {
+      AwaitGuestOutputRefresherSignal(guest_output_refresher_submission);
+    }
+  }
+  if (guest_output_resource) {
+    painted_refresh_ = guest_output_properties.refresh;
+    if (is_in_deferred_guest_output_paint()) {
+      last_deferred_painted_refresh_ = painted_refresh_;
+    }
   }
 
   // Begin the command list with the command allocator not currently potentially
