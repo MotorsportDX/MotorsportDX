@@ -130,6 +130,8 @@ struct State {
   // only): GPU time and count.
   double gpu_resolve_bucket_ms[4] = {};
   uint64_t gpu_resolve_bucket_count[4] = {};
+  // The post pass groups (kGpuPasses) and the swap's passes (d3d-hle-n4.md 17.24).
+  double gpu_pass_ms[5 + 1] = {};
   // Samples passing depth/stencil per occlusion snapshot interval, as reported
   // to the guest (after any divisor), to compare paths and calibrate.
   double occlusion_samples[2]{};  // Unawaited, awaited.
@@ -703,6 +705,19 @@ inline void AddGpuFrame(double busy_ms, double resolve_ms, double span_ms, doubl
   state->gpu_transfer_depth_ms += transfer_depth_ms;
 }
 
+// The post pass groups of the perf trace's gpu passes_ms, in the order of the
+// command processor's GpuTimestampKind::kPass... kinds.
+inline constexpr const char* kGpuPasses[] = {"gtao", "taa", "motion", "windshield", "other"};
+inline constexpr size_t kGpuPassCount = sizeof(kGpuPasses) / sizeof(kGpuPasses[0]);
+static_assert(kGpuPassCount + 1 == sizeof(State::gpu_pass_ms) / sizeof(double));
+
+// ms: the GPU time of each post pass group, then of the swap's passes.
+inline void AddGpuPasses(const double* ms) {
+  State* state = Get();
+  if (!state) return;
+  for (size_t i = 0; i < kGpuPassCount + 1; ++i) state->gpu_pass_ms[i] += ms[i];
+}
+
 inline void AddGpuResolveBuckets(const double* ms, const uint32_t* counts) {
   State* state = Get();
   if (!state) return;
@@ -957,7 +972,10 @@ inline void OnSwap() {
     state->output << ",\"host_presents\":{\"new_frames\":" << presents.new_frames
                   << ",\"repeats\":" << presents.repeats << ",\"ui_thread\":" << presents.ui_thread
                   << ",\"under_8_33_ms\":" << presents.under_8_33_ms
-                  << ",\"under_4_17_ms\":" << presents.under_4_17_ms << '}';
+                  << ",\"under_4_17_ms\":" << presents.under_4_17_ms << ",\"paint_gpu_ms\":"
+                  << (presents.paint_gpu_paints ? presents.paint_gpu_ms / double(presents.paint_gpu_paints)
+                                                : 0.0)
+                  << '}';
   }
   // The title's ring index waits that slept (guest_ring_wait_sleep, d3d-hle-n4.md 17.16).
   {
@@ -1029,7 +1047,22 @@ inline void OnSwap() {
                     << double(state->gpu_resolve_bucket_count[i]) / gpu_frames << ']';
     }
   }
-  state->output << "}";
+  state->output << "},\"passes_ms\":{";
+  {
+    // The post passes by group, the swap's passes, and the rest of the frame's
+    // GPU time: the guest's draws and resolves with its own post-processing,
+    // which the look mods change in place (d3d-hle-n4.md 17.24).
+    double passes = 0;
+    for (size_t i = 0; i < kGpuPassCount; ++i) {
+      state->output << (i ? "," : "") << '"' << kGpuPasses[i]
+                    << "\":" << state->gpu_pass_ms[i] / gpu_frames;
+      passes += state->gpu_pass_ms[i];
+    }
+    state->output << "},\"swap_ms\":" << state->gpu_pass_ms[kGpuPassCount] / gpu_frames
+                  << ",\"scene_ms\":"
+                  << std::max(0.0, state->gpu_busy_ms - passes - state->gpu_pass_ms[kGpuPassCount]) /
+                         gpu_frames;
+  }
   const auto ns_ms = [](uint64_t ns) { return double(ns) / 1e6; };
   state->output << "},\"submit_thread\":{\"jobs\":"
                 << submit_thread_jobs.exchange(0, std::memory_order_relaxed) << ",\"busy_ms\":"

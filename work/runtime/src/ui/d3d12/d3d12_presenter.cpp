@@ -18,6 +18,7 @@
 #include <rex/assert.h>
 #include <rex/cvar.h>
 #include <rex/logging.h>
+#include <rex/ui/present_stats.h>
 #include <rex/math.h>
 #include <rex/ui/d3d12/d3d12_presenter.h>
 #include <rex/ui/d3d12/d3d12_provider.h>
@@ -582,6 +583,57 @@ void D3D12Presenter::SignalGuestOutputRefresher(UINT64 submission) {
   guest_output_refresher_signal_cond_.notify_all();
 }
 
+uint32_t D3D12Presenter::BeginPaintTimestamp(ID3D12GraphicsCommandList* command_list,
+                                             UINT64 submission) {
+  if (!PaintGpuTimingEnabled() || paint_timestamps_failed_) return UINT32_MAX;
+  if (!paint_timestamp_heap_) {
+    ID3D12Device* device = provider_.GetDevice();
+    D3D12_QUERY_HEAP_DESC heap_desc = {};
+    heap_desc.Type = D3D12_QUERY_HEAP_TYPE_TIMESTAMP;
+    heap_desc.Count = kPaintTimestampSlots * 2;
+    D3D12_RESOURCE_DESC buffer_desc;
+    util::FillBufferResourceDesc(buffer_desc, sizeof(uint64_t) * kPaintTimestampSlots * 2,
+                                 D3D12_RESOURCE_FLAG_NONE);
+    UINT64 frequency = 0;
+    void* mapping = nullptr;
+    if (FAILED(device->CreateQueryHeap(&heap_desc, IID_PPV_ARGS(&paint_timestamp_heap_))) ||
+        FAILED(device->CreateCommittedResource(&util::kHeapPropertiesReadback, D3D12_HEAP_FLAG_NONE,
+                                               &buffer_desc, D3D12_RESOURCE_STATE_COPY_DEST, nullptr,
+                                               IID_PPV_ARGS(&paint_timestamp_readback_))) ||
+        FAILED(provider_.GetDirectQueue()->GetTimestampFrequency(&frequency)) || !frequency ||
+        FAILED(paint_timestamp_readback_->Map(0, nullptr, &mapping))) {
+      REXLOG_WARN("D3D12Presenter: no GPU timestamps for the paints");
+      paint_timestamp_heap_.Reset();
+      paint_timestamp_readback_.Reset();
+      paint_timestamps_failed_ = true;
+      return UINT32_MAX;
+    }
+    paint_timestamp_mapping_ = static_cast<const uint64_t*>(mapping);
+    paint_timestamp_tick_ms_ = 1000.0 / double(frequency);
+  }
+  // The paints whose work has completed since.
+  const UINT64 completed = paint_context_.paint_submission_tracker.GetCompletedSubmission();
+  for (uint32_t i = 0; i < kPaintTimestampSlots; ++i) {
+    if (!paint_timestamp_pending_[i] || paint_timestamp_submissions_[i] > completed) continue;
+    paint_timestamp_pending_[i] = false;
+    const uint64_t begin = paint_timestamp_mapping_[i * 2], end = paint_timestamp_mapping_[i * 2 + 1];
+    if (end > begin) AddPaintGpuMs(double(end - begin) * paint_timestamp_tick_ms_);
+  }
+  const uint32_t slot = uint32_t(submission % kPaintTimestampSlots);
+  paint_timestamp_pending_[slot] = false;
+  command_list->EndQuery(paint_timestamp_heap_.Get(), D3D12_QUERY_TYPE_TIMESTAMP, slot * 2);
+  return slot;
+}
+
+void D3D12Presenter::EndPaintTimestamp(ID3D12GraphicsCommandList* command_list, uint32_t slot) {
+  if (slot == UINT32_MAX) return;
+  command_list->EndQuery(paint_timestamp_heap_.Get(), D3D12_QUERY_TYPE_TIMESTAMP, slot * 2 + 1);
+  command_list->ResolveQueryData(paint_timestamp_heap_.Get(), D3D12_QUERY_TYPE_TIMESTAMP, slot * 2, 2,
+                                 paint_timestamp_readback_.Get(), sizeof(uint64_t) * slot * 2);
+  paint_timestamp_submissions_[slot] = paint_context_.paint_submission_tracker.GetCurrentSubmission();
+  paint_timestamp_pending_[slot] = true;
+}
+
 void D3D12Presenter::OnGuestOutputRefreshed(uint32_t mailbox_index,
                                             const GuestOutputProperties& properties) {
   // On the guest output thread, which alone writes guest_output_resources_.
@@ -692,6 +744,7 @@ Presenter::PaintResult D3D12Presenter::PaintAndPresentImpl(bool execute_ui_drawe
   command_allocator->Reset();
   ID3D12GraphicsCommandList* command_list = paint_context_.command_list.Get();
   command_list->Reset(command_allocator, nullptr);
+  const uint32_t paint_timestamp = BeginPaintTimestamp(command_list, current_paint_submission);
 
   ID3D12Device* device = provider_.GetDevice();
 
@@ -1248,6 +1301,7 @@ Presenter::PaintResult D3D12Presenter::PaintAndPresentImpl(bool execute_ui_drawe
   command_list->ResourceBarrier(1, &barrier_rtv_to_present);
 
   // Execute and present.
+  EndPaintTimestamp(command_list, paint_timestamp);
   command_list->Close();
   ID3D12CommandList* execute_command_list = command_list;
   provider_.GetDirectQueue()->ExecuteCommandLists(1, &execute_command_list);

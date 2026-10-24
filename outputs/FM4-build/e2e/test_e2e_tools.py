@@ -288,10 +288,22 @@ class SummaryTests(unittest.TestCase):
         self.assertEqual(result['guest_render_thread_ms_per_frame_median'], 5)
         self.assertEqual((result['queue_depth_median'], result['queue_depth_max']), (0.5, 2))
 
+    def test_gpu_passes(self):
+        gpu = {'frames': 50, 'frame_ms': 8.0, 'resolve_ms': 1.0, 'span_ms': 9.0,
+               'passes_ms': {'gtao': 1.0, 'taa': 0.5, 'motion': 0.2, 'windshield': 0.1, 'other': 0.0},
+               'swap_ms': 0.2, 'scene_ms': 6.0}
+        result = e2e.summarize([self.window(gpu=gpu)] * 3, 0)
+        self.assertEqual(result['gpu_passes_ms_median'],
+                         {'gtao': 1.0, 'taa': 0.5, 'motion': 0.2, 'windshield': 0.1, 'other': 0.0,
+                          'swap': 0.2, 'scene': 6.0})
+
     def test_host_presents(self):
-        result = e2e.summarize([self.window(host_presents={'new_frames': 50, 'repeats': 150, 'ui_thread': 200}),
-                                self.window(host_presents={'new_frames': 50, 'repeats': 0, 'ui_thread': 0})], 0)
+        result = e2e.summarize([self.window(host_presents={'new_frames': 50, 'repeats': 150, 'ui_thread': 200,
+                                                           'paint_gpu_ms': 0.05}),
+                                self.window(host_presents={'new_frames': 50, 'repeats': 0, 'ui_thread': 0,
+                                                           'paint_gpu_ms': 0.07})], 0)
         self.assertEqual(result['host_presents_per_s'], {'new_frames': 50, 'repeats': 75, 'ui_thread': 100})
+        self.assertEqual(result['host_paint_gpu_ms_median'], 0.06)
         self.assertEqual(result['host_presents_per_frame'], 2.5)
         self.assertNotIn('host_presents_per_s', e2e.summarize([self.window()] * 3, 0))
 

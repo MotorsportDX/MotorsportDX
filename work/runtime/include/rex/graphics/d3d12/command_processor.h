@@ -12,6 +12,7 @@
 #pragma once
 
 #include <algorithm>
+#include <string_view>
 #include <array>
 #include <atomic>
 #include <condition_variable>
@@ -75,6 +76,10 @@ class D3D12CommandProcessor : public CommandProcessor {
   // (transfer_depth_ms).
   uint32_t BeginTransferTimestamp(bool depth = false);
   void EndTransferTimestamp(uint32_t pair) { EndGpuTimestamp(pair); }
+  // A post pass (perf trace gpu passes_ms, d3d-hle-n4.md 17.24), grouped by
+  // its name: gtao_*, taa_*, motion_*, windshield_*, and the others.
+  uint32_t BeginPostPassTimestamp(std::string_view pass_name);
+  void EndPostPassTimestamp(uint32_t pair) { EndGpuTimestamp(pair); }
 
   void ClearCaches() override;
   void InvalidateGpuMemory() override;
@@ -562,7 +567,15 @@ class D3D12CommandProcessor : public CommandProcessor {
     // at 32bpp, less, and none (clears only).
     kResolveMid,
     kResolveSmall,
-    kResolveClear
+    kResolveClear,
+    // Post passes by group (BeginPostPassTimestamp), then the swap's gamma
+    // and FXAA passes into the guest output.
+    kPassGtao,
+    kPassTaa,
+    kPassMotion,
+    kPassWindshield,
+    kPassOther,
+    kSwap
   };
   // The resolve's kind by the bytes it wrote.
   static GpuTimestampKind GetResolveTimestampKind(uint32_t written_length);

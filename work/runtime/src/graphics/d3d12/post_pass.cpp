@@ -2191,8 +2191,15 @@ void PostPasses::RunPoint(Point point) {
   }
   std::memcpy(mapping, &constants, sizeof(constants));
 
+  // Each pass's GPU time in the perf trace, by group (d3d-hle-n4.md 17.24).
+  const auto run_timed = [&](PassDesc& pass) {
+    const uint32_t timestamp = command_processor_.BeginPostPassTimestamp(pass.name);
+    const bool ran = RunPass(pass, constants_address);
+    command_processor_.EndPostPassTimestamp(timestamp);
+    return ran;
+  };
   for (PassDesc& pass : manifest_->passes) {
-    if (pass.point == point && PassEnabled(pass) && RunPass(pass, constants_address) &&
+    if (pass.point == point && PassEnabled(pass) && run_timed(pass) &&
         std::find(manifest.jitter_consumers.begin(), manifest.jitter_consumers.end(),
                   pass.name) != manifest.jitter_consumers.end()) {
       jitter_consumer_frame_ = frame;

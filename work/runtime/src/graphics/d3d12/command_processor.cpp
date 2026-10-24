@@ -3475,6 +3475,9 @@ void D3D12CommandProcessor::IssueSwap(uint32_t frontbuffer_ptr, uint32_t frontbu
                               D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE);
         gamma_ramp_buffer_state_ = D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE;
 
+        // The swap's passes (perf trace gpu swap_ms): only queries from here on,
+        // which leave the descriptor heap as it is.
+        const uint32_t swap_timestamp = BeginGpuTimestamp(GpuTimestampKind::kSwap);
         deferred_command_list_.D3DSetComputeRootSignature(apply_gamma_root_signature_.Get());
         ApplyGammaConstants apply_gamma_constants;
         apply_gamma_constants.size[0] = guest_output_width;
@@ -3521,6 +3524,7 @@ void D3D12CommandProcessor::IssueSwap(uint32_t frontbuffer_ptr, uint32_t frontbu
                                   apply_gamma_dest_initial_state);
             PushTransitionBarrier(guest_output_resource, D3D12_RESOURCE_STATE_COPY_DEST,
                                   ui::d3d12::D3D12Presenter::kGuestOutputInternalState);
+            EndGpuTimestamp(swap_timestamp);
             return false;
           } else {
             assert_true(apply_gamma_dest_initial_state ==
@@ -3581,6 +3585,7 @@ void D3D12CommandProcessor::IssueSwap(uint32_t frontbuffer_ptr, uint32_t frontbu
         // presenter so it can submit its own commands for displaying it to the
         // queue.
         SubmitBarriers();
+        EndGpuTimestamp(swap_timestamp);
         EndSubmission(true);
         return true;
       },
@@ -7449,6 +7454,8 @@ void D3D12CommandProcessor::ReadGpuTimestampFrame() {
     const uint64_t* ticks = gpu_timestamp_mapping_ + size_t(slot) * kGpuTimestampPairsPerFrame * 2;
     uint64_t busy = 0, resolve = 0, load = 0, readback = 0, resolve_full = 0, load_full = 0,
              transfer = 0, transfer_depth = 0;
+    // The post pass groups in the order of perf_trace::kGpuPasses, then the swap.
+    uint64_t passes[perf_trace::kGpuPassCount + 1] = {};
     // Resolves by kind: full screen, mid, small, clears only.
     double bucket_ms[4] = {};
     uint32_t bucket_count[4] = {};
@@ -7494,6 +7501,14 @@ void D3D12CommandProcessor::ReadGpuTimestampFrame() {
         case GpuTimestampKind::kTransferDepth:
           transfer_depth += duration;
           break;
+        case GpuTimestampKind::kPassGtao:
+        case GpuTimestampKind::kPassTaa:
+        case GpuTimestampKind::kPassMotion:
+        case GpuTimestampKind::kPassWindshield:
+        case GpuTimestampKind::kPassOther:
+        case GpuTimestampKind::kSwap:
+          passes[size_t(frame.kinds[pair]) - size_t(GpuTimestampKind::kPassGtao)] += duration;
+          break;
       }
       first = std::min(first, begin);
       last = std::max(last, end);
@@ -7505,6 +7520,9 @@ void D3D12CommandProcessor::ReadGpuTimestampFrame() {
                             double(load_full) * ms, double(transfer) * ms,
                             double(transfer_depth) * ms);
     perf_trace::AddGpuResolveBuckets(bucket_ms, bucket_count);
+    double passes_ms[perf_trace::kGpuPassCount + 1];
+    for (size_t i = 0; i < perf_trace::kGpuPassCount + 1; ++i) passes_ms[i] = double(passes[i]) * ms;
+    perf_trace::AddGpuPasses(passes_ms);
   }
   frame = {};
 }
@@ -7523,6 +7541,17 @@ D3D12CommandProcessor::GpuTimestampKind D3D12CommandProcessor::GetResolveTimesta
     return GpuTimestampKind::kResolveMid;
   }
   return written_length ? GpuTimestampKind::kResolveSmall : GpuTimestampKind::kResolveClear;
+}
+
+uint32_t D3D12CommandProcessor::BeginPostPassTimestamp(std::string_view pass_name) {
+  const auto group = [&]() {
+    if (pass_name.starts_with("gtao")) return GpuTimestampKind::kPassGtao;
+    if (pass_name.starts_with("taa")) return GpuTimestampKind::kPassTaa;
+    if (pass_name.starts_with("motion")) return GpuTimestampKind::kPassMotion;
+    if (pass_name.starts_with("windshield")) return GpuTimestampKind::kPassWindshield;
+    return GpuTimestampKind::kPassOther;
+  };
+  return BeginGpuTimestamp(group());
 }
 
 uint32_t D3D12CommandProcessor::BeginTransferTimestamp(bool depth) {

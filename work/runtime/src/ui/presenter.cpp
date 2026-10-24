@@ -1520,6 +1520,8 @@ bool Presenter::InSurfaceOnMonitorFromUIThread() const {
 namespace {
 std::atomic<uint64_t> present_new_frames{0}, present_repeats{0}, present_ui_thread{0};
 std::atomic<uint64_t> present_under_8_33_ms{0}, present_under_4_17_ms{0};
+// In nanoseconds.
+std::atomic<uint64_t> paint_gpu_ns{0}, paint_gpu_paints{0};
 }  // namespace
 
 PresentStats TakePresentStats() {
@@ -1529,7 +1531,14 @@ PresentStats TakePresentStats() {
   stats.ui_thread = present_ui_thread.exchange(0, std::memory_order_relaxed);
   stats.under_8_33_ms = present_under_8_33_ms.exchange(0, std::memory_order_relaxed);
   stats.under_4_17_ms = present_under_4_17_ms.exchange(0, std::memory_order_relaxed);
+  stats.paint_gpu_ms = double(paint_gpu_ns.exchange(0, std::memory_order_relaxed)) / 1e6;
+  stats.paint_gpu_paints = paint_gpu_paints.exchange(0, std::memory_order_relaxed);
   return stats;
+}
+
+void AddPaintGpuMs(double ms) {
+  paint_gpu_ns.fetch_add(uint64_t(ms * 1e6), std::memory_order_relaxed);
+  paint_gpu_paints.fetch_add(1, std::memory_order_relaxed);
 }
 
 Presenter::PaintResult Presenter::PaintAndPresent(bool execute_ui_drawers) {

@@ -285,6 +285,7 @@ The statistics come from the steady part of the perf trace: without `--measure`,
 | `cp_busy_ms_per_s_median` | window time minus all waits: wall time the command-processor thread works |
 | `readbacks_per_s_median`, `draws_per_s_median` | resolve readbacks and draws per second |
 | `draws_per_frame_mean` | draws over all measured frames |
+| `gpu_passes_ms_median`, `host_paint_gpu_ms_median` | GPU time a frame of the post pass groups, the swap's passes and the rest of the frame (`scene`), and of a presenter paint ([d3d-hle-n4.md 17.24](../analysis/d3d-hle-n4.md#1724-gpu-time-per-pass-24-october-2026)) |
 | `host_presents_per_s`, `host_presents_per_frame` | the host's presents per second over the measured windows (`new_frames`, `repeats`, `ui_thread`, from the trace's `host_presents`), and all presents per guest frame ([d3d-hle-n4.md 17.22](../analysis/d3d-hle-n4.md#1722-host-presents-24-october-2026)) |
 | `render_thread_busy_ms_per_frame_median`, `render_thread_source`, `guest_render_thread_ms_per_frame_median`, `queue_depth_median`, `queue_depth_max` | backend-neutral thread and queue metrics; on the PM4 path the render thread is the command processor (`render_thread_source` `cp`); the others only when the trace has them ([frozen-frames.md](frozen-frames.md#backend-neutral-fields)) |
 | `cpu_ms_per_s_median` | command-processor time per zone, per second |

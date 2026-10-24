@@ -724,3 +724,27 @@ The host presented at once with tearing allowed (sync interval 0 with `DXGI_PRES
 - At 120 fps the three modes do not differ, and the menus not at all (60 presents for 60 frames).
 - Not measured here: the latency of `on` (it queues a frame for the refresh; PresentMon would measure it), and a 120 Hz panel setting, which is the user's. The Ally X's run shows auto at work below the cap: its race frames under 8.33 ms are counted by `host_presents.under_8_33_ms`.
 - `launcher_tests` passes with the VSync modes on five test displays (the main PC's, a fixed 60 Hz screen, a 144 Hz VRR screen, a fixed 1280x800 screen and the Ally X's panel): 95 plans, no failure.
+
+### 17.24 GPU time per pass, 24 October 2026
+
+The ROG Xbox Ally X is GPU bound (17.21), and its trace split the GPU time only into resolves, texture loads and transfers: about 5.7 of its 7.9 ms a race frame were not attributed. The perf trace now times the passes the runtime adds and the presenter's paint, with the timestamp pairs the trace already resolves (only while it runs):
+
+- `gpu.passes_ms`: the post passes by group of their names in `passes.toml`: `gtao` (`gtao_*`), `taa` (`taa_*`), `motion` (`motion_*`), `windshield` (`windshield_*`) and `other`;
+- `gpu.swap_ms`: the swap's gamma and FXAA passes into the guest output;
+- `gpu.scene_ms`: the rest of the frame's GPU time: the guest's draws and resolves with its own post-processing, which the look mods change in place, so they are part of it;
+- `host_presents.paint_gpu_ms`: a presenter paint (the guest output into the back buffer with its effect, and the UI), from timestamps around the presenter's command list.
+
+`e2e.py` summarizes them per phase (`gpu_passes_ms_median`, `host_paint_gpu_ms_median`).
+
+**The gate** (`n4ts-*` against `n4tso-*` on the build before, `menu_race`, 240 Hz, e2e's defaults, one run a side; the race phase, ms of GPU time a frame):
+
+| Run | fps, before | GPU frame, before | gtao | taa | motion | windshield | swap | scene | paint |
+| --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |
+| `-Native` 1x | 239.5, 238.4 | 2.08, 2.20 | 0.18 | 0.10 | 0.03 | 0.09 | 0.01 | 1.68 | 0.013 |
+| RTV 1x | 218.8, 227.9 | 2.71, 2.68 | 0.18 | 0.10 | 0.03 | 0.09 | 0.01 | 2.32 | 0.013 |
+| `-Native` 2x | 190.0, 191.2 | 5.05, 5.08 | 0.68 | 0.36 | 0.11 | 0.32 | 0.03 | 3.58 | 0.041 |
+
+- The frame rate and the GPU time a frame do not move beyond the noise of single runs (RTV's 1x races vary from 210 to 234 fps, 17.22), so the timestamps stay on with the trace.
+- The groups, the swap and the scene add up to the frame's GPU time (the scene is the rest); the passes the runtime adds take 0.40 ms of the 2.08 ms at 1x (19%) and 1.48 of the 5.05 ms at 2x (29%), GTAO the most.
+- The presenter's paint is separate from the frame's GPU time: 0.013 ms at 1x and 0.041 ms at 2x on this PC.
+- The Ally X's next run gives these per pass: whether GTAO, TAA or the scene is the lever there.

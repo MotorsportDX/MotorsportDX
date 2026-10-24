@@ -944,6 +944,13 @@ def summarize(perf, measure):
         result['gpu_frame_ms_median'] = median([g['frame_ms'] for g in gpu])
         result['gpu_resolve_ms_median'] = median([g['resolve_ms'] for g in gpu])
         result['gpu_span_ms_median'] = median([g['span_ms'] for g in gpu])
+        if 'passes_ms' in gpu[0]:
+            # Per pass (docs/analysis/d3d-hle-n4.md 17.24): the post pass groups, the swap's
+            # passes and the rest of the frame (the scene).
+            result['gpu_passes_ms_median'] = {k: median([g['passes_ms'][k] for g in gpu])
+                                              for k in gpu[0]['passes_ms']}
+            result['gpu_passes_ms_median'].update(
+                swap=median([g['swap_ms'] for g in gpu]), scene=median([g['scene_ms'] for g in gpu]))
     frames_in = lambda p: max(1, len(p.get('frame_ms', [])))
     # Over all measured frames: per-window values alternate with the frame count of a window
     # when frames alternate (the half-rate mirror), by about 0.5% in a frozen frame.
@@ -954,8 +961,13 @@ def summarize(perf, measure):
         # earlier present showed, of the same frame again, and those the UI thread made, per
         # second over all measured windows; and all presents per guest frame.
         seconds = sum(p['window_ms'] for p in steady) / 1000
-        presents = {k: sum(p['host_presents'][k] for p in steady) for k in steady[0]['host_presents']}
+        presents = {k: sum(p['host_presents'][k] for p in steady) for k in steady[0]['host_presents']
+                    if k != 'paint_gpu_ms'}
         result['host_presents_per_s'] = {k: round(v / seconds, 1) for k, v in presents.items()}
+        if 'paint_gpu_ms' in steady[0]['host_presents']:
+            # The GPU time of a presenter paint (17.24), a mean per window.
+            result['host_paint_gpu_ms_median'] = round(statistics.median(
+                [p['host_presents']['paint_gpu_ms'] for p in steady]), 3)
         result['host_presents_per_frame'] = round(
             (presents['new_frames'] + presents['repeats']) / all_frames, 2)
     # Backend-neutral names for the native path (docs/e2e/frozen-frames.md): the thread that

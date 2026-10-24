@@ -327,6 +327,19 @@ class D3D12Presenter final : public Presenter {
   void SignalGuestOutputRefresher(UINT64 submission);
   bool IsGuestOutputRefresherSignalEnqueued(UINT64 submission);
   void AwaitGuestOutputRefresherSignal(UINT64 submission);
+  // The GPU time of each paint for the perf trace (d3d-hle-n4.md 17.24): a pair
+  // of timestamps around its command list, resolved into a readback slot by its
+  // paint submission, and read once that submission has completed.
+  static constexpr uint32_t kPaintTimestampSlots = 8;
+  uint32_t BeginPaintTimestamp(ID3D12GraphicsCommandList* command_list, UINT64 submission);
+  void EndPaintTimestamp(ID3D12GraphicsCommandList* command_list, uint32_t slot);
+  Microsoft::WRL::ComPtr<ID3D12QueryHeap> paint_timestamp_heap_;
+  Microsoft::WRL::ComPtr<ID3D12Resource> paint_timestamp_readback_;
+  const uint64_t* paint_timestamp_mapping_ = nullptr;
+  double paint_timestamp_tick_ms_ = 0;
+  bool paint_timestamps_failed_ = false;
+  std::array<UINT64, kPaintTimestampSlots> paint_timestamp_submissions_{};
+  std::array<bool, kPaintTimestampSlots> paint_timestamp_pending_{};
   // The latest refreshed images with their properties and refresher submission
   // (d3d-hle-n4.md 17.22). A deferred paint that finds the newest image not
   // yet submitted presents the newest submitted one of these, the image of its
