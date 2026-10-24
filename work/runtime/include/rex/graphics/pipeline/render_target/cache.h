@@ -572,6 +572,11 @@ class RenderTargetCache {
   // bits of the key), 32 tiles of pitch.
   bool IsPrivateDepth(uint32_t base_tiles, uint32_t pitch_tiles_at_32bpp,
                       xenos::MsaaSamples msaa_samples) const;
+  // native_rt_surfaces bit 16 with native_one_pass_msaa (docs/analysis/d3d-hle-n5.md
+  // 18.11): every 1280-wide surface of the races is private too, the 2x scene
+  // colour, the post passes' one-sample colour at base 0 and the final
+  // picture's depth at base 720.
+  bool IsPrivateSceneWide() const;
   // native_one_pass_msaa=4: the scene colour (base 0, 32 tiles of pitch, 4x,
   // the resource format of 2_10_10_10_FLOAT and of its 16_16_16_16 view) is
   // private too, with the 2,880 tiles of 1280x720 that the EDRAM cannot hold.
