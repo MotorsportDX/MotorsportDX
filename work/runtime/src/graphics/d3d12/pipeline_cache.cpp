@@ -50,6 +50,7 @@
 #include <rex/thread.h>
 #include <rex/types.h>
 #include <rex/ui/d3d12/d3d12_util.h>
+#include "../util/perf_trace.h"
 
 REXCVAR_DEFINE_BOOL(d3d12_dxbc_disasm, false, "GPU/D3D12", "Dump DXBC disassembly");
 
@@ -65,6 +66,17 @@ REXCVAR_DEFINE_BOOL(d3d12_tessellation_wireframe, false, "GPU/D3D12",
                     "Render tessellation as wireframe");
 
 namespace rex::graphics::d3d12 {
+
+namespace {
+// A pixel shader translated for a scene draw at a fractional scale while the
+// title runs (d3d-hle-n5.md 18.16).
+void CountSceneVariantTranslation(const D3D12Shader::D3D12Translation& translation) {
+  if (translation.shader().type() == xenos::ShaderType::kPixel &&
+      DxbcShaderTranslator::Modification(translation.modification()).pixel.scene_scale) {
+    perf_trace::scene_variant_translations.fetch_add(1, std::memory_order_relaxed);
+  }
+}
+}  // namespace
 
 // Generated with `xb buildshaders`.
 namespace shaders {
@@ -112,7 +124,7 @@ PipelineCache::PipelineCache(D3D12CommandProcessor& command_processor,
       {bindless_resources_used_, edram_rov_used,
        !render_target_cache_.gamma_render_target_as_unorm16(),
        render_target_cache_.msaa_2x_supported(), render_target_cache_.draw_resolution_scale_x(),
-       render_target_cache_.draw_resolution_scale_y()});
+       render_target_cache_.draw_resolution_scale_y(), render_target_cache_.scene_draw_scale()});
 }
 
 PipelineCache::~PipelineCache() {
@@ -553,6 +565,7 @@ void PipelineCache::InitializeShaderStorage(const std::filesystem::path& cache_r
     }
 
     size_t pipelines_created = 0;
+    size_t scene_pipelines_created = 0;
     for (const PipelineStoredDescription& pipeline_stored_description :
          pipeline_stored_descriptions) {
       const PipelineDescription& pipeline_description = pipeline_stored_description.description;
@@ -647,6 +660,10 @@ void PipelineCache::InitializeShaderStorage(const std::filesystem::path& cache_r
           bound_rts, shader_writes_color_targets, shader_writes_depth);
       pipelines_.emplace(pipeline_stored_description.description_hash, new_pipeline);
       COUNT_profile_set("gpu/pipeline_cache/pipelines", pipelines_.size());
+      if (DxbcShaderTranslator::Modification(pipeline_description.pixel_shader_modification)
+              .pixel.scene_scale) {
+        ++scene_pipelines_created;
+      }
       if (!creation_threads_.empty()) {
         // Submit the pipeline for creation to any available thread.
         {
@@ -697,9 +714,9 @@ void PipelineCache::InitializeShaderStorage(const std::filesystem::path& cache_r
     }
 
     REXGPU_INFO(
-        "Created {} graphics pipelines (not including reading the "
-        "descriptions) from the storage in {} milliseconds",
-        pipelines_created,
+        "Created {} graphics pipelines ({} of scene draws at a fractional scale; not including "
+        "reading the descriptions) from the storage in {} milliseconds",
+        pipelines_created, scene_pipelines_created,
         (rex::chrono::Clock::QueryHostTickCount() - pipeline_creation_start_) * 1000 /
             rex::chrono::Clock::QueryHostTickFrequency());
     // If any pipeline descriptions were corrupted (or the whole file has excess
@@ -1083,6 +1100,7 @@ bool PipelineCache::ConfigurePipeline(
           REXGPU_ERROR("Failed to translate the pixel shader!");
           return false;
         }
+        CountSceneVariantTranslation(*pixel_shader);
         if (shader_storage_file_ &&
             pixel_shader->shader().ucode_storage_index() != shader_storage_index_) {
           pixel_shader->shader().set_ucode_storage_index(shader_storage_index_);
@@ -1161,6 +1179,7 @@ bool PipelineCache::TranslateShadersForDraw(D3D12Shader::D3D12Translation* verte
           REXGPU_ERROR("Failed to translate the pixel shader!");
           return false;
         }
+        CountSceneVariantTranslation(*pixel_shader);
         if (shader_storage_file_ &&
             pixel_shader->shader().ucode_storage_index() != shader_storage_index_) {
           pixel_shader->shader().set_ucode_storage_index(shader_storage_index_);
@@ -1231,6 +1250,10 @@ bool PipelineCache::ConfigurePipelineDescribed(
   new_pipeline->root_signature.store(runtime_description.root_signature, std::memory_order_release);
   pipelines_.emplace(hash, new_pipeline);
   COUNT_profile_set("gpu/pipeline_cache/pipelines", pipelines_.size());
+  if (DxbcShaderTranslator::Modification(description.pixel_shader_modification)
+          .pixel.scene_scale) {
+    perf_trace::scene_variant_pipelines.fetch_add(1, std::memory_order_relaxed);
+  }
 
   if (use_async) {
     uint32_t bound_rts =
@@ -3409,6 +3432,7 @@ bool PipelineCache::PrepareRuntimeDescriptionForQueuedCreation(
           REXGPU_ERROR("Failed to translate queued {} shader", shader_type);
           return false;
         }
+        CountSceneVariantTranslation(*translation);
         if (shader_storage_file_ &&
             translation->shader().ucode_storage_index() != shader_storage_index_) {
           translation->shader().set_ucode_storage_index(shader_storage_index_);

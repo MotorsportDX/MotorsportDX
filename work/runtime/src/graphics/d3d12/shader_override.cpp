@@ -639,12 +639,24 @@ std::string ShaderOverrides::BuildContract(
 
   // Host configuration of the translator.
   uint32_t scale_x = config_.draw_resolution_scale_x, scale_y = config_.draw_resolution_scale_y;
-  line("#define XE_RESOLUTION_SCALE_X {}", scale_x);
-  line("#define XE_RESOLUTION_SCALE_Y {}", scale_y);
-  line("#define XE_REVERT_RESOLUTION_SCALE_AXES {}u",
-       REXCVAR_GET(draw_resolution_scaled_texture_offsets)
-           ? uint32_t(scale_x > 1) | (uint32_t(scale_y > 1) << 1)
-           : 0u);
+  if (modification.pixel.scene_scale && !config_.scene_draw_scale.IsWhole()) {
+    // A scene draw at a fractional scale (18.13): the macros as floats.
+    const DrawScale scene = config_.scene_draw_scale;
+    line("#define XE_RESOLUTION_SCALE_X ({}.0 / {}.0)", scene.numerator, scene.denominator);
+    line("#define XE_RESOLUTION_SCALE_Y ({}.0 / {}.0)", scene.numerator, scene.denominator);
+    line("#define XE_REVERT_RESOLUTION_SCALE_AXES {}u",
+         REXCVAR_GET(draw_resolution_scaled_texture_offsets) ? 3u : 0u);
+  } else {
+    if (modification.pixel.scene_scale) {
+      scale_x = scale_y = config_.scene_draw_scale.Floor();
+    }
+    line("#define XE_RESOLUTION_SCALE_X {}", scale_x);
+    line("#define XE_RESOLUTION_SCALE_Y {}", scale_y);
+    line("#define XE_REVERT_RESOLUTION_SCALE_AXES {}u",
+         REXCVAR_GET(draw_resolution_scaled_texture_offsets)
+             ? uint32_t(scale_x > 1) | (uint32_t(scale_y > 1) << 1)
+             : 0u);
+  }
   line("#define XE_GAMMA_RENDER_TARGET_AS_UNORM8 {}", int(config_.gamma_render_target_as_unorm8));
   line("#define XE_MSAA_2X_SUPPORTED {}", int(config_.msaa_2x_supported));
   line("#define XE_FUZZY_ALPHA_EPSILON {}", int(REXCVAR_GET(use_fuzzy_alpha_epsilon)));

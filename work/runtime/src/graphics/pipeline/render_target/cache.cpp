@@ -2182,7 +2182,9 @@ RenderTargetCache::RenderTarget* RenderTargetCache::GetOrCreateRenderTarget(Rend
   const uint32_t full_rows = GetFullTileRows(key);
   // native_rt_surfaces bit 8: the rows asked for, rounded up to 8, at most the
   // EDRAM's.
-  const bool sized = IsSizingEnabled() && tile_rows;
+  // A private surface at a fractional scene scale is created at its full
+  // height: the growth copies by tile transfers at the whole scale (18.16).
+  const bool sized = IsSizingEnabled() && tile_rows && GetKeyScale(key).IsWhole();
   const uint32_t needed_rows = std::min(tile_rows, full_rows);
   const uint32_t rows =
       sized ? std::min(full_rows, (needed_rows + 7) & ~uint32_t(7)) : full_rows;

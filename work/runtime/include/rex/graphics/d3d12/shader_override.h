@@ -20,6 +20,7 @@
 
 #include <rex/graphics/d3d12/shader.h>
 #include <rex/graphics/pipeline/shader/dxbc_translator.h>
+#include <rex/graphics/util/draw_scale.h>
 #include <rex/hash.h>
 
 namespace rex::graphics::d3d12 {
@@ -56,6 +57,9 @@ class ShaderOverrides {
     bool msaa_2x_supported;
     uint32_t draw_resolution_scale_x;
     uint32_t draw_resolution_scale_y;
+    // The scene's scale, for translations with the scene_scale modification
+    // (docs/analysis/d3d-hle-n5.md 18.13).
+    DrawScale scene_draw_scale;
   };
 
   // Live knobs: floats in the system constant buffer (b0) after

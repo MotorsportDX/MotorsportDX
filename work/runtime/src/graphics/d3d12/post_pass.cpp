@@ -2135,12 +2135,20 @@ void PostPasses::RunPoint(Point point) {
     final_color_.resource = target.resource;
     final_color_.rtv = target.rtv;
     final_color_.format = target.format;
-    final_width_ = std::min(
-        final_guest_width_ * command_processor_.texture_cache_->draw_resolution_scale_x(),
-        target.width);
-    final_height_ = std::min(
-        final_guest_height_ * command_processor_.texture_cache_->draw_resolution_scale_y(),
-        target.height);
+    // A private final target at a fractional scene scale (d3d-hle-n5.md
+    // 18.13): its pixels are the scene's.
+    const DrawScale scene_scale = command_processor_.texture_cache_->scene_draw_scale();
+    if (command_processor_.render_target_cache_->scene_textures() && !scene_scale.IsWhole()) {
+      final_width_ = std::min(scene_scale.ScaleUp(final_guest_width_), target.width);
+      final_height_ = std::min(scene_scale.ScaleUp(final_guest_height_), target.height);
+    } else {
+      final_width_ = std::min(
+          final_guest_width_ * command_processor_.texture_cache_->draw_resolution_scale_x(),
+          target.width);
+      final_height_ = std::min(
+          final_guest_height_ * command_processor_.texture_cache_->draw_resolution_scale_y(),
+          target.height);
+    }
     ui::d3d12::util::DescriptorCpuGpuHandlePair descriptor;
     if (!final_width_ || !final_height_ ||
         !command_processor_.RequestOneUseSingleViewDescriptors(1, &descriptor)) {

@@ -323,6 +323,10 @@ inline void CountSceneTextureCreated() {
 inline void CountSceneTextureUnwritten() {
   native_resolve_scene_unwritten.fetch_add(1, std::memory_order_relaxed);
 }
+// Scene draws at a fractional scale (d3d-hle-n5.md 18.16): pixel shader
+// translations and pipelines with the scene_scale modification made while the
+// title runs, not loaded from the storage.
+inline std::atomic<uint64_t> scene_variant_translations{0}, scene_variant_pipelines{0};
 // native_rt_surfaces=1 (d3d-hle.md 16.9): ownership transfers, their tiles and
 // those left after the cutout, how the transferred tiles ended (dropped when
 // another render target took them, overwritten, read by a draw or a resolve),
@@ -816,6 +820,10 @@ inline void OnSwap() {
                 << native_resolve_scene_created.exchange(0, std::memory_order_relaxed)
                 << ",\"scene_unwritten\":"
                 << native_resolve_scene_unwritten.exchange(0, std::memory_order_relaxed) << '}'
+                << ",\"scene_variants\":{\"translations\":"
+                << scene_variant_translations.exchange(0, std::memory_order_relaxed)
+                << ",\"pipelines\":"
+                << scene_variant_pipelines.exchange(0, std::memory_order_relaxed) << '}'
                 << ",\"host_resolve\":{\"found\":"
                 << host_resolves_found.exchange(0, std::memory_order_relaxed) << ",\"done\":"
                 << host_resolves_done.exchange(0, std::memory_order_relaxed) << ",\"other\":"

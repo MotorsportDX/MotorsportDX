@@ -266,8 +266,27 @@ entry_inputs_end_code_begin_compute_xe
     packed = XeEndianSwap32(XeEndianSwap32(packed, resolve_info.dest_endian_128),
                             texture_info & 7u);
     uint2_xe texel = pixel_index + resolve_info.dest_xy_offset_scaled;
+    uint depth_texture = (texture_info >> 5u) & 3u;
     dont_flatten_xe
-    if ((texture_info & (1u << 3u)) != 0u) {
+    if (depth_texture != 0u) {
+      // A depth texture (18.16), R32_UINT over R32_FLOAT: the depth of the
+      // words as the depth texture load converts them, 24-bit unorm (1) or
+      // 20e4 float (2) in bits 8:31.
+      uint4_xe depth24 = packed >> 8u;
+      uint4_xe bits;
+      if (depth_texture == 2u) {
+        bits = XeFloat20e4To32(depth24);
+      } else {
+        bits = asuint(XeUNorm24To32(depth24));
+      }
+      image_store_2d_rgba_xe(xe_resolve_dest_texture, texel, uint_x4_xe(bits.x));
+      image_store_2d_rgba_xe(xe_resolve_dest_texture, texel + uint2_xe(1u, 0u),
+                             uint_x4_xe(bits.y));
+      image_store_2d_rgba_xe(xe_resolve_dest_texture, texel + uint2_xe(2u, 0u),
+                             uint_x4_xe(bits.z));
+      image_store_2d_rgba_xe(xe_resolve_dest_texture, texel + uint2_xe(3u, 0u),
+                             uint_x4_xe(bits.w));
+    } else if ((texture_info & (1u << 3u)) != 0u) {
       // R10G10B10A2_UINT.
       image_store_2d_rgba_xe(xe_resolve_dest_texture, texel,
           (uint_x4_xe(packed.x) >> uint4_xe(0u, 10u, 20u, 30u)) &

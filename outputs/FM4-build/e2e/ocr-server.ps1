@@ -28,9 +28,10 @@ public static class Fm4Ppm {
     return count == 0 ? 0 : (int)(sum / count);
   }
   // Grayscale, upscaled copy of a binary PPM (P6) as BGRA8 bytes. Small white
-  // UI text on dark backgrounds recognizes far better at 2x. Captures of a
-  // resolution scaled run (2560x1440, 3840x2160) are first averaged down to
-  // 1280x720, so boxes and the rectangles below stay in 720p pixels.
+  // UI text on dark backgrounds recognizes far better at 2x. Captures taller
+  // than 720 lines (1920x1080, 2560x1440, 3840x2160) are first averaged down to
+  // 720 lines, each pixel over the source pixels it covers, so boxes and the
+  // rectangles below stay in 720p pixels.
   public static byte[] Load(string path, int scale, out int width, out int height) {
     byte[] data = File.ReadAllBytes(path);
     int pos = 0;
@@ -44,8 +45,7 @@ public static class Fm4Ppm {
     int sw = int.Parse(token()), sh = int.Parse(token());
     token();
     pos++;
-    int k = Math.Max(1, sh / 720);
-    int w = sw / k, h = sh / k;
+    int h = Math.Min(sh, 720), w = (int)((long)sw * h / sh);
     width = w * scale;
     height = h * scale;
     byte[] output = new byte[width * height * 4];
@@ -54,14 +54,17 @@ public static class Fm4Ppm {
     grayWidth_ = w;
     grayHeight_ = h;
     for (int y = 0; y < h; y++) {
+      int y0 = (int)((long)y * sh / h), y1 = (int)((long)(y + 1) * sh / h);
       for (int x = 0; x < w; x++) {
+        int x0 = (int)((long)x * sw / w), x1 = (int)((long)(x + 1) * sw / w);
         int r = 0, gr = 0, b = 0;
-        for (int ky = 0; ky < k; ky++)
-          for (int kx = 0; kx < k; kx++) {
-            int s = pos + ((y * k + ky) * sw + x * k + kx) * 3;
+        for (int sy = y0; sy < y1; sy++)
+          for (int sx = x0; sx < x1; sx++) {
+            int s = pos + (sy * sw + sx) * 3;
             r += data[s]; gr += data[s + 1]; b += data[s + 2];
           }
-        r /= k * k; gr /= k * k; b /= k * k;
+        int n = (y1 - y0) * (x1 - x0);
+        r /= n; gr /= n; b /= n;
         byte g = (byte)((r * 77 + gr * 150 + b * 29) >> 8);
         gray_[y * w + x] = g;
         red_[y * w + x] = (byte)(r > 150 && gr < 80 && b < 80 ? 1 : 0);

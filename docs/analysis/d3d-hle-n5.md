@@ -226,3 +226,37 @@ The no-change gate on `I:\FM4-build-usa` at 240 Hz (step 4b on local main `8e701
 | `parity.py` on `freeze` against step 4a | PASS at 2x with `--look aces` (34.1% of the image above 4). At real 1x the first run froze at a later race moment (the car ahead much closer): draws -4.0%, FAIL on draws, with a correct picture. On the rebased tree both pass: real 1x draws -0.0% (11.1% of the image above 4), 2x with `aces` -0.0% (32.2%) |
 | an earlier build of 4b (`n5i`, `n5j`) | marked destinations the resolve does not write as scene-resolved and looked for the existing textures under the wrong key at 2x: 74,015 fetches before a write and 59,124 creations a run. Fixed before `n5k` |
 
+
+### 18.16 Increment 1, step 4c: the first image at 3/2, 24 October 2026
+
+The parts of 18.13's 4c that the first image needs, behind `native_draw_scale` with `native_rt_surfaces` bit 32:
+
+- **Textures at the scene's scale.** The host texture of a `scene_scaled` key is created at `ScaleUp` of its guest size (`D3D12TextureCache::CreateTexture`; before, it took the whole scale, so the first 3/2 images showed the top left of the scene, enlarged), and `RequestResolvedTexture` reports that size to the post passes.
+- **The scene depth.** The title resolves the scene depth to a depth format (`k_24_8_FLOAT`). A full-screen depth resolve from a private surface is a scene destination too: it writes the destination's `8_8_8_8` textures (the same words; the post passes read the stencil through that view) and its depth-format textures, created by the resolve when missing. A depth texture at the scene's scale is `R32_TYPELESS`, written through an `R32_UINT` view with the depth as the depth texture load converts it (24-bit unorm or 20e4 float, `resolve_host_32bpp.xesli`). Without it the post passes took the 1x depth at 3/2, and TAA rejected its history at every edge: 17% to 22% of a frozen picture changed from capture to capture with `aces`.
+- **The frame.** The post passes' final size at a fractional scale is `ScaleUp` of the guest size. The look mods' `XE_RESOLUTION_SCALE_X` and `_Y` of a `scene_scale` translation are floats (`(3.0 / 2.0)`), with both axes' texture offsets reverted. A resolve clear into a private surface at a fractional scale maps its rectangle with `ScaleEdge`. A private surface at a fractional scale is created at its full height (no sizing: the growth copies by tile transfers at the whole scale), and a resolve from it is never dumped into the EDRAM buffer, as for one pass 4x. Occlusion queries at a fractional scale are normalized by the scene's scale squared; the sun's glare at 3/2 has no separate check yet.
+- **Counters.** The perf trace's `scene_variants` counts the pixel shader translations and the pipelines with the `scene_scale` modification made while the title runs, and the shader storage's load log counts the pipelines of scene draws it created. A log line per full-screen destination says whether it is a scene destination.
+- **e2e.** `ocr-server.ps1` averages captures taller than 720 lines down to 720 lines at any ratio, so menu selection works on 1920x1080 captures (the 3/2 career first timed out on QUIT RACE: the red lines were looked for at 720p offsets in a 1080p image).
+
+The gate on `I:\FM4-build-usa`, one pass 2x, `native_rt_surfaces=58`, the scene's scale passed explicitly (`native_draw_scale=3/2` with `draw_resolution_scale_x` and `_y` of 1; 1 and 2 at the whole scales, without `native_draw_scale_variant`):
+
+| Check | Result |
+|---|---|
+| captures and presentation | 1920x1080 at 3/2 in `freeze`, `photo` and `career`; the swap's texture is 1920x1080 |
+| 1:1 crops at 3/2 against 1x and 2x (`n5s-freeze-32-nat` against `n5l-freeze-1x-nat` with `original,taa=0`; `n5w-freeze-32-aces` against `n5l-freeze-2x-aces`) | the car ahead, the stands, the gauges, the rear-view mirror (a destination resolved down to k) and the cable car: the same picture, its detail between 1x and 2x; no offset, seam or zoom |
+| still picture, `freeze` (`n5x-freeze-*`) | 0.0% of the image above 4 from capture to capture at 1x, 3/2 and 2x, with `original,taa=0` and with `aces` (TAA, GTAO, motion vectors, windshield) |
+| combined checks with perturbation, `career` at 3/2 (`n5t-check-32`) | reached its goal; the resolve byte check 5,105 resolves and the texture byte check 2,190 textures (the destinations at k), 0 mismatches; identity, bindings and guard: mismatches only the perturbed; the error keys of the 2x baseline (`n5l-check-2x`) and one "final size" error (below) |
+| scene textures | 12 created a `freeze` run, none fetched before its first write; 11 resolves without a texture against about 5,500 before the scene depth |
+| translations and pipelines of scene draws | the storage holds 295 pipelines of scene draws at 3/2 (of 2,601) after the runs of this step. A run with a warm storage made none at runtime in `freeze` and the `photo` race; `photo` made 1 translation and 2 pipelines for photo mode in its first run, and 1 pipeline in the next |
+
+GPU time a frame on this PC (RTX 5070 Ti Laptop), the same build, one run each (`n5x`):
+
+| Scene | 1x (1280x720) | 3/2 (1920x1080) | 2x (2560x1440) | 3/2 from the fit of 1x and 2x |
+|---|---|---|---|---|
+| `freeze`, `original,taa=0` | 1.67 ms | 2.42 ms | 3.09 ms | 2.26 ms |
+| `freeze`, `aces` | 2.21 ms | 3.52 ms | 4.93 ms | 3.35 ms |
+| race of `photo` at 240 Hz, `aces` | 2.31 ms | 3.74 ms | 5.35 ms | 3.58 ms |
+| race fps and p99 | 236.0, 5.03 ms | 236.1, 5.24 ms | 188.4, 7.49 ms | |
+
+3/2 costs 0.75 to 1.43 ms more than 1x, and 4% to 7% more than the line through 1x and 2x (the surfaces kept at k are part of the fixed cost of every scale, 18.8). The passes of `aces` at 3/2: GTAO 0.38 ms, TAA 0.27, windshield 0.19, motion vectors 0.03.
+
+Open items for step 5: in photo mode the post passes see a 1280x720 scene depth (photo mode's depth resolve is not a scene destination yet), so they log "final size 1920x1080 differs from the scene's 1280x720" and leave its frames without the look's passes, which photo mode's picture shows correctly otherwise; TAA's thresholds in guest pixels; the box filter of the small destinations sampled for the picture (18.13, 4b); then 20/9 and 3.

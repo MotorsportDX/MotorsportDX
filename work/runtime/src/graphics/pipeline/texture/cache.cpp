@@ -945,6 +945,10 @@ TextureCache::Texture* TextureCache::FindOrCreateTexture(TextureKey key) {
   // A full-screen resolve target of a private surface (18.15): one level over
   // the scene-resolved range.
   if (key.tiled && !key.mip_max_level && key.base_page &&
+      (key.format == xenos::TextureFormat::k_8_8_8_8 ||
+       key.format == xenos::TextureFormat::k_2_10_10_10 ||
+       key.format == xenos::TextureFormat::k_24_8 ||
+       key.format == xenos::TextureFormat::k_24_8_FLOAT) &&
       IsRangeSceneResolved(key.base_page << 12, key.GetGuestLayout().base.level_data_extent_bytes)) {
     key.scene_scaled = 1;
   }

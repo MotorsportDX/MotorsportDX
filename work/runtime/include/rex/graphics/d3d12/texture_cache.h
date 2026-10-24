@@ -213,6 +213,9 @@ class D3D12TextureCache final : public TextureCache {
     DXGI_FORMAT uav_format = DXGI_FORMAT_UNKNOWN;
     // A texture at the scene's scale (18.15).
     bool scene_scaled = false;
+    // A depth texture at the scene's scale (18.16): 1 k_24_8, 2 k_24_8_FLOAT,
+    // written as the depth load converts the words, through an R32_UINT view.
+    uint32_t depth = 0;
   };
   static constexpr size_t kMaxResolveTextureTargets = 8;
   // With scene (a full-screen resolve of a private surface at the scene's
@@ -222,7 +225,8 @@ class D3D12TextureCache final : public TextureCache {
   size_t GetResolveTextureTargets(uint32_t base_address, uint32_t pitch, uint32_t width,
                                   uint32_t height, xenos::TextureFormat format,
                                   ResolveTextureTarget* targets_out, bool scene = false,
-                                  xenos::Endian scene_endianness = xenos::Endian::k8in32);
+                                  xenos::Endian scene_endianness = xenos::Endian::k8in32,
+                                  uint32_t scene_depth = 0);
   // Whether textures of this key are created for unordered access (with
   // native_rt_resolve, the 32bpp full-screen single-level 2D ones).
   bool IsResolveTextureTargetKey(const TextureKey& key) const;

@@ -6901,10 +6901,7 @@ void D3D12CommandProcessor::RetireROVOcclusionSnapshots() {
       // 4x its pixels at 1x, 2x and 4x MSAA. Count guest pixels instead (the
       // resolution scale is removed when the report is published), scale them
       // and pass them through the soft limit.
-      const double resolution_scale =
-          double(texture_cache_ ? texture_cache_->draw_resolution_scale_x() *
-                                      texture_cache_->draw_resolution_scale_y()
-                                : 1);
+      const double resolution_scale = OcclusionResolutionScale();
       const double limit = REXCVAR_GET(rtv_occlusion_awaited_limit);
       for (uint64_t& samples : segment) {
         double pixels = double(samples) / (std::max(pending.host_samples_per_pixel, 1u) *
@@ -7780,9 +7777,28 @@ bool D3D12CommandProcessor::EndGuestOcclusionQuery(
   return true;
 }
 
+double D3D12CommandProcessor::OcclusionResolutionScale() const {
+  if (!texture_cache_) {
+    return 1.0;
+  }
+  // At a fractional scene scale the queries' draws go into the private
+  // surfaces at the scene's scale (docs/analysis/d3d-hle-n5.md 18.16).
+  const DrawScale scene_scale = render_target_cache_->scene_draw_scale();
+  if (render_target_cache_->scene_textures() && !scene_scale.IsWhole()) {
+    const double scale = scene_scale.ToFloat();
+    return scale * scale;
+  }
+  return double(texture_cache_->draw_resolution_scale_x() *
+                texture_cache_->draw_resolution_scale_y());
+}
+
 uint64_t D3D12CommandProcessor::NormalizeOcclusionSamples(uint64_t samples) const {
   if (samples == 0 || !texture_cache_) {
     return samples;
+  }
+  const DrawScale scene_scale = render_target_cache_->scene_draw_scale();
+  if (render_target_cache_->scene_textures() && !scene_scale.IsWhole()) {
+    return uint64_t(double(samples) / OcclusionResolutionScale() + 0.5);
   }
   uint64_t scale_x = texture_cache_->draw_resolution_scale_x();
   uint64_t scale_y = texture_cache_->draw_resolution_scale_y();

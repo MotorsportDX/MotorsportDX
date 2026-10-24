@@ -659,6 +659,9 @@ class D3D12CommandProcessor : public CommandProcessor {
   bool AcquireOcclusionQueryIndex(uint32_t& host_index_out);
   void DisableHostOcclusionQueries();
   uint64_t NormalizeOcclusionSamples(uint64_t samples) const;
+  // The host samples of one guest pixel's sample: the whole scale squared, or
+  // at a fractional scene scale the scene's (18.16).
+  double OcclusionResolutionScale() const;
   void WriteGuestOcclusionResult(xenos::xe_gpu_depth_sample_counts* sample_counts,
                                  uint64_t samples);
   void InvalidateAllVertexBufferResidency();

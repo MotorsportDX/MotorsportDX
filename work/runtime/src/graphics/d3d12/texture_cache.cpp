@@ -1523,6 +1523,10 @@ ID3D12Resource* D3D12TextureCache::RequestResolvedTexture(
   bool scaled = texture->key().scaled_resolve != 0;
   host_width_out = width * (scaled ? draw_resolution_scale_x() : 1);
   host_height_out = height * (scaled ? draw_resolution_scale_y() : 1);
+  if (texture->key().scene_scaled) {
+    host_width_out = scene_draw_scale().ScaleUp(width);
+    host_height_out = scene_draw_scale().ScaleUp(height);
+  }
   return texture_resource;
 }
 
@@ -1594,14 +1598,17 @@ bool D3D12TextureCache::IsResolveTextureTargetKey(const TextureKey& key) const {
          key.dimension == xenos::DataDimension::k2DOrStacked && key.GetDepthOrArraySize() == 1 &&
          !key.mip_max_level && key.tiled && !key.signed_separate &&
          (key.format == xenos::TextureFormat::k_8_8_8_8 ||
-          key.format == xenos::TextureFormat::k_2_10_10_10);
+          key.format == xenos::TextureFormat::k_2_10_10_10 ||
+          (key.scene_scaled && (key.format == xenos::TextureFormat::k_24_8 ||
+                                key.format == xenos::TextureFormat::k_24_8_FLOAT)));
 }
 
 size_t D3D12TextureCache::GetResolveTextureTargets(uint32_t base_address, uint32_t pitch,
                                                    uint32_t width, uint32_t height,
                                                    xenos::TextureFormat format,
                                                    ResolveTextureTarget* targets_out, bool scene,
-                                                   xenos::Endian scene_endianness) {
+                                                   xenos::Endian scene_endianness,
+                                                   uint32_t scene_depth) {
   size_t count = 0;
   if (scene) {
     // Created from the key the fetches use, so the first frame is written.
@@ -1663,6 +1670,64 @@ size_t D3D12TextureCache::GetResolveTextureTargets(uint32_t base_address, uint32
       target.scene_scaled = scene;
       if (count >= kMaxResolveTextureTargets) {
         return count;
+      }
+    }
+  }
+  // The depth textures of a scene depth resolve (the post passes read the
+  // scene depth through them, 18.16): those of the depth format, created as
+  // for the colour formats above when none exists.
+  if (scene && scene_depth) {
+    const xenos::TextureFormat depth_format =
+        scene_depth == 2 ? xenos::TextureFormat::k_24_8_FLOAT : xenos::TextureFormat::k_24_8;
+    bool any_depth = false;
+    for (uint32_t endianness = 0; endianness < 4 && !any_depth; ++endianness) {
+      TextureKey key;
+      xenos::xe_gpu_texture_fetch_t fetch;
+      if (!ResolvedTextureKey(base_address, pitch, width, height, depth_format,
+                              xenos::Endian(endianness), key, fetch)) {
+        break;
+      }
+      for (uint32_t packed_mips = 0; packed_mips < 2; ++packed_mips) {
+        key.packed_mips = packed_mips;
+        key.scaled_resolve = uint32_t(IsDrawResolutionScaled());
+        key.scene_scaled = 1;
+        any_depth |= FindTexture(key) != nullptr;
+      }
+    }
+    TextureKey create_key;
+    xenos::xe_gpu_texture_fetch_t create_fetch;
+    if (!any_depth && ResolvedTextureKey(base_address, pitch, width, height, depth_format,
+                                         scene_endianness, create_key, create_fetch)) {
+      for (uint32_t packed_mips = 0; packed_mips < 2; ++packed_mips) {
+        create_key.packed_mips = packed_mips;
+        if (FindOrCreateTexture(create_key)) {
+          perf_trace::CountSceneTextureCreated();
+        }
+      }
+    }
+    for (uint32_t endianness = 0; endianness < 4; ++endianness) {
+      TextureKey key;
+      xenos::xe_gpu_texture_fetch_t fetch;
+      if (!ResolvedTextureKey(base_address, pitch, width, height, depth_format,
+                              xenos::Endian(endianness), key, fetch)) {
+        break;
+      }
+      for (uint32_t packed_mips = 0; packed_mips < 2; ++packed_mips) {
+        key.packed_mips = packed_mips;
+        key.scaled_resolve = uint32_t(IsDrawResolutionScaled());
+        key.scene_scaled = 1;
+        auto* texture = static_cast<D3D12Texture*>(FindTexture(key));
+        if (!texture || count >= kMaxResolveTextureTargets ||
+            !(texture->resource()->GetDesc().Flags & D3D12_RESOURCE_FLAG_ALLOW_UNORDERED_ACCESS)) {
+          continue;
+        }
+        ResolveTextureTarget& target = targets_out[count++];
+        target.texture = texture;
+        target.resource = texture->resource();
+        target.endianness = xenos::Endian(endianness);
+        target.uav_format = DXGI_FORMAT_R32_UINT;
+        target.scene_scaled = true;
+        target.depth = scene_depth;
       }
     }
   }
@@ -1927,6 +1992,12 @@ uint32_t D3D12TextureCache::GetMaxHostTextureDepthOrArraySize(
 std::unique_ptr<TextureCache::Texture> D3D12TextureCache::CreateTexture(TextureKey key) {
   D3D12_RESOURCE_DESC desc;
   desc.Format = GetDXGIResourceFormat(key);
+  // A depth texture at the scene's scale is written through an R32_UINT view
+  // (docs/analysis/d3d-hle-n5.md 18.16).
+  if (key.scene_scaled && (key.format == xenos::TextureFormat::k_24_8 ||
+                           key.format == xenos::TextureFormat::k_24_8_FLOAT)) {
+    desc.Format = DXGI_FORMAT_R32_TYPELESS;
+  }
   if (desc.Format == DXGI_FORMAT_UNKNOWN) {
     unsupported_format_features_used_[uint32_t(key.format)] |= kUnsupportedResourceBit;
     return nullptr;
@@ -1943,6 +2014,11 @@ std::unique_ptr<TextureCache::Texture> D3D12TextureCache::CreateTexture(TextureK
   if (key.scaled_resolve) {
     desc.Width *= draw_resolution_scale_x();
     desc.Height *= draw_resolution_scale_y();
+  }
+  // A texture at the scene's scale (18.15).
+  if (key.scene_scaled) {
+    desc.Width = scene_draw_scale().ScaleUp(key.GetWidth());
+    desc.Height = scene_draw_scale().ScaleUp(key.GetHeight());
   }
   desc.DepthOrArraySize = key.GetDepthOrArraySize();
   desc.MipLevels = key.mip_max_level + 1;
