@@ -227,7 +227,8 @@ takes a value.
 | `-TextureReplace <dir>` | off | Use `<hash>.dds` files from this directory instead of the game textures with that hash. See [Texture replacement](#texture-replacement). |
 | `-Info` | off | Show the settings overlay at start. F2 toggles it in any run. |
 | `-Rov` | off | Use the earlier pixel shader interlock render target path, for comparisons. |
-| `-Native` | off | The native path: a host render thread consumes the guest's commands from a record queue instead of the command processor thread, and races render in one pass with 2x MSAA. See [-Native](#-native). |
+| `-Native` | off (on with integrated GPUs only) | The native path: a host render thread consumes the guest's commands from a record queue instead of the command processor thread, and races render in one pass with 2x MSAA. See [-Native](#-native). |
+| `-Rtv` | off | The PM4 path on host render targets even where `-Native` is the default. |
 | `-SingleTile` | with TAA | Render races as one 720p tile without MSAA also with a look without TAA, then with FXAA on the swap. A look with TAA (every preset) renders one tile anyway. |
 | `-Msaa` | off | Keep the tiles and MSAA of `-Quality` with a look that has TAA. |
 | `-MsaaSamples 4` or `0` | 2 with `-Native` | With `-Native`: 4 renders races in one pass with 4x MSAA, 0 in one tile without MSAA, instead of one pass with 2x MSAA. See [-Native](#-native). |
@@ -379,6 +380,8 @@ render targets" in the log), so every look mod and the AO are gone and the pictu
 the title's own. Compare the default path against `-Rov` with `-Look original`.
 
 #### -Native
+
+On a computer with integrated GPUs only (the rule of the render scale, [-Display](#-display-and-render-scale)), the native path is the default, unless `-Rov` or `-Msaa` is given, and the launcher prints "native path for an integrated GPU"; `-Rtv` (the GUI launcher's render path "RTV") runs RTV there. On the ROG Xbox Ally X it races at 110.5 fps on battery against RTV's 100.1, with p99 15.3 against 19.8 ms ([D3D-level HLE, 17.25](analysis/d3d-hle-n4.md#1725-the-second-rog-xbox-ally-x-run-24-october-2026)). Elsewhere RTV stays the default.
 
 Runs the first increment of stage N1 of the native port
 ([D3D-level HLE, section 14](analysis/d3d-hle.md#14-stage-n1-design-21-october-2026)):

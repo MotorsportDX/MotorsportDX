@@ -15,6 +15,7 @@ param(
     [switch]$FixedVblank,
     [switch]$Rov,
     [switch]$Native,
+    [switch]$Rtv,
     [switch]$FullRateMirror,
     [switch]$ShadowWorkaround,
     [ValidateSet('native','720p','1080p','1440p','4k')][string]$Display,
@@ -52,6 +53,7 @@ if ($PSBoundParameters.ContainsKey('MsaaSamples')) { $arguments += @('--msaa-sam
 if ($FixedVblank) { $arguments += @('--fixed-vblank') }
 if ($Rov) { $arguments += @('--rov') }
 if ($Native) { $arguments += @('--native') }
+if ($Rtv) { $arguments += @('--rtv') }
 if ($FullRateMirror) { $arguments += @('--full-rate-mirror') }
 if ($ShadowWorkaround) { $arguments += @('--shadow-workaround') }
 if ($Display) { $arguments += @('--display', $Display) }

@@ -1119,7 +1119,7 @@ def launch(root,single_tile=False,fixed_vblank=False,frame_rate=None,rov=False,
            resolution_scale=None,full_rate_mirror=False,look=None,shadow_workaround=False,
            quality=None,display=DEFAULT_DISPLAY,fullscreen=False,supersample=False,info=False,
            ao=False,shader_dev=False,texture_dump=None,texture_replace=None,msaa=False,
-           native=False,msaa_samples=None,vsync=DEFAULT_VSYNC):
+           native=None,msaa_samples=None,vsync=DEFAULT_VSYNC):
     state = json.loads((root/'local.json').read_text())
     disc1,disc2 = validate_discs(state['disc1'],state['disc2'])
     report=json.loads((root/'build-result.json').read_text())
@@ -1152,13 +1152,18 @@ def launch_plan(root,disc1,single_tile=False,fixed_vblank=False,frame_rate=None,
                 resolution_scale=None,full_rate_mirror=False,look=None,shadow_workaround=False,
                 quality=None,display=DEFAULT_DISPLAY,fullscreen=False,supersample=False,info=False,
                 ao=False,shader_dev=False,texture_dump=None,texture_replace=None,msaa=False,
-                content_manifest=None,monitor=None,native=False,msaa_samples=None,
+                content_manifest=None,monitor=None,native=None,msaa_samples=None,
                 vsync=DEFAULT_VSYNC):
     """The cvars, the FM4_ environment and the display description of a run of the options of
     launch. The GUI launcher (work/fm4-launcher, plan.cpp) ports this function; launcher_tests
     compares the two. monitor: the primary monitor's (width, height, DPI scale, refresh Hz, VRR
-    min Hz, VRR max Hz) instead of the real one."""
+    min Hz, VRR max Hz, integrated GPUs only) instead of the real one. native: True for -Native,
+    False for -Rtv, None for the default: the native path with integrated GPUs only, unless
+    -Rov or -Msaa (the main session's decision of 24 October 2026, d3d-hle-n4.md 17.25)."""
     monitor=monitor or primary_monitor()
+    native_auto=native is None
+    if native_auto:
+        native=len(monitor)>6 and bool(monitor[6]) and not rov and not msaa
     env={}
     env.update(launch_env())
     if full_rate_mirror:
@@ -1213,6 +1218,8 @@ def launch_plan(root,disc1,single_tile=False,fixed_vblank=False,frame_rate=None,
     present,frame_rate,present_description=present_settings(vsync,frame_rate,monitor)
     cvars.update(present)
     description+=f'; {present_description}'
+    if native_auto and native:
+        description+='; native path for an integrated GPU'
     if frame_rate:
         # The display refresh the title sees and the FrameRate of its race scenarios
         # (60). The guest vblank runs at 60 Hz, and at this rate only while a race
@@ -1322,6 +1329,8 @@ def launcher_test_options(root):
             {'native':True,'look':'gt','frame_rate':240,'fixed_vblank':True},
             {'frame_rate':120,'vsync':'on'},
             {'native':True,'frame_rate':240,'vsync':'off'},
+            {'native':False},
+            {'msaa':True},
             {'look':'aces,foliage_hue=-60,sky=1.2,road_gloss=0.5,sun=0,tonemap=filmic,taa_point=1',
              'supersample':True},
             {'look':'neutral,windshield=2,ao=0','resolution_scale':3,'display':'4k'},
@@ -1496,9 +1505,13 @@ def main():
                         help='run: no shadow map outside the cockpit in races (the old Xenia workaround)')
     parser.add_argument('--rov',action='store_true',
                         help='run: the slower pixel shader interlock render target path instead of RTV')
-    parser.add_argument('--native',action='store_true',
-                        help='run: stage N1 of the native path, the host render thread instead of the '
-                             'command processor thread (one tile only; docs/analysis/d3d-hle.md)')
+    parser.add_argument('--native',action='store_const',const=True,default=None,
+                        help='run: the native path, the host render thread instead of the command '
+                             'processor thread (the default with integrated GPUs only; '
+                             'docs/analysis/d3d-hle.md)')
+    parser.add_argument('--rtv',action='store_const',const=False,dest='native',
+                        help='run: the PM4 path on host render targets (RTV) even with integrated GPUs '
+                             'only, where --native is the default')
     parser.add_argument('--look',
                         help='run: post-processing look, a preset ('+', '.join(LOOK_PRESETS)+
                              '; pc is aces; default '+DEFAULT_LOOK+') and/or knobs, for example '

@@ -51,7 +51,7 @@ struct Options {
   bool info = false;
   bool ao = false;
   bool msaa = false;
-  bool native = false;       // -Native
+  int native = -1;           // 1: -Native, 0: -Rtv, -1: the default (native with integrated GPUs only)
   int msaa_samples = -1;     // -MsaaSamples; -1: unset (2 with -Native)
   int frame_rate = 0;        // 0: the title's 60
   std::string vsync;         // -VSync auto, on or off; empty: the default (auto)

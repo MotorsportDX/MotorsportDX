@@ -815,3 +815,8 @@ The gate on the main PC (`n4pth*`, the players' path `present_skip_superseded=fa
 - render scale 1x (the integrated GPU rule) and one pass with 2x MSAA: 4x adds 0.8 to 2.1 ms of GPU time a frame;
 - `guest_ring_wait_sleep` and `high_resolution_timing` on, as before.
 - The levers for the GPU, if more frame rate on battery is wanted: GTAO (0.7 to 0.9 ms) and the windshield (0.6 ms) together take about 1.3 to 1.6 ms of the 7.5 to 8.3 ms a frame.
+
+**The main session's decisions of 24 October 2026.**
+- The native path becomes the default render path with integrated GPUs only, by the rule of the 1x render scale (`-Rtv` and the GUI launcher's render path keep RTV available; `-Rov` and `-Msaa` keep RTV as before). RTV stays the default elsewhere until after N5.
+- VSync Auto, render scale 1x, one pass with 2x MSAA, the ring wait's sleep and the timer stay as they are.
+- GTAO (0.7 to 0.9 ms) and the windshield (0.6 ms, almost as much as GTAO) are candidates for an "Ally X performance" look preset, later.

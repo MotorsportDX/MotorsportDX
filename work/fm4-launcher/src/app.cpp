@@ -1421,9 +1421,18 @@ void App::AdvancedPage() {
   ImGui::Checkbox("One tile without MSAA also with a look without TAA (then FXAA)", &o.single_tile);
   ImGui::Checkbox("Ambient occlusion pass also without the look's ao knob", &o.ao);
   ImGui::Checkbox("ROV render path (the uncorrected reference, slower)", &o.rov);
-  ImGui::Checkbox("Native path (races in one pass with MSAA, the native port's stages)",
-                  &o.native);
-  ImGui::BeginDisabled(!o.native);
+  // The render path: -1 automatic (the native path with integrated GPUs only, else RTV), 0 RTV
+  // (-Rtv), 1 the native path (-Native).
+  const char* path_labels[] = {monitor_.integrated_gpu ? "Automatic (the native path: integrated GPU)"
+                                                       : "Automatic (RTV)",
+                               "RTV (the PM4 path on host render targets)",
+                               "Native path (races in one pass with MSAA, the native port's stages)"};
+  int path_choice = o.native < 0 ? 0 : o.native == 0 ? 1 : 2;
+  ImGui::SetNextItemWidth(420 * scale_);
+  if (ImGui::Combo("Render path", &path_choice, path_labels, IM_ARRAYSIZE(path_labels)))
+    o.native = path_choice == 0 ? -1 : path_choice == 1 ? 0 : 1;
+  const bool native = o.native < 0 ? monitor_.integrated_gpu && !o.rov && !o.msaa : o.native == 1;
+  ImGui::BeginDisabled(!native);
   // -MsaaSamples: -1 (unset) is one pass with 2x, the default.
   const char* msaa_labels[] = {"One pass with 2x MSAA (default)", "One pass with 4x MSAA",
                                "One tile without MSAA"};

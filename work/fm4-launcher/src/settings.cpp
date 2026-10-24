@@ -50,7 +50,11 @@ Options OptionsFromJson(const Json& json) {
   get("quality", o.quality);
   get("look", o.look);
   get("msaa", o.msaa);
-  get("native", o.native);
+  // Earlier profiles stored a checkbox: true for -Native, false for RTV.
+  if (json.contains("native") && json.at("native").is_boolean())
+    o.native = json.at("native").get<bool>() ? 1 : 0;
+  else
+    get("native", o.native);
   get("msaa_samples", o.msaa_samples);
   get("perf_trace", o.perf_trace);
   get("extra_cvars", o.extra_cvars);
