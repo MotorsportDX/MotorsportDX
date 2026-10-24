@@ -43,7 +43,11 @@ Options OptionsFromJson(const Json& json) {
   };
   get("display", o.display);
   get("fullscreen", o.fullscreen);
-  get("resolution_scale", o.resolution_scale);
+  // pipeline.py's resolution_scale 'panel' (the launcher tests), or the stored kPanelScale.
+  if (json.contains("resolution_scale") && json.at("resolution_scale") == "panel")
+    o.resolution_scale = kPanelScale;
+  else
+    get("resolution_scale", o.resolution_scale);
   get("supersample", o.supersample);
   get("frame_rate", o.frame_rate);
   get("vsync", o.vsync);

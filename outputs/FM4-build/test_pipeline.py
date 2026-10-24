@@ -383,7 +383,9 @@ class PipelineTests(unittest.TestCase):
                 self.assertEqual(env['FM4_ONE_PASS_MSAA'],'2')
                 self.assertNotIn('TilingScenario',env.get('FM4_RACE_SETTINGS',''))
                 self.assertEqual(cvars['native_one_pass_msaa'],'2')
-                self.assertEqual(cvars['native_rt_surfaces'],'26')
+                # A 1080p screen's own scale, 3/2 (test_screen_scale).
+                self.assertEqual(cvars['native_rt_surfaces'],'58')
+                self.assertEqual(cvars['native_draw_scale'],'3/2')
                 self.assertEqual(cvars['host_render_thread'],'true')
             cvars,env,_=pipeline.launch_plan(root,r'C:\FM4 test\Disc 1',native=True,
                                              msaa_samples=4,monitor=(1920,1080,1.0))
@@ -412,6 +414,59 @@ class PipelineTests(unittest.TestCase):
                 with self.assertRaises(ValueError):
                     pipeline.launch_plan(root,r'C:\FM4 test\Disc 1',msaa_samples=samples,native=True,
                                          rov=True,monitor=(1920,1080,1.0))
+
+    def test_screen_scale(self):
+        """The native path in one pass with 2x MSAA renders at the screen's own scale, the largest
+        16:9 picture that fits (d3d-hle-n5.md 18.19): a fraction sets native_draw_scale, its whole
+        part draw_resolution_scale and bit 32 of native_rt_surfaces. Integrated GPUs keep 1x
+        unless -ResolutionScale panel; -Supersample takes the whole part plus one; RTV, -Rov and
+        one pass 4x keep the whole multiple that covers the screen."""
+        self.assertEqual(pipeline.screen_scale(1920,1080),(3,2))
+        self.assertEqual(pipeline.screen_scale(2560,1440),(2,1))
+        self.assertEqual(pipeline.screen_scale(2560,1600),(2,1))
+        self.assertEqual(pipeline.screen_scale(2880,1800),(9,4))
+        self.assertEqual(pipeline.screen_scale(3840,2160),(3,1))
+        self.assertEqual(pipeline.screen_scale(1280,800),(1,1))
+        self.assertEqual(pipeline.screen_scale(1024,768),(1,1))
+        self.assertEqual(pipeline.screen_scale(1366,768),(16,15))
+        disc=r'C:\FM4 test\Disc 1'
+        def plan(monitor,**options):
+            with tempfile.TemporaryDirectory(prefix='fm4 screen scale test ') as directory:
+                return pipeline.launch_plan(Path(directory),disc,monitor=monitor,**options)
+        def scales(cvars):
+            return (cvars.get('draw_resolution_scale_x'),cvars.get('native_draw_scale'),
+                    cvars.get('native_rt_surfaces'))
+        cvars,_,description=plan((1920,1080,1.0),native=True)
+        self.assertEqual(scales(cvars),(None,'3/2','58'))
+        self.assertIn('render 3/2 (1920x1080)',description)
+        cvars,_,description=plan((2560,1440,1.0),native=True)
+        self.assertEqual(scales(cvars),('2',None,'26'))
+        cvars,_,description=plan((2560,1600,1.5),native=True)
+        self.assertEqual(scales(cvars),('2',None,'26'))
+        self.assertIn('render 2x (2560x1440), 16:9 letterboxed until the aspect work',description)
+        cvars,_,description=plan((2880,1800,2.0),native=True)
+        self.assertEqual(scales(cvars),('2','9/4','58'))
+        self.assertIn('render 9/4 (2880x1620)',description)
+        cvars,_,_=plan((3840,2160,2.0),native=True)
+        self.assertEqual(scales(cvars),('3',None,'26'))
+        cvars,_,_=plan((1920,1080,1.0),native=True,supersample=True)
+        self.assertEqual(scales(cvars),('2',None,'26'))
+        integrated=(1920,1080,1.5,120,48,120,True)
+        cvars,_,description=plan(integrated)
+        self.assertEqual(scales(cvars),(None,None,'26'))
+        self.assertIn('render 1x (1280x720) for an integrated GPU',description)
+        cvars,_,description=plan(integrated,resolution_scale='panel')
+        self.assertEqual(scales(cvars),(None,'3/2','58'))
+        cvars,_,_=plan((1920,1080,1.0),native=True,msaa_samples=4)
+        self.assertEqual(scales(cvars),('2',None,'26'))
+        cvars,_,description=plan((1920,1080,1.0))
+        self.assertEqual(scales(cvars),('2',None,None))
+        self.assertNotIn('letterboxed',description)
+        cvars,_,_=plan((1920,1080,1.0),rov=True)
+        self.assertEqual(scales(cvars),('2',None,None))
+        for options in ({},{'rov':True},{'native':True,'single_tile':True}):
+            with self.assertRaises(ValueError):
+                plan((1920,1080,1.0),resolution_scale='panel',**options)
 
     def test_vrr_range_and_vsync(self):
         # The main PC's panel: a DisplayID 2.0 extension with Adaptive-Sync descriptors of 60 to

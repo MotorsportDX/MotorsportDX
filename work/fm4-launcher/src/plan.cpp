@@ -7,6 +7,7 @@
 #include <cstdlib>
 #include <fstream>
 #include <map>
+#include <numeric>
 #include <sstream>
 
 namespace fm4 {
@@ -468,9 +469,25 @@ std::vector<std::string> LookDefines(const LauncherData& data, const Pairs& knob
   return defines;
 }
 
+std::pair<int, int> ScreenScale(int width, int height) {
+  long long numerator = width, denominator = 1280;
+  if (static_cast<long long>(width) * 720 > static_cast<long long>(height) * 1280) {
+    numerator = height;
+    denominator = 720;
+  }
+  if (denominator > 720) {
+    numerator = numerator * 720 / denominator;
+    denominator = 720;
+  }
+  if (numerator < denominator) numerator = denominator = 1;
+  const long long divisor = std::gcd(numerator, denominator);
+  return {static_cast<int>(numerator / divisor), static_cast<int>(denominator / divisor)};
+}
+
 std::pair<Pairs, std::string> DisplaySettings(const LauncherData& data, const std::string& display,
                                               bool fullscreen, bool supersample,
-                                              int resolution_scale, const Monitor& monitor) {
+                                              int resolution_scale, const Monitor& monitor,
+                                              bool scene_scale) {
   int width = monitor.width, height = monitor.height;
   if (display == "native") {
     fullscreen = true;
@@ -482,11 +499,32 @@ std::pair<Pairs, std::string> DisplaySettings(const LauncherData& data, const st
     height = displays.at(display).at(1).get<int>();
     fullscreen = fullscreen || width >= monitor.width || height >= monitor.height;
   }
+  const bool panel = resolution_scale == kPanelScale;
+  if (panel && !scene_scale)
+    throw PlanError(
+        "-ResolutionScale panel needs the native path in one pass with 2x MSAA (-Native without "
+        "-SingleTile, -Msaa or -MsaaSamples 0 or 4).");
   const int max_scale = data.json.at("max_resolution_scale").get<int>();
-  const int cover = monitor.integrated_gpu
-                        ? 1
-                        : static_cast<int>(std::ceil(std::min(width / 1280.0, height / 720.0) - 1e-6));
-  const int scale = resolution_scale ? resolution_scale : std::min(max_scale, cover + (supersample ? 1 : 0));
+  const auto own = ScreenScale(width, height);
+  int numerator, denominator;
+  if (panel || (scene_scale && !resolution_scale && !monitor.integrated_gpu && !supersample)) {
+    numerator = own.first;
+    denominator = own.second;
+  } else {
+    int scale;
+    if (scene_scale && supersample && !resolution_scale && !monitor.integrated_gpu) {
+      scale = std::min(max_scale, own.first / own.second + 1);
+    } else {
+      const int cover =
+          monitor.integrated_gpu
+              ? 1
+              : static_cast<int>(std::ceil(std::min(width / 1280.0, height / 720.0) - 1e-6));
+      scale = resolution_scale ? resolution_scale : std::min(max_scale, cover + (supersample ? 1 : 0));
+    }
+    numerator = scale;
+    denominator = 1;
+  }
+  const int whole = numerator / denominator;
   Pairs cvars;
   cvars.Set("fullscreen", fullscreen ? "true" : "false");
   if (!fullscreen) {
@@ -494,18 +532,50 @@ std::pair<Pairs, std::string> DisplaySettings(const LauncherData& data, const st
     cvars.Set("window_width", std::to_string(static_cast<long long>(std::nearbyint(width / monitor.dpi))));
     cvars.Set("window_height", std::to_string(static_cast<long long>(std::nearbyint(height / monitor.dpi))));
   }
-  if (scale > 1) {
-    cvars.Set("draw_resolution_scale_x", std::to_string(scale));
-    cvars.Set("draw_resolution_scale_y", std::to_string(scale));
+  if (whole > 1) {
+    cvars.Set("draw_resolution_scale_x", std::to_string(whole));
+    cvars.Set("draw_resolution_scale_y", std::to_string(whole));
   }
+  if (denominator > 1) {
+    // The scene at the fraction, the other surfaces at its whole part; bit 32: the resolves
+    // write the scene's textures at that scale (d3d-hle-n5.md 18.15).
+    cvars.Set("native_draw_scale", std::to_string(numerator) + "/" + std::to_string(denominator));
+    cvars.Set("native_rt_surfaces", "58");
+  }
+  const int render_width = (1280 * numerator + denominator - 1) / denominator;
+  const int render_height = (720 * numerator + denominator - 1) / denominator;
+  const std::string scale_text = denominator > 1
+                                     ? std::to_string(numerator) + "/" + std::to_string(denominator)
+                                     : std::to_string(numerator) + "x";
   const std::string screen =
       fullscreen ? "fullscreen " + std::to_string(monitor.width) + "x" + std::to_string(monitor.height)
                  : "window " + std::to_string(width) + "x" + std::to_string(height);
   const std::string gpu_note =
       monitor.integrated_gpu && !resolution_scale ? " for an integrated GPU" : "";
-  return {cvars, "Display " + display + ": " + screen + ", render " + std::to_string(scale) +
-                     "x (" + std::to_string(1280 * scale) + "x" + std::to_string(720 * scale) + ")" +
-                     gpu_note};
+  const long long shown_width = fullscreen ? monitor.width : width;
+  const long long shown_height = fullscreen ? monitor.height : height;
+  std::string aspect_note;
+  if (scene_scale && shown_width * 9 != shown_height * 16)
+    aspect_note = std::string(", 16:9 ") +
+                  (shown_width * 9 < shown_height * 16 ? "letterboxed" : "pillarboxed") +
+                  " until the aspect work";
+  return {cvars, "Display " + display + ": " + screen + ", render " + scale_text + " (" +
+                     std::to_string(render_width) + "x" + std::to_string(render_height) + ")" +
+                     gpu_note + aspect_note};
+}
+
+std::string RenderScaleText(const Pairs& cvars) {
+  int numerator = std::stoi(cvars.Get("draw_resolution_scale_x", "1")), denominator = 1;
+  const std::string fraction = cvars.Get("native_draw_scale");
+  const size_t slash = fraction.find('/');
+  if (slash != std::string::npos) {
+    numerator = std::stoi(fraction.substr(0, slash));
+    denominator = std::stoi(fraction.substr(slash + 1));
+  }
+  return (denominator > 1 ? std::to_string(numerator) + "/" + std::to_string(denominator)
+                          : std::to_string(numerator) + "x") +
+         ", " + std::to_string((1280 * numerator + denominator - 1) / denominator) + "x" +
+         std::to_string((720 * numerator + denominator - 1) / denominator);
 }
 
 // pipeline.py present_settings: the cvars of -VSync, the race frame rate it leaves, and its
@@ -635,7 +705,7 @@ Plan LaunchPlan(const LauncherData& data, const std::string& root, const std::st
                                   : options.display;
   auto [screen, description] = DisplaySettings(data, display, options.fullscreen,
                                                options.supersample, options.resolution_scale,
-                                               monitor);
+                                               monitor, native && msaa_samples == 2);
   Update(cvars, screen);
   const PresentSettings present = PresentSettingsOf(data, options.vsync, options.frame_rate, monitor);
   Update(cvars, present.cvars);

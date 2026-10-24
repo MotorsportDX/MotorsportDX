@@ -22,7 +22,7 @@ param(
     [switch]$Fullscreen,
     [switch]$Supersample,
     [switch]$Info,
-    [ValidateRange(1,4)][int]$ResolutionScale,
+    [ValidateSet('1','2','3','4','panel')][string]$ResolutionScale,
     [ValidateRange(30,240)][int]$FrameRate,
     [ValidateSet('auto','on','off')][string]$VSync,
     [string]$Look,

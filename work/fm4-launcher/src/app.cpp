@@ -314,6 +314,7 @@ class App {
   void Play();
   void Refresh(bool discs);
   std::optional<Plan> CurrentPlan(std::string& error);
+  std::optional<Plan> PlanOf(const Options& options, std::string& error);
   std::vector<std::string> GameArgs(const Plan& plan);
   fs::path UserData() const;
   bool Imported(const Package& package) const;
@@ -675,10 +676,14 @@ void App::SaveSettings() {
 }
 
 std::optional<Plan> App::CurrentPlan(std::string& error) {
+  return PlanOf(settings_.Active().options, error);
+}
+
+std::optional<Plan> App::PlanOf(const Options& options, std::string& error) {
   try {
     const std::string manifest = content_.packages.empty() ? "" : Utf8(root_ / "content-packages.txt");
     return LaunchPlan(data_, Utf8(root_), disc1_.path.empty() ? settings_.disc1 : disc1_.path,
-                      settings_.Active().options, monitor_, manifest);
+                      options, monitor_, manifest);
   } catch (const std::exception& exception) {
     error = exception.what();
     return std::nullopt;
@@ -995,24 +1000,29 @@ void App::DisplayPage() {
   ImGui::Checkbox("##fullscreen", &o.fullscreen);
   ImGui::EndDisabled();
 
-  // The automatic render scale of this screen, as display_settings picks it.
+  // The automatic render scale of this screen and the screen's own, as display_settings picks
+  // them for these options (the native path in one pass renders at the screen's own scale).
+  std::string auto_text = "1x, 1280x720", panel_text = "native path in one pass only", unused;
   Options automatic = o;
   automatic.resolution_scale = 0;
-  int auto_scale = 1;
-  try {
-    const auto [cvars, description] =
-        DisplaySettings(data_, display ? displays[display] : "native", automatic.fullscreen,
-                        automatic.supersample, 0, monitor_);
-    auto_scale = std::stoi(cvars.Get("draw_resolution_scale_x", "1"));
-  } catch (const std::exception&) {
-  }
-  const std::string auto_label = "Auto (" + std::to_string(auto_scale) + "x, " +
-                                 std::to_string(1280 * auto_scale) + "x" + std::to_string(720 * auto_scale) + ")";
-  const char* scales[] = {auto_label.c_str(), "1x (1280x720)", "2x (2560x1440)", "3x (3840x2160)",
-                          "4x (5120x2880)"};
-  Label("Render scale", "Render at this multiple of 1280x720. Auto covers the screen.");
+  if (const auto plan = PlanOf(automatic, unused)) auto_text = RenderScaleText(plan->cvars);
+  automatic.resolution_scale = kPanelScale;
+  if (const auto plan = PlanOf(automatic, unused)) panel_text = RenderScaleText(plan->cvars);
+  const std::string auto_label = "Auto (" + auto_text + ")";
+  const std::string panel_label = "Screen's own resolution (" + panel_text + ")";
+  const char* scales[] = {auto_label.c_str(), panel_label.c_str(), "1x (1280x720)",
+                          "2x (2560x1440)", "3x (3840x2160)", "4x (5120x2880)"};
+  // Combo items: Auto (0), the screen's own (kPanelScale), then 1x to 4x.
+  int scale_item =
+      o.resolution_scale == kPanelScale ? 1 : o.resolution_scale ? o.resolution_scale + 1 : 0;
+  Label("Render scale",
+        "Auto covers the screen; on the native path in one pass it is the screen's own resolution "
+        "(1080p renders 1920x1080), except with integrated GPUs (1x). The screen's own resolution "
+        "renders the largest 16:9 picture that fits the screen, letterboxed on 16:10 until the "
+        "aspect work; 1x to 4x render at that multiple of 1280x720.");
   ImGui::SetNextItemWidth(320 * scale_);
-  ImGui::Combo("##scale", &o.resolution_scale, scales, 5);
+  if (ImGui::Combo("##scale", &scale_item, scales, 6))
+    o.resolution_scale = scale_item == 1 ? kPanelScale : scale_item ? scale_item - 1 : 0;
   Label("Supersample", "Render one scale above the screen (up to 4x), then average it down.");
   ImGui::BeginDisabled(o.resolution_scale != 0);
   ImGui::Checkbox("##supersample", &o.supersample);

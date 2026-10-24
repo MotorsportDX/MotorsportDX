@@ -916,16 +916,33 @@ def primary_monitor():
         return width,height,1.0,refresh,vrr_min,vrr_max,integrated
     return width,height,dpi_x.value/96,refresh,vrr_min,vrr_max,integrated
 
+def screen_scale(width,height):
+    """The scale of the largest 16:9 picture that fits a screen of width x height pixels, as a
+    reduced fraction (numerator, denominator) of 1280x720: min(width / 1280, height / 720), at
+    most 720 in the denominator (rounded down), at least 1 (docs/analysis/d3d-hle-n5.md 18.19)."""
+    numerator,denominator=(width,1280) if width*720<=height*1280 else (height,720)
+    if denominator>720:
+        numerator,denominator=numerator*720//denominator,720
+    if numerator<denominator:
+        numerator,denominator=1,1
+    divisor=math.gcd(numerator,denominator)
+    return numerator//divisor,denominator//divisor
+
 def display_settings(display=DEFAULT_DISPLAY,fullscreen=False,supersample=False,
-                     resolution_scale=None,monitor=None):
+                     resolution_scale=None,monitor=None,scene_scale=False):
     """Cvars of -Display and a description. native: borderless fullscreen on the primary
     monitor; 720p, 1080p, 1440p, 4k: a window of that many pixels, or fullscreen with
     -Fullscreen or when it does not fit the monitor. The render scale is the smallest whole
     multiple of 1280x720 that covers the 16:9 picture of that screen (720p 1x, 1080p and 1440p
     2x, 4k 3x; a 2560x1600 monitor 2x), or 1x with integrated GPUs only (integrated_gpu), one
-    more with -Supersample (up to 4x), or -ResolutionScale. The presenter fits the picture to the window, averaging the render
-    over each screen pixel when it is larger (present_area_downscale). monitor: (width, height,
-    DPI scale, refresh, VRR min, VRR max, integrated GPUs only) instead of the primary monitor's."""
+    more with -Supersample (up to 4x), or -ResolutionScale. With scene_scale (the native path in
+    one pass with 2x MSAA, which renders the scene at a fractional scale, d3d-hle-n5.md 18.19;
+    one pass with 4x is not tested at one yet) it is the screen's own scale instead, the largest 16:9 picture that fits (screen_scale: 1080p 3/2,
+    1440p 2, a 2560x1600 monitor 2, letterboxed), except with integrated GPUs only (1x) or
+    -Supersample (its whole part plus one); -ResolutionScale panel picks it on every GPU. The
+    presenter fits the picture to the window, averaging the render over each screen pixel when
+    it is larger (present_area_downscale). monitor: (width, height, DPI scale, refresh, VRR min,
+    VRR max, integrated GPUs only) instead of the primary monitor's."""
     monitor_width,monitor_height,dpi,*rest=monitor or primary_monitor()
     integrated=len(rest)>3 and bool(rest[3])
     if display=='native':
@@ -934,20 +951,46 @@ def display_settings(display=DEFAULT_DISPLAY,fullscreen=False,supersample=False,
         width,height=DISPLAYS[display]
         # A window of the monitor's size or more does not fit beside its frame and the taskbar.
         fullscreen=fullscreen or width>=monitor_width or height>=monitor_height
-    cover=1 if integrated else math.ceil(min(width/1280,height/720)-1e-6)
-    scale=resolution_scale or min(MAX_RESOLUTION_SCALE,cover+int(supersample))
+    if resolution_scale=='panel' and not scene_scale:
+        raise ValueError("-ResolutionScale panel needs the native path in one pass with 2x MSAA "
+                         "(-Native without -SingleTile, -Msaa or -MsaaSamples 0 or 4).")
+    own=screen_scale(width,height)
+    if resolution_scale=='panel' or (scene_scale and not resolution_scale and not integrated
+                                     and not supersample):
+        numerator,denominator=own
+    else:
+        if scene_scale and supersample and not resolution_scale and not integrated:
+            scale=min(MAX_RESOLUTION_SCALE,own[0]//own[1]+1)
+        else:
+            cover=1 if integrated else math.ceil(min(width/1280,height/720)-1e-6)
+            scale=resolution_scale or min(MAX_RESOLUTION_SCALE,cover+int(supersample))
+        numerator,denominator=scale,1
+    whole=numerator//denominator
     cvars={'fullscreen':'true' if fullscreen else 'false'}
     if not fullscreen:
         # Window sizes are logical pixels: the runtime multiplies them by the DPI scale.
         cvars.update(window_width=str(round(width/dpi)),window_height=str(round(height/dpi)))
-    if scale>1:
+    if whole>1:
         # Render targets and resolved textures at N times 1280x720 on both axes;
         # CPU readbacks of resolves are downscaled.
-        cvars['draw_resolution_scale_x']=cvars['draw_resolution_scale_y']=str(scale)
+        cvars['draw_resolution_scale_x']=cvars['draw_resolution_scale_y']=str(whole)
+    if denominator>1:
+        # The scene at the fraction, the other surfaces at its whole part; bit 32: the resolves
+        # write the scene's textures at that scale (d3d-hle-n5.md 18.15).
+        cvars.update({'native_draw_scale':f'{numerator}/{denominator}','native_rt_surfaces':'58'})
+    render_width=-(-1280*numerator//denominator)
+    render_height=-(-720*numerator//denominator)
+    scale_text=f'{numerator}/{denominator}' if denominator>1 else f'{numerator}x'
     screen=(f'fullscreen {monitor_width}x{monitor_height}' if fullscreen
             else f'window {width}x{height}')
     gpu_note=' for an integrated GPU' if integrated and not resolution_scale else ''
-    return cvars,f'Display {display}: {screen}, render {scale}x ({1280*scale}x{720*scale}){gpu_note}'
+    shown_width,shown_height=(monitor_width,monitor_height) if fullscreen else (width,height)
+    aspect_note=''
+    if scene_scale and shown_width*9!=shown_height*16:
+        aspect_note=(', 16:9 '+('letterboxed' if shown_width*9<shown_height*16 else 'pillarboxed')
+                     +' until the aspect work')
+    return cvars,(f'Display {display}: {screen}, render {scale_text} ({render_width}x{render_height})'
+                  f'{gpu_note}{aspect_note}')
 
 VSYNC_MODES=('auto','on','off')
 DEFAULT_VSYNC='auto'
@@ -1213,7 +1256,8 @@ def launch_plan(root,disc1,single_tile=False,fixed_vblank=False,frame_rate=None,
             # Bit 8: the host render targets sized to the tiles the title uses (16.15); bit 16:
             # every 1280-wide race surface private (d3d-hle-n5.md 18.11).
             cvars.update({'native_one_pass_msaa':str(msaa_samples),'native_rt_surfaces':'26'})
-    screen,description=display_settings(display,fullscreen,supersample,resolution_scale,monitor)
+    screen,description=display_settings(display,fullscreen,supersample,resolution_scale,monitor,
+                                        scene_scale=bool(native and msaa_samples==2))
     cvars.update(screen)
     present,frame_rate,present_description=present_settings(vsync,frame_rate,monitor)
     cvars.update(present)
@@ -1310,10 +1354,12 @@ def build_launcher(root,jobs):
 
 # Options of the launcher tests: each with each monitor (width, height, DPI scale, refresh Hz,
 # VRR min Hz, VRR max Hz, integrated GPUs only; the main PC's panel, a fixed 60 Hz screen, a
-# 144 Hz VRR screen, a fixed 1280x800 screen, the ROG Xbox Ally X's panel and GPU).
+# 144 Hz VRR screen, a fixed 1280x800 screen, the ROG Xbox Ally X's panel and GPU, a 1440p
+# screen and a 2880x1800 one).
 LAUNCHER_TEST_MONITORS=((2560,1600,1.5,240,60,240,False),(1920,1080,1.0,60,0,0,False),
                         (3840,2160,2.0,144,48,144,False),(1280,800,1.25,60,0,0,False),
-                        (1920,1080,1.5,120,48,120,True))
+                        (1920,1080,1.5,120,48,120,True),(2560,1440,1.0,165,48,165,False),
+                        (2880,1800,2.0,120,48,120,False))
 def launcher_test_options(root):
     return [{},
             {'look':'gt','quality':'ultra','frame_rate':120,'display':'1080p'},
@@ -1337,7 +1383,12 @@ def launcher_test_options(root):
             {'look':'original,taa=0,sharpen=0.5','ao':True,'texture_dump':str(root/'logs'),
              'texture_replace':str(root/'cache')},
             {'look':'pc,clearcoat=0,sky=1,exposure=1e-05','quality':'xbox','display':'1440p'},
-            {'look':'original,taa=0,sun=2.5','msaa':True,'frame_rate':240,'supersample':True}]
+            {'look':'original,taa=0,sun=2.5','msaa':True,'frame_rate':240,'supersample':True},
+            {'native':True,'resolution_scale':'panel'},
+            {'native':True,'supersample':True},
+            {'native':True,'display':'1080p'},
+            {'native':True,'resolution_scale':2,'display':'1440p'},
+            {'resolution_scale':'panel','msaa_samples':2,'native':True,'display':'720p'}]
 
 def launcher_tests(root):
     """Compares fm4_launcher.exe's port of launch_plan, disc check and content search with this
@@ -1493,9 +1544,13 @@ def main():
                         help='run: auto (default: on a VRR display, tearing presents held a refresh '
                              'apart and races under the refresh; else on), on (the refresh, no '
                              'tearing) or off (at once, tearing allowed)')
-    parser.add_argument('--resolution-scale',type=int,choices=range(1,MAX_RESOLUTION_SCALE+1),
-                        metavar=f'1-{MAX_RESOLUTION_SCALE}',
-                        help='run: render at this multiple of 1280x720 instead of the --display one')
+    parser.add_argument('--resolution-scale',
+                        type=lambda text:text if text=='panel' else int(text),
+                        choices=[*range(1,MAX_RESOLUTION_SCALE+1),'panel'],
+                        metavar=f'1-{MAX_RESOLUTION_SCALE}|panel',
+                        help='run: render at this multiple of 1280x720 instead of the --display '
+                             "one, or panel: the screen's own resolution (the largest 16:9 "
+                             'picture that fits it) on the native path in one pass')
     parser.add_argument('--full-rate-mirror',action='store_true',
                         help='run: render the rear-view mirror every frame in every race')
     parser.add_argument('--quality',choices=list(QUALITY_PRESETS),

@@ -39,6 +39,9 @@ class PlanError : public std::runtime_error {
   using std::runtime_error::runtime_error;
 };
 
+// Options::resolution_scale of -ResolutionScale panel.
+constexpr int kPanelScale = -1;
+
 // The options of Build.ps1 -Action run that the launcher offers (no -ShaderDev).
 struct Options {
   bool single_tile = false;
@@ -55,7 +58,7 @@ struct Options {
   int msaa_samples = -1;     // -MsaaSamples; -1: unset (2 with -Native)
   int frame_rate = 0;        // 0: the title's 60
   std::string vsync;         // -VSync auto, on or off; empty: the default (auto)
-  int resolution_scale = 0;  // 0: from the display
+  int resolution_scale = 0;  // 0: from the display; kPanelScale: the screen's own (panel)
   std::string look;          // empty: the default look
   std::string quality;       // empty: the default quality
   std::string display;       // empty: the default display
@@ -109,10 +112,19 @@ Pairs LookKnobs(const LauncherData& data, const std::string& look);
 bool TaaEnabled(const Pairs& knobs);
 std::vector<std::string> LookDefines(const LauncherData& data, const Pairs& knobs);
 
-// display_settings of pipeline.py: cvars and the description.
+// screen_scale of pipeline.py: the largest 16:9 picture that fits the screen, as a reduced
+// fraction of 1280x720.
+std::pair<int, int> ScreenScale(int width, int height);
+
+// display_settings of pipeline.py: cvars and the description. scene_scale: the native path in
+// one pass with 2x MSAA, which renders at the screen's own scale.
 std::pair<Pairs, std::string> DisplaySettings(const LauncherData& data, const std::string& display,
                                               bool fullscreen, bool supersample,
-                                              int resolution_scale, const Monitor& monitor);
+                                              int resolution_scale, const Monitor& monitor,
+                                              bool scene_scale = false);
+
+// The render scale of a plan's cvars for the GUI: "3/2, 1920x1080" or "2x, 2560x1440".
+std::string RenderScaleText(const Pairs& cvars);
 
 Plan LaunchPlan(const LauncherData& data, const std::string& root, const std::string& disc1,
                 const Options& options, const Monitor& monitor,

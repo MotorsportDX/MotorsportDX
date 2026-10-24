@@ -219,7 +219,7 @@ takes a value.
 | `-Display native\|720p\|1080p\|1440p\|4k` | `native` | Screen and render size. `native` is borderless fullscreen on the primary monitor. Other values are a window of that size. |
 | `-Fullscreen` | off | Fullscreen with the `-Display` size and its render scale. |
 | `-Supersample` | off | Render one scale above the screen (up to 4x), then average the result down to the screen. |
-| `-ResolutionScale 1-4` | from `-Display` | Render at this multiple of 1280x720. Overrides the render scale of `-Display`. |
+| `-ResolutionScale 1-4\|panel` | from `-Display` | Render at this multiple of 1280x720, or `panel`: the screen's own resolution (the native path in one pass only). Overrides the render scale of `-Display`. |
 | `-Quality xbox\|high\|ultra` | `high` | Render quality of races. |
 | `-Look <preset/knobs>` | `aces` | Post-processing look and car paint. See [Look](#look). |
 | `-ShaderDev` | off | Shader mod development: the look mods reload when a file in `work/fm4-rex/look` is saved, and the knobs change live. See [Shader mod development](#shader-mod-development). |
@@ -306,6 +306,21 @@ the window, the presenter averages it over each screen pixel in linear light
 (`work/runtime/src/ui/shaders/guest_output_area.ps.hlsl`; `present_area_downscale=false`
 selects the earlier single bilinear tap). So 2x on a 1080p screen is supersampling,
 not a shrink that skips texels.
+
+On the native path in one pass with 2x MSAA (`-Native`, the default with integrated
+GPUs only), the scene renders at the screen's own resolution instead: the largest 16:9
+picture that fits the screen, at a fractional scale of 1280x720 where it needs one
+(1080p at 3/2, 1920x1080; 1440p at 2; 2160p at 3; 2560x1600 at 2, letterboxed; 2880x1800
+at 9/4, 2880x1620, letterboxed). The launcher sets `native_draw_scale` and the
+`native_rt_surfaces` the fraction needs together ([D3D-level HLE,
+18.19](analysis/d3d-hle-n5.md#1819-increment-3-the-screens-own-resolution-in-the-launcher-25-october-2026)).
+On 16:10 and other screens that are not 16:9 the picture is letterboxed or pillarboxed
+until the aspect work (increment 2), and the description says so. Integrated GPUs keep
+1x automatically; `-ResolutionScale panel` (the GUI's "Screen's own resolution") picks
+the screen's own resolution on them. `-Supersample` on the native path renders at the
+whole part of the screen's scale plus one. Photo mode stays at the whole scale and is
+scaled to the screen. One pass with 4x MSAA keeps the whole multiple until it is tested at
+a fractional scale.
 
 `-Supersample` renders one scale above the screen, up to 4x (5120x2880), and averages
 it down. Edges are smoother and thin objects are more stable, at the GPU cost of that
