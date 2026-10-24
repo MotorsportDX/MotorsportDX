@@ -2,7 +2,7 @@
 
 `e2e.py` launches the built game from a BuildRoot with the same arguments as `Build.ps1 -Action run`, drives the application-local diagnostic controller (`FM4_TEST_INPUT_FILE`; no desktop input is sent), and collects:
 
-- GPU frame captures every 2 seconds (`FM4_CAPTURE_DIR`), converted to PNG;
+- GPU frame captures every 2 seconds (`FM4_CAPTURE_DIR`), converted to PNG; with `--env FM4_CAPTURE_STATS=1` also the mean luma of the frame and six cockpit patches of nearly every frame in `capture/stats.csv` ([cockpit brightness](../analysis/cockpit-brightness.md#swings-between-bright-and-dark-25-october-2026));
 - a per-second performance trace (`REX_PERF_TRACE_FILE`, see [traces.md](traces.md));
 - crash status and error counts from the runtime log;
 - `summary.json` with median FPS and GPU-thread stall times.

@@ -1,6 +1,8 @@
 #pragma once
 #include <rex/ui/presenter.h>
+#include <algorithm>
 #include <chrono>
+#include <cstdint>
 #include <cstdio>
 #include <cstdlib>
 #include <filesystem>
@@ -66,6 +68,48 @@ inline void FM4CaptureGpuCommands(std::stop_token stop, const std::filesystem::p
 }
 
 // Diagnostic GPU readback only. No desktop capture or input injection.
+// FM4_CAPTURE_STATS=1: between the captures, the guest output is captured as
+// often as it can be (tens a second) and the mean Rec. 709 luma of the frame and
+// of six patches is appended to capture/stats.csv with the steady clock time, so
+// a jump from one frame to the next shows (the patches of
+// docs/analysis/cockpit-brightness.md, scaled from 1280x720).
+inline void FM4CaptureStats(rex::ui::Presenter* presenter, std::ofstream& output) {
+  rex::ui::RawImage frame;
+  if (!presenter->CaptureGuestOutput(frame) || !frame.width || !frame.height ||
+      frame.stride < size_t(frame.width) * 4 ||
+      frame.data.size() < size_t(frame.height - 1) * frame.stride + size_t(frame.width) * 4) {
+    std::this_thread::sleep_for(std::chrono::milliseconds(5));
+    return;
+  }
+  struct Patch { unsigned x, y, w, h; };
+  // The frame, then dashboard top, gauges, wheel hub, right hand, road, sky.
+  static const Patch kPatches[] = {{0, 0, 1280, 720},  {520, 490, 180, 30}, {530, 540, 210, 60},
+                                   {580, 610, 100, 40}, {800, 540, 80, 60},  {450, 400, 150, 40},
+                                   {420, 190, 100, 40}};
+  const double sx = frame.width / 1280.0, sy = frame.height / 720.0;
+  output << std::chrono::duration_cast<std::chrono::milliseconds>(
+                std::chrono::steady_clock::now().time_since_epoch())
+                .count();
+  for (const Patch& patch : kPatches) {
+    const unsigned x0 = unsigned(patch.x * sx), y0 = unsigned(patch.y * sy);
+    const unsigned x1 = std::min(frame.width, unsigned((patch.x + patch.w) * sx));
+    const unsigned y1 = std::min(frame.height, unsigned((patch.y + patch.h) * sy));
+    const unsigned step = patch.w >= 1280 ? 4 : 1;
+    double sum = 0;
+    size_t count = 0;
+    for (unsigned y = y0; y < y1; y += step) {
+      const uint8_t* row = frame.data.data() + size_t(y) * frame.stride;
+      for (unsigned x = x0; x < x1; x += step) {
+        const uint8_t* pixel = row + size_t(x) * 4;
+        sum += 0.2126 * pixel[0] + 0.7152 * pixel[1] + 0.0722 * pixel[2];
+        ++count;
+      }
+    }
+    output << ',' << (count ? sum / double(count) : 0.0);
+  }
+  output << std::endl;
+}
+
 inline void FM4CaptureFrames(std::stop_token stop, rex::ui::Presenter* presenter,
                              const std::filesystem::path& directory, rex::Runtime* runtime) {
   unsigned saved = 0;
@@ -76,12 +120,25 @@ inline void FM4CaptureFrames(std::stop_token stop, rex::ui::Presenter* presenter
     if (end != configured && *end == '\0' && value <= 450)
       archive_limit = static_cast<unsigned>(value);
   }
+  const char* stats_setting = std::getenv("FM4_CAPTURE_STATS");
+  const bool stats = stats_setting && *stats_setting && *stats_setting != '0';
   try {
     std::filesystem::create_directories(directory);
+    std::ofstream stats_output;
+    if (stats) {
+      stats_output.open(directory / "stats.csv", std::ios::app);
+      stats_output << "ms,frame,dashboard,gauges,wheel,hand,road,sky" << std::endl;
+    }
     while (!stop.stop_requested()) {
-      for (unsigned tick = 0; tick < (saved ? 20u : 5u); ++tick) {
+      const auto next = std::chrono::steady_clock::now() +
+                        std::chrono::milliseconds(saved ? 2000 : 500);
+      while (std::chrono::steady_clock::now() < next) {
         if (stop.stop_requested()) return;
-        std::this_thread::sleep_for(std::chrono::milliseconds(100));
+        if (stats) {
+          FM4CaptureStats(presenter, stats_output);
+        } else {
+          std::this_thread::sleep_for(std::chrono::milliseconds(100));
+        }
       }
       if (stop.stop_requested()) return;
       FM4CaptureGpuCommands(stop, directory);
