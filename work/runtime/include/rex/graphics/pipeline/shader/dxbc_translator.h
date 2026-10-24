@@ -20,6 +20,7 @@
 #include <rex/graphics/format/dxbc.h>
 #include <rex/graphics/format/ucode.h>
 #include <rex/graphics/pipeline/shader/translator.h>
+#include <rex/graphics/util/draw_scale.h>
 #include <rex/math.h>
 #include <rex/string/buffer.h>
 #include <rex/ui/graphics_provider.h>
@@ -52,6 +53,10 @@ class DxbcShaderTranslator : public ShaderTranslator {
                        bool msaa_2x_supported = true, uint32_t draw_resolution_scale_x = 1,
                        uint32_t draw_resolution_scale_y = 1, bool force_emit_source_map = false);
   ~DxbcShaderTranslator() override;
+
+  // The native path's scene scale, used by pixel shaders translated with the
+  // scene_scale modification (docs/analysis/d3d-hle-n5.md 18.13).
+  void SetSceneDrawScale(DrawScale scale) { scene_draw_scale_ = scale; }
 
   // Stage linkage ordering and rules (must be respected not only within the
   // DxbcShaderTranslator, but also by everything else between the VS and the
@@ -179,6 +184,10 @@ class DxbcShaderTranslator : public ShaderTranslator {
       // Not used by the translator: keeps the DXBC translation where an HLSL
       // shader override would replace it (shader_override_ab_ms).
       uint32_t hlsl_override_disabled : 1;
+      // The native path's scene draw at a fractional scale
+      // (docs/analysis/d3d-hle-n5.md 18.13): the pixel position, memexport's
+      // pixel and the resolution-scaled textures at SetSceneDrawScale's scale.
+      uint32_t scene_scale : 1;
     } pixel;
 
     explicit Modification(uint64_t modification_value = 0) : value(modification_value) {
@@ -953,6 +962,15 @@ class DxbcShaderTranslator : public ShaderTranslator {
   // Guest pixel host width / height.
   uint32_t draw_resolution_scale_x_;
   uint32_t draw_resolution_scale_y_;
+  // The scene's scale (SetSceneDrawScale), and the scale of the current
+  // translation: the scene's for a pixel shader with the scene_scale
+  // modification, the whole scale otherwise, set in StartTranslation.
+  DrawScale scene_draw_scale_;
+  DrawScale translation_scale_;
+  float translation_scale_x_ = 1.0f;
+  float translation_scale_y_ = 1.0f;
+  // The axes whose scale is above 1.
+  uint32_t translation_scaled_axes_ = 0;
 
   // Is currently writing the empty depth-only pixel shader, for
   // CompleteTranslation.

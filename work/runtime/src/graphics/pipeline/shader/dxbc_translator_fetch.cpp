@@ -883,7 +883,7 @@ void DxbcShaderTranslator::ProcessTextureFetchInstruction(
   }
   uint32_t revert_resolution_scale_axes =
       REXCVAR_GET(draw_resolution_scaled_texture_offsets)
-          ? uint32_t(draw_resolution_scale_x_ > 1) | (uint32_t(draw_resolution_scale_y_ > 1) << 1)
+          ? translation_scaled_axes_
           : 0;
 
   if (instr.opcode == FetchOpcode::kGetTextureWeights) {
@@ -933,8 +933,8 @@ void DxbcShaderTranslator::ProcessTextureFetchInstruction(
                dxbc::Src::LU(uint32_t(1) << tfetch_index));
       a_.OpIf(true, dxbc::Src::R(system_temp_result_, dxbc::Src::kWWWW));
       // The texture is resolution-scaled - scale the coordinates and the size.
-      dxbc::Src resolution_scale_src(dxbc::Src::LF(float(draw_resolution_scale_x_),
-                                                   float(draw_resolution_scale_y_), 1.0f, 1.0f));
+      dxbc::Src resolution_scale_src(
+          dxbc::Src::LF(translation_scale_x_, translation_scale_y_, 1.0f, 1.0f));
       if (resolution_scaled_coord_components) {
         a_.OpMul(dxbc::Dest::R(system_temp_result_, resolution_scaled_coord_components), coord_src,
                  resolution_scale_src);
@@ -1043,8 +1043,8 @@ void DxbcShaderTranslator::ProcessTextureFetchInstruction(
           a_.OpIf(true, dxbc::Src::R(coord_and_sampler_temp, dxbc::Src::kWWWW));
           a_.OpAdd(dxbc::Dest::R(coord_and_sampler_temp, normalized_components_with_scaled_offsets),
                    coord_operand,
-                   dxbc::Src::LF(offsets[0] / draw_resolution_scale_x_,
-                                 offsets[1] / draw_resolution_scale_y_, 0.0f, 0.0f));
+                   dxbc::Src::LF(offsets[0] / translation_scale_x_,
+                                 offsets[1] / translation_scale_y_, 0.0f, 0.0f));
           a_.OpElse();
           a_.OpAdd(dxbc::Dest::R(coord_and_sampler_temp, normalized_components_with_scaled_offsets),
                    coord_operand, offsets_src);
@@ -1103,7 +1103,7 @@ void DxbcShaderTranslator::ProcessTextureFetchInstruction(
           a_.OpIf(true, dxbc::Src::R(coord_and_sampler_temp, dxbc::Src::kWWWW));
           a_.OpMAd(dxbc::Dest::R(coord_and_sampler_temp, normalized_components_with_scaled_offsets),
                    dxbc::Src::R(coord_and_sampler_temp),
-                   dxbc::Src::LF(1.0f / draw_resolution_scale_x_, 1.0f / draw_resolution_scale_y_,
+                   dxbc::Src::LF(1.0f / translation_scale_x_, 1.0f / translation_scale_y_,
                                  1.0f, 1.0f),
                    coord_operand);
           a_.OpElse();

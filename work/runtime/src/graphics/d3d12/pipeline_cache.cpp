@@ -102,6 +102,7 @@ PipelineCache::PipelineCache(D3D12CommandProcessor& command_processor,
       !render_target_cache_.gamma_render_target_as_unorm16(),
       render_target_cache_.msaa_2x_supported(), render_target_cache_.draw_resolution_scale_x(),
       render_target_cache_.draw_resolution_scale_y(), provider.GetGraphicsAnalysis() != nullptr);
+  shader_translator_->SetSceneDrawScale(render_target_cache_.scene_draw_scale());
 
   if (edram_rov_used) {
     depth_only_pixel_shader_ = std::move(shader_translator_->CreateDepthOnlyPixelShader());
@@ -384,6 +385,7 @@ void PipelineCache::InitializeShaderStorage(const std::filesystem::path& cache_r
           render_target_cache_.msaa_2x_supported(), render_target_cache_.draw_resolution_scale_x(),
           render_target_cache_.draw_resolution_scale_y(),
           provider.GetGraphicsAnalysis() != nullptr);
+      translator.SetSceneDrawScale(render_target_cache_.scene_draw_scale());
       // If needed and possible, create objects needed for DXIL conversion and
       // disassembly on this thread.
       IDxbcConverter* dxbc_converter = nullptr;
@@ -3133,10 +3135,17 @@ ID3D12PipelineState* PipelineCache::CreateD3D12Pipeline(
   // reverted (slope only along the scaled axis), thus max. More bias is better
   // than less bias, because less bias means Z fighting with the background is
   // more likely.
+  // A scene draw at a fractional scale (the scene_scale modification,
+  // docs/analysis/d3d-hle-n5.md 18.13): the scene's scale.
+  const bool scene_scale =
+      runtime_description.pixel_shader &&
+      DxbcShaderTranslator::Modification(runtime_description.pixel_shader->modification())
+          .pixel.scene_scale;
   state_desc.RasterizerState.SlopeScaledDepthBias =
       description.depth_bias_slope_scaled *
-      float(std::max(render_target_cache_.draw_resolution_scale_x(),
-                     render_target_cache_.draw_resolution_scale_y()));
+      (scene_scale ? render_target_cache_.scene_draw_scale().ToFloat()
+                   : float(std::max(render_target_cache_.draw_resolution_scale_x(),
+                                    render_target_cache_.draw_resolution_scale_y())));
   state_desc.RasterizerState.DepthClipEnable = description.depth_clip ? TRUE : FALSE;
   uint32_t msaa_sample_count = uint32_t(1) << uint32_t(description.host_msaa_samples);
   if (edram_rov_used) {

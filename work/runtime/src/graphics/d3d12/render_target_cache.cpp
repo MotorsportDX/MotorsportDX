@@ -1999,6 +1999,14 @@ RenderTargetCache::RenderTarget* D3D12RenderTargetCache::CreateRenderTarget(Rend
                          (xenos::kEdramTileHeightSamples >>
                           uint32_t(key.msaa_samples >= xenos::MsaaSamples::k2X)) *
                          draw_resolution_scale_y();
+  // A private surface at the scene's fractional scale (18.13).
+  const DrawScale key_scale = GetKeyScale(key);
+  if (!key_scale.IsWhole()) {
+    resource_desc.Width = key_scale.ScaleUp(key.GetWidth());
+    resource_desc.Height = key_scale.ScaleUp(
+        tile_rows *
+        (xenos::kEdramTileHeightSamples >> uint32_t(key.msaa_samples >= xenos::MsaaSamples::k2X)));
+  }
   resource_desc.DepthOrArraySize = 1;
   resource_desc.MipLevels = 1;
   if (key.is_depth) {

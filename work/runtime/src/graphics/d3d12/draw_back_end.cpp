@@ -263,12 +263,14 @@ bool ComputeSystemConstants(const RegisterFile& regs, const draw_util::ViewportI
     // 2 because 1 in the NDC is half of the viewport's axis, 0.5 for diameter
     // to radius conversion to avoid multiplying the per-vertex diameter by an
     // additional constant in the shader.
+    const float point_scale_x =
+        inputs.scene_draw ? inputs.scene_scale.ToFloat() : float(draw_resolution_scale_x);
+    const float point_scale_y =
+        inputs.scene_draw ? inputs.scene_scale.ToFloat() : float(draw_resolution_scale_y);
     float point_screen_diameter_to_ndc_radius_x =
-        (/* 0.5f * 2.0f * */ float(draw_resolution_scale_x)) /
-        std::max(viewport_info.xy_extent[0], uint32_t(1));
+        (/* 0.5f * 2.0f * */ point_scale_x) / std::max(viewport_info.xy_extent[0], uint32_t(1));
     float point_screen_diameter_to_ndc_radius_y =
-        (/* 0.5f * 2.0f * */ float(draw_resolution_scale_y)) /
-        std::max(viewport_info.xy_extent[1], uint32_t(1));
+        (/* 0.5f * 2.0f * */ point_scale_y) / std::max(viewport_info.xy_extent[1], uint32_t(1));
     dirty |= constants.point_screen_diameter_to_ndc_radius[0] !=
              point_screen_diameter_to_ndc_radius_x;
     dirty |= constants.point_screen_diameter_to_ndc_radius[1] !=
@@ -407,8 +409,10 @@ bool ComputeSystemConstants(const RegisterFile& regs, const draw_util::ViewportI
     // reverted (slope only along the scaled axis), thus max. More bias is
     // better than less bias, because less bias means Z fighting with the
     // background is more likely.
-    float poly_offset_scale_factor = xenos::kPolygonOffsetScaleSubpixelUnit *
-                                     std::max(draw_resolution_scale_x, draw_resolution_scale_y);
+    float poly_offset_scale_factor =
+        xenos::kPolygonOffsetScaleSubpixelUnit *
+        (inputs.scene_draw ? inputs.scene_scale.ToFloat()
+                           : float(std::max(draw_resolution_scale_x, draw_resolution_scale_y)));
     poly_offset_front_scale *= poly_offset_scale_factor;
     poly_offset_back_scale *= poly_offset_scale_factor;
     dirty |= constants.edram_poly_offset_front_scale != poly_offset_front_scale;
@@ -485,6 +489,33 @@ void ComputeBlendFactorAndStencilReference(const RegisterFile& regs, bool primit
     stencil_ref_mask_reg = XE_GPU_REG_RB_STENCILREFMASK;
   }
   stencil_reference_out = regs.Get<reg::RB_STENCILREFMASK>(stencil_ref_mask_reg).stencilref;
+}
+
+void ComputeViewportAndScissor(const RegisterFile& regs, uint32_t flags, uint32_t scale_x,
+                               uint32_t scale_y, DrawScale scene_scale,
+                               reg::RB_DEPTHCONTROL normalized_depth_control,
+                               bool pixel_shader_writes_depth, draw_util::ViewportInfo& viewport,
+                               draw_util::Scissor& scissor) {
+  if (flags & kFlagSceneScale) {
+    draw_util::GetHostViewportInfo(regs, scene_scale, true, D3D12_VIEWPORT_BOUNDS_MAX,
+                                   D3D12_VIEWPORT_BOUNDS_MAX, false, normalized_depth_control,
+                                   (flags & kFlagConvertZToFloat24) != 0,
+                                   (flags & kFlagHostRenderTargets) != 0,
+                                   pixel_shader_writes_depth, viewport);
+    draw_util::GetScissor(regs, scissor);
+    draw_util::ScaleScissor(scene_scale, scissor);
+    return;
+  }
+  draw_util::GetHostViewportInfo(regs, scale_x, scale_y, true, D3D12_VIEWPORT_BOUNDS_MAX,
+                                 D3D12_VIEWPORT_BOUNDS_MAX, false, normalized_depth_control,
+                                 (flags & kFlagConvertZToFloat24) != 0,
+                                 (flags & kFlagHostRenderTargets) != 0, pixel_shader_writes_depth,
+                                 viewport);
+  draw_util::GetScissor(regs, scissor);
+  scissor.offset[0] *= scale_x;
+  scissor.offset[1] *= scale_y;
+  scissor.extent[0] *= scale_x;
+  scissor.extent[1] *= scale_y;
 }
 
 }  // namespace rex::graphics::d3d12::draw_back_end
@@ -1113,21 +1144,14 @@ void D3D12CommandProcessor::CaptureDrawBackEnd(const DrawBackEndCapture& capture
       const uint32_t uniform_scale_y = (capture.flags >> (be::kFlagUniformScaleShift + 2)) & 3;
       const uint32_t scale_x = front.flags.draw_resolution_scale_x * uniform_scale_x;
       const uint32_t scale_y = front.flags.draw_resolution_scale_y * uniform_scale_y;
-      draw_util::GetHostViewportInfo(regs, scale_x, scale_y, true, D3D12_VIEWPORT_BOUNDS_MAX,
-                                     D3D12_VIEWPORT_BOUNDS_MAX, false, depth_control,
-                                     (capture.flags & be::kFlagConvertZToFloat24) != 0,
-                                     (capture.flags & be::kFlagHostRenderTargets) != 0,
-                                     pixel_shader && pixel_shader->writes_depth(),
-                                     expected.viewport);
+      be::ComputeViewportAndScissor(regs, capture.flags, scale_x, scale_y,
+                                    render_target_cache_->scene_draw_scale(), depth_control,
+                                    pixel_shader && pixel_shader->writes_depth(),
+                                    expected.viewport, expected.scissor);
       if (capture.flags & be::kFlagJitter) {
         post_pass::AddJitterToNdcOffset(capture.jitter, expected.viewport.xy_extent,
                                         expected.viewport.ndc_offset);
       }
-      draw_util::GetScissor(regs, expected.scissor);
-      expected.scissor.offset[0] *= scale_x;
-      expected.scissor.offset[1] *= scale_y;
-      expected.scissor.extent[0] *= scale_x;
-      expected.scissor.extent[1] *= scale_y;
       be::ComputeBlendFactorAndStencilReference(regs, polygonal, depth_control,
                                                 expected.blend_factor, expected.stencil_reference);
       be::ComputeSystemConstants(regs, expected.viewport, inputs, system_constants_);
@@ -1247,6 +1271,8 @@ void D3D12CommandProcessor::ReplayDrawBackEnd(const uint8_t* arguments, Register
   inputs.normalized_depth_control = depth_control;
   inputs.draw_resolution_scale_x = list.flags.draw_resolution_scale_x;
   inputs.draw_resolution_scale_y = list.flags.draw_resolution_scale_y;
+  inputs.scene_draw = (flags & be::kFlagSceneScale) != 0;
+  inputs.scene_scale = render_target_cache_->scene_draw_scale();
   std::memcpy(inputs.texture_swizzled_signs, list.texture_swizzled_signs,
               sizeof(inputs.texture_swizzled_signs));
   std::memcpy(inputs.texture_integer_scale_bits, list.texture_integer_scale_bits,
@@ -1284,22 +1310,15 @@ void D3D12CommandProcessor::ReplayDrawBackEnd(const uint8_t* arguments, Register
         std::memcmp(description, expected.pipeline_description,
                     pipeline_cache_->GetPipelineDescriptionSize()) != 0;
     draw_util::ViewportInfo viewport;
-    draw_util::GetHostViewportInfo(regs, scale_x, scale_y, true, D3D12_VIEWPORT_BOUNDS_MAX,
-                                   D3D12_VIEWPORT_BOUNDS_MAX, false, depth_control,
-                                   (flags & be::kFlagConvertZToFloat24) != 0,
-                                   (flags & be::kFlagHostRenderTargets) != 0,
-                                   pixel_shader && pixel_shader->writes_depth(), viewport);
+    draw_util::Scissor scissor;
+    be::ComputeViewportAndScissor(regs, flags, scale_x, scale_y,
+                                  render_target_cache_->scene_draw_scale(), depth_control,
+                                  pixel_shader && pixel_shader->writes_depth(), viewport, scissor);
     if (flags & be::kFlagJitter) {
       post_pass::AddJitterToNdcOffset(list.flags.jitter, viewport.xy_extent, viewport.ndc_offset);
     }
     mismatches[be::kMismatchViewport] =
         std::memcmp(&viewport, &expected.viewport, sizeof(viewport)) != 0;
-    draw_util::Scissor scissor;
-    draw_util::GetScissor(regs, scissor);
-    scissor.offset[0] *= scale_x;
-    scissor.offset[1] *= scale_y;
-    scissor.extent[0] *= scale_x;
-    scissor.extent[1] *= scale_y;
     mismatches[be::kMismatchScissor] =
         std::memcmp(&scissor, &expected.scissor, sizeof(scissor)) != 0;
     if (flags & be::kFlagHostRenderTargets) {
@@ -1451,11 +1470,11 @@ void D3D12CommandProcessor::ReplayDrawBackEndDraw(
 
   // Viewport, scissor, blend factor and stencil reference.
   draw_util::ViewportInfo viewport_info;
-  draw_util::GetHostViewportInfo(regs, scale_x, scale_y, true, D3D12_VIEWPORT_BOUNDS_MAX,
-                                 D3D12_VIEWPORT_BOUNDS_MAX, false, depth_control,
-                                 (flags & be::kFlagConvertZToFloat24) != 0,
-                                 (flags & be::kFlagHostRenderTargets) != 0,
-                                 pixel_shader && pixel_shader->writes_depth(), viewport_info);
+  draw_util::Scissor scissor;
+  be::ComputeViewportAndScissor(regs, flags, scale_x, scale_y,
+                                render_target_cache_->scene_draw_scale(), depth_control,
+                                pixel_shader && pixel_shader->writes_depth(), viewport_info,
+                                scissor);
   if (flags & be::kFlagJitter) {
     post_pass::AddJitterToNdcOffset(list.flags.jitter, viewport_info.xy_extent,
                                     viewport_info.ndc_offset);
@@ -1472,12 +1491,6 @@ void D3D12CommandProcessor::ReplayDrawBackEndDraw(
     d3d.viewport = viewport;
     d3d.viewport_set = true;
   }
-  draw_util::Scissor scissor;
-  draw_util::GetScissor(regs, scissor);
-  scissor.offset[0] *= scale_x;
-  scissor.offset[1] *= scale_y;
-  scissor.extent[0] *= scale_x;
-  scissor.extent[1] *= scale_y;
   D3D12_RECT scissor_rect;
   scissor_rect.left = LONG(scissor.offset[0]);
   scissor_rect.top = LONG(scissor.offset[1]);
@@ -1860,6 +1873,23 @@ void D3D12CommandProcessor::ReplayDrawBackEndDraw(
                   pipeline_cache_->GetPipelineDescriptionSize()) != 0;
   mismatches[be::kMismatchViewport] =
       std::memcmp(&viewport_info, &expected->viewport, sizeof(viewport_info)) != 0;
+  if (mismatches[be::kMismatchViewport]) {
+    static uint32_t viewport_messages = 0;
+    if (viewport_messages < 4) {
+      ++viewport_messages;
+      const draw_util::ViewportInfo& e = expected->viewport;
+      REXGPU_WARN(
+          "Draw back end: viewport flags {:X}: replay {},{} {}x{} z {}..{} ndc {} {} {} / {} {} "
+          "{}, draw {},{} {}x{} z {}..{} ndc {} {} {} / {} {} {}",
+          flags, viewport_info.xy_offset[0], viewport_info.xy_offset[1],
+          viewport_info.xy_extent[0], viewport_info.xy_extent[1], viewport_info.z_min,
+          viewport_info.z_max, viewport_info.ndc_scale[0], viewport_info.ndc_scale[1],
+          viewport_info.ndc_scale[2], viewport_info.ndc_offset[0], viewport_info.ndc_offset[1],
+          viewport_info.ndc_offset[2], e.xy_offset[0], e.xy_offset[1], e.xy_extent[0],
+          e.xy_extent[1], e.z_min, e.z_max, e.ndc_scale[0], e.ndc_scale[1], e.ndc_scale[2],
+          e.ndc_offset[0], e.ndc_offset[1], e.ndc_offset[2]);
+    }
+  }
   mismatches[be::kMismatchScissor] =
       std::memcmp(&scissor, &expected->scissor, sizeof(scissor)) != 0;
   mismatches[be::kMismatchFixedFunction] =

@@ -172,3 +172,41 @@ The gate on `I:\FM4-build-usa` at 240 Hz (snapshot `n5d-nat2x`, local main `9a67
 
 The main session's condition for `-Native` holds for bit 16 (turned on in `51cd88d`, the byte check covering the private surfaces); bit 32 stays off until the fractional scale needs it.
 
+### 18.13 Step 4 design: draws at the scene's scale, 24 October 2026
+
+Step 4 splits into three parts, each with a no-change gate at whole scales; the first image at 3/2 comes with the third.
+
+**4a, draws into the private surfaces at s.** A draw whose bound targets are private (the registers say so before the render target update) is a scene draw; every other draw keeps k.
+
+- **Targets.** A private target is created at `ScaleUp` of its guest size; the others at k, as today.
+- **Viewport and scissor.** `GetHostViewportInfo` keeps its guest-pixel snapping. For a scene draw at a fractional s the host edges are `ScaleEdge` of the guest edges, and the NDC scale and offset come from those host edges divided by s, so the mapping is exact. Whole scales keep today's formula. The draw back end of N4, which computes the viewport on the replay thread, takes the same path.
+- **The translated shaders.** The translator writes the scale into each translation as literals: the pixel position's 1/scale, memexport's pixel choice, and the reversal of texture fetch offsets for scaled textures. A scene draw at a fractional s uses a pixel shader translation with a new modification bit (`scene_scale`), translated with s. Every existing translation keeps its modification value and its DXBC, so the shader storage stays valid and whole scales do not change. At 3/2, k is 1, so the scaled textures a scene draw samples are the ones written at s. The main session approved the bit over moving the scale into the system constants on 24 October 2026. A fractional scale adds pixel shader translations and pipelines for the scene draws; step 4's perf report counts them per race at 3/2 and checks that the shader storage keeps them for the next run, since the first race otherwise compiles them (and the Ally X's driver compiles pipelines anyway).
+- **Pipelines.** The slope-scaled depth bias and the point size use the draw's scale.
+- **Occlusion queries.** A query whose draws went into the scene targets is normalized by s squared, others by k squared. The queries have several paths (on RTV and on `-Rov`), so this comes with 4c's check of the sun's glare.
+- **Test at whole scales.** A diagnostic forces the scene variant when s equals k. Its images and byte checks must match the normal path.
+
+**4b, resolves from s.** The scaled resolve buffer stays at k for everything, and so do the readbacks and the small destinations, which load from it as today. A host resolve from a private surface at s into the buffer at k takes the nearest sample where only readbacks read the destination; where a pass samples it for the picture (the bloom chain's inputs, the reflections), nearest at 3/2 would alias, so those take a box filter over the host pixels of each guest pixel at k (the main session's rule of 24 October 2026). The inventory of 18.4 says which destinations are which. Full-screen destinations get host textures at s (step 3's path). These textures have a key of their own (a `scene_scaled` bit, set for ranges a full-screen private resolve wrote), sized by `ScaleUp`.
+
+**Open item of the 20/9 step.** At 20/9, k is 2: a texture at k sampled with fetch offsets in a scene draw has its offsets reversed with s instead of k. The error is the offset times (s - k) / s, 0.1 texel of the texture at s per texel of offset, so under one host texel for any offset below 10 texels. The main session deferred it to the 20/9 step on 24 October 2026.
+
+**4c, the frame at s.** The post passes' final size, the swap and the presentation at the panel's size, TAA's thresholds in guest pixels, and the look mods' scale macros. Then the first image at 3/2, at 1:1 against 1x and 2x.
+
+### 18.14 Increment 1, step 4a: scene draws, 24 October 2026
+
+The parts of 18.13's 4a, behind `native_draw_scale`. A scene draw is one whose render target update bound private surfaces, while the scene's scale is fractional or the diagnostic `native_draw_scale_variant` is on, and that is not a uniform draw (a clear-like draw of `rtv_uniform_draws`, which stays off while the scene's scale is fractional).
+
+- **Targets.** A private target at a fractional scale is created at `ScaleUp` of its guest width and height (`GetKeyScale`).
+- **Viewport and scissor.** `draw_util::GetHostViewportInfo(regs, DrawScale, ...)` computes the viewport in guest pixels, maps its edges with `ScaleEdge`, and adjusts the NDC scale and offset to the host edges. `ScaleScissor` maps the scissor's edges the same way. The command processor and every viewport of the draw back end go through `draw_back_end::ComputeViewportAndScissor`: the capture's expected values, the check, and the replay that draws. The back end's capture carries the scene draw as `kFlagSceneScale`.
+- **Shaders.** A scene draw's pixel shader has the `scene_scale` modification. The translator takes its scale for the pixel position, memexport's pixel (at a fractional scale the first host pixel of each guest pixel) and the scaled textures' coordinates and offsets from that bit. A translation without the bit keeps its literals.
+- **Pipelines and system constants.** The slope-scaled depth bias of a pipeline with a `scene_scale` pixel shader, and the point size and polygon offset of a scene draw's system constants (`SystemConstantInputs::scene_draw`), use the scene's scale.
+
+The no-change gate on `I:\FM4-build-usa` at 240 Hz, local main `96da8da` with step 4a, `-Native` one pass 2x with `native_rt_surfaces=26`, `native_draw_scale` equal to the whole scale and `native_draw_scale_variant=true`, so that every draw into the private surfaces takes the scene draws' path at a scale where it must give the same picture:
+
+| Check | Result |
+|---|---|
+| combined checks with perturbation, `career` at 1x (`n5h-check-1x`) and 2x (`n5g-check-2x`) | the draw back end's check (the replay's pipeline, viewport, scissor and system constants against the draw's): mismatches only the perturbed; identity, bindings and guard the same; the resolve byte check 11,961 resolves at 2x, 0 mismatches. The first 1x run (`n5g-check-1x`) found 8 draws in the boot splash whose replayed viewport and system constants differed: the replay that draws still computed its viewport on the whole path. Fixed before `n5h-check-1x` |
+| smoke at 2x (`n5g-nat2x`) | 3 of 3 cells reached their goal; races 199.6 and 193.9 fps |
+| `parity.py` on `freeze` against step 3 | PASS at real 1x (15.7% of the image above 4) and at 2x with `--look aces` (26.7%); the 1:1 crops of the dashboard and the car ahead are the same; the still picture does not change from capture to capture |
+
+Occlusion queries at the scene's scale come with 4c (18.13).
+

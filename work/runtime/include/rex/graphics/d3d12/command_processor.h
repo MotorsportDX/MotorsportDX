@@ -783,6 +783,9 @@ class D3D12CommandProcessor : public CommandProcessor {
   ViewportCacheKey previous_viewport_key_{};
   draw_util::ViewportInfo previous_viewport_info_{};
   bool viewport_cache_valid_ = false;
+  // Whether the draw being issued is a scene draw (docs/analysis/d3d-hle-n5.md 18.13), for
+  // FillSystemConstantInputs.
+  bool current_draw_scene_ = false;
 
   // Should bindless textures and samplers be used - many times faster
   // UpdateBindings than bindful (that becomes a significant bottleneck with

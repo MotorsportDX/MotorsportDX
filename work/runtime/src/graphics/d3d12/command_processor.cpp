@@ -57,6 +57,12 @@ REXCVAR_DEFINE_STRING(native_draw_scale, "", "GPU",
                       "be draw_resolution_scale_x and _y, the scale of the other surfaces. "
                       "Empty: the scene at the whole scale. RTV path with host_render_native only")
     .lifecycle(rex::cvar::Lifecycle::kRequiresRestart);
+REXCVAR_DEFINE_BOOL(native_draw_scale_variant, false, "GPU",
+                    "Diagnostic: draws into the private surfaces use the scene draws' path "
+                    "(the scene_scale shader variant, the rational viewport and scissor) also "
+                    "at a whole native_draw_scale, to test it against the whole path "
+                    "(docs/analysis/d3d-hle-n5.md 18.13)")
+    .lifecycle(rex::cvar::Lifecycle::kRequiresRestart);
 REXCVAR_DEFINE_BOOL(d3d12_reuse_draw_bindings_check, false, "GPU/D3D12",
                     "Compare every texture binding kept in sync with a key computed fresh from "
                     "its fetch constant (the check of d3d12_reuse_draw_bindings)");
@@ -2318,6 +2324,7 @@ bool D3D12CommandProcessor::SetupContext() {
                    text, scale->Floor(), draw_resolution_scale_x, draw_resolution_scale_y);
     } else {
       texture_cache_->SetSceneDrawScale(*scale);
+      render_target_cache_->SetSceneDrawScale(*scale);
       REXGPU_INFO("Native draw scale: {}/{} for the scene, {} for the other surfaces",
                   scale->numerator, scale->denominator, draw_resolution_scale_x);
     }
@@ -3886,6 +3893,7 @@ bool D3D12CommandProcessor::IssueDraw(xenos::PrimitiveType primitive_type, uint3
   uniform_draw_debug_reason = 0;
   if (render_target_cache_->GetPath() == RenderTargetCache::Path::kHostRenderTargets &&
       REXCVAR_GET(rtv_uniform_draws) && is_rasterization_done && !memexport_used &&
+      render_target_cache_->scene_draw_scale().IsWhole() &&
       GetDrawOverwrite(regs, primitive_type, index_count, pixel_shader, ps_param_gen_pos,
                        normalized_depth_control, normalized_color_mask,
                        uniform_draw_overwritten_slots, uniform_draw_values_may_be_uniform)) {
@@ -3998,6 +4006,17 @@ bool D3D12CommandProcessor::IssueDraw(xenos::PrimitiveType primitive_type, uint3
                            *vertex_shader)) {
     return false;
   }
+  // A scene draw (docs/analysis/d3d-hle-n5.md 18.13): into the private
+  // surfaces at a fractional scene scale (or any with the diagnostic), drawn
+  // with the scene_scale pixel shader variant, the rational viewport and
+  // scissor.
+  const DrawScale scene_draw_scale = render_target_cache_->scene_draw_scale();
+  const bool scene_draw = render_target_cache_->last_update_private() && !uniform_draw_set &&
+                          (!scene_draw_scale.IsWhole() || REXCVAR_GET(native_draw_scale_variant));
+  if (scene_draw && pixel_shader) {
+    pixel_shader_modification.pixel.scene_scale = 1;
+  }
+  current_draw_scene_ = scene_draw;
   FrameGraphRenderTargets(*render_target_cache_);
   TraceTransferDraw(regs, *render_target_cache_, *vertex_shader, pixel_shader, primitive_type,
                     index_count, ps_param_gen_pos, normalized_depth_control,
@@ -4111,7 +4130,8 @@ bool D3D12CommandProcessor::IssueDraw(xenos::PrimitiveType primitive_type, uint3
   viewport_key.flags = (uint32_t(convert_z_to_float24) << 0) |
                        (uint32_t(host_render_targets_used) << 1) | (uint32_t(ps_writes_depth) << 2) |
                        (uniform_draw_scale_x << 3) | (uniform_draw_scale_y << 5) |
-                       (uint32_t(regs.Get<reg::RB_DEPTH_INFO>().depth_format) << 8);
+                       (uint32_t(regs.Get<reg::RB_DEPTH_INFO>().depth_format) << 8) |
+                       (uint32_t(scene_draw) << 16);
 
   draw_util::ViewportInfo viewport_info;
   if (draw_back_end_ == 2) {
@@ -4119,11 +4139,18 @@ bool D3D12CommandProcessor::IssueDraw(xenos::PrimitiveType primitive_type, uint3
   } else if (viewport_cache_valid_ && viewport_key == previous_viewport_key_) {
     viewport_info = previous_viewport_info_;
   } else {
-    draw_util::GetHostViewportInfo(regs, draw_resolution_scale_x * uniform_draw_scale_x,
-                                   draw_resolution_scale_y * uniform_draw_scale_y, true,
-                                   D3D12_VIEWPORT_BOUNDS_MAX, D3D12_VIEWPORT_BOUNDS_MAX, false,
-                                   normalized_depth_control, convert_z_to_float24,
-                                   host_render_targets_used, ps_writes_depth, viewport_info);
+    if (scene_draw) {
+      draw_util::GetHostViewportInfo(regs, scene_draw_scale, true, D3D12_VIEWPORT_BOUNDS_MAX,
+                                     D3D12_VIEWPORT_BOUNDS_MAX, false, normalized_depth_control,
+                                     convert_z_to_float24, host_render_targets_used,
+                                     ps_writes_depth, viewport_info);
+    } else {
+      draw_util::GetHostViewportInfo(regs, draw_resolution_scale_x * uniform_draw_scale_x,
+                                     draw_resolution_scale_y * uniform_draw_scale_y, true,
+                                     D3D12_VIEWPORT_BOUNDS_MAX, D3D12_VIEWPORT_BOUNDS_MAX, false,
+                                     normalized_depth_control, convert_z_to_float24,
+                                     host_render_targets_used, ps_writes_depth, viewport_info);
+    }
     previous_viewport_key_ = viewport_key;
     previous_viewport_info_ = viewport_info;
     viewport_cache_valid_ = true;
@@ -4150,10 +4177,14 @@ bool D3D12CommandProcessor::IssueDraw(xenos::PrimitiveType primitive_type, uint3
 
   draw_util::Scissor scissor;
   draw_util::GetScissor(regs, scissor);
-  scissor.offset[0] *= draw_resolution_scale_x * uniform_draw_scale_x;
-  scissor.offset[1] *= draw_resolution_scale_y * uniform_draw_scale_y;
-  scissor.extent[0] *= draw_resolution_scale_x * uniform_draw_scale_x;
-  scissor.extent[1] *= draw_resolution_scale_y * uniform_draw_scale_y;
+  if (scene_draw) {
+    draw_util::ScaleScissor(scene_draw_scale, scissor);
+  } else {
+    scissor.offset[0] *= draw_resolution_scale_x * uniform_draw_scale_x;
+    scissor.offset[1] *= draw_resolution_scale_y * uniform_draw_scale_y;
+    scissor.extent[0] *= draw_resolution_scale_x * uniform_draw_scale_x;
+    scissor.extent[1] *= draw_resolution_scale_y * uniform_draw_scale_y;
+  }
 
   // Update viewport, scissor, blend factor and stencil reference.
   if (draw_back_end_ != 2) {
@@ -4208,7 +4239,8 @@ bool D3D12CommandProcessor::IssueDraw(xenos::PrimitiveType primitive_type, uint3
                     (inputs.rov_occlusion_query ? be::kFlagRovOcclusionQuery : 0) |
                     (jitter_applied ? be::kFlagJitter : 0) |
                     (uniform_draw_scale_x << be::kFlagUniformScaleShift) |
-                    (uniform_draw_scale_y << (be::kFlagUniformScaleShift + 2));
+                    (uniform_draw_scale_y << (be::kFlagUniformScaleShift + 2)) |
+                    (scene_draw ? be::kFlagSceneScale : 0);
     capture.jitter[0] = jitter_applied ? jitter[0] : 0.0f;
     capture.jitter[1] = jitter_applied ? jitter[1] : 0.0f;
     capture.pipeline_handle = pipeline_handle;
@@ -5741,6 +5773,8 @@ void D3D12CommandProcessor::FillSystemConstantInputs(
   inputs.normalized_depth_control = normalized_depth_control;
   inputs.draw_resolution_scale_x = texture_cache_->draw_resolution_scale_x();
   inputs.draw_resolution_scale_y = texture_cache_->draw_resolution_scale_y();
+  inputs.scene_draw = current_draw_scene_;
+  inputs.scene_scale = render_target_cache_->scene_draw_scale();
   inputs.textures_resolution_scaled = 0;
   uint32_t textures_remaining = used_texture_mask;
   uint32_t texture_index;

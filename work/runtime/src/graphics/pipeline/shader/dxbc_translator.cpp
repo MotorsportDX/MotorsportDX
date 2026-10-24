@@ -658,14 +658,13 @@ void DxbcShaderTranslator::StartPixelShader() {
     // correct derivative magnitude and LODs.
     in_position_used_ |= 0b0011;
     a_.OpRoundNI(dxbc::Dest::R(param_gen_temp, 0b0011), dxbc::Src::V1D(in_reg_ps_position_));
-    uint32_t resolution_scaled_axes =
-        uint32_t(draw_resolution_scale_x_ > 1) | (uint32_t(draw_resolution_scale_y_ > 1) << 1);
+    uint32_t resolution_scaled_axes = translation_scaled_axes_;
     if (resolution_scaled_axes) {
       // Revert resolution scale - after truncating, so if the pixel position
       // is passed to tfetch (assuming the game doesn't round it by itself),
       // it will be sampled with higher resolution too.
       a_.OpMul(dxbc::Dest::R(param_gen_temp, resolution_scaled_axes), dxbc::Src::R(param_gen_temp),
-               dxbc::Src::LF(1.0f / draw_resolution_scale_x_, 1.0f / draw_resolution_scale_y_, 1.0f,
+               dxbc::Src::LF(1.0f / translation_scale_x_, 1.0f / translation_scale_y_, 1.0f,
                              1.0f));
     }
     if (shader_modification.pixel.param_gen_point) {
@@ -724,9 +723,36 @@ void DxbcShaderTranslator::StartPixelShader() {
         dxbc::Dest::R(system_temp_memexport_enabled_and_eM_written_, 0b0001));
     dxbc::Src memexport_enabled_src(
         dxbc::Src::R(system_temp_memexport_enabled_and_eM_written_, dxbc::Src::kXXXX));
-    uint32_t resolution_scaled_axes =
-        uint32_t(draw_resolution_scale_x_ > 1) | (uint32_t(draw_resolution_scale_y_ > 1) << 1);
-    if (resolution_scaled_axes) {
+    uint32_t resolution_scaled_axes = translation_scaled_axes_;
+    if (resolution_scaled_axes && !translation_scale_.IsWhole()) {
+      // A fractional scale: the first host pixel of each guest pixel, where
+      // floor((x - 1) * d / n) differs from floor(x * d / n) (at x = 0 the
+      // subtraction wraps, so the first column counts too).
+      uint32_t memexport_condition_temp = PushSystemTemp();
+      in_position_used_ |= 0b0011;
+      const uint32_t kXYXY = 0b01000100, kZWZW = 0b11101110;
+      a_.OpFToU(dxbc::Dest::R(memexport_condition_temp, 0b0011),
+                dxbc::Src::V1D(in_reg_ps_position_));
+      // zw = xy * d, then xy = zw - d.
+      a_.OpIMul(dxbc::Dest::Null(), dxbc::Dest::R(memexport_condition_temp, 0b1100),
+                dxbc::Src::R(memexport_condition_temp, kXYXY),
+                dxbc::Src::LU(translation_scale_.denominator));
+      a_.OpIAdd(dxbc::Dest::R(memexport_condition_temp, 0b0011),
+                dxbc::Src::R(memexport_condition_temp, kZWZW),
+                dxbc::Src::LI(-int32_t(translation_scale_.denominator)));
+      a_.OpUDiv(dxbc::Dest::R(memexport_condition_temp), dxbc::Dest::Null(),
+                dxbc::Src::R(memexport_condition_temp),
+                dxbc::Src::LU(translation_scale_.numerator));
+      a_.OpINE(dxbc::Dest::R(memexport_condition_temp, 0b0011),
+               dxbc::Src::R(memexport_condition_temp),
+               dxbc::Src::R(memexport_condition_temp, kZWZW));
+      a_.OpAnd(memexport_enabled_dest, memexport_enabled_src,
+               dxbc::Src::R(memexport_condition_temp, dxbc::Src::kXXXX));
+      a_.OpAnd(memexport_enabled_dest, memexport_enabled_src,
+               dxbc::Src::R(memexport_condition_temp, dxbc::Src::kYYYY));
+      // Release memexport_condition_temp.
+      PopSystemTemp();
+    } else if (resolution_scaled_axes) {
       uint32_t memexport_condition_temp = PushSystemTemp();
       // Only do memexport for one host pixel in a guest pixel - prefer the
       // host pixel closer to the center of the guest pixel, but one that's
@@ -773,6 +799,18 @@ void DxbcShaderTranslator::StartPixelShader() {
 void DxbcShaderTranslator::StartTranslation() {
   // Set up the input and output registers.
   Modification shader_modification = GetDxbcShaderModification();
+  // The scale the literals of this translation use.
+  if (is_pixel_shader() && shader_modification.pixel.scene_scale) {
+    translation_scale_ = scene_draw_scale_;
+    translation_scale_x_ = translation_scale_y_ = scene_draw_scale_.ToFloat();
+    translation_scaled_axes_ = scene_draw_scale_.numerator > scene_draw_scale_.denominator ? 0b11 : 0;
+  } else {
+    translation_scale_ = DrawScale::Whole(draw_resolution_scale_x_);
+    translation_scale_x_ = float(draw_resolution_scale_x_);
+    translation_scale_y_ = float(draw_resolution_scale_y_);
+    translation_scaled_axes_ =
+        uint32_t(draw_resolution_scale_x_ > 1) | (uint32_t(draw_resolution_scale_y_ > 1) << 1);
+  }
   uint32_t interpolator_register_mask = GetModificationInterpolatorMask();
   uint32_t interpolator_register_count = rex::bit_count(interpolator_register_mask);
   if (is_vertex_shader()) {

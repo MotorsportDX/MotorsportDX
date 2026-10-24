@@ -160,6 +160,18 @@ class RenderTargetCache {
   // the half-pixel offset of vertices, would cause the entire 0.75...2.25 quad
   // to be discarded.
   uint32_t draw_resolution_scale_x() const { return draw_resolution_scale_x_; }
+  // The scene's scale on the native path (native_draw_scale,
+  // docs/analysis/d3d-hle-n5.md 18.13): the private surfaces are created at
+  // it, and a draw into them is a scene draw. The whole scale by default.
+  DrawScale scene_draw_scale() const {
+    return scene_draw_scale_set_ ? scene_draw_scale_ : DrawScale::Whole(draw_resolution_scale_x_);
+  }
+  void SetSceneDrawScale(DrawScale scale) {
+    scene_draw_scale_ = scale;
+    scene_draw_scale_set_ = true;
+  }
+  // Whether the last Update bound private surfaces (a scene draw).
+  bool last_update_private() const { return last_update_private_; }
   uint32_t draw_resolution_scale_y() const { return draw_resolution_scale_y_; }
   bool IsDrawResolutionScaled() const {
     return draw_resolution_scale_x() > 1 || draw_resolution_scale_y() > 1;
@@ -594,6 +606,10 @@ class RenderTargetCache {
                         : IsPrivateColor(key.base_tiles, key.pitch_tiles_at_32bpp,
                                          key.msaa_samples, key.resource_format);
   }
+  // A private target's scale: the scene's.
+  DrawScale GetKeyScale(RenderTargetKey key) const {
+    return IsPrivateKey(key) ? scene_draw_scale() : DrawScale::Whole(draw_resolution_scale_x_);
+  }
   // The height in pixels of a target of the surface: the EDRAM's rows, or for
   // a private 4x surface twice that, which holds the 720 lines of the scene.
   uint32_t GetSurfaceHeight(uint32_t pitch_tiles_at_32bpp, xenos::MsaaSamples msaa_samples,
@@ -715,6 +731,9 @@ class RenderTargetCache {
  private:
   const RegisterFile& register_file_;
   uint32_t draw_resolution_scale_x_;
+  DrawScale scene_draw_scale_;
+  bool scene_draw_scale_set_ = false;
+  bool last_update_private_ = false;
   uint32_t draw_resolution_scale_y_;
 
   DrawExtentEstimator draw_extent_estimator_;

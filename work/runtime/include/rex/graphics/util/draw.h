@@ -19,6 +19,7 @@
 #include <rex/graphics/pipeline/shader/shader.h>
 #include <rex/graphics/register_file.h>
 #include <rex/graphics/registers.h>
+#include <rex/graphics/util/draw_scale.h>
 #include <rex/graphics/xenos.h>
 #include <rex/memory.h>
 
@@ -286,6 +287,19 @@ struct Scissor {
   uint32_t extent[2];
 };
 void GetScissor(const RegisterFile& regs, Scissor& scissor_out, bool clamp_to_surface_pitch = true);
+
+// A uniform draw resolution scale as a fraction for the native path's scene
+// draws (docs/analysis/d3d-hle-n5.md 18.13): the viewport in guest pixels, its
+// edges in host pixels by DrawScale::ScaleEdge, and the NDC scale and offset
+// adjusted to the host edges, so the mapping stays exact. x_max and y_max are
+// host pixels.
+void GetHostViewportInfo(const RegisterFile& regs, DrawScale scale, bool origin_bottom_left,
+                         uint32_t x_max, uint32_t y_max, bool allow_reverse_z,
+                         reg::RB_DEPTHCONTROL normalized_depth_control, bool convert_z_to_float24,
+                         bool full_float24_in_0_to_1, bool pixel_shader_writes_depth,
+                         ViewportInfo& viewport_info_out);
+// A guest scissor in host pixels at the scale, by the same edges.
+void ScaleScissor(DrawScale scale, Scissor& scissor);
 
 // Returns the color component write mask for the draw command taking into
 // account which color targets are written to by the pixel shader, as well as

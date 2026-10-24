@@ -547,6 +547,7 @@ bool RenderTargetCache::Update(bool is_rasterization_done,
                                uint32_t normalized_color_mask, const Shader& vertex_shader) {
   const RegisterFile& regs = register_file();
   bool interlock_barrier_only = GetPath() == Path::kPixelShaderInterlock;
+  last_update_private_ = false;
   // For this update only.
   const UniformDraw uniform_draw = uniform_draw_;
   uniform_draw_ = UniformDraw();
@@ -823,6 +824,7 @@ bool RenderTargetCache::Update(bool is_rasterization_done,
   }
   if (private_rts) {
     perf_trace::CountOnePass(perf_trace::one_pass_draws);
+    last_update_private_ = true;
   }
   for (uint32_t i = 0; i < edram_bases_sorted_count; ++i) {
     const std::pair<uint32_t, uint32_t>& rt_base_index = edram_bases_sorted[i];

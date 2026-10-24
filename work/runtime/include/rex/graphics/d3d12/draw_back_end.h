@@ -70,6 +70,10 @@ struct SystemConstantInputs {
   reg::RB_DEPTHCONTROL normalized_depth_control;
   uint32_t draw_resolution_scale_x;
   uint32_t draw_resolution_scale_y;
+  // A scene draw at the scene's scale (18.13): the point size and the polygon
+  // offset use it.
+  bool scene_draw;
+  DrawScale scene_scale;
   // Per texture fetch constant, valid for the used textures: the texture
   // cache's swizzled signs and integer scale bits, and the resolution scaled
   // textures as a mask.
@@ -88,6 +92,15 @@ void ComputeBlendFactorAndStencilReference(const RegisterFile& regs, bool primit
                                            reg::RB_DEPTHCONTROL normalized_depth_control,
                                            float blend_factor_out[4],
                                            uint32_t& stencil_reference_out);
+
+// The host viewport and scissor of a draw: at the whole scale times the
+// uniform draw's, or with kFlagSceneScale at the scene's scale
+// (docs/analysis/d3d-hle-n5.md 18.13).
+void ComputeViewportAndScissor(const RegisterFile& regs, uint32_t flags, uint32_t scale_x,
+                               uint32_t scale_y, DrawScale scene_scale,
+                               reg::RB_DEPTHCONTROL normalized_depth_control,
+                               bool pixel_shader_writes_depth, draw_util::ViewportInfo& viewport,
+                               draw_util::Scissor& scissor);
 
 // The kDrawBackEnd command, written by Encode and read by Decode only, so the
 // format can change without the back end. After the header: the masks of the
@@ -175,6 +188,8 @@ constexpr uint32_t kFlagRovOcclusionQuery = 1 << 6;
 constexpr uint32_t kFlagJitter = 1 << 7;
 constexpr uint32_t kFlagUniformScaleShift = 8;  // 2 bits x, 2 bits y.
 constexpr uint32_t kFlagKnobs = 1 << 12;
+// A scene draw: into the private surfaces at the scene's scale (18.13).
+constexpr uint32_t kFlagSceneScale = 1 << 13;
 struct GroupFlags {
   uint32_t flags;
   uint16_t draw_resolution_scale_x;

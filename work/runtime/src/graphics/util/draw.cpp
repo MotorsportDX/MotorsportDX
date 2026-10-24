@@ -535,6 +535,53 @@ void GetHostViewportInfo(const RegisterFile& regs, uint32_t draw_resolution_scal
   }
 }
 
+void GetHostViewportInfo(const RegisterFile& regs, DrawScale scale, bool origin_bottom_left,
+                         uint32_t x_max, uint32_t y_max, bool allow_reverse_z,
+                         reg::RB_DEPTHCONTROL normalized_depth_control, bool convert_z_to_float24,
+                         bool full_float24_in_0_to_1, bool pixel_shader_writes_depth,
+                         ViewportInfo& viewport_info_out) {
+  const uint32_t x_max_guest =
+      std::max(uint32_t(1), uint32_t(uint64_t(x_max) * scale.denominator / scale.numerator));
+  const uint32_t y_max_guest =
+      std::max(uint32_t(1), uint32_t(uint64_t(y_max) * scale.denominator / scale.numerator));
+  GetHostViewportInfo(regs, 1, 1, origin_bottom_left, x_max_guest, y_max_guest, allow_reverse_z,
+                      normalized_depth_control, convert_z_to_float24, full_float24_in_0_to_1,
+                      pixel_shader_writes_depth, viewport_info_out);
+  // The guest rectangle a0 ... a0 + E becomes the host one h0 ... h1, which
+  // shows the guest's g0 = h0 / s ... g1 = h1 / s. A position at ndc of the
+  // guest rectangle is the guest pixel a0 + (ndc + 1) / 2 * E; the same pixel
+  // in the host rectangle is at ndc * E / E' + (2 * (a0 - g0) + E - E') / E',
+  // with E' = g1 - g0.
+  const float inverse_scale = float(scale.denominator) / float(scale.numerator);
+  for (uint32_t i = 0; i < 2; ++i) {
+    const uint32_t a0 = viewport_info_out.xy_offset[i];
+    const uint32_t extent = viewport_info_out.xy_extent[i];
+    const uint32_t h0 = scale.ScaleEdge(a0);
+    const uint32_t h1 = scale.ScaleEdge(a0 + extent);
+    viewport_info_out.xy_offset[i] = h0;
+    viewport_info_out.xy_extent[i] = h1 - h0;
+    if (!extent || h1 == h0) {
+      continue;
+    }
+    const float g0 = float(h0) * inverse_scale;
+    const float guest_extent = float(extent);
+    const float host_extent_guest = float(h1 - h0) * inverse_scale;
+    const float ratio = guest_extent / host_extent_guest;
+    viewport_info_out.ndc_scale[i] *= ratio;
+    viewport_info_out.ndc_offset[i] =
+        viewport_info_out.ndc_offset[i] * ratio +
+        (2.0f * (float(a0) - g0) + guest_extent - host_extent_guest) / host_extent_guest;
+  }
+}
+
+void ScaleScissor(DrawScale scale, Scissor& scissor) {
+  for (uint32_t i = 0; i < 2; ++i) {
+    const uint32_t end = scale.ScaleEdge(scissor.offset[i] + scissor.extent[i]);
+    scissor.offset[i] = scale.ScaleEdge(scissor.offset[i]);
+    scissor.extent[i] = end - scissor.offset[i];
+  }
+}
+
 void GetScissor(const RegisterFile& regs, Scissor& scissor_out, bool clamp_to_surface_pitch) {
   auto pa_sc_window_scissor_tl = regs.Get<reg::PA_SC_WINDOW_SCISSOR_TL>();
   int32_t tl_x = int32_t(pa_sc_window_scissor_tl.tl_x);
