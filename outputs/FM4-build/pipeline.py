@@ -754,6 +754,69 @@ DISPLAYS={'720p':(1280,720),'1080p':(1920,1080),'1440p':(2560,1440),'4k':(3840,2
 DEFAULT_DISPLAY='native'
 MAX_RESOLUTION_SCALE=4
 
+def integrated_gpu():
+    """Whether the computer has integrated GPUs only: every hardware adapter is UMA (it shares
+    the system memory; D3D12_FEATURE_ARCHITECTURE of a Direct3D 12 device made on it), or has
+    less than 1 GB of dedicated video memory where no device can be made. False when there is no
+    hardware adapter or it cannot be told. The ROG Xbox Ally X's GPU is GPU bound at 2x
+    (docs/analysis/d3d-hle-n4.md 17.21)."""
+    import ctypes
+    from ctypes import wintypes
+    try:
+        dxgi,d3d12=ctypes.WinDLL('dxgi'),ctypes.WinDLL('d3d12')
+    except OSError:
+        return False
+    class GUID(ctypes.Structure):
+        _fields_=[('a',wintypes.DWORD),('b',wintypes.WORD),('c',wintypes.WORD),('d',ctypes.c_ubyte*8)]
+    def guid(a,b,c,d):
+        return GUID(a,b,c,(ctypes.c_ubyte*8)(*d))
+    class DESC1(ctypes.Structure):
+        _fields_=[('description',wintypes.WCHAR*128),('vendor',wintypes.UINT),('device',wintypes.UINT),
+                  ('subsys',wintypes.UINT),('revision',wintypes.UINT),('dedicated_video',ctypes.c_size_t),
+                  ('dedicated_system',ctypes.c_size_t),('shared_system',ctypes.c_size_t),
+                  ('luid_low',wintypes.DWORD),('luid_high',wintypes.LONG),('flags',wintypes.UINT)]
+    class ARCHITECTURE(ctypes.Structure):
+        _fields_=[('node',wintypes.UINT),('tile_based',wintypes.BOOL),('uma',wintypes.BOOL),
+                  ('cache_coherent_uma',wintypes.BOOL)]
+    def method(obj,index,*types):
+        vtable=ctypes.cast(obj,ctypes.POINTER(ctypes.POINTER(ctypes.c_void_p))).contents
+        return ctypes.WINFUNCTYPE(ctypes.c_long,ctypes.c_void_p,*types)(vtable[index])
+    def release(obj):
+        method(obj,2)(obj)
+    factory=ctypes.c_void_p()
+    iid_factory1=guid(0x770aae78,0xf26f,0x4dba,(0xa8,0x29,0x25,0x3c,0x83,0xd1,0xb3,0x87))
+    iid_device=guid(0x189819f1,0x1db6,0x4b57,(0xbe,0x54,0x18,0x21,0x33,0x9b,0x85,0xf7))
+    if dxgi.CreateDXGIFactory1(ctypes.byref(iid_factory1),ctypes.byref(factory)):
+        return False
+    hardware=integrated=0
+    try:
+        index=0
+        while True:
+            adapter=ctypes.c_void_p()
+            # IDXGIFactory1::EnumAdapters1, IDXGIAdapter1::GetDesc1, ID3D12Device::CheckFeatureSupport.
+            if method(factory,12,wintypes.UINT,ctypes.POINTER(ctypes.c_void_p))(factory,index,ctypes.byref(adapter)):
+                break
+            index+=1
+            try:
+                desc=DESC1()
+                if method(adapter,10,ctypes.POINTER(DESC1))(adapter,ctypes.byref(desc)) or desc.flags&2:
+                    continue
+                hardware+=1
+                uma=desc.dedicated_video<(1<<30)
+                device=ctypes.c_void_p()
+                if not d3d12.D3D12CreateDevice(adapter,0xb000,ctypes.byref(iid_device),ctypes.byref(device)):
+                    architecture=ARCHITECTURE()
+                    if not method(device,13,ctypes.c_int,ctypes.c_void_p,wintypes.UINT)(
+                            device,1,ctypes.byref(architecture),ctypes.sizeof(architecture)):
+                        uma=bool(architecture.uma)
+                    release(device)
+                integrated+=uma
+            finally:
+                release(adapter)
+    finally:
+        release(factory)
+    return hardware>0 and integrated==hardware
+
 def vrr_range(edid):
     """The variable refresh rate range (min Hz, max Hz) an EDID reports, or (0, 0): DisplayID's
     Adaptive-Sync data block (tag 0x2B) in a DisplayID extension, else EDID 1.4's range limits
@@ -832,7 +895,8 @@ def primary_display():
 
 def primary_monitor():
     """Width and height in pixels and the DPI scale of the primary monitor, then its refresh rate
-    and variable refresh rate range (primary_display)."""
+    and variable refresh rate range (primary_display), and whether the computer has integrated
+    GPUs only (integrated_gpu)."""
     import ctypes
     from ctypes import wintypes
     user32,shcore=ctypes.windll.user32,ctypes.windll.shcore
@@ -842,9 +906,10 @@ def primary_monitor():
     monitor=user32.MonitorFromPoint(wintypes.POINT(0,0),1)
     dpi_x,dpi_y=wintypes.UINT(),wintypes.UINT()
     refresh,(vrr_min,vrr_max)=primary_display()
+    integrated=integrated_gpu()
     if shcore.GetDpiForMonitor(monitor,0,ctypes.byref(dpi_x),ctypes.byref(dpi_y)):
-        return width,height,1.0,refresh,vrr_min,vrr_max
-    return width,height,dpi_x.value/96,refresh,vrr_min,vrr_max
+        return width,height,1.0,refresh,vrr_min,vrr_max,integrated
+    return width,height,dpi_x.value/96,refresh,vrr_min,vrr_max,integrated
 
 def display_settings(display=DEFAULT_DISPLAY,fullscreen=False,supersample=False,
                      resolution_scale=None,monitor=None):
@@ -852,19 +917,20 @@ def display_settings(display=DEFAULT_DISPLAY,fullscreen=False,supersample=False,
     monitor; 720p, 1080p, 1440p, 4k: a window of that many pixels, or fullscreen with
     -Fullscreen or when it does not fit the monitor. The render scale is the smallest whole
     multiple of 1280x720 that covers the 16:9 picture of that screen (720p 1x, 1080p and 1440p
-    2x, 4k 3x; a 2560x1600 monitor 2x), one more with -Supersample (up to 4x), or
-    -ResolutionScale. The presenter fits the picture to the window, averaging the render
+    2x, 4k 3x; a 2560x1600 monitor 2x), or 1x with integrated GPUs only (integrated_gpu), one
+    more with -Supersample (up to 4x), or -ResolutionScale. The presenter fits the picture to the window, averaging the render
     over each screen pixel when it is larger (present_area_downscale). monitor: (width, height,
-    DPI scale, ...) instead of the primary monitor's."""
-    monitor_width,monitor_height,dpi,*_=monitor or primary_monitor()
+    DPI scale, refresh, VRR min, VRR max, integrated GPUs only) instead of the primary monitor's."""
+    monitor_width,monitor_height,dpi,*rest=monitor or primary_monitor()
+    integrated=len(rest)>3 and bool(rest[3])
     if display=='native':
         width,height,fullscreen=monitor_width,monitor_height,True
     else:
         width,height=DISPLAYS[display]
         # A window of the monitor's size or more does not fit beside its frame and the taskbar.
         fullscreen=fullscreen or width>=monitor_width or height>=monitor_height
-    scale=resolution_scale or min(MAX_RESOLUTION_SCALE,
-                                  math.ceil(min(width/1280,height/720)-1e-6)+int(supersample))
+    cover=1 if integrated else math.ceil(min(width/1280,height/720)-1e-6)
+    scale=resolution_scale or min(MAX_RESOLUTION_SCALE,cover+int(supersample))
     cvars={'fullscreen':'true' if fullscreen else 'false'}
     if not fullscreen:
         # Window sizes are logical pixels: the runtime multiplies them by the DPI scale.
@@ -875,7 +941,8 @@ def display_settings(display=DEFAULT_DISPLAY,fullscreen=False,supersample=False,
         cvars['draw_resolution_scale_x']=cvars['draw_resolution_scale_y']=str(scale)
     screen=(f'fullscreen {monitor_width}x{monitor_height}' if fullscreen
             else f'window {width}x{height}')
-    return cvars,f'Display {display}: {screen}, render {scale}x ({1280*scale}x{720*scale})'
+    gpu_note=' for an integrated GPU' if integrated and not resolution_scale else ''
+    return cvars,f'Display {display}: {screen}, render {scale}x ({1280*scale}x{720*scale}){gpu_note}'
 
 VSYNC_MODES=('auto','on','off')
 DEFAULT_VSYNC='auto'
@@ -1229,10 +1296,11 @@ def build_launcher(root,jobs):
     stage_launcher_files(root)
 
 # Options of the launcher tests: each with each monitor (width, height, DPI scale, refresh Hz,
-# VRR min Hz, VRR max Hz; the main PC's panel, a fixed 60 Hz screen, a 144 Hz VRR screen, a
-# fixed 1280x800 screen, the ROG Xbox Ally X's panel).
-LAUNCHER_TEST_MONITORS=((2560,1600,1.5,240,60,240),(1920,1080,1.0,60,0,0),(3840,2160,2.0,144,48,144),
-                        (1280,800,1.25,60,0,0),(1920,1080,1.5,120,48,120))
+# VRR min Hz, VRR max Hz, integrated GPUs only; the main PC's panel, a fixed 60 Hz screen, a
+# 144 Hz VRR screen, a fixed 1280x800 screen, the ROG Xbox Ally X's panel and GPU).
+LAUNCHER_TEST_MONITORS=((2560,1600,1.5,240,60,240,False),(1920,1080,1.0,60,0,0,False),
+                        (3840,2160,2.0,144,48,144,False),(1280,800,1.25,60,0,0,False),
+                        (1920,1080,1.5,120,48,120,True))
 def launcher_test_options(root):
     return [{},
             {'look':'gt','quality':'ultra','frame_rate':120,'display':'1080p'},

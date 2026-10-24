@@ -11,7 +11,8 @@
 namespace fm4 {
 
 // Width and height in pixels, the DPI scale, the refresh rate and the variable refresh rate
-// range of the primary monitor, as primary_monitor in pipeline.py measures them.
+// range of the primary monitor, and whether the computer has integrated GPUs only, as
+// primary_monitor in pipeline.py measures them.
 Monitor PrimaryMonitor();
 
 // subprocess.list2cmdline: the command line of an argument list.

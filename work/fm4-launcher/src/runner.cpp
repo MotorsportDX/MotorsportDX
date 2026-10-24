@@ -1,6 +1,8 @@
 #include "runner.h"
 
 #include <windows.h>
+#include <d3d12.h>
+#include <dxgi1_4.h>
 #include <shellapi.h>
 #include <shellscalingapi.h>
 #include <tlhelp32.h>
@@ -103,6 +105,42 @@ void PrimaryDisplay(Monitor& monitor) {
   std::tie(monitor.vrr_min, monitor.vrr_max) = VrrRange(edid);
 }
 
+// As pipeline.py integrated_gpu: every hardware adapter is UMA (D3D12_FEATURE_ARCHITECTURE of a
+// device made on it), or has under 1 GB of dedicated video memory where no device can be made.
+bool IntegratedGpu() {
+  const HMODULE d3d12 = LoadLibraryW(L"d3d12.dll");
+  if (!d3d12) return false;
+  const auto create_device =
+      reinterpret_cast<PFN_D3D12_CREATE_DEVICE>(GetProcAddress(d3d12, "D3D12CreateDevice"));
+  IDXGIFactory1* factory = nullptr;
+  if (!create_device || FAILED(CreateDXGIFactory1(IID_PPV_ARGS(&factory)))) {
+    FreeLibrary(d3d12);
+    return false;
+  }
+  int hardware = 0, integrated = 0;
+  IDXGIAdapter1* adapter = nullptr;
+  for (UINT index = 0; factory->EnumAdapters1(index, &adapter) == S_OK; ++index) {
+    DXGI_ADAPTER_DESC1 desc{};
+    if (SUCCEEDED(adapter->GetDesc1(&desc)) && !(desc.Flags & DXGI_ADAPTER_FLAG_SOFTWARE)) {
+      ++hardware;
+      bool uma = desc.DedicatedVideoMemory < (SIZE_T(1) << 30);
+      ID3D12Device* device = nullptr;
+      if (SUCCEEDED(create_device(adapter, D3D_FEATURE_LEVEL_11_0, IID_PPV_ARGS(&device)))) {
+        D3D12_FEATURE_DATA_ARCHITECTURE architecture{};
+        if (SUCCEEDED(device->CheckFeatureSupport(D3D12_FEATURE_ARCHITECTURE, &architecture,
+                                                  sizeof(architecture))))
+          uma = architecture.UMA != FALSE;
+        device->Release();
+      }
+      integrated += uma;
+    }
+    adapter->Release();
+  }
+  factory->Release();
+  FreeLibrary(d3d12);
+  return hardware > 0 && integrated == hardware;
+}
+
 }  // namespace
 
 Monitor PrimaryMonitor() {
@@ -113,6 +151,7 @@ Monitor PrimaryMonitor() {
   const HMONITOR handle = MonitorFromPoint(POINT{0, 0}, MONITOR_DEFAULTTOPRIMARY);
   monitor.dpi = GetDpiForMonitor(handle, MDT_EFFECTIVE_DPI, &dpi_x, &dpi_y) == S_OK ? dpi_x / 96.0 : 1.0;
   PrimaryDisplay(monitor);
+  monitor.integrated_gpu = IntegratedGpu();
   return monitor;
 }
 

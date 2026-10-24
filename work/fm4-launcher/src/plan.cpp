@@ -483,12 +483,10 @@ std::pair<Pairs, std::string> DisplaySettings(const LauncherData& data, const st
     fullscreen = fullscreen || width >= monitor.width || height >= monitor.height;
   }
   const int max_scale = data.json.at("max_resolution_scale").get<int>();
-  const int scale =
-      resolution_scale
-          ? resolution_scale
-          : std::min(max_scale,
-                     static_cast<int>(std::ceil(std::min(width / 1280.0, height / 720.0) - 1e-6)) +
-                         (supersample ? 1 : 0));
+  const int cover = monitor.integrated_gpu
+                        ? 1
+                        : static_cast<int>(std::ceil(std::min(width / 1280.0, height / 720.0) - 1e-6));
+  const int scale = resolution_scale ? resolution_scale : std::min(max_scale, cover + (supersample ? 1 : 0));
   Pairs cvars;
   cvars.Set("fullscreen", fullscreen ? "true" : "false");
   if (!fullscreen) {
@@ -503,8 +501,11 @@ std::pair<Pairs, std::string> DisplaySettings(const LauncherData& data, const st
   const std::string screen =
       fullscreen ? "fullscreen " + std::to_string(monitor.width) + "x" + std::to_string(monitor.height)
                  : "window " + std::to_string(width) + "x" + std::to_string(height);
+  const std::string gpu_note =
+      monitor.integrated_gpu && !resolution_scale ? " for an integrated GPU" : "";
   return {cvars, "Display " + display + ": " + screen + ", render " + std::to_string(scale) +
-                     "x (" + std::to_string(1280 * scale) + "x" + std::to_string(720 * scale) + ")"};
+                     "x (" + std::to_string(1280 * scale) + "x" + std::to_string(720 * scale) + ")" +
+                     gpu_note};
 }
 
 // pipeline.py present_settings: the cvars of -VSync, the race frame rate it leaves, and its

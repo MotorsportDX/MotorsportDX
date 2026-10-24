@@ -39,7 +39,8 @@ int RunTests(const std::filesystem::path& cases_path, const std::filesystem::pat
     const Options options = OptionsFromJson(test.at("options"));
     const Json& screen = test.at("monitor");
     const Monitor monitor{screen.at(0).get<int>(), screen.at(1).get<int>(), screen.at(2).get<double>(),
-                          screen.at(3).get<int>(),   screen.at(4).get<int>(), screen.at(5).get<int>()};
+                          screen.at(3).get<int>(),   screen.at(4).get<int>(), screen.at(5).get<int>(),
+                          screen.size() > 6 && screen.at(6).get<bool>()};
     const std::string what = test.at("options").dump() + " on " + test.at("monitor").dump();
     ++plans;
     try {

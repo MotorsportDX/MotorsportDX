@@ -91,7 +91,7 @@ after editing `work/fm4-rex/look` or `work/fm4-rex/passes`, run `build` or use
 
 The runs of stage N4 on the ROG Xbox Ally X ([D3D-level HLE, 17.19](analysis/d3d-hle-n4.md)), from an export, with the GUI launcher. Make one profile per run, all with **Performance trace** on, the default look, the race frame rate the screen allows (120 on the Ally X's panel), and otherwise the defaults.
 
-Runs 1 to 6 use render scale 1x (Display page). On the Ally X's 1080p panel the launcher picks 2x, and its GPU then takes about 21 ms a race frame (about 47 fps, N1's estimate), which would hide what the CPU A/B runs measure:
+Runs 1 to 6 use render scale 1x (Display page). On the Ally X's 1080p panel the launcher of `de4e9bd` picked 2x, and its GPU then takes about 21 ms a race frame (about 47 fps, N1's estimate), which would hide what the CPU A/B runs measure; later launchers pick 1x there (integrated GPUs only, [-Display](#-display-and-render-scale)):
 
 | Run | Profile settings |
 | --- | --- |
@@ -294,7 +294,13 @@ the Windows display scale into account.
 
 The render scale is the smallest whole multiple of 1280x720 that covers the 16:9
 picture of the screen: 720p 1x, 1080p and 1440p 2x, 2560x1600 2x, and 4k 3x. `-Display
-720p` was the earlier default (1x in a 1280x720 window). If the render is larger than
+720p` was the earlier default (1x in a 1280x720 window). On a computer with integrated GPUs only
+(every GPU shares the system memory, as on the ROG Xbox Ally X) it is 1x on every screen: the
+Ally X's GPU takes 23.9 to 27.2 ms a race frame at 2x and races at 35 to 39 fps
+([D3D-level HLE, 17.21](analysis/d3d-hle-n4.md#1721-the-rog-xbox-ally-x-runs-24-october-2026)).
+The launcher prints "for an integrated GPU" after the render scale then; `-ResolutionScale`
+and `-Supersample` (the render scale and supersample on the GUI launcher's Display page)
+still choose another. If the render is larger than
 the window, the presenter averages it over each screen pixel in linear light
 (`work/runtime/src/ui/shaders/guest_output_area.ps.hlsl`; `present_area_downscale=false`
 selects the earlier single bilinear tap). So 2x on a 1080p screen is supersampling,

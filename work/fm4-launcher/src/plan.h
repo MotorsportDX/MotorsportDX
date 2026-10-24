@@ -76,6 +76,8 @@ struct Monitor {
   int refresh = 0;
   int vrr_min = 0;
   int vrr_max = 0;
+  // Integrated GPUs only (pipeline.py integrated_gpu): the automatic render scale is 1x.
+  bool integrated_gpu = false;
 };
 
 struct Plan {
