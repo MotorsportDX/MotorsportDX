@@ -2163,6 +2163,18 @@ void PostPasses::RunPoint(Point point) {
       if (scene_color_frame_ == frame && manifest_->uses_scene_color) {
         RequestExternal(color_group_, ExternalKind::kColor, scene_color_);
       }
+      // Passes such as TAA leave the frame as it is when the final size is
+      // not the scene's, which no known case has; report each new pair.
+      if ((final_width_ != scene_width_ || final_height_ != scene_height_) &&
+          (final_width_ != mismatch_final_width_ || final_height_ != mismatch_final_height_ ||
+           scene_width_ != mismatch_scene_width_ || scene_height_ != mismatch_scene_height_)) {
+        mismatch_final_width_ = final_width_;
+        mismatch_final_height_ = final_height_;
+        mismatch_scene_width_ = scene_width_;
+        mismatch_scene_height_ = scene_height_;
+        REXGPU_ERROR("Post passes: final size {}x{} differs from the scene's {}x{}", final_width_,
+                     final_height_, scene_width_, scene_height_);
+      }
     }
   }
   // The objects of the frame are drawn once its scene depth is resolved.

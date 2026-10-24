@@ -264,6 +264,7 @@
 !/work/fm4-rex/src/main.cpp
 !/work/fm4-rex/src/vector-instruction-tests.h
 !/work/fm4-rex/tests/CMakeLists.txt
+!/work/fm4-rex/tests/draw-scale-tests.cpp
 !/work/fm4-rex/tests/make-vector-vectors.py
 !/work/fm4-rex/tests/post-pass-camera-tests.cpp
 !/work/fm4-rex/tests/post-pass-shader-tests.cpp

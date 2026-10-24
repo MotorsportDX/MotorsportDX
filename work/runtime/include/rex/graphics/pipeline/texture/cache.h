@@ -22,6 +22,7 @@
 #include <rex/graphics/pipeline/texture/util.h>
 #include <rex/graphics/register_file.h>
 #include <rex/graphics/shared_memory.h>
+#include <rex/graphics/util/draw_scale.h>
 #include <rex/graphics/xenos.h>
 #include <rex/hash.h>
 #include <rex/thread/mutex.h>
@@ -73,6 +74,10 @@ class TextureCache {
   bool IsDrawResolutionScaled() const {
     return draw_resolution_scale_x_ > 1 || draw_resolution_scale_y_ > 1;
   }
+  // The scene's scale on the native path (native_draw_scale, docs/analysis/d3d-hle-n5.md):
+  // a fraction whose whole part is draw_resolution_scale_x and _y, or that scale itself.
+  DrawScale scene_draw_scale() const { return scene_draw_scale_; }
+  void SetSceneDrawScale(DrawScale scale) { scene_draw_scale_ = scale; }
 
   virtual void ClearCache();
 
@@ -633,6 +638,7 @@ class TextureCache {
   SharedMemory& shared_memory_;
   uint32_t draw_resolution_scale_x_;
   uint32_t draw_resolution_scale_y_;
+  DrawScale scene_draw_scale_;
 
   static const LoadShaderInfo load_shader_info_[kLoadShaderCount];
 

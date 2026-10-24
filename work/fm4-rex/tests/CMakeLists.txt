@@ -16,6 +16,9 @@ target_compile_options(fm4_instruction_tests PRIVATE -march=x86-64-v2 -ffp-contr
 add_executable(fm4_post_pass_camera_tests post-pass-camera-tests.cpp)
 target_include_directories(fm4_post_pass_camera_tests SYSTEM PRIVATE "${REX_HEADER_ROOT}")
 target_compile_options(fm4_post_pass_camera_tests PRIVATE -march=x86-64-v2 -ffp-contract=off)
+# The draw resolution scale as a fraction (header only).
+add_executable(fm4_draw_scale_tests draw-scale-tests.cpp)
+target_include_directories(fm4_draw_scale_tests SYSTEM PRIVATE "${REX_HEADER_ROOT}")
 # The scene_depth and final passes of work/fm4-rex/passes on WARP (CPU Direct3D
 # 12), as the post pass framework runs them; arguments: post_pass.hlsli, the
 # passes directory.

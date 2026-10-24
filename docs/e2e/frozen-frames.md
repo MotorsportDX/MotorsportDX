@@ -2,6 +2,8 @@
 
 `compare.py` judges performance: it fails on a crash, a missed goal, fps more than 10% below the baseline, a p99 more than 20% above it, a new error key or a missing phase. Image statistics and draw counts only warn, because races are not deterministic. A wrong image or a dropped draw therefore passes it. The frozen-frame harness closes that gap for the stages of the [native port](../analysis/d3d-hle.md#10-validation-and-success-criteria): one scene, frozen by the title's rewind, rendered by two builds or two paths and compared pixel by pixel, with the draws and the predicated packets of that frame.
 
+> **The `freeze` scenario renders at 2x and with the look `original,taa=0` unless the run says otherwise.** A run named 1x needs `--arg draw_resolution_scale_x=1 --arg draw_resolution_scale_y=1`, and a check of the look mods, GTAO, TAA or the windshield needs `--look` (for example `--look aces`). Since 24 October 2026 `e2e.py` prints the render scale and writes it into `summary.json` (`draw_scale`), and `matrix.py` passes it explicitly in every cell (1, and 2 for `freeze`, unless `--arg` sets it). Before that, the freeze runs named 1x in the gates of stage N3 (`n3a` to `n3z`, `n4g`) rendered at 2x ([D3D-level HLE, 16.18](../analysis/d3d-hle-n3.md#1618-the-close-gate-of-stage-n3-24-october-2026)).
+
 Parts:
 
 - the `freeze` scenario of [`e2e.py`](../../outputs/FM4-build/e2e/e2e.py), which reaches the frozen frame and pins what would otherwise change the picture;

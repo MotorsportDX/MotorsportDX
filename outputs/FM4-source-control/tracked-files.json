@@ -1633,6 +1633,10 @@
       "provenance": "runtime-fork"
     },
     {
+      "path": "work/runtime/include/rex/graphics/util/draw_scale.h",
+      "provenance": "runtime-fork"
+    },
+    {
       "path": "work/runtime/include/rex/graphics/video_mode_util.h",
       "provenance": "runtime-fork"
     },
@@ -4499,6 +4503,10 @@
     },
     {
       "path": "work/fm4-rex/tests/post-pass-shader-tests.cpp",
+      "provenance": "Synthetic tests/oracle; no game input data"
+    },
+    {
+      "path": "work/fm4-rex/tests/draw-scale-tests.cpp",
       "provenance": "Synthetic tests/oracle; no game input data"
     },
     {

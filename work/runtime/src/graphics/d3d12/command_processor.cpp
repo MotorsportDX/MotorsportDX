@@ -38,6 +38,7 @@
 #include <rex/graphics/flags.h>
 #include <rex/graphics/registers.h>
 #include <rex/graphics/util/draw.h>
+#include <rex/graphics/util/draw_scale.h>
 #include <rex/graphics/pipeline/shader/interpreter.h>
 #include <rex/graphics/xenos.h>
 #include <rex/hash.h>
@@ -48,6 +49,13 @@
 #include <rex/ui/d3d12/d3d12_util.h>
 
 REXCVAR_DEFINE_BOOL(d3d12_bindless, true, "GPU/D3D12", "Use bindless resources where available")
+    .lifecycle(rex::cvar::Lifecycle::kRequiresRestart);
+REXCVAR_DECLARE(bool, host_render_native);
+REXCVAR_DEFINE_STRING(native_draw_scale, "", "GPU",
+                      "The scene's draw resolution scale on the native path as a fraction, such "
+                      "as 3/2 for 1920x1080 (docs/analysis/d3d-hle-n5.md); its whole part must "
+                      "be draw_resolution_scale_x and _y, the scale of the other surfaces. "
+                      "Empty: the scene at the whole scale. RTV path with host_render_native only")
     .lifecycle(rex::cvar::Lifecycle::kRequiresRestart);
 REXCVAR_DEFINE_BOOL(d3d12_reuse_draw_bindings_check, false, "GPU/D3D12",
                     "Compare every texture binding kept in sync with a key computed fresh from "
@@ -2294,6 +2302,26 @@ bool D3D12CommandProcessor::SetupContext() {
   }
   texture_cache_->SetBindingCheck(REXCVAR_GET(d3d12_reuse_draw_bindings_check),
                                   uint32_t(REXCVAR_GET(d3d12_reuse_draw_bindings_check_perturb)));
+  if (!REXCVAR_GET(native_draw_scale).empty()) {
+    const std::string& text = REXCVAR_GET(native_draw_scale);
+    std::optional<DrawScale> scale = DrawScale::Parse(text);
+    if (!scale) {
+      REXGPU_ERROR("native_draw_scale {} is not a scale from 1 to 7, such as 3/2", text);
+    } else if (render_target_cache_->GetPath() != RenderTargetCache::Path::kHostRenderTargets ||
+               !REXCVAR_GET(host_render_native)) {
+      REXGPU_ERROR("native_draw_scale {} needs the native path (host render targets and "
+                   "host_render_native); the scene keeps the whole scale",
+                   text);
+    } else if (draw_resolution_scale_x != draw_resolution_scale_y ||
+               scale->Floor() != draw_resolution_scale_x) {
+      REXGPU_ERROR("native_draw_scale {} needs draw_resolution_scale_x and _y of {}, not {}x{}",
+                   text, scale->Floor(), draw_resolution_scale_x, draw_resolution_scale_y);
+    } else {
+      texture_cache_->SetSceneDrawScale(*scale);
+      REXGPU_INFO("Native draw scale: {}/{} for the scene, {} for the other surfaces",
+                  scale->numerator, scale->denominator, draw_resolution_scale_x);
+    }
+  }
 
   pipeline_cache_ = std::make_unique<PipelineCache>(
       *this, *register_file_, *render_target_cache_.get(), bindless_resources_used_);

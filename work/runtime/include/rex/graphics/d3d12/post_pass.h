@@ -494,6 +494,11 @@ class PostPasses {
   uint32_t final_guest_width_ = 0, final_guest_height_ = 0;
   uint32_t final_width_ = 0, final_height_ = 0;
   bool warned_final_ = false;
+  // The last final and scene sizes reported as differing.
+  uint32_t mismatch_final_width_ = 0;
+  uint32_t mismatch_final_height_ = 0;
+  uint32_t mismatch_scene_width_ = 0;
+  uint32_t mismatch_scene_height_ = 0;
   // The passes' inputs at the current run; the stencil is requested by the
   // first pass that reads it.
   External scene_depth_, scene_color_, scene_stencil_;

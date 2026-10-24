@@ -49,11 +49,28 @@ The probe of 24 October 2026 read the runtime for every use of `draw_resolution_
 | Swap and presentation | the swap texture has the scaled size, and the one resample is at presentation (`presenter.cpp:549`, letterboxed by the guest mode's aspect at `:910`) | at the panel's own scale the presentation copies 1:1; with a logical width other than 1280 the guest mode reports the logical size, so the letterbox does not add bars |
 | Launcher | the integer scale of `plan.cpp:481` and integer cvars (`:500`) | the panel's scale and logical width (increment 3) |
 
-### 18.4 The coverage risk and the scale per surface
+### 18.4 The coverage risk and the scale per resolve destination
 
 The reason the header gives: at 1.5x, a one-pixel quad (the last step of a reduction such as the average luminance) covers host pixels 0 to 1.5 or 0.75 to 2.25, so by the top-left rule it covers only the first or only the second host pixel. Xenia's fix for the half-pixel offset at 2x and 3x, stretching the second column into the first, would erase such a pixel at 1.5x, and within one pass the emulator cannot tell which draws need it.
 
-The design avoids the problem instead of fixing it: only the scene-sized surfaces render at the rational scale. A surface whose guest width is below the scene's (the reductions, the bloom chain, the small windshield targets, the shadow maps) renders at the integer scale k = floor(s): 1 at 3/2, 2 at 20/9, 3 at 3. A pass that reads a scene-sized texture into a small target samples it in normalized coordinates, so the scale of its source does not matter to it. The first step of increment 1 lists the surfaces of a race frame by size with the transfer inventory, to set the threshold (the post passes already use a guest width of at least 1024 for the scene, `post_pass.cpp:1252`). The list includes the title's full-screen resolves that feed its post chain (bloom, depth of field, motion blur), so that none of them drops to k without notice and comes back upscaled.
+The design avoids the problem instead of fixing it: only the scene-sized surfaces render at the rational scale. Everything else renders at the integer scale k = floor(s): 1 at 3/2, 2 at 20/9, 3 at 3. The approved note drew that line per surface; the frame graph below moved it to the resolve destinations, because the reductions and the bloom chain are drawn into the scene's own surfaces. A pass that reads a scene-sized texture into a small target samples it in normalized coordinates, so the scale of its source does not matter to it. The inventory of a race frame by size sets the threshold (the post passes already use a guest width of at least 1024 for the scene, `post_pass.cpp:1252`). The list includes the title's full-screen resolves that feed its post chain (bloom, depth of field, motion blur), so that none of them drops to k without notice and comes back upscaled.
+
+**The frame graph of a race in one pass (24 October 2026)** changed the rule from a scale per surface to a scale per resolve destination (`n5a-fg-nat1x`, `-Native` with one pass 2x at 1x, frame 15000: 26 resolves). The title draws its reductions and its bloom chain into small viewports of the scene's own 1280-wide surfaces and resolves those regions:
+
+| Surfaces (guest pitch, MSAA) | What they hold | Resolves |
+|---|---|---|
+| 1280, 2x, colour at 0 and the private depth at 1024 | the scene | the depth and the colour, 1280x720 |
+| 1280, 1x, colour at 0 (the post chain) and the final colour | the post passes, the bloom chain and the luminance reduction in small viewports, the final picture | 320x192, 160x192, 160x96, 96x96, 96x64, 64x64, 64x32 and 32x32 regions; the final 1280x720 |
+| 640 and 520 with 4x, 560 | the shadow maps | 512x512 (`8_8_8_8`, `16_16`, `8_8`) |
+| 320 | the reflections and their mip chain | 256x256 down to 32x32 |
+| 80 | the luminance (`32_FLOAT`) | 32x32 |
+
+So the rule is per resolve destination, decided by the main session on 24 October 2026:
+
+- The scene-sized surfaces (the 1280-wide ones) render at s, including the post chain's draws into their small regions, with viewports and scissors through `DrawScale::ScaleEdge`.
+- A resolve to a full-screen destination keeps s.
+- A resolve to a smaller destination is resolved down to the integer scale k, so the texture the next pass samples has whole sizes (at 20/9 a 320x192 region would be 711.1 host pixels wide) and the reductions end on whole host pixels.
+- Separate small surfaces (the shadow maps, the reflections, the luminance) render at k.
 
 What follows from it:
 
@@ -99,9 +116,26 @@ The surfaces kept at the integer scale k (18.4) are part of the fixed time at ea
 
 ### 18.9 Increments and gates
 
-The main session approved this note on 24 October 2026, with the scale per surface (18.4), the resolves into host textures with the downscale for readbacks, the projection hook before the shader override, the required culling hook and the centred HUD as the first aspect step (18.5). Its order, with step gates per step, a close gate per increment and the 1:1 image check every time:
+The main session approved this note on 24 October 2026, with the scale per surface (18.4, refined the same day to a scale per resolve destination), the resolves into host textures with the downscale for readbacks, the projection hook before the shader override, the required culling hook and the centred HUD as the first aspect step (18.5). Its order, with step gates per step, a close gate per increment and the 1:1 image check every time:
 
-1. **Resolution.** The rational scale on the native path: host targets, host resolves, scene-scaled textures, the swap, the post passes, TAA's jitter and thresholds, GTAO and the look mods. 3/2 first, then 20/9 and 3. Steps: TAA's size mismatch logged as an error; the rational type with the integer path unchanged, proven by a no-change gate at 1x and 2x; the surface inventory and the scale per surface; the private scene colour at 2x with its alias copies; resolves into host textures at the scene's scale with the downscale for readbacks; viewports, scissors, occlusion queries and memexport; the post passes, the look mods and the swap. Gate: 1:1 images at 3/2 against 1x and 2x; the resolve byte check and the identity check; no change at integer scales; perf on this PC at 3/2, 20/9 and 3. Effort, inferred: 3 to 5 person-weeks.
+1. **Resolution.** The rational scale on the native path: host targets, host resolves, scene-scaled textures, the swap, the post passes, TAA's jitter and thresholds, GTAO and the look mods. 3/2 first, then 20/9 and 3. Steps: TAA's size mismatch logged as an error; the rational type with the integer path unchanged, proven by a no-change gate at 1x and 2x; the scale per resolve destination (18.4); the private scene colour at 2x with its alias copies; resolves into host textures at the scene's scale with the downscale for readbacks; viewports, scissors, occlusion queries and memexport; the post passes, the look mods and the swap. Gate: 1:1 images at 3/2 against 1x and 2x; the resolve byte check and the identity check; no change at integer scales; perf on this PC at 3/2, 20/9 and 3. Effort, inferred: 3 to 5 person-weeks.
 2. **Aspect.** The logical width with the projection, culling and HUD hooks, 16:10 first (2560x1600), then 21:9. Gate: no stretch (round wheels and objects), correct culling at the edges, the HUD placed, and the 16:9 result unchanged. Effort, inferred: 3 to 6 person-weeks; most of it finds the title's projection, culling and UI code.
 3. **The launcher.** The display choice renders at the panel's own resolution and aspect in a borderless fullscreen that fills it; RTV and `-Rov` fall back to their integer 16:9 behaviour. `Build.ps1`, `pipeline.py`, `e2e.py` and `launcher_tests` get the options. Effort, inferred: under 1 person-week.
 4. **The Ally X export** at 1080p native, for the user's runs.
+
+### 18.10 Increment 1, step 1: the rational type, 24 October 2026
+
+- **TAA's size mismatch.** TAA leaves the frame as it is when the final size is not the scene's (`taa.hlsl:198`). The post pass framework now logs that as an error, once per pair of sizes, so the scale work cannot hide a mismatch (`post_pass.cpp`, at the final point).
+- **The type.** `rex/graphics/util/draw_scale.h` holds `DrawScale`, a uniform scale as a numerator over a denominator: `Parse` (`3/2`, `1.5`, `1080/720`), `Floor`, `ScaleDown`, `ScaleUp` and `ScaleEdge` (a guest pixel edge to the nearest host edge, halves up, so neighbouring rectangles share it). It is header only; `fm4_draw_scale_tests` checks it on the CPU, in `Build.ps1`'s tests: whole scales give the integer results, 3/2 and 20/9 give the panel sizes, and the edges of fractional scales leave no gap.
+- **The cvar.** `native_draw_scale` (empty by default) sets the scene's scale on the native path. The runtime refuses it with an error and keeps the whole scale unless the path is RTV with `host_render_native` and `draw_resolution_scale_x` and `_y` are both its whole part, the scale of the other surfaces. `TextureCache::scene_draw_scale()` returns it; nothing reads it yet.
+
+The no-change gate on `I:\FM4-build-usa` at 240 Hz (snapshot `n5a-nat1x`, local main `fc39156` with step 1), against the close gate of N3 (`n3z`):
+
+| Check | Result |
+|---|---|
+| smoke, native one pass 2x at 1x and 2x, RTV at 1x and 2x (`n5a-nat1x`, `n5a-nat2x`, `n5a-rtv1x`, `n5a-rtv2x`) | 12 of 12 cells reached their goal; races 239.0 and 237.8 fps (1x native), 192.6 and 192.7 (2x native), 231.2 and 222.4 (1x RTV), 176.7 and 167.7 (2x RTV), within the noise of `n3z`. No "final size" error. The one FAIL (RTV 2x `photo`) is the known `Unimplemented XAM message` key, absent from that baseline cell; the WARNs are capture statistics and the guest's waits |
+| `freeze`, native, against `n3z-freeze-*-nat` (both at the scenario's 2x) | PASS: draws -0.0% and +0.1%, 24.7% and 28.1% of the image above 4 |
+| `native_draw_scale=3/2` at 2x (`n5a-freeze-1x-nat-s32`, which ran at the scenario's 2x) | refused: "native_draw_scale 3/2 needs draw_resolution_scale_x and _y of 1, not 2x2"; the run is otherwise the same |
+| `native_draw_scale=3/2` at 1x (`n5b-freeze-1x-nat-s32` against `n5b-freeze-1x-nat`, both with the scale passed explicitly) | accepted ("Native draw scale: 3/2 for the scene, 1 for the other surfaces"); parity PASS, 25.2% of the image above 4 |
+| The first real 1x freeze parity (`n5b-freeze-1x-*`, 1280x720 captures, `original,taa=0`, `FM4_TILING_SCENARIO=1`) | native one pass against RTV: draws -14.3%, predicated packets -25.8%, FAIL by design, 20.6% of the image above 4; the 1:1 crops of the old tile seam (line 512) and of the top 208 lines show no artefact |
+

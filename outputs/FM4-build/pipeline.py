@@ -431,7 +431,8 @@ def post_pass_tests(root,jobs):
     (Direct3D 12 on the CPU) as the framework runs them, FXC compiles of the override library and
     the look mods with and without XE_POST_VIEWS (the library's post pass code is only compiled
     with it), the track lighting file edits of the look's track knobs (fm4-track-settings.h), and
-    the texture replacement content hash and DDS files (docs/analysis/texture-replacement.md).
+    the texture replacement content hash and DDS files (docs/analysis/texture-replacement.md), and
+    the draw resolution scale as a fraction (docs/analysis/d3d-hle-n5.md).
     work/fm4-rex/tests, synced here like the runtime, built against the installed runtime headers. The WARP scene's checks were set with a GTAO radius of 1 m."""
     source,build=root/'project/tests',root/'tests-build'
     inventory=json.loads((REPO/'outputs/FM4-source-control/tracked-files.json').read_text())
@@ -445,12 +446,13 @@ def post_pass_tests(root,jobs):
         log=root/'logs/tests-configure.log')
     run(['cmake','--build',build,'--parallel',jobs,'--target','fm4_post_pass_camera_tests',
          'fm4_post_pass_shader_tests','fm4_shader_mod_tests','fm4_track_settings_tests',
-         'fm4_texture_replacement_tests'],
+         'fm4_texture_replacement_tests','fm4_draw_scale_tests'],
         log=root/'logs/tests-build.log')
     run([build/'fm4_track_settings_tests.exe'],cwd=build,log=root/'logs/track-settings-tests.log')
     run([build/'fm4_texture_replacement_tests.exe'],cwd=build,
         log=root/'logs/texture-replacement-tests.log')
     run([build/'fm4_post_pass_camera_tests.exe'],cwd=build,log=root/'logs/post-pass-camera-tests.log')
+    run([build/'fm4_draw_scale_tests.exe'],cwd=build,log=root/'logs/draw-scale-tests.log')
     run([build/'fm4_post_pass_shader_tests.exe',root/'runtime-source/src/graphics/d3d12/post_pass.hlsli',
          PASSES_DIRECTORY,'GTAO_RADIUS=1'],cwd=build,log=root/'logs/post-pass-shader-tests.log')
     run([build/'fm4_shader_mod_tests.exe',root/'runtime-source/src/graphics/d3d12/shader_override.hlsli',

@@ -214,7 +214,8 @@ TextureCache::TextureCache(const RegisterFile& register_file, SharedMemory& shar
     : register_file_(register_file),
       shared_memory_(shared_memory),
       draw_resolution_scale_x_(draw_resolution_scale_x),
-      draw_resolution_scale_y_(draw_resolution_scale_y) {
+      draw_resolution_scale_y_(draw_resolution_scale_y),
+      scene_draw_scale_(DrawScale::Whole(draw_resolution_scale_x)) {
   assert_true(draw_resolution_scale_x >= 1);
   assert_true(draw_resolution_scale_x <= kMaxDrawResolutionScaleAlongAxis);
   assert_true(draw_resolution_scale_y >= 1);

@@ -1075,6 +1075,11 @@ def run_once(options, out):
     for item in options.arg:
         key, value = item.lstrip('-').split('=', 1)
         args[key] = value
+    # The render scale the run uses, in its summary and on the console: the freeze scenario pins
+    # 2x unless --arg says otherwise, so a run named "1x" without it renders at 2x.
+    draw_scale = f"{args.get('draw_resolution_scale_x', '1')}x{args.get('draw_resolution_scale_y', '1')}"
+    print(f'Render scale {draw_scale}' + (' (the freeze scenario pins 2x)' if freeze and
+          not any(item.lstrip('-').startswith('draw_resolution_scale') for item in options.arg) else ''))
     env = {k: v for k, v in os.environ.items() if not k.startswith(('FM4_', 'REX_'))}
     env.update(pipeline.launch_env())
     env.update(FM4_CAPTURE_DIR=str(capture),
@@ -1295,7 +1300,7 @@ def run_once(options, out):
     summary = {
         'crashed': crashed, 'goal': options.goal, 'scenario': None if options.steps else options.scenario,
         'goal_reached': goal_reached, 'failed_step': failed_step, 'args': options.arg, 'profile': options.profile,
-        'look': look,
+        'look': look, 'draw_scale': draw_scale,
         # The binary the run used: a baseline variance or a parity verdict holds for one binary.
         'binary': {'path': str(exe), 'sha256': pipeline.digest(exe),
                    'mtime': time.strftime('%Y-%m-%d %H:%M:%S', time.localtime(exe.stat().st_mtime)),
@@ -1350,7 +1355,8 @@ def aggregate(runs):
         'crashed': next((r['crashed'] for r in runs if r['crashed']), None),
         'goal': runs[0]['goal'], 'scenario': runs[0].get('scenario'), 'route': runs[0].get('route'),
         'args': runs[0]['args'],
-        'look': runs[0].get('look'), 'binary': runs[0].get('binary'),
+        'look': runs[0].get('look'), 'draw_scale': runs[0].get('draw_scale'),
+        'binary': runs[0].get('binary'),
         'failed_steps': [r.get('failed_step') for r in runs],
         'goal_reached': None if runs[0]['goal_reached'] is None else all(r['goal_reached'] for r in runs),
         'fps_median': median(pick('fps_median')),

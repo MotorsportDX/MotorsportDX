@@ -101,7 +101,7 @@ The gate of 16.3 against RTV of the same binary (with the kept traps of 16.5), o
 | perf 1x, `photo` race (`n3d1xp`, `n3d1xpd`) | 216.2 fps, p99 6.44 ms, GPU 3.01 ms | 220.8 fps, p99 5.62 ms, GPU 2.37 ms | +2.1%, GPU -0.64 ms |
 | smoke 2x races (`n3d2x`, `n3d2xd`) | `photo` 160.5, `career` 154.9, replay 105.6 fps | 176.5, 174.5, 115.0 fps | +10.0%, +12.6%, +8.8% |
 | smoke 1x races (`n3d1x`, `n3d1xd`) | `photo` 213.1, `career` 225.0 fps | 210.9, 229.6 fps | within one run's noise |
-| `parity.py` on the one-tile `freeze` | | 19.9% (1x) and 17.4% (2x) of the image above 4 | pass |
+| `parity.py` on the one-tile `freeze`, two runs at 2x (the run named 1x also rendered at 2x, 16.18) | | 19.9% and 17.4% of the image above 4 | pass |
 | smoke 1x with `-Native`'s cvars (`n3d1xn`, against `n3d1x`) | | races 237.5 and 224.9 fps | pass |
 
 - No FAIL and no new error key in any cell; the WARNs are capture statistics of different race moments. The saved photos are intact at 1x and 2x (their thumbnails, and the full photo in `photo_view`); the races differ between runs, so the photo files cannot be compared with RTV's pixel for pixel.
@@ -141,7 +141,7 @@ The gate on `I:\FM4-build-usa` at 240 Hz, against the same binary with only the 
 | GPU a race frame at 2x (perf, three runs, medians) | loads of at least 1280x720 0.32 to 0.13 ms, resolves of at least 1280x720 0.32 to 0.52 ms: frame 5.34 against 5.48 ms, no saving |
 | perf 2x `photo` race | 183.2 fps, p99 7.89 ms against 178.9 fps, p99 8.17 ms (-2.4%); the baseline's run 2 missed the "SAVE SUCCESSFUL" text by OCR while the screen showed the save succeeded |
 | smoke 1x, 2x | pass with no new error key; races within -3% to +1%; the WARNs are capture statistics; the saved photos are intact (`photo_view`) |
-| `parity.py` on `freeze` | pass at 1x (35.1% of the image above 4) and 2x (28.4%) |
+| `parity.py` on `freeze`, two runs at 2x (the run named 1x also rendered at 2x, 16.18) | pass (35.1% and 28.4% of the image above 4) |
 
 Step A is correct but saves nothing: writing the texture from the EDRAM buffer costs about what the load from the scaled resolve buffer cost (both move a 2560x1440 32bpp image), and the resolve copy and the dump stay. The saving of increment 1 needs work removed, not moved: a conversion straight from the host render target (with the dump's encoding of the guest formats, proven by the same byte check) in place of the dump, the resolve copy and the load, with step B's CPU readback for the rare guest reads.
 
@@ -230,7 +230,7 @@ The close gate of increment 3 on `I:\FM4-build-usa` at 240 Hz, on the binary of 
 | perf 2x (`n3c2xpr`, `n3c2xpn`), race, three runs | 158.4 fps, p99 9.29 ms, GPU 6.13 ms a frame, resolves 0.68 ms | 190.1 fps, p99 7.68 ms, GPU 5.16 ms, resolves 0.47 ms; `compare.py` PASS |
 | smoke 2x (`n3c2x`, `n3c2xn`), races | `photo` 166.0, `career` 157.6 fps | 188.4, 183.3 fps |
 | smoke 1x (`n3c1x`, `n3c1xn`), races | `photo` 233.0, `career` 218.9 fps | 234.8, 224.1 fps |
-| `parity.py` on `freeze`, 1x and 2x (`n3c-freeze-*`) | | PASS, 22.3% and 31.1% of the image above 4 (35.1% and 28.4% at the close of increment 2) |
+| `parity.py` on `freeze`, two runs at 2x (`n3c-freeze-*`; the run named 1x also rendered at 2x, 16.18) | | PASS, 22.3% and 31.1% of the image above 4 (35.1% and 28.4% at the close of increment 2) |
 | identity check with perturbation (`n3c-perturb-career`) | | 13,525 ranges perturbed, 13,525 reported |
 
 Every cell reached its goal with RTV's error keys; the smoke and perf warnings are capture statistics of races that differ (the `photo_view` photos checked by eye). With bit 2 the race resolves 26.1 times a frame from the host render target at 1x and 2x (3.75 a frame cannot), the replay 33.0 and photo mode 39.2. The readback on demand had no timeout, CP fault or lost trap; the races read nothing back. The first RTV perf cell (`n3c2xp`) lost its third run to a guest access violation (a write of guest address 0 while the race loaded, on RTV's defaults, which bit 2 does not touch); the repeated cell ran three of three, and the crash did not recur in the other 25 runs of the gate. The crash handler's dump (`I:\FM4-build-usa\guest-null-crash.dmp`), symbolized by the main session against the snapshot's map file, puts the fault in guest code: `sub_82956DA8`, guest instruction `0x8295720C` (`stwx r11,r10,r18`). The function loads an object from its r6 argument; the buffer pointer at offset 160 of that object is null, so the store writes 0 to guest address 0. A game object's buffer was not set yet while the race loaded, either a load-order race between guest threads or an allocation that returned 0. Nothing points at the GPU path. If it recurs, the runtime log near the crash is to be checked for a failed allocation.
@@ -287,7 +287,7 @@ The second build (`n3m-*`, the commits of this step) fixes both. Deferred tiles 
 | `career` with `native_rt_surfaces_lazy_check` | 0 violations, 0 hazards; race 187.5 fps |
 | `career` with the check and `native_rt_surfaces_lazy_perturb=1000` | 26,630 copies skipped, 26,630 violations reported, 0 hazards |
 | `race` with bit 4, against bit 2 alone (one run each) | 191.5 against 182.9 fps, GPU 5.15 against 5.34 ms a frame (1,658 against 2,404 draws a frame, another race load); transfers 0.306 against 0.328 ms a frame |
-| `parity.py` on `freeze` against RTV's `n3c-freeze-*-rtv`, 1x and 2x | PASS, 25.4% and 30.7% of the image above 4 (22.3% and 31.1% without bit 4) |
+| `parity.py` on `freeze` against RTV's `n3c-freeze-*-rtv`, two runs at 2x (the run named 1x also rendered at 2x, 16.18) | PASS, 25.4% and 30.7% of the image above 4 (22.3% and 31.1% without bit 4) |
 
 In the race, a frame claims 2,216 tiles from another owner:
 
@@ -352,7 +352,7 @@ Bit 8 is built as designed in 16.15 and stays off by default. The step gate ran 
 | `career` 2x, race and replay | 43 | 2,142.2 MB | 564.5 MB (-74%) |
 | `race` 2x | 42 | 2,102.2 MB | 548.5 MB (-74%) |
 
-- **Checks.** The byte check of the resolves from the host render target (`native_rt_surfaces_check=30`) compared 19,636 resolves at 1x and 16,552 at 2x with no mismatch, after the targets were sized and grown. Each run grew one target. `parity.py` on `freeze` against RTV's `n3c-freeze-*-rtv` passes at 1x and 2x, with 20.8% and 29.0% of the image above 4 (22.3% and 31.1% without bit 8). Every run reached its goal with RTV's error keys.
+- **Checks.** The byte check of the resolves from the host render target (`native_rt_surfaces_check=30`) compared 19,636 resolves at 1x and 16,552 at 2x with no mismatch, after the targets were sized and grown. Each run grew one target. `parity.py` on `freeze` against RTV's `n3c-freeze-*-rtv` passes in two runs at 2x (the run named 1x also rendered at 2x, 16.18), with 20.8% and 29.0% of the image above 4 (22.3% and 31.1% without bit 8). Every run reached its goal with RTV's error keys.
 - **Cap.** With `native_rt_surfaces_memory_cap_mb=200` at 2x (`n3z-career-2x-cap`), the cache kept 19 to 20 targets and 185 to 197 MB in the race and the replay, with a peak of 323.5 MB. To stay there it evicted 3,029 targets in the run, and they were created again. The working set of the targets that own tiles is about 550 MB at 2x, so a cap below it trades memory for re-creations. No byte check differed.
 - **Performance.** Three race pairs at 2x (`n3z-race-2x-*`), one run each, the race's load between 1,460 and 2,114 draws a frame:
 
@@ -477,7 +477,7 @@ One pass with 2x MSAA costs about 0.04 ms of GPU time a frame more than today's 
 | perf 1x, 3 runs (`n4g1xp`, `n4g1xpn`), race | 197.8 fps, GPU 3.15 ms a frame, 2.31 µs of render thread time a draw | 219.1 fps, GPU 2.32 ms, 1.92 µs | pass |
 | perf 2x, 3 runs (`n4g2xp`, `n4g2xpn`), race | 148.7 fps, GPU 6.51 ms, 2.33 µs a draw, resolves 0.86 ms | 179.9 fps, GPU 5.42 ms, 2.16 µs, resolves 0.56 ms | pass |
 | RTV's defaults (one tile) at 2x, 3 runs (`n4g2xpd` against `n3c2xpr`), race | 158.6 fps, GPU 6.14 ms (160.1 fps, 6.08 ms before) | | RTV not slower |
-| `parity.py` on `freeze`, 1x and 2x (`n4g-freeze-*`) | `-Rov` against RTV passes: 37.1% and 26.0% of the image above 4 | against RTV and `-Rov`: draws -14%, predicated packets -25%, FAIL by design ([frozen-frames.md](../e2e/frozen-frames.md)); 31.3% and 25.4% of the image above 4 against RTV | within the spread of two race moments; the 1:1 crops of the old tile seam (line 1024 at 2x) and of the top 416 lines show no artefact |
+| `parity.py` on `freeze`, two runs at 2x (`n4g-freeze-*`; the run named 1x also rendered at 2x, 16.18) | `-Rov` against RTV passes: 37.1% and 26.0% of the image above 4 | against RTV and `-Rov`: draws -14%, predicated packets -25%, FAIL by design ([frozen-frames.md](../e2e/frozen-frames.md)); 31.3% and 25.4% of the image above 4 against RTV | within the spread of two race moments; the 1:1 crops of the old tile seam (line 1024 at 2x) and of the top 416 lines show no artefact |
 | identity check with perturbation 1,000, `career` (`n4g-perturb-career`) | | 12,847 ranges perturbed, 12,847 reported | pass |
 | grow stress with the resolve byte check, `career` (`n4g-grow-career`) | | 19,422 byte checks, 0 mismatches, 39 resizes; 16.1 M draws, 25,049 resolves and 19,187 clears of the private depth, 0 violations | pass |
 | render target memory, `career` | 589.8 MB at 1x, 2,142.2 MB at 2x | 203.5 MB at 1x (207.5 MB at the peak of the grow stress), 596.5 MB at 2x | |
@@ -593,7 +593,7 @@ Every cell reached its goal (18 smoke cells, 15 perf runs). No cell has a new er
 
 | Check | Result |
 |---|---|
-| `parity.py` on `freeze` (`n3z-freeze-*`, 1x and 2x) | `-Rov` against RTV passes: 30.5% and 13.0% of the image above 4. Native one pass against RTV and `-Rov`: draws -14.4%, predicated packets -26%, FAIL by design ([frozen-frames.md](../e2e/frozen-frames.md)); 23.9% and 24.6% of the image above 4 against RTV, 29.6% and 25.1% against `-Rov` |
+| `parity.py` on `freeze` (`n3z-freeze-*`, two runs at 2x; the run named 1x also rendered at 2x, see below) | `-Rov` against RTV passes: 30.5% and 13.0% of the image above 4. Native one pass against RTV and `-Rov`: draws -14.4%, predicated packets -26%, FAIL by design ([frozen-frames.md](../e2e/frozen-frames.md)); 23.9% and 24.6% of the image above 4 against RTV, 29.6% and 25.1% against `-Rov` |
 | 1:1 images, the 2x `freeze` frames | the old tile seam (lines 896 to 1152, three crops across the width) and the top 416 lines, native against RTV and against `-Rov`: no artefact, two race moments |
 | combined checks, `career` with one pass 2x (`n3z-check-nat2x`), each perturbed every 1,000th | identity 14,014,384 ranges, 12,594 perturbed and 12,594 reported; bindings 19,243,976 and guard 19,028,022, mismatches only the perturbed; back end 21,913,688 draws; resolve byte check 12,317 resolves, 0 mismatches |
 | the same with one pass 4x (`n3z-check-nat4x`) | identity 14,545,309 ranges, 13,005 perturbed and 13,005 reported; bindings 17,963,093 and guard 18,377,393, mismatches only the perturbed; back end 21,464,988 draws; resolve byte check 11,733 resolves, 0 mismatches |
@@ -608,11 +608,13 @@ The main session's decision of 24 October 2026 on the rest of N3's row in [secti
 
 | Check | Native one pass 2x | RTV |
 |---|---|---|
-| `freeze` at 2x (`n3v-freeze-*`, the cockpit camera) | goal reached | goal reached |
-| 1:1 crops: the dashboard and the steering wheel, the A pillar and the door, the roof lining, the car ahead (its bumper and wheel arches), the windshield over the sky and the cable car | GTAO's shading in the same places and strength, the windshield's tint and light the same; the edges smoother through 2x MSAA | |
-| TAA on the still picture: the last six frozen frames | 0.0% of the image changes above 4 from frame to frame | 0.0% |
+| `freeze` at 2x with `--look aces` (`n3w-freeze-*`, the cockpit camera; first run `n3v-freeze-*` without `--look`, see below) | goal reached | goal reached |
+| 1:1 crops: the dashboard and the steering wheel, the A pillar and the door, the roof lining, the car ahead (its bumper and wheel arches), the windshield over the sky and the cable car | GTAO's shading under the car and on the dashboard, the cockpit light on the gauges and the windshield's dust and haze in the same places and strength as RTV's; the edges smoother through 2x MSAA | |
+| TAA on the still picture: the last six captures of the frozen frame, 2.1 s apart, which keeps rendering at 60 fps | 0.0% of the image changes above 4 from capture to capture | 0.0% |
 | `race` at 2x with `MOTION_DEBUG` 0, 1 and 4 cycled every second (`n3v-mv-*`) | 188.1 fps; motion and history valid from the first race scene, the same camera sources and fields of view | 168.1 fps; the same |
 | The debug views at 1:1 | the colour-coded motion and the object motion alone match RTV's: the same hues by screen direction, the cockpit and the cars that move with the camera white, the same object outlines | |
 
-Both runs log the same single warning (no single-sampled colour render target at the final point, once) and no new error key. N3's row criterion is met, and N3 is closed.
+Both race runs log the same single warning (no single-sampled colour render target at the final point, once), a known message on both paths, and no run has a new error key. N3's row criterion is met, and N3 is closed. Whether TAA's still-camera jitter was armed in the frozen frame is not logged; the check shows that the picture TAA puts out stays the same.
+
+**Correction, 24 October 2026.** The `freeze` scenario pins the look `original,taa=0` and render scale 2x unless `--look` and `--arg` say otherwise ([frozen-frames.md](../e2e/frozen-frames.md)). The first look check (`n3v-freeze-*`) ran without `--look`, so its frozen frames had no mods, no GTAO, no TAA and no windshield; its crops and its TAA result were withdrawn and replaced by the `n3w` runs above. For the same reason, every freeze run named 1x in the gates of this stage (`n3a`, `n3c`, `n3d`, `n3l`, `n3m`, `n3z`, `n4g`) rendered at 2x; the parity rows above now say so. A real 1x freeze parity on local main with step 1 of N5 is recorded in [d3d-hle-n5.md 18.10](d3d-hle-n5.md#1810-increment-1-step-1-the-rational-type-24-october-2026). Since then, `e2e.py` prints the render scale and records it in `summary.json`, and `matrix.py` passes it in every cell.
 
