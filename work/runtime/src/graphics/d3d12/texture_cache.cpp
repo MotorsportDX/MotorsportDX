@@ -35,6 +35,7 @@
 #include <rex/math.h>
 #include <rex/ui/d3d12/d3d12_upload_buffer_pool.h>
 #include <rex/ui/d3d12/d3d12_util.h>
+#include "../util/perf_trace.h"
 
 REXCVAR_DEFINE_STRING(texture_dump_path, "", "GPU/D3D12",
                       "Write each new guest texture once here as <content hash>.dds, with a line "
@@ -1599,8 +1600,41 @@ bool D3D12TextureCache::IsResolveTextureTargetKey(const TextureKey& key) const {
 size_t D3D12TextureCache::GetResolveTextureTargets(uint32_t base_address, uint32_t pitch,
                                                    uint32_t width, uint32_t height,
                                                    xenos::TextureFormat format,
-                                                   ResolveTextureTarget* targets_out) {
+                                                   ResolveTextureTarget* targets_out, bool scene,
+                                                   xenos::Endian scene_endianness) {
   size_t count = 0;
+  if (scene) {
+    // Created from the key the fetches use, so the first frame is written.
+    bool any = false;
+    for (uint32_t endianness = 0; endianness < 4 && !any; ++endianness) {
+      TextureKey key;
+      xenos::xe_gpu_texture_fetch_t fetch;
+      if (!ResolvedTextureKey(base_address, pitch, width, height, format,
+                              xenos::Endian(endianness), key, fetch)) {
+        return 0;
+      }
+      for (uint32_t packed_mips = 0; packed_mips < 2; ++packed_mips) {
+        key.packed_mips = packed_mips;
+        key.scaled_resolve = uint32_t(IsDrawResolutionScaled());
+        key.scene_scaled = 1;
+        any |= FindTexture(key) != nullptr;
+      }
+    }
+    if (!any) {
+      TextureKey key;
+      xenos::xe_gpu_texture_fetch_t fetch;
+      if (ResolvedTextureKey(base_address, pitch, width, height, format, scene_endianness, key,
+                             fetch)) {
+        for (uint32_t packed_mips = 0; packed_mips < 2; ++packed_mips) {
+          key.packed_mips = packed_mips;
+          if (FindOrCreateTexture(key)) {
+            perf_trace::CountSceneTextureCreated();
+          }
+        }
+        // FindOrCreateTexture sets the scene and scaled bits from the pages.
+      }
+    }
+  }
   for (uint32_t endianness = 0; endianness < 4; ++endianness) {
     TextureKey key;
     xenos::xe_gpu_texture_fetch_t fetch;
@@ -1614,6 +1648,7 @@ size_t D3D12TextureCache::GetResolveTextureTargets(uint32_t base_address, uint32
       // The fetch's key leaves this to the texture's creation; the resolve
       // made the range scaled.
       variant_key.scaled_resolve = uint32_t(IsDrawResolutionScaled());
+      variant_key.scene_scaled = uint32_t(scene);
       auto* texture = static_cast<D3D12Texture*>(FindTexture(variant_key));
       if (!texture || texture->replacement() || !IsResolveTextureTargetKey(variant_key) ||
           !(texture->resource()->GetDesc().Flags & D3D12_RESOURCE_FLAG_ALLOW_UNORDERED_ACCESS)) {
@@ -1625,6 +1660,7 @@ size_t D3D12TextureCache::GetResolveTextureTargets(uint32_t base_address, uint32
       target.endianness = xenos::Endian(endianness);
       target.uav_format = format == xenos::TextureFormat::k_8_8_8_8 ? DXGI_FORMAT_R8G8B8A8_UINT
                                                                     : DXGI_FORMAT_R10G10B10A2_UINT;
+      target.scene_scaled = scene;
       if (count >= kMaxResolveTextureTargets) {
         return count;
       }
@@ -1649,6 +1685,9 @@ void D3D12TextureCache::EndResolveTextureWrite(const ResolveTextureTarget& targe
                                            kState);
   // The resolve marked the memory as written: the texture holds it already.
   MarkTextureLoaded(texture);
+  if (texture.key().scene_scaled) {
+    texture.SetSceneWritten();
+  }
   texture.MarkAsUsed();
 }
 

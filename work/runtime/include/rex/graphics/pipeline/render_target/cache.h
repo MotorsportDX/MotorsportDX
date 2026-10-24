@@ -170,6 +170,11 @@ class RenderTargetCache {
     scene_draw_scale_ = scale;
     scene_draw_scale_set_ = true;
   }
+  // Whether the full-screen resolves of the private surfaces write textures
+  // at the scene's scale (18.15): at a fractional scene scale, or with
+  // native_draw_scale_variant at any.
+  void SetSceneTextures(bool scene_textures) { scene_textures_ = scene_textures; }
+  bool scene_textures() const { return scene_textures_; }
   // Whether the last Update bound private surfaces (a scene draw).
   bool last_update_private() const { return last_update_private_; }
   uint32_t draw_resolution_scale_y() const { return draw_resolution_scale_y_; }
@@ -733,6 +738,7 @@ class RenderTargetCache {
   uint32_t draw_resolution_scale_x_;
   DrawScale scene_draw_scale_;
   bool scene_draw_scale_set_ = false;
+  bool scene_textures_ = false;
   bool last_update_private_ = false;
   uint32_t draw_resolution_scale_y_;
 

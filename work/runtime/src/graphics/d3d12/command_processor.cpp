@@ -2330,6 +2330,8 @@ bool D3D12CommandProcessor::SetupContext() {
     } else {
       texture_cache_->SetSceneDrawScale(*scale);
       render_target_cache_->SetSceneDrawScale(*scale);
+      render_target_cache_->SetSceneTextures(!scale->IsWhole() ||
+                                             REXCVAR_GET(native_draw_scale_variant));
       REXGPU_INFO("Native draw scale: {}/{} for the scene, {} for the other surfaces",
                   scale->numerator, scale->denominator, draw_resolution_scale_x);
     }

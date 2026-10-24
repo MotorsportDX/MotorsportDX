@@ -343,6 +343,7 @@ void TextureCache::MarkRangeAsResolved(uint32_t start_unscaled, uint32_t length_
   for (uint32_t page = start_unscaled >> 12, page_last = (start_unscaled + length_unscaled - 1) >> 12;
        page <= page_last; ++page) {
     ever_resolved_pages_[page >> 6] |= UINT64_C(1) << (page & 63);
+    scene_resolved_pages_[page >> 6] &= ~(UINT64_C(1) << (page & 63));
   }
 
   if (IsDrawResolutionScaled()) {
@@ -367,6 +368,33 @@ void TextureCache::MarkRangeAsResolved(uint32_t start_unscaled, uint32_t length_
   // Invalidate textures. Toggling individual textures between scaled and
   // unscaled also relies on invalidation through shared memory.
   shared_memory().RangeWrittenByGpu(start_unscaled, length_unscaled);
+}
+
+void TextureCache::MarkRangeAsSceneResolved(uint32_t start, uint32_t length) {
+  if (!length) {
+    return;
+  }
+  start &= 0x1FFFFFFF;
+  length = std::min(length, 0x20000000 - start);
+  for (uint32_t page = start >> 12, page_last = (start + length - 1) >> 12; page <= page_last;
+       ++page) {
+    scene_resolved_pages_[page >> 6] |= UINT64_C(1) << (page & 63);
+  }
+}
+
+bool TextureCache::IsRangeSceneResolved(uint32_t start, uint32_t length) const {
+  if (!length) {
+    return false;
+  }
+  start &= 0x1FFFFFFF;
+  length = std::min(length, 0x20000000 - start);
+  for (uint32_t page = start >> 12, page_last = (start + length - 1) >> 12; page <= page_last;
+       ++page) {
+    if (scene_resolved_pages_[page >> 6] & (UINT64_C(1) << (page & 63))) {
+      return true;
+    }
+  }
+  return false;
 }
 
 bool TextureCache::IsRangeEverResolved(uint32_t start, uint32_t length) const {
@@ -914,12 +942,21 @@ TextureCache::Texture* TextureCache::FindOrCreateTexture(TextureKey key) {
       key.scaled_resolve = 1;
     }
   }
+  // A full-screen resolve target of a private surface (18.15): one level over
+  // the scene-resolved range.
+  if (key.tiled && !key.mip_max_level && key.base_page &&
+      IsRangeSceneResolved(key.base_page << 12, key.GetGuestLayout().base.level_data_extent_bytes)) {
+    key.scene_scaled = 1;
+  }
 
   auto get_host_extent = [this, &key](uint32_t& host_width_out, uint32_t& host_height_out,
                                       uint32_t& host_depth_or_array_size_out) {
     host_width_out = key.GetWidth();
     host_height_out = key.GetHeight();
-    if (key.scaled_resolve) {
+    if (key.scene_scaled) {
+      host_width_out = scene_draw_scale_.ScaleUp(host_width_out);
+      host_height_out = scene_draw_scale_.ScaleUp(host_height_out);
+    } else if (key.scaled_resolve) {
       host_width_out *= draw_resolution_scale_x();
       host_height_out *= draw_resolution_scale_y();
     }
@@ -1035,6 +1072,15 @@ TextureCache::WriteBackCounts TextureCache::StartWriteBackCount(Texture* texture
 }
 
 bool TextureCache::LoadTextureData(Texture& texture) {
+  // A texture at the scene's scale has no data in memory at that scale: the
+  // resolves write it (18.15). One created before its resolve is counted.
+  if (texture.key().scene_scaled) {
+    if (!texture.scene_written()) {
+      perf_trace::CountSceneTextureUnwritten();
+    }
+    MarkTextureLoaded(texture);
+    return true;
+  }
   PendingTextureLoad pending_load;
   PendingSharedMemoryRange pending_ranges[2];
   size_t pending_range_count = 0;

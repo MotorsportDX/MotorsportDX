@@ -72,10 +72,17 @@ uint XeHostDepthTo20e4(float depth, bool round_to_nearest_even) {
   return (biased >> 3u) & 0xFFFFFFu;
 }
 
+// The source pixel of a destination pixel at another scale (18.15).
+uint2_xe XeHostSourcePixel(uint2_xe pixel_index, uint source_scale) {
+  uint n = source_scale & 0xFFFFu, d = source_scale >> 16u;
+  return (pixel_index * 2u + 1u) * n / (2u * d);
+}
+
 // The EDRAM word of a sample of the resolve's pixel, as the dump stores it.
 uint XeHostEdramWord(uint2_xe pixel_index, uint guest_sample, uint host_info,
                      uint2_xe host_offset) {
-  int2 position = int2(pixel_index + host_offset);
+  int2 position = int2(XeHostSourcePixel(pixel_index, push_const_xe(xe_resolve_host_source_scale)) +
+                       host_offset);
   uint samples_log2 = (host_info >> 4u) & 3u;
   uint host_sample;
   if (samples_log2 >= 2u) {
@@ -162,9 +169,23 @@ entry_inputs_end_code_begin_compute_xe
   uint host_offset_packed = push_const_xe(xe_resolve_host_offset);
   uint2_xe host_offset = uint2_xe(host_offset_packed & 0xFFFFu, host_offset_packed >> 16u);
   uint2_xe pixel_index = in_global_thread_id_xe.xy << uint2_xe(2u, 0u);
-  dont_flatten_xe
-  if (pixel_index.x >= resolve_info.width_div_8_scaled << 3u) {
-    return;
+  #ifdef XE_HOST_TEXTURE
+    // A texture at the scene's scale: its own size bounds the pixels, and the
+    // half-pixel fill of whole scales does not apply.
+    uint texture_size = push_const_xe(xe_resolve_host_texture_size);
+    if (texture_size != 0u) {
+      resolve_info.half_pixel_offset_fill_source = uint2_xe(0u, 0u);
+      dont_flatten_xe
+      if (pixel_index.x >= (texture_size & 0xFFFFu) || pixel_index.y >= (texture_size >> 16u)) {
+        return;
+      }
+    } else
+  #endif
+  {
+    dont_flatten_xe
+    if (pixel_index.x >= resolve_info.width_div_8_scaled << 3u) {
+      return;
+    }
   }
   uint fill_y = resolve_info.half_pixel_offset_fill_source.y;
   uint first_sample = XeResolveFirstSampleIndex(resolve_info.sample_select);

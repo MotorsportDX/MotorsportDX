@@ -210,3 +210,19 @@ The no-change gate on `I:\FM4-build-usa` at 240 Hz, local main `96da8da` with st
 
 Occlusion queries at the scene's scale come with 4c (18.13).
 
+### 18.15 Increment 1, step 4b: resolves from the scene's scale, 24 October 2026
+
+- **The source scale.** `HostResolveSource` carries the render target's scale: the scene's for a private surface. The host offset of a resolve's first pixel is the guest offset at that scale (`ScaleEdge`). The host resolve shaders take `xe_resolve_host_source_scale`, the source's scale over the destination's as n:d, and destination pixel p reads source pixel floor((2p + 1) * n / (2d)): the nearest sample, the identity at 1:1. The scaled resolve buffer (or the shared memory at 1x) stays at the whole scale k, so the readbacks and the small destinations load as before.
+- **Textures at the scene's scale.** A full-screen destination (at least 1280x720) of a private surface, in a format the host texture shader writes (`8_8_8_8` or `2_10_10_10`, at offset 0, not an array), is marked scene-resolved (`MarkRangeAsSceneResolved`; the next resolve to the range clears it). A texture over such a range gets the `scene_scaled` key bit, is sized by `ScaleUp`, is written only by the resolves (`ResolveHostIntoTextures` with the destination's pixels one to one, bounded by `xe_resolve_host_texture_size`) and is never loaded. If no texture of the destination exists at the resolve, the resolve creates the two `packed_mips` variants under the destination's endianness, so the first frame is written too. The texture cache reports a `scene_scaled` texture as resolution-scaled, so the scene variant of the shaders scales its coordinates.
+- **Counters** (perf trace, `native_rt_resolve`): `scene_created`, the textures a resolve created, and `scene_unwritten`, those fetched before any resolve wrote them. A texture keeps its data when the readback on demand writes the same bytes under it.
+- It needs `native_rt_surfaces` bit 32 (the textures' unordered access) and runs at a fractional scene scale, or at any with `native_draw_scale_variant`.
+
+The no-change gate on `I:\FM4-build-usa` at 240 Hz (step 4b on local main `8e70103`, then again on `9337939` after the rebase, `n5l`), with the scene path forced at whole scales (`native_draw_scale` equal to the whole scale, `native_draw_scale_variant=true`, `native_rt_surfaces=58`):
+
+| Check | Result |
+|---|---|
+| combined checks with perturbation and both byte checks, `career` at 1x and 2x (`n5k-check-1x`, `n5k-check-2x`) | the resolve byte check 12,355 and 12,309 resolves, 0 mismatches; the texture byte check (the textures below 1280x720) 2,180 and 5,268, 0 mismatches; 8 and 10 scene textures created, none fetched before its first write; identity, bindings, guard and back end: mismatches only the perturbed, apart from one identity mismatch at 2x, register 044B (`CP_PROG_COUNTER`), a register mismatch the late write trace does not cover, which N4 recorded in 17.26 and logs since `02ff637`. On the rebased tree (`n5l-check-1x`, `n5l-check-2x`): the resolve byte check 12,535 and 11,566, the texture byte check 2,215 and 4,956, 0 mismatches; identity 12,147 and 11,156, only the perturbed |
+| smoke at 2x (`n5k-nat2x`) | 3 of 3 cells reached their goal and PASS against step 4a; races 199.9 and 190.3 fps |
+| `parity.py` on `freeze` against step 4a | PASS at 2x with `--look aces` (34.1% of the image above 4). At real 1x the first run froze at a later race moment (the car ahead much closer): draws -4.0%, FAIL on draws, with a correct picture. On the rebased tree both pass: real 1x draws -0.0% (11.1% of the image above 4), 2x with `aces` -0.0% (32.2%) |
+| an earlier build of 4b (`n5i`, `n5j`) | marked destinations the resolve does not write as scene-resolved and looked for the existing textures under the wrong key at 2x: 74,015 fetches before a write and 59,124 creations a run. Fixed before `n5k` |
+

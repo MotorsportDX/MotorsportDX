@@ -86,6 +86,11 @@ class TextureCache {
   virtual void BeginFrame();
 
   void MarkRangeAsResolved(uint32_t start_unscaled, uint32_t length_unscaled);
+  // After MarkRangeAsResolved: the range holds a full-screen resolve of a
+  // private surface at the scene's scale (18.15), so the textures over it are
+  // scene_scaled. The next resolve to the range clears it.
+  void MarkRangeAsSceneResolved(uint32_t start, uint32_t length);
+  bool IsRangeSceneResolved(uint32_t start, uint32_t length) const;
   // Ensures the memory backing the range in the scaled resolve address space is
   // allocated and returns whether it is.
   virtual bool EnsureScaledResolveMemoryCommitted(uint32_t /*start_unscaled*/,
@@ -143,8 +148,10 @@ class TextureCache {
     if (!binding) {
       return false;
     }
-    return (binding->texture && binding->texture->key().scaled_resolve) ||
-           (binding->texture_signed && binding->texture_signed->key().scaled_resolve);
+    return (binding->texture &&
+            (binding->texture->key().scaled_resolve || binding->texture->key().scene_scaled)) ||
+           (binding->texture_signed && (binding->texture_signed->key().scaled_resolve ||
+                                        binding->texture_signed->key().scene_scaled));
   }
 
   // The host textures the post passes wrote over (a write-back): what the
@@ -189,8 +196,12 @@ class TextureCache {
 
     // Whether this texture is a resolution-scaled resolve target.
     uint32_t scaled_resolve : 1;  // 97
+    // Whether it is a full-screen resolve target of a private surface at the
+    // scene's scale (docs/analysis/d3d-hle-n5.md 18.15): sized by
+    // DrawScale::ScaleUp, written only by the resolves, never loaded.
+    uint32_t scene_scaled : 1;  // 98
     // Least important in ==, so placed last.
-    uint32_t is_valid : 1;  // 98
+    uint32_t is_valid : 1;  // 99
 
     TextureKey() { MakeInvalid(); }
     TextureKey(const TextureKey& key) { std::memcpy(this, &key, sizeof(*this)); }
@@ -240,6 +251,11 @@ class TextureCache {
     // may still need to be interpreted as 3D.
     bool force_load_3d_tiling() const { return force_load_3d_tiling_; }
     void SetForceLoad3DTiling(bool force) { force_load_3d_tiling_ = force; }
+    // A scene_scaled texture a resolve has written (18.15): its data stays
+    // valid when the memory under it is written with the same bytes, as the
+    // readback on demand does.
+    bool scene_written() const { return scene_written_; }
+    void SetSceneWritten() { scene_written_ = true; }
 
     uint64_t GetHostMemoryUsage() const { return host_memory_usage_; }
 
@@ -291,6 +307,7 @@ class TextureCache {
     Texture* used_next_;
     bool in_usage_list_;
     bool force_load_3d_tiling_ = false;
+    bool scene_written_ = false;
 
     // These are to be accessed within the global critical region to synchronize
     // with shared memory.
@@ -647,6 +664,8 @@ class TextureCache {
   // resolve data. uint32_t rather than uint64_t because parts of it can be sent
   // to shaders.
   std::unique_ptr<uint32_t[]> scaled_resolve_pages_;
+  // Per 4 KB page of the physical memory, MarkRangeAsSceneResolved.
+  uint64_t scene_resolved_pages_[(SharedMemory::kBufferSize >> 12) / 64] = {};
   // Second level of the bit vector for faster rejection of non-scaled textures.
   // >> 12 for 4 KB pages, >> 5 for uint32_t level 1 bits, >> 6 for uint64_t
   // level 2 bits.

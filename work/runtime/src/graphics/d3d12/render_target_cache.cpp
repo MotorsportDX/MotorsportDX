@@ -423,7 +423,7 @@ bool D3D12RenderTargetCache::Initialize() {
         (draw_resolution_scaled ? sizeof(draw_util::ResolveCopyShaderConstants::DestRelative)
                                 : sizeof(draw_util::ResolveCopyShaderConstants)) /
             sizeof(uint32_t) +
-        2;
+        4;
     // The resolve copy's parameters, and the stencil (t1) in a table of its
     // own: one-use descriptors are not contiguous with bindless resources.
     std::array<D3D12_ROOT_PARAMETER, 4> host_parameters;
@@ -476,7 +476,7 @@ bool D3D12RenderTargetCache::Initialize() {
     // texture's info, then the host resolve's two.
     if (REXCVAR_GET(native_rt_surfaces) & 32) {
       host_parameters[0].Constants.Num32BitValues =
-          sizeof(draw_util::ResolveCopyShaderConstants::DestRelative) / sizeof(uint32_t) + 3;
+          sizeof(draw_util::ResolveCopyShaderConstants::DestRelative) / sizeof(uint32_t) + 5;
       host_texture_root_signature_ =
           ui::d3d12::util::CreateRootSignature(provider, host_root_signature_desc);
 #define XE_HOST_TEXTURE_CODE(name) {shaders::name, sizeof(shaders::name)}
@@ -1738,8 +1738,31 @@ bool D3D12RenderTargetCache::Resolve(const memory::Memory& memory, D3D12SharedMe
                                     copy_shader_constants);
           }
           if (host_resolve && private_surface && host_texture_root_signature_) {
+            // A full-screen destination of a private surface at a fractional
+            // scene scale (or any with native_draw_scale_variant) has textures
+            // at the scene's scale (18.15).
+            const uint32_t dest_width = resolve_info.coordinate_info.width_div_8
+                                        << xenos::kResolveAlignmentPixelsLog2;
+            const uint32_t dest_height = resolve_info.height_div_8
+                                         << xenos::kResolveAlignmentPixelsLog2;
+            // Only what ResolveHostIntoTextures writes: 32bpp 8_8_8_8 or
+            // 2_10_10_10, not an array, at offset 0.
+            const auto dest_format =
+                xenos::TextureFormat(resolve_info.copy_dest_info.copy_dest_format);
+            const bool scene =
+                scene_textures() && dest_width >= 1280 && dest_height >= 720 &&
+                !resolve_info.copy_dest_info.copy_dest_array &&
+                !resolve_info.copy_dest_coordinate_info.offset_x_div_8 &&
+                !resolve_info.copy_dest_coordinate_info.offset_y_div_8 &&
+                (dest_format == xenos::TextureFormat::k_8_8_8_8 ||
+                 dest_format == xenos::TextureFormat::k_2_10_10_10) &&
+                host_texture_pipelines_[host_source.kind][host_source.multisampled];
+            if (scene) {
+              texture_cache.MarkRangeAsSceneResolved(resolve_info.copy_dest_extent_start,
+                                                     resolve_info.copy_dest_extent_length);
+            }
             ResolveHostIntoTextures(texture_cache, resolve_info, copy_shader_constants,
-                                    host_source);
+                                    host_source, scene);
           }
           // native_rt_surfaces_depth_dump (16.17): the bytes of the 4x depth
           // fast copies, written to a file when the submission completes.
@@ -6298,14 +6321,19 @@ bool D3D12RenderTargetCache::FindHostResolveSource(const draw_util::ResolveInfo&
                               uint32_t(key.msaa_samples >= xenos::MsaaSamples::k4X);
   const uint32_t tile_height = xenos::kEdramTileHeightSamples >>
                                uint32_t(key.msaa_samples >= xenos::MsaaSamples::k2X);
-  const uint32_t offset_x =
-      ((relative_tiles % pitch_tiles) * tile_width +
-       (resolve_info.coordinate_info.edram_offset_x_div_8 << 3)) *
-      draw_resolution_scale_x();
-  const uint32_t offset_y =
-      ((relative_tiles / pitch_tiles) * tile_height +
-       (resolve_info.coordinate_info.edram_offset_y_div_8 << 3)) *
-      draw_resolution_scale_y();
+  // In host pixels of the render target, at its scale (the scene's for a
+  // private surface, 18.15).
+  const DrawScale source_scale = GetKeyScale(key);
+  const uint32_t guest_offset_x = (relative_tiles % pitch_tiles) * tile_width +
+                                  (resolve_info.coordinate_info.edram_offset_x_div_8 << 3);
+  const uint32_t guest_offset_y = (relative_tiles / pitch_tiles) * tile_height +
+                                  (resolve_info.coordinate_info.edram_offset_y_div_8 << 3);
+  const uint32_t offset_x = source_scale.IsWhole()
+                                ? guest_offset_x * draw_resolution_scale_x()
+                                : source_scale.ScaleEdge(guest_offset_x);
+  const uint32_t offset_y = source_scale.IsWhole()
+                                ? guest_offset_y * draw_resolution_scale_y()
+                                : source_scale.ScaleEdge(guest_offset_y);
   if (offset_x > 0xFFFF || offset_y > 0xFFFF) {
     return false;
   }
@@ -6321,6 +6349,8 @@ bool D3D12RenderTargetCache::FindHostResolveSource(const draw_util::ResolveInfo&
       (draw_util::GetD3D10SampleIndexForGuest2xMSAA(0, msaa_2x_supported_) << 8) |
       (draw_util::GetD3D10SampleIndexForGuest2xMSAA(1, msaa_2x_supported_) << 10);
   source_out.host_offset = offset_x | (offset_y << 16);
+  source_out.scale = source_scale.IsWhole() ? DrawScale::Whole(draw_resolution_scale_x())
+                                            : source_scale;
   return host_resolve_pipelines_[kind][source_out.multisampled] != nullptr;
 }
 
@@ -6359,7 +6389,7 @@ bool D3D12RenderTargetCache::DispatchHostResolve(
       D3D12_DESCRIPTOR_HEAP_TYPE_CBV_SRV_UAV);
 
   // The destination, or the scratch initialized with its bytes.
-  uint32_t root_constants[sizeof(draw_util::ResolveCopyShaderConstants) / sizeof(uint32_t) + 2];
+  uint32_t root_constants[sizeof(draw_util::ResolveCopyShaderConstants) / sizeof(uint32_t) + 4];
   uint32_t constant_count;
   if (scaled) {
     std::memcpy(root_constants, &constants.dest_relative, sizeof(constants.dest_relative));
@@ -6434,6 +6464,11 @@ bool D3D12RenderTargetCache::DispatchHostResolve(
   }
   root_constants[constant_count++] = source.host_info;
   root_constants[constant_count++] = source.host_offset;
+  // Into the resolve buffer at the whole scale, from a source at the scene's
+  // (the nearest sample, 18.15).
+  root_constants[constant_count++] =
+      HostSourceScale(source.scale, DrawScale::Whole(draw_resolution_scale_x()));
+  root_constants[constant_count++] = 0;
   command_list.D3DSetComputeRootSignature(host_resolve_root_signature_);
   command_list.D3DSetComputeRoot32BitConstants(0, constant_count, root_constants, 0);
   command_list.D3DSetComputeRootDescriptorTable(1, descriptors[0].second);
@@ -6762,7 +6797,8 @@ void D3D12RenderTargetCache::ResolveIntoHostTextures(
 
 void D3D12RenderTargetCache::ResolveHostIntoTextures(
     D3D12TextureCache& texture_cache, const draw_util::ResolveInfo& resolve_info,
-    const draw_util::ResolveCopyShaderConstants& constants, const HostResolveSource& source) {
+    const draw_util::ResolveCopyShaderConstants& constants, const HostResolveSource& source,
+    bool scene) {
   ID3D12PipelineState* pipeline = host_texture_pipelines_[source.kind][source.multisampled];
   const auto format = xenos::TextureFormat(resolve_info.copy_dest_info.copy_dest_format);
   const uint32_t width = resolve_info.coordinate_info.width_div_8
@@ -6780,17 +6816,20 @@ void D3D12RenderTargetCache::ResolveHostIntoTextures(
   }
   D3D12TextureCache::ResolveTextureTarget
       targets[D3D12TextureCache::kMaxResolveTextureTargets];
+  const uint32_t dest_endian = uint32_t(resolve_info.copy_dest_info.copy_dest_endian);
   const size_t target_count = texture_cache.GetResolveTextureTargets(
       resolve_info.copy_dest_base,
       resolve_info.copy_dest_coordinate_info.pitch_aligned_div_32 << 5, width, height, format,
-      targets);
+      targets, scene, xenos::Endian(dest_endian <= 3 ? dest_endian : 2));
   perf_trace::CountNativeResolve(uint32_t(target_count));
   if (!target_count) {
     return;
   }
   const int32_t check_every = REXCVAR_GET(native_rt_resolve_check);
-  const bool check =
-      check_every > 0 && command_processor_.GetCurrentFrame() % uint64_t(check_every) == 0;
+  // A texture at the scene's scale is never loaded, so it has no check: the
+  // resolve always writes it.
+  const bool check = !scene && check_every > 0 &&
+                     command_processor_.GetCurrentFrame() % uint64_t(check_every) == 0;
   const ui::d3d12::D3D12Provider& provider = command_processor_.GetD3D12Provider();
   ID3D12Device* device = provider.GetDevice();
   DeferredCommandList& command_list = command_processor_.GetDeferredCommandList();
@@ -6840,7 +6879,7 @@ void D3D12RenderTargetCache::ResolveHostIntoTextures(
                                                     : render_target.descriptor_srv())
                                       .GetHandle(),
                                   D3D12_DESCRIPTOR_HEAP_TYPE_CBV_SRV_UAV);
-    uint32_t root_constants[sizeof(constants.dest_relative) / sizeof(uint32_t) + 3];
+    uint32_t root_constants[sizeof(constants.dest_relative) / sizeof(uint32_t) + 5];
     std::memcpy(root_constants, &constants.dest_relative, sizeof(constants.dest_relative));
     uint32_t constant_count = sizeof(constants.dest_relative) / sizeof(uint32_t);
     root_constants[constant_count++] =
@@ -6848,6 +6887,15 @@ void D3D12RenderTargetCache::ResolveHostIntoTextures(
         (uint32_t(target.uav_format == DXGI_FORMAT_R10G10B10A2_UINT) << 3);
     root_constants[constant_count++] = source.host_info;
     root_constants[constant_count++] = source.host_offset;
+    // A texture at the scene's scale takes the source's pixels one to one,
+    // bounded by its size; one at the whole scale samples the source.
+    const bool scene_texture = target.scene_scaled;
+    const DrawScale dest_scale =
+        scene_texture ? source.scale : DrawScale::Whole(draw_resolution_scale_x());
+    const uint32_t texture_width = scene_texture ? dest_scale.ScaleUp(width) : 0;
+    const uint32_t texture_height = scene_texture ? dest_scale.ScaleUp(height) : 0;
+    root_constants[constant_count++] = HostSourceScale(source.scale, dest_scale);
+    root_constants[constant_count++] = texture_width | (texture_height << 16);
     command_list.D3DSetComputeRootSignature(host_texture_root_signature_);
     command_list.D3DSetComputeRoot32BitConstants(0, constant_count, root_constants, 0);
     command_list.D3DSetComputeRootDescriptorTable(1, descriptors[0].second);
@@ -6856,8 +6904,11 @@ void D3D12RenderTargetCache::ResolveHostIntoTextures(
     command_processor_.SetExternalPipeline(pipeline);
     command_processor_.SubmitBarriers();
     // 8x8 groups of threads of 4 pixels.
-    command_list.D3DDispatch(((width * draw_resolution_scale_x() >> 2) + 7) >> 3,
-                             (height * draw_resolution_scale_y() + 7) >> 3, 1);
+    const uint32_t dispatch_width =
+        scene_texture ? texture_width : width * draw_resolution_scale_x();
+    const uint32_t dispatch_height =
+        scene_texture ? texture_height : height * draw_resolution_scale_y();
+    command_list.D3DDispatch(((dispatch_width + 3) / 4 + 7) >> 3, (dispatch_height + 7) >> 3, 1);
     if (check) {
       command_processor_.PushUAVBarrier(dest);
       texture_cache.QueueResolveTextureCheck(target, dest);

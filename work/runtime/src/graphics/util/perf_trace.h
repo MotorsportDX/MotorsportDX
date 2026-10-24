@@ -314,6 +314,15 @@ inline void CountNativeResolve(uint32_t textures) {
   native_resolve_textures.fetch_add(textures, std::memory_order_relaxed);
   if (!textures) native_resolve_misses.fetch_add(1, std::memory_order_relaxed);
 }
+// Textures at the scene's scale (d3d-hle-n5.md 18.15): created by a resolve,
+// and fetched before any resolve wrote them.
+inline std::atomic<uint64_t> native_resolve_scene_created{0}, native_resolve_scene_unwritten{0};
+inline void CountSceneTextureCreated() {
+  native_resolve_scene_created.fetch_add(1, std::memory_order_relaxed);
+}
+inline void CountSceneTextureUnwritten() {
+  native_resolve_scene_unwritten.fetch_add(1, std::memory_order_relaxed);
+}
 // native_rt_surfaces=1 (d3d-hle.md 16.9): ownership transfers, their tiles and
 // those left after the cutout, how the transferred tiles ended (dropped when
 // another render target took them, overwritten, read by a draw or a resolve),
@@ -802,7 +811,11 @@ inline void OnSwap() {
                 << ",\"misses\":" << native_resolve_misses.exchange(0, std::memory_order_relaxed)
                 << ",\"checks\":" << native_resolve_checks.exchange(0, std::memory_order_relaxed)
                 << ",\"mismatches\":"
-                << native_resolve_mismatches.exchange(0, std::memory_order_relaxed) << '}'
+                << native_resolve_mismatches.exchange(0, std::memory_order_relaxed)
+                << ",\"scene_created\":"
+                << native_resolve_scene_created.exchange(0, std::memory_order_relaxed)
+                << ",\"scene_unwritten\":"
+                << native_resolve_scene_unwritten.exchange(0, std::memory_order_relaxed) << '}'
                 << ",\"host_resolve\":{\"found\":"
                 << host_resolves_found.exchange(0, std::memory_order_relaxed) << ",\"done\":"
                 << host_resolves_done.exchange(0, std::memory_order_relaxed) << ",\"other\":"

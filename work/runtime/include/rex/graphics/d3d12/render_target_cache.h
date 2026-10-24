@@ -19,6 +19,7 @@
 #include <functional>
 #include <map>
 #include <memory>
+#include <numeric>
 #include <string>
 #include <unordered_map>
 #include <utility>
@@ -745,7 +746,17 @@ class D3D12RenderTargetCache final : public RenderTargetCache {
     uint32_t multisampled = 0;
     uint32_t host_info = 0;
     uint32_t host_offset = 0;
+    // The render target's scale: the scene's for a private surface (18.15).
+    DrawScale scale;
   };
+  // The source's scale over a destination scale as n:d, 16:16, for the host
+  // resolve shaders' xe_resolve_host_source_scale.
+  static uint32_t HostSourceScale(DrawScale source, DrawScale dest) {
+    uint64_t n = uint64_t(source.numerator) * dest.denominator;
+    uint64_t d = uint64_t(source.denominator) * dest.numerator;
+    uint64_t divisor = std::gcd(n, d);
+    return uint32_t(n / divisor) | (uint32_t(d / divisor) << 16);
+  }
   // Whether a resolve can read its source straight from one host render
   // target that owns every source tile with the same layout.
   bool FindHostResolveSource(const draw_util::ResolveInfo& resolve_info,
@@ -779,10 +790,11 @@ class D3D12RenderTargetCache final : public RenderTargetCache {
   // the host textures of a 32bpp destination straight from the host render
   // target, or with native_rt_resolve_check scratch copies that the
   // textures' next loads are compared with.
+  // With scene, a full-screen destination at the scene's scale (18.15).
   void ResolveHostIntoTextures(D3D12TextureCache& texture_cache,
                                const draw_util::ResolveInfo& resolve_info,
                                const draw_util::ResolveCopyShaderConstants& constants,
-                               const HostResolveSource& source);
+                               const HostResolveSource& source, bool scene);
 
   // Writes contents of host render targets within rectangles from
   // ResolveInfo::GetCopyEdramTileSpan to edram_buffer_.

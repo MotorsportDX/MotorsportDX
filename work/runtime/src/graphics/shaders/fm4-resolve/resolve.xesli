@@ -63,6 +63,14 @@ push_const_begin_xe(b0, space0)
       uint xe_resolve_host_info;
       // The host render target pixel of the resolve's first one, 16:16.
       uint xe_resolve_host_offset;
+      // The source's scale over the destination's as n:d, 16:16 (1:1 when
+      // they are the same): destination pixel p reads the source pixel
+      // floor((2p + 1) * n / (2d)) (docs/analysis/d3d-hle-n5.md 18.15).
+      uint xe_resolve_host_source_scale;
+      // With XE_RESOLVE_TEXTURE: the host texture's size in pixels, 16:16,
+      // when its pixels are the source's (a texture at the scene's scale),
+      // otherwise 0.
+      uint xe_resolve_host_texture_size;
     #endif
   #endif
 push_const_end_xe

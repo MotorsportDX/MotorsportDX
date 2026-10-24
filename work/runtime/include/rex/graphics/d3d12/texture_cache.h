@@ -211,11 +211,18 @@ class D3D12TextureCache final : public TextureCache {
     ID3D12Resource* resource = nullptr;
     xenos::Endian endianness = xenos::Endian::kNone;
     DXGI_FORMAT uav_format = DXGI_FORMAT_UNKNOWN;
+    // A texture at the scene's scale (18.15).
+    bool scene_scaled = false;
   };
   static constexpr size_t kMaxResolveTextureTargets = 8;
+  // With scene (a full-screen resolve of a private surface at the scene's
+  // scale, docs/analysis/d3d-hle-n5.md 18.15): the scene_scaled textures, and
+  // if there are none yet, the two packed_mips variants of scene_endianness
+  // are created, so a texture created before the first resolve is rare.
   size_t GetResolveTextureTargets(uint32_t base_address, uint32_t pitch, uint32_t width,
                                   uint32_t height, xenos::TextureFormat format,
-                                  ResolveTextureTarget* targets_out);
+                                  ResolveTextureTarget* targets_out, bool scene = false,
+                                  xenos::Endian scene_endianness = xenos::Endian::k8in32);
   // Whether textures of this key are created for unordered access (with
   // native_rt_resolve, the 32bpp full-screen single-level 2D ones).
   bool IsResolveTextureTargetKey(const TextureKey& key) const;
