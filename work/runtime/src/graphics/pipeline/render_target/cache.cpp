@@ -59,8 +59,10 @@ REXCVAR_DEFINE_INT32(native_rt_surfaces, 0, "GPU",
                      "the host render targets to the tile rows their surfaces use (16.15), 16 "
                      "with native_one_pass_msaa, give every 1280-wide surface of the races "
                      "(the scene, the post passes' colour and the final depth) a private host "
-                     "target (docs/analysis/d3d-hle-n5.md 18.11). RTV path only")
-    .range(0, 31)
+                     "target (docs/analysis/d3d-hle-n5.md 18.11), 32 resolve the private "
+                     "surfaces into the host textures of the destination straight from the "
+                     "host render target (18.12). RTV path only")
+    .range(0, 63)
     .lifecycle(rex::cvar::Lifecycle::kRequiresRestart);
 
 REXCVAR_DEFINE_INT32(native_rt_surfaces_memory_cap_mb, 0, "GPU",

@@ -256,6 +256,12 @@ class D3D12RenderTargetCache final : public RenderTargetCache {
   ID3D12RootSignature* resolve_texture_root_signature_ = nullptr;
   ID3D12PipelineState* resolve_texture_pipeline_ = nullptr;
   std::unordered_map<uint64_t, Microsoft::WRL::ComPtr<ID3D12Resource>> resolve_texture_scratch_;
+  // native_rt_surfaces bit 32 (docs/analysis/d3d-hle-n5.md 18.12): resolves
+  // from a private surface into the host textures of the destination, from
+  // the host render target, per source kind and multisampling; the host
+  // resolve's root signature with one more constant.
+  ID3D12RootSignature* host_texture_root_signature_ = nullptr;
+  ID3D12PipelineState* host_texture_pipelines_[3][2] = {};
 
   // For host render targets.
 
@@ -769,6 +775,14 @@ class D3D12RenderTargetCache final : public RenderTargetCache {
                                const draw_util::ResolveInfo& resolve_info,
                                draw_util::ResolveCopyShaderIndex copy_shader,
                                const draw_util::ResolveCopyShaderConstants& constants);
+  // After a resolve from a private surface (native_rt_surfaces bit 32): writes
+  // the host textures of a 32bpp destination straight from the host render
+  // target, or with native_rt_resolve_check scratch copies that the
+  // textures' next loads are compared with.
+  void ResolveHostIntoTextures(D3D12TextureCache& texture_cache,
+                               const draw_util::ResolveInfo& resolve_info,
+                               const draw_util::ResolveCopyShaderConstants& constants,
+                               const HostResolveSource& source);
 
   // Writes contents of host render targets within rectangles from
   // ResolveInfo::GetCopyEdramTileSpan to edram_buffer_.

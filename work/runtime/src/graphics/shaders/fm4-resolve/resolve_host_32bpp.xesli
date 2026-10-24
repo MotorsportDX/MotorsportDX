@@ -6,9 +6,15 @@
 // or converted and packed (as resolve_full_32bpp) into the destination. HLSL
 // only. Defines: XE_HOST_SOURCE_KIND (0 float color, 1 uint color, 2 depth and
 // stencil), XE_HOST_SOURCE_MS (multisampled source), and
-// XE_RESOLVE_RESOLUTION_SCALED for the scaled resolve buffer.
+// XE_RESOLVE_RESOLUTION_SCALED for the scaled resolve buffer. With
+// XE_HOST_TEXTURE (and XE_RESOLVE_RESOLUTION_SCALED) the words go into the host
+// texture that samples the destination instead, as resolve_texture_32bpp
+// stores them (docs/analysis/d3d-hle-n5.md 18.12).
 
 #define XE_RESOLVE_HOST
+#ifdef XE_HOST_TEXTURE
+  #define XE_RESOLVE_TEXTURE
+#endif
 #include "endian.xesli"
 #include "pixel_formats.xesli"
 #include "resolve.xesli"
@@ -32,7 +38,12 @@
     Texture2D<float4> xe_resolve_host_source : register(t0, space0);
   #endif
 #endif
-byte_buffer_align16_wo_declare_xe(xe_resolve_dest, set=1, binding=0, u0, space0)
+#ifdef XE_HOST_TEXTURE
+  image_wo_xe(image_2d_xe, uint4_xe, xe_resolve_dest_texture, set=1, binding=0, u0, space0,
+              texture(0))
+#else
+  byte_buffer_align16_wo_declare_xe(xe_resolve_dest, set=1, binding=0, u0, space0)
+#endif
 
 // DxbcShaderTranslator::PreClampedFloat32To7e3.
 uint XeHostFloat32To7e3(float value) {
@@ -228,8 +239,42 @@ entry_inputs_end_code_begin_compute_xe
     }
     packed.x = packed.y;
   }
-  byte_buffer_align16_store16_xe(
-      xe_resolve_dest, XeResolveDestPixelAddress(resolve_info, pixel_index, 2u),
-      XeEndianSwap32(packed, resolve_info.dest_endian_128));
+  #ifdef XE_HOST_TEXTURE
+    // The guest memory's words, then as the texture load reads them.
+    uint texture_info = push_const_xe(xe_resolve_texture_info);
+    packed = XeEndianSwap32(XeEndianSwap32(packed, resolve_info.dest_endian_128),
+                            texture_info & 7u);
+    uint2_xe texel = pixel_index + resolve_info.dest_xy_offset_scaled;
+    dont_flatten_xe
+    if ((texture_info & (1u << 3u)) != 0u) {
+      // R10G10B10A2_UINT.
+      image_store_2d_rgba_xe(xe_resolve_dest_texture, texel,
+          (uint_x4_xe(packed.x) >> uint4_xe(0u, 10u, 20u, 30u)) &
+          uint4_xe(1023u, 1023u, 1023u, 3u));
+      image_store_2d_rgba_xe(xe_resolve_dest_texture, texel + uint2_xe(1u, 0u),
+          (uint_x4_xe(packed.y) >> uint4_xe(0u, 10u, 20u, 30u)) &
+          uint4_xe(1023u, 1023u, 1023u, 3u));
+      image_store_2d_rgba_xe(xe_resolve_dest_texture, texel + uint2_xe(2u, 0u),
+          (uint_x4_xe(packed.z) >> uint4_xe(0u, 10u, 20u, 30u)) &
+          uint4_xe(1023u, 1023u, 1023u, 3u));
+      image_store_2d_rgba_xe(xe_resolve_dest_texture, texel + uint2_xe(3u, 0u),
+          (uint_x4_xe(packed.w) >> uint4_xe(0u, 10u, 20u, 30u)) &
+          uint4_xe(1023u, 1023u, 1023u, 3u));
+    } else {
+      // R8G8B8A8_UINT.
+      image_store_2d_rgba_xe(xe_resolve_dest_texture, texel,
+          (uint_x4_xe(packed.x) >> uint4_xe(0u, 8u, 16u, 24u)) & 255u);
+      image_store_2d_rgba_xe(xe_resolve_dest_texture, texel + uint2_xe(1u, 0u),
+          (uint_x4_xe(packed.y) >> uint4_xe(0u, 8u, 16u, 24u)) & 255u);
+      image_store_2d_rgba_xe(xe_resolve_dest_texture, texel + uint2_xe(2u, 0u),
+          (uint_x4_xe(packed.z) >> uint4_xe(0u, 8u, 16u, 24u)) & 255u);
+      image_store_2d_rgba_xe(xe_resolve_dest_texture, texel + uint2_xe(3u, 0u),
+          (uint_x4_xe(packed.w) >> uint4_xe(0u, 8u, 16u, 24u)) & 255u);
+    }
+  #else
+    byte_buffer_align16_store16_xe(
+        xe_resolve_dest, XeResolveDestPixelAddress(resolve_info, pixel_index, 2u),
+        XeEndianSwap32(packed, resolve_info.dest_endian_128));
+  #endif
 }
 entry_code_end_compute_xe

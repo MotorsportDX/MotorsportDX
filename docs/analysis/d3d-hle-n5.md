@@ -156,3 +156,19 @@ The gate on `I:\FM4-build-usa` at 240 Hz (snapshot `n5c-nat1x`, local main `ea2a
 | 1:1 crops, 2x with `aces` | the rewind menu's text and buttons, the dashboard and its gauges, the windshield over the sky: the same as without bit 16 |
 | the menus at 2x, `photo_view` with full-size captures, bit 16 off and on (`n5c-menu-off`, `n5c-menu-on`) | both reached their goal; 27 of the 37 captures at 2560x1440 are identical (0.0% of the image above 4); the other 10 differ by 2.8% to 25.7% where the menus animate (the intro's arrow, the career home's car and sky at another moment), with the menus' text and panels the same |
 
+### 18.12 Increment 1, step 3: resolves from the private surfaces into host textures, 24 October 2026
+
+`native_rt_surfaces` bit 32 (off by default, not in `-Native`; it needs bit 2): after a resolve from a private surface, `ResolveHostIntoTextures` writes the host textures that sample the destination straight from the host render target. The shader is `resolve_host_32bpp` built with `XE_HOST_TEXTURE`: the samples are read and encoded as for the host resolve, then stored as `resolve_texture_32bpp` stores them (16.8), the destination's endianness and then the texture's applied, through a `UINT` view of the texture. Destinations: `8_8_8_8` and `2_10_10_10`, at any size and at offset 0, into the existing textures of their key (both `packed_mips` keys, every endianness, one level, created with unordered access under bit 32). Those textures are marked loaded, so the texture cache does not load them from the scaled resolve buffer. The scaled resolve buffer is still written, for the readbacks and every other reader, so at integer scales the step saves no GPU time; it is the path a fractional scale needs (18.9, step 4). With `native_rt_resolve_check=N`, every N-th frame writes scratch copies instead, and the textures' next loads are compared with them.
+
+The gate on `I:\FM4-build-usa` at 240 Hz (snapshot `n5d-nat2x`, local main `9a67a9e` with step 3), `-Native` with one pass and `native_rt_surfaces=58`:
+
+| Check | Result |
+|---|---|
+| texture byte check, `native_rt_resolve_check=30` with the resolve byte check (`native_rt_surfaces_check=30`) | `career` one pass 2x at 1x (`n5d-check-nat-1x`): 5,498 textures compared, 0 mismatches; at 2x (`n5d-check-nat-2x`): 8,244, 0; one pass 4x at 1x (`n5d-check-nat4x-1x`): 5,593, 0; `photo` at 2x (`n5d-check-photo-2x`): 6,148, 0. The resolve byte check: 20,072, 15,943, 18,887 and 11,564 resolves, 0 mismatches. All four runs reached their goal with no new error key |
+| destinations | 279,346 to 361,861 textures written for 202,642 to 368,431 resolves from private surfaces; 5% to 9% of those resolves found no texture (a destination not sampled yet, or not at offset 0) and keep the load from the scaled resolve buffer |
+| smoke at 2x (`n5d-nat2x`) | 3 of 3 cells reached their goal; races 198.8 and 190.9 fps |
+| perf at 2x, 3 runs (`n5d-nat2xp` against step 2's `n5c-nat2xp`) | race 191.7 fps against 196.2, p99 7.27 ms against 7.17, GPU 4.89 ms a frame against 4.83: the texture writes cost about what the loads they replace did |
+| `parity.py` on `freeze` against step 2 | PASS at real 1x (22.7% of the image above 4) and at 2x with `--look aces` (33.3%); the 1:1 crops of the windshield, the dashboard and the rewind menu are the same |
+
+The main session's condition for `-Native` holds for bit 16 (turned on in `51cd88d`, the byte check covering the private surfaces); bit 32 stays off until the fractional scale needs it.
+

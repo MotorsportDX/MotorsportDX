@@ -46,6 +46,7 @@ REXCVAR_DEFINE_STRING(texture_replace_path, "", "GPU/D3D12",
                       "subdirectory; format and size may differ from the original (empty: off)")
     .lifecycle(rex::cvar::Lifecycle::kRequiresRestart);
 
+REXCVAR_DECLARE(int32_t, native_rt_surfaces);
 REXCVAR_DEFINE_BOOL(native_rt_resolve, false, "GPU/D3D12",
                     "Full-screen 32bpp resolves also write the host textures that sample their "
                     "destination, so those need no load from the resolved memory "
@@ -1583,12 +1584,16 @@ bool D3D12TextureCache::WriteResolvedTexture(uint32_t base_address, uint32_t pit
 }
 
 bool D3D12TextureCache::IsResolveTextureTargetKey(const TextureKey& key) const {
-  return REXCVAR_GET(native_rt_resolve) && key.dimension == xenos::DataDimension::k2DOrStacked &&
-         key.GetDepthOrArraySize() == 1 && !key.mip_max_level && key.tiled &&
-         !key.signed_separate &&
+  // native_rt_resolve: the full-screen ones; native_rt_surfaces bit 32 (the
+  // resolves from private surfaces, docs/analysis/d3d-hle-n5.md 18.12): any
+  // size.
+  const bool full_screen = key.GetWidth() >= 1280 && key.GetHeight() >= 720;
+  return ((REXCVAR_GET(native_rt_resolve) && full_screen) ||
+          (REXCVAR_GET(native_rt_surfaces) & 32)) &&
+         key.dimension == xenos::DataDimension::k2DOrStacked && key.GetDepthOrArraySize() == 1 &&
+         !key.mip_max_level && key.tiled && !key.signed_separate &&
          (key.format == xenos::TextureFormat::k_8_8_8_8 ||
-          key.format == xenos::TextureFormat::k_2_10_10_10) &&
-         key.GetWidth() >= 1280 && key.GetHeight() >= 720;
+          key.format == xenos::TextureFormat::k_2_10_10_10);
 }
 
 size_t D3D12TextureCache::GetResolveTextureTargets(uint32_t base_address, uint32_t pitch,

@@ -119,6 +119,12 @@ namespace shaders {
 #include "../shaders/bytecode/d3d12_5_1/resolve_host_32bpp_depth_scaled_cs.h"
 #include "../shaders/bytecode/d3d12_5_1/resolve_host_32bpp_depth_ms_cs.h"
 #include "../shaders/bytecode/d3d12_5_1/resolve_host_32bpp_depth_ms_scaled_cs.h"
+#include "../shaders/bytecode/d3d12_5_1/resolve_host_texture_32bpp_color_cs.h"
+#include "../shaders/bytecode/d3d12_5_1/resolve_host_texture_32bpp_color_ms_cs.h"
+#include "../shaders/bytecode/d3d12_5_1/resolve_host_texture_32bpp_uint_cs.h"
+#include "../shaders/bytecode/d3d12_5_1/resolve_host_texture_32bpp_uint_ms_cs.h"
+#include "../shaders/bytecode/d3d12_5_1/resolve_host_texture_32bpp_depth_cs.h"
+#include "../shaders/bytecode/d3d12_5_1/resolve_host_texture_32bpp_depth_ms_cs.h"
 #include "../shaders/bytecode/d3d12_5_1/resolve_full_64bpp_cs.h"
 #include "../shaders/bytecode/d3d12_5_1/resolve_full_64bpp_scaled_cs.h"
 #include "../shaders/bytecode/d3d12_5_1/resolve_full_8bpp_cs.h"
@@ -465,6 +471,33 @@ bool D3D12RenderTargetCache::Initialize() {
       }
     } else {
       REXGPU_ERROR("D3D12RenderTargetCache: Failed to create the host resolve root signature");
+    }
+    // Into host textures (bit 32): the scaled form of the constants, the
+    // texture's info, then the host resolve's two.
+    if (REXCVAR_GET(native_rt_surfaces) & 32) {
+      host_parameters[0].Constants.Num32BitValues =
+          sizeof(draw_util::ResolveCopyShaderConstants::DestRelative) / sizeof(uint32_t) + 3;
+      host_texture_root_signature_ =
+          ui::d3d12::util::CreateRootSignature(provider, host_root_signature_desc);
+#define XE_HOST_TEXTURE_CODE(name) {shaders::name, sizeof(shaders::name)}
+      const HostResolveCode texture_codes[3][2] = {
+          {XE_HOST_TEXTURE_CODE(resolve_host_texture_32bpp_color_cs),
+           XE_HOST_TEXTURE_CODE(resolve_host_texture_32bpp_color_ms_cs)},
+          {XE_HOST_TEXTURE_CODE(resolve_host_texture_32bpp_uint_cs),
+           XE_HOST_TEXTURE_CODE(resolve_host_texture_32bpp_uint_ms_cs)},
+          {XE_HOST_TEXTURE_CODE(resolve_host_texture_32bpp_depth_cs),
+           XE_HOST_TEXTURE_CODE(resolve_host_texture_32bpp_depth_ms_cs)}};
+#undef XE_HOST_TEXTURE_CODE
+      for (uint32_t kind = 0; kind < 3 && host_texture_root_signature_; ++kind) {
+        for (uint32_t ms = 0; ms < 2; ++ms) {
+          host_texture_pipelines_[kind][ms] = ui::d3d12::util::CreateComputePipeline(
+              device, texture_codes[kind][ms].code, texture_codes[kind][ms].size,
+              host_texture_root_signature_);
+        }
+      }
+      if (!host_texture_pipelines_[2][1]) {
+        REXGPU_ERROR("D3D12RenderTargetCache: Failed to create the host texture resolve pipelines");
+      }
     }
   }
 
@@ -1153,6 +1186,12 @@ void D3D12RenderTargetCache::Shutdown(bool from_destructor) {
   }
   ui::d3d12::util::ReleaseAndNull(resolve_copy_root_signature_);
   ui::d3d12::util::ReleaseAndNull(resolve_texture_pipeline_);
+  for (auto& kind_pipelines : host_texture_pipelines_) {
+    for (auto& pipeline : kind_pipelines) {
+      ui::d3d12::util::ReleaseAndNull(pipeline);
+    }
+  }
+  ui::d3d12::util::ReleaseAndNull(host_texture_root_signature_);
   for (auto& kind_pipelines : host_resolve_pipelines_) {
     for (auto& pipeline : kind_pipelines) {
       ui::d3d12::util::ReleaseAndNull(pipeline);
@@ -1697,6 +1736,10 @@ bool D3D12RenderTargetCache::Resolve(const memory::Memory& memory, D3D12SharedMe
           if (resolve_texture_pipeline_ && !dispatched_from_host) {
             ResolveIntoHostTextures(texture_cache, resolve_info, copy_shader,
                                     copy_shader_constants);
+          }
+          if (host_resolve && private_surface && host_texture_root_signature_) {
+            ResolveHostIntoTextures(texture_cache, resolve_info, copy_shader_constants,
+                                    host_source);
           }
           // native_rt_surfaces_depth_dump (16.17): the bytes of the 4x depth
           // fast copies, written to a file when the submission completes.
@@ -6700,6 +6743,113 @@ void D3D12RenderTargetCache::ResolveIntoHostTextures(
     command_processor_.SubmitBarriers();
     // 8x8 groups of threads of 4 pixels.
     command_list.D3DDispatch(((width * scale_x >> 2) + 7) >> 3, (height * scale_y + 7) >> 3, 1);
+    if (check) {
+      command_processor_.PushUAVBarrier(dest);
+      texture_cache.QueueResolveTextureCheck(target, dest);
+    } else {
+      texture_cache.EndResolveTextureWrite(target);
+    }
+  }
+}
+
+void D3D12RenderTargetCache::ResolveHostIntoTextures(
+    D3D12TextureCache& texture_cache, const draw_util::ResolveInfo& resolve_info,
+    const draw_util::ResolveCopyShaderConstants& constants, const HostResolveSource& source) {
+  ID3D12PipelineState* pipeline = host_texture_pipelines_[source.kind][source.multisampled];
+  const auto format = xenos::TextureFormat(resolve_info.copy_dest_info.copy_dest_format);
+  const uint32_t width = resolve_info.coordinate_info.width_div_8
+                         << xenos::kResolveAlignmentPixelsLog2;
+  const uint32_t height = resolve_info.height_div_8 << xenos::kResolveAlignmentPixelsLog2;
+  // A destination at an offset is a part of a texture whose key the resolve
+  // does not give.
+  if (!pipeline || resolve_info.copy_dest_info.copy_dest_array ||
+      resolve_info.copy_dest_coordinate_info.offset_x_div_8 ||
+      resolve_info.copy_dest_coordinate_info.offset_y_div_8 ||
+      (format != xenos::TextureFormat::k_8_8_8_8 &&
+       format != xenos::TextureFormat::k_2_10_10_10)) {
+    perf_trace::CountNativeResolve(0);
+    return;
+  }
+  D3D12TextureCache::ResolveTextureTarget
+      targets[D3D12TextureCache::kMaxResolveTextureTargets];
+  const size_t target_count = texture_cache.GetResolveTextureTargets(
+      resolve_info.copy_dest_base,
+      resolve_info.copy_dest_coordinate_info.pitch_aligned_div_32 << 5, width, height, format,
+      targets);
+  perf_trace::CountNativeResolve(uint32_t(target_count));
+  if (!target_count) {
+    return;
+  }
+  const int32_t check_every = REXCVAR_GET(native_rt_resolve_check);
+  const bool check =
+      check_every > 0 && command_processor_.GetCurrentFrame() % uint64_t(check_every) == 0;
+  const ui::d3d12::D3D12Provider& provider = command_processor_.GetD3D12Provider();
+  ID3D12Device* device = provider.GetDevice();
+  DeferredCommandList& command_list = command_processor_.GetDeferredCommandList();
+  auto& render_target = *static_cast<D3D12RenderTarget*>(source.render_target);
+  for (size_t i = 0; i < target_count; ++i) {
+    const D3D12TextureCache::ResolveTextureTarget& target = targets[i];
+    ID3D12Resource* dest = target.resource;
+    if (check) {
+      const uint64_t scratch_key = (uint64_t(resolve_info.copy_dest_base) << 32) |
+                                   (uint64_t(target.endianness) << 1) | (i & 1);
+      auto& scratch = resolve_texture_scratch_[scratch_key];
+      D3D12_RESOURCE_DESC desc = target.resource->GetDesc();
+      if (!scratch || scratch->GetDesc().Width != desc.Width ||
+          scratch->GetDesc().Height != desc.Height || scratch->GetDesc().Format != desc.Format) {
+        scratch.Reset();
+        if (FAILED(device->CreateCommittedResource(
+                &ui::d3d12::util::kHeapPropertiesDefault, provider.GetHeapFlagCreateNotZeroed(),
+                &desc, D3D12_RESOURCE_STATE_UNORDERED_ACCESS, nullptr,
+                IID_PPV_ARGS(&scratch)))) {
+          continue;
+        }
+      }
+      dest = scratch.Get();
+    } else {
+      texture_cache.BeginResolveTextureWrite(target);
+    }
+    ui::d3d12::util::DescriptorCpuGpuHandlePair descriptors[3];
+    if (!command_processor_.RequestOneUseSingleViewDescriptors(3, descriptors)) {
+      if (!check) {
+        texture_cache.EndResolveTextureWrite(target);
+      }
+      return;
+    }
+    D3D12_UNORDERED_ACCESS_VIEW_DESC uav_desc = {};
+    uav_desc.Format = target.uav_format;
+    uav_desc.ViewDimension = D3D12_UAV_DIMENSION_TEXTURE2D;
+    device->CreateUnorderedAccessView(dest, nullptr, &uav_desc, descriptors[0].first);
+    command_processor_.PushTransitionBarrier(
+        render_target.resource(),
+        render_target.SetResourceState(D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE),
+        D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE);
+    device->CopyDescriptorsSimple(1, descriptors[1].first,
+                                  render_target.descriptor_srv().GetHandle(),
+                                  D3D12_DESCRIPTOR_HEAP_TYPE_CBV_SRV_UAV);
+    device->CopyDescriptorsSimple(1, descriptors[2].first,
+                                  (source.kind == 2 ? render_target.descriptor_srv_stencil()
+                                                    : render_target.descriptor_srv())
+                                      .GetHandle(),
+                                  D3D12_DESCRIPTOR_HEAP_TYPE_CBV_SRV_UAV);
+    uint32_t root_constants[sizeof(constants.dest_relative) / sizeof(uint32_t) + 3];
+    std::memcpy(root_constants, &constants.dest_relative, sizeof(constants.dest_relative));
+    uint32_t constant_count = sizeof(constants.dest_relative) / sizeof(uint32_t);
+    root_constants[constant_count++] =
+        uint32_t(target.endianness) |
+        (uint32_t(target.uav_format == DXGI_FORMAT_R10G10B10A2_UINT) << 3);
+    root_constants[constant_count++] = source.host_info;
+    root_constants[constant_count++] = source.host_offset;
+    command_list.D3DSetComputeRootSignature(host_texture_root_signature_);
+    command_list.D3DSetComputeRoot32BitConstants(0, constant_count, root_constants, 0);
+    command_list.D3DSetComputeRootDescriptorTable(1, descriptors[0].second);
+    command_list.D3DSetComputeRootDescriptorTable(2, descriptors[1].second);
+    command_list.D3DSetComputeRootDescriptorTable(3, descriptors[2].second);
+    command_processor_.SetExternalPipeline(pipeline);
+    command_processor_.SubmitBarriers();
+    // 8x8 groups of threads of 4 pixels.
+    command_list.D3DDispatch(((width * draw_resolution_scale_x() >> 2) + 7) >> 3,
+                             (height * draw_resolution_scale_y() + 7) >> 3, 1);
     if (check) {
       command_processor_.PushUAVBarrier(dest);
       texture_cache.QueueResolveTextureCheck(target, dest);
