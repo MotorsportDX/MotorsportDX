@@ -691,6 +691,24 @@ Presenter::PaintResult D3D12Presenter::PaintAndPresentImpl(bool execute_ui_drawe
     // using the new reference or is exclusively owned by main target painting
     // (and multiple threads can't paint the main target at the same time).
   }
+  if (guest_output_resource && is_in_deferred_guest_output_paint() && deferred_paint_refresh_ &&
+      !REXCVAR_GET(present_skip_superseded) &&
+      guest_output_properties.refresh != deferred_paint_refresh_) {
+    // A newer frame is in the mailbox: present the frame this paint was
+    // deferred for, if its work is submitted and no later one has been shown,
+    // so each frame is presented once (d3d-hle-n4.md 17.25).
+    std::lock_guard<std::mutex> lock(recent_guest_outputs_mutex_);
+    for (const RecentGuestOutput& recent : recent_guest_outputs_) {
+      if (recent.resource && recent.properties.refresh == deferred_paint_refresh_ &&
+          recent.properties.refresh > last_deferred_painted_refresh_ &&
+          IsGuestOutputRefresherSignalEnqueued(recent.submission)) {
+        guest_output_resource = recent.resource;
+        guest_output_properties = recent.properties;
+        guest_output_refresher_submission = recent.submission;
+        break;
+      }
+    }
+  }
   if (guest_output_resource &&
       !IsGuestOutputRefresherSignalEnqueued(guest_output_refresher_submission)) {
     if (is_in_deferred_guest_output_paint() && REXCVAR_GET(present_skip_superseded)) {

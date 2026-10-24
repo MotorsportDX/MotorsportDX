@@ -750,3 +750,68 @@ The ROG Xbox Ally X is GPU bound (17.21), and its trace split the GPU time only 
 - The groups, the swap and the scene add up to the frame's GPU time (the scene is the rest); the passes the runtime adds take 0.40 ms of the 2.08 ms at 1x (19%) and 1.48 of the 5.05 ms at 2x (29%), GTAO the most.
 - The presenter's paint is separate from the frame's GPU time: 0.013 ms at 1x and 0.041 ms at 2x on this PC.
 - The Ally X's next run gives these per pass: whether GTAO, TAA or the scene is the lever there.
+
+### 17.25 The second ROG Xbox Ally X run, 24 October 2026
+
+The user ran four profiles on the handheld from the export of `96da8da`, on AC power at 35 W (its folder is named "cgarge 30w", a typo; the TDP was 35 W, as in 17.21) and on battery at 17 W: 1 RTV, 2 `-Native`, 3 `-Native` with one pass at 4x MSAA, 4 `-Native` with `-VSync off`. All ran at the launcher's defaults otherwise: VSync Auto and render scale 1x (the integrated GPU rule), the race at 120 fps. Battery has a second, short perf-2 file of an aborted run; the longer one is used. The race is taken as in 17.21 (about 160 s).
+
+**VSync Auto found a VRR range.** In profiles 1 to 3 the runtime reports a 117 Hz refresh to the title, the cap of VSync Auto on a 120 Hz panel with a range up to 120 Hz; profile 4 (off) reports 120 Hz. The range itself is not in the logs; the launcher shows it on its Display page.
+
+| Run | Power | fps | p50, p99 ms | frames > 8.33 ms | > 16.7 ms | < 8.0 ms | GPU ms a frame | presents a second (under 8.33 ms) | `readback_publish` ms/s | process CPU ms/s |
+| --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |
+| 1 RTV | 35 W | 113.9 | 8.61, 13.27 | 82.4% | 0.48% | 1.26% | 7.80 | 113.9 (0) | 56.5 | 3,232 |
+| 2 Native | 35 W | 114.4 | 8.60, 12.85 | 79.5% | 0.54% | 1.55% | 7.46 | 114.4 (0) | 0 | 3,087 |
+| 3 Native, 4x | 35 W | 113.5 | 8.60, 13.08 | 86.4% | 0.51% | 0.79% | 8.14 | 113.5 (0) | 0 | 3,412 |
+| 4 Native, VSync off | 35 W | 118.2 | 8.33, 11.38 | 48.4% | 0.42% | 6.49% | 7.28 | 118.2 (58.7) | 0 | 3,079 |
+| 1 RTV | 17 W | 100.1 | 9.07, 19.81 | 93.6% | 1.59% | 0.86% | 9.50 | 100.1 (0) | 15.8 | 3,722 |
+| 2 Native | 17 W | 110.5 | 8.69, 15.30 | 83.8% | 0.80% | 2.06% | 8.28 | 110.5 (0) | 0 | 3,735 |
+| 3 Native, 4x | 17 W | 90.3 | 10.69, 20.49 | 99.1% | 1.76% | 0.30% | 10.62 | 90.3 (0) | 0 | 3,742 |
+| 4 Native, VSync off | 17 W | 101.3 | 9.14, 17.46 | 92.7% | 1.20% | 1.51% | 9.41 | 101.3 (29.1) | 0 | 3,708 |
+
+With VSync Auto the race runs at most at 117 fps, a frame at least 8.55 ms, so the share of frames over 8.33 ms is high by design; p99 and the frames over 16.7 ms show the pacing. One run a side. Profile 3 ran without the ring wait's sleep (no ring waits, and a guest thread at 979 to 991 ms a second, as with `guest_ring_wait_sleep=false` in 17.21), most likely an extra cvar left in the profile, so its CPU time is not comparable.
+
+**The GPU per pass on the 890M** (17.24, ms a race frame, `-Native` with VSync Auto):
+
+| Power | GPU frame | scene | GTAO | TAA | motion vectors | windshield | swap | paint |
+| --- | --- | --- | --- | --- | --- | --- | --- | --- |
+| 35 W | 7.46 | 5.18 | 0.71 | 0.51 | 0.35 | 0.62 | 0.09 | 0.14 |
+| 17 W | 8.28 | 5.76 | 0.92 | 0.54 | 0.35 | 0.65 | 0.09 | 0.14 |
+
+- The passes the runtime adds take 2.19 ms of 7.46 at 35 W (29%) and 2.46 of 8.28 at 17 W (30%), against 19% on the main PC at 1x: GTAO the most, then the windshield (0.62 ms, almost as much), TAA and the motion vectors. The scene (the title's draws, resolves and own post-processing with the look mods) is the rest, 5.2 to 5.8 ms.
+- One pass at 4x adds 0.77 ms of scene at 35 W (5.95) and 2.05 ms at 17 W (7.81), with GTAO at 1.17 ms there.
+- The presenter's paint takes 0.14 ms.
+
+**Host presents.** The Ally X presents every guest frame once in every profile (presents equal the frame rate, no repeats, none from the UI thread): its display path does not cap the presents as the main PC's does (17.22), and Armoury Crate's counter now shows the guest's rate. VSync Auto keeps every present at least a refresh apart (no interval under 8.33 ms); with VSync off 58.7 a second at 35 W and 29.1 at 17 W come sooner, which a 120 Hz VRR panel shows torn.
+
+**VSync Auto against off** (profile 2 against 4): at 35 W off runs 3.2% faster (118.2 against 114.4 fps, Auto's cap is 117) with p99 11.38 against 12.85 ms and 0.42 against 0.54% of the frames over 16.7 ms, but tears; at 17 W Auto is faster and smoother (110.5 against 101.3 fps, p99 15.30 against 17.46 ms, 0.80 against 1.20% over 16.7 ms), though its run had a 5% lighter draw load (1,238 against 1,299 draws a frame).
+
+**RTV's resolve readbacks wait under VSync Auto:** `readback_publish` 56.5 ms a second at 35 W and 15.8 at 17 W, against 0 for `-Native`, which reads back on demand. Auto's hold ran on the submit thread, which RTV's readbacks go through (the present thread below).
+
+**Against the first run** (17.21, `de4e9bd`, 35 W and 17 W, VSync as off, the race at 120):
+- `-Native` with VSync off at 35 W (like for like but for the 1x rule, which 17.21's runs set by hand): 118.2 against 112.5 fps, p99 11.38 against 14.34 ms, 0.42 against 0.73% of the frames over 16.7 ms, GPU 7.28 against 7.54 ms a frame, process CPU 3,079 against 2,933 ms a second at 5% more frames.
+- At 17 W: 101.3 against 93.3 fps with VSync off and 110.5 with Auto, p99 17.46 and 15.30 against 19.52 ms, 1.20 and 0.80 against 1.52% over 16.7 ms.
+- RTV: 113.9 against 106.5 fps at 35 W (p99 13.27 against 18.22 ms), 100.1 against 91.6 at 17 W (19.81 against 24.45 ms).
+- The UI's repaints (17.22) no longer present the same frame between the guest's frames, which on the 120 Hz panel added up to 120 paints a second of GPU time and power; with the other changes between the two exports (N1's private surfaces among them) the device gains 5 to 9% in fps and up to a fifth in p99.
+- No new error key: the three keys of the main PC, and the post passes' warnings.
+
+**The present thread.** With `d3d12_submit_thread_async_swap` (on in the launcher), a frame's present ran on the submit thread after its submission, and VSync Auto's hold (`present_min_interval_us`), VSync On or an external limiter then held the submissions behind it, RTV's readbacks among them. A frame's present now runs on a thread of its own (`GPU Present`): the submit thread hands it over after the frame's submission and goes on, the present thread presents at once, and the swap of the next frame waits only until the present before it is done, so one frame is in flight and the guest still follows the presents (a limiter at 30 gives 30 guest frames). The deferred present shows its own frame once its work is submitted (the refresh number it was deferred for), not the newest one, so every frame is presented once.
+
+The gate on the main PC (`n4pth*`, the players' path `present_skip_superseded=false`, 240 Hz, 1x, one run a side; the race phase):
+
+| Run | fps | p99 ms | `readback_publish` ms/s | presents a frame |
+| --- | --- | --- | --- | --- |
+| RTV, VSync off, on, auto | 119.9, 120.0, 119.8 | 11.34, 12.06, 11.39 | 0.1, 0.1, 0.0 | 1.0 |
+| `-Native`, VSync off, on, auto | 120.0, 120.0, 120.0 | 10.45, 10.49, 10.38 | 0 | 1.0 |
+| Limiter at 30, `-Native` and RTV | 29.7, 29.9 | 37.4, 40.7 | 0 | 1.0 |
+
+- The main PC presents at most about 120 times a second (17.22), so it did not show the readback wait in the players' path before the change either (`n4vr-*`: 0.0 to 0.4 ms/s with VSync off, on and auto): the Ally X, whose presents follow the guest, is where the hold filled most of each frame. Its next run confirms the fix there.
+- The menus present once a frame (60 for 60, none repeated); RTV's menus ran at 59.6 to 59.8 fps against 60.0.
+- The 1:1 image check at 2x (`n4pt-kf` against `n4pthl-kfu`, the menu): the same picture.
+- e2e's benchmark mode presents from the UI thread (17.22) and is not changed.
+
+**The recommended Ally X defaults** (the main session decides):
+- the native path: the best frame rate and p99 on battery (110.5 against 100.1 fps, p99 15.30 against 19.81 ms), and no readback wait;
+- VSync Auto (the default): no present within a refresh of the one before, and on battery the better pacing of the two; on AC it costs 3% against off;
+- render scale 1x (the integrated GPU rule) and one pass with 2x MSAA: 4x adds 0.8 to 2.1 ms of GPU time a frame;
+- `guest_ring_wait_sleep` and `high_resolution_timing` on, as before.
+- The levers for the GPU, if more frame rate on battery is wanted: GTAO (0.7 to 0.9 ms) and the windshield (0.6 ms) together take about 1.3 to 1.6 ms of the 7.5 to 8.3 ms a frame.

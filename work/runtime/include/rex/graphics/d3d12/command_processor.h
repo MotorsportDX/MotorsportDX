@@ -738,6 +738,27 @@ class D3D12CommandProcessor : public CommandProcessor {
   void FlushSubmitThread();
   void ShutdownSubmitThread();
 
+  // With d3d12_submit_thread_async_swap, a frame's present runs on a thread of
+  // its own (d3d-hle-n4.md 17.25): the submit thread hands it over after the
+  // frame's submission, so a present that blocks (on the display, VSync, the
+  // VSync Auto hold or an external limiter) no longer holds the submissions
+  // behind it, such as RTV's resolve readbacks. One frame is in flight: the
+  // swap of the next frame waits until the present before it is done, so the
+  // guest still follows the presents. The thread presents as soon as a frame
+  // is handed over.
+  std::thread present_thread_;
+  std::mutex present_mutex_;
+  std::condition_variable present_cond_;
+  std::function<void()> present_job_;
+  bool present_in_flight_ = false;
+  bool present_shutdown_ = false;
+  void PresentThreadMain();
+  // On the command processor thread: waits for the present in flight, then
+  // passes this frame's present to the submit thread, which hands it to the
+  // present thread after the frame's submission.
+  void DeferPresent(std::function<void()> present);
+  void ShutdownPresentThread();
+
   // d3d12_readback_publish_thread: resolve readbacks are copied into guest
   // memory by a worker thread, in order. Before a readback slot is written
   // again or released, before another write of guest memory (memexport), and

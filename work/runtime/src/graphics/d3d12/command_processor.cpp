@@ -1958,6 +1958,11 @@ bool D3D12CommandProcessor::SetupContext() {
     submit_shutdown_ = false;
     submit_async_swap_ = REXCVAR_GET(d3d12_submit_thread_async_swap);
     submit_thread_ = std::thread([this]() { SubmitThreadMain(); });
+    if (submit_async_swap_) {
+      present_shutdown_ = false;
+      present_in_flight_ = false;
+      present_thread_ = std::thread([this]() { PresentThreadMain(); });
+    }
   }
   if (REXCVAR_GET(d3d12_readback_publish_thread)) {
     readback_publish_await_signals_ = REXCVAR_GET(d3d12_readback_publish_await_signals);
@@ -3303,9 +3308,7 @@ void D3D12CommandProcessor::IssueSwap(uint32_t frontbuffer_ptr, uint32_t frontbu
   // thread after the swap submission.
   ui::Presenter::GuestOutputPaintDeferrer paint_deferrer;
   if (submit_async_swap_) {
-    paint_deferrer = [this](std::function<void()> present) {
-      EnqueueSubmitCallback(std::move(present));
-    };
+    paint_deferrer = [this](std::function<void()> present) { DeferPresent(std::move(present)); };
   }
   presenter->RefreshGuestOutput(
       guest_output_width, guest_output_height, display_width, display_height,
@@ -7191,7 +7194,58 @@ void D3D12CommandProcessor::ShutdownReadbackPublishThread() {
   readback_publish_thread_.join();
 }
 
+void D3D12CommandProcessor::PresentThreadMain() {
+  rex::thread::set_current_thread_name("GPU Present");
+  std::unique_lock<std::mutex> lock(present_mutex_);
+  while (true) {
+    present_cond_.wait(lock, [this]() { return present_shutdown_ || present_job_; });
+    if (!present_job_) {
+      return;
+    }
+    std::function<void()> job = std::move(present_job_);
+    present_job_ = nullptr;
+    lock.unlock();
+    job();
+    lock.lock();
+    present_in_flight_ = false;
+    present_cond_.notify_all();
+  }
+}
+
+void D3D12CommandProcessor::DeferPresent(std::function<void()> present) {
+  if (!present_thread_.joinable()) {
+    EnqueueSubmitCallback(std::move(present));
+    return;
+  }
+  {
+    std::unique_lock<std::mutex> lock(present_mutex_);
+    present_cond_.wait(lock, [this]() { return present_shutdown_ || !present_in_flight_; });
+    if (present_shutdown_) return;
+    present_in_flight_ = true;
+  }
+  EnqueueSubmitCallback([this, present = std::move(present)]() mutable {
+    {
+      std::lock_guard<std::mutex> lock(present_mutex_);
+      if (present_shutdown_) return;
+      present_job_ = std::move(present);
+    }
+    present_cond_.notify_all();
+  });
+}
+
+void D3D12CommandProcessor::ShutdownPresentThread() {
+  if (!present_thread_.joinable()) return;
+  {
+    std::lock_guard<std::mutex> lock(present_mutex_);
+    present_shutdown_ = true;
+  }
+  present_cond_.notify_all();
+  present_thread_.join();
+  present_job_ = nullptr;
+}
+
 void D3D12CommandProcessor::ShutdownSubmitThread() {
+  ShutdownPresentThread();
   if (!submit_thread_.joinable()) return;
   {
     std::lock_guard<std::mutex> lock(submit_mutex_);

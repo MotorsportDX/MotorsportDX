@@ -628,7 +628,9 @@ bool Presenter::RefreshGuestOutput(
 
   // Trigger the presentation on the host.
   if (paint_deferrer) {
-    paint_deferrer([this]() { PresentRefreshedGuestOutput(true); });
+    paint_deferrer([this, refresh = writable_properties.refresh]() {
+      PresentRefreshedGuestOutput(true, refresh);
+    });
   } else {
     PresentRefreshedGuestOutput(false);
   }
@@ -636,7 +638,7 @@ bool Presenter::RefreshGuestOutput(
   return is_active;
 }
 
-void Presenter::PresentRefreshedGuestOutput(bool deferred) {
+void Presenter::PresentRefreshedGuestOutput(bool deferred, uint64_t refresh) {
   PaintResult paint_result = PaintResult::kNotPresented;
   {
     std::lock_guard<std::mutex> paint_mode_mutex_lock(paint_mode_mutex_);
@@ -652,8 +654,10 @@ void Presenter::PresentRefreshedGuestOutput(bool deferred) {
         // Both painting and window paint requesting are accessible.
         if (surface_paint_connection_state_ == SurfacePaintConnectionState::kConnectedPaintable) {
           is_in_deferred_guest_output_paint_ = deferred;
+          deferred_paint_refresh_ = deferred ? refresh : 0;
           paint_result = PaintAndPresent(false);
           is_in_deferred_guest_output_paint_ = false;
+          deferred_paint_refresh_ = 0;
           if (surface_paint_connection_state_ == SurfacePaintConnectionState::kConnectedOutdated) {
             RequestPaintOrConnectionRecoveryViaWindow(true);
           }

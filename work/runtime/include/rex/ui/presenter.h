@@ -748,6 +748,10 @@ class Presenter {
   // painted (GuestOutputProperties::refresh), 0 for none (the perf trace's new
   // and repeated presents, d3d-hle-n4.md 17.22).
   uint64_t painted_refresh_ = 0;
+  // During a deferred paint, the refresh number of the frame it was deferred
+  // for: PaintAndPresentImpl presents that frame once its work is submitted,
+  // rather than the newest one (d3d-hle-n4.md 17.25).
+  uint64_t deferred_paint_refresh_ = 0;
 
   // For calling from the painting implementations if requested.
   void ExecuteUIDrawersFromUIThread(UIDrawContext& ui_draw_context);
@@ -881,7 +885,9 @@ class Presenter {
   // The presentation part of RefreshGuestOutput, after the new image has been
   // made the ready one: paints it in the guest output thread mode, or requests
   // a UI thread paint.
-  void PresentRefreshedGuestOutput(bool deferred);
+  // refresh: with deferred, the refresh number of the frame it presents
+  // (deferred_paint_refresh_).
+  void PresentRefreshedGuestOutput(bool deferred, uint64_t refresh = 0);
 
   void HandleUIDrawersChangeFromUIThread(bool drawers_were_empty);
 
