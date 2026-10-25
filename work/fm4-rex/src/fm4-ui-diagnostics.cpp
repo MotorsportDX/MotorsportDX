@@ -2,6 +2,8 @@
 #define NOMINMAX
 #include <Windows.h>
 #include <rex/hook.h>
+#include <rex/input/device.h>
+#include <rex/input/title_input_ranges.h>
 #include <array>
 #include <chrono>
 #include <cstdarg>
@@ -125,10 +127,35 @@ void TraceVibration(bool async, uint32_t user, uint8_t* base, uint32_t vibration
                  fm4_diagnostic_race_update.load(std::memory_order_relaxed), user, motors >> 16,
                  motors & 0xFFFF);
 }
+// The keyboard's deadzone compensation (docs/analysis/keyboard-controls.md). The input poll
+// sub_822B5E60 calls the conversion once per user per frame, returning to 0x822B5F6C, with the
+// user index in r27 and the profile's deadzones in f1-f8 in the pad's raw units: left stick
+// inner and outer, right stick inner and outer, left trigger inner and outer, right trigger
+// inner and outer. They are copied for the runtime's keyboard driver; the conversion runs as
+// it would without the hook.
+void PublishInputRanges(const PPCContext& ctx) {
+  if (ctx.lr != 0x822B5F6C || ctx.r27.u32 >= rex::input::kMaxGuestUsers) return;
+  rex::input::keyboard::TitleRanges ranges;
+  ranges.steering = {ctx.f1.f64, ctx.f2.f64};
+  ranges.left_trigger = {ctx.f5.f64, ctx.f6.f64};
+  ranges.right_trigger = {ctx.f7.f64, ctx.f8.f64};
+  rex::input::SetTitleInputRanges(ctx.r27.u32, ranges);
+}
 }  // namespace
+
+// Until the title has converted a user's input: the profile's defaults (ForzaProfile.sch,
+// ControllerAdvancedOptions: steering 0.24 to 0.95, brake 0.15 to 0.95, throttle 0.15 to 0.90).
+void FM4InstallInputRanges() {
+  rex::input::keyboard::TitleRanges ranges;
+  ranges.steering = {0.24 * 32767.0, 0.95 * 32767.0};
+  ranges.left_trigger = {0.15 * 255.0, 0.95 * 255.0};
+  ranges.right_trigger = {0.15 * 255.0, 0.90 * 255.0};
+  rex::input::SetDefaultTitleInputRanges(ranges);
+}
 
 REX_EXTERN(__imp__sub_822B4130);
 REX_HOOK_RAW(sub_822B4130) {
+  PublishInputRanges(ctx);
   const auto object = ctx.r3.u32, input = ctx.r4.u32;
   const auto buttons = std::getenv("FM4_TEST_INPUT_FILE") ? UIRead(base, input + 4) >> 16 : 0;
   if (InputTrace()) {

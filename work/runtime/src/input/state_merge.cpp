@@ -18,10 +18,6 @@ namespace rex::input {
 
 namespace {
 
-int16_t LargerMagnitude(int16_t a, int16_t b) {
-  return std::abs(static_cast<int>(a)) >= std::abs(static_cast<int>(b)) ? a : b;
-}
-
 bool PastDeadzone(int16_t axis) {
   return std::abs(static_cast<int>(axis)) >= kThumbDeadzone;
 }
@@ -33,10 +29,16 @@ void MergeInto(X_INPUT_STATE& dst, const X_INPUT_STATE& src) {
       static_cast<uint16_t>(dst.gamepad.buttons) | static_cast<uint16_t>(src.gamepad.buttons);
   dst.gamepad.left_trigger = std::max(dst.gamepad.left_trigger, src.gamepad.left_trigger);
   dst.gamepad.right_trigger = std::max(dst.gamepad.right_trigger, src.gamepad.right_trigger);
-  dst.gamepad.thumb_lx = LargerMagnitude(dst.gamepad.thumb_lx, src.gamepad.thumb_lx);
-  dst.gamepad.thumb_ly = LargerMagnitude(dst.gamepad.thumb_ly, src.gamepad.thumb_ly);
-  dst.gamepad.thumb_rx = LargerMagnitude(dst.gamepad.thumb_rx, src.gamepad.thumb_rx);
-  dst.gamepad.thumb_ry = LargerMagnitude(dst.gamepad.thumb_ry, src.gamepad.thumb_ry);
+  int16_t lx = dst.gamepad.thumb_lx;
+  int16_t ly = dst.gamepad.thumb_ly;
+  MergeStick(lx, ly, src.gamepad.thumb_lx, src.gamepad.thumb_ly);
+  dst.gamepad.thumb_lx = lx;
+  dst.gamepad.thumb_ly = ly;
+  int16_t rx = dst.gamepad.thumb_rx;
+  int16_t ry = dst.gamepad.thumb_ry;
+  MergeStick(rx, ry, src.gamepad.thumb_rx, src.gamepad.thumb_ry);
+  dst.gamepad.thumb_rx = rx;
+  dst.gamepad.thumb_ry = ry;
 
   if (static_cast<uint32_t>(src.packet_number) > static_cast<uint32_t>(dst.packet_number)) {
     dst.packet_number = src.packet_number;

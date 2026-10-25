@@ -24,6 +24,9 @@ BUTTONS = {'up': 0x1, 'down': 0x2, 'left': 0x4, 'right': 0x8, 'start': 0x10, 'ba
 #   'defines:<NAME=VALUE ...>'  writes shader_mod_defines.txt in the shader_mod_path, which the
 #                      runtime applies with hot reload (--shader-dev): live knobs at once, other
 #                      defines through a recompile. The file is restored after the run.
+# 'key=<name>' holds a keyboard key (a keybind name such as D, Control or Space) through the
+# keyboard driver's bindings and its steering and pedal model (docs/analysis/keyboard-controls.md);
+# 'key=Control+key=D' holds two, and the next action without them releases them.
 # [timeout, action, hold, text(, retry)] checks the screen: the action (comma-separated
 # presses, or 'wait') is repeated every retry (default RETRY_S) seconds until one of the
 # '|'-separated texts appears in a capture taken after it. The run fails (goal_reached false)
@@ -410,13 +413,16 @@ def percentile(values, fraction):
 LAST_PRESS = [0.0]
 
 
-def set_input(path, buttons=0, lt=0, rt=0, lx=0, ly=0, rx=0, ry=0, pulse=0, pulse_from=None):
-    if buttons or lt or rt or lx or ly or rx or ry or pulse:
+def set_input(path, buttons=0, lt=0, rt=0, lx=0, ly=0, rx=0, ry=0, pulse=0, pulse_from=None,
+              keys=()):
+    if buttons or lt or rt or lx or ly or rx or ry or pulse or keys:
         LAST_PRESS[0] = time.time()
     tmp = path.with_suffix('.tmp')
     # The pulsed buttons and their race frame (FM4TestInput) are written only when set.
     extra = (f' {pulse}' + ('' if pulse_from is None else f' {pulse_from}')) if pulse else ''
-    tmp.write_text(f'{buttons} {lt} {rt} {lx} {ly} {rx} {ry}{extra}\n')
+    # Held keyboard keys, on a line of their own, go to the keyboard driver (FM4TestInput).
+    key_line = f'keys {" ".join(keys)}\n' if keys else ''
+    tmp.write_text(f'{buttons} {lt} {rt} {lx} {ly} {rx} {ry}{extra}\n{key_line}')
     # The game may be reading the file at this moment; Windows then refuses the replace.
     for attempt in range(50):
         try:
@@ -429,11 +435,16 @@ def set_input(path, buttons=0, lt=0, rt=0, lx=0, ly=0, rx=0, ry=0, pulse=0, puls
 
 def parse_action(action):
     """The input state of one press ('+'-joined parts); ValueError names a bad part."""
-    state = dict(buttons=0, lt=0, rt=0, lx=0, ly=0, rx=0, ry=0, pulse=0, pulse_from=None)
+    state = dict(buttons=0, lt=0, rt=0, lx=0, ly=0, rx=0, ry=0, pulse=0, pulse_from=None, keys=())
     if action == 'none':
         return state
     for part in action.split('+'):
-        if part.startswith('~'):
+        if part.startswith('key='):
+            name = part[4:]
+            if not name.isalnum():
+                raise ValueError(f'bad key {part!r} in {action!r} (key=<keybind name>)')
+            state['keys'] += (name,)
+        elif part.startswith('~'):
             button, at, start = part[1:].partition('@')
             if button not in BUTTONS or (at and not start.isdigit()):
                 raise ValueError(f'bad pulse {part!r} in {action!r} (~<button> or ~<button>@<frame>)')

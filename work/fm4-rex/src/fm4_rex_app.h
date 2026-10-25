@@ -20,6 +20,7 @@ void FM4MountRenderOverrides(rex::Runtime*);
 void FM4MountTrackSettings(rex::Runtime*);
 void FM4InstallVblankRate(rex::Runtime*);
 void FM4InstallCommandLine();
+void FM4InstallInputRanges();
 
 class Fm4RexApp : public rex::ReXApp {
  public:
@@ -62,6 +63,7 @@ class Fm4RexApp : public rex::ReXApp {
     FM4InstallVblankRate(runtime());
     FM4InstallCommandLine();
     FM4InstallContent(runtime());
+    FM4InstallInputRanges();
     const char* input_file = std::getenv("FM4_TEST_INPUT_FILE");
     if (input_file && *input_file && runtime()->input_system()) {
       auto* input = static_cast<rex::input::InputSystem*>(runtime()->input_system());

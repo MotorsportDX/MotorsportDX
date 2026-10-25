@@ -121,31 +121,34 @@ struct Bind {
   const char* runtime_default;
 };
 
+// By their function in FM4's DEFAULT LAYOUT 1 (docs/analysis/keyboard-controls.md); the keys
+// press the pad input in brackets, so another game layout moves the functions.
 const std::vector<Bind> kBinds = {
     {"keybind_right_trigger", "Gas (right trigger)", "E,O"},
     {"keybind_left_trigger", "Brake (left trigger)", "Q,I"},
-    {"keybind_lstick_left", "Steer left", "A"},
-    {"keybind_lstick_right", "Steer right", "D"},
+    {"keybind_lstick_left", "Steer left (left stick)", "A"},
+    {"keybind_lstick_right", "Steer right (left stick)", "D"},
+    {"keybind_precision", "Precision, held", ""},
+    {"keybind_b", "Shift up, menu back (B)", "Quote,Backspace"},
+    {"keybind_x", "Shift down (X)", "L"},
+    {"keybind_a", "Handbrake, menu select (A)", "Semicolon,Space"},
+    {"keybind_left_shoulder", "Clutch (LB)", "1"},
+    {"keybind_right_shoulder", "Look back (RB)", "3"},
+    {"keybind_y", "Rewind (Y)", "P"},
+    {"keybind_back", "Camera (Back)", "Z,Tab"},
+    {"keybind_start", "Pause (Start)", "X,Return"},
+    {"keybind_dpad_up", "Menu up, telemetry (D-pad)", "Shift+Up"},
+    {"keybind_dpad_down", "Menu down, telemetry (D-pad)", "Shift+Down"},
+    {"keybind_dpad_left", "Menu left, telemetry (D-pad)", "Shift+Left"},
+    {"keybind_dpad_right", "Menu right, telemetry (D-pad)", "Shift+Right"},
+    {"keybind_rstick_up", "Free look up (right stick)", "Up"},
+    {"keybind_rstick_down", "Free look down (right stick)", "Down"},
+    {"keybind_rstick_left", "Free look left (right stick)", "Left"},
+    {"keybind_rstick_right", "Free look right (right stick)", "Right"},
+    {"keybind_rstick_press", "Heat damage (right stick press)", "K"},
+    {"keybind_lstick_press", "Left stick press", "F"},
     {"keybind_lstick_up", "Left stick up", "W"},
     {"keybind_lstick_down", "Left stick down", "S"},
-    {"keybind_a", "A button", "Semicolon,Space"},
-    {"keybind_b", "B button", "Quote,Backspace"},
-    {"keybind_x", "X button", "L"},
-    {"keybind_y", "Y button", "P"},
-    {"keybind_left_shoulder", "Left shoulder", "1"},
-    {"keybind_right_shoulder", "Right shoulder", "3"},
-    {"keybind_start", "Start", "X,Return"},
-    {"keybind_back", "Back", "Z,Tab"},
-    {"keybind_dpad_up", "D-pad up", "Shift+Up"},
-    {"keybind_dpad_down", "D-pad down", "Shift+Down"},
-    {"keybind_dpad_left", "D-pad left", "Shift+Left"},
-    {"keybind_dpad_right", "D-pad right", "Shift+Right"},
-    {"keybind_rstick_up", "Right stick up", "Up"},
-    {"keybind_rstick_down", "Right stick down", "Down"},
-    {"keybind_rstick_left", "Right stick left", "Left"},
-    {"keybind_rstick_right", "Right stick right", "Right"},
-    {"keybind_lstick_press", "Left stick press", "F"},
-    {"keybind_rstick_press", "Right stick press", "K"},
     {"keybind_guide", "Guide", ""},
 };
 
@@ -309,6 +312,7 @@ class App {
   void LookPage();
   void ControlsPage();
   void ControllerSection();
+  void KeyboardSection();
   void GameDataPage();
   void AdvancedPage();
   void Footer();
@@ -369,6 +373,8 @@ class App {
   bool look_editing_ = false;
   std::string pad_edit_;
   bool pad_editing_ = false;
+  std::string keyboard_edit_;
+  bool keyboard_editing_ = false;
   std::optional<Package> remove_candidate_;
   std::mutex dialog_mutex_;
   std::vector<std::pair<DialogTarget, std::vector<std::string>>> dialog_results_;
@@ -1431,10 +1437,104 @@ void App::ControllerSection() {
   ImGui::Dummy(ImVec2(0, 4 * scale_));
 }
 
+void App::KeyboardSection() {
+  Options& o = settings_.Active().options;
+  const Json& table = data_.json.at("keyboard").at("knobs");
+  Pairs knobs;
+  std::string error;
+  try {
+    knobs = KeyboardKnobs(data_, o.keyboard);
+    KeyboardCvars(data_, o.keyboard);
+  } catch (const std::exception& exception) {
+    error = exception.what();
+  }
+  const auto fallback = [&](const char* name) { return table.at(name).at("default").get<std::string>(); };
+  const auto value_of = [&](const char* name) {
+    const std::string* value = knobs.Find(name);
+    return value ? *value : fallback(name);
+  };
+  const auto set_knob = [&](const char* name, const std::string& value) {
+    if (value == fallback(name))
+      knobs.Erase(name);
+    else
+      knobs.Set(name, value);
+    std::string joined;
+    for (const auto& [knob, text] : knobs.Items()) joined += (joined.empty() ? "" : ",") + knob + "=" + text;
+    o.keyboard = joined;
+  };
+  const auto number = [&](const char* name) {
+    try {
+      return static_cast<float>(PyFloat(value_of(name)));
+    } catch (const std::exception&) {
+      return static_cast<float>(PyFloat(fallback(name)));
+    }
+  };
+  const auto slider = [&](const char* name, const char* label, const char* help) {
+    Label(label, help);
+    float value = number(name);
+    ImGui::PushID(name);
+    ImGui::SetNextItemWidth(300 * scale_);
+    const Json& knob = table.at(name);
+    if (ImGui::SliderFloat("##value", &value, knob.at("min").get<float>(), knob.at("max").get<float>(), "%.2f")) {
+      const std::string text = FormatKnob(value, 0.01f);
+      set_knob(name, PyFloat(text) == PyFloat(fallback(name)) ? fallback(name) : text);
+    }
+    if (knobs.Has(name)) {
+      ImGui::SameLine();
+      if (ImGui::SmallButton("Reset")) set_knob(name, fallback(name));
+    }
+    ImGui::PopID();
+  };
+  const auto toggle = [&](const char* name, const char* label, const char* help) {
+    Label(label, help);
+    bool on = value_of(name) == "1";
+    ImGui::PushID(name);
+    if (ImGui::Checkbox("##on", &on)) set_knob(name, on ? "1" : "0");
+    ImGui::PopID();
+  };
+
+  ImGui::TextColored(kSecondary, "Keyboard");
+  Muted("The keys move the steering, throttle and brake at limited rates instead of jumping, mapped into the "
+        "game's own deadzones so they act from the first press. Hold the precision key (Ctrl) for half lock "
+        "and half pedal.");
+  ImGui::Dummy(ImVec2(0, 2 * scale_));
+  toggle("smooth", "Smooth steering and pedals",
+         "Off: the keys are digital, full lock and full pedal at once (as before).");
+  slider("steer_attack", "Steering attack (s)", "Seconds from centre to full lock while a steering key is held.");
+  slider("steer_release", "Steering release (s)", "Seconds from full lock back to centre after the key is released.");
+  slider("throttle_attack", "Throttle attack (s)", "Seconds from 0 to full throttle.");
+  slider("throttle_release", "Throttle release (s)", "Seconds from full throttle to 0.");
+  slider("brake_attack", "Brake attack (s)", "Seconds from 0 to full brake.");
+  slider("brake_release", "Brake release (s)", "Seconds from full brake to 0.");
+  slider("precision", "Precision share", "Share of full lock and full pedal while the precision key is held.");
+  ImGui::PushStyleColor(ImGuiCol_Header, kField);
+  if (ImGui::CollapsingHeader("Mouse steering and deadzones")) {
+    toggle("mouse_steering", "Mouse steering",
+           "The mouse's horizontal motion steers; the right stick then gets no mouse motion.");
+    slider("mouse_steer_sensitivity", "Mouse steering sensitivity",
+           "Thousandths of full lock per count of mouse motion.");
+    slider("mouse_steer_centering", "Mouse steering centring (s)",
+           "Time constant of the return to centre when the mouse rests; 0 turns it off.");
+    toggle("title_deadzones", "Into the game's deadzones",
+           "Off: the keys' values go to the game as they are, and its deadzones apply on top (for comparisons).");
+  }
+  ImGui::PopStyleColor();
+  ImGui::TextColored(kMuted, "Keyboard value (Build.ps1 -Keyboard)");
+  if (!keyboard_editing_) keyboard_edit_ = o.keyboard;
+  ImGui::SetNextItemWidth(-1);
+  ImGui::InputText("##keyboard", &keyboard_edit_);
+  keyboard_editing_ = ImGui::IsItemActive();
+  if (ImGui::IsItemDeactivatedAfterEdit()) o.keyboard = keyboard_edit_;
+  if (!error.empty()) Colored(kDanger, error);
+  ImGui::Dummy(ImVec2(0, 4 * scale_));
+}
+
 void App::ControlsPage() {
   ControllerSection();
-  Muted("Keyboard bindings of the controller. Several keys are separated by commas, modifiers are written "
-        "as Shift+Up.");
+  KeyboardSection();
+  Muted("Keyboard bindings, by their function in the game's DEFAULT LAYOUT 1 (the pad input in brackets). "
+        "Several keys are separated by commas, modifiers are written as Shift+Up. Ctrl is the precision key "
+        "and also works while the other keys are held.");
   ImGui::Dummy(ImVec2(0, 4 * scale_));
   if (ImGui::BeginTable("binds", 3, ImGuiTableFlags_RowBg | ImGuiTableFlags_BordersInnerH | ImGuiTableFlags_PadOuterX)) {
     ImGui::TableSetupColumn("Control", ImGuiTableColumnFlags_WidthFixed, 190 * scale_);

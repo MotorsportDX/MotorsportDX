@@ -29,6 +29,7 @@ param(
     [ValidateSet('auto','on','off')][string]$VSync,
     [string]$Upscale,
     [string]$Pad,
+    [string]$Keyboard,
     [string]$Look,
     [switch]$ShaderDev,
     [string]$TextureDump,
@@ -71,6 +72,7 @@ if ($FrameRate) { $arguments += @('--frame-rate', "$FrameRate") }
 if ($VSync) { $arguments += @('--vsync', $VSync) }
 if ($Upscale) { $arguments += @('--upscale', $Upscale) }
 if ($Pad) { $arguments += @('--pad', $Pad) }
+if ($Keyboard) { $arguments += @('--keyboard', $Keyboard) }
 if ($Look) { $arguments += @('--look', $Look) }
 if ($ShaderDev) { $arguments += @('--shader-dev') }
 if ($TextureDump) { $arguments += @('--texture-dump', $TextureDump) }

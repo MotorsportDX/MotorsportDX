@@ -6,6 +6,7 @@ add_library(rexinput OBJECT
     device_assignment.cpp
     pad_settings.cpp
     state_merge.cpp
+    title_input_ranges.cpp
     mnk/mnk_input_driver.cpp
     nop/nop_input_driver.cpp
 )

@@ -433,10 +433,12 @@ Pairs LookKnobs(const LauncherData& data, const std::string& look) {
   return knobs;
 }
 
-Pairs PadKnobs(const LauncherData& data, const std::string& pad) {
-  const Json& table = data.json.at("pad").at("knobs");
+namespace {
+
+// option_knobs of pipeline.py: the knobs of a -Pad or -Keyboard value.
+Pairs OptionKnobs(const Json& table, const std::string& text, const std::string& option) {
   Pairs knobs;
-  for (const auto& part : Split(pad, ',')) {
+  for (const auto& part : Split(text, ',')) {
     const std::string item = Strip(part);
     if (item.empty()) continue;
     const auto equals = item.find('=');
@@ -444,17 +446,18 @@ Pairs PadKnobs(const LauncherData& data, const std::string& pad) {
     if (equals == std::string::npos || !table.contains(name)) {
       std::vector<std::string> names;
       for (const auto& [knob, value] : table.items()) names.push_back(knob);
-      throw PlanError("Unknown -Pad knob '" + item + "'; use name=value with " + Join(names, ", ") + ".");
+      throw PlanError("Unknown " + option + " knob '" + item + "'; use name=value with " +
+                      Join(names, ", ") + ".");
     }
     knobs.Set(name, Strip(item.substr(equals + 1)));
   }
   return knobs;
 }
 
-Pairs PadCvars(const LauncherData& data, const std::string& pad) {
-  const Json& table = data.json.at("pad").at("knobs");
+// option_cvars of pipeline.py: the runtime cvars of the knobs that differ from their defaults.
+Pairs OptionCvars(const Json& table, const std::string& text, const std::string& option) {
   Pairs cvars;
-  for (const auto& [name, value] : PadKnobs(data, pad).Items()) {
+  for (const auto& [name, value] : OptionKnobs(table, text, option).Items()) {
     const Json& knob = table.at(name);
     const std::string cvar = knob.at("cvar").get<std::string>();
     const std::string fallback = knob.at("default").get<std::string>();
@@ -463,7 +466,8 @@ Pairs PadCvars(const LauncherData& data, const std::string& pad) {
       std::vector<std::string> choices;
       for (const auto& choice : knob.at("choices")) choices.push_back(choice.get<std::string>());
       if (std::find(choices.begin(), choices.end(), value) == choices.end())
-        throw PlanError("-Pad " + name + " is one of " + Join(choices, ", ") + ", not '" + value + "'.");
+        throw PlanError(option + " " + name + " is one of " + Join(choices, ", ") + ", not '" +
+                        value + "'.");
       if (value == fallback) {
         cvars.Erase(cvar);
         continue;
@@ -478,8 +482,8 @@ Pairs PadCvars(const LauncherData& data, const std::string& pad) {
       } catch (const PlanError&) {
       }
       if (!(low <= number && number <= high))
-        throw PlanError("-Pad " + name + " is a number from " + PyG(low) + " to " + PyG(high) +
-                        ", not '" + value + "'.");
+        throw PlanError(option + " " + name + " is a number from " + PyG(low) + " to " +
+                        PyG(high) + ", not '" + value + "'.");
       if (number == PyFloat(fallback)) {
         cvars.Erase(cvar);
         continue;
@@ -489,6 +493,24 @@ Pairs PadCvars(const LauncherData& data, const std::string& pad) {
     cvars.Set(cvar, text);
   }
   return cvars;
+}
+
+}  // namespace
+
+Pairs PadKnobs(const LauncherData& data, const std::string& pad) {
+  return OptionKnobs(data.json.at("pad").at("knobs"), pad, "-Pad");
+}
+
+Pairs PadCvars(const LauncherData& data, const std::string& pad) {
+  return OptionCvars(data.json.at("pad").at("knobs"), pad, "-Pad");
+}
+
+Pairs KeyboardKnobs(const LauncherData& data, const std::string& keyboard) {
+  return OptionKnobs(data.json.at("keyboard").at("knobs"), keyboard, "-Keyboard");
+}
+
+Pairs KeyboardCvars(const LauncherData& data, const std::string& keyboard) {
+  return OptionCvars(data.json.at("keyboard").at("knobs"), keyboard, "-Keyboard");
 }
 
 bool TaaEnabled(const Pairs& knobs) {
@@ -931,8 +953,9 @@ Plan LaunchPlan(const LauncherData& data, const std::string& root, const std::st
     cvars.Set("texture_replace_path", ResolvePath(options.texture_replace));
   }
   if (!content_manifest.empty()) env.Set("FM4_CONTENT_MANIFEST", content_manifest);
-  // The physical controller's options.
+  // The physical controller's options, and the keyboard's.
   Update(cvars, PadCvars(data, options.pad));
+  Update(cvars, KeyboardCvars(data, options.keyboard));
   env.Set("FM4_INFO", InfoOverlay(data, cvars, env, look, quality, plan.description));
   if (options.info) env.Set("FM4_INFO_SHOW", "1");
   return plan;

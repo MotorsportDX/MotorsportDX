@@ -11,19 +11,28 @@
 #pragma once
 
 #include <rex/input/input_driver.h>
+#include <rex/input/keyboard_model.h>
 #include <rex/ui/window.h>
 #include <rex/ui/window_listener.h>
 
 #include <atomic>
+#include <chrono>
 #include <cstdint>
 #include <mutex>
 #include <queue>
 #include <string>
+#include <vector>
 
 namespace rex::input::mnk {
 
 void SetMouseLookActive(bool active);
 bool IsMouseLookActive();
+
+// Keys held beside the real ones, by virtual key, for the e2e harness's
+// diagnostic controller (work/fm4-rex/src/fm4-test-input.h): they go through
+// the same bindings and model, also without window focus, but not while an
+// overlay takes the input. Replaces the previous set; empty releases them.
+void SetInjectedKeys(const std::vector<uint16_t>& virtual_keys);
 
 class MnkInputDriver final : public InputDriver,
                              public rex::ui::WindowInputListener,
@@ -57,8 +66,23 @@ class MnkInputDriver final : public InputDriver,
   void OnGotFocus(rex::ui::UISetupEvent& e) override;
 
  private:
+  using Clock = std::chrono::steady_clock;
+
   bool IsEnabled() const;
   void SetKeyState(uint16_t vk, bool down);
+  // A key or mouse button changed, from the UI thread: the model runs up to
+  // now on the old keys first. Under state_mutex_.
+  void ApplyKey(uint16_t vk, bool down);
+
+  // The keyboard model (rex/input/keyboard_model.h,
+  // docs/analysis/keyboard-controls.md); all under state_mutex_.
+  void RefreshBinds();
+  // The held keys, real and injected; returns whether any key is injected.
+  bool HeldKeys(bool (&down)[256]) const;
+  bool Held(size_t bind, const bool (&down)[256]) const;
+  void AdvanceModel(Clock::time_point now);
+  void UpdateTargets(const bool (&down)[256]);
+  void ResetModel();
   void EnqueueKeystroke(uint16_t vk_pad, bool down);
 
   // Called from the guest thread. The rest of the capture path stays on the UI
@@ -98,6 +122,28 @@ class MnkInputDriver final : public InputDriver,
   std::atomic<bool> mouse_capture_update_queued_{false};
 
   std::atomic<bool> has_focus_{true};
+
+  // The bindings as last parsed, per bind (the enum in the .cpp), and the
+  // modifiers bound as keys of their own.
+  std::vector<std::string> bind_text_;
+  std::vector<std::vector<keyboard::BindToken>> bind_tokens_;
+  uint8_t ignored_modifiers_ = 0;
+
+  // The model's values and targets, in the title's terms: steering -1..1,
+  // throttle and brake 0..1.
+  double steer_ = 0.0;
+  double throttle_ = 0.0;
+  double brake_ = 0.0;
+  double steer_target_ = 0.0;
+  double throttle_target_ = 0.0;
+  double brake_target_ = 0.0;
+  keyboard::SteeringKeys steering_keys_;
+  Clock::time_point model_time_{};
+  bool model_running_ = false;
+  // Mouse steering, -1..1, and the time of its last decay.
+  double mouse_steer_ = 0.0;
+  Clock::time_point mouse_time_{};
+  bool mouse_running_ = false;
 
   // Keystroke queue
   std::queue<X_INPUT_KEYSTROKE> keystroke_queue_;

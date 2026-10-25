@@ -567,6 +567,29 @@ class PipelineTests(unittest.TestCase):
                          {'present_vsync': 'true'})
         self.assertEqual(pipeline.present_settings('off', 240, ally), ({}, 240, 'VSync off'))
 
+    def test_keyboard_cvars(self):
+        # The launchers' defaults set nothing beyond launch_cvars, which turns the model on.
+        self.assertEqual(pipeline.keyboard_cvars(None), {})
+        self.assertEqual(pipeline.keyboard_cvars('smooth=1,steer_attack=0.30,precision=0.5'), {})
+        self.assertEqual(pipeline.keyboard_cvars('smooth=0'), {'mnk_smooth': 'false'})
+        self.assertEqual(pipeline.keyboard_cvars('steer_attack=0.4, title_deadzones=0,mouse_steering=1'),
+                         {'mnk_steer_attack': '0.4', 'mnk_title_deadzones': 'false',
+                          'mnk_mouse_steering': 'true'})
+        self.assertEqual(pipeline.keyboard_cvars('precision=0.7,precision=0.5'), {})
+        cvars = pipeline.launch_cvars(Path('root'), 'disc', Path('root/logs/runtime.log'))
+        self.assertEqual(cvars['mnk_smooth'], 'true')
+        self.assertEqual(cvars['keybind_precision'], 'Control')
+        self.assertEqual(cvars['keybind_lstick_up'], '')
+        self.assertEqual(cvars['keybind_start'], 'Escape,Return')
+        keys = [key.strip() for name, value in cvars.items() if name.startswith('keybind_')
+                for key in value.split(',') if key.strip()]
+        self.assertEqual(len(keys), len(set(keys)), 'a key bound twice')
+        for bad, message in (('steer_attack=3', 'number from 0 to 2'), ('smooth=2', 'one of 0, 1'),
+                             ('speed=1', 'Unknown -Keyboard knob')):
+            with self.assertRaises(ValueError) as caught:
+                pipeline.keyboard_cvars(bad)
+            self.assertIn(message, str(caught.exception))
+
     def test_pad_cvars(self):
         # The defaults set no cvar, so a default plan is unchanged.
         self.assertEqual(pipeline.pad_cvars(None), {})

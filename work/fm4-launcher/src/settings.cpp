@@ -15,6 +15,7 @@ Json OptionsToJson(const Options& o) {
               {"vsync", o.vsync},
               {"upscale", o.upscale},
               {"pad", o.pad},
+              {"keyboard", o.keyboard},
               {"quality", o.quality},
               {"look", o.look},
               {"msaa", o.msaa},
@@ -55,6 +56,7 @@ Options OptionsFromJson(const Json& json) {
   get("vsync", o.vsync);
   get("upscale", o.upscale);
   get("pad", o.pad);
+  get("keyboard", o.keyboard);
   get("quality", o.quality);
   get("look", o.look);
   get("msaa", o.msaa);

@@ -203,6 +203,18 @@ class InputTests(unittest.TestCase):
             self.assertEqual(path.read_text().split(), '0 0 0 0 0 0 0 32768'.split())
             e2e.set_input(path, **e2e.parse_action('~y@720'))
             self.assertEqual(path.read_text().split(), '0 0 0 0 0 0 0 32768 720'.split())
+            # Keyboard keys on a second line, for the keyboard driver (docs/analysis/keyboard-controls.md).
+            e2e.set_input(path, **e2e.parse_action('key=Control+key=D+a'))
+            self.assertEqual(path.read_text().splitlines(), ['4096 0 0 0 0 0 0', 'keys Control D'])
+            e2e.set_input(path, **e2e.parse_action('none'))
+            self.assertEqual(path.read_text().splitlines(), ['0 0 0 0 0 0 0'])
+
+    def test_key_actions(self):
+        self.assertEqual(e2e.parse_action('key=W')['keys'], ('W',))
+        for action in ('key=', 'key=Shift+Up', 'key=W,'):
+            with self.assertRaises(ValueError, msg=action):
+                e2e.parse_action(action)
+        e2e.check_actions([[1, 'key=A', 0], [1, 'key=W+key=Control', 0.5], [1, 'key=D,key=A', 0.12]])
 
 
 class EventTests(unittest.TestCase):

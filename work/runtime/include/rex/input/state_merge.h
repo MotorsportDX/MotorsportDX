@@ -21,8 +21,22 @@ namespace rex::input {
 constexpr int32_t kThumbDeadzone = 7849;
 constexpr uint8_t kTriggerThreshold = 30;
 
-/// Folds src into dst: buttons OR, triggers max, stick axes larger magnitude,
-/// packet number newest.
+/// One stick of two devices: the stick deflected further wins with both of its
+/// axes (dst on a tie). Taking each axis from a different device would make a
+/// deflection neither has, and a title's radial deadzone reads both axes
+/// together; the keyboard's steering, mapped into the title's deadzone
+/// (docs/analysis/keyboard-controls.md), would then add to a pad's.
+inline void MergeStick(int16_t& dst_x, int16_t& dst_y, int16_t src_x, int16_t src_y) {
+  const int64_t dst = int64_t(dst_x) * dst_x + int64_t(dst_y) * dst_y;
+  const int64_t src = int64_t(src_x) * src_x + int64_t(src_y) * src_y;
+  if (src > dst) {
+    dst_x = src_x;
+    dst_y = src_y;
+  }
+}
+
+/// Folds src into dst: buttons OR, triggers max, each stick from the device
+/// that deflects it further (MergeStick), packet number newest.
 void MergeInto(X_INPUT_STATE& dst, const X_INPUT_STATE& src);
 
 bool IsNeutral(const X_INPUT_GAMEPAD& gamepad);

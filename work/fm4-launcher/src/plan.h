@@ -68,6 +68,7 @@ struct Options {
   std::string texture_dump;     // empty: off
   std::string texture_replace;  // empty: off
   std::string pad;              // -Pad knobs; empty: the controller's defaults
+  std::string keyboard;         // -Keyboard knobs; empty: the launchers' keyboard defaults
   // Applied at Play, outside the launch plan (pipeline.py has no counterpart): the performance
   // trace into logs\perf-<profile>-<time>.jsonl, and cvars given as --name=value, applied last.
   bool perf_trace = false;
@@ -120,6 +121,9 @@ std::vector<std::string> LookDefines(const LauncherData& data, const Pairs& knob
 // runtime cvars of those that differ from their defaults (launcher.json "pad").
 Pairs PadKnobs(const LauncherData& data, const std::string& pad);
 Pairs PadCvars(const LauncherData& data, const std::string& pad);
+// keyboard_cvars of pipeline.py: the same for a -Keyboard value (launcher.json "keyboard").
+Pairs KeyboardKnobs(const LauncherData& data, const std::string& keyboard);
+Pairs KeyboardCvars(const LauncherData& data, const std::string& keyboard);
 
 // screen_scale of pipeline.py: the largest 16:9 picture that fits the screen, as a reduced
 // fraction of 1280x720.

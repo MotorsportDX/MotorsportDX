@@ -12,12 +12,15 @@
 
 #include <rex/cvar.h>
 #include <rex/input/input.h>
+#include <rex/input/keyboard_model.h>
+#include <rex/input/title_input_ranges.h>
 #include <rex/logging.h>
 #include <rex/ui/keybinds.h>
 #include <rex/ui/virtual_key.h>
 #include <rex/ui/window.h>
 
 #include <algorithm>
+#include <array>
 #include <cmath>
 #include <cstdlib>
 #include <cstring>
@@ -29,6 +32,44 @@ REXCVAR_DEFINE_BOOL(mnk_mouse, false, "Input",
                     "from the keybind_rstick_* keys only");
 REXCVAR_DEFINE_DOUBLE(mnk_sensitivity, 1.0, "Input", "Mouse sensitivity for right stick")
     .range(0.01, 10.0);
+
+// The keyboard's steering and pedal model (rex/input/keyboard_model.h,
+// docs/analysis/keyboard-controls.md). Off, the keys are digital as before.
+REXCVAR_DEFINE_BOOL(mnk_smooth, false, "Input",
+                    "Keyboard steering, throttle and brake move at limited rates instead of "
+                    "jumping, mapped into the title's own deadzones");
+REXCVAR_DEFINE_DOUBLE(mnk_steer_attack, 0.30, "Input",
+                      "Keyboard steering: seconds from centre to full lock")
+    .range(0.0, 2.0);
+REXCVAR_DEFINE_DOUBLE(mnk_steer_release, 0.20, "Input",
+                      "Keyboard steering: seconds from full lock back to centre")
+    .range(0.0, 2.0);
+REXCVAR_DEFINE_DOUBLE(mnk_throttle_attack, 0.25, "Input",
+                      "Keyboard throttle (right trigger): seconds from 0 to full")
+    .range(0.0, 2.0);
+REXCVAR_DEFINE_DOUBLE(mnk_throttle_release, 0.10, "Input",
+                      "Keyboard throttle (right trigger): seconds from full to 0")
+    .range(0.0, 2.0);
+REXCVAR_DEFINE_DOUBLE(mnk_brake_attack, 0.15, "Input",
+                      "Keyboard brake (left trigger): seconds from 0 to full")
+    .range(0.0, 2.0);
+REXCVAR_DEFINE_DOUBLE(mnk_brake_release, 0.10, "Input",
+                      "Keyboard brake (left trigger): seconds from full to 0")
+    .range(0.0, 2.0);
+REXCVAR_DEFINE_DOUBLE(mnk_precision, 0.5, "Input",
+                      "Share of full lock and full pedal while the precision key is held")
+    .range(0.1, 1.0);
+REXCVAR_DEFINE_BOOL(mnk_title_deadzones, true, "Input",
+                    "Map the keyboard's steering and pedals into the deadzones the title "
+                    "publishes, so they act from the first press");
+REXCVAR_DEFINE_BOOL(mnk_mouse_steering, false, "Input",
+                    "The mouse's horizontal motion steers (the right stick then gets no mouse)");
+REXCVAR_DEFINE_DOUBLE(mnk_mouse_steer_sensitivity, 1.0, "Input",
+                      "Mouse steering: thousandths of full lock per count of motion")
+    .range(0.1, 10.0);
+REXCVAR_DEFINE_DOUBLE(mnk_mouse_steer_centering, 1.0, "Input",
+                      "Mouse steering: time constant in seconds of the return to centre (0: off)")
+    .range(0.0, 5.0);
 
 REXCVAR_DEFINE_STRING(keybind_a, "Semicolon,Space", "Input/Keybinds/Controller", "A button");
 REXCVAR_DEFINE_STRING(keybind_b, "Quote,Backspace", "Input/Keybinds/Controller", "B button");
@@ -57,6 +98,8 @@ REXCVAR_DEFINE_STRING(keybind_dpad_right, "Shift+Right", "Input/Keybinds/Control
 REXCVAR_DEFINE_STRING(keybind_back, "Z,Tab", "Input/Keybinds/Controller", "Back button");
 REXCVAR_DEFINE_STRING(keybind_start, "X,Return", "Input/Keybinds/Controller", "Start button");
 REXCVAR_DEFINE_STRING(keybind_guide, "", "Input/Keybinds/Controller", "Guide button");
+REXCVAR_DEFINE_STRING(keybind_precision, "", "Input/Keybinds/Controller",
+                      "Precision (hold): limits steering and pedals");
 
 namespace rex::input::mnk {
 
@@ -66,73 +109,92 @@ namespace {
 constexpr rex::input::DeviceId kMnkDevice = static_cast<rex::input::DeviceId>(0x4D4E4B00);
 
 // Bind values are a comma-separated list of alternatives, each optionally
-// carrying modifier prefixes: "Q,I" or "Shift+W". Modifier matching is exact,
-// so "Up" stays silent while Shift is held and "Shift+Up" stays silent without
-// it. That is what lets the D-pad share the arrow keys. A consequence is
-// that binding a bare modifier name ("Shift") can never fire, since holding it
-// makes the live mask non-zero while the bind wants zero.
-constexpr uint8_t kModShift = 1u << 0;
-constexpr uint8_t kModCtrl = 1u << 1;
-constexpr uint8_t kModAlt = 1u << 2;
+// carrying modifier prefixes: "Q,I" or "Shift+W" (keyboard::ParseBind). Modifier
+// matching is exact, so "Up" stays silent while Shift is held and "Shift+Up"
+// stays silent without it. That is what lets the D-pad share the arrow keys.
+// A binding whose key is itself a modifier ("Control" for the precision key)
+// fires while it is held, and that modifier is then left out of every other
+// binding's comparison, so W still presses the throttle with Ctrl held
+// (keyboard::BindHeld).
+enum Bind : size_t {
+  kBindA,
+  kBindB,
+  kBindX,
+  kBindY,
+  kBindLeftShoulder,
+  kBindRightShoulder,
+  kBindLeftThumb,
+  kBindRightThumb,
+  kBindBack,
+  kBindStart,
+  kBindGuide,
+  kBindDpadUp,
+  kBindDpadDown,
+  kBindDpadLeft,
+  kBindDpadRight,
+  kBindLeftTrigger,
+  kBindRightTrigger,
+  kBindLStickUp,
+  kBindLStickDown,
+  kBindLStickLeft,
+  kBindLStickRight,
+  kBindRStickUp,
+  kBindRStickDown,
+  kBindRStickLeft,
+  kBindRStickRight,
+  kBindPrecision,
+  kBindCount
+};
 
-uint8_t LiveModifiers(const bool (&key_down)[256]) {
-  uint8_t mods = 0;
-  if (key_down[static_cast<uint16_t>(rex::ui::VirtualKey::kShift)])
-    mods |= kModShift;
-  if (key_down[static_cast<uint16_t>(rex::ui::VirtualKey::kControl)])
-    mods |= kModCtrl;
-  if (key_down[static_cast<uint16_t>(rex::ui::VirtualKey::kMenu)])
-    mods |= kModAlt;
-  return mods;
+std::string& (*const kBindCvars[kBindCount])() = {
+    &FLAGS_keybind_a_storage_,           &FLAGS_keybind_b_storage_,
+    &FLAGS_keybind_x_storage_,           &FLAGS_keybind_y_storage_,
+    &FLAGS_keybind_left_shoulder_storage_, &FLAGS_keybind_right_shoulder_storage_,
+    &FLAGS_keybind_lstick_press_storage_, &FLAGS_keybind_rstick_press_storage_,
+    &FLAGS_keybind_back_storage_,        &FLAGS_keybind_start_storage_,
+    &FLAGS_keybind_guide_storage_,       &FLAGS_keybind_dpad_up_storage_,
+    &FLAGS_keybind_dpad_down_storage_,   &FLAGS_keybind_dpad_left_storage_,
+    &FLAGS_keybind_dpad_right_storage_,  &FLAGS_keybind_left_trigger_storage_,
+    &FLAGS_keybind_right_trigger_storage_, &FLAGS_keybind_lstick_up_storage_,
+    &FLAGS_keybind_lstick_down_storage_, &FLAGS_keybind_lstick_left_storage_,
+    &FLAGS_keybind_lstick_right_storage_, &FLAGS_keybind_rstick_up_storage_,
+    &FLAGS_keybind_rstick_down_storage_, &FLAGS_keybind_rstick_left_storage_,
+    &FLAGS_keybind_rstick_right_storage_, &FLAGS_keybind_precision_storage_,
+};
+
+constexpr std::pair<Bind, uint16_t> kButtonBinds[] = {
+    {kBindA, X_INPUT_GAMEPAD_A},
+    {kBindB, X_INPUT_GAMEPAD_B},
+    {kBindX, X_INPUT_GAMEPAD_X},
+    {kBindY, X_INPUT_GAMEPAD_Y},
+    {kBindLeftShoulder, X_INPUT_GAMEPAD_LEFT_SHOULDER},
+    {kBindRightShoulder, X_INPUT_GAMEPAD_RIGHT_SHOULDER},
+    {kBindLeftThumb, X_INPUT_GAMEPAD_LEFT_THUMB},
+    {kBindRightThumb, X_INPUT_GAMEPAD_RIGHT_THUMB},
+    {kBindBack, X_INPUT_GAMEPAD_BACK},
+    {kBindStart, X_INPUT_GAMEPAD_START},
+    {kBindGuide, X_INPUT_GAMEPAD_GUIDE},
+    {kBindDpadUp, X_INPUT_GAMEPAD_DPAD_UP},
+    {kBindDpadDown, X_INPUT_GAMEPAD_DPAD_DOWN},
+    {kBindDpadLeft, X_INPUT_GAMEPAD_DPAD_LEFT},
+    {kBindDpadRight, X_INPUT_GAMEPAD_DPAD_RIGHT},
+};
+
+uint16_t ParseKeyName(std::string_view name) {
+  return static_cast<uint16_t>(rex::ui::ParseVirtualKey(name));
 }
 
-// Strips leading modifier prefixes off 'token', advancing it to the bare key
-// name and returning the mask they require.
-uint8_t TakeModifiers(std::string_view& token) {
-  uint8_t mods = 0;
-  for (;;) {
-    size_t plus = token.find('+');
-    if (plus == std::string_view::npos || plus == 0) {
-      break;
-    }
-    std::string_view head = token.substr(0, plus);
-    uint8_t bit = 0;
-    if (head == "Shift") {
-      bit = kModShift;
-    } else if (head == "Ctrl" || head == "Control") {
-      bit = kModCtrl;
-    } else if (head == "Alt") {
-      bit = kModAlt;
-    } else {
-      break;
-    }
-    mods |= bit;
-    token.remove_prefix(plus + 1);
-  }
-  return mods;
-}
+// Keys the diagnostic controller holds (SetInjectedKeys), apart from the
+// driver so that it needs no pointer to it.
+struct InjectedKeys {
+  std::mutex mutex;
+  bool down[256] = {};
+  bool any = false;
+};
 
-std::string_view TrimSpaces(std::string_view s) {
-  while (!s.empty() && s.front() == ' ') {
-    s.remove_prefix(1);
-  }
-  while (!s.empty() && s.back() == ' ') {
-    s.remove_suffix(1);
-  }
-  return s;
-}
-
-bool TokenPressed(const bool (&key_down)[256], std::string_view token, uint8_t live_mods) {
-  uint8_t want = TakeModifiers(token);
-  if (want != live_mods) {
-    return false;
-  }
-  rex::ui::VirtualKey vk = rex::ui::ParseVirtualKey(token);
-  if (vk == rex::ui::VirtualKey::kNone) {
-    return false;
-  }
-  uint16_t idx = static_cast<uint16_t>(vk);
-  return idx < 256 && key_down[idx];
+InjectedKeys& GetInjectedKeys() {
+  static InjectedKeys keys;
+  return keys;
 }
 
 std::atomic<bool> mouse_look_active{true};
@@ -145,6 +207,19 @@ void SetMouseLookActive(bool active) {
 
 bool IsMouseLookActive() {
   return mouse_look_active.load(std::memory_order_relaxed);
+}
+
+void SetInjectedKeys(const std::vector<uint16_t>& virtual_keys) {
+  InjectedKeys& injected = GetInjectedKeys();
+  std::lock_guard lock(injected.mutex);
+  std::memset(injected.down, 0, sizeof(injected.down));
+  injected.any = false;
+  for (uint16_t vk : virtual_keys) {
+    if (vk != 0 && vk < 256) {
+      injected.down[vk] = true;
+      injected.any = true;
+    }
+  }
 }
 
 using rex::ui::VirtualKey;
@@ -200,25 +275,6 @@ bool MnkInputDriver::IsEnabled() const {
   return REXCVAR_GET(mnk_mode);
 }
 
-static bool IsBindPressed(const bool (&key_down)[256], const std::string& cvar_val) {
-  const uint8_t live_mods = LiveModifiers(key_down);
-  std::string_view rest(cvar_val);
-  while (!rest.empty()) {
-    size_t comma = rest.find(',');
-    std::string_view token = rest.substr(0, comma);
-    if (comma == std::string_view::npos) {
-      rest = std::string_view();
-    } else {
-      rest.remove_prefix(comma + 1);
-    }
-    token = TrimSpaces(token);
-    if (!token.empty() && TokenPressed(key_down, token, live_mods)) {
-      return true;
-    }
-  }
-  return false;
-}
-
 void MnkInputDriver::EnumerateDevices(std::vector<DeviceInfo>& out) {
   // Disabled means no device at all, so it never occupies a guest user slot.
   if (!IsEnabled()) {
@@ -259,12 +315,21 @@ X_RESULT MnkInputDriver::GetDeviceState(DeviceId id, X_INPUT_STATE* out_state) {
     return X_ERROR_DEVICE_NOT_CONNECTED;
   }
 
+  const bool mouse_steering = REXCVAR_GET(mnk_mouse_steering);
   // Mouse look is opt in. Without this gate, keyboard input alone would hide
   // and lock the cursor, breaking the ImGui overlays.
-  QueueMouseCaptureUpdate(IsEnabled() && REXCVAR_GET(mnk_mouse) && IsMouseLookActive() &&
-                          has_focus_ && is_active());
+  QueueMouseCaptureUpdate(IsEnabled() && (REXCVAR_GET(mnk_mouse) || mouse_steering) &&
+                          IsMouseLookActive() && has_focus_ && is_active());
 
-  if (!is_active() || !has_focus_) {
+  std::lock_guard lock(state_mutex_);
+
+  bool down[256];
+  const bool injected = HeldKeys(down);
+  // Injected keys are not desktop input, so they count without focus.
+  if (!is_active() || (!has_focus_ && !injected)) {
+    ResetModel();
+    mouse_dx_ = 0.0f;
+    mouse_dy_ = 0.0f;
     if (out_state) {
       std::memset(out_state, 0, sizeof(*out_state));
       out_state->packet_number = packet_number_;
@@ -272,66 +337,80 @@ X_RESULT MnkInputDriver::GetDeviceState(DeviceId id, X_INPUT_STATE* out_state) {
     return X_ERROR_SUCCESS;
   }
 
-  std::lock_guard lock(state_mutex_);
-
+  RefreshBinds();
   uint16_t buttons = 0;
-  if (IsBindPressed(key_down_, REXCVAR_GET(keybind_a)))
-    buttons |= X_INPUT_GAMEPAD_A;
-  if (IsBindPressed(key_down_, REXCVAR_GET(keybind_b)))
-    buttons |= X_INPUT_GAMEPAD_B;
-  if (IsBindPressed(key_down_, REXCVAR_GET(keybind_x)))
-    buttons |= X_INPUT_GAMEPAD_X;
-  if (IsBindPressed(key_down_, REXCVAR_GET(keybind_y)))
-    buttons |= X_INPUT_GAMEPAD_Y;
-  if (IsBindPressed(key_down_, REXCVAR_GET(keybind_left_shoulder)))
-    buttons |= X_INPUT_GAMEPAD_LEFT_SHOULDER;
-  if (IsBindPressed(key_down_, REXCVAR_GET(keybind_right_shoulder)))
-    buttons |= X_INPUT_GAMEPAD_RIGHT_SHOULDER;
-  if (IsBindPressed(key_down_, REXCVAR_GET(keybind_lstick_press)))
-    buttons |= X_INPUT_GAMEPAD_LEFT_THUMB;
-  if (IsBindPressed(key_down_, REXCVAR_GET(keybind_rstick_press)))
-    buttons |= X_INPUT_GAMEPAD_RIGHT_THUMB;
-  if (IsBindPressed(key_down_, REXCVAR_GET(keybind_back)))
-    buttons |= X_INPUT_GAMEPAD_BACK;
-  if (IsBindPressed(key_down_, REXCVAR_GET(keybind_start)))
-    buttons |= X_INPUT_GAMEPAD_START;
-  if (IsBindPressed(key_down_, REXCVAR_GET(keybind_guide)))
-    buttons |= X_INPUT_GAMEPAD_GUIDE;
-  if (IsBindPressed(key_down_, REXCVAR_GET(keybind_dpad_up)))
-    buttons |= X_INPUT_GAMEPAD_DPAD_UP;
-  if (IsBindPressed(key_down_, REXCVAR_GET(keybind_dpad_down)))
-    buttons |= X_INPUT_GAMEPAD_DPAD_DOWN;
-  if (IsBindPressed(key_down_, REXCVAR_GET(keybind_dpad_left)))
-    buttons |= X_INPUT_GAMEPAD_DPAD_LEFT;
-  if (IsBindPressed(key_down_, REXCVAR_GET(keybind_dpad_right)))
-    buttons |= X_INPUT_GAMEPAD_DPAD_RIGHT;
+  for (const auto& [bind, bit] : kButtonBinds) {
+    if (Held(bind, down)) {
+      buttons |= bit;
+    }
+  }
 
-  uint8_t lt = IsBindPressed(key_down_, REXCVAR_GET(keybind_left_trigger)) ? 0xFF : 0;
-  uint8_t rt = IsBindPressed(key_down_, REXCVAR_GET(keybind_right_trigger)) ? 0xFF : 0;
+  const bool smooth = REXCVAR_GET(mnk_smooth);
+  const Clock::time_point now = Clock::now();
+  if (smooth) {
+    AdvanceModel(now);
+  } else {
+    model_running_ = false;
+  }
+  UpdateTargets(down);
 
   int32_t lx = 0;
+  uint8_t lt = 0;
+  uint8_t rt = 0;
+  if (!smooth && !mouse_steering) {
+    // Digital keys, as before the model: full deflection at once, opposite
+    // keys cancel.
+    lt = Held(kBindLeftTrigger, down) ? 0xFF : 0;
+    rt = Held(kBindRightTrigger, down) ? 0xFF : 0;
+    if (Held(kBindLStickLeft, down))
+      lx -= INT16_MAX;
+    if (Held(kBindLStickRight, down))
+      lx += INT16_MAX;
+  } else {
+    double steer = smooth ? steer_ : steer_target_;
+    const double throttle = smooth ? throttle_ : throttle_target_;
+    const double brake = smooth ? brake_ : brake_target_;
+    if (mouse_steering) {
+      // Auto-centring decays toward 0, then the motion since the last poll adds.
+      const double centering = REXCVAR_GET(mnk_mouse_steer_centering);
+      if (mouse_running_ && centering > 0.0) {
+        const double dt = std::chrono::duration<double>(now - mouse_time_).count();
+        mouse_steer_ *= std::exp(-dt / centering);
+      }
+      mouse_time_ = now;
+      mouse_running_ = true;
+      mouse_steer_ = std::clamp(
+          mouse_steer_ + double(mouse_dx_) * REXCVAR_GET(mnk_mouse_steer_sensitivity) / 1000.0,
+          -1.0, 1.0);
+      const double limit = Held(kBindPrecision, down) ? REXCVAR_GET(mnk_precision) : 1.0;
+      steer = std::clamp(steer + mouse_steer_, -limit, limit);
+    }
+    // The keyboard always feeds guest user 0 (device_assignment.h).
+    const keyboard::TitleRanges ranges =
+        REXCVAR_GET(mnk_title_deadzones) ? GetTitleInputRanges(0) : keyboard::TitleRanges{};
+    lx = keyboard::StickFromTitle(steer, ranges.steering);
+    lt = keyboard::TriggerFromTitle(brake, ranges.left_trigger);
+    rt = keyboard::TriggerFromTitle(throttle, ranges.right_trigger);
+  }
+
   int32_t ly = 0;
-  if (IsBindPressed(key_down_, REXCVAR_GET(keybind_lstick_left)))
-    lx -= INT16_MAX;
-  if (IsBindPressed(key_down_, REXCVAR_GET(keybind_lstick_right)))
-    lx += INT16_MAX;
-  if (IsBindPressed(key_down_, REXCVAR_GET(keybind_lstick_up)))
+  if (Held(kBindLStickUp, down))
     ly += INT16_MAX;
-  if (IsBindPressed(key_down_, REXCVAR_GET(keybind_lstick_down)))
+  if (Held(kBindLStickDown, down))
     ly -= INT16_MAX;
 
   int32_t rx = 0;
   int32_t ry = 0;
-  if (IsBindPressed(key_down_, REXCVAR_GET(keybind_rstick_left)))
+  if (Held(kBindRStickLeft, down))
     rx -= INT16_MAX;
-  if (IsBindPressed(key_down_, REXCVAR_GET(keybind_rstick_right)))
+  if (Held(kBindRStickRight, down))
     rx += INT16_MAX;
-  if (IsBindPressed(key_down_, REXCVAR_GET(keybind_rstick_up)))
+  if (Held(kBindRStickUp, down))
     ry += INT16_MAX;
-  if (IsBindPressed(key_down_, REXCVAR_GET(keybind_rstick_down)))
+  if (Held(kBindRStickDown, down))
     ry -= INT16_MAX;
 
-  if (REXCVAR_GET(mnk_mouse) && IsMouseLookActive()) {
+  if (REXCVAR_GET(mnk_mouse) && !mouse_steering && IsMouseLookActive()) {
     double sensitivity = REXCVAR_GET(mnk_sensitivity);
     constexpr double kBaseScale = 200.0;
     rx += static_cast<int32_t>(double(mouse_dx_) * sensitivity * kBaseScale);
@@ -360,6 +439,81 @@ X_RESULT MnkInputDriver::GetDeviceState(DeviceId id, X_INPUT_STATE* out_state) {
     out_state->gamepad.thumb_ry = clamp16(ry);
   }
   return X_ERROR_SUCCESS;
+}
+
+void MnkInputDriver::RefreshBinds() {
+  if (bind_tokens_.size() != kBindCount) {
+    bind_text_.assign(kBindCount, std::string());
+    bind_tokens_.assign(kBindCount, {});
+  }
+  bool changed = false;
+  for (size_t i = 0; i < kBindCount; ++i) {
+    const std::string& text = kBindCvars[i]();
+    if (text != bind_text_[i]) {
+      bind_text_[i] = text;
+      bind_tokens_[i] = keyboard::ParseBind(text, ParseKeyName);
+      changed = true;
+    }
+  }
+  if (changed) {
+    ignored_modifiers_ = 0;
+    for (const auto& tokens : bind_tokens_) {
+      ignored_modifiers_ |= keyboard::BareModifiers(tokens);
+    }
+  }
+}
+
+bool MnkInputDriver::HeldKeys(bool (&down)[256]) const {
+  std::memcpy(down, key_down_, sizeof(down));
+  InjectedKeys& injected = GetInjectedKeys();
+  std::lock_guard lock(injected.mutex);
+  if (injected.any) {
+    for (size_t i = 0; i < 256; ++i) {
+      down[i] = down[i] || injected.down[i];
+    }
+  }
+  return injected.any;
+}
+
+bool MnkInputDriver::Held(size_t bind, const bool (&down)[256]) const {
+  return keyboard::BindHeld(bind_tokens_[bind], down, keyboard::LiveModifiers(down),
+                            ignored_modifiers_);
+}
+
+void MnkInputDriver::AdvanceModel(Clock::time_point now) {
+  if (!model_running_) {
+    model_time_ = now;
+    model_running_ = true;
+    return;
+  }
+  const double dt = std::chrono::duration<double>(now - model_time_).count();
+  model_time_ = now;
+  steer_ = keyboard::AdvanceAxis(steer_, steer_target_, dt,
+                                 {REXCVAR_GET(mnk_steer_attack), REXCVAR_GET(mnk_steer_release)});
+  throttle_ = keyboard::AdvanceAxis(
+      throttle_, throttle_target_, dt,
+      {REXCVAR_GET(mnk_throttle_attack), REXCVAR_GET(mnk_throttle_release)});
+  brake_ = keyboard::AdvanceAxis(brake_, brake_target_, dt,
+                                 {REXCVAR_GET(mnk_brake_attack), REXCVAR_GET(mnk_brake_release)});
+}
+
+void MnkInputDriver::UpdateTargets(const bool (&down)[256]) {
+  RefreshBinds();
+  const double steer =
+      steering_keys_.Update(Held(kBindLStickLeft, down), Held(kBindLStickRight, down));
+  const double limit = Held(kBindPrecision, down) ? REXCVAR_GET(mnk_precision) : 1.0;
+  steer_target_ = steer * limit;
+  throttle_target_ = Held(kBindRightTrigger, down) ? limit : 0.0;
+  brake_target_ = Held(kBindLeftTrigger, down) ? limit : 0.0;
+}
+
+void MnkInputDriver::ResetModel() {
+  steer_ = 0.0;
+  throttle_ = 0.0;
+  brake_ = 0.0;
+  model_running_ = false;
+  mouse_steer_ = 0.0;
+  mouse_running_ = false;
 }
 
 X_RESULT MnkInputDriver::SetDeviceVibration(DeviceId id, X_INPUT_VIBRATION* vibration) {
@@ -480,22 +634,30 @@ void MnkInputDriver::SetKeyState(uint16_t vk, bool down) {
   }
 }
 
+void MnkInputDriver::ApplyKey(uint16_t vk, bool down) {
+  if (REXCVAR_GET(mnk_smooth)) {
+    AdvanceModel(Clock::now());
+  }
+  SetKeyState(vk, down);
+  bool keys[256];
+  HeldKeys(keys);
+  UpdateTargets(keys);
+}
+
 void MnkInputDriver::OnKeyDown(rex::ui::KeyEvent& e) {
   // Alt combinations belong to the host (Alt+Return toggles fullscreen, Alt+Tab,
   // Alt+F4): they must not press the controller buttons of their keys.
   if (!IsEnabled() || !has_focus_ || e.is_alt_pressed())
     return;
   std::lock_guard lock(state_mutex_);
-  uint16_t vk = static_cast<uint16_t>(e.virtual_key());
-  SetKeyState(vk, true);
+  ApplyKey(static_cast<uint16_t>(e.virtual_key()), true);
 }
 
 void MnkInputDriver::OnKeyUp(rex::ui::KeyEvent& e) {
   if (!IsEnabled())
     return;
   std::lock_guard lock(state_mutex_);
-  uint16_t vk = static_cast<uint16_t>(e.virtual_key());
-  SetKeyState(vk, false);
+  ApplyKey(static_cast<uint16_t>(e.virtual_key()), false);
 }
 
 void MnkInputDriver::OnMouseDown(rex::ui::MouseEvent& e) {
@@ -504,13 +666,13 @@ void MnkInputDriver::OnMouseDown(rex::ui::MouseEvent& e) {
   std::lock_guard lock(state_mutex_);
   switch (e.button()) {
     case rex::ui::MouseEvent::Button::kLeft:
-      SetKeyState(static_cast<uint16_t>(VirtualKey::kLButton), true);
+      ApplyKey(static_cast<uint16_t>(VirtualKey::kLButton), true);
       break;
     case rex::ui::MouseEvent::Button::kRight:
-      SetKeyState(static_cast<uint16_t>(VirtualKey::kRButton), true);
+      ApplyKey(static_cast<uint16_t>(VirtualKey::kRButton), true);
       break;
     case rex::ui::MouseEvent::Button::kMiddle:
-      SetKeyState(static_cast<uint16_t>(VirtualKey::kMButton), true);
+      ApplyKey(static_cast<uint16_t>(VirtualKey::kMButton), true);
       break;
     default:
       break;
@@ -523,13 +685,13 @@ void MnkInputDriver::OnMouseUp(rex::ui::MouseEvent& e) {
   std::lock_guard lock(state_mutex_);
   switch (e.button()) {
     case rex::ui::MouseEvent::Button::kLeft:
-      SetKeyState(static_cast<uint16_t>(VirtualKey::kLButton), false);
+      ApplyKey(static_cast<uint16_t>(VirtualKey::kLButton), false);
       break;
     case rex::ui::MouseEvent::Button::kRight:
-      SetKeyState(static_cast<uint16_t>(VirtualKey::kRButton), false);
+      ApplyKey(static_cast<uint16_t>(VirtualKey::kRButton), false);
       break;
     case rex::ui::MouseEvent::Button::kMiddle:
-      SetKeyState(static_cast<uint16_t>(VirtualKey::kMButton), false);
+      ApplyKey(static_cast<uint16_t>(VirtualKey::kMButton), false);
       break;
     default:
       break;
@@ -570,6 +732,7 @@ void MnkInputDriver::OnLostFocus(rex::ui::UISetupEvent&) {
     std::memset(key_down_, 0, sizeof(key_down_));
     mouse_dx_ = 0.0f;
     mouse_dy_ = 0.0f;
+    ResetModel();
   }
   if (attached_window_) {
     ReleaseMouseCaptureFromUIThread(attached_window_);

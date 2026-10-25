@@ -1677,6 +1677,18 @@
       "provenance": "runtime-fork"
     },
     {
+      "path": "work/runtime/include/rex/input/keyboard_model.h",
+      "provenance": "runtime-fork"
+    },
+    {
+      "path": "work/runtime/include/rex/input/title_input_ranges.h",
+      "provenance": "runtime-fork"
+    },
+    {
+      "path": "work/runtime/src/input/title_input_ranges.cpp",
+      "provenance": "runtime-fork"
+    },
+    {
       "path": "work/runtime/src/input/pad_settings.cpp",
       "provenance": "runtime-fork"
     },
@@ -4560,6 +4572,10 @@
     {
       "path": "work/fm4-rex/tests/pad-shaping-tests.cpp",
       "provenance": "Synthetic tests/oracle; the title's steering conversion as measured (numbers only, no game data)"
+    },
+    {
+      "path": "work/fm4-rex/tests/keyboard-model-tests.cpp",
+      "provenance": "Synthetic tests/oracle; the title's steering and trigger conversions as measured and the profile's default deadzones (numbers only, no game data)"
     },
     {
       "path": "work/fm4-rex/tests/shader-mod-tests.cpp",

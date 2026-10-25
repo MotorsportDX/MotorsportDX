@@ -1,11 +1,16 @@
 #pragma once
 #include <rex/input/input_driver.h>
+#include <rex/input/mnk/mnk_input_driver.h>
+#include <rex/ui/keybinds.h>
 #include <rex/ui/virtual_key.h>
 #include "fm4-diagnostic-state.h"
 #include <chrono>
 #include <fstream>
 #include <mutex>
 #include <cstdio>
+#include <sstream>
+#include <string>
+#include <vector>
 
 // Opt-in, application-local controller for reproducible startup tests. It never
 // sends desktop input. Missing or malformed files mean all controls released.
@@ -31,7 +36,39 @@ class FM4TestInput final : public rex::input::InputDriver {
       next_read_ = now + std::chrono::milliseconds(50);
       int buttons = 0, lt = 0, rt = 0, lx = 0, ly = 0, rx = 0, ry = 0, pulse = 0;
       long long from = -1;
-      std::ifstream file(path_);
+      std::ifstream input(path_);
+      std::stringstream text;
+      text << input.rdbuf();
+      // An optional line "keys <names>" holds keyboard keys (keybind names separated by
+      // spaces, '+' or ','), which the keyboard driver treats as held beside the real ones,
+      // through its bindings and steering model (docs/analysis/keyboard-controls.md).
+      std::string keys;
+      for (std::string line; std::getline(text, line);) {
+        if (line.rfind("keys ", 0) == 0) keys = line.substr(5);
+      }
+      text.clear();
+      text.seekg(0);
+      std::istream& file = text;
+      if (keys != keys_) {
+        keys_ = keys;
+        std::vector<uint16_t> held;
+        std::string name;
+        for (char c : keys + " ") {
+          if (c == ' ' || c == '+' || c == ',' || c == '\r') {
+            if (!name.empty() && name != "none") {
+              const auto vk = rex::ui::ParseVirtualKey(name);
+              if (vk != rex::ui::VirtualKey::kNone) held.push_back(uint16_t(vk));
+              else std::fprintf(stderr, "FM4 test input: unknown key %s\n", name.c_str());
+            }
+            name.clear();
+          } else {
+            name += c;
+          }
+        }
+        rex::input::mnk::SetInjectedKeys(held);
+        std::fprintf(stderr, "FM4 test input: keys=%s (%zu held) packet=%u\n", keys.c_str(),
+                     held.size(), packet_ + 1);
+      }
       rex::input::X_INPUT_STATE next{};
       uint16_t next_pulse = 0;
       int64_t next_from = -1;
@@ -174,6 +211,7 @@ class FM4TestInput final : public rex::input::InputDriver {
   std::mutex mutex_;
   std::chrono::steady_clock::time_point next_read_{};
   uint32_t packet_ = 0;
+  std::string keys_;
   uint16_t pulse_ = 0;
   int64_t pulse_from_ = -1;
   uint32_t pulse_polls_ = 0;

@@ -599,8 +599,31 @@ std::vector<std::string> Init(int argc, char** argv) {
     }
   }
 
+  // "--name=" sets a string cvar to empty. CLI11 would take the next argument
+  // as the value instead, so those are applied here and kept from it.
+  std::vector<char*> args;
+  std::vector<std::string> empty_values;
+  for (int i = 0; i < argc; ++i) {
+    std::string_view arg(argv[i]);
+    if (i > 0 && arg.size() > 3 && arg.starts_with("--") && arg.ends_with('=') &&
+        arg.find('=') == arg.size() - 1) {
+      empty_values.emplace_back(arg.substr(2, arg.size() - 3));
+      continue;
+    }
+    args.push_back(argv[i]);
+  }
+  for (const std::string& name : empty_values) {
+    std::lock_guard lock(GetRegistryMutex());
+    auto it = GetRegistryIndex().find(name);
+    if (it == GetRegistryIndex().end()) {
+      GetPendingValuesStorage()[name].cmdline = std::string();
+    } else if (GetRegistryStorage()[it->second].type != FlagType::Boolean) {
+      ApplyFromSource(GetRegistryStorage()[it->second], "", Source::kCommandLine);
+    }
+  }
+
   try {
-    app.parse(argc, argv);
+    app.parse(static_cast<int>(args.size()), args.data());
   } catch (const CLI::ParseError& e) {
     // TODO(tomc): dumb workaround for the stupid chicken and its egg.
     //             dont call rex logging funcs here for now.

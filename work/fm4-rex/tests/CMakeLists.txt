@@ -23,6 +23,11 @@ target_include_directories(fm4_draw_scale_tests SYSTEM PRIVATE "${REX_HEADER_ROO
 add_executable(fm4_pad_shaping_tests pad-shaping-tests.cpp)
 target_include_directories(fm4_pad_shaping_tests SYSTEM PRIVATE "${REX_HEADER_ROOT}")
 target_compile_options(fm4_pad_shaping_tests PRIVATE -march=x86-64-v2)
+# The keyboard's steering and pedal model, its bindings and the merge of two devices' sticks
+# (header only).
+add_executable(fm4_keyboard_model_tests keyboard-model-tests.cpp)
+target_include_directories(fm4_keyboard_model_tests SYSTEM PRIVATE "${REX_HEADER_ROOT}")
+target_compile_options(fm4_keyboard_model_tests PRIVATE -march=x86-64-v2)
 # The scene_depth and final passes of work/fm4-rex/passes on WARP (CPU Direct3D
 # 12), as the post pass framework runs them; arguments: post_pass.hlsli, the
 # passes directory.
