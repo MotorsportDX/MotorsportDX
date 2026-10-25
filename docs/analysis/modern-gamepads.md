@@ -4,7 +4,7 @@ Design note for better support of modern pads: Xbox One and Series controllers (
 
 ## Summary
 
-- **Drivers.** Xbox class pads (the Series controller, the Elite, the Ally X's built-in pad) go through SDL's XInput driver today: two motors, no trigger rumble, no Share button, no paddles. SDL's Windows HID backend skips every XInput device, so its HIDAPI Xbox drivers never see them, and its GameInput driver cannot start in this build (the Windows SDK's `gameinput.h` predates the API version SDL requires). Trigger rumble for Xbox One and Series pads is available through SDL's RAWINPUT driver with its WGI correlation, or the stand-alone WGI driver. PlayStation pads always go through HIDAPI, with rumble, light bar, gyro and touchpad. **Recommended:** keep SDL's defaults as the default; offer `rawinput` (trigger rumble) and `wgi` as options; no GameInput option until SDL is built with the GameInput SDK's header.
+- **Drivers.** Xbox class pads (the Series controller, the Elite, the Ally X's built-in pad) go through SDL's XInput driver today: two motors, no trigger rumble, no Share button, no paddles. SDL's Windows HID backend skips every XInput device, so its HIDAPI Xbox drivers never see them, and its GameInput driver cannot start in this build (the Windows SDK's `gameinput.h` predates the API version SDL requires). Trigger rumble for Xbox One and Series pads is available through SDL's RAWINPUT driver with its WGI correlation, or the stand-alone WGI driver. PlayStation pads always go through HIDAPI, with rumble, light bar, gyro and touchpad. **Recommended:** keep SDL's defaults as the default; offer `rawinput` (trigger rumble) and `wgi` as options; GameInput followed on 25 October 2026 as `gameinput`, with GameInput API v3 from the MIT files of Microsoft's GameInput package and a patch to SDL ([The GameInput driver](#the-gameinput-driver)).
 - **The title's own deadzones.** The title applies a radial deadzone with a linear, rescaled response to the sticks and a linear range to the triggers, from the player's profile: steering 0.24 to 0.95 of the stick, throttle 0.15 to 0.90 and brake 0.15 to 0.95 of the trigger. Measured through the diagnostic controller, the first 24% of the steering stick does nothing. The game's own steering deadzone setting cannot lower it: the game keeps the inner edge at XInput's 7,849 or above. The fix is the runtime's steering anti-deadzone, which maps the stick into the deadzone the game reports, read live ([Stage 2](#the-steering-anti-deadzone-with-the-live-ranges)); off by default for now.
 - **Rumble.** `Media/ControllerRumble.xml` maps the car's state to the motors: the right motor carries the engine near its limiter and front tyre slip, the left one rear tyre slip, gear changes and impacts, both the surface; the effects add up. Measured in normal driving: 0.05 to 0.2 of full strength. Trigger rumble can be derived (throttle from the left motor, brake from the right), off by default; slip-only trigger effects need a hook in the title's rumble update and are left for later. The title sends no rumble while the AI drives.
 - **Latency.** The runtime adds about 1 ms at 60 and 120 Hz: SDL's update on the UI thread runs every millisecond, and the rest is the title polling once per frame. In 240 Hz races the UI thread is busy presenting and updates SDL only every 8.4 ms, so a new pad state waits 4 ms more on average. An SDL input thread of its own would fix that and is proposed as an opt-in, to be measured per driver (COM objects created on the UI thread may pull calls back to it); updating SDL on the guest's reading thread is allowed by SDL but runs driver code on guest threads, so it is not proposed.
@@ -40,14 +40,14 @@ The hints that decide the driver, with their defaults on Windows desktop:
 Three findings decide the matrix:
 
 1. **Xbox pads never reach HIDAPI on Windows.** Every XInput device (wired Xbox 360, One and Series pads, Xbox pads over Bluetooth through `xinputhid`, and pads that present themselves as an Xbox 360 pad) has a HID interface whose path contains `&IG_`, and SDL's Windows HID backend skips those interfaces ("XInput devices don't get real HID reports and are better handled by the raw input driver", `src/hidapi/windows/hid.c`). So the HIDAPI Xbox drivers, the only SDL drivers that read the Elite paddles and the Share button of an Xbox pad, do not see them, whatever the hints.
-2. **GameInput cannot start in this build.** `SDL_InitGameInput` loads `gameinput.dll` and calls `GameInputCreate`, then on Win32 requires GameInput API version 1 or newer (`#if GAMEINPUT_API_VERSION >= 1`, otherwise `hr = E_NOINTERFACE`, `SDL_gameinput.cpp`). `GAMEINPUT_API_VERSION` comes from `gameinput.h`, and the Windows SDK 10.0.26100 header that the build uses does not define it (that header is version 0; versions 1 and 2 ship in Microsoft's separate GameInput SDK package). With `SDL_JOYSTICK_GAMEINPUT=1` the driver fails its init, SDL keeps the other drivers, and the error stays in `SDL_GetError`. This PC has `GameInput.dll` and `GameInputRedist.dll` in System32, so only the header is missing.
+2. **GameInput cannot start in this build.** `SDL_InitGameInput` loads `gameinput.dll` and calls `GameInputCreate`, then on Win32 requires GameInput API version 1 or newer (`#if GAMEINPUT_API_VERSION >= 1`, otherwise `hr = E_NOINTERFACE`, `SDL_gameinput.cpp`). `GAMEINPUT_API_VERSION` comes from `gameinput.h`, and the Windows SDK 10.0.26100 header that the build uses does not define it (that header is version 0; versions 1 and 2 ship in Microsoft's separate GameInput SDK package). With `SDL_JOYSTICK_GAMEINPUT=1` the driver fails its init, SDL keeps the other drivers, and the error stays in `SDL_GetError`. This PC has `GameInput.dll` and `GameInputRedist.dll` in System32, so only the header is missing. (So it was until 25 October 2026; since then the runtime builds SDL's GameInput driver with API v3, see [The GameInput driver](#the-gameinput-driver).)
 3. **Trigger rumble on Windows comes only from WGI** (or GameInput). The XInput driver returns `SDL_Unsupported()` for trigger rumble (`WINDOWS_JoystickRumbleTriggers`); RAWINPUT drives the trigger motors through its WGI correlation (`RAWINPUT_JoystickRumbleTriggers`), and sets the trigger rumble capability only for pads whose IDs are of the Xbox One family (`ctx->is_xboxone`).
 
 ### The matrix
 
 "Today" is SDL's defaults, which the runtime uses now. "RAWINPUT" is `SDL_JOYSTICK_RAWINPUT=1` (WGI correlation on by default). "WGI" is the stand-alone WGI driver, which takes XInput devices only with XInput and DirectInput off (`SDL_XINPUT_ENABLED=0`, `SDL_JOYSTICK_DIRECTINPUT=0`, `SDL_JOYSTICK_WGI=1`; with XInput on it skips them, and with DirectInput on, DirectInput would claim them first). "GameInput" is what SDL's GameInput driver would give if it started (it does not in this build).
 
-| Pad | Today | RAWINPUT | WGI | GameInput (not in this build) |
+| Pad | Today | RAWINPUT | WGI | GameInput (`gameinput` since 25 October 2026, API v3) |
 | --- | --- | --- | --- | --- |
 | Xbox Series, USB or Bluetooth | XInput driver: two motors, no trigger rumble, no Share, Guide through `XInputGetStateEx`, battery level | RAWINPUT driver: two motors (XInput correlation), trigger rumble through WGI once correlated, no Share | WGI driver: two motors and trigger rumble; axes read 0 without focus; no Share | two motors, trigger rumble, Share as Misc1; no LED, no sensors (compiled out) |
 | Xbox Elite Series 2 | as Series; the paddles are not reported (the controller's own profile can map them to other buttons, which XInput then reports) | as Series, no paddles | as Series, no paddles | no paddles (SDL reads only GameInput's gamepad state) |
@@ -68,7 +68,7 @@ Notes on the rows:
 - **Default: today's drivers** (SDL's defaults: XInput for Xbox class pads, HIDAPI for PlayStation pads). They are what the owner plays with now, and they need no correlation.
 - **Option `rawinput`** for trigger rumble on Xbox One and Series pads: RAWINPUT with its WGI correlation. It is the candidate default for the owner's hardware test with the Series controller.
 - **Option `wgi`** (WGI with XInput and DirectInput off) as a fallback if RAWINPUT's correlation misbehaves with a pad.
-- **No `gameinput` option in stage 2.** It would need SDL rebuilt with the GameInput SDK's v1 or v2 header, which is a download (Microsoft's `Microsoft.GameInput` package) and needs the owner's approval; without it the option would silently fall back. With the header, GameInput would add the Share button; the system DLL is present on this PC, and an absent DLL falls back to the other drivers.
+- **No `gameinput` option in stage 2.** It would need SDL rebuilt with the GameInput SDK's v1 or v2 header, which is a download (Microsoft's `Microsoft.GameInput` package) and needs the owner's approval; without it the option would silently fall back. With the header, GameInput would add the Share button; the system DLL is present on this PC, and an absent DLL falls back to the other drivers. (Superseded on 25 October 2026: the owner approved the package's MIT files, which give API v3; see [The GameInput driver](#the-gameinput-driver).)
 - Fallback in every case: a driver that does not start leaves SDL's others running, so a pad is never lost; the pad report logs the driver that took it.
 
 ## The title's input code
@@ -232,7 +232,7 @@ Every default keeps today's behaviour. The owner's hardware test through an expo
 
 Details:
 
-- **Driver option.** Named after what it does rather than "auto/GameInput/XInput": GameInput cannot start in this build, and "auto" is SDL's default. A driver that fails to start leaves the others running, so no choice can lose a pad. The pad report says which driver took it.
+- **Driver option.** Named after what it does rather than "auto/GameInput/XInput": GameInput cannot start in this build, and "auto" is SDL's default. A driver that fails to start leaves the others running, so no choice can lose a pad. The pad report says which driver took it. (So it was until 25 October 2026; since then the runtime builds SDL's GameInput driver with API v3, see [The GameInput driver](#the-gameinput-driver).)
 - **Mapping.** On Windows the paddles and Misc1 of Xbox pads never arrive (no SDL driver in this build reads them there), so the mapping matters for PlayStation pads (the DualSense's microphone button is Misc1, its touchpad click the touchpad button) and other HIDAPI pads; an Elite's own profile can still map its paddles to buttons that XInput reports. A Guide target stays subject to `guide_button`.
 - **Shaping.** One helper for the physical drivers (`sdl` and `xinput`), never for the diagnostic controller or the keyboard and mouse driver, so e2e runs keep their exact values. Order: inner deadzone and outer edge on the stick's magnitude, rescaled from the deadzone's edge (as the title does, so there is no jump), then the curve, then the anti-deadzone, which maps any non-zero magnitude into the title's own deadzone; triggers: inner and outer range on the 8-bit value. With the defaults it returns its input bit for bit. Unit tests cover the identity, the radial rescale, the anti-deadzone fed through the title's own formula (any stick past the runtime's deadzone must give the title a non-zero, rising steering output, checked against this note's measured transfer) and the clamps.
 - **Rumble.** The strength multiplies both motors and clamps at 65,535. Trigger rumble goes through `SDL_RumbleGamepadTriggers` with the same long duration as the motors, only on pads that report `SDL_PROP_GAMEPAD_CAP_TRIGGER_RUMBLE_BOOLEAN`: right trigger from the left motor and the throttle, left trigger from the right motor and the brake (see [Deriving trigger rumble](#deriving-trigger-rumble)). It is tested without a pad through a virtual SDL gamepad, whose `RumbleTriggers` callback records what the driver sends.
@@ -340,7 +340,7 @@ So neither XInput nor RAWINPUT gives trigger rumble on the Ally X: as an Xbox 36
 - The launchers default to rumble strength 1.5 (`-Pad` knob `rumble`, `PAD_KNOBS` with `runtime_default` 1, in both launchers); the runtime cvar `pad_rumble_strength` keeps 1, the title's own scale.
 - The steering deadzone: first 10 in the game as the starting value; corrected the same day, when the game's floor of 7,849 came to light, to the runtime's anti-deadzone with the live range and a stick deadzone of 0.05, off by default until the owner's test ([below](#the-steering-anti-deadzone-with-the-live-ranges)).
 - The input thread stays off by default: no gain on the Ally X at its race rate, a gain only in 240 fps races on the main PC.
-- Trigger rumble on the Ally X waits for GameInput, which needs the GameInput SDK's header and the owner's approval.
+- Trigger rumble on the Ally X waits for GameInput: approved the same day as option A, GameInput API v3 with an SDL patch ([The GameInput driver](#the-gameinput-driver)).
 
 ### The steering anti-deadzone with the live ranges
 
@@ -375,12 +375,56 @@ steering deadzone. The runtime's anti-deadzone now uses that range:
   in the merge, with the anti-deadzone the larger of the pad's and the keys' steering wins and
   reaches the title unchanged, without it a pad's 20% loses to the keys' 5%.
 
+### The GameInput driver
+
+25 October 2026. The owner approved downloading Microsoft.GameInput 3.5.283 from NuGet for its
+MIT files only, and then option A of the review: GameInput API v3 with a minimal SDL patch (the
+non-MIT v2 header was rejected). The review and the download are in
+[sources and licensing](../sources-and-licensing.md#third-party-code-microsoftgameinput).
+
+- **The package.** Of its files, only the public header (`native/include/GameInput.h`, API v3)
+  and the static library's loader source (`native/src/GameInput.cpp`) carry the MIT license; its
+  `LICENSE.txt` and its `v0`, `v1` and `v2` headers are under Microsoft's terms for the GameInput
+  redistributable. Setup fetches the pinned package (SHA-512 checked) into the BuildRoot and
+  extracts the two MIT files ([setup](../setup.md#the-gameinput-package)).
+- **What SDL 3.5 needed for v3** ([sdl3-gameinput-v3.patch](../../outputs/FM4-build/sdl3-gameinput-v3.patch),
+  applied to the fetched source by `patch_thirdparty`, which refuses a mismatch): the
+  `GameInput::v3` namespace; creation through `GameInputInitialize` (v3 has a new
+  `IID_IGameInput`, and Windows' own `GameInput.dll` exports only the old `GameInputCreate`); and
+  the controller counts, which v3 moved into `GameInputDeviceInfo::controllerInfo` (null for
+  devices that are not controllers). Every other GameInput call SDL makes (readings, rumble
+  with the trigger motors, system buttons, focus policy, sensors) is unchanged in v3, which only
+  adds methods and drops the UI navigation state SDL does not read.
+- **The loader.** The package's MIT loader, built into SDL, picks the newest of Windows'
+  `GameInput.dll`, the redistributable's `GameInputRedist.dll` (System32 or the directory the
+  registry names) and one beside the executable, and calls its `GameInputInitialize`; a runtime
+  without that export serves API v0 only, and the loader then fails with `E_NOINTERFACE`. On the
+  development PC, Windows' `GameInput.dll` is 0.2309.26100.9278 (exports `GameInputCreate`
+  only) and `GameInputRedist.dll` 4.0.302.0 (exports `GameInputInitialize`).
+- **The build.** `REX_GAMEINPUT_DIR` puts the v3 header before the Windows SDK's `gameinput.h`
+  for SDL's sources only and adds the loader to SDL; without it SDL builds against the SDK's
+  header as before, and the patch keeps that path.
+- **The option.** `sdl_joystick_driver=gameinput` sets `SDL_HINT_JOYSTICK_GAMEINPUT`. SDL's
+  GameInput driver comes before its others, which skip the pads it claims. When it cannot
+  start, the others take the pads as with `default`, and the runtime logs one line from the same
+  creation SDL makes: `SDL GameInput: a GameInput v3 runtime is available` or
+  `SDL GameInput: no GameInput v3 runtime (HRESULT ...)` with the reason. Nothing of the package
+  is shipped: an export relies on the GameInput runtime the PC has.
+
+Verification, 25 October 2026, on `I:\FM4-build-usa` (snapshot `gp-s6` from commit `334fa62`, not dirty):
+
+- The build applied the patch to the fetched SDL (`patch_thirdparty`: checked, then applied, CRLF kept; a second run finds it applied, and a changed source is refused) and configured the runtime with `REX_GAMEINPUT_DIR`: SDL's GameInput sources compile with the v3 header first on their include path, and the loader is part of SDL. `fm4_pad_shaping_tests` and `launcher_tests` (342 plans, with a `driver=gameinput` case) pass.
+- On this PC the loader creates the v3 interface (`GameInputInitialize` returns `S_OK`, through `GameInputRedist.dll` 4.0.302); a small check program built from the same two files showed it before the game run.
+- `gp3-gi60`, `driver=gameinput` with the latency probe, AI race at 60 Hz: the log has `SDL GameInput: a GameInput v3 runtime is available; GameInput takes the pads it supports`, the run reaches its goal, and the probe's virtual pad is read as with `default` (age at the title's read 8.79 ms against 8.83, update gaps 0.83 ms); the error lines are those of every run.
+- Smoke (`gp3s`, fast route, 240 Hz, `photo` against `gp2s2`): reached its goal, race 230.5 fps against 212.6, p99 5.35 against 6.89 ms; WARN on `wait_reg_mem` (229 to 335 ms/s, from main's render changes since the baseline) and the capture statistics.
+- Not covered: a pad that GameInput takes (this PC has none connected), so the trigger rumble and the Share button through GameInput are the owner's test ([checklist](../running.md#controller-test-checklist)); the fallback on a PC without a v3 runtime, which this PC cannot show (SDL tries every driver and keeps the ones that start, `SDL_InitJoysticks`, and the runtime logs the loader's HRESULT).
+
 ## Left for later
 
 - **PlayStation glyphs.** The title draws Xbox button glyphs. A texture replacement set per pad type ([texture replacement](texture-replacement.md)) chosen from the pad report is the likely route.
 - **Gyro steering.** The DualSense reports its gyroscope through HIDAPI, and SDL fuses the Ally's own IMU into an Xbox 360 class pad on the Ally (`IsROGAlly`). Mapping it onto the steering axis (with a centre reset) is a separate feature.
 - **Trigger effects from the title's state.** Slip-only trigger rumble, and DualSense adaptive triggers (resistance from the brake, a pulse on locking), need the rumble mixer's per-effect values (`TireTractionFront`, `TireTractionRear`, the engine speed), so a hook in the title's rumble update first.
-- **GameInput.** Needs SDL built with the GameInput SDK's v1 or v2 header (a download, owner's approval). It would give the Xbox Share button and trigger rumble without RAWINPUT's correlation, but no paddles; it is also the one route left to the ROG Xbox Ally X's trigger motors, which XInput and RAWINPUT do not reach.
+- **GameInput beyond the first test.** `gameinput` is in since 25 October 2026 ([The GameInput driver](#the-gameinput-driver)); whether GameInput reaches the Ally X's trigger motors and the Series pad's Share button is for the owner's test. A newer SDL with API v3 support of its own would replace the patch.
 - **Elite paddles as paddles on Windows.** Only SDL's HIDAPI Xbox drivers read them, and on Windows those never see an XInput device; libusb is not built in.
 
 ## Evidence
