@@ -31,7 +31,7 @@ the preview cannot start without it.
 
 | Item | Closed preview | Public preview |
 | --- | --- | --- |
-| A fresh clone follows README and [setup](../setup.md) to a built game on the development computer that boots to the menus (25 October 2026, [current status](../status/current.md#clean-setup-from-a-fresh-clone-25-october-2026)) | Done | Done |
+| A fresh clone follows README and [setup](../setup.md) to a built game on the development computer that runs a Quick Race (25 October 2026, [current status](../status/current.md#clean-setup-from-a-fresh-clone-25-october-2026)) | Done | Done |
 | The bugs and gaps that clean setup found are fixed: the launcher test that needed `BuildRoot\cache`, the execution policy, the Python path, the `vswhere` message, disk space and time, and `warmcache`, which needs a profile played once and the English OCR language | Done | Done |
 | `warmcache` and the e2e timelines on a new profile: the game's intro video and first-run screens are not driven, so a tester plays once first | Not done (documented) | Not done (documented) |
 | Testers can clone the source: GitHub's `main` is about 184 commits behind local `main` (25 October 2026), and nothing is pushed without the owner | **Blocker** (push to a private repository with the testers invited, or another channel the owner chooses) | **Blocker** (push to a public repository) |

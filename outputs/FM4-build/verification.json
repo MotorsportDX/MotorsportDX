@@ -7,7 +7,7 @@
     "python": "3.11",
     "git": "2.55.0"
   },
-  "source_isolation": "A fresh git clone of local main at 5c346c9 in a new folder and a new BuildRoot; the upstream SDK, its submodules and the FidelityFX SDK fetched from GitHub by setup; no pre-existing generated game source.",
+  "source_isolation": "A fresh git clone of local main at 5c346c9, with the launcher test fix and the window-title rename of 25 October 2026, in a new folder and a new BuildRoot; the upstream SDK, its submodules and the FidelityFX SDK fetched from GitHub by setup; no pre-existing generated game source.",
   "release": "USA (media ID 26FF1101), with Disc 2 and eight DLC packages",
   "setup": "passed: pinned SDK and 13 submodules, FidelityFX SDK v1.1.4, resolve shaders, Release runtime build and install",
   "generate": "passed for the main executable and both auxiliary modules",
@@ -24,22 +24,27 @@
     "vector_checks": 227529
   },
   "startup": {
-    "observed": "warmcache on the new profile: the legal notice, the splash videos, the title screen and the intro video; e2e quickrace on a copy of the development profile: the main menu, Free Play and the car select (Disc 2 not imported by e2e)",
-    "race_reached": false,
-    "disc2_and_dlc_imported": false,
+    "observed": "Build.ps1 -Action run imported the four Disc 2 and eight DLC packages in 15 s; e2e quickrace on a copy of the development profile reached the race (Abarth 131 on the Bernese Alps grid, cars placed, 3-2-1 started), no clear-gray frames; warmcache on the new profile stopped at the intro video",
+    "race_reached": true,
+    "disc2_packages_imported": 4,
+    "dlc_packages_imported": 8,
+    "window_titles": [
+      "Motorsport DX",
+      "Motorsport DX [rexglue-v0.10.0.0-dev.unknown-Release]"
+    ],
     "exit": "closed by the harness"
   },
   "full_gameplay_verified": false,
   "limitations": [
     "Verification used a fresh clone on the development computer, not a second physical computer.",
     "The runtime was built with REX_FSR off; the GUI launcher and export were not run from this BuildRoot.",
-    "The e2e Quick Race used a copy of the development profile: a new profile plays the intro video first."
+    "The e2e Quick Race used a copy of the development profile: a new profile plays the intro video first, and e2e imports no content, so Build.ps1 -Action run imported Disc 2 and the DLC before it."
   ],
   "game_artifacts_in_repository": false,
   "artifact_hashes": {
-    "fm4_rex.exe": "f4197ca65fbfee68de310214c784f221b56c50b86933f686667738795bbf6f08",
-    "fm4_rex_XMediaFacade_default.dll": "9cfbc01e55a130e1d2c31293e34697a6918c7f462c222949830f617b006e6897",
-    "fm4_rex_SpeechFacade_default.dll": "f0d3fdd6890b69d9d0eb0405ad9b517dbc9cceb0f52faaecc8cac7a4031bbfd0",
+    "fm4_rex.exe": "76f4876106ae77fbe1fe501eed147f4d55618802ccb0f57e227144296079cd20",
+    "fm4_rex_XMediaFacade_default.dll": "81852201bfdfb5f8f5115c49ff3189d63abc365edf03b1c090d62152d5a49b66",
+    "fm4_rex_SpeechFacade_default.dll": "72490f4545d8ef2a8be1e87a3415831ead51c381758cce356f93d3e9fdd34a47",
     "rexruntime.dll": "3eb9586a036eb1a4a851b7833d308e54f4303b3b9b267ae8e7f80f53f1762c04",
     "rexgpu-xenos.dll": "42a3100a73d8da36744c049be5616a7abeeb5daeef521b3d22a42298d656a740"
   }

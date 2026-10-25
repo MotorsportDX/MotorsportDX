@@ -8,7 +8,7 @@ Motorsport DX is not affiliated with or endorsed by Microsoft, Xbox Game Studios
 
 ## Status
 
-- **Latest verification:** 25 October 2026. A fresh clone set up, generated and built the game from the USA discs on the development computer and booted to the menus. The automated e2e harness runs Quick Race, photo mode and career races through to the reward on the latest build.
+- **Latest verification:** 25 October 2026. A fresh clone set up, generated and built the game from the USA discs on the development computer and ran a Quick Race. The automated e2e harness runs Quick Race, photo mode and career races through to the reward on the latest build.
 - **Tested hardware:** the development laptop (Intel Core Ultra 7 255HX, RTX 5070 Ti Laptop GPU) and, from exports, a ROG Xbox Ally X (Radeon 890M), where the project owner plays Quick Race, career, photo mode and replays. No other GPU has been tried.
 - **Status:** an experimental build, not yet a full port with all features and verified stability. What is known not to work or not tested is in [known issues](docs/known-issues.md); how to report a problem is in [bug reports](docs/bug-reports.md).
 - **Details:** [current status](docs/status/current.md) and [history](docs/status/history.md).
