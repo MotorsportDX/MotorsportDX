@@ -105,6 +105,10 @@
       "provenance": "Project documentation; plan for AMD FSR 3.1 beside TAA (version and license review, integration design, stages; no third-party code and no game content)"
     },
     {
+      "path": "docs/analysis/modern-gamepads.md",
+      "provenance": "Project documentation; design note for modern gamepads (SDL driver matrix from the SDL source, the title's deadzones and rumble from the recompiled code, the profile schema and e2e logs, input latency measurements, proposed options; no third-party code and no game content beyond setting names and values)"
+    },
+    {
       "path": "docs/analysis/function-catalog.md",
       "provenance": "Project documentation; method and coverage of the function catalog built from static analysis (counts, address ranges, module and class names, a few function addresses; no decompiled code or game content)"
     },

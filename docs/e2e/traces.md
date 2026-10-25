@@ -29,6 +29,7 @@ Summary of the variables on this page:
 | `REX_READBACK_DUMP` | bytes of one resolve readback | `REX_READBACK_DUMP_EVERY`, default 120 | [Readback dumps](#readback-dumps-rex_readback_dump) |
 | `REX_RESOLVE_PUBLICATION_TRACE` | one JSON line per resolve publication, after `<file>.arm` exists | every publication | [Resolve publication](#resolve-publication-rex_resolve_publication_trace) |
 | `REX_FILE_READ_TRACE`, `REX_IO_TRACE`, `FM4_STREAM_TRACE` | guest file and I/O activity | every call | [File and I/O](#file-and-io) |
+| `FM4_INPUT_TRACE_FILE`, cvar `input_latency_probe` | the title's deadzones, stick and trigger output and rumble; the age of SDL pad states at the guest's read | every change; every 5 seconds | [Gamepad input](#gamepad-input) |
 
 ## Performance trace (REX_PERF_TRACE_FILE)
 
@@ -282,3 +283,8 @@ These checks were written for the RTV missing-road issue, and they are usable fo
 - `FM4_STREAM_TRACE=<file>`: the title's resource loader ([`work/fm4-rex/src/fm4-stream-trace.cpp`](../../work/fm4-rex/src/fm4-stream-trace.cpp)): request steps, the section allocation and its failure flags, archive stream reads, `ReadFile` and `GetOverlappedResult` results, decompressor results, and the memory manager's pool table when a section allocation fails.
 
 The streaming fix itself is always on. `FM4_STREAMING_FALLBACK=0` turns it off for comparisons; see [experiments.md](experiments.md).
+
+## Gamepad input
+
+- `FM4_INPUT_TRACE_FILE=<file>` ([`fm4-ui-diagnostics.cpp`](../../work/fm4-rex/src/fm4-ui-diagnostics.cpp)) writes the title's own pad handling, one line per change and up to 200,000 lines, with the steady clock in milliseconds: `cfg` lines with the ten deadzone floats the input conversion `sub_822B4130` gets (left stick, right stick, left trigger and right trigger inner and outer, then the right stick's second pair), `in` lines with the raw state (sticks, triggers, buttons) and the title's output (trigger bytes, and per stick its direction, angle, magnitude, x and y), and `rumble` lines with the motors of the title's `XInputSetState` (`rumble-async` for its overlapped path). `u=` is the session update count, `r=` the race marker of the diagnostic controller. Run it with a human driver: the title sends no rumble while the AI drives. The findings are in [modern gamepads](../analysis/modern-gamepads.md).
+- `--arg input_latency_probe=true` (runtime cvar, SDL backend) attaches a virtual SDL gamepad whose right stick X flips every 20 to 49 ms on a thread of its own, and logs to `runtime.log` every 5 seconds the gaps between SDL's joystick updates, the wait from a new value to the update that sent it, from that update to the guest's read, the age at the read, and the gaps between the guest's reads (`SDL latency probe (ms): ...`). The value (256) stays inside every stick deadzone. The probe is a physical SDL pad to the runtime: without another pad it is guest user 0 and merges with the diagnostic controller. It lets SDL take pad events without window focus.

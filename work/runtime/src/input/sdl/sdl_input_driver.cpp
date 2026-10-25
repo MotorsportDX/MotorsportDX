@@ -148,6 +148,12 @@ void SDLInputDriver::OnWindowAvailable(rex::ui::Window* window) {
           },
           this);
 
+      // SDL drops pad events while none of its windows has keyboard focus, and a game
+      // started by the e2e harness need not have it.
+      if (REXCVAR_GET(input_latency_probe)) {
+        SDL_SetHint(SDL_HINT_JOYSTICK_ALLOW_BACKGROUND_EVENTS, "1");
+      }
+
       // Initialize game controller subsystem
       if (!SDL_InitSubSystem(SDL_INIT_GAMEPAD)) {
         REXLOG_ERROR("SDL: Failed to init gamecontroller subsystem: {}", SDL_GetError());
