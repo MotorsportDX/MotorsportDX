@@ -1,6 +1,6 @@
 # Bug reports
 
-How to report a problem with FM4-PC so that it can be reproduced. Check
+How to report a problem with Motorsport DX so that it can be reproduced. Check
 [known issues](known-issues.md) first: the problem may be known, or a part that has not been
 tested yet, which a report is welcome for too.
 
@@ -18,7 +18,7 @@ invitation names. Use one report per problem.
    Information) writes them all to a text file; send the parts named above.
 4. **The game**: the release that `generate` printed (`Disc 1: USA release` or Japan/Asia),
    and whether Disc 2 and downloadable content are imported.
-5. **The build**: the FM4-PC commit (`git log -1 --format=%h` in the repository), whether it
+5. **The build**: the Motorsport DX commit (`git log -1 --format=%h` in the repository), whether it
    was built with `-Fsr on`, and whether you run from the BuildRoot or from an export.
 6. **The options**: the `Build.ps1 -Action run` command line, or in the GUI launcher the
    profile's settings (Advanced, **Copy command line**). With `-Info` or F2 the settings overlay

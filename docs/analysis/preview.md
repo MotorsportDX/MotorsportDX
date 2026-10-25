@@ -1,6 +1,6 @@
 # Preview plan (25 October 2026)
 
-What a preview of FM4-PC can be, what it must not contain, and what is done, not done or
+What a preview of Motorsport DX can be, what it must not contain, and what is done, not done or
 blocking for a closed preview (a few testers who own the game) and for a public one. The
 checklist comes from an audit on 25 October 2026: a clean setup from a fresh clone, a review of
 every third-party license, a scan of the Git history, and the status documents. Whether and

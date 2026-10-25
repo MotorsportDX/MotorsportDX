@@ -1,6 +1,6 @@
 ---
 name: fm4-e2e-gate
-description: Run and read FM4-PC e2e gates (matrix.py smoke, perf, full and career tiers, single e2e.py runs, compare.py verdicts). Use when a change to the runtime, the integration code, a look or a launcher setting needs verification on the built game, when asked to "run smoke", "run a gate", "measure fps", "compare with the baseline" or "check that it still works", and when reading existing gate results under <BuildRoot>\e2e.
+description: Run and read Motorsport DX (FM4-PC) e2e gates (matrix.py smoke, perf, full and career tiers, single e2e.py runs, compare.py verdicts). Use when a change to the runtime, the integration code, a look or a launcher setting needs verification on the built game, when asked to "run smoke", "run a gate", "measure fps", "compare with the baseline" or "check that it still works", and when reading existing gate results under <BuildRoot>\e2e.
 ---
 
 # FM4 e2e gates

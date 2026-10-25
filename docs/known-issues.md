@@ -1,6 +1,6 @@
 # Known issues
 
-FM4-PC is an experimental build. This page lists, in plain terms, what is known not to work,
+Motorsport DX is an experimental build. This page lists, in plain terms, what is known not to work,
 what has not been tried, and the hardware it has run on. The technical state and its evidence
 are in [status/current.md](status/current.md). To report a problem, see
 [bug reports](bug-reports.md).

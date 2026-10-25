@@ -1,6 +1,6 @@
-Third-party notices
+Motorsport DX: third-party notices
 
-FM4-PC is built from the project's own code, the ReXGlue SDK fork in work/runtime, and the
+Motorsport DX is built from the project's own code, the ReXGlue SDK fork in work/runtime, and the
 third-party code below. None of the third-party libraries is stored in this repository:
 setup fetches them into the BuildRoot from their pinned upstream revisions. Each license file
 in this folder is the upstream text as it stands at that revision. Build.ps1 -Action export

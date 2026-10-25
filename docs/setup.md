@@ -1,12 +1,12 @@
 # Setup and build
 
-This guide covers building FM4-PC from source on Windows x64 with your own
+This guide covers building Motorsport DX from source on Windows x64 with your own
 Forza Motorsport 4 discs: prerequisites, the `doctor` check, the setup, generate
 and build stages, optional build flavors, the BuildRoot layout, what is kept out
 of the repository, and troubleshooting. To launch the built game and its options,
 see [running.md](running.md).
 
-FM4-PC is an experimental integration. Building it does not turn Forza Motorsport 4
+Motorsport DX is an experimental integration. Building it does not turn Forza Motorsport 4
 into a complete or bug-free native port; existing rendering, mode-coverage and
 performance limitations still apply. For what has been verified, the historical
 gameplay results and the open gaps, see [status/current.md](status/current.md) and

@@ -1,4 +1,4 @@
-// FM4-PC launcher: a window to pick the run options of Build.ps1 -Action run, the Discs and the
+// Motorsport DX launcher: a window to pick the run options of Build.ps1 -Action run, the Discs and the
 // downloadable content, and to start the game without Python, Visual Studio or the repository
 // (docs/running.md#gui-launcher). The launch rules are those of pipeline.py (plan.cpp).
 #include <windows.h>
@@ -430,7 +430,7 @@ bool App::Init(int argc, char** argv) {
   game_event_ = SDL_RegisterEvents(1);
   scale_ = SDL_GetDisplayContentScale(SDL_GetPrimaryDisplay());
   if (scale_ <= 0) scale_ = 1;
-  window_ = SDL_CreateWindow("FM4-PC", static_cast<int>(980 * scale_), static_cast<int>(700 * scale_),
+  window_ = SDL_CreateWindow("Motorsport DX", static_cast<int>(980 * scale_), static_cast<int>(700 * scale_),
                              SDL_WINDOW_RESIZABLE | SDL_WINDOW_HIDDEN | SDL_WINDOW_HIGH_PIXEL_DENSITY);
   if (!window_) return false;
   SDL_SetWindowMinimumSize(window_, static_cast<int>(760 * scale_), static_cast<int>(520 * scale_));
@@ -896,7 +896,7 @@ void App::Frame() {
   ImGui::SetNextWindowPos(viewport->WorkPos);
   ImGui::SetNextWindowSize(viewport->WorkSize);
   ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, ImVec2(0, 0));
-  ImGui::Begin("FM4-PC", nullptr,
+  ImGui::Begin("Motorsport DX", nullptr,
                ImGuiWindowFlags_NoDecoration | ImGuiWindowFlags_NoMove | ImGuiWindowFlags_NoSavedSettings |
                    ImGuiWindowFlags_NoBringToFrontOnFocus);
   ImGui::PopStyleVar();
@@ -943,7 +943,7 @@ void App::Header() {
                 ImGui::GetColorU32(kBorder));
   ImGui::SetCursorScreenPos(ImVec2(origin.x + 18 * scale_, origin.y + (height - ImGui::GetFontSize() * 1.3f) / 2));
   ImGui::PushFont(heading_font_, 22);
-  ImGui::TextUnformatted("FM4-PC");
+  ImGui::TextUnformatted("Motorsport DX");
   ImGui::PopFont();
   ImGui::SameLine();
   ImGui::SetCursorPosY(ImGui::GetCursorPosY() + 3 * scale_);
@@ -1830,7 +1830,7 @@ void App::Footer() {
 int main(int argc, char** argv) {
   App app;
   if (!app.Init(argc, argv)) {
-    SDL_ShowSimpleMessageBox(SDL_MESSAGEBOX_ERROR, "FM4-PC", SDL_GetError(), nullptr);
+    SDL_ShowSimpleMessageBox(SDL_MESSAGEBOX_ERROR, "Motorsport DX", SDL_GetError(), nullptr);
     return 1;
   }
   app.Run();

@@ -1,4 +1,4 @@
-# Running FM4-PC
+# Running Motorsport DX
 
 This guide covers launching a finished build with `Build.ps1 -Action run`: what
 the launcher checks and sets up, its options, the look knobs, the controls and the

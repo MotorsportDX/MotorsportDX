@@ -1,8 +1,10 @@
-# FM4-PC
+# Motorsport DX
 
-Experimental recompilation of **Forza Motorsport 4 for Windows x64**, built on the ReXGlue SDK with runtime and GPU patches derived from ReXGlue and Xenia. The project provides integration code and a setup, generate, build, and run workflow that works from **game data you own**. ReXGlue translates the Xbox 360 executable into C++ locally, and the toolchain builds it into an executable and DLLs for PC. Xbox services and graphics are handled by the SDK runtime.
+Motorsport DX runs **Forza Motorsport 4** (Xbox 360), recompiled for Windows x64 from the player's own discs. It is an experimental recompilation built on the ReXGlue SDK with runtime and GPU patches derived from ReXGlue and Xenia. The project provides integration code and a setup, generate, build, and run workflow that works from **game data you own**. ReXGlue translates the Xbox 360 executable into C++ locally, and the toolchain builds it into an executable and DLLs for PC. Xbox services and graphics are handled by the SDK runtime.
 
 The repository does not include the game, original assets, recompiled code, or a ready-to-run binary. Cloning is not enough: prepare the game data and build prerequisites first.
+
+Motorsport DX is not affiliated with or endorsed by Microsoft, Xbox Game Studios or Turn 10 Studios. Forza Motorsport and Xbox are trademarks of the Microsoft group of companies. The project was called FM4-PC until 25 October 2026; the repository, its folders and the program files (`fm4_rex.exe`, `fm4_launcher.exe`) keep that name for now.
 
 ## Status
 
@@ -160,11 +162,9 @@ The next validation priorities are a clean setup on a second computer, then audi
 
 The repository contains reviewed integration code and a ReXGlue SDK fork (BSD-3-Clause, with Xenia-derived portions), and it keeps the upstream notices. The project does not assign a blanket license of its own, and it provides no rights to FM4 game content. Only the source is distributed: the game's executables and DLLs that `build` makes, an export, and any game data stay with the player who built them ([distribution](docs/sources-and-licensing.md#distribution)). See [docs/sources-and-licensing.md](docs/sources-and-licensing.md).
 
-FM4-PC is not affiliated with or endorsed by Microsoft, Xbox Game Studios or Turn 10 Studios. Forza Motorsport and Xbox are trademarks of the Microsoft group of companies.
-
 ## Credits
 
-FM4-PC builds on the work of these projects. Their license texts are in the [third-party notices](outputs/FM4-source-control/third-party-notices/README.txt), which every export carries; the versions, and the binary each one ends up in, are in [third-party components](docs/sources-and-licensing.md#third-party-components).
+Motorsport DX builds on the work of these projects. Their license texts are in the [third-party notices](outputs/FM4-source-control/third-party-notices/README.txt), which every export carries; the versions, and the binary each one ends up in, are in [third-party components](docs/sources-and-licensing.md#third-party-components).
 
 - [ReXGlue SDK](https://github.com/rexglue/rexglue-sdk), Copyright (c) 2026 Tom Clay, BSD-3-Clause: the recompiler and the runtime that `work/runtime` forks.
 - [Xenia](https://xenia.jp), Copyright (c) 2022 Ben Vanik and Xenia project contributors, BSD-3-Clause: the Xbox 360 kernel, GPU and audio emulation that ReXGlue derives from, including the resolve shaders.

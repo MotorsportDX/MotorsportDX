@@ -86,7 +86,7 @@ Not built: tiny-AES-c (compiled as a static library that no binary links), Vulka
 
 ## Distribution
 
-What FM4-PC can be given to others as, a preview included ([preview plan](analysis/preview.md)):
+What Motorsport DX can be given to others as, a preview included ([preview plan](analysis/preview.md)):
 
 - **The source repository, with the build instructions.** It holds the integration code, the runtime fork, the tooling, the documentation and the third-party notices, and none of the game. Each player builds the game on their own computer from their own discs ([setup](setup.md)): `generate` reads the game's code from their `default.xex`, and `build` compiles it there.
 - **Not an export, a BuildRoot or any binary of it.** `fm4_rex.exe` and the two module DLLs are the game's code recompiled from the player's discs, so they carry the game, and the export's shader cache (`cache`) holds shaders translated from the game. An export is for the builder's own computers ([export](running.md#export-to-another-computer)). The runtime DLLs and the GUI launcher are not distributed on their own either: they are built in the same BuildRoot, and the LGPL terms above would apply to the runtime.
