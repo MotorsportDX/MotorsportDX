@@ -109,7 +109,9 @@ another drive.
 The `doctor` action checks the prerequisites and reports what is missing: Windows
 x64, 64-bit Python 3.11 or newer, `git`, `cmake`, `ninja`, `clang`, `clang++` and
 `link` on the path, LLVM 20.x (from `clang++ --version`), CMake 3.25 or newer, and
-`fxc.exe` in the Visual Studio developer environment. `Build.ps1` sets up the
+`fxc.exe` in the Visual Studio developer environment. It also reports the BuildRoot's
+FidelityFX SDK checkout (fetched or not, at the pinned commit or not) and its mirror
+([the FidelityFX SDK mirror](#the-fidelityfx-sdk-mirror)). `Build.ps1` sets up the
 Visual Studio x64 environment itself. The scripts do not silently install system
 software or change security settings.
 
@@ -183,6 +185,7 @@ The stages can also run separately:
 | `-Content` | Content package files or directories (DLC). Optional, one or more, read by `generate`, `all` and `run`. See [Downloadable content](#downloadable-content). |
 | `-Flavor` | Compiler experiment for `build`, for example `thinlto,v3`. See [Build flavors](#build-flavors). |
 | `-Fsr` | `on` or `off`, for `setup`, `build` and `all`: link AMD FSR 3.1 into the runtime, built from the FidelityFX SDK source (`REX_FSR`). `on` fetches the pinned SDK first. The runtime build folder keeps the choice for later builds; off by default. See [FSR 3.1](#fsr-31-optional). |
+| `-FfxMirror` | The FidelityFX SDK mirror for `setup`, `build` and `all`, in place of the `FFX_MIRROR` environment variable: another Git URL or a local `.bundle` file. See [the FidelityFX SDK mirror](#the-fidelityfx-sdk-mirror). |
 | `-Out` | The folder of `export`, outside the BuildRoot and the repository. |
 
 ## Stages
@@ -197,23 +200,46 @@ The stages can also run separately:
   `f5337cdc947ff6d4c4196737e2c807a48f2a1fc2`: the vendored directories and the 13
   submodules that the D3D12 build needs. Vulkan, SPIR-V, Tracy and the tests are not
   fetched;
+- takes the AMD FidelityFX SDK from `GPUOpen-LibrariesAndSDKs/FidelityFX-SDK`, tag
+  `v1.1.4`, commit `c6efa6bf7f2027b3ec94f28578bb5965eabb9e55`: a sparse, blob-filtered Git
+  clone of the files the FSR 3 upscaler and its DX12 backend build from (about 39 MB plus
+  36 MB of Git objects) in `BuildRoot\fidelityfx-sdk`. Setup refuses any other commit, and
+  takes it from the [mirror](#the-fidelityfx-sdk-mirror) when GitHub cannot be reached;
 - compiles the licensed Xenia/ReXGlue resolve shaders with the Windows SDK FXC;
 - builds and installs the Release runtime locally.
 
 #### FSR 3.1 (optional)
 
-With `-Fsr on`, `setup` (or `build`) also:
+With `-Fsr on`, `setup` (or `build`) also builds the FSR 3 upscaler and its DX12 backend
+from the FidelityFX SDK checkout into the runtime, with the SDK's shader compiler and DXC
+from the same checkout (used at build time only). Nothing of it runs yet
+([FSR plan](analysis/fsr-plan.md#31-stage-0s-build-25-october-2026)). The license notices
+are in [third-party-notices](../outputs/FM4-source-control/third-party-notices/README.txt).
 
-- fetches the AMD FidelityFX SDK, tag `v1.1.4`, commit
-  `c6efa6bf7f2027b3ec94f28578bb5965eabb9e55`, as a sparse, blob-filtered Git clone of the
-  files the FSR 3 upscaler and the DX12 backend need (about 39 MB plus 36 MB of Git objects)
-  into `BuildRoot\fidelityfx-sdk`, and stops when the checked-out commit differs;
-- builds the upscaler and its DX12 backend from that source into the runtime, with the SDK's
-  shader compiler and DXC from the same checkout (used at build time only).
+#### The FidelityFX SDK mirror
 
-Nothing of it runs yet ([FSR plan](analysis/fsr-plan.md#31-stage-0s-build-25-october-2026)).
-The license notices are in
-[third-party-notices](../outputs/FM4-source-control/third-party-notices/README.txt).
+The SDK is not in the repository, so a copy of the pinned commit keeps setup reproducible
+when GitHub cannot be reached or the repository goes away. `FFX_MIRROR` (an environment
+variable, or `Build.ps1 -FfxMirror`) names it:
+
+- **A local `.bundle` file.** When the file does not exist, setup writes it after a fetch
+  from GitHub: a Git bundle of the pinned commit with its trees and the sparse files' blobs
+  (about 15 MB), made from the checkout without network. When GitHub cannot be reached,
+  setup checks that the bundle holds the pinned commit and checks it out from there. On the
+  development computer it is `D:\FM4-archive\third-party\fidelityfx-sdk-v1.1.4.bundle`,
+  written on 25 October 2026.
+- **Another Git URL** that holds the tag `v1.1.4` at the pinned commit, used the same way as
+  GitHub. The project owner may fork the SDK to their own GitHub account and name the fork
+  here; check that the fork has the tag `v1.1.4` (fork every branch, not the main branch
+  only, or push the tag to it). A mirror at another commit is refused like GitHub.
+
+```powershell
+$env:FFX_MIRROR = 'D:\FM4-archive\third-party\fidelityfx-sdk-v1.1.4.bundle'
+.\outputs\FM4-build\Build.ps1 -Action setup @common
+```
+
+Without a mirror, setup stops when GitHub cannot be reached and the BuildRoot holds no
+checkout yet. An existing checkout at the pinned commit needs no network.
 
 ### 2. Generate
 

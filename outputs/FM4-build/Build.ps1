@@ -9,6 +9,7 @@ param(
     [ValidateRange(1,64)][int]$Jobs = 4,
     [string]$Flavor,
     [ValidateSet('on','off')][string]$Fsr,
+    [string]$FfxMirror,
     [string]$Out,
     [switch]$SingleTile,
     [switch]$Msaa,
@@ -48,6 +49,7 @@ foreach ($path in $Content) { $arguments += @('--content', $path) }
 if ($BuildRoot) { $arguments += @('--build-root', $BuildRoot) }
 if ($Flavor) { $arguments += @('--flavor', $Flavor) }
 if ($Fsr) { $arguments += @('--fsr', $Fsr) }
+if ($FfxMirror) { $arguments += @('--ffx-mirror', $FfxMirror) }
 if ($Out) { $arguments += @('--out', $Out) }
 if ($SingleTile) { $arguments += @('--single-tile') }
 if ($Msaa) { $arguments += @('--msaa') }

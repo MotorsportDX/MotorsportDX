@@ -7,6 +7,7 @@ import os
 from pathlib import Path
 import re
 import shutil
+import stat
 import subprocess
 import sys
 import time
@@ -26,12 +27,13 @@ THIRDPARTY_VENDORED = ('aes_128','crypto','disasm','disruptorplus','dxbc','dxc',
 THIRDPARTY_SUBMODULES = ('cli11','libmspack','FFmpeg','tomlplusplus','simde','xxHash','spdlog','fmt',
                          'utfcpp','imgui','sdl3','inja','o1heap')
 # AMD FidelityFX SDK for REX_FSR (FSR 3.1 from source, docs/analysis/fsr-plan.md section 10):
-# a sparse, blob-filtered clone of the files the FSR 3 upscaler and the DX12 backend build from,
-# pinned to the v1.1.4 tag's commit, outside the repository in <BuildRoot>/fidelityfx-sdk.
-FFX_SDK_URL = 'https://github.com/GPUOpen-LibrariesAndSDKs/FidelityFX-SDK'
-FFX_SDK_TAG = 'v1.1.4'
-FFX_SDK_REV = 'c6efa6bf7f2027b3ec94f28578bb5965eabb9e55'
-FFX_SDK_PATHS = ('/LICENSE.txt','/sdk/LICENSE.txt','/sdk/CMakeLists.txt','/sdk/toolchain.cmake',
+# setup fetches a sparse, blob-filtered clone of the files the FSR 3 upscaler and the DX12
+# backend build from, pinned to the v1.1.4 tag's commit, outside the repository in
+# <BuildRoot>/fidelityfx-sdk, and refuses any other commit; FFX_MIRROR names a fallback.
+FFX_URL = 'https://github.com/GPUOpen-LibrariesAndSDKs/FidelityFX-SDK'
+FFX_TAG = 'v1.1.4'
+FFX_REV = 'c6efa6bf7f2027b3ec94f28578bb5965eabb9e55'
+FFX_PATHS = ('/LICENSE.txt','/sdk/LICENSE.txt','/sdk/CMakeLists.txt','/sdk/toolchain.cmake',
                  '/sdk/include/','/sdk/src/components/fsr3upscaler/','/sdk/src/backends/dx12/',
                  '/sdk/src/backends/shared/','/sdk/src/shared/','/sdk/tools/binary_store/')
 NOTICES = REPO/'outputs/FM4-source-control/third-party-notices'
@@ -321,25 +323,123 @@ def compile_resolve_shaders(root, fxc):
         log=root/'logs/guest_output_area.log')
     marker.write_text(inputs.hexdigest())
 
+def ffx_mirror():
+    """FFX_MIRROR (environment, or --ffx-mirror): another Git URL of the FidelityFX SDK that
+    holds the pinned tag (a fork, for example on the owner's GitHub), or a local .bundle file
+    (ffx_write_bundle). Used when GitHub cannot be reached; a .bundle path that does not exist
+    yet is written after a fetch from GitHub."""
+    return os.environ.get('FFX_MIRROR') or None
+
+def ffx_is_bundle(mirror):
+    return mirror is not None and mirror.lower().endswith('.bundle')
+
+def ffx_head(sdk):
+    result=subprocess.run(['git','-C',sdk,'rev-parse','HEAD'],capture_output=True,text=True)
+    return result.stdout.strip() if result.returncode==0 else None
+
+def ffx_patterns(repository):
+    """The blob of the sparse-checkout patterns (FFX_PATHS) in a repository, for the
+    sparse:oid filter."""
+    return subprocess.run(['git','-C',repository,'hash-object','-w','--stdin'],
+                          input=''.join(f'{path}\n' for path in FFX_PATHS).encode(),
+                          capture_output=True,check=True).stdout.decode().strip()
+
+def remove_git_tree(path):
+    """shutil.rmtree for a Git repository, whose object files are read-only on Windows."""
+    def writable(function, name, _):
+        os.chmod(name, stat.S_IWRITE)
+        function(name)
+    if Path(path).exists():
+        shutil.rmtree(path, onerror=writable)
+
+def ffx_restore_bundle(bundle, sdk, log):
+    """A checkout of FFX_REV from a bundle of ffx_write_bundle, without network: the bundle
+    holds the pinned commit as a shallow commit, its trees and the blobs of FFX_PATHS (Git
+    does not clone a filtered bundle, so the pack is unbundled into a new repository)."""
+    heads=subprocess.check_output(['git','bundle','list-heads',bundle],text=True).split()
+    if FFX_REV not in heads:
+        raise RuntimeError(f'{bundle} does not hold the pinned FidelityFX SDK commit {FFX_REV}.')
+    run(['git','init','-q',sdk],log=log)
+    run(['git','-C',sdk,'bundle','unbundle',bundle],log=log)
+    (sdk/'.git/shallow').write_text(FFX_REV+'\n')
+    run(['git','-C',sdk,'tag','-f',FFX_TAG,FFX_REV],log=log)
+    for key,value in (('core.repositoryformatversion','1'),('extensions.partialclone','origin'),
+                      ('remote.origin.url',FFX_URL),('remote.origin.promisor','true'),
+                      ('remote.origin.partialclonefilter','blob:none')):
+        run(['git','-C',sdk,'config',key,value],log=log)
+
+def ffx_write_bundle(sdk, bundle, log):
+    """A bundle of FFX_REV that ffx_restore_bundle reads: a shallow, sparse-filtered local
+    clone of the checkout (nothing is fetched from the network), bundled with that filter.
+    About 15 MB."""
+    temporary=sdk.parent/'fidelityfx-sdk-bundle'
+    remove_git_tree(temporary)
+    patterns=ffx_patterns(sdk)
+    no_network={**os.environ,'GIT_NO_LAZY_FETCH':'1'}
+    run(['git','-c','protocol.file.allow=always','clone','-q','--bare','--depth','1','--no-local',
+         f'--filter=sparse:oid={patterns}','--branch',FFX_TAG,'-u',
+         'git -c uploadpack.allowFilter=true -c uploadpack.allowAnySHA1InWant=true upload-pack',
+         sdk.as_uri(),temporary],log=log,env=no_network)
+    if ffx_head(temporary)!=FFX_REV:
+        raise RuntimeError(f'{temporary} is not at the pinned FidelityFX SDK commit {FFX_REV}.')
+    bundle=Path(bundle)
+    bundle.parent.mkdir(parents=True,exist_ok=True)
+    part=bundle.with_name(bundle.name+'.part')
+    run(['git','-C',temporary,'bundle','create',part,f'--filter=sparse:oid={ffx_patterns(temporary)}',
+         FFX_TAG],log=log,env=no_network)
+    part.replace(bundle)
+    remove_git_tree(temporary)
+    print(f'FidelityFX SDK bundle written to {bundle}.')
+
 def fetch_fidelityfx(root):
-    """<BuildRoot>/fidelityfx-sdk at FFX_SDK_REV, sparse (FFX_SDK_PATHS). Stops when the
-    checked-out commit differs from the pinned one."""
+    """<BuildRoot>/fidelityfx-sdk at FFX_REV, sparse (FFX_PATHS), from GitHub or else from
+    FFX_MIRROR (ffx_mirror). Stops when the checked-out commit differs from the pinned one."""
     sdk=root/'fidelityfx-sdk'
     log=root/'logs/fidelityfx-fetch.log'
+    mirror=ffx_mirror()
     if not (sdk/'.git').is_dir():
-        run(['git','clone','--filter=blob:none','--no-checkout','--sparse','--branch',FFX_SDK_TAG,
-             FFX_SDK_URL,sdk],log=log)
+        clone=['git','clone','--filter=blob:none','--no-checkout','--sparse','--branch',FFX_TAG]
+        try:
+            run([*clone,FFX_URL,sdk],log=log)
+        except RuntimeError:
+            remove_git_tree(sdk)
+            if not mirror or (ffx_is_bundle(mirror) and not Path(mirror).is_file()):
+                raise RuntimeError(f'{FFX_URL} cannot be reached and FFX_MIRROR names no mirror '
+                                   'that exists (docs/setup.md#the-fidelityfx-sdk-mirror).')
+            print(f'{FFX_URL} cannot be reached; using the mirror {mirror}.')
+            if ffx_is_bundle(mirror):
+                ffx_restore_bundle(Path(mirror),sdk,log)
+            else:
+                run([*clone,mirror,sdk],log=log)
     listed=subprocess.run(['git','-C',sdk,'sparse-checkout','list'],capture_output=True,
                           text=True).stdout.split()
-    if sorted(listed)!=sorted(FFX_SDK_PATHS):
-        run(['git','-C',sdk,'sparse-checkout','set','--no-cone',*FFX_SDK_PATHS],log=log)
-    head=subprocess.run(['git','-C',sdk,'rev-parse','HEAD'],capture_output=True,text=True).stdout.strip()
-    if head!=FFX_SDK_REV:
-        run(['git','-C',sdk,'checkout','--detach',FFX_SDK_REV],log=log)
-        head=subprocess.check_output(['git','-C',sdk,'rev-parse','HEAD'],text=True).strip()
-    if head!=FFX_SDK_REV:
-        raise RuntimeError(f'{sdk} is at {head}, not the pinned FidelityFX SDK commit {FFX_SDK_REV}.')
+    if sorted(listed)!=sorted(FFX_PATHS):
+        run(['git','-C',sdk,'sparse-checkout','set','--no-cone',*FFX_PATHS],log=log)
+    if ffx_head(sdk)!=FFX_REV or not (sdk/'sdk/LICENSE.txt').is_file():
+        run(['git','-C',sdk,'checkout','--detach',FFX_REV],log=log)
+    head=ffx_head(sdk)
+    if head!=FFX_REV:
+        raise RuntimeError(f'{sdk} is at {head}, not the pinned FidelityFX SDK commit {FFX_REV}.')
+    if ffx_is_bundle(mirror) and not Path(mirror).is_file():
+        ffx_write_bundle(sdk,Path(mirror),log)
     return sdk
+
+def ffx_status(root):
+    """doctor's line on the FidelityFX SDK checkout and its mirror."""
+    sdk=root/'fidelityfx-sdk'
+    head=ffx_head(sdk) if (sdk/'.git').is_dir() else None
+    state=('not fetched yet (setup fetches it)' if head is None else
+           f'at the pinned commit {FFX_REV[:7]} ({FFX_TAG})' if head==FFX_REV else
+           f'at {head[:7]}, not the pinned commit {FFX_REV[:7]}: setup checks it out again')
+    mirror=ffx_mirror()
+    if mirror is None:
+        mirror_state='no mirror (FFX_MIRROR is not set)'
+    elif ffx_is_bundle(mirror):
+        mirror_state=(f'mirror bundle {mirror}' if Path(mirror).is_file() else
+                      f'mirror bundle {mirror} not written yet (setup writes it)')
+    else:
+        mirror_state=f'mirror {mirror}'
+    return f'FidelityFX SDK: {sdk} {state}; {mirror_state}.'
 
 def build_runtime(root, fxc, jobs, fsr=None, build=None):
     """fsr: True or False sets REX_FSR (AMD FSR 3.1 from the FidelityFX SDK source, fetched
@@ -367,8 +467,11 @@ def build_runtime(root, fxc, jobs, fsr=None, build=None):
         run(['cmake','--install',build],log=root/'logs/runtime-install.log')
 
 def setup(root, fxc, jobs, fsr=None):
+    fetch_fidelityfx(root)
     build_runtime(root, fxc, jobs, fsr)
-    (root/'setup-complete.json').write_text(json.dumps({'thirdparty_revision':SDK_REV,'runtime':'work/runtime'}))
+    (root/'setup-complete.json').write_text(json.dumps({'thirdparty_revision':SDK_REV,
+                                                        'fidelityfx_revision':FFX_REV,
+                                                        'runtime':'work/runtime'}))
 
 def generate(root, disc1, disc2, content, jobs):
     install, project = root/'runtime-install', root/'project'
@@ -1671,6 +1774,9 @@ def main():
                         help='run: write each new game texture once as <hash>.dds to this directory')
     parser.add_argument('--texture-replace',type=Path,
                         help='run: use <hash>.dds files from this directory instead of the game textures')
+    parser.add_argument('--ffx-mirror',
+                        help='setup, build, all: the FidelityFX SDK mirror, a Git URL or a local '
+                             '.bundle file (FFX_MIRROR; docs/setup.md)')
     parser.add_argument('--fsr',choices=['on','off'],
                         help='setup, build, all: link AMD FSR 3.1, built from the FidelityFX SDK '
                              'source, into the runtime (REX_FSR; fetches the pinned SDK). Kept for '
@@ -1686,7 +1792,9 @@ def main():
     flavor=tuple(sorted({f for f in args.flavor.split(',') if f}))
     if set(flavor)-set(FLAVORS) or {'pgo-gen','pgo-use'}<=set(flavor):
         raise ValueError(f'flavor must be a comma list of {FLAVORS}, not both pgo-gen and pgo-use')
+    if args.ffx_mirror: os.environ['FFX_MIRROR']=args.ffx_mirror
     fxc=doctor()
+    print(ffx_status(root))
     if args.action=='doctor': return
     discs=None
     if args.content and args.action not in ('generate','all','run'):
