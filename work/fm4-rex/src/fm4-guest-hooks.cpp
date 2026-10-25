@@ -386,27 +386,48 @@ REX_HOOK_RAW(sub_82BB96E0) { TracePhotoEncoder(ctx, base, __imp__sub_82BB96E0); 
 // base 1024 (the private depth's); patched early, a race drew no private depth
 // (the title probably places it after the 1280x720 colour, as at 4x). The native
 // path only; RTV and -Rov run the title's table.
+//
+// FM4_ONE_PASS_ENTRY0=4 makes scenario 0 (4xMSAA, three tiles: the user
+// interface, the front-end menus, the pre-race screens and photo mode) one
+// 1280x720 tile with 4x MSAA, early as entry 3's 4x: the title sizes
+// that entry's surface at boot ("entry 0 at s", docs/analysis/d3d-hle-n5.md
+// 18.25).
+namespace {
+void PatchOnePassScenario(uint8_t* base, uint32_t scenario, uint32_t samples) {
+  const uint32_t entry = 0x82D883C8u + scenario * 0x4D0u;
+  auto store = [base](uint32_t address, uint32_t word) {
+    rex::memory::store_and_swap<uint32_t>(base + address, word);
+  };
+  store(entry + 4, samples == 2 ? 1u : 2u);
+  store(entry + 8, 1);
+  store(entry + 16, 1);
+  const uint32_t rectangle[4] = {0, 0, 1280, 720};
+  for (uint32_t i = 0; i < 12; ++i) {
+    store(entry + 24 + 4 * i, i < 4 ? rectangle[i] : 0);
+  }
+  std::fprintf(stderr, "FM4 one pass: tiling scenario %u is one 1280x720 tile with %ux MSAA\n",
+               scenario, samples);
+}
+}  // namespace
+
 void FM4PatchTilingScenarios(uint8_t* base, bool early) {
+  if (early) {
+    const char* entry0 = std::getenv("FM4_ONE_PASS_ENTRY0");
+    if (entry0 && std::atoi(entry0) == 4) {
+      static const bool entry0_patched = [base]() {
+        PatchOnePassScenario(base, 0, 4);
+        return true;
+      }();
+      (void)entry0_patched;
+    }
+  }
   const char* value = std::getenv("FM4_ONE_PASS_MSAA");
   const uint32_t samples = value ? uint32_t(std::atoi(value)) : 0;
   if ((samples != 2 && samples != 4) || early != (samples == 4)) {
     return;
   }
   static const bool patched = [base, samples]() {
-    const uint32_t scenario = samples == 2 ? 1u : 3u;
-    const uint32_t entry = 0x82D883C8u + scenario * 0x4D0u;
-    auto store = [base](uint32_t address, uint32_t word) {
-      rex::memory::store_and_swap<uint32_t>(base + address, word);
-    };
-    store(entry + 4, samples == 2 ? 1u : 2u);
-    store(entry + 8, 1);
-    store(entry + 16, 1);
-    const uint32_t rectangle[4] = {0, 0, 1280, 720};
-    for (uint32_t i = 0; i < 12; ++i) {
-      store(entry + 24 + 4 * i, i < 4 ? rectangle[i] : 0);
-    }
-    std::fprintf(stderr, "FM4 one pass: tiling scenario %u is one 1280x720 tile with %ux MSAA\n",
-                 scenario, samples);
+    PatchOnePassScenario(base, samples == 2 ? 1u : 3u, samples);
     return true;
   }();
   (void)patched;

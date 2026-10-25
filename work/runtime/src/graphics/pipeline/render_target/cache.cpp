@@ -61,8 +61,11 @@ REXCVAR_DEFINE_INT32(native_rt_surfaces, 0, "GPU",
                      "(the scene, the post passes' colour and the final depth) a private host "
                      "target (docs/analysis/d3d-hle-n5.md 18.11), 32 resolve the private "
                      "surfaces into the host textures of the destination straight from the "
-                     "host render target (18.12). RTV path only")
-    .range(0, 63)
+                     "host render target (18.12), 64 with native_one_pass_msaa=2 and bit 16, "
+                     "give the title's tiling entry 0 in one pass (FM4_ONE_PASS_ENTRY0=4: the "
+                     "menus, the pre-race screens and photo mode) a private 4x pair, the colour "
+                     "at base 0 in each format and the depth at base 832 (18.25). RTV path only")
+    .range(0, 127)
     .lifecycle(rex::cvar::Lifecycle::kRequiresRestart);
 
 REXCVAR_DEFINE_INT32(native_rt_surfaces_memory_cap_mb, 0, "GPU",
@@ -826,7 +829,7 @@ bool RenderTargetCache::Update(bool is_rasterization_done,
   if (private_rts) {
     perf_trace::CountOnePass(perf_trace::one_pass_draws);
     last_update_private_ = true;
-    last_update_input_scale_ = msaa_samples != xenos::MsaaSamples::k1X;
+    last_update_input_scale_ = IsSceneInputSamples(msaa_samples);
   }
   for (uint32_t i = 0; i < edram_bases_sorted_count; ++i) {
     const std::pair<uint32_t, uint32_t>& rt_base_index = edram_bases_sorted[i];
@@ -2010,6 +2013,16 @@ bool RenderTargetCache::IsPrivateSceneWide() const {
          (REXCVAR_GET(native_rt_surfaces) & 16);
 }
 
+bool RenderTargetCache::IsPrivateEntry0() const {
+  return IsPrivateSceneWide() && REXCVAR_GET(native_one_pass_msaa) == 2 &&
+         (REXCVAR_GET(native_rt_surfaces) & 64);
+}
+
+bool RenderTargetCache::IsSceneInputSamples(xenos::MsaaSamples msaa_samples) const {
+  return msaa_samples != xenos::MsaaSamples::k1X &&
+         (msaa_samples == xenos::MsaaSamples::k2X || REXCVAR_GET(native_one_pass_msaa) == 4);
+}
+
 bool RenderTargetCache::IsPrivateDepth(uint32_t base_tiles, uint32_t pitch_tiles_at_32bpp,
                                        xenos::MsaaSamples msaa_samples) const {
   if (GetPath() != Path::kHostRenderTargets) {
@@ -2018,6 +2031,11 @@ bool RenderTargetCache::IsPrivateDepth(uint32_t base_tiles, uint32_t pitch_tiles
   // The final picture's depth (base 720, 1280 wide, one sample).
   if (IsPrivateSceneWide() && base_tiles == 720 && pitch_tiles_at_32bpp == 16 &&
       msaa_samples == xenos::MsaaSamples::k1X) {
+    return true;
+  }
+  // Entry 0's 4x depth in one pass, after its 2,880-tile colour (18.25).
+  if (IsPrivateEntry0() && base_tiles == 832 && pitch_tiles_at_32bpp == 32 &&
+      msaa_samples == xenos::MsaaSamples::k4X) {
     return true;
   }
   switch (REXCVAR_GET(native_one_pass_msaa)) {
@@ -2041,6 +2059,11 @@ bool RenderTargetCache::IsPrivateColor(uint32_t base_tiles, uint32_t pitch_tiles
   if (REXCVAR_GET(native_one_pass_msaa) == 4 && GetPath() == Path::kHostRenderTargets &&
       base_tiles == 0 && pitch_tiles_at_32bpp == 32 &&
       msaa_samples == xenos::MsaaSamples::k4X && resource_format == float_format) {
+    return true;
+  }
+  // Entry 0's 4x colour in one pass, in every format (18.25).
+  if (IsPrivateEntry0() && base_tiles == 0 && pitch_tiles_at_32bpp == 32 &&
+      msaa_samples == xenos::MsaaSamples::k4X) {
     return true;
   }
   // native_rt_surfaces bit 16: the 2x scene colour, and the post passes'

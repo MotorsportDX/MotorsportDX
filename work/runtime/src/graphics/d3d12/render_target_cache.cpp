@@ -1789,7 +1789,8 @@ bool D3D12RenderTargetCache::Resolve(const memory::Memory& memory, D3D12SharedMe
               // (docs/analysis/fsr-plan.md 11).
               texture_cache.MarkRangeAsSceneResolved(
                   resolve_info.copy_dest_extent_start, resolve_info.copy_dest_extent_length,
-                  IsSceneUpscaled() && host_source.multisampled);
+                  IsSceneUpscaled() &&
+                      IsSceneInputSamples(host_source.render_target->key().msaa_samples));
             }
             ResolveHostIntoTextures(texture_cache, resolve_info, copy_shader_constants,
                                     host_source, scene);
@@ -6910,7 +6911,8 @@ void D3D12RenderTargetCache::ResolveHostIntoTextures(
                  ? 2u
                  : 1u)
           : 0u,
-      scene && IsSceneUpscaled() && source.multisampled);
+      scene && IsSceneUpscaled() &&
+          IsSceneInputSamples(source.render_target->key().msaa_samples));
   perf_trace::CountNativeResolve(uint32_t(target_count));
   if (!target_count) {
     return;

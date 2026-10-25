@@ -619,6 +619,13 @@ class RenderTargetCache {
   // colour, the post passes' one-sample colour at base 0 and the final
   // picture's depth at base 720.
   bool IsPrivateSceneWide() const;
+  // native_rt_surfaces bit 64 with one pass 2x: the title's tiling entry 0 in
+  // one pass with 4x MSAA has a private pair too (d3d-hle-n5.md 18.25).
+  bool IsPrivateEntry0() const;
+  // Whether private surfaces of the sample count are at the scene's input scale
+  // while upscaling: the races' MSAA scene (2x, or 4x with one pass 4x races);
+  // entry 0's 4x pair beside 2x races is at the output scale.
+  bool IsSceneInputSamples(xenos::MsaaSamples msaa_samples) const;
   // native_one_pass_msaa=4: the scene colour (base 0, 32 tiles of pitch, 4x,
   // the resource format of 2_10_10_10_FLOAT and of its 16_16_16_16 view) is
   // private too, with the 2,880 tiles of 1280x720 that the EDRAM cannot hold.
@@ -642,7 +649,7 @@ class RenderTargetCache {
     if (!IsPrivateKey(key)) {
       return DrawScale::Whole(draw_resolution_scale_x_);
     }
-    return key.msaa_samples != xenos::MsaaSamples::k1X ? scene_input_scale() : scene_draw_scale();
+    return IsSceneInputSamples(key.msaa_samples) ? scene_input_scale() : scene_draw_scale();
   }
   // A target's width in guest pixels: the scene's logical width for a private
   // 1280-wide one (native_logical_width, d3d-hle-n5.md 18.21).
