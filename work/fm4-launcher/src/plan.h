@@ -115,7 +115,13 @@ std::string ResolvePath(const std::string& text);
 // The knobs of a look value ('aces', 'sharpen=0.5' or both, later items win).
 Pairs LookKnobs(const LauncherData& data, const std::string& look);
 bool TaaEnabled(const Pairs& knobs);
-std::vector<std::string> LookDefines(const LauncherData& data, const Pairs& knobs);
+// upscale_ratio: the scene's output lines over its input lines (SceneUpscaleRatio), which
+// FSR's sharpening follows (FsrSharpness).
+std::vector<std::string> LookDefines(const LauncherData& data, const Pairs& knobs,
+                                     double upscale_ratio = 1.0);
+// scene_upscale_ratio of pipeline.py: a plan's output lines over its input lines, 1 without
+// upscaling.
+double SceneUpscaleRatio(const Pairs& cvars);
 
 // pad_knobs and pad_cvars of pipeline.py: the knobs of a -Pad value (later items win), and the
 // runtime cvars of those, over the launchers' defaults, that differ from the runtime's defaults

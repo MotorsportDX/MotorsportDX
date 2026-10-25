@@ -92,6 +92,24 @@ std::string JoinPath(const std::string& root, const std::string& name) {
   return root + "\\" + name;
 }
 
+// fsr_sharpness of pipeline.py: the fsr_sharpen knob, or the look's sharpening plus 0.4 times the
+// upscale ratio above 1, at most 1.
+double FsrSharpness(const Pairs& knobs, double upscale_ratio) {
+  if (knobs.Find("fsr_sharpen")) {
+    const std::string text = knobs.Get("fsr_sharpen");
+    const double value = PyFloat(text);
+    if (!(value >= 0 && value <= 1))
+      throw PlanError("fsr_sharpen is a strength from 0 to 1, not '" + text + "'.");
+    return value;
+  }
+  const double sharpen = PyFloat(knobs.Get("sharpen", "0"));
+  if (upscale_ratio == 1.0) return sharpen;
+  // Rounded to thousandths, as pipeline.py rounds it.
+  return std::nearbyint(std::min(std::max(sharpen + 0.4 * (upscale_ratio - 1.0), 0.0), 1.0) *
+                        1000.0) /
+         1000.0;
+}
+
 double WindshieldStrength(const Pairs& knobs) {
   const std::string text = knobs.Get("windshield", "0");
   const double value = PyFloat(text);
@@ -147,7 +165,8 @@ void Update(Pairs& target, const Pairs& source) {
   for (const auto& [key, value] : source.Items()) target.Set(key, value);
 }
 
-Pairs LookCvars(const LauncherData& data, const std::string& root, const std::string& look) {
+Pairs LookCvars(const LauncherData& data, const std::string& root, const std::string& look,
+                double upscale_ratio) {
   const Json& tables = data.Look();
   Pairs knobs;
   for (const auto& [name, value] : LookKnobs(data, look).Items())
@@ -157,7 +176,7 @@ Pairs LookCvars(const LauncherData& data, const std::string& root, const std::st
   for (const auto& [name, value] : knobs.Items())
     if (!Contains(tables.at("runtime_knobs"), name) && !Contains(tables.at("pass_knobs"), name))
       mods = true;
-  std::vector<std::string> defines = LookDefines(data, knobs);
+  std::vector<std::string> defines = LookDefines(data, knobs, upscale_ratio);
   if (!mods) {
     std::erase_if(defines, [](const std::string& define) { return define.starts_with("FM4_LOOK_"); });
     if (!defines.empty()) cvars.Set("shader_mod_defines", Join(defines, ";"));
@@ -520,7 +539,8 @@ bool TaaEnabled(const Pairs& knobs) {
   return value > 0;
 }
 
-std::vector<std::string> LookDefines(const LauncherData& data, const Pairs& knobs) {
+std::vector<std::string> LookDefines(const LauncherData& data, const Pairs& knobs,
+                                     double upscale_ratio) {
   const Json& tables = data.Look();
   const Json& look_knobs = tables.at("knobs");
   std::vector<std::string> defines;
@@ -553,7 +573,7 @@ std::vector<std::string> LookDefines(const LauncherData& data, const Pairs& knob
     throw PlanError("aa=fsr needs taa above 0 (the look turns temporal anti-aliasing on).");
   if (fsr) {
     // FSR at the scene_color point, the look's sharpening as its RCAS.
-    const double sharpen = PyFloat(knobs.Get("sharpen", "0"));
+    const double sharpen = FsrSharpness(knobs, upscale_ratio);
     std::erase_if(defines, [](const std::string& d) { return d.starts_with("FM4_LOOK_SHARPEN="); });
     defines.insert(defines.end(), {"FM4_LOOK_SHARPEN=0.0", "TAA=1", "TAA_SHARPEN=0.0", "TAA_POINT=1",
                                    "FSR=1", "FSR_SHARPNESS=" + PyRepr(sharpen)});
@@ -774,6 +794,17 @@ std::pair<Pairs, std::string> UpscaleSettings(const LauncherData& data, const st
                       std::to_string(output_lines) + "p" + clamped};
 }
 
+double SceneUpscaleRatio(const Pairs& cvars) {
+  const std::string input = cvars.Get("native_scene_input_scale");
+  const std::string output = cvars.Get("native_draw_scale");
+  if (input.empty() || output.empty()) return 1.0;
+  const auto lines = [](const std::string& text) {
+    const auto [numerator, denominator] = ParseScale(text);
+    return (720 * numerator + denominator / 2) / denominator;
+  };
+  return double(lines(output)) / double(lines(input));
+}
+
 std::string UpscaleText(const Pairs& cvars) {
   const std::string input = cvars.Get("native_scene_input_scale");
   if (input.empty()) return "";
@@ -941,7 +972,7 @@ Plan LaunchPlan(const LauncherData& data, const std::string& root, const std::st
     cvars.Set("video_mode_refresh_rate", std::to_string(present.frame_rate));
     env.Set("FM4_FRAME_RATE", std::to_string(present.frame_rate));
   }
-  Update(cvars, LookCvars(data, root, look));
+  Update(cvars, LookCvars(data, root, look, SceneUpscaleRatio(cvars)));
   const std::string track = LookTrackSettings(data, knobs);
   if (!track.empty()) env.Set("FM4_TRACK_SETTINGS", track);
   Update(cvars, AoCvars(root, options.ao));

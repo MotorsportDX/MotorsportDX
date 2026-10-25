@@ -195,6 +195,11 @@ class RenderTargetCache {
   uint32_t scene_logical_height() const { return scene_logical_height_; }
   // Whether the last Update bound private surfaces (a scene draw).
   bool last_update_private() const { return last_update_private_; }
+  // Whether a draw with the current registers would bind a private surface:
+  // the keys Update would make private, before it runs (the uniform draws at a
+  // fractional or upscaled scene scale, docs/analysis/fsr-plan.md 13).
+  bool DrawBindsPrivateSurface(reg::RB_DEPTHCONTROL normalized_depth_control,
+                               uint32_t normalized_color_mask) const;
   // Whether the last Update bound MSAA private surfaces, which are at the
   // input scale (scene_input_scale) rather than the scene's.
   bool last_update_input_scale() const { return last_update_input_scale_; }

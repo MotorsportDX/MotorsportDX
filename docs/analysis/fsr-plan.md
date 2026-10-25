@@ -394,6 +394,32 @@ Upscaling gains 14% over native 1080p there (15.15 against 17.14 ms). Where run 
 
 The guest's own post chain and HUD at 1080 cost little more than at 720; the extra time is FSR, the full-screen resolves and the transfers at the output scale, and the windshield pass. At 1x the full-screen resolves go into guest memory and the textures are loaded after (0.25 ms a resolve and 1.07 ms of loads); with the scene at a scale they write the host textures straight (0.88 ms a resolve at 1080 from 720, 1.51 ms at 1080 native, run 2).
 
+## 13. Uniform draws off the whole scales, and RCAS with the ratio (26 October 2026)
+
+Two items of the integrated GPU proposal after 12.4, approved by the main session on 26 October 2026: (e2) remove the ownership transfers that the fractional scales and upscaling cost, and (f) sharpen an upscaled picture more than a native one.
+
+### 13.1 The uniform draws
+
+`IssueDraw` turns clears and draws that overwrite their whole rectangle with uniform values into uniform draws: the render target cache takes the tiles they cover without transferring their old owner's data first, and a 4x clear that the next draw at the same place reads with fewer samples is drawn at that sample count (half the pitch, `GetUniformDrawNextMsaa`). Until now it did that only at a whole scene scale with the 16:9 logical size, and since stage 3 not while upscaling, because the private surfaces are at the scene's scale there and the others at its whole part. So at 3/2 (the 1080p default of the native path), at a logical size and in every upscale mode, every such clear pulled in the tiles' old owner first. The transfer inventory in `race` with TAA at 3/2: 37.5 transfers and 5,760 tiles a frame, where 2x has 15.5 and 1,006; 2x with `rtv_uniform_draws=false` has the kinds of 3/2.
+
+The change: off the whole scales, at a logical size and while upscaling, uniform draws are taken for every draw that binds no private surface (`RenderTargetCache::DrawBindsPrivateSurface`, the keys `Update` would make private, checked before it runs). Where the 4x clear's lower sample count would name a private surface, the clear stays a uniform draw at its own 4x instead. Uniform draws into the private surfaces themselves stay off there: none of the remaining transfers is into one, so their bounds at the scene's scale are not needed. Nothing changes at the whole scales with 16:9, so RTV, `-Rov` and `-Native` at 1x and 2x run the same code as before.
+
+The gate (`I:\FM4-build-usa`, `-Native` with `native_rt_surfaces=58`, `race` at 60 Hz with the transfer inventory, one run each; the baseline `game-build-e2base` is the runtime before the change, the candidate `game-build-quirky`):
+
+| Run | Tiles transferred a frame | `transfer` GPU ms | GPU a frame |
+|---|---|---|---|
+| 3/2, `aces` | 5,760 → 2,382 | 0.32 → 0.10 | 3.66 → 3.48 |
+| 9/4, `aces` (2880x1620) | 5,760 → 2,382 | 1.05 → 0.26 | 6.98 → 6.17 |
+| 1440p quality (960 to 1440 lines), `aces,aa=fsr` | 5,760 → 2,382 | 0.31 → 0.10 | 4.25 → 4.04 |
+
+The first version, which dropped the 4x clears whose lower sample count names a private surface, kept 4,766 tiles at 3/2 (0.22 ms). The 2,382 tiles left are mostly the cars' shadow map (the 4x colour at base 832, pitch 13) and the 4x depth at base 0, pitch 13 taking tiles of the scene's surfaces, which 2x does not transfer either way. On the 890M the transfers took 1.0 ms a frame at 1080p native and from 720 (12.4), so the saving there should be several times this PC's, at native 1080p as well as upscaled; the next export measures it.
+
+The frozen frame against the baseline (`parity.py`): `-Native` 3/2 without TAA passes (draws +0.6%, 34.5% of the image above 4), and so do RTV 2x with `aces` (-0.1%, 29.0%) and `-Rov` 1x with `original,taa=0` (+1.2%, 32.6%). Under upscaling FSR keeps changing the frozen frame (its own captures differ in 0.4 to 0.8% of pixels on both sides, so `parity.py` reports FAIL on its freeze check alone), so the candidate is judged against the run-to-run range: at 1080p from 720p two baseline runs differ in 36.3% of the image above 4, the candidate against them in 23.5% and 36.3%, with the draws within 0.1%; at 1440p quality 25.9%, the draws +0.1%. In 1:1 crops at 1080p quality the gauges' print, the grandstand and the HUD are as sharp as the baseline's. The 240 Hz smoke at 3/2 (`photo`, `career`) reached its goals with the baseline's error keys: `photo` raced at 237.7 fps (p99 4.97 ms) with photo mode at 30.0, `career` at 236.0 fps (p99 5.28 ms) with the replay at 119.4. The CPU tests pass: `test_pipeline` and the launcher tests (351 plans).
+
+### 13.2 RCAS with the ratio
+
+FSR's RCAS sharpening was the look's `sharpen` at every ratio. In 1:1 crops of the frozen frame at 1080p from 720p against native 1080p, 0.6 brings the grandstand and the gauges' print close to native's crispness, 0.8 starts to over-sharpen the crowd. `FSR_SHARPNESS` is now the look's `sharpen` plus 0.4 times the ratio above 1, at most 1: with the presets' 0.4, 0.5 at 1.25, 0.6 at quality, 0.68 at balanced and 0.8 at performance, and nothing added at ratio 1 (FSR's native anti-aliasing is unchanged). The ratio is the output's lines over the input's (`scene_upscale_ratio` in `pipeline.py`, `SceneUpscaleRatio` in the launcher). The look knob `fsr_sharpen` (0 to 1) sets it instead, for the owner's A/B. The `-Info` overlay shows the strength in use.
+
 ## Related
 
 - [TAA](taa.md), [motion vectors](motion-vectors.md#6-requirements-for-taa-and-the-upscalers), [post pass framework](post-pass-framework.md)

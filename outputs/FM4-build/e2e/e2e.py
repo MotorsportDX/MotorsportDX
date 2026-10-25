@@ -1111,7 +1111,11 @@ def run_once(options, out):
         args['user_data_root'] = str(prepare_profile(source, root, out))
     freeze = options.scenario == 'freeze' and not options.steps
     look = (FREEZE_LOOK if freeze else pipeline.DEFAULT_LOOK) if options.look is None else options.look
-    look_args = {k: str(v) for k, v in pipeline.look_cvars(root, look, options.shader_dev).items()}
+    # The upscale ratio of --arg native_scene_input_scale (FSR's sharpening follows it).
+    scale_args = dict(item.lstrip('-').split('=', 1) for item in options.arg
+                      if item.lstrip('-').startswith(('native_draw_scale=', 'native_scene_input_scale=')))
+    look_args = {k: str(v) for k, v in pipeline.look_cvars(
+        root, look, options.shader_dev, pipeline.scene_upscale_ratio(scale_args)).items()}
     args.update(look_args)
     args.update({k: str(v) for k, v in pipeline.ao_cvars(root, options.ao, options.shader_dev).items()})
     if freeze:

@@ -2013,6 +2013,40 @@ bool RenderTargetCache::IsPrivateSceneWide() const {
          (REXCVAR_GET(native_rt_surfaces) & 16);
 }
 
+bool RenderTargetCache::DrawBindsPrivateSurface(reg::RB_DEPTHCONTROL normalized_depth_control,
+                                                uint32_t normalized_color_mask) const {
+  if (GetPath() != Path::kHostRenderTargets) {
+    return false;
+  }
+  const RegisterFile& regs = register_file();
+  const auto rb_surface_info = regs.Get<reg::RB_SURFACE_INFO>();
+  const xenos::MsaaSamples msaa_samples = rb_surface_info.msaa_samples;
+  const uint32_t msaa_samples_x_log2 = uint32_t(msaa_samples >= xenos::MsaaSamples::k4X);
+  const uint32_t pitch_tiles_at_32bpp =
+      ((rb_surface_info.surface_pitch << msaa_samples_x_log2) +
+       (xenos::kEdramTileWidthSamples - 1)) /
+      xenos::kEdramTileWidthSamples;
+  if ((normalized_depth_control.z_enable || normalized_depth_control.stencil_enable) &&
+      IsPrivateDepth(regs.Get<reg::RB_DEPTH_INFO>().depth_base, pitch_tiles_at_32bpp,
+                     msaa_samples)) {
+    return true;
+  }
+  for (uint32_t i = 0; i < xenos::kMaxColorRenderTargets; ++i) {
+    if (!(normalized_color_mask & (uint32_t(0b1111) << (4 * i)))) {
+      continue;
+    }
+    const auto color_info =
+        regs.Get<reg::RB_COLOR_INFO>(reg::RB_COLOR_INFO::rt_register_indices[i]);
+    const auto resource_format =
+        GetColorResourceFormat(xenos::GetStorageColorFormat(color_info.color_format));
+    if (IsPrivateColor(color_info.color_base, pitch_tiles_at_32bpp, msaa_samples,
+                       uint32_t(resource_format))) {
+      return true;
+    }
+  }
+  return false;
+}
+
 bool RenderTargetCache::IsPrivateEntry0() const {
   return IsPrivateSceneWide() && REXCVAR_GET(native_one_pass_msaa) == 2 &&
          (REXCVAR_GET(native_rt_surfaces) & 64);

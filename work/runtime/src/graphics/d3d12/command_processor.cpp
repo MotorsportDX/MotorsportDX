@@ -4109,12 +4109,20 @@ bool D3D12CommandProcessor::IssueDraw(xenos::PrimitiveType primitive_type, uint3
   // jittered.
   bool uniform_draw_set = false;
   uniform_draw_debug_reason = 0;
+  // At a fractional scene scale, a logical size or while upscaling, the
+  // private surfaces are not at the other surfaces' scale: a uniform draw then
+  // only for draws that bind none (docs/analysis/fsr-plan.md 13); without them
+  // every clear of a shared surface transferred the tiles it overwrites.
+  const bool uniform_draws_private_only =
+      !render_target_cache_->scene_draw_scale().IsWhole() ||
+      render_target_cache_->IsSceneUpscaled() ||
+      render_target_cache_->scene_logical_width() != 1280 ||
+      render_target_cache_->scene_logical_height() != 720;
   if (render_target_cache_->GetPath() == RenderTargetCache::Path::kHostRenderTargets &&
       REXCVAR_GET(rtv_uniform_draws) && is_rasterization_done && !memexport_used &&
-      render_target_cache_->scene_draw_scale().IsWhole() &&
-      !render_target_cache_->IsSceneUpscaled() &&
-      render_target_cache_->scene_logical_width() == 1280 &&
-      render_target_cache_->scene_logical_height() == 720 &&
+      !(uniform_draws_private_only &&
+        render_target_cache_->DrawBindsPrivateSurface(normalized_depth_control,
+                                                      normalized_color_mask)) &&
       GetDrawOverwrite(regs, primitive_type, index_count, pixel_shader, ps_param_gen_pos,
                        normalized_depth_control, normalized_color_mask,
                        uniform_draw_overwritten_slots, uniform_draw_values_may_be_uniform)) {
@@ -4164,6 +4172,16 @@ bool D3D12CommandProcessor::IssueDraw(xenos::PrimitiveType primitive_type, uint3
           written_registers_[XE_GPU_REG_RB_SURFACE_INFO >> 6] |=
               uint64_t(1) << (XE_GPU_REG_RB_SURFACE_INFO & 63);
         }
+      }
+      // The changed sample count may name a private surface, which is not at
+      // the 4x surface's scale: the uniform draw then keeps the draw's own
+      // sample count (the register goes back).
+      if (uniform_draws_private_only && surface_info_restore.register_file &&
+          render_target_cache_->DrawBindsPrivateSurface(normalized_depth_control,
+                                                        normalized_color_mask)) {
+        register_file_->values[XE_GPU_REG_RB_SURFACE_INFO] = surface_info_restore.value;
+        surface_info_restore.register_file = nullptr;
+        uniform_draw_scale_x = uniform_draw_scale_y = 1;
       }
       uniform_draw.scale_x = uniform_draw_scale_x;
       uniform_draw.scale_y = uniform_draw_scale_y;

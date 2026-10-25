@@ -877,7 +877,9 @@ SUN_LIMIT=1200
 # windshield above 0: the glass of the cockpit camera's windshield and side windows, which the
 # title does not draw there (work/fm4-rex/passes/windshield.hlsl, docs/analysis/windshield.md):
 # the strength of its tint, dashboard reflection, glare and dust (WINDSHIELD), up to 2.
-LOOK_PASS_KNOBS=('taa','taa_point','aa','windshield')
+# fsr_sharpen (0 to 1): FSR's RCAS strength in place of the default, the look's sharpening plus
+# 0.4 times the upscale ratio above 1 (fsr_sharpness, docs/analysis/fsr-plan.md 13).
+LOOK_PASS_KNOBS=('taa','taa_point','aa','windshield','fsr_sharpen')
 # Knobs that take a name instead of a number.
 LOOK_NAMES={'tonemap':{'filmic':0,'gt':1,'aces':2,'neutral':3}}
 # Knobs that edit the title's per-track lighting files instead of shaders (FM4_TRACK_SETTINGS,
@@ -991,11 +993,26 @@ def windshield_strength(knobs):
         raise RuntimeError(f'windshield is a strength from 0 (off) to 2, not {knobs["windshield"]!r}.')
     return value
 
-def look_defines(knobs):
+def fsr_sharpness(knobs,upscale_ratio=1.0):
+    """FSR's RCAS strength (FSR_SHARPNESS): the fsr_sharpen knob, or the look's sharpening plus
+    0.4 times the upscale ratio above 1 (0.2 more at quality's 1.5, nothing at ratio 1), at most 1."""
+    if 'fsr_sharpen' in knobs:
+        value=float(knobs['fsr_sharpen'])
+        if not 0<=value<=1:
+            raise RuntimeError(f'fsr_sharpen is a strength from 0 to 1, not {knobs["fsr_sharpen"]!r}.')
+        return value
+    sharpen=float(knobs.get('sharpen','0'))
+    if upscale_ratio==1.0:
+        return sharpen
+    # Rounded to thousandths, as the launcher's port rounds it.
+    return round(min(max(sharpen+0.4*(upscale_ratio-1.0),0.0),1.0),3)
+
+def look_defines(knobs,upscale_ratio=1.0):
     """The shader_mod_defines of look knobs: NAME=VALUE with the hlsli names and numbers, and
     with taa the pass params TAA and TAA_SHARPEN (the look's sharpening, which then is 0), or at
     the scene_color point (taa_point=1) TAA_POINT with the look's sharpening kept, or with
-    aa=fsr FSR at the scene_color point with the look's sharpening as FSR_SHARPNESS."""
+    aa=fsr FSR at the scene_color point with the look's sharpening as FSR_SHARPNESS
+    (fsr_sharpness: more while upscaling by upscale_ratio)."""
     defines=[]
     for name,value in knobs.items():
         if name in LOOK_RUNTIME_KNOBS or name in LOOK_TRACK_KNOBS or name in LOOK_PASS_KNOBS:
@@ -1015,10 +1032,9 @@ def look_defines(knobs):
         raise RuntimeError('aa=fsr needs taa above 0 (the look turns temporal anti-aliasing on).')
     if fsr:
         # FSR at the scene_color point, the look's sharpening as its RCAS.
-        sharpen=float(knobs.get('sharpen','0'))
         defines=[d for d in defines if not d.startswith('FM4_LOOK_SHARPEN=')]
         defines+=['FM4_LOOK_SHARPEN=0.0','TAA=1','TAA_SHARPEN=0.0','TAA_POINT=1','FSR=1',
-                  f'FSR_SHARPNESS={sharpen!r}']
+                  f'FSR_SHARPNESS={fsr_sharpness(knobs,upscale_ratio)!r}']
     elif taa_enabled(knobs) and scene_point:
         defines+=['TAA=1','TAA_SHARPEN=0.0','TAA_POINT=1']
     elif taa_enabled(knobs):
@@ -1042,19 +1058,20 @@ def look_track_settings(knobs):
             items+=[f'{attribute}*={value!r}' for attribute in attributes]
     return ';'.join(items)
 
-def look_cvars(root,look,shader_dev=False):
+def look_cvars(root,look,shader_dev=False,upscale_ratio=1.0):
     """Cvars of the look mods (work/fm4-rex/look/fm4-look.hlsli): copies them to BuildRoot/look
     and passes the knobs of the look (look_knobs; knobs left out keep the original look). Only
     post pass knobs ('original': TAA): the post passes and their params without the look mods;
     none ('original,taa=0'): no mods at all.
     shader_dev (docs/analysis/shader-mod-iteration.md): the mods load from work/fm4-rex/look
     itself and hot reload when a file there changes, and every knob of the files is a live knob
-    (the ones left out at their defaults), which shader_mod_set changes in the console (`)."""
+    (the ones left out at their defaults), which shader_mod_set changes in the console (`).
+    upscale_ratio: the scene's output lines over its input lines (scene_upscale_ratio)."""
     # The track lighting knobs are not shader knobs (look_track_settings).
     knobs={name:value for name,value in look_knobs(look).items() if name not in LOOK_TRACK_KNOBS}
     cvars=sun_cvars(knobs.get('sun'))
     mods=shader_dev or any(name not in LOOK_RUNTIME_KNOBS and name not in LOOK_PASS_KNOBS for name in knobs)
-    defines=look_defines(knobs)
+    defines=look_defines(knobs,upscale_ratio)
     if not mods:
         # The post pass params reach the passes through shader_mod_defines without the mods.
         defines=[define for define in defines if not define.startswith('FM4_LOOK_')]
@@ -1378,6 +1395,17 @@ def display_settings(display=DEFAULT_DISPLAY,fullscreen=False,supersample=False,
 # at the output's lines divided by the mode's ratio and upscales it to the output scale.
 UPSCALE_MODES={'native':1.0,'quality':1.5,'balanced':1.7,'performance':2.0}
 DEFAULT_UPSCALE='native'
+
+def scene_upscale_ratio(cvars):
+    """The output lines over the input lines of a plan's cvars (upscale_settings), 1 without
+    upscaling."""
+    if 'native_scene_input_scale' not in cvars or 'native_draw_scale' not in cvars:
+        return 1.0
+    def lines(text):
+        numerator,_,denominator=text.partition('/')
+        numerator,denominator=int(numerator),int(denominator or 1)
+        return (720*numerator+denominator//2)//denominator
+    return lines(cvars['native_draw_scale'])/lines(cvars['native_scene_input_scale'])
 
 def upscale_ratio(upscale):
     """The ratio of an -Upscale mode or number (1: native)."""
@@ -1827,7 +1855,7 @@ def launch_plan(root,disc1,single_tile=False,fixed_vblank=False,frame_rate=None,
         env['FM4_FRAME_RATE']=str(frame_rate)
     # Shader mods on the game's post-processing (tone curve, sharpening, bloom, exposure,
     # contrast, saturation, vignette, motion blur): the aces look unless -Look says otherwise.
-    cvars.update(look_cvars(root,look,shader_dev))
+    cvars.update(look_cvars(root,look,shader_dev,scene_upscale_ratio(cvars)))
     track_settings=look_track_settings(look_knobs(look))
     if track_settings:
         env['FM4_TRACK_SETTINGS']=track_settings
@@ -1970,7 +1998,8 @@ def launcher_test_options(root):
             {'native':True,'look':'pc,aa=fsr','upscale':'quality','display':'4k'},
             {'native':True,'look':'pc,aa=fsr','upscale':'balanced','display':'1440p'},
             {'native':True,'look':'pc,aa=fsr','upscale':'performance'},
-            {'native':True,'look':'pc,aa=fsr','upscale':'1.25','display':'1080p'}]
+            {'native':True,'look':'pc,aa=fsr','upscale':'1.25','display':'1080p'},
+            {'native':True,'look':'pc,aa=fsr,fsr_sharpen=0.5','upscale':'quality','display':'1080p'}]
 
 def launcher_tests(root):
     """Compares fm4_launcher.exe's port of launch_plan, disc check and content search with this

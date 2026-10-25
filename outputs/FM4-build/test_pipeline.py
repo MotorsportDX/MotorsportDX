@@ -227,6 +227,18 @@ class PipelineTests(unittest.TestCase):
                               defines['TAA_POINT'],defines['FM4_LOOK_SHARPEN']),
                              ('1','0.4','1','1','0.0'))
             self.assertNotIn('FSR',defines_of('pc,aa=taa')[1])
+            # Upscaling sharpens more: 0.4 times the ratio above 1; fsr_sharpen overrides it.
+            sharpness=lambda look,ratio: pipeline.fsr_sharpness(pipeline.look_knobs(look),ratio)
+            self.assertEqual([sharpness('pc,aa=fsr',ratio) for ratio in (1.0,1.25,1.5,1.7,2.0)],
+                             [0.4,0.5,0.6,0.68,0.8])
+            self.assertEqual(sharpness('pc,aa=fsr,sharpen=0.9',2.0),1.0)
+            self.assertEqual(sharpness('pc,aa=fsr,fsr_sharpen=0.3',1.5),0.3)
+            self.assertEqual(defines_of('pc,aa=fsr,fsr_sharpen=0.7')[1]['FSR_SHARPNESS'],'0.7')
+            with self.assertRaises(RuntimeError):
+                pipeline.look_cvars(root,'pc,aa=fsr,fsr_sharpen=1.5')
+            self.assertEqual(pipeline.scene_upscale_ratio({'native_scene_input_scale':'1',
+                                                           'native_draw_scale':'3/2'}),1.5)
+            self.assertEqual(pipeline.scene_upscale_ratio({'native_draw_scale':'3/2'}),1.0)
             for look in ('pc,aa=dlss','pc,taa=0,aa=fsr'):
                 with self.assertRaises(RuntimeError):
                     pipeline.look_cvars(root,look)
@@ -534,6 +546,9 @@ class PipelineTests(unittest.TestCase):
             self.assertEqual(scales(cvars),expected,(monitor,mode))
             self.assertEqual(cvars['native_rt_surfaces'],'58')
             self.assertIn(text,description)
+        # The quality mode's RCAS: the look's 0.4 plus 0.2 at ratio 1.5.
+        cvars,_,_=plan(fhd,'quality',native=True)
+        self.assertIn('FSR_SHARPNESS=0.6',cvars['shader_mod_defines'])
         native,_,description=plan(fhd,'native',native=True)
         self.assertEqual(scales(native),(None,'3/2',None))
         self.assertNotIn('FSR',description)

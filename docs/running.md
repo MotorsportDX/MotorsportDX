@@ -386,7 +386,12 @@ integrated GPUs only) and FSR 3.1 as the anti-aliasing method (`-Look "aces,aa=f
 runtime built with `-Fsr on`); both launchers refuse it with `aa=taa` ("-Upscale quality
 needs aa=fsr in -Look: TAA does not upscale"). `native`, the default, renders at the render
 scale as before. Photo mode and the menus render at the whole part of the input scale and
-are scaled to the screen.
+are scaled to the screen. FSR sharpens an upscaled picture more than a native one: the
+look's `sharpen` plus 0.4 times the ratio above 1 (0.4 becomes 0.5 at 1.25, 0.6 at
+`quality`, 0.68 at `balanced`, 0.8 at `performance`), which brings it close to native
+rendering's crispness; the look knob `fsr_sharpen` sets it instead, and the `-Info` overlay
+shows the strength in use. The scene's texture mips are those of the output (a LOD bias of
+log2 of the input over the output scale).
 
 #### -Quality
 
@@ -632,6 +637,7 @@ and `-Look original`.
 | `taa` | `1` on (in every preset), `0` off | Temporal anti-aliasing before the HUD, with the scene jittered while the camera moves and on a still camera, whose frames it accumulates; the look's `sharpen` moves after it, and races render one tile without MSAA. See [Temporal anti-aliasing](#temporal-anti-aliasing). |
 | `taa_point` | `0` (default) or `1` | With `taa`: `1` runs TAA at the scene_color point, before the game's post chain, instead of before the HUD; the look's `sharpen` stays in the final combine. See [Temporal anti-aliasing](#temporal-anti-aliasing). |
 | `aa` | `taa` (default) or `fsr` | With `taa`: `fsr` runs AMD FSR 3.1's native anti-aliasing at the scene_color point instead of TAA, with the look's `sharpen` as FSR's sharpening; needs a runtime built with `-Fsr on`, else TAA runs at that point. See [Temporal anti-aliasing](#temporal-anti-aliasing). |
+| `fsr_sharpen` | number, 0 to 1; no preset | With `aa=fsr`: FSR's sharpening (RCAS) in place of its default, the look's `sharpen` at ratio 1 and 0.4 times the [-Upscale](#-upscale) ratio above 1 more while upscaling (0.6 at `quality` with the presets' 0.4), at most 1. For A/B runs, for example `-Look "aces,aa=fsr,fsr_sharpen=0.4"`. |
 | `windshield` | number, 0 (off) to 2; 1 in `aces`, `gt` and `neutral` | Glass on the windshield and side windows of the race cockpit camera, which the game leaves open: a light tint, a faint reflection of the dashboard, and glare and dust toward bright light. See [Cockpit glass](#cockpit-glass). |
 | `sun` | number, `0` turns the glare off | Strength of the sun glare on the RTV path, the same at every MSAA level. Without it (`original`) the glare follows the counted samples. See [Sun glare](#sun-glare). |
 | `road_gloss` | multiplier, default 1 | Specular of the road surface. See [Track lighting](#track-lighting). |
