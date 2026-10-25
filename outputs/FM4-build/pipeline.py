@@ -57,6 +57,8 @@ GAMEINPUT_FILES = {'native/include/GameInput.h':'include/gameinput.h',
 # applied by patch_thirdparty: each must apply exactly, and setup refuses a mismatch.
 THIRDPARTY_PATCHES = (('sdl3-gameinput-v3.patch','sdl3'),)
 NOTICES = REPO/'outputs/FM4-source-control/third-party-notices'
+# The acknowledgements beside fm4_launcher.exe; its About page opens them (docs/running.md).
+CREDITS = HERE/'CREDITS.txt'
 RESOLVE_SHADERS = [f'resolve_full_{bits}bpp{suffix}' for bits in (8,16,32,64) for suffix in ('','_scaled')]
 # The fast copy of 32bpp 4x MSAA surfaces with a per-pixel EDRAM address, in place of upstream's
 # precompiled one, which read the vertical sample at the depth tile's half swap (d3d-hle-n3.md 16.17).
@@ -1878,9 +1880,13 @@ def launcher_data():
 
 def stage_launcher_files(directory):
     """launcher.json, and the look mods and post passes that launch copies before each run, into
-    directory (the BuildRoot or an export folder): the launcher runs them from there."""
+    directory (the BuildRoot or an export folder): the launcher runs them from there. Also the
+    credits and the licenses of the third-party code in the binaries, which the launcher's About
+    page opens."""
     directory=Path(directory)
     (directory/'launcher.json').write_text(json.dumps(launcher_data(),indent=1),encoding='utf-8')
+    shutil.copyfile(CREDITS,directory/'CREDITS.txt')
+    shutil.copytree(NOTICES,directory/'third-party-notices',dirs_exist_ok=True)
     for name,source,suffixes in (('look',LOOK_DIRECTORY,('.hlsli',)),
                                  ('passes',PASSES_DIRECTORY,('.toml','.hlsl','.hlsli'))):
         shutil.rmtree(directory/name,ignore_errors=True)
@@ -1994,8 +2000,9 @@ def launcher_tests(root):
 def export(root,out,jobs):
     """A folder that runs the game with fm4_launcher.exe alone (docs/running.md#export): the
     launcher, game-build's executable, modules and runtime, the look mods, the post passes, the
-    shader cache and launcher.json. Not user-data: the profile, saves and imported content stay,
-    and the launcher of the folder imports Disc 2 and the content packages on its first run.
+    shader cache, launcher.json, CREDITS.txt and the third-party notices. Not user-data: the
+    profile, saves and imported content stay, and the launcher of the folder imports Disc 2 and
+    the content packages on its first run.
     The Disc and content paths of local.json become the launcher's first settings."""
     report=json.loads((root/'build-result.json').read_text())
     game=root/'game-build'
@@ -2015,9 +2022,7 @@ def export(root,out,jobs):
         shutil.copyfile(game/name,out/'game-build'/name)
     shutil.copyfile(game/'fm4_launcher.exe',out/'fm4_launcher.exe')
     shutil.copyfile(root/'build-result.json',out/'build-result.json')
-    # The licenses of the third-party code in the runtime (ReXGlue/Xenia, and AMD FidelityFX
-    # and Microsoft's d3dx12.h when it is built with REX_FSR).
-    shutil.copytree(NOTICES,out/'third-party-notices',dirs_exist_ok=True)
+    # With CREDITS.txt and third-party-notices, the licenses of the third-party code in the binaries.
     stage_launcher_files(out)
     if (root/'cache').is_dir():
         shutil.copytree(root/'cache',out/'cache',dirs_exist_ok=True)

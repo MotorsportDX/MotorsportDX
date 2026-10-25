@@ -201,6 +201,10 @@
       "provenance": "Project documentation; research note on the wet grip fields of the tire and surface data (function addresses, struct offsets, field names and a few data values, no game code)"
     },
     {
+      "path": "outputs/FM4-build/CREDITS.txt",
+      "provenance": "Project documentation; acknowledgements copied beside the GUI launcher"
+    },
+    {
       "path": "outputs/FM4-build/Build.ps1",
       "provenance": "Reviewed bootstrap tooling or documentation; no original game function bodies"
     },
@@ -358,6 +362,10 @@
     },
     {
       "path": "outputs/FM4-source-control/third-party-notices/ReXGlue-LICENSE.txt",
+      "provenance": "Repository policy/tooling or upstream license"
+    },
+    {
+      "path": "outputs/FM4-source-control/third-party-notices/XenonRecomp-LICENSE.txt",
       "provenance": "Repository policy/tooling or upstream license"
     },
     {

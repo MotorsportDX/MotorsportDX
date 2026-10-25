@@ -316,6 +316,7 @@ class App {
   void KeyboardSection();
   void GameDataPage();
   void AdvancedPage();
+  void AboutPage();
   void Footer();
   void Play();
   void Refresh(bool discs);
@@ -925,7 +926,8 @@ void App::Frame() {
     case 1: LookPage(); break;
     case 2: ControlsPage(); break;
     case 3: GameDataPage(); break;
-    default: AdvancedPage(); break;
+    case 4: AdvancedPage(); break;
+    default: AboutPage(); break;
   }
   ImGui::EndChild();
   ImGui::PopStyleVar();
@@ -982,9 +984,9 @@ void App::Banner() {
 }
 
 void App::Navigation() {
-  static const char* pages[] = {"Display", "Look", "Controls", "Game data", "Advanced"};
+  static const char* pages[] = {"Display", "Look", "Controls", "Game data", "Advanced", "About"};
   ImGui::Dummy(ImVec2(0, 2 * scale_));
-  for (int i = 0; i < 5; ++i) {
+  for (int i = 0; i < static_cast<int>(IM_ARRAYSIZE(pages)); ++i) {
     const bool selected = page_ == i;
     ImGui::PushStyleColor(ImGuiCol_Text, selected ? ImVec4(0.902f, 0.945f, 0.984f, 1) : kSecondary);
     if (ImGui::Selectable(pages[i], selected, 0, ImVec2(0, ImGui::GetFrameHeight()))) page_ = i;
@@ -1762,6 +1764,52 @@ void App::AdvancedPage() {
       SDL_SetClipboardText(text.c_str());
     }
   }
+}
+
+// Who made this possible, in short; CREDITS.txt beside the launcher (outputs/FM4-build/CREDITS.txt,
+// copied by build and export) says it in full, and third-party-notices holds the licenses.
+void App::AboutPage() {
+  ImGui::PushFont(heading_font_, 22);
+  ImGui::TextUnformatted("Motorsport DX");
+  ImGui::PopFont();
+  ImGui::TextWrapped("Runs Forza Motorsport 4 (Xbox 360), recompiled for Windows from your own discs.");
+  ImGui::Dummy(ImVec2(0, 8 * scale_));
+  ImGui::PushFont(heading_font_, 17);
+  ImGui::TextUnformatted("Made possible by");
+  ImGui::PopFont();
+  static const char* const kThanks[][2] = {
+      {"The ReXGlue SDK", "Tom (crack), its founder, and the ReXGlue contributors: the recompiler and runtime"},
+      {"Xenia", "Ben Vanik and the Xenia project contributors: the Xbox 360 emulation it all builds on"},
+      {"Xenia Canary", "its game patches and arithmetic, which parts of the FM4 fixes follow"},
+      {"XenonRecomp", "hedge-dev and contributors: the modern Xbox 360 static recompiler"},
+      {"rexdex's recompiler", "the original Xbox 360 static recompiler"},
+      {"XenosRecomp and Unleashed Recompiled", "hedge-dev: ideas for the shader mods and the native path"},
+      {"The Xbox 360 homebrew, modding and reverse-engineering communities", "their shared research"},
+      {"LLVM and Clang, Python, the Windows SDK and the DirectX compilers", "the tools that build it"},
+      {"Turn 10 Studios", "who made Forza Motorsport 4"},
+  };
+  for (const auto& [name, what] : kThanks) {
+    ImGui::Bullet();
+    ImGui::TextWrapped("%s", name);
+    ImGui::Indent(ImGui::GetStyle().IndentSpacing);
+    Muted(what);
+    ImGui::Unindent(ImGui::GetStyle().IndentSpacing);
+  }
+  ImGui::Dummy(ImVec2(0, 8 * scale_));
+  Muted("Motorsport DX is not affiliated with or endorsed by Microsoft, Xbox Game Studios or Turn 10 "
+        "Studios. Forza Motorsport and Xbox are trademarks of the Microsoft group of companies.");
+  ImGui::Dummy(ImVec2(0, 8 * scale_));
+  const fs::path credits = root_ / "CREDITS.txt";
+  const fs::path notices = root_ / "third-party-notices";
+  ImGui::BeginDisabled(!fs::exists(credits));
+  if (ImGui::Button("Open credits")) OpenPath(credits);
+  ImGui::EndDisabled();
+  ImGui::SameLine();
+  ImGui::BeginDisabled(!fs::exists(notices));
+  if (ImGui::Button("Open third-party notices")) OpenPath(notices);
+  ImGui::EndDisabled();
+  Muted(fs::exists(notices) ? "The licenses of the libraries in the program files: " + Utf8(notices)
+                            : "Run build (or export) to copy CREDITS.txt and third-party-notices here.");
 }
 
 void App::Footer() {

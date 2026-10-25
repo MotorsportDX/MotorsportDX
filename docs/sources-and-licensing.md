@@ -49,6 +49,21 @@ Research notes:
 - [Visual style of FM4](analysis/visual-style.md): whether the look comes from shader code in the game or from parameters in the track assets.
 - [B4 shader research](analysis/b4-shader-research.md): the editable shader path (HLSL compiled through FXC, with overrides per hash).
 
+## Projects this work builds on
+
+Read on 26 October 2026 from each project's own README and license (the ReXGlue SDK's README in the BuildRoot's `runtime-upstream`, the others on GitHub). The thanks to them are in README's [Acknowledgements](../README.md#acknowledgements) and in [CREDITS.txt](../outputs/FM4-build/CREDITS.txt).
+
+| Project | License | How this work builds on it |
+|---|---|---|
+| [ReXGlue SDK](https://github.com/rexglue/rexglue-sdk), Tom (crack) and contributors | BSD-3-Clause | The recompiler and the runtime that `work/runtime` forks. |
+| [Xenia](https://github.com/xenia-project/xenia), Ben Vanik and the Xenia project contributors | BSD-3-Clause | ReXGlue's runtime derives from its kernel, GPU and audio emulation; the resolve shaders in `work/runtime/src/graphics/shaders/fm4-resolve` adapt Xenia's. |
+| [Xenia Canary](https://github.com/xenia-canary/xenia-canary) | not reviewed: no code of it is copied | The optional shadow workaround follows its game patches (game-patches#398), and `fm4-vector-fixes.h` matches its dot product arithmetic. |
+| [XenonRecomp](https://github.com/hedge-dev/XenonRecomp), hedge-dev and contributors | MIT | Through ReXGlue: its README says much of ReXGlue's code analysis and instruction translation is based on XenonRecomp, and four files of the runtime fork are marked as based on XenonRecomp and Unleashed Recompiled (below). `fm4-instruction-fixes.h` ports float16 semantics that XenonRecomp's regression suite checks. |
+| [rexdex's recompiler](https://github.com/rexdex/recompiler) | MIT | Through ReXGlue, which names it as an inspiration; no code of it. |
+| [XenosRecomp](https://github.com/hedge-dev/XenosRecomp) and [Unleashed Recompiled](https://github.com/hedge-dev/UnleashedRecomp), hedge-dev | MIT and GPL-3.0 | Read for design ideas: the editable shader path ([B4 research](analysis/b4-shader-research.md)) and the native port ([D3D-level HLE, 5](analysis/d3d-hle.md#5-prior-art-unleashed-recompiled)). No code of them in this project's own sources. |
+
+**XenonRecomp's code in the runtime fork.** The ReXGlue SDK marks `include/rex/ppc/context.h` ("Based on XenonRecomp/UnleashedRecomp PPCContext infrastructure"), `include/rex/ppc/function.h` (translation wrappers), `include/rex/ppc/intrinsics.h` (SIMD patterns) and `src/codegen/config.cpp` (the TOML config) as based on XenonRecomp and Unleashed Recompiled. The three headers compile into the runtime and the game's generated code, `config.cpp` into `rexglue.exe`. The files carry only ReXGlue's BSD-3-Clause notice, so XenonRecomp's MIT notice is kept in [XenonRecomp-LICENSE.txt](../outputs/FM4-source-control/third-party-notices/XenonRecomp-LICENSE.txt). Unleashed Recompiled is under the GPL 3.0; whether those files hold code from it rather than from XenonRecomp, whose PPC context it shares, is a question for the ReXGlue SDK ([open items](#open-items-before-a-public-release)).
+
 ## Third-party components
 
 Reviewed on 25 October 2026 against the build's CMake files, the link map of `fm4_rex.exe` and the license files of the pinned revisions. No third-party library is stored in the repository: `setup` fetches the ReXGlue SDK at `f5337cdc947ff6d4c4196737e2c807a48f2a1fc2` with the 13 submodules of `THIRDPARTY_SUBMODULES` and the 11 vendored folders of `THIRDPARTY_VENDORED` in [pipeline.py](../outputs/FM4-build/pipeline.py), and the FidelityFX SDK at its pinned commit. Every license text is in [third-party-notices](../outputs/FM4-source-control/third-party-notices/README.txt), which `export` copies into each export.
@@ -56,6 +71,7 @@ Reviewed on 25 October 2026 against the build's CMake files, the link map of `fm
 | Component | Version | License | In | Notice condition |
 |---|---|---|---|---|
 | ReXGlue SDK, with Xenia-derived portions | `f5337cd` (the fork in `work/runtime`) | BSD-3-Clause | every binary but the launcher | keep the notice in source and in the documentation of binaries |
+| XenonRecomp (the PPC context, function wrappers and SIMD patterns that ReXGlue bases on it) | in the fork's `include/rex/ppc` and `src/codegen/config.cpp` | MIT | the runtime, the game's code, `rexglue.exe` | the notice in all copies, in `XenonRecomp-LICENSE.txt` |
 | SDL 3, altered by `outputs/FM4-build/sdl3-gameinput-v3.patch` | `8bf3b72` (3.5.0 development) | zlib | `rexruntime.dll`, `fm4_launcher.exe` | none for binaries; keep the notice in source and mark the altered source, which the patch does |
 | Microsoft.GameInput (the API v3 header and its loader, in SDL's GameInput driver) | 3.5.283 | MIT (those two files only) | `rexruntime.dll`, `fm4_launcher.exe`, inside SDL | the notice in all copies; see [below](#third-party-code-microsoftgameinput) |
 | Dear ImGui | 1.92.5 (`6d910d5`) | MIT | `rexruntime.dll`, `fm4_launcher.exe` | the notice in all copies |
@@ -103,6 +119,7 @@ Every commit of every ref of the development repository was scanned (352 commits
 - **No project license.** No license is assigned to the project's own code (`work/fm4-rex`, `work/fm4-launcher`, `outputs`, the docs); without one, others may read the source but have no right to reuse it. `work/runtime` stays BSD-3-Clause. The choice is the project owner's.
 - **Two vendored files without a stated license.** `pe_image.h` (a Microsoft copyright line only) and disruptorplus (MIT upstream; no license file in the SDK's copy), both from Xenia and fetched from the upstream SDK, not stored here.
 - **Notices not re-read from upstream.** The copyright years of AMD's FidelityFX CAS and FSR 1 licenses, and the DirectX Shader Compiler's `LICENSE.TXT`, which the SDK's copy of the DXC headers does not include; the review did not download them.
+- **Unleashed Recompiled in the ReXGlue SDK.** Four files of the runtime fork are marked as based on XenonRecomp and Unleashed Recompiled (GPL 3.0), with only ReXGlue's BSD-3-Clause notice ([above](#projects-this-work-builds-on)). Ask the ReXGlue SDK which parts, if any, come from Unleashed Recompiled.
 - **`XenonRecomp-FM4-fixes.patch`** stays out of the repository until its provenance is reviewed.
 - **DLSS** would need its own review of NVIDIA's SDK license; not planned.
 

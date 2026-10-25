@@ -64,6 +64,7 @@ the environment and the display description of sixteen sets of options (RTV, `-R
 | Controls | The Controller section: the options of `-Pad` (the pad driver, rumble strength, trigger rumble, the steering anti-deadzone and the input thread; stick and trigger shaping and the extra buttons folded), with the `-Pad` value shown and editable; see [Controller](#controller). Then the Keyboard section: the options of `-Keyboard` (smooth steering and pedals, their rates and the precision share; mouse steering folded), with the `-Keyboard` value; see [Keyboard](#keyboard). Below it the keyboard bindings, by their function in the game's DEFAULT LAYOUT 1 (the runtime's `keybind_*` settings). **Set** waits for a key; several keys are separated by commas, modifiers are written as `Shift+Up`. Unknown key names are marked and block Play. A connected controller needs no setup. |
 | Game data | Disc 1 and Disc 2, checked as `generate` checks them, the downloadable content folders and files, and the content packages found, with their import state. **Remove import** deletes an imported package from the user data (see [Data directories](#data-directories)). The texture pack is the `-TextureReplace` folder. |
 | Advanced | Fixed vblank, the shadow workaround, `-SingleTile`, `--ao`, `-Rov`, the native path (`-Native`, and its MSAA: one pass with 2x, the default, one pass with 4x as `-MsaaSamples 4`, or one tile without MSAA as `-MsaaSamples 0`), the performance trace, extra cvars, the texture dump folder, the user data folder, and buttons that open the logs and the user data and copy the command line. |
+| About | Who made Motorsport DX possible (the ReXGlue SDK, Xenia, XenonRecomp and the other projects of [CREDITS.txt](../outputs/FM4-build/CREDITS.txt)), the non-affiliation line, and buttons that open `CREDITS.txt` and the `third-party-notices` folder beside the launcher. |
 
 A **profile** is one set of run options; the Discs, content, saved looks and key
 bindings are shared by all profiles. The launcher saves its settings in
@@ -118,8 +119,9 @@ repository:
 
 The folder holds `fm4_launcher.exe`, `game-build` (the executable, the two modules and
 the runtime DLLs of `build-result.json`), `look`, `passes`, the shader cache (`cache`),
-`launcher.json`, `build-result.json`, the license notices of the third-party code in the
-runtime (`third-party-notices`), and a first `launcher-settings.json` with the
+`launcher.json`, `build-result.json`, `CREDITS.txt` (the projects that made it possible), the
+license notices of the third-party code in the binaries (`third-party-notices`), and a first
+`launcher-settings.json` with the
 Disc and content paths of `local.json`. It does not hold `user-data`: profiles, saves
 and imported content stay on the build computer. `export` checks the artifact hashes
 first, and refuses a folder that is not empty unless it is an earlier export, which it

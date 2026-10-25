@@ -312,8 +312,8 @@ runtime edits need only this stage. It then:
   and each e2e run's `summary.json` copies `source` into `binary`);
 - builds the [GUI launcher](running.md#gui-launcher), `game-build\fm4_launcher.exe`,
   from [work/fm4-launcher](../work/fm4-launcher) with the runtime's SDL3, Dear ImGui
-  and JSON header, writes its tables to `launcher.json` and copies the look mods and
-  post passes into `look` and `passes`;
+  and JSON header, writes its tables to `launcher.json`, copies the look mods and
+  post passes into `look` and `passes`, and `CREDITS.txt` and `third-party-notices` beside them;
 - runs the launcher tests, which compare the launcher's launch plans and its Disc and
   content checks with those of `pipeline.py`. A flavor build skips the launcher.
 
@@ -374,6 +374,8 @@ FM4-build/
 ├── local.json        # Local Disc and content paths, and the release
 ├── content-packages.txt # Packages the last run imports, written by the launcher
 ├── launcher.json     # Tables of the GUI launcher, written by build
+├── CREDITS.txt       # The projects that made it possible, copied by build
+├── third-party-notices/ # The licenses of the third-party code, copied by build
 ├── launcher-settings.json # The GUI launcher's Discs, profiles, looks and bindings
 └── build-result.json # Artifact hashes and build result
 ```

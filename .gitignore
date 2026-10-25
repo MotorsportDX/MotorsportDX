@@ -28,6 +28,7 @@
 !/.claude/
 !/.claude/skills/
 !/.claude/skills/**
+!/outputs/FM4-build/CREDITS.txt
 !/outputs/FM4-build/Build.ps1
 !/outputs/FM4-build/dump-image.cpp
 !/outputs/FM4-build/texture-extract.cpp
@@ -90,6 +91,7 @@
 !/outputs/FM4-source-control/third-party-notices/tomlplusplus-LICENSE.txt
 !/outputs/FM4-source-control/third-party-notices/utfcpp-LICENSE.txt
 !/outputs/FM4-source-control/third-party-notices/Vendored-code-NOTICES.txt
+!/outputs/FM4-source-control/third-party-notices/XenonRecomp-LICENSE.txt
 !/outputs/FM4-source-control/third-party-notices/xxHash-LICENSE.txt
 !/outputs/FM4-source-control/tracked-files.json
 !/work/fm4-rex/CMakeLists.txt

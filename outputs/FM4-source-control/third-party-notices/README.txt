@@ -3,8 +3,10 @@ Motorsport DX: third-party notices
 Motorsport DX is built from the project's own code, the ReXGlue SDK fork in work/runtime, and the
 third-party code below. None of the third-party libraries is stored in this repository:
 setup fetches them into the BuildRoot from their pinned upstream revisions. Each license file
-in this folder is the upstream text as it stands at that revision. Build.ps1 -Action export
-copies this folder into the export as third-party-notices.
+in this folder is the upstream text as it stands at that revision. Build.ps1 -Action build and
+-Action export copy this folder beside fm4_launcher.exe as third-party-notices, with
+CREDITS.txt, which thanks the projects that made Motorsport DX possible; the launcher's About
+page opens both.
 
 The binaries a build produces, and what each one contains:
   rexruntime.dll    the runtime: ReXGlue and Xenia code, SDL3 (with the GameInput API v3
@@ -30,6 +32,15 @@ ReXGlue-LICENSE.txt
   Vanik and Xenia project contributors"): the runtime fork in work/runtime (from commit
   f5337cdc947ff6d4c4196737e2c807a48f2a1fc2), in every build and export. The resolve shaders in
   work/runtime/src/graphics/shaders/fm4-resolve keep Xenia's license in LICENSE.xenia there.
+
+XenonRecomp-LICENSE.txt
+  XenonRecomp, https://github.com/hedge-dev/XenonRecomp, MIT, "Copyright (c) 2025 hedge-dev
+  and contributors" (its LICENSE.md, read on 26 October 2026). The ReXGlue SDK marks four files
+  of the runtime fork as based on XenonRecomp and Unleashed Recompiled: include/rex/ppc/context.h,
+  function.h and intrinsics.h (the PPC context, the function wrappers and the SIMD patterns,
+  compiled into the runtime and the game) and src/codegen/config.cpp (in rexglue.exe). Those
+  files carry only ReXGlue's notice; XenonRecomp's is kept here. Unleashed Recompiled is under
+  the GPL 3.0, an open question for the ReXGlue SDK (docs/sources-and-licensing.md).
 
 Libraries the runtime builds (the upstream SDK's submodules at that commit)
   SDL-LICENSE.txt              SDL 3 (3.5.0 development, commit 8bf3b72), zlib license.

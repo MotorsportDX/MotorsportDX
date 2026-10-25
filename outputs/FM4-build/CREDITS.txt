@@ -1,0 +1,43 @@
+Motorsport DX: credits
+
+Motorsport DX runs Forza Motorsport 4 (Xbox 360), recompiled for Windows from the player's own
+discs. It would not exist without the people and projects below.
+
+The ReXGlue SDK - https://github.com/rexglue/rexglue-sdk
+  The recompiler and the runtime that Motorsport DX forks. Its README credits Tom (crack), the
+  project founder; Loreaxe (Linux), mystixor (Windows), Carlos Estrague (mrcmunir, Linux and
+  ARM64), sanjay900 (Linux and SDL) and Roxxsen (CI/CD) as contributors; Graine25 and Toby for
+  project support; and everyone in the ReXGlue community.
+
+Xenia - https://xenia.jp - https://github.com/xenia-project/xenia
+  Ben Vanik and the Xenia project contributors. Their Xbox 360 emulation laid the ground that
+  ReXGlue and this runtime stand on: the kernel, the GPU and the audio. Xenia Canary
+  (https://github.com/xenia-canary/xenia-canary): the optional FM4 shadow workaround follows its
+  game patches, and the vector dot products follow its arithmetic.
+
+XenonRecomp - https://github.com/hedge-dev/XenonRecomp - hedge-dev and contributors
+  It pioneered the modern approach to Xbox 360 static recompilation; much of ReXGlue's code
+  analysis and instruction translation is based on its work.
+
+rexdex's recompiler - https://github.com/rexdex/recompiler
+  The original Xbox 360 static recompiler, which ReXGlue names as an inspiration.
+
+XenosRecomp and Unleashed Recompiled - https://github.com/hedge-dev/XenosRecomp -
+https://github.com/hedge-dev/UnleashedRecomp - hedge-dev
+  Their shader recompiler and their port of a game at the Direct3D level showed the way for
+  this project's shader mods and its native render path. They were read for ideas; this
+  project uses no code of them.
+
+The Xbox 360 homebrew, modding and reverse-engineering communities, whose research is the
+shared knowledge that projects like this build on.
+
+The tools that build it: LLVM and Clang, CMake and Ninja, Python, Git, Microsoft's Visual
+Studio build tools, the Windows SDK with its shader compiler (FXC), and the DirectX Shader
+Compiler.
+
+Turn 10 Studios, who made Forza Motorsport 4.
+
+Motorsport DX is not affiliated with or endorsed by Microsoft, Xbox Game Studios or Turn 10
+Studios. Forza Motorsport and Xbox are trademarks of the Microsoft group of companies.
+
+The libraries in the program files and their licenses: third-party-notices\README.txt.

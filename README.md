@@ -164,10 +164,28 @@ The repository contains reviewed integration code and a ReXGlue SDK fork (BSD-3-
 
 ## Credits
 
-Motorsport DX builds on the work of these projects. Their license texts are in the [third-party notices](outputs/FM4-source-control/third-party-notices/README.txt), which every export carries; the versions, and the binary each one ends up in, are in [third-party components](docs/sources-and-licensing.md#third-party-components).
+### Acknowledgements
+
+Motorsport DX would not exist without the people and projects below.
+
+- **The ReXGlue SDK** ([rexglue/rexglue-sdk](https://github.com/rexglue/rexglue-sdk)), the recompiler and runtime that this project forks. Its README credits [Tom (crack)](https://github.com/tomcl7), the project founder; [Loreaxe](https://github.com/Loreaxe) (Linux), [mystixor](https://github.com/Mystixor) (Windows), [Carlos Estrague (mrcmunir)](https://github.com/mrcmunir) (Linux and ARM64), [sanjay900](https://github.com/sanjay900) (Linux and SDL) and [Roxxsen](https://github.com/Roxxsen) (CI/CD) as contributors; [Graine25](https://github.com/Graine25) and [Toby](https://github.com/TbyDtch) for project support; and everyone in the ReXGlue community.
+- **Xenia** ([xenia.jp](https://xenia.jp), [xenia-project/xenia](https://github.com/xenia-project/xenia)): Ben Vanik and the Xenia project contributors, whose Xbox 360 emulation (the kernel, the GPU and the audio) laid the ground that ReXGlue and this runtime stand on. [Xenia Canary](https://github.com/xenia-canary/xenia-canary): the optional FM4 shadow workaround follows its game patches, and the vector dot products follow its arithmetic.
+- **XenonRecomp** ([hedge-dev/XenonRecomp](https://github.com/hedge-dev/XenonRecomp)), by hedge-dev and contributors, which pioneered the modern approach to Xbox 360 static recompilation. ReXGlue's README says that much of its code analysis and instruction translation is based on XenonRecomp's work.
+- **rexdex's recompiler** ([rexdex/recompiler](https://github.com/rexdex/recompiler)), the original Xbox 360 static recompiler, which ReXGlue names as an inspiration.
+- **XenosRecomp** and **Unleashed Recompiled** ([hedge-dev/XenosRecomp](https://github.com/hedge-dev/XenosRecomp), [hedge-dev/UnleashedRecomp](https://github.com/hedge-dev/UnleashedRecomp)), whose shader recompiler and port of a game at the Direct3D level showed the way for this project's shader mods and its native render path. They were read for ideas; this project uses no code of them.
+- The Xbox 360 homebrew, modding and reverse-engineering communities, whose research is the shared knowledge that projects like this build on.
+- The tools that build it: LLVM and Clang, CMake and Ninja, Python, Git, Microsoft's Visual Studio build tools, the Windows SDK with its shader compiler (FXC), and the DirectX Shader Compiler.
+- Turn 10 Studios, who made Forza Motorsport 4.
+
+The same thanks are in [CREDITS.txt](outputs/FM4-build/CREDITS.txt), which `build` and `export` put beside `fm4_launcher.exe`, and on the GUI launcher's About page.
+
+### Third-party code
+
+The third-party code in the program files, with its license. The license texts are in the [third-party notices](outputs/FM4-source-control/third-party-notices/README.txt), which every export carries; the versions, and the binary each one ends up in, are in [third-party components](docs/sources-and-licensing.md#third-party-components).
 
 - [ReXGlue SDK](https://github.com/rexglue/rexglue-sdk), Copyright (c) 2026 Tom Clay, BSD-3-Clause: the recompiler and the runtime that `work/runtime` forks.
 - [Xenia](https://xenia.jp), Copyright (c) 2022 Ben Vanik and Xenia project contributors, BSD-3-Clause: the Xbox 360 kernel, GPU and audio emulation that ReXGlue derives from, including the resolve shaders.
+- [XenonRecomp](https://github.com/hedge-dev/XenonRecomp), Copyright (c) 2025 hedge-dev and contributors, MIT: the PPC context, function wrappers and SIMD patterns that ReXGlue's runtime marks as based on it.
 - [SDL 3](https://github.com/libsdl-org/SDL), Copyright (C) 1997-2026 Sam Lantinga, zlib license: the window, input and audio layer, built from source with a patch for GameInput API v3.
 - The GameInput API v3 header and loader from Microsoft's [Microsoft.GameInput](https://www.nuget.org/packages/Microsoft.GameInput) package, Copyright (c) Microsoft Corporation, MIT license: built into SDL's GameInput driver for the pad driver choice `gameinput`.
 - [Dear ImGui](https://github.com/ocornut/imgui), Omar Cornut, MIT: the settings overlay and the GUI launcher.
