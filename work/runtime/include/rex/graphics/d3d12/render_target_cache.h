@@ -87,6 +87,10 @@ class D3D12RenderTargetCache final : public RenderTargetCache {
     DXGI_FORMAT format;
     uint32_t width, height;
     xenos::ColorRenderTargetFormat guest_format;
+    // Without one: 1 nothing bound in the slot, 2 a multisampled target, whose
+    // key's EDRAM base, sample count (log2) and resource format these are.
+    uint32_t miss;
+    uint32_t miss_base_tiles, miss_samples_log2, miss_format;
   };
   ID3D12Resource* TransitionLastColorRenderTarget(uint32_t index, D3D12_RESOURCE_STATES state,
                                                   LastColorRenderTarget& out);

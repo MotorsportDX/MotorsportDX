@@ -5383,8 +5383,14 @@ ID3D12Resource* D3D12RenderTargetCache::TransitionLastColorRenderTarget(
     return nullptr;
   }
   RenderTarget* render_target = last_update_accumulated_render_targets()[1 + index];
-  if (!render_target || render_target->key().is_depth ||
-      render_target->key().msaa_samples != xenos::MsaaSamples::k1X) {
+  out.miss = !render_target || render_target->key().is_depth ? 1 : 0;
+  if (!out.miss && render_target->key().msaa_samples != xenos::MsaaSamples::k1X) {
+    out.miss = 2;
+    out.miss_base_tiles = render_target->key().base_tiles;
+    out.miss_samples_log2 = uint32_t(render_target->key().msaa_samples);
+    out.miss_format = render_target->key().resource_format;
+  }
+  if (out.miss) {
     return nullptr;
   }
   // The transfers kept pending write into the render targets first, and the

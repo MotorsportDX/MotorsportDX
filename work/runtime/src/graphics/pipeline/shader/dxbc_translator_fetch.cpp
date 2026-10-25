@@ -11,6 +11,8 @@
 
 #include <algorithm>
 #include <cmath>
+#include <cstdlib>
+#include <string>
 #include <memory>
 #include <sstream>
 
@@ -26,9 +28,26 @@
 
 REXCVAR_DEFINE_BOOL(draw_resolution_scaled_texture_offsets, true, "GPU/Shader",
                     "Scale texture offsets with draw resolution");
+REXCVAR_DEFINE_STRING(native_scene_input_lod_bias, "auto", "GPU/Shader",
+                      "The LOD bias of the computed-LOD texture fetches of the scene draws at "
+                      "native_scene_input_scale while upscaling: auto, log2(input / output), "
+                      "which picks the mips of the output scale (docs/analysis/fsr-plan.md 12), "
+                      "or a number of mip levels (0: none)")
+    .lifecycle(rex::cvar::Lifecycle::kRequiresRestart);
 
 namespace rex::graphics {
 using namespace ucode;
+
+float DxbcShaderTranslator::SceneInputLodBias(DrawScale input, DrawScale output) {
+  const std::string& text = REXCVAR_GET(native_scene_input_lod_bias);
+  if (text.empty() || text == "auto") {
+    return std::log2(float(uint64_t(input.numerator) * output.denominator) /
+                     float(uint64_t(input.denominator) * output.numerator));
+  }
+  char* end = nullptr;
+  const float bias = std::strtof(text.c_str(), &end);
+  return end && !*end ? bias : 0.0f;
+}
 
 void DxbcShaderTranslator::ProcessVertexFetchInstruction(
     const ParsedVertexFetchInstruction& instr) {
@@ -1442,6 +1461,11 @@ void DxbcShaderTranslator::ProcessTextureFetchInstruction(
           }
           assert_not_zero(grad_component_count);
           uint32_t grad_mask = (1 << grad_component_count) - 1;
+          // A scene draw at the input scale while upscaling: the mips of the
+          // output scale (SceneInputLodBias).
+          if (translation_lod_bias_ != 0.0f) {
+            a_.OpAdd(lod_dest, lod_src, dxbc::Src::LF(translation_lod_bias_));
+          }
           // Convert the bias to a gradient scale.
           a_.OpExp(lod_dest, lod_src);
           // FIXME(Triang3l): Gradient exponent adjustment is currently not done

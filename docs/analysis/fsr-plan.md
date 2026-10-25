@@ -326,10 +326,37 @@ FSR's own cost follows the output size more than the input (1.37 to 1.66 ms at 2
 **Pictures** (1:1 crops of the frozen frame from full-resolution captures, native against quality at each output; the crops stay outside the repository):
 - 1080p from 720p, 1440p from 960p and 2160p from 1440p keep the cable car's wires and the pylon's lattice; the upscaled ones are a little softer, most at 1080p from 720p, where far wires break up in places. The grandstand's crowd is alike. The HUD is identical (drawn at s_out after the scene).
 - The rear-view mirror renders at k, so it is softer where k drops (1440p quality at k 1 against native's 2; 2160p quality at k 2 against 3), the cost the main session accepted with k = floor(s_in).
-- The clock in the instrument cluster looks hazy in every upscaled mode and not at ratio 1: its glass is in FSR's reactive mask (`motion_mask` G marks car glass), so FSR keeps little history there, and an input below the output shows. An open item for the reactive mask (the glass of the gauges against the windows).
+- The clock in the instrument cluster looks hazy in every upscaled mode and not at ratio 1. The first guess here, FSR's reactive mask, was wrong; the cause is the texture mips (section 12.1), fixed after the gate.
 - A whole upscaled race frame and photo mode at 1080p from 720p look complete, with the HUD sharp.
 
-**Runs**: the upscale smoke (`s3-up32from1-photo`, `-career`: race, photo mode, the replay) reached its goal with the error keys of stage 2's runs; the scene read trace is section 11.3. The final point reports "no single-sampled color render target" once, at the first frame with a scene, and runs from the next frame on.
+**Runs**: the upscale smoke (`s3-up32from1-photo`, `-career`: race, photo mode, the replay) reached its goal with the error keys of stage 2's runs; the scene read trace is section 11.3. The final point's warning "no single-sampled color render target" (logged once) is explained in section 12.2.
+
+## 12. After stage 3 (25 October 2026)
+
+### 12.1 The instrument cluster's haze: the texture mips
+
+In every upscale mode the dials of the instrument cluster (the clock most, its numerals and ticks) looked hazy and doubled against native rendering, while the hands, which are geometry, stayed sharp. The causes the main session listed, checked:
+
+- **Not FSR's reactive or transparency handling.** The cluster is the cockpit interior: the motion pass classifies it as the interior (its own motion, `motion_mask` 0 in both channels), so neither FSR's reactive mask (G marks only the world seen through car glass) nor its transparency and composition mask (R marks pixels without known motion) covers it.
+- **Not a scene texture's class, nor the scene colour.** The dials are ordinary textures, not scene-resolved ranges (the scene read trace of 11.3 lists no read of them), and the cluster draws are scene draws into the MSAA surfaces like the rest of the interior.
+- **The texture mips.** A scene draw at s_in has larger screen-space derivatives than at s_out, so the hardware picks a coarser mip of every texture, and FSR upscales that coarser picture. At ratio 1 the mips are those of the output. FSR's documentation asks for a negative mip bias while upscaling for this reason.
+
+The fix: the computed-LOD fetches of the scene draws at the input scale (the `scene_input_scale` translations) take a LOD bias of log2(s_in / s_out), the mips the output scale would pick: -0.585 at 1080p from 720p and 1440p from 960p, -1 at performance. The DXBC translator adds it before the gradients' scale; the shader override library takes it as `XE_SCENE_LOD_BIAS`, defined only for those translations. Nothing changes at s_in = s_out or off the native path (the bias is 0 and no instruction or define is emitted). `native_scene_input_lod_bias` overrides it with a number of mip levels (0: none). FSR's documentation also suggests one level more (log2(render / display) - 1, -1.585 at quality); at 1440p from 960p that sharpened the ticks a little more in the frozen frame, but it would sharpen beyond native rendering and, at ratio 1, change stages 1 and 2, so the default stays log2(s_in / s_out).
+
+Checked on the frozen frame (`aces,aa=fsr`, the build of 12.3), 1:1 crops of native, quality before and quality with the bias: at 1080p from 720p the clock's dial, numerals and ticks match native's again, and the other dials and the grandstand's crowd are sharper than before; at 1440p from 960p the dials' small print (VEGLIA, ELECTRONIC) is sharper. GPU time a race frame at 1440p quality: 4.51 ms against 4.26 ms before (one run each; native 5.80 ms).
+
+### 12.2 The final point's skipped frames
+
+The warning "no single-sampled color render target at the final point" came once per run, in runs before stage 3 too (stage 2's `-Native` 1x and 2x, RTV 2x). With the frame and the target logged: from the first frame with a scene camera the title's final combine shader draws, for 125 frames in a row, into a 4x target at EDRAM base 0 (`2_10_10_10`, the guest viewport 1280x720): the pre-race screens with the car, which use the title's tiling entry 0 (4x tiles). The final point's passes (the windshield, TAA at the final point) need the single-sampled final picture, so they skip those frames; the race's frames and photo mode run them. Harmless, and expected until entry 0 renders in one pass ("entry 0 at s"). The warning is now an information line once per stretch of such frames, with the target, and another when the final point runs again with the number of frames skipped.
+
+### 12.3 The checks
+
+On the build after 3f28619 with 12.1 and 12.2 (`game-build-s4`):
+
+- No change at s_in = s_out: the frozen frame's parity against stage 2's runtime on `-Native` 3/2 without TAA (draws +0.2%, 39.0% of the image above 4) and on RTV 2x with `aces` (+0.1%, 33.1%): PASS.
+- `photo` at 1080p from 720p reached its goal with no new error key; the final point logs one stretch of 123 skipped frames (the pre-race screens) and runs from frame 2,762 on.
+- The CPU tests: `fm4_shader_mod_tests` compiles the override library with the bias define's `#ifdef`; the post pass shader tests pass with FSR's checks on the hardware adapter.
+
 
 ## Related
 

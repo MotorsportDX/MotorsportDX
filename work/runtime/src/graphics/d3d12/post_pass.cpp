@@ -2224,11 +2224,30 @@ void PostPasses::RunPoint(Point point) {
     D3D12RenderTargetCache::LastColorRenderTarget target;
     if (!command_processor_.render_target_cache_->TransitionLastColorRenderTarget(
             0, kShaderResource, target)) {
-      if (!warned_final_) {
-        warned_final_ = true;
-        REXGPU_WARN("Post passes: no single-sampled color render target at the final point");
+      // The final combine draws into a multisampled target in the frames of
+      // the title's tiling entry 0 (4x tiles at base 0: the pre-race screens
+      // with a scene camera, docs/analysis/fsr-plan.md 12), where the final
+      // point's passes do not run. Logged once per stretch of such frames.
+      if (!final_missed_frames_) {
+        if (target.miss == 2) {
+          REXGPU_INFO("Post passes: the final point skips the frames whose final combine draws "
+                      "into a {}x target (EDRAM base {}, format {}), from frame {}",
+                      1u << target.miss_samples_log2, target.miss_base_tiles, target.miss_format,
+                      command_processor_.GetCurrentFrame());
+        } else {
+          REXGPU_INFO("Post passes: the final point skips the frames whose final combine has no "
+                      "color target, from frame {}",
+                      command_processor_.GetCurrentFrame());
+        }
       }
+      final_missed_frames_ += final_missed_frame_ != command_processor_.GetCurrentFrame();
+      final_missed_frame_ = command_processor_.GetCurrentFrame();
       return;
+    }
+    if (final_missed_frames_) {
+      REXGPU_INFO("Post passes: the final point runs again at frame {}, after {} frames",
+                  command_processor_.GetCurrentFrame(), final_missed_frames_);
+      final_missed_frames_ = 0;
     }
     final_color_.resource = target.resource;
     final_color_.rtv = target.rtv;

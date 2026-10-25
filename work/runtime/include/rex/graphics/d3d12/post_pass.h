@@ -538,7 +538,10 @@ class PostPasses {
   // The final combine's guest viewport, and the final color in host pixels.
   uint32_t final_guest_width_ = 0, final_guest_height_ = 0;
   uint32_t final_width_ = 0, final_height_ = 0;
-  bool warned_final_ = false;
+  // The frames in a row whose final point found no single-sampled target, and
+  // the last of them.
+  uint32_t final_missed_frames_ = 0;
+  uint64_t final_missed_frame_ = UINT64_MAX;
   // The last final and scene sizes reported as differing.
   uint32_t mismatch_final_width_ = 0;
   uint32_t mismatch_final_height_ = 0;

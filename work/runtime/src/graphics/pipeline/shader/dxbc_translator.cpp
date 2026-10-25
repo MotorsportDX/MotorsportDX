@@ -806,7 +806,11 @@ void DxbcShaderTranslator::StartTranslation() {
     translation_scale_x_ = translation_scale_y_ = translation_scale_.ToFloat();
     translation_scaled_axes_ =
         translation_scale_.numerator > translation_scale_.denominator ? 0b11 : 0;
+    translation_lod_bias_ = shader_modification.pixel.scene_input_scale
+                                ? SceneInputLodBias(scene_input_scale_, scene_draw_scale_)
+                                : 0.0f;
   } else {
+    translation_lod_bias_ = 0.0f;
     translation_scale_ = DrawScale::Whole(draw_resolution_scale_x_);
     translation_scale_x_ = float(draw_resolution_scale_x_);
     translation_scale_y_ = float(draw_resolution_scale_y_);

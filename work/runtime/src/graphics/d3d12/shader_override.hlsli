@@ -322,6 +322,11 @@ void xe_texture_gradients(uint lod_flags, float lod, float3 location, float3 siz
                           bool unnormalized, uint normalized_mask, float3 register_gradient_h,
                           float3 register_gradient_v, out float3 gradient_x,
                           out float3 gradient_y) {
+#ifdef XE_SCENE_LOD_BIAS
+  // A scene draw at the input scale while upscaling: the mips of the output
+  // scale (DxbcShaderTranslator::SceneInputLodBias).
+  lod += XE_SCENE_LOD_BIAS;
+#endif
   float gradient_scale = exp2(lod);
   if (lod_flags & XE_LOD_REGISTER_GRADIENTS) {
     gradient_x = register_gradient_h * gradient_scale;

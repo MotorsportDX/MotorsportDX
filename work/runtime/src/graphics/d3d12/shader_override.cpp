@@ -678,6 +678,13 @@ std::string ShaderOverrides::BuildContract(
              ? uint32_t(scale_x > 1) | (uint32_t(scale_y > 1) << 1)
              : 0u);
   }
+  if (modification.pixel.scene_scale && modification.pixel.scene_input_scale) {
+    const float lod_bias =
+        DxbcShaderTranslator::SceneInputLodBias(config_.scene_input_scale, config_.scene_draw_scale);
+    if (lod_bias != 0.0f) {
+      line("#define XE_SCENE_LOD_BIAS {:.9g}", lod_bias);
+    }
+  }
   line("#define XE_GAMMA_RENDER_TARGET_AS_UNORM8 {}", int(config_.gamma_render_target_as_unorm8));
   line("#define XE_MSAA_2X_SUPPORTED {}", int(config_.msaa_2x_supported));
   line("#define XE_FUZZY_ALPHA_EPSILON {}", int(REXCVAR_GET(use_fuzzy_alpha_epsilon)));

@@ -60,6 +60,10 @@ class DxbcShaderTranslator : public ShaderTranslator {
   // The scene's input scale before the upscaler, used instead with the
   // scene_input_scale modification (docs/analysis/fsr-plan.md 11).
   void SetSceneInputScale(DrawScale scale) { scene_input_scale_ = scale; }
+  // The LOD bias of the computed-LOD fetches of a scene draw at the input
+  // scale (native_scene_input_lod_bias): by default log2(input / output), the
+  // mips the output scale would pick (docs/analysis/fsr-plan.md 12).
+  static float SceneInputLodBias(DrawScale input, DrawScale output);
 
   // Stage linkage ordering and rules (must be respected not only within the
   // DxbcShaderTranslator, but also by everything else between the VS and the
@@ -975,6 +979,8 @@ class DxbcShaderTranslator : public ShaderTranslator {
   DrawScale scene_draw_scale_;
   DrawScale scene_input_scale_;
   DrawScale translation_scale_;
+  // SceneInputLodBias for a scene_input_scale translation, 0 otherwise.
+  float translation_lod_bias_ = 0.0f;
   float translation_scale_x_ = 1.0f;
   float translation_scale_y_ = 1.0f;
   // The axes whose scale is above 1.
