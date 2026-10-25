@@ -1,0 +1,121 @@
+# SDL 3 GameInput API v3 (the MIT header of the Microsoft.GameInput package; SDL 3.5 knows
+# v1 and v2 only): the v3 namespace, creation through the package's loader
+# (GameInputInitialize), and the controller counts from controllerInfo with a null check.
+# Applied by outputs/FM4-build/pipeline.py (patch_thirdparty) to the fetched SDL source.
+diff --git a/src/core/windows/SDL_gameinput.cpp b/src/core/windows/SDL_gameinput.cpp
+index baf7ed2..ffab17f 100644
+--- a/src/core/windows/SDL_gameinput.cpp
++++ b/src/core/windows/SDL_gameinput.cpp
+@@ -32,6 +32,17 @@ static int g_nGameInputRefCount;
+ 
+ bool SDL_InitGameInput(IGameInput **ppGameInput)
+ {
++#if GAMEINPUT_API_VERSION >= 3
++    // GameInput v3: the GameInput package's loader (its GameInput.cpp, built in) loads the newest
++    // GameInput runtime and creates the v3 interface; a missing or older runtime fails here.
++    if (g_nGameInputRefCount == 0) {
++        HRESULT hr = GameInputInitialize(IID_IGameInput, (void **)&g_pGameInput);
++        if (FAILED(hr)) {
++            g_pGameInput = NULL;
++            return WIN_SetErrorFromHRESULT("GameInputInitialize failed", hr);
++        }
++    }
++#else
+     if (g_nGameInputRefCount == 0) {
+         g_hGameInputDLL = SDL_LoadObject("gameinput.dll");
+         if (!g_hGameInputDLL) {
+@@ -69,6 +80,7 @@ bool SDL_InitGameInput(IGameInput **ppGameInput)
+         g_pGameInput = pGameInput;
+ #endif
+     }
++#endif // GAMEINPUT_API_VERSION >= 3
+     ++g_nGameInputRefCount;
+ 
+     if (ppGameInput) {
+diff --git a/src/core/windows/SDL_gameinput.h b/src/core/windows/SDL_gameinput.h
+index a046489..0d7b6f8 100644
+--- a/src/core/windows/SDL_gameinput.h
++++ b/src/core/windows/SDL_gameinput.h
+@@ -31,7 +31,9 @@
+ #define GAMEINPUT_API_VERSION 0
+ #endif
+ 
+-#if GAMEINPUT_API_VERSION == 2
++#if GAMEINPUT_API_VERSION == 3
++using namespace GameInput::v3;
++#elif GAMEINPUT_API_VERSION == 2
+ using namespace GameInput::v2;
+ #elif GAMEINPUT_API_VERSION == 1
+ using namespace GameInput::v1;
+diff --git a/src/joystick/gdk/SDL_gameinputjoystick.cpp b/src/joystick/gdk/SDL_gameinputjoystick.cpp
+index 0e3d50a..bc25ff4 100644
+--- a/src/joystick/gdk/SDL_gameinputjoystick.cpp
++++ b/src/joystick/gdk/SDL_gameinputjoystick.cpp
+@@ -27,6 +27,18 @@
+ #include "../../core/windows/SDL_windows.h"
+ #include "../../core/windows/SDL_gameinput.h"
+ 
++// GameInput v3 moved the controller counts into controllerInfo, which is null for devices that
++// are not controllers.
++#if GAMEINPUT_API_VERSION >= 3
++static uint32_t ControllerAxisCount(const GameInputDeviceInfo *info) { return info->controllerInfo ? info->controllerInfo->controllerAxisCount : 0; }
++static uint32_t ControllerButtonCount(const GameInputDeviceInfo *info) { return info->controllerInfo ? info->controllerInfo->controllerButtonCount : 0; }
++static uint32_t ControllerSwitchCount(const GameInputDeviceInfo *info) { return info->controllerInfo ? info->controllerInfo->controllerSwitchCount : 0; }
++#else
++static uint32_t ControllerAxisCount(const GameInputDeviceInfo *info) { return info->controllerAxisCount; }
++static uint32_t ControllerButtonCount(const GameInputDeviceInfo *info) { return info->controllerButtonCount; }
++static uint32_t ControllerSwitchCount(const GameInputDeviceInfo *info) { return info->controllerSwitchCount; }
++#endif
++
+ // Default value for SDL_HINT_JOYSTICK_GAMEINPUT
+ #if defined(SDL_PLATFORM_GDK)
+ #define SDL_GAMEINPUT_DEFAULT true
+@@ -542,9 +554,9 @@ static bool GAMEINPUT_JoystickOpen(SDL_Joystick *joystick, int device_index)
+         }
+ #endif // GAMEINPUT_API_VERSION >= 1
+     } else {
+-        joystick->naxes = info->controllerAxisCount;
+-        joystick->nbuttons = info->controllerButtonCount;
+-        joystick->nhats = info->controllerSwitchCount;
++        joystick->naxes = ControllerAxisCount(info);
++        joystick->nbuttons = ControllerButtonCount(info);
++        joystick->nhats = ControllerSwitchCount(info);
+     }
+ 
+     if (info->supportedRumbleMotors & (GameInputRumbleLowFrequency | GameInputRumbleHighFrequency)) {
+@@ -676,13 +688,13 @@ static void GAMEINPUT_JoystickUpdate(SDL_Joystick *joystick)
+ #undef CONVERT_TRIGGER
+         }
+     } else {
+-        bool *button_state = SDL_stack_alloc(bool, info->controllerButtonCount);
+-        float *axis_state = SDL_stack_alloc(float, info->controllerAxisCount);
+-        GameInputSwitchPosition *switch_state = SDL_stack_alloc(GameInputSwitchPosition, info->controllerSwitchCount);
++        bool *button_state = SDL_stack_alloc(bool, ControllerButtonCount(info));
++        float *axis_state = SDL_stack_alloc(float, ControllerAxisCount(info));
++        GameInputSwitchPosition *switch_state = SDL_stack_alloc(GameInputSwitchPosition, ControllerSwitchCount(info));
+ 
+         if (button_state) {
+             uint32_t i;
+-            uint32_t button_count = reading->GetControllerButtonState(info->controllerButtonCount, button_state);
++            uint32_t button_count = reading->GetControllerButtonState(ControllerButtonCount(info), button_state);
+             for (i = 0; i < button_count; ++i) {
+                 SDL_SendJoystickButton(timestamp, joystick, (Uint8)i, button_state[i]);
+             }
+@@ -692,7 +704,7 @@ static void GAMEINPUT_JoystickUpdate(SDL_Joystick *joystick)
+ #define CONVERT_AXIS(v) (Sint16)((v)*65535.0f - 32768.0f)
+         if (axis_state) {
+             uint32_t i;
+-            uint32_t axis_count = reading->GetControllerAxisState(info->controllerAxisCount, axis_state);
++            uint32_t axis_count = reading->GetControllerAxisState(ControllerAxisCount(info), axis_state);
+             for (i = 0; i < axis_count; ++i) {
+                 SDL_SendJoystickAxis(timestamp, joystick, (Uint8)i, CONVERT_AXIS(axis_state[i]));
+             }
+@@ -702,7 +714,7 @@ static void GAMEINPUT_JoystickUpdate(SDL_Joystick *joystick)
+ 
+         if (switch_state) {
+             uint32_t i;
+-            uint32_t switch_count = reading->GetControllerSwitchState(info->controllerSwitchCount, switch_state);
++            uint32_t switch_count = reading->GetControllerSwitchState(ControllerSwitchCount(info), switch_state);
+             for (i = 0; i < switch_count; ++i) {
+                 Uint8 hat;
+                 switch (switch_state[i]) {

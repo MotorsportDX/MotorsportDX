@@ -304,6 +304,22 @@ endif()
 
 add_subdirectory(sdl3)
 
+# GameInput API v3 for SDL's GameInput driver (sdl_joystick_driver=gameinput): the MIT header
+# and loader of the Microsoft.GameInput NuGet package, which setup fetches outside the
+# repository (REX_GAMEINPUT_DIR: include/gameinput.h and src/GameInput.cpp). The header comes
+# before the Windows SDK's gameinput.h for SDL's own sources only, and the loader, which loads
+# the newest GameInput runtime DLL at run time, is built into SDL. SDL's patch for v3
+# (outputs/FM4-build/sdl3-gameinput-v3.patch) keeps the SDK's older API without it.
+set(REX_GAMEINPUT_DIR "" CACHE PATH "The Microsoft.GameInput package's MIT header and loader")
+if(WIN32 AND REX_GAMEINPUT_DIR)
+    if(NOT EXISTS "${REX_GAMEINPUT_DIR}/include/gameinput.h" OR
+       NOT EXISTS "${REX_GAMEINPUT_DIR}/src/GameInput.cpp")
+        message(FATAL_ERROR "REX_GAMEINPUT_DIR has no include/gameinput.h and src/GameInput.cpp")
+    endif()
+    target_include_directories(SDL3-static BEFORE PRIVATE "${REX_GAMEINPUT_DIR}/include")
+    target_sources(SDL3-static PRIVATE "${REX_GAMEINPUT_DIR}/src/GameInput.cpp")
+endif()
+
 #=============================================================================
 # DXC API headers (vendored from DirectXShaderCompiler, runtime-loaded)
 #=============================================================================

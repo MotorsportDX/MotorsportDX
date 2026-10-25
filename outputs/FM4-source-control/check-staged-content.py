@@ -21,6 +21,9 @@ RUNTIME = 'work/runtime/'
 NOTICES = 'outputs/FM4-source-control/third-party-notices/'
 # The first line of the SDK's source files, split so that this file does not match it.
 FIDELITYFX_HEADER = 'This file is part of the ' + 'FidelityFX SDK.'
+# The Microsoft.GameInput package stays in the BuildRoot too (pipeline.py fetch_gameinput):
+# text of its header and of its loader, split likewise.
+GAMEINPUT_MARKERS = ('namespace GameInput { ' + 'namespace v', 'GameInputCreate' + 'WithVersion(')
 
 def check_blob(path, data, allowed):
     if path not in allowed:
@@ -31,6 +34,8 @@ def check_blob(path, data, allowed):
     text = data.decode('utf-8-sig')
     if FIDELITYFX_HEADER in text and not path.startswith(NOTICES):
         raise ValueError(f'FidelityFX SDK source: {path}')
+    if any(marker in text for marker in GAMEINPUT_MARKERS):
+        raise ValueError(f'Microsoft.GameInput package source: {path}')
     # The recompiler's emitter writes these macro names as text; it is marked in the inventory.
     if path.endswith(('.cpp', '.h', '.patch')) and not allowed[path].get('emitter'):
         if re.search(r'PPC_FUNC_IMPL\s*\(|PPC_FUNC\s*\(|DEFINE_REX_FUNC\s*\(|__imp__sub_[0-9A-Fa-f]+\s*\([^;]*\)\s*\{', text):

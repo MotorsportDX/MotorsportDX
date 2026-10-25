@@ -156,6 +156,10 @@ The repository contains reviewed integration code and a ReXGlue SDK fork (BSD-3-
 
 AMD FidelityFX Super Resolution 3.1 (FSR 3.1), from the [AMD FidelityFX SDK](https://github.com/GPUOpen-LibrariesAndSDKs/FidelityFX-SDK), Copyright (C) 2024 Advanced Micro Devices, Inc., MIT license; built from source into the runtime when it is built with `-Fsr on`. See the [third-party notices](outputs/FM4-source-control/third-party-notices/README.txt).
 
+[SDL 3](https://github.com/libsdl-org/SDL), Copyright (C) 1997-2026 Sam Lantinga, zlib license: the runtime's window, event and gamepad layer, built from source, with a patch for GameInput API v3.
+
+The GameInput API v3 header and loader from Microsoft's [Microsoft.GameInput](https://www.nuget.org/packages/Microsoft.GameInput) package, Copyright (c) Microsoft Corporation, MIT license: built into SDL's GameInput driver for the pad driver choice `gameinput`.
+
 ## Pre-commit check
 
 Before committing, check the staged content:

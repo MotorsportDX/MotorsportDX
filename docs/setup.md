@@ -111,7 +111,8 @@ x64, 64-bit Python 3.11 or newer, `git`, `cmake`, `ninja`, `clang`, `clang++` an
 `link` on the path, LLVM 20.x (from `clang++ --version`), CMake 3.25 or newer, and
 `fxc.exe` in the Visual Studio developer environment. It also reports the BuildRoot's
 FidelityFX SDK checkout (fetched or not, at the pinned commit or not) and its mirror
-([the FidelityFX SDK mirror](#the-fidelityfx-sdk-mirror)). `Build.ps1` sets up the
+([the FidelityFX SDK mirror](#the-fidelityfx-sdk-mirror)), and the GameInput package
+([the GameInput package](#the-gameinput-package)). `Build.ps1` sets up the
 Visual Studio x64 environment itself. The scripts do not silently install system
 software or change security settings.
 
@@ -205,6 +206,11 @@ The stages can also run separately:
   clone of the files the FSR 3 upscaler and its DX12 backend build from (about 39 MB plus
   36 MB of Git objects) in `BuildRoot\fidelityfx-sdk`. Setup refuses any other commit, and
   takes it from the [mirror](#the-fidelityfx-sdk-mirror) when GitHub cannot be reached;
+- takes the Microsoft.GameInput package, version 3.5.283, from NuGet (2.04 MB) into
+  `BuildRoot\gameinput-sdk\3.5.283`, and extracts its two MIT files: the GameInput API v3
+  header and its loader source ([the GameInput package](#the-gameinput-package));
+- patches the fetched SDL source for GameInput API v3
+  ([outputs/FM4-build/sdl3-gameinput-v3.patch](../outputs/FM4-build/sdl3-gameinput-v3.patch));
 - compiles the licensed Xenia/ReXGlue resolve shaders with the Windows SDK FXC;
 - builds and installs the Release runtime locally.
 
@@ -240,6 +246,20 @@ $env:FFX_MIRROR = 'D:\FM4-archive\third-party\fidelityfx-sdk-v1.1.4.bundle'
 
 Without a mirror, setup stops when GitHub cannot be reached and the BuildRoot holds no
 checkout yet. An existing checkout at the pinned commit needs no network.
+
+#### The GameInput package
+
+The pad driver choice `gameinput` ([running.md](running.md#pad-drivers)) builds SDL's GameInput
+driver against GameInput API v3. `setup` and `build` fetch the Microsoft.GameInput package,
+version 3.5.283, from `https://api.nuget.org/v3-flatcontainer/microsoft.gameinput/3.5.283/microsoft.gameinput.3.5.283.nupkg`
+into `BuildRoot\gameinput-sdk\3.5.283` (`fetch_gameinput` in `pipeline.py`) and refuse any file
+whose SHA-512 is not the pinned one (`59083faf...fe77705`, NuGet's published hash). They extract
+only the package's two MIT-licensed files, `include\gameinput.h` (the public header) and
+`src\GameInput.cpp` (the loader); the header is used for SDL's sources only, and the loader is
+built into SDL. `GAMEINPUT_MIRROR` (an environment variable) names a fallback: another URL of the
+same package or a local copy of the `.nupkg` file. An existing package with the pinned hash needs
+no network. Nothing of the package is committed or shipped, and nothing in it is run; the
+license review is in [sources and licensing](sources-and-licensing.md#third-party-code-microsoftgameinput).
 
 ### 2. Generate
 
@@ -323,6 +343,7 @@ FM4-build/
 ├── runtime-source/   # Copy of work/runtime + third-party libraries
 ├── runtime-upstream/ # Upstream SDK clone (only for third-party libraries)
 ├── fidelityfx-sdk/   # AMD FidelityFX SDK, sparse clone (only with -Fsr on)
+├── gameinput-sdk/    # Microsoft.GameInput package and its two MIT files
 ├── runtime-build/    # Runtime build
 ├── runtime-install/  # Locally installed runtime
 ├── project/          # Integration source and private generated/

@@ -879,7 +879,7 @@ setting, named in the last column.
 
 | Knob | Values | Default | Description | Runtime setting |
 | --- | --- | --- | --- | --- |
-| `driver` | `default`, `rawinput`, `wgi` | `default` | SDL's Windows pad drivers; see [Pad drivers](#pad-drivers). | `sdl_joystick_driver` |
+| `driver` | `default`, `rawinput`, `wgi`, `gameinput` | `default` | SDL's Windows pad drivers; see [Pad drivers](#pad-drivers). | `sdl_joystick_driver` |
 | `rumble` | 0 to 2 | 1.5 (the runtime's: 1) | Multiplies the game's two motors, clamped at full strength. The game's rumble in normal driving is 0.05 to 0.2 of full strength, so the launchers default to 1.5; `rumble=1` gives the game's own strength. | `pad_rumble_strength` |
 | `trigger_rumble` | 0, 1 | 0 | Trigger rumble derived from the game's motors; see [Trigger rumble](#trigger-rumble). | `pad_trigger_rumble` |
 | `trigger_rumble_strength` | 0 to 2 | 1 | Multiplies the derived trigger rumble. | `pad_trigger_rumble_strength` |
@@ -913,12 +913,21 @@ setting, named in the last column.
 | `default` | SDL's defaults: XInput for Xbox class pads, HIDAPI for PlayStation pads | two motors, no trigger rumble | XInput, two motors |
 | `rawinput` | Raw Input, with Windows.Gaming.Input (WGI) correlating the triggers and the trigger motors | two motors; trigger rumble once correlated, which needs a first button or stick input | Raw Input, two motors; no trigger rumble (an Xbox 360 class pad; checked on the owner's Ally X) |
 | `wgi` | WGI, with XInput and DirectInput off | two motors and trigger rumble; the axes read 0 without window focus | WGI, if WGI lists the pad |
+| `gameinput` | Microsoft's GameInput (API v3) before SDL's other drivers; without a GameInput v3 runtime, as `default` | two motors, trigger rumble and the Share button (Misc1) where GameInput reports them | GameInput, for its trigger motors, which XInput and Raw Input do not reach (the owner's test) |
 
 PlayStation pads go through SDL's HIDAPI drivers with every choice (rumble, light bar,
 sensors, touchpad). A driver that does not start leaves SDL's others running, so no choice
-loses a pad. Raw Input is off in remote desktop sessions. GameInput is not offered: SDL's
-GameInput driver cannot start in this build (the Windows SDK's `gameinput.h` is older than
-the version SDL requires).
+loses a pad. Raw Input is off in remote desktop sessions.
+
+`gameinput` needs a GameInput runtime of API v3 or newer: the GameInput redistributable
+(`GameInputRedist.dll`; the development PC has version 4.0.302 in System32). Windows' own
+`GameInput.dll` there (0.2309.26100.9278) offers only the older API. The runtime is not
+shipped with the export. At start the log says which applies, `SDL GameInput: a GameInput v3 runtime is available` or
+`SDL GameInput: no GameInput v3 runtime (HRESULT ...)` with the reason (not installed, or older
+than v3); without one, SDL's other drivers take the pads as with `default`. The pad report's
+`driver=gameinput` shows a pad that GameInput took. SDL's GameInput driver is built with the
+MIT header and loader of Microsoft's GameInput package and a patch to SDL
+([setup](setup.md#the-gameinput-package)).
 
 ### Trigger rumble
 
@@ -982,6 +991,7 @@ Xbox Series controller:
 | B | Pad driver Raw Input, Trigger rumble on (Rumble strength 1.5, the default) |
 | C | as B with Rumble strength 2 |
 | D | the defaults with Steering anti-deadzone on and, under Sticks and triggers, Stick deadzone 0.05 |
+| E | Pad driver GameInput, Trigger rumble on (Rumble strength 1.5, the default) |
 
 - Note for each profile whether the pad works in the menus and in races, whether the first
   rumble comes at once or only after a first input, whether the trigger rumble feels right
@@ -989,6 +999,9 @@ Xbox Series controller:
 - For profile D: whether small corrections steer now, how the steering feels against A, and
   whether the car steers by itself with the stick at rest (then raise the stick deadzone a
   step and note the value that holds).
+- For profile E: whether the pad works, whether the triggers rumble (against B), and whether
+  the Share button does anything; send its `SDL GameInput:` line and pad report
+  (`driver`, `trigger_rumble`, `misc1`).
 
 ROG Xbox Ally X built-in pad, race frame rate 120 (its panel). Profiles A to D ran on
 25 October 2026 ([results](analysis/modern-gamepads.md#the-owners-rog-xbox-ally-x-test)):
@@ -1000,21 +1013,28 @@ ROG Xbox Ally X built-in pad, race frame rate 120 (its panel). Profiles A to D r
 | C | the defaults, Input thread on | `--input_latency_probe=true` |
 | D | Pad driver Raw Input, Input thread on | `--input_latency_probe=true` |
 | E | the defaults with Steering anti-deadzone on and Stick deadzone 0.05 | none |
+| F | Pad driver GameInput, Trigger rumble on (Rumble strength 1.5, the default) | none |
 
 - The Ally X's pad reports no trigger rumble under XInput or Raw Input (`trigger_rumble=0`),
-  so Trigger rumble does nothing with those drivers.
+  so Trigger rumble does nothing with those drivers; GameInput is the route left to its
+  trigger motors (profile F).
 - For profile E: as profile D of the Series controller.
+- For profile F: whether the pad works and whether the triggers rumble; send its
+  `SDL GameInput:` line and pad report (`driver`, `trigger_rumble`, `misc1`). Also note the
+  version of `C:\Windows\System32\GameInputRedist.dll` (Properties, Details) if the file
+  exists.
 
 What to send back, from the export folder's `logs\runtime.log` (the line types below,
 nothing else is needed). The log keeps the earlier runs; each run starts at its own
 `SDL joystick driver option:` line, so note which profile ran in which order:
 
 ```powershell
-Select-String -Path logs\runtime.log -Pattern 'SDL pad report:','SDL joystick driver option:','SDL input','SDL latency probe' | ForEach-Object Line
+Select-String -Path logs\runtime.log -Pattern 'SDL pad report:','SDL joystick driver option:','SDL input','SDL GameInput','SDL latency probe' | ForEach-Object Line
 ```
 
 - `SDL pad report:`: what each pad exposes under the driver of that run.
 - `SDL joystick driver option:` and `SDL input thread`: which options the run used.
+- `SDL GameInput:` (with `gameinput`): whether a GameInput v3 runtime was found, and why not.
 - `SDL input: rumble stopped at exit`: the pads' rumble was stopped when the window closed.
 - `SDL latency probe (ms):` (every 5 seconds) and `SDL latency probe at exit:`: the probe's
   timings and the rumble it received.

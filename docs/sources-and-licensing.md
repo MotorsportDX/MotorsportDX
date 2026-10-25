@@ -13,7 +13,8 @@ This repository is source-only. It records reviewed integration code, diagnostic
 - `work/fm4-launcher`: the GUI launcher, original code that ports the launch rules of `pipeline.py`. It is built against the runtime's third-party SDL3, Dear ImGui and JSON header, which are not stored.
 - `outputs/FM4-build`: the setup, generate, build, and run pipeline (`Build.ps1`, `pipeline.py`, and the loader), reviewed integration metadata (function bounds and switch recipes), the e2e harness and gates (`e2e/`), and `verification.json`.
 - `docs/`: project documentation, including the research notes in `docs/analysis/`.
-- The third-party notices in `outputs/FM4-source-control/third-party-notices`: the ReXGlue/Xenia copyright and BSD license notice, AMD's FidelityFX SDK license, Microsoft's `d3dx12.h` license, and a `README.txt` that says what each covers.
+- The third-party notices in `outputs/FM4-source-control/third-party-notices`: the ReXGlue/Xenia copyright and BSD license notice, AMD's FidelityFX SDK license, Microsoft's `d3dx12.h` license, SDL's zlib license, the Microsoft.GameInput package's MIT license, and a `README.txt` that says what each covers.
+- `outputs/FM4-build/sdl3-gameinput-v3.patch`: the change to the fetched SDL 3 source for GameInput API v3, applied by setup (it holds context lines of SDL's code, zlib, and marks what it alters; [Microsoft.GameInput](#third-party-code-microsoftgameinput)).
 - `work/runtime/cmake/rex_fsr.cmake`, `work/runtime/cmake/fsr-include`, `work/runtime/include/rex/graphics/d3d12/fsr.h`, `work/runtime/src/graphics/d3d12/fsr.cpp` and `work/fm4-rex/passes/fsr.hlsl`: the integration that builds AMD FSR 3.1 from the FidelityFX SDK source when `REX_FSR` is on and runs it at the scene_color point (original code of this project; it calls the SDK's API and holds none of its code). The SDK itself is not stored ([AMD FidelityFX SDK](#third-party-code-amd-fidelityfx-sdk-fsr-31)).
 
 ### Excluded
@@ -34,6 +35,8 @@ The SDK and the shipped shader sources keep their upstream attribution and licen
 
 - [ReXGlue/Xenia notice](../outputs/FM4-source-control/third-party-notices/ReXGlue-LICENSE.txt)
 - [AMD FidelityFX SDK license](../outputs/FM4-source-control/third-party-notices/AMD-FidelityFX-SDK-LICENSE.txt) and [Microsoft d3dx12.h license](../outputs/FM4-source-control/third-party-notices/Microsoft-d3dx12-LICENSE.txt), for a runtime built with `REX_FSR`
+- [SDL license](../outputs/FM4-source-control/third-party-notices/SDL-LICENSE.txt) (zlib), for the SDL 3 built into every runtime and altered by the GameInput patch
+- [Microsoft.GameInput license](../outputs/FM4-source-control/third-party-notices/Microsoft-GameInput-LICENSE.txt) (MIT), for the GameInput header and loader built into SDL
 - [What each notice covers](../outputs/FM4-source-control/third-party-notices/README.txt), including the DirectX Shader Compiler that the FSR build runs and does not ship
 - [Runtime license (ReXGlue/Xenia)](../work/runtime/LICENSE)
 - [Xenia shader license](../work/runtime/src/graphics/shaders/fm4-resolve/LICENSE.xenia)
@@ -75,6 +78,20 @@ Conclusions:
 - FSR 4 is not planned: it would mean redistributing AMD binaries on undocumented terms, and it does not run on the development computer.
 - DLSS (DLAA) needs its own review of NVIDIA's SDK license; not reviewed yet.
 - The plan for adding FSR 3.1 is in [FSR plan](analysis/fsr-plan.md).
+
+## Third-party code: Microsoft.GameInput
+
+The project owner approved, on 25 October 2026, the download of exactly one package, Microsoft.GameInput 3.5.283 from nuget.org, for its MIT files only ("pakai yang MIT"), and then option A of the review: GameInput API v3 with a minimal SDL patch. Nothing of the package is in the repository.
+
+| Item | Value |
+|---|---|
+| Source | [Microsoft.GameInput](https://www.nuget.org/packages/Microsoft.GameInput/3.5.283) 3.5.283, published 28 September 2026, authors Microsoft, 2,143,539 bytes, SHA-512 `59083faf7e0fc669f6caf0c39642b8a4cb9825faf9b17acc4b030d0b8ebe2a7219d512397831e98321b281b3a5757a963ac5dcd61ba57f60ff2890fb7fe77705` (NuGet's catalog, base64 `WQg/r34P...f+d3BQ==`); fetched by `setup` and `build` into `<BuildRoot>\gameinput-sdk\3.5.283` (`fetch_gameinput` in `pipeline.py`, which refuses any other hash), with `GAMEINPUT_MIRROR` as a fallback ([setup](setup.md#the-gameinput-package)) |
+| Used | Two files: `native/include/GameInput.h` (GameInput API v3, extracted as `include/gameinput.h`) and `native/src/GameInput.cpp` (the static library's loader source), which both say "This file is licensed under the MIT License" with "Copyright (c) Microsoft Corporation"; the package's README for 3.5: "Updated public header and static library (lib) license to MIT". [Notice](../outputs/FM4-source-control/third-party-notices/Microsoft-GameInput-LICENSE.txt) |
+| Not used | The package's `LICENSE.txt` is Microsoft's software license terms for the GameInput redistributable, and its `v0`, `v1` and `v2` headers carry only "All rights reserved" under those terms; they are not extracted. Neither are its static libraries, its `GameInputRedist.msi` or its signature. Nothing in the package is run |
+| How it is built | The header comes before the Windows SDK's `gameinput.h` for SDL's sources only (`REX_GAMEINPUT_DIR` in `work/runtime/thirdparty/CMakeLists.txt`), and the runtime's SDL driver includes it for its availability line; the loader is compiled into SDL. At run time the loader loads the newest GameInput runtime DLL that Windows or the GameInput redistributable installed (`GameInput.dll` or `GameInputRedist.dll`); without a v3-capable one SDL's GameInput driver does not start and SDL's other drivers take the pads |
+| SDL | SDL 3 (zlib, "Copyright (C) 1997-2026 Sam Lantinga") knows GameInput API v1 and v2 only; `outputs/FM4-build/sdl3-gameinput-v3.patch` adds v3 (the namespace, creation through the loader's `GameInputInitialize`, the controller counts from `controllerInfo` with a null check). `patch_thirdparty` in `pipeline.py` applies it to the fetched source and refuses a mismatch. [Notice](../outputs/FM4-source-control/third-party-notices/SDL-LICENSE.txt) |
+| Exports | `Build.ps1 -Action export` copies `third-party-notices` into the export folder; no file of the package is copied |
+| Pre-commit check | `check-staged-content.py` blocks a file with the text of the package's header or loader |
 
 ## Inventory and the pre-commit check
 

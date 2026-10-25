@@ -601,6 +601,8 @@ class PipelineTests(unittest.TestCase):
                           'pad_rumble_strength': '2.0'})
         self.assertEqual(pipeline.pad_cvars('driver=rawinput'),
                          {'pad_rumble_strength': '1.5', 'sdl_joystick_driver': 'rawinput'})
+        self.assertEqual(pipeline.pad_cvars('driver=gameinput,rumble=1'),
+                         {'sdl_joystick_driver': 'gameinput'})
         # Later items win, also back to a default.
         self.assertEqual(pipeline.pad_cvars('rumble=2,anti_deadzone=1,rumble=1'),
                          {'pad_steering_anti_deadzone': 'true'})
@@ -610,7 +612,7 @@ class PipelineTests(unittest.TestCase):
         self.assertEqual(pipeline.pad_cvars('rumble=2,rumble=1.5'), {'pad_rumble_strength': '1.5'})
         self.assertEqual(pipeline.pad_cvars('rumble=1,right_paddle1=none,touchpad=back'),
                          {'pad_right_paddle1': 'none', 'pad_touchpad': 'back'})
-        for bad in ('rumble=2.5', 'stick_outer=0.4', 'driver=gameinput', 'thread=on', 'misc1=z',
+        for bad in ('rumble=2.5', 'stick_outer=0.4', 'driver=xinput', 'thread=on', 'misc1=z',
                     'rumble', 'paddle1=a', 'rumble=nan'):
             with self.assertRaises(ValueError, msg=bad):
                 pipeline.pad_cvars(bad)
@@ -629,6 +631,12 @@ class PipelineTests(unittest.TestCase):
                 self.assertEqual(value, expected, name)
             else:
                 self.assertEqual(float(value), float(expected), name)
+            # A string cvar's allowed values are the knob's choices.
+            if 'choices' in knob and knob['choices'] != ['0', '1']:
+                definition = sources[match.start():].split('REXCVAR_DEFINE', 1)[0]
+                allowed = re.search(r'\.allowed\(\{([^}]*)\}\)', definition)
+                self.assertIsNotNone(allowed, name)
+                self.assertEqual(re.findall(r'"([^"]*)"', allowed.group(1)), knob['choices'], name)
 
     def test_full_rate(self):
         """Replays and the countdown run at the race frame rate (FM4_FULL_RATE), shared with

@@ -309,6 +309,10 @@
       "provenance": "ReXGlue/Xenia SDK source; upstream BSD notices included"
     },
     {
+      "path": "outputs/FM4-build/sdl3-gameinput-v3.patch",
+      "provenance": "Patch to the fetched SDL 3 source (zlib); context lines of SDL code, no game data and no GameInput package code"
+    },
+    {
       "path": "outputs/FM4-build/speech_bounds.toml",
       "provenance": "Factual integration metadata: addresses, bounds, registers and counts only"
     },
@@ -350,6 +354,14 @@
     },
     {
       "path": "outputs/FM4-source-control/third-party-notices/Microsoft-d3dx12-LICENSE.txt",
+      "provenance": "Repository policy/tooling or upstream license"
+    },
+    {
+      "path": "outputs/FM4-source-control/third-party-notices/Microsoft-GameInput-LICENSE.txt",
+      "provenance": "Repository policy/tooling or upstream license"
+    },
+    {
+      "path": "outputs/FM4-source-control/third-party-notices/SDL-LICENSE.txt",
       "provenance": "Repository policy/tooling or upstream license"
     },
     {

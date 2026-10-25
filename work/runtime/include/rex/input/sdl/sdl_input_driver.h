@@ -113,6 +113,8 @@ class SDLInputDriver final : public InputDriver, public rex::ui::WindowListener 
   void QueueControllerUpdate();
   // The SDL joystick driver hints of sdl_joystick_driver, before SDL_INIT_GAMEPAD.
   void ApplyDriverHints();
+  // sdl_joystick_driver=gameinput: one line on whether a GameInput v3 runtime starts.
+  void LogGameInputAvailability();
   // The guest button an SDL button maps to (0: none).
   uint16_t GuestButton(uint32_t sdl_button) const;
   void LogPadReport(const ControllerState& state) const;

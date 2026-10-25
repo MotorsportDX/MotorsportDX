@@ -38,3 +38,10 @@ else()
 endif()
 
 target_link_libraries(rexinput PUBLIC rexcore rexui SDL3::SDL3)
+
+# sdl_joystick_driver=gameinput: the GameInput v3 header that SDL is built with
+# (thirdparty/CMakeLists.txt, REX_GAMEINPUT_DIR), for the driver's availability line.
+if(WIN32 AND REX_GAMEINPUT_DIR)
+    target_include_directories(rexinput PRIVATE "${REX_GAMEINPUT_DIR}/include")
+    target_compile_definitions(rexinput PRIVATE REX_GAMEINPUT_V3=1)
+endif()

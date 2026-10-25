@@ -31,6 +31,11 @@
 #include <windows.h>  // NOLINT(build/include_order)
 #include <objbase.h>  // NOLINT(build/include_order)
 #endif
+#if REX_GAMEINPUT_V3
+// The Microsoft.GameInput package's MIT header (API v3), which SDL's GameInput driver is built
+// with; its loader (GameInputInitialize) is built into SDL.
+#include <gameinput.h>  // NOLINT(build/include_order)
+#endif
 
 REXCVAR_DEFINE_STRING(hid_mappings_file, "gamecontrollerdb.txt", "Input",
                       "Path to SDL gamecontroller mappings file");
@@ -41,8 +46,10 @@ REXCVAR_DEFINE_STRING(sdl_joystick_driver, "default", "Input",
                       "SDL's Windows pad drivers: default (SDL's own: XInput for Xbox class pads, "
                       "HIDAPI for PlayStation pads), rawinput (Raw Input with Windows.Gaming.Input "
                       "correlation: trigger rumble on Xbox One and Series pads), wgi "
-                      "(Windows.Gaming.Input, with XInput and DirectInput off)")
-    .allowed({"default", "rawinput", "wgi"})
+                      "(Windows.Gaming.Input, with XInput and DirectInput off), gameinput "
+                      "(GameInput API v3 before the others: trigger rumble and the Share button "
+                      "where GameInput has them; without a GameInput v3 runtime, SDL's others)")
+    .allowed({"default", "rawinput", "wgi", "gameinput"})
     .lifecycle(rex::cvar::Lifecycle::kRequiresRestart);
 REXCVAR_DEFINE_BOOL(input_sdl_thread, false, "Input",
                     "Update SDL's pads every millisecond on a thread of their own instead of the "
@@ -319,8 +326,40 @@ void SDLInputDriver::ApplyDriverHints() {
     SDL_SetHint(SDL_HINT_JOYSTICK_WGI, "1");
     SDL_SetHint(SDL_HINT_XINPUT_ENABLED, "0");
     SDL_SetHint(SDL_HINT_JOYSTICK_DIRECTINPUT, "0");
+  } else if (mode == "gameinput") {
+    // SDL's GameInput driver comes before the others. When it cannot start, the others take
+    // the pads as with default; when it starts, SDL leaves the pads it claims to it.
+    SDL_SetHint(SDL_HINT_JOYSTICK_GAMEINPUT, "1");
   }
   REXLOG_INFO("SDL joystick driver option: {}", mode);
+  if (mode == "gameinput") {
+    LogGameInputAvailability();
+  }
+}
+
+void SDLInputDriver::LogGameInputAvailability() {
+#if REX_GAMEINPUT_V3
+  // The same creation SDL's GameInput driver makes (the package's loader picks the newest
+  // runtime DLL), so its result tells whether SDL's driver starts.
+  IUnknown* game_input = nullptr;
+  const HRESULT result = GameInput::v3::GameInputInitialize(GameInput::v3::IID_IGameInput,
+                                                             reinterpret_cast<void**>(&game_input));
+  if (SUCCEEDED(result)) {
+    game_input->Release();
+    REXLOG_INFO("SDL GameInput: a GameInput v3 runtime is available; GameInput takes the pads it "
+                "supports");
+  } else {
+    REXLOG_INFO("SDL GameInput: no GameInput v3 runtime (HRESULT 0x{:08X}{}); SDL's other drivers "
+                "take the pads",
+                static_cast<uint32_t>(result),
+                result == HRESULT_FROM_WIN32(ERROR_FILE_NOT_FOUND) ? ", GameInput is not installed"
+                : result == E_NOINTERFACE ? ", the installed GameInput is older than v3"
+                                          : "");
+  }
+#else
+  REXLOG_INFO("SDL GameInput: this runtime is built without the GameInput v3 header (setup "
+              "fetches it); SDL's other drivers take the pads");
+#endif
 }
 
 void SDLInputDriver::OnWindowAvailable(rex::ui::Window* window) {

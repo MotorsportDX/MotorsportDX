@@ -11,6 +11,8 @@ import stat
 import subprocess
 import sys
 import time
+import urllib.request
+import zipfile
 
 from prepare import write_switches
 
@@ -39,6 +41,21 @@ FFX_PATHS = ('/.gitattributes','/LICENSE.txt','/sdk/LICENSE.txt','/sdk/CMakeList
              '/sdk/toolchain.cmake','/sdk/include/','/sdk/src/components/fsr3upscaler/',
              '/sdk/src/backends/dx12/','/sdk/src/backends/shared/','/sdk/src/shared/',
              '/sdk/tools/binary_store/')
+# Microsoft.GameInput (GameInput API v3, for sdl_joystick_driver=gameinput;
+# docs/analysis/modern-gamepads.md): setup fetches the pinned NuGet package into
+# <BuildRoot>/gameinput-sdk/<version>, refuses any other SHA-512, and extracts only the files the
+# package licenses under MIT, the public header and the static library's loader source.
+# GAMEINPUT_MIRROR names a fallback: another URL of the package or a local .nupkg file.
+GAMEINPUT_VERSION = '3.5.283'
+GAMEINPUT_URL = ('https://api.nuget.org/v3-flatcontainer/microsoft.gameinput/'
+                 f'{GAMEINPUT_VERSION}/microsoft.gameinput.{GAMEINPUT_VERSION}.nupkg')
+GAMEINPUT_SHA512 = ('59083faf7e0fc669f6caf0c39642b8a4cb9825faf9b17acc4b030d0b8ebe2a72'
+                    '19d512397831e98321b281b3a5757a963ac5dcd61ba57f60ff2890fb7fe77705')
+GAMEINPUT_FILES = {'native/include/GameInput.h':'include/gameinput.h',
+                   'native/src/GameInput.cpp':'src/GameInput.cpp'}
+# Patches to the fetched third-party sources (patch, directory under runtime-source/thirdparty),
+# applied by patch_thirdparty: each must apply exactly, and setup refuses a mismatch.
+THIRDPARTY_PATCHES = (('sdl3-gameinput-v3.patch','sdl3'),)
 NOTICES = REPO/'outputs/FM4-source-control/third-party-notices'
 RESOLVE_SHADERS = [f'resolve_full_{bits}bpp{suffix}' for bits in (8,16,32,64) for suffix in ('','_scaled')]
 # The fast copy of 32bpp 4x MSAA surfaces with a per-pixel EDRAM address, in place of upstream's
@@ -293,6 +310,104 @@ def fetch_thirdparty(root):
         shutil.copytree(upstream/'thirdparty'/name,destination/name,symlinks=True)
     marker.write_text(json.dumps(wanted))
 
+def apply_patch(patch, directory, log, reverse=False, check=False):
+    """git apply of a patch with LF line endings to a directory whose files may have CRLF ones
+    (Git for Windows checks submodules out with CRLF): the files the patch names are copied with
+    LF into a scratch directory, patched there, and written back with their own line endings.
+    Raises RuntimeError when the patch does not apply exactly."""
+    names=[line[6:].strip() for line in patch.read_text(encoding='utf-8').splitlines()
+           if line.startswith('+++ b/')]
+    scratch=log.parent/f'patch-{patch.stem}'
+    shutil.rmtree(scratch,ignore_errors=True)
+    crlf={}
+    for name in names:
+        data=(directory/name).read_bytes()
+        crlf[name]=b'\r\n' in data
+        (scratch/name).parent.mkdir(parents=True,exist_ok=True)
+        (scratch/name).write_bytes(data.replace(b'\r\n',b'\n'))
+    args=['git','apply','-p1',*(['--reverse'] if reverse else []),*(['--check'] if check else []),
+          str(patch.resolve())]
+    run(args,cwd=scratch,log=log)
+    if not check:
+        for name in names:
+            data=(scratch/name).read_bytes()
+            (directory/name).write_bytes(data.replace(b'\n',b'\r\n') if crlf[name] else data)
+    shutil.rmtree(scratch,ignore_errors=True)
+
+def patch_thirdparty(root):
+    """THIRDPARTY_PATCHES on runtime-source/thirdparty, once: a marker beside each patched
+    directory keeps the applied patch, so a changed patch is reversed before the new one is
+    applied. Refuses a patch that does not apply to the fetched source."""
+    destination=root/'runtime-source/thirdparty'
+    for name,directory in THIRDPARTY_PATCHES:
+        patch,target=HERE/name,destination/directory
+        applied=target/f'.fm4-{name}'
+        if applied.is_file() and applied.read_bytes()==patch.read_bytes():
+            continue
+        log=root/f'logs/patch-{Path(name).stem}.log'
+        if applied.is_file():
+            apply_patch(applied,target,log,reverse=True)
+        try:
+            apply_patch(patch,target,log,check=True)
+        except RuntimeError as error:
+            try:
+                # Applied before, without its marker.
+                apply_patch(patch,target,log,reverse=True,check=True)
+            except RuntimeError:
+                raise RuntimeError(f'{name} does not apply to {target}: the fetched source differs '
+                                   f'from the one the patch was made for ({log}).') from error
+        else:
+            apply_patch(patch,target,log)
+        shutil.copyfile(patch,applied)
+
+def fetch_gameinput(root):
+    """<BuildRoot>/gameinput-sdk/<GAMEINPUT_VERSION>: the pinned Microsoft.GameInput package from
+    NuGet, or else from GAMEINPUT_MIRROR, checked against GAMEINPUT_SHA512, and its MIT files
+    (GAMEINPUT_FILES) extracted beside it. Nothing else of the package is used."""
+    directory=root/'gameinput-sdk'/GAMEINPUT_VERSION
+    package=directory/f'microsoft.gameinput.{GAMEINPUT_VERSION}.nupkg'
+    def valid(path):
+        return path.is_file() and hashlib.sha512(path.read_bytes()).hexdigest()==GAMEINPUT_SHA512
+    if not valid(package):
+        directory.mkdir(parents=True,exist_ok=True)
+        mirror=os.environ.get('GAMEINPUT_MIRROR')
+        partial=package.with_suffix('.partial')
+        for source in filter(None,(GAMEINPUT_URL,mirror)):
+            try:
+                if Path(source).is_file():
+                    shutil.copyfile(source,partial)
+                else:
+                    with urllib.request.urlopen(source,timeout=120) as response:
+                        partial.write_bytes(response.read())
+            except (OSError,ValueError) as error:
+                print(f'GameInput package: {source} failed: {error}')
+                continue
+            if valid(partial):
+                partial.replace(package)
+                break
+            print(f'GameInput package: {source} does not have the pinned SHA-512.')
+        partial.unlink(missing_ok=True)
+        if not valid(package):
+            raise RuntimeError(f'Microsoft.GameInput {GAMEINPUT_VERSION} cannot be fetched with its '
+                               'pinned SHA-512 (docs/setup.md#the-gameinput-package).')
+    with zipfile.ZipFile(package) as archive:
+        for member,relative in GAMEINPUT_FILES.items():
+            data=archive.read(member)
+            target=directory/relative
+            if not target.is_file() or target.read_bytes()!=data:
+                target.parent.mkdir(parents=True,exist_ok=True)
+                target.write_bytes(data)
+    return directory
+
+def gameinput_status(root):
+    """doctor's line on the GameInput package."""
+    directory=root/'gameinput-sdk'/GAMEINPUT_VERSION
+    ready=all((directory/relative).is_file() for relative in GAMEINPUT_FILES.values())
+    state='fetched' if ready else 'not fetched yet (setup and build fetch it)'
+    mirror=os.environ.get('GAMEINPUT_MIRROR')
+    return (f'GameInput package: Microsoft.GameInput {GAMEINPUT_VERSION} in {directory} {state}; '
+            f'{"mirror " + mirror if mirror else "no mirror (GAMEINPUT_MIRROR is not set)"}.')
+
 def compile_resolve_shaders(root, fxc):
     """FM4 resolve shaders, the scaled readback downscale shader and the presenter's area
     downscale shader -> DXBC headers; only when their sources changed."""
@@ -453,11 +568,18 @@ def build_runtime(root, fxc, jobs, fsr=None, build=None):
     build = root/'runtime-build' if default_build else Path(build)
     sync_runtime(root)
     fetch_thirdparty(root)
+    patch_thirdparty(root)
     compile_resolve_shaders(root, fxc)
     options=[]
     if fsr is not None:
         options=['-DREX_FSR=ON',f'-DREX_FSR_SDK_DIR={fetch_fidelityfx(root).as_posix()}'] if fsr \
             else ['-DREX_FSR=OFF']
+    # SDL's GameInput driver with the package's API v3 header and loader (REX_GAMEINPUT_DIR);
+    # a build folder configured without it is configured again.
+    gameinput=fetch_gameinput(root).as_posix()
+    cache=build/'CMakeCache.txt'
+    if not cache.is_file() or f'REX_GAMEINPUT_DIR:PATH={gameinput}' not in cache.read_text(errors='replace'):
+        options.append(f'-DREX_GAMEINPUT_DIR={gameinput}')
     if not (build/'build.ninja').is_file() or options:
         run(['cmake','-S',source,'-B',build,'-G','Ninja','-DCMAKE_BUILD_TYPE=Release',
              '-DCMAKE_C_COMPILER=clang','-DCMAKE_CXX_COMPILER=clang++',
@@ -471,9 +593,11 @@ def build_runtime(root, fxc, jobs, fsr=None, build=None):
 
 def setup(root, fxc, jobs, fsr=None):
     fetch_fidelityfx(root)
+    fetch_gameinput(root)
     build_runtime(root, fxc, jobs, fsr)
     (root/'setup-complete.json').write_text(json.dumps({'thirdparty_revision':SDK_REV,
                                                         'fidelityfx_revision':FFX_REV,
+                                                        'gameinput_version':GAMEINPUT_VERSION,
                                                         'runtime':'work/runtime'}))
 
 def generate(root, disc1, disc2, content, jobs):
@@ -1305,7 +1429,7 @@ PAD_BUTTONS=('a','b','x','y','lb','rb','back','start','ls','rs','up','down','lef
              'none')
 PAD_KNOBS={
     'driver':{'cvar':'sdl_joystick_driver','default':'default',
-              'choices':['default','rawinput','wgi']},
+              'choices':['default','rawinput','wgi','gameinput']},
     'thread':{'cvar':'input_sdl_thread','default':'0','choices':['0','1']},
     'rumble':{'cvar':'pad_rumble_strength','default':'1.5','runtime_default':'1','min':0.0,
               'max':2.0},
@@ -1799,6 +1923,7 @@ def launcher_test_options(root):
             {'native':True,'look':'pc,aa=fsr,sharpen=0.6','info':True},
             {'frame_rate':120,'vsync':'on'},
             {'pad':'driver=rawinput,trigger_rumble=1,rumble=1.5'},
+            {'pad':'driver=gameinput,trigger_rumble=1','frame_rate':120},
             {'pad':'driver=wgi,thread=1,stick_deadzone=0.08,anti_deadzone=1,stick_curve=1.4,'
                    'stick_outer=0.95,trigger_deadzone=0.05,trigger_outer=0.9,'
                    'trigger_rumble_strength=2,misc1=back,right_paddle1=none,touchpad=start'},
@@ -2065,6 +2190,7 @@ def main():
     if args.ffx_mirror: os.environ['FFX_MIRROR']=args.ffx_mirror
     fxc=doctor()
     print(ffx_status(root))
+    print(gameinput_status(root))
     if args.action=='doctor': return
     discs=None
     if args.content and args.action not in ('generate','all','run'):

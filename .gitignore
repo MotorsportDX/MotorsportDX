@@ -60,6 +60,7 @@
 !/outputs/FM4-build/pipeline.py
 !/outputs/FM4-build/prepare.py
 !/outputs/FM4-build/rexglue.cmake
+!/outputs/FM4-build/sdl3-gameinput-v3.patch
 !/outputs/FM4-build/speech_bounds.toml
 !/outputs/FM4-build/switch-recipes.json
 !/outputs/FM4-build/test_pipeline.py
@@ -68,6 +69,8 @@
 !/outputs/FM4-source-control/check-staged-content.py
 !/outputs/FM4-source-control/third-party-notices/AMD-FidelityFX-SDK-LICENSE.txt
 !/outputs/FM4-source-control/third-party-notices/Microsoft-d3dx12-LICENSE.txt
+!/outputs/FM4-source-control/third-party-notices/Microsoft-GameInput-LICENSE.txt
+!/outputs/FM4-source-control/third-party-notices/SDL-LICENSE.txt
 !/outputs/FM4-source-control/third-party-notices/README.txt
 !/outputs/FM4-source-control/third-party-notices/ReXGlue-LICENSE.txt
 !/outputs/FM4-source-control/tracked-files.json

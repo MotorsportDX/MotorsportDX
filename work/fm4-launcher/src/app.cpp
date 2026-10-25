@@ -1372,15 +1372,17 @@ void App::ControllerSection() {
         "INSIDE setting can only raise that; for small corrections to steer, turn on the steering anti-deadzone "
         "with a stick deadzone of 0.05.");
   ImGui::Dummy(ImVec2(0, 2 * scale_));
-  const char* drivers[] = {"default", "rawinput", "wgi"};
+  const char* drivers[] = {"default", "rawinput", "wgi", "gameinput"};
   int driver = 0;
-  for (int i = 0; i < 3; ++i)
+  for (int i = 0; i < 4; ++i)
     if (value_of("driver") == drivers[i]) driver = i;
   Label("Pad driver",
         "Default: SDL's own (XInput for Xbox pads, HIDAPI for PlayStation pads). Raw Input: adds trigger "
         "rumble on Xbox One and Series pads (through Windows.Gaming.Input). WGI: Windows.Gaming.Input with "
-        "XInput off, a fallback if Raw Input misbehaves.");
-  if (Segment("driver", driver, {"Default", "Raw Input", "WGI"})) set_knob("driver", drivers[driver]);
+        "XInput off, a fallback if Raw Input misbehaves. GameInput: Microsoft's GameInput first, for trigger "
+        "rumble and the Share button where it has them (the ROG Xbox Ally X's triggers); without the GameInput "
+        "runtime the others take the pads.");
+  if (Segment("driver", driver, {"Default", "Raw Input", "WGI", "GameInput"})) set_knob("driver", drivers[driver]);
   slider("rumble", "Rumble strength",
          "Multiplies the game's two rumble motors (1: as the game sends them; 1.5 by default, since the game's "
          "driving rumble is only 0.05 to 0.2 of full).");
