@@ -580,6 +580,7 @@ class D3D12CommandProcessor : public CommandProcessor {
     kPassTaa,
     kPassMotion,
     kPassWindshield,
+    kPassFsr,
     kPassOther,
     kSwap
   };

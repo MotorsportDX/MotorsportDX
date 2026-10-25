@@ -131,7 +131,7 @@ struct State {
   double gpu_resolve_bucket_ms[4] = {};
   uint64_t gpu_resolve_bucket_count[4] = {};
   // The post pass groups (kGpuPasses) and the swap's passes (d3d-hle-n4.md 17.24).
-  double gpu_pass_ms[5 + 1] = {};
+  double gpu_pass_ms[6 + 1] = {};
   // Samples passing depth/stencil per occlusion snapshot interval, as reported
   // to the guest (after any divisor), to compare paths and calibrate.
   double occlusion_samples[2]{};  // Unawaited, awaited.
@@ -720,7 +720,7 @@ inline void AddGpuFrame(double busy_ms, double resolve_ms, double span_ms, doubl
 
 // The post pass groups of the perf trace's gpu passes_ms, in the order of the
 // command processor's GpuTimestampKind::kPass... kinds.
-inline constexpr const char* kGpuPasses[] = {"gtao", "taa", "motion", "windshield", "other"};
+inline constexpr const char* kGpuPasses[] = {"gtao", "taa", "motion", "windshield", "fsr", "other"};
 inline constexpr size_t kGpuPassCount = sizeof(kGpuPasses) / sizeof(kGpuPasses[0]);
 static_assert(kGpuPassCount + 1 == sizeof(State::gpu_pass_ms) / sizeof(double));
 

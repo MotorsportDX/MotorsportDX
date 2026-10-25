@@ -7711,6 +7711,7 @@ void D3D12CommandProcessor::ReadGpuTimestampFrame() {
         case GpuTimestampKind::kPassTaa:
         case GpuTimestampKind::kPassMotion:
         case GpuTimestampKind::kPassWindshield:
+        case GpuTimestampKind::kPassFsr:
         case GpuTimestampKind::kPassOther:
         case GpuTimestampKind::kSwap:
           passes[size_t(frame.kinds[pair]) - size_t(GpuTimestampKind::kPassGtao)] += duration;
@@ -7755,6 +7756,7 @@ uint32_t D3D12CommandProcessor::BeginPostPassTimestamp(std::string_view pass_nam
     if (pass_name.starts_with("taa")) return GpuTimestampKind::kPassTaa;
     if (pass_name.starts_with("motion")) return GpuTimestampKind::kPassMotion;
     if (pass_name.starts_with("windshield")) return GpuTimestampKind::kPassWindshield;
+    if (pass_name.starts_with("fsr")) return GpuTimestampKind::kPassFsr;
     return GpuTimestampKind::kPassOther;
   };
   return BeginGpuTimestamp(group());

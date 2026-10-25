@@ -19,7 +19,7 @@ if(NOT REX_FSR)
 endif()
 
 if(NOT WIN32)
-    message(FATAL_ERROR "REX_FSR needs Windows and the D3D12 backend")
+    message(FATAL_ERROR "REX_FSR needs Windows")
 endif()
 
 set(_rex_fsr_sdk "${REX_FSR_SDK_DIR}/sdk")
