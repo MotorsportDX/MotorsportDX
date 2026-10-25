@@ -202,10 +202,13 @@ SCENARIOS.update({
 # has settled and is repeated when the next scene does not follow.
 # Boot: A until the title scene exists (A skips the Microsoft Studios part of the splash video;
 # the Turn 10 part and the legal notice before it ignore A, so the boot is not shorter), then A
-# on the title once it has faded in, until the main menu's render scenario is pushed.
+# on the title once it has faded in, until the main menu's render scenario is pushed. An A that
+# lands as the title scene is created (up to 0.06 s before it) can open the main menu by itself,
+# about 0.9 s later and so during the wait: '?' then skips the title's A, which would otherwise
+# go to PLAY CAREER (25 October 2026, six runs).
 _FAST_TO_MAIN_MENU = [
     [60, 'a', 0.12, '@scene \\d+ 120_P_PRE_SPLASH', 2.5],
-    [2.5, 'wait', 0], [20, 'a', 0.12, '@push UI_Homespace', 3],
+    [2.5, 'wait', 0], [20, '?a', 0.12, '@push UI_Homespace', 3],
 ]
 _FAST_QUICKRACE_MENUS = [
     # The main menu: FREE PLAY is three Rights from PLAY CAREER; the select checks it.

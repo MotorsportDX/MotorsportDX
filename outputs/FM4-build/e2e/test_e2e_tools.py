@@ -255,6 +255,29 @@ class EventTests(unittest.TestCase):
             self.assertGreater(e2e.LAST_PRESS[0], started + 0.5)
             screen.close()
 
+    def test_fast_boot_main_menu_during_wait(self):
+        # The title took the boot's last A and pushed the main menu during the wait (run
+        # gp2s-240-photo, 25 October 2026): the title's A is skipped, not pressed on PLAY CAREER.
+        _, action, hold, text, retry = e2e._FAST_TO_MAIN_MENU[2]
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            events, input_file = root / 'events.txt', root / 'input.txt'
+            screen = e2e.Screen(root, self.Process(), root / 'steps.jsonl', events)
+            try:
+                pressed = time.time() - 2.6
+                e2e.LAST_PRESS[0] = pressed
+                self.write(events, [(pressed + 0.04, 'scene 221 120_P_PRE_SPLASH')])
+                # Without the push, the title gets its A (and the step times out here).
+                self.assertFalse(e2e.checked_step(screen, input_file, 0.2, action, hold, text, retry))
+                self.assertGreater(e2e.LAST_PRESS[0], pressed)
+                pressed = e2e.LAST_PRESS[0] = time.time() - 2.6
+                self.write(events, [(pressed + 0.04, 'scene 221 120_P_PRE_SPLASH'),
+                                    (pressed + 0.88, 'pop UI_NoCar'), (pressed + 0.88, 'push UI_Homespace')])
+                self.assertTrue(e2e.checked_step(screen, input_file, 1, action, hold, text, retry))
+                self.assertEqual(e2e.LAST_PRESS[0], pressed)
+            finally:
+                screen.close()
+
     def test_fast_scenarios(self):
         fast, menus = e2e.FAST_SCENARIOS, e2e.SCENARIOS
         for name, steps in fast.items():
