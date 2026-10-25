@@ -215,6 +215,15 @@ The `fsr` group is `fsr_prepare`, FSR's own passes and `fsr_output` (a new group
 3. Look for: sharpness of thin lines and text, shimmer or crawling edges on still frames, trails or smears behind cars, smoke and sparks, the mirror's picture lagging, any flicker or black frame, the HUD.
 4. Send back: the `-Info` overlay's "Anti-aliasing:" line (a photo of the screen is enough), the lines of `runtime.log` that contain "FSR" (the context's size and creation time, any warning that TAA runs instead, any FSR error), and with Performance trace the `perf-<profile>-<time>.jsonl` files, which hold the GPU time of the `fsr` and `taa` groups.
 
+**The owner's first result on the ROG Xbox Ally X** (25 October 2026, relayed by the main session): the export of f4891c4 (`E:\FM4-Test-Ally-2026-10-25`, logs in `D:\log_ally_3`) on the Radeon 890M at 117 Hz with the launcher's defaults for integrated GPUs (`-Native` at 1x, 1280x720, one pass with 2x MSAA), the look `aces`, a Quick Race. The medians of the race windows (the two runs are not frame-matched):
+
+| Method | fps | Frame p99 | GPU a frame | The AA pass |
+|---|---|---|---|---|
+| TAA (`perf-1`) | 91.0 | 26.8 ms | 10.42 ms | `taa` 0.61 ms |
+| FSR (`perf-2`, `FSR_FP16=1`) | 80.7 | 33.3 ms | 11.47 ms | `fsr` 2.57 ms |
+
+A third run had FSR's native AA at 1920x1080 (its context created in 717 ms, the cold driver cache's hitch), without a perf trace. FSR's native AA costs about four times TAA's time on the 890M, eight times this PC's 0.32 ms at 1x, so at 1x it is not worth it there. The main session's decision of 25 October 2026: TAA stays the default with integrated GPUs; FSR's value there is the upscaling of stage 3 (720 to 1080 lines, section 11), which the next export measures. The default with discrete GPUs waits for the owner's visual verdict, which has not come yet.
+
 ## 10. The download for stage 0 (approved on 25 October 2026)
 
 The project owner approved the download on 25 October 2026 (relayed by the main session), on the condition that AMD's credit goes with the code: the notices in `outputs/FM4-source-control/third-party-notices`, the entry in [sources and licensing](../sources-and-licensing.md#third-party-code-amd-fidelityfx-sdk-fsr-31), a credits line in the README, and the notices in every export. It was fetched on the same day into `I:\FM4-build-usa\fidelityfx-sdk`. `fetch_fidelityfx` in `pipeline.py` fetches it pinned (the constants `FFX_URL`, `FFX_TAG`, `FFX_REV` and `FFX_PATHS`, as the ReXGlue SDK's `SDK_URL` and `SDK_REV`) at every `setup`, and at `build` with `--fsr on`; `doctor` reports the checkout. A mirror, `FFX_MIRROR`, takes over when GitHub cannot be reached: another Git URL (a fork on the project owner's GitHub, for example) or a local Git bundle of the pinned commit, which setup writes after a fetch (on the development computer `D:\FM4-archive\third-party\fidelityfx-sdk-v1.1.4.bundle`, 14,584,507 bytes, written again on 25 October 2026 with `.gitattributes`; [setup, the FidelityFX SDK mirror](../setup.md#the-fidelityfx-sdk-mirror)):
