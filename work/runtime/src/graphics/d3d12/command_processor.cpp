@@ -200,6 +200,11 @@ REXCVAR_DEFINE_INT32(async_shader_draw_wait_us, 0, "GPU/D3D12",
 
 namespace rex::graphics::d3d12 {
 
+#if REX_FSR
+// fsr.cpp.
+void LogFsrLink();
+#endif
+
 namespace {
 
 // The command processor's side of the readback on demand: an access that
@@ -1960,6 +1965,9 @@ bool D3D12CommandProcessor::SetupContext() {
   }
   InvalidateAllVertexBufferResidency();
   UpdateDebugMarkersEnabled();
+#if REX_FSR
+  LogFsrLink();
+#endif
 
   const ui::d3d12::D3D12Provider& provider = GetD3D12Provider();
   ID3D12Device* device = provider.GetDevice();

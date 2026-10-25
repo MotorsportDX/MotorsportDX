@@ -182,6 +182,7 @@ The stages can also run separately:
 | `-Disc2` | Extracted Disc 2 root. Optional. |
 | `-Content` | Content package files or directories (DLC). Optional, one or more, read by `generate`, `all` and `run`. See [Downloadable content](#downloadable-content). |
 | `-Flavor` | Compiler experiment for `build`, for example `thinlto,v3`. See [Build flavors](#build-flavors). |
+| `-Fsr` | `on` or `off`, for `setup`, `build` and `all`: link AMD FSR 3.1 into the runtime, built from the FidelityFX SDK source (`REX_FSR`). `on` fetches the pinned SDK first. The runtime build folder keeps the choice for later builds; off by default. See [FSR 3.1](#fsr-31-optional). |
 | `-Out` | The folder of `export`, outside the BuildRoot and the repository. |
 
 ## Stages
@@ -198,6 +199,21 @@ The stages can also run separately:
   fetched;
 - compiles the licensed Xenia/ReXGlue resolve shaders with the Windows SDK FXC;
 - builds and installs the Release runtime locally.
+
+#### FSR 3.1 (optional)
+
+With `-Fsr on`, `setup` (or `build`) also:
+
+- fetches the AMD FidelityFX SDK, tag `v1.1.4`, commit
+  `c6efa6bf7f2027b3ec94f28578bb5965eabb9e55`, as a sparse, blob-filtered Git clone of the
+  files the FSR 3 upscaler and the DX12 backend need (about 39 MB plus 36 MB of Git objects)
+  into `BuildRoot\fidelityfx-sdk`, and stops when the checked-out commit differs;
+- builds the upscaler and its DX12 backend from that source into the runtime, with the SDK's
+  shader compiler and DXC from the same checkout (used at build time only).
+
+Nothing of it runs yet ([FSR plan](analysis/fsr-plan.md#31-stage-0s-build-25-october-2026)).
+The license notices are in
+[third-party-notices](../outputs/FM4-source-control/third-party-notices/README.txt).
 
 ### 2. Generate
 
@@ -280,6 +296,7 @@ layout is:
 FM4-build/
 ├── runtime-source/   # Copy of work/runtime + third-party libraries
 ├── runtime-upstream/ # Upstream SDK clone (only for third-party libraries)
+├── fidelityfx-sdk/   # AMD FidelityFX SDK, sparse clone (only with -Fsr on)
 ├── runtime-build/    # Runtime build
 ├── runtime-install/  # Locally installed runtime
 ├── project/          # Integration source and private generated/

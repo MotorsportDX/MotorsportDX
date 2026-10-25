@@ -25,6 +25,16 @@ THIRDPARTY_VENDORED = ('aes_128','crypto','disasm','disruptorplus','dxbc','dxc',
                        'renderdoc','stb','tiny-aes-c')
 THIRDPARTY_SUBMODULES = ('cli11','libmspack','FFmpeg','tomlplusplus','simde','xxHash','spdlog','fmt',
                          'utfcpp','imgui','sdl3','inja','o1heap')
+# AMD FidelityFX SDK for REX_FSR (FSR 3.1 from source, docs/analysis/fsr-plan.md section 10):
+# a sparse, blob-filtered clone of the files the FSR 3 upscaler and the DX12 backend build from,
+# pinned to the v1.1.4 tag's commit, outside the repository in <BuildRoot>/fidelityfx-sdk.
+FFX_SDK_URL = 'https://github.com/GPUOpen-LibrariesAndSDKs/FidelityFX-SDK'
+FFX_SDK_TAG = 'v1.1.4'
+FFX_SDK_REV = 'c6efa6bf7f2027b3ec94f28578bb5965eabb9e55'
+FFX_SDK_PATHS = ('/LICENSE.txt','/sdk/LICENSE.txt','/sdk/CMakeLists.txt','/sdk/toolchain.cmake',
+                 '/sdk/include/','/sdk/src/components/fsr3upscaler/','/sdk/src/backends/dx12/',
+                 '/sdk/src/backends/shared/','/sdk/src/shared/','/sdk/tools/binary_store/')
+NOTICES = REPO/'outputs/FM4-source-control/third-party-notices'
 RESOLVE_SHADERS = [f'resolve_full_{bits}bpp{suffix}' for bits in (8,16,32,64) for suffix in ('','_scaled')]
 # The fast copy of 32bpp 4x MSAA surfaces with a per-pixel EDRAM address, in place of upstream's
 # precompiled one, which read the vertical sample at the depth tile's half swap (d3d-hle-n3.md 16.17).
@@ -311,22 +321,53 @@ def compile_resolve_shaders(root, fxc):
         log=root/'logs/guest_output_area.log')
     marker.write_text(inputs.hexdigest())
 
-def build_runtime(root, fxc, jobs):
-    source, build, install = root/'runtime-source', root/'runtime-build', root/'runtime-install'
+def fetch_fidelityfx(root):
+    """<BuildRoot>/fidelityfx-sdk at FFX_SDK_REV, sparse (FFX_SDK_PATHS). Stops when the
+    checked-out commit differs from the pinned one."""
+    sdk=root/'fidelityfx-sdk'
+    log=root/'logs/fidelityfx-fetch.log'
+    if not (sdk/'.git').is_dir():
+        run(['git','clone','--filter=blob:none','--no-checkout','--sparse','--branch',FFX_SDK_TAG,
+             FFX_SDK_URL,sdk],log=log)
+    listed=subprocess.run(['git','-C',sdk,'sparse-checkout','list'],capture_output=True,
+                          text=True).stdout.split()
+    if sorted(listed)!=sorted(FFX_SDK_PATHS):
+        run(['git','-C',sdk,'sparse-checkout','set','--no-cone',*FFX_SDK_PATHS],log=log)
+    head=subprocess.run(['git','-C',sdk,'rev-parse','HEAD'],capture_output=True,text=True).stdout.strip()
+    if head!=FFX_SDK_REV:
+        run(['git','-C',sdk,'checkout','--detach',FFX_SDK_REV],log=log)
+        head=subprocess.check_output(['git','-C',sdk,'rev-parse','HEAD'],text=True).strip()
+    if head!=FFX_SDK_REV:
+        raise RuntimeError(f'{sdk} is at {head}, not the pinned FidelityFX SDK commit {FFX_SDK_REV}.')
+    return sdk
+
+def build_runtime(root, fxc, jobs, fsr=None, build=None):
+    """fsr: True or False sets REX_FSR (AMD FSR 3.1 from the FidelityFX SDK source, fetched
+    by fetch_fidelityfx); None keeps the build directory's setting (off when it is new). build:
+    another build directory, which is built but not installed."""
+    source, install = root/'runtime-source', root/'runtime-install'
+    default_build = build is None
+    build = root/'runtime-build' if default_build else Path(build)
     sync_runtime(root)
     fetch_thirdparty(root)
     compile_resolve_shaders(root, fxc)
-    if not (build/'build.ninja').is_file():
+    options=[]
+    if fsr is not None:
+        options=['-DREX_FSR=ON',f'-DREX_FSR_SDK_DIR={fetch_fidelityfx(root).as_posix()}'] if fsr \
+            else ['-DREX_FSR=OFF']
+    if not (build/'build.ninja').is_file() or options:
         run(['cmake','-S',source,'-B',build,'-G','Ninja','-DCMAKE_BUILD_TYPE=Release',
              '-DCMAKE_C_COMPILER=clang','-DCMAKE_CXX_COMPILER=clang++',
              '-DCMAKE_C_FLAGS=-march=x86-64-v2','-DCMAKE_CXX_FLAGS=-march=x86-64-v2',
              '-DREXGLUE_ENABLE_TRACY=OFF','-DREXGLUE_BUILD_TESTS=OFF','-DREXGLUE_USE_VULKAN=OFF',
-             f'-DCMAKE_INSTALL_PREFIX={install}'],log=root/'logs/runtime-configure.log')
-    run(['cmake','--build',build,'--parallel',jobs],log=root/'logs/runtime-build.log')
-    run(['cmake','--install',build],log=root/'logs/runtime-install.log')
+             *options,f'-DCMAKE_INSTALL_PREFIX={install}'],
+            log=root/('logs/runtime-configure.log' if default_build else f'logs/{build.name}-configure.log'))
+    run(['cmake','--build',build,'--parallel',jobs],log=root/f'logs/{build.name}.log')
+    if default_build:
+        run(['cmake','--install',build],log=root/'logs/runtime-install.log')
 
-def setup(root, fxc, jobs):
-    build_runtime(root, fxc, jobs)
+def setup(root, fxc, jobs, fsr=None):
+    build_runtime(root, fxc, jobs, fsr)
     (root/'setup-complete.json').write_text(json.dumps({'thirdparty_revision':SDK_REV,'runtime':'work/runtime'}))
 
 def generate(root, disc1, disc2, content, jobs):
@@ -396,14 +437,14 @@ def flavor_flags(root,flavor):
         flags+=[f'-fprofile-use={profile.as_posix()}','-Wno-profile-instr-out-of-date','-Wno-profile-instr-unprofiled']
     return ' '.join(flags)
 
-def build_game(root,fxc,jobs,flavor=()):
+def build_game(root,fxc,jobs,flavor=(),fsr=None):
     project, install, build = root/'project',root/'runtime-install',game_build_dir(root,flavor)
     if not (root/'local.json').is_file():
         raise RuntimeError('Run generate first.')
     state=json.loads((root/'local.json').read_text())
     validate_discs(state['disc1'],state['disc2'])
     # Edits in work/runtime are picked up here: sync, incremental build, install.
-    build_runtime(root,fxc,jobs)
+    build_runtime(root,fxc,jobs,fsr)
     suffix=build.name[len('game-build'):]
     # clang++ drives lld-link, so linker options go through -Xlinker.
     lto_jobs=f'-Xlinker /opt:lldltojobs={jobs}'
@@ -1488,6 +1529,9 @@ def export(root,out,jobs):
         shutil.copyfile(game/name,out/'game-build'/name)
     shutil.copyfile(game/'fm4_launcher.exe',out/'fm4_launcher.exe')
     shutil.copyfile(root/'build-result.json',out/'build-result.json')
+    # The licenses of the third-party code in the runtime (ReXGlue/Xenia, and AMD FidelityFX
+    # and Microsoft's d3dx12.h when it is built with REX_FSR).
+    shutil.copytree(NOTICES,out/'third-party-notices',dirs_exist_ok=True)
     stage_launcher_files(out)
     if (root/'cache').is_dir():
         shutil.copytree(root/'cache',out/'cache',dirs_exist_ok=True)
@@ -1627,6 +1671,10 @@ def main():
                         help='run: write each new game texture once as <hash>.dds to this directory')
     parser.add_argument('--texture-replace',type=Path,
                         help='run: use <hash>.dds files from this directory instead of the game textures')
+    parser.add_argument('--fsr',choices=['on','off'],
+                        help='setup, build, all: link AMD FSR 3.1, built from the FidelityFX SDK '
+                             'source, into the runtime (REX_FSR; fetches the pinned SDK). Kept for '
+                             'later builds; off by default')
     parser.add_argument('--flavor',default='',help='opt-in compiler experiment for build: comma list of '+','.join(FLAVORS))
     args=parser.parse_args()
     root=args.build_root.resolve()
@@ -1648,10 +1696,11 @@ def main():
         validate_content(discs[1],args.content)
     root.mkdir(parents=True,exist_ok=True)
     check_layout(root)
-    if args.action in ('setup','all'): setup(root,fxc,args.jobs)
+    fsr=None if args.fsr is None else args.fsr=='on'
+    if args.action in ('setup','all'): setup(root,fxc,args.jobs,fsr)
     if args.action in ('generate','all'): generate(root,*discs,args.content,args.jobs)
     if args.action=='run' and args.content: save_content(root,args.content)
-    if args.action in ('build','all'): build_game(root,fxc,args.jobs,flavor)
+    if args.action in ('build','all'): build_game(root,fxc,args.jobs,flavor,None if args.action=='all' else fsr)
     if args.action=='run': launch(root,args.single_tile,args.fixed_vblank,args.frame_rate,args.rov,
                                      args.resolution_scale,args.full_rate_mirror,args.look,
                                      args.shadow_workaround,args.quality,args.display,

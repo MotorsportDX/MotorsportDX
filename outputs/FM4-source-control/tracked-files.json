@@ -337,6 +337,18 @@
       "provenance": "Repository policy/tooling or upstream license"
     },
     {
+      "path": "outputs/FM4-source-control/third-party-notices/AMD-FidelityFX-SDK-LICENSE.txt",
+      "provenance": "Repository policy/tooling or upstream license"
+    },
+    {
+      "path": "outputs/FM4-source-control/third-party-notices/Microsoft-d3dx12-LICENSE.txt",
+      "provenance": "Repository policy/tooling or upstream license"
+    },
+    {
+      "path": "outputs/FM4-source-control/third-party-notices/README.txt",
+      "provenance": "Repository policy/tooling or upstream license"
+    },
+    {
       "path": "outputs/FM4-source-control/tracked-files.json",
       "provenance": "Repository inventory/configuration"
     },
@@ -1178,6 +1190,14 @@
     },
     {
       "path": "work/runtime/cmake/rexglue_fidelityfx.cmake",
+      "provenance": "runtime-fork"
+    },
+    {
+      "path": "work/runtime/cmake/rex_fsr.cmake",
+      "provenance": "runtime-fork"
+    },
+    {
+      "path": "work/runtime/cmake/fsr-include/pix/pix3.h",
       "provenance": "runtime-fork"
     },
     {
@@ -3043,6 +3063,10 @@
     },
     {
       "path": "work/runtime/src/graphics/d3d12/post_pass.cpp",
+      "provenance": "runtime-fork"
+    },
+    {
+      "path": "work/runtime/src/graphics/d3d12/fsr.cpp",
       "provenance": "runtime-fork"
     },
     {

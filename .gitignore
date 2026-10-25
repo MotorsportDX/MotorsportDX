@@ -66,6 +66,9 @@
 !/outputs/FM4-build/verification.json
 !/outputs/FM4-build/xmedia_bounds.toml
 !/outputs/FM4-source-control/check-staged-content.py
+!/outputs/FM4-source-control/third-party-notices/AMD-FidelityFX-SDK-LICENSE.txt
+!/outputs/FM4-source-control/third-party-notices/Microsoft-d3dx12-LICENSE.txt
+!/outputs/FM4-source-control/third-party-notices/README.txt
 !/outputs/FM4-source-control/third-party-notices/ReXGlue-LICENSE.txt
 !/outputs/FM4-source-control/tracked-files.json
 !/work/fm4-rex/CMakeLists.txt

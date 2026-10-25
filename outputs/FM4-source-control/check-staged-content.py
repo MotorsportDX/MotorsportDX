@@ -16,6 +16,11 @@ def git(*args):
 # The runtime fork keeps a few large upstream sources (D3D12 command processor,
 # render target cache); other files stay below 256 KiB.
 RUNTIME = 'work/runtime/'
+# The AMD FidelityFX SDK stays in the BuildRoot (work/runtime/cmake/rex_fsr.cmake builds it from
+# there); only its license text is stored, with the third-party notices.
+NOTICES = 'outputs/FM4-source-control/third-party-notices/'
+# The first line of the SDK's source files, split so that this file does not match it.
+FIDELITYFX_HEADER = 'This file is part of the ' + 'FidelityFX SDK.'
 
 def check_blob(path, data, allowed):
     if path not in allowed:
@@ -24,6 +29,8 @@ def check_blob(path, data, allowed):
     if len(data) > limit or b'\0' in data:
         raise ValueError(f'Binary or oversized file: {path}')
     text = data.decode('utf-8-sig')
+    if FIDELITYFX_HEADER in text and not path.startswith(NOTICES):
+        raise ValueError(f'FidelityFX SDK source: {path}')
     # The recompiler's emitter writes these macro names as text; it is marked in the inventory.
     if path.endswith(('.cpp', '.h', '.patch')) and not allowed[path].get('emitter'):
         if re.search(r'PPC_FUNC_IMPL\s*\(|PPC_FUNC\s*\(|DEFINE_REX_FUNC\s*\(|__imp__sub_[0-9A-Fa-f]+\s*\([^;]*\)\s*\{', text):

@@ -118,7 +118,8 @@ repository:
 
 The folder holds `fm4_launcher.exe`, `game-build` (the executable, the two modules and
 the runtime DLLs of `build-result.json`), `look`, `passes`, the shader cache (`cache`),
-`launcher.json`, `build-result.json`, and a first `launcher-settings.json` with the
+`launcher.json`, `build-result.json`, the license notices of the third-party code in the
+runtime (`third-party-notices`), and a first `launcher-settings.json` with the
 Disc and content paths of `local.json`. It does not hold `user-data`: profiles, saves
 and imported content stay on the build computer. `export` checks the artifact hashes
 first, and refuses a folder that is not empty unless it is an earlier export, which it

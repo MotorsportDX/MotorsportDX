@@ -191,3 +191,6 @@ if(REXGLUE_USE_D3D12)
         dxguid
     )
 endif()
+
+# AMD FSR 3.1 from the FidelityFX SDK source, off by default (docs/analysis/fsr-plan.md).
+include(${REXGLUE_ROOT}/cmake/rex_fsr.cmake)

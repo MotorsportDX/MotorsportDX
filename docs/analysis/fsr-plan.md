@@ -1,6 +1,6 @@
 # FSR: plan
 
-A plan to add AMD FSR 3.1 to the runtime's post pass framework, first in its native anti-aliasing mode (no upscaling) beside the project's own [TAA](taa.md), and then as an upscaler on N5's scales. Nothing of it is built. Written on 20 October 2026 and updated against N5 on 25 October 2026 (sections 9 and 10); the license review is in [sources and licensing](../sources-and-licensing.md#candidate-third-party-code-amd-fsr).
+A plan to add AMD FSR 3.1 to the runtime's post pass framework, first in its native anti-aliasing mode (no upscaling) beside the project's own [TAA](taa.md), and then as an upscaler on N5's scales. Stage 0 is done: the runtime builds and links the upscaler from the SDK source behind `REX_FSR` (section 3.1); nothing of it runs yet. Written on 20 October 2026 and updated against N5 on 25 October 2026 (sections 9 and 10); the license review is in [sources and licensing](../sources-and-licensing.md#third-party-code-amd-fidelityfx-sdk-fsr-31).
 
 ## Summary
 
@@ -9,7 +9,7 @@ A plan to add AMD FSR 3.1 to the runtime's post pass framework, first in its nat
 - **Point**: the scene_color point ([TAA, section 2.2](taa.md#22-the-scene_color-point-option)), where the color, depth, motion vectors and masks share the scene layout, so nothing has to be rotated, and the output goes back into the game's scene through the existing write-back.
 - **Needs**: the single tile without MSAA (the default with TAA since 20 October 2026), the jitter on every frame of a scene (FSR accumulates still pictures itself), a way to run FSR's D3D12 backend inside the runtime's deferred command list, DXC for its Shader Model 6.2 shaders, and the license steps below.
 - **Not in the first stage**: upscaling. It builds on N5's scales: the native path renders the scene's private surfaces at a rational scale and every other surface at the integer scale, chosen per resolve destination, at the screen's logical size; upscaling splits the scene's scale into an input scale for the scene and an output scale for the post chain, the HUD and the swap (section 9).
-- **The plan against N5** (25 October 2026, for the main session's approval) is section 9; the download stage 0 needs, for the project owner's approval, is section 10. Nothing is fetched before that approval.
+- **The plan against N5** (25 October 2026) is section 9; the download stage 0 needs is section 10, approved by the project owner on 25 October 2026.
 
 ## 1. Why, and what it can gain
 
@@ -19,7 +19,7 @@ A plan to add AMD FSR 3.1 to the runtime's post pass framework, first in its nat
 
 ## 2. Licensing and sources (stage 0)
 
-1. Read the `LICENSE.txt` of the FidelityFX SDK at the tag to be used (1.1.4 or the last 1.1.x); the SDK's README states MIT, but the file was not read yet.
+1. Read the `LICENSE.txt` of the FidelityFX SDK at the tag to be used (1.1.4 or the last 1.1.x). Done on 25 October 2026: MIT (section 10).
 2. Do not vendor the SDK into the repository: fetch it during `setup` at a pinned tag and commit hash, as the runtime's upstream SDK clone is pinned, and verify the hash. Only integration code of this project goes into Git.
 3. Add AMD's notice under `outputs/FM4-source-control/third-party-notices`, whitelist new files in `.gitignore`, add review entries to `tracked-files.json`, and run `check-staged-content.py`.
 4. Check that MIT code linked into the runtime fits the runtime's license ([work/runtime/LICENSE](../../work/runtime/LICENSE)); MIT is permissive and normally does.
@@ -30,8 +30,15 @@ A plan to add AMD FSR 3.1 to the runtime's post pass framework, first in its nat
 - The FSR 3.1 upscaler is C++ host code (`ffx_fsr3upscaler`) plus HLSL shaders compiled into permutation headers, and a D3D12 backend (`ffx_backend_dx12`).
 - The shaders need DXC (Shader Model 6.2, 16-bit types where supported); the runtime compiles its own shaders with FXC. The SDK's `sdk/tools/binary_store` carries its shader compiler with a DXC (section 10), so no separate DXC is fetched; `doctor` checks it.
 - Build the two libraries with the project's toolchain (LLVM 20, CMake, Ninja) into BuildRoot and link them into `rexgpu`. A build switch keeps the runtime buildable without them (`REX_FSR=OFF` by default until stage 2 passes).
-- Risk: the SDK's CMake expects MSVC and its own shader compiler wrapper; adapting it to clang-cl may take a patch, applied at setup like the runtime's own.
+- Risk: the SDK's CMake expects MSVC and its own shader compiler wrapper; adapting it to clang-cl may take a patch, applied at setup like the runtime's own. Stage 0 needed no patch (3.1).
 
+### 3.1 Stage 0's build (25 October 2026)
+
+- `work/runtime/cmake/rex_fsr.cmake`, included by the graphics plugin's CMake file, runs when `REX_FSR` is on (`Build.ps1 -Fsr on`, kept in the runtime build folder for later builds; off by default). It sets the variables the SDK's top `CMakeLists.txt` sets for `DX12_X64` with only the FSR 3 upscaler and static libraries, and adds the SDK's own CMake files for the component (`ffx_fsr3upscaler_x64`) and the DX12 backend (`ffx_backend_dx12_x64`). The SDK's top file is not used: it adds every component and the PIX library, which the sparse checkout does not hold.
+- The adaptations, all in that file, none in the SDK: the two libraries are compiled as C++17 (in C++20 and later `ffx_util.h` calls `std::popcount` without including `<bit>`) with the SDK's `UNICODE` defines and without warnings; an empty `pix/pix3.h` stands in for the PIX header (the backend loads the PIX functions it uses from `WinPixEventRuntime.dll` at run time); the backend's frame generation swap chain is taken out of its sources (it needs the AntiLag 2 header and the upscaler does not use it); and an empty file stands in for a dependency the SDK's shader function adds by mistake (the name of its output variable), which Visual Studio ignores and Ninja does not.
+- The shaders: the backend's CMake runs `FidelityFX_SC.exe` (with the DXC of `sdk/tools/binary_store`) on the upscaler's 10 passes, each as wave32 and wave64, with and without 16-bit types, over the 64 permutations of its options: 240 headers in the build folder (40 permutation tables and 200 distinct shaders, 13.2 MB), embedded into the backend.
+- The runtime: `rexgpu-xenos` links the two libraries, and `d3d12/fsr.cpp` logs the linked version at the command processor's setup (`FSR 3.1.4: linked`, with the backend's scratch memory for one context). No context is created and nothing is dispatched. The DLL grows from 6,716,928 to 9,148,416 bytes.
+- Gate (25 October 2026): the runtime builds with `REX_FSR` on and off in separate build folders from the same source, under clang++ 20.1.8 and Ninja, and the shader permutations compile; see section 10 for the fetch.
 ## 4. Runtime integration (stage 1)
 
 ### 4.1 Running FSR inside the deferred command list
@@ -104,7 +111,7 @@ Section 9.7 updates these stages and their gates against N5.
 ## 8. Prerequisites and open questions
 
 - The single tile without MSAA as the default with TAA: done on 20 October 2026; FSR cannot take MSAA input, so `-Msaa` and `-Rov` would leave it out.
-- Whether the SDK's shader permutation build runs under the project's toolchain without large patches (stage 0 decides; FSR 2.2 is the fallback).
+- Whether the SDK's shader permutation build runs under the project's toolchain without large patches: it does, with no patch of the SDK (3.1), so FSR 2.2 is not needed.
 - Whether the callback in the deferred list (4.1 a) can restore the command processor's descriptor heap state cheaply.
 - Exposure: auto exposure or 1.0 (A/B).
 - DLAA (NVIDIA) through the same inputs needs its own license review; not planned yet.
@@ -157,30 +164,31 @@ Assumption, not measured: FSR 3.1's upscaler costs about 0.5 to 1 ms at a 1080p 
 
 | Stage | Work | Gate |
 |---|---|---|
-| 0 | The download (section 10, after the owner's approval), the license file read, the notices, the two libraries (`ffx_fsr3upscaler`, `ffx_backend_dx12`) built with LLVM 20 and the SDK's shader compiler (`FidelityFX_SC.exe` with its DXC) into BuildRoot behind `REX_FSR` (off by default) | the runtime builds with and without it; the SDK's shader permutations compile; nothing runs yet |
+| 0 | The download (section 10, after the owner's approval), the license file read, the notices, the two libraries (`ffx_fsr3upscaler`, `ffx_backend_dx12`) built with LLVM 20 and the SDK's shader compiler (`FidelityFX_SC.exe` with its DXC) into BuildRoot behind `REX_FSR` (off by default) | the runtime builds with and without it; the SDK's shader permutations compile; nothing runs yet. Passed on 25 October 2026 (3.1) |
 | 1 | The callback (9.4), the FSR context, the inputs and output at the scene_color point, the jitter rule, the knob, the particle flag | a WARP test with the synthetic scene (a still edge converges and holds, a moving box leaves no trail, a cut resets) |
 | 2 | Native AA in the game | 1:1 crops at 3/2 and 2x against TAA (the cable car wires, fences, the grandstand lattice, distant road lines), still pictures (the share of pixels that change), ghosting cases (tire smoke, sparks, the interior mirror), GPU time per frame on this PC, smoke and perf gates, the 16:9 parity unchanged with `aa=taa`; the owner's A/B decides the default |
 | 3 | Upscaling (9.3): two scene scales, the texture cache's scale per range, the launcher's choice of the input scale | 1:1 crops of the upscaled frame against native s_out and against s_in, the byte checks (the destinations at k), GPU time at 1080p and 4K on this PC, and the Ally X through the export |
 
 Effort, inferred: stage 0 one to two days if the SDK's CMake and shader compiler build under clang (FSR 2.2 is the fallback), stages 1 and 2 three to six days, stage 3 two to three weeks.
 
-## 10. The download for stage 0 (for the project owner's approval)
+## 10. The download for stage 0 (approved on 25 October 2026)
 
-Nothing is fetched until the project owner approves. What `setup` would fetch, pinned:
+The project owner approved the download on 25 October 2026 (relayed by the main session), on the condition that AMD's credit goes with the code: the notices in `outputs/FM4-source-control/third-party-notices`, the entry in [sources and licensing](../sources-and-licensing.md#third-party-code-amd-fidelityfx-sdk-fsr-31), a credits line in the README, and the notices in every export. It was fetched on the same day into `I:\FM4-build-usa\fidelityfx-sdk`. `fetch_fidelityfx` in `pipeline.py` fetches it pinned, when `setup`, `build` or `all` runs with `--fsr on`:
 
 - **Repository**: `https://github.com/GPUOpen-LibrariesAndSDKs/FidelityFX-SDK`.
 - **Tag and commit**: `v1.1.4`, commit `c6efa6bf7f2027b3ec94f28578bb5965eabb9e55`, the last 1.1.x release (the FSR 3.1 upscaler from source). The 2.x tags (`v2.0.0` to `v2.3.0`) are the line that ships FSR 4 as signed DLLs and are not used.
-- **License**: `LICENSE.txt` at the tag (1,115 bytes) is the MIT license, "Copyright (C) 2024 Advanced Micro Devices, Inc."; `sdk/LICENSE.txt` is the same file. Read in full at stage 0.
-- **What is needed**: the `sdk/` folder only, by a sparse, blob-filtered clone (`git clone --filter=blob:none --sparse`, then `git sparse-checkout set sdk`), checked against the commit:
+- **Commit check**: after the fetch, `HEAD` is `c6efa6bf7f2027b3ec94f28578bb5965eabb9e55` (checked on 25 October 2026); `fetch_fidelityfx` stops when it differs.
+- **License**: `LICENSE.txt` at the tag (1,115 bytes) is the MIT license, "Copyright (C) 2024 Advanced Micro Devices, Inc."; `sdk/LICENSE.txt` is the same file. Read in full on 25 October 2026 and copied into the notices. The DX12 backend also compiles Microsoft's `d3dx12.h` (MIT, its `license.txt` beside it), whose notice is there too.
+- **What is fetched**: a sparse, blob-filtered clone (`git clone --filter=blob:none --no-checkout --sparse`, then `git sparse-checkout set --no-cone` with the paths of `FFX_SDK_PATHS`), checked against the commit: `LICENSE.txt`, `sdk/LICENSE.txt`, `sdk/CMakeLists.txt`, `sdk/toolchain.cmake`, `sdk/include`, `sdk/src/components/fsr3upscaler`, `sdk/src/backends/dx12`, `sdk/src/backends/shared`, `sdk/src/shared` and `sdk/tools/binary_store`. Against the list below, measured at stage 0: `sdk/src/backends/shared` (the shader blob accessors the backend compiles, 356 KB) is added, and `sdk/tools/ffx_shader_compiler` (the source of the compiler driver, whose build is in `binary_store`) and `sdk/libs` (PIX and AntiLag 2) are not fetched. The list as planned:
   - `sdk/include` (the host and GPU headers: `FidelityFX/host/ffx_fsr3upscaler.h`, the DX12 backend's header, the shaders' `gpu/fsr3upscaler`),
   - `sdk/src/components/fsr3upscaler` (`ffx_fsr3upscaler.cpp`, 91,833 bytes), `sdk/src/backends/dx12` and `sdk/src/shared`,
   - `sdk/tools/ffx_shader_compiler` and `sdk/tools/binary_store`, which holds the SDK's shader compiler `FidelityFX_SC.exe` (474,624 bytes) with `dxcompiler.dll` (17,802,672 bytes) and `dxil.dll` (1,463,736 bytes), so no separate DXC download is needed; the same folder holds `D3D12Core.dll`, `d3d12SDKLayers.dll`, `d3dconfig.exe` and `glslangValidator.exe`, which the build does not use,
   - `sdk/CMakeLists.txt` and `sdk/toolchain.cmake`.
 - **Not fetched**: `samples`, `framework`, `docs`, `ffx-api`, `PrebuiltSignedDLL` (the SDK's own signed DLLs) and the samples' media (`UpdateMedia.bat`).
-- **Size**: the whole repository is about 411 MB (GitHub's figure, with the samples' media); the sparse `sdk/` checkout is estimated at 40 to 60 MB, of which about 34 MB are the binaries of `sdk/tools/binary_store`. Measured at stage 0.
+- **Size**: the whole repository is about 411 MB (GitHub's figure, with the samples' media); the sparse checkout measures 39 MB of files, of which 34 MB are the binaries of `sdk/tools/binary_store`, and 36 MB of Git objects.
 - **Where**: outside the repository, into the BuildRoot (`<BuildRoot>\fidelityfx-sdk`), as the runtime's own upstream clone; only this project's integration code goes into Git, with AMD's notice under `outputs/FM4-source-control/third-party-notices`.
 
 ## Related
 
 - [TAA](taa.md), [motion vectors](motion-vectors.md#6-requirements-for-taa-and-the-upscalers), [post pass framework](post-pass-framework.md)
-- [Sources and licensing](../sources-and-licensing.md#candidate-third-party-code-amd-fsr)
+- [Sources and licensing](../sources-and-licensing.md#third-party-code-amd-fidelityfx-sdk-fsr-31)

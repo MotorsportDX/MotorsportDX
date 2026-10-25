@@ -13,7 +13,8 @@ This repository is source-only. It records reviewed integration code, diagnostic
 - `work/fm4-launcher`: the GUI launcher, original code that ports the launch rules of `pipeline.py`. It is built against the runtime's third-party SDL3, Dear ImGui and JSON header, which are not stored.
 - `outputs/FM4-build`: the setup, generate, build, and run pipeline (`Build.ps1`, `pipeline.py`, and the loader), reviewed integration metadata (function bounds and switch recipes), the e2e harness and gates (`e2e/`), and `verification.json`.
 - `docs/`: project documentation, including the research notes in `docs/analysis/`.
-- The ReXGlue/Xenia copyright and BSD license notice in `outputs/FM4-source-control/third-party-notices`.
+- The third-party notices in `outputs/FM4-source-control/third-party-notices`: the ReXGlue/Xenia copyright and BSD license notice, AMD's FidelityFX SDK license, Microsoft's `d3dx12.h` license, and a `README.txt` that says what each covers.
+- `work/runtime/cmake/rex_fsr.cmake`, `work/runtime/cmake/fsr-include` and `work/runtime/src/graphics/d3d12/fsr.cpp`: the integration that builds AMD FSR 3.1 from the FidelityFX SDK source when `REX_FSR` is on. The SDK itself is not stored ([AMD FidelityFX SDK](#third-party-code-amd-fidelityfx-sdk-fsr-31)).
 
 ### Excluded
 
@@ -32,6 +33,8 @@ No blanket license is assigned to the project by this checkpoint. Upstream SDK-d
 The SDK and the shipped shader sources keep their upstream attribution and license terms:
 
 - [ReXGlue/Xenia notice](../outputs/FM4-source-control/third-party-notices/ReXGlue-LICENSE.txt)
+- [AMD FidelityFX SDK license](../outputs/FM4-source-control/third-party-notices/AMD-FidelityFX-SDK-LICENSE.txt) and [Microsoft d3dx12.h license](../outputs/FM4-source-control/third-party-notices/Microsoft-d3dx12-LICENSE.txt), for a runtime built with `REX_FSR`
+- [What each notice covers](../outputs/FM4-source-control/third-party-notices/README.txt), including the DirectX Shader Compiler that the FSR build runs and does not ship
 - [Runtime license (ReXGlue/Xenia)](../work/runtime/LICENSE)
 - [Xenia shader license](../work/runtime/src/graphics/shaders/fm4-resolve/LICENSE.xenia)
 - [Origin and adaptation of the resolve shader source](../work/runtime/src/graphics/shaders/fm4-resolve/PROVENANCE.txt)
@@ -43,19 +46,32 @@ Research notes:
 - [Visual style of FM4](analysis/visual-style.md): whether the look comes from shader code in the game or from parameters in the track assets.
 - [B4 shader research](analysis/b4-shader-research.md): the editable shader path (HLSL compiled through FXC, with overrides per hash).
 
-## Candidate third-party code: AMD FSR
+## Third-party code: AMD FidelityFX SDK (FSR 3.1)
 
-No FSR code or binary is in the repository. Reviewed on 20 October 2026 as a candidate for an anti-aliasing or upscaling post pass beside the project's own TAA ([TAA, open items](analysis/taa.md#11-open-items-and-later)):
+The project owner approved the download on 25 October 2026 ([FSR plan, section 10](analysis/fsr-plan.md#10-the-download-for-stage-0-approved-on-25-october-2026)). No FidelityFX source or binary is in the repository: setup fetches the SDK into the BuildRoot, and the runtime builds the upscaler from that source when `REX_FSR` is on.
+
+| Item | Value |
+|---|---|
+| Source | [FidelityFX SDK](https://github.com/GPUOpen-LibrariesAndSDKs/FidelityFX-SDK), tag `v1.1.4`, commit `c6efa6bf7f2027b3ec94f28578bb5965eabb9e55`; a sparse, blob-filtered checkout in `<BuildRoot>idelityfx-sdk` (`fetch_fidelityfx` in `pipeline.py`, which stops when the checked-out commit differs) |
+| License | MIT, "Copyright (C) 2024 Advanced Micro Devices, Inc.", read in the SDK's `LICENSE.txt` on 25 October 2026 (`sdk/LICENSE.txt` is the same file); [notice](../outputs/FM4-source-control/third-party-notices/AMD-FidelityFX-SDK-LICENSE.txt) |
+| What is used | The FSR 3 upscaler component (`ffx_fsr3upscaler`, FSR 3.1.4) and the SDK's DX12 backend (`ffx_backend_dx12`), as static libraries linked into `rexgpu-xenos`, with the upscaler's shader permutations compiled into headers at build time. The backend's frame generation swap chain and every other component are left out |
+| How it is built | From source with LLVM 20 and Ninja, through the SDK's own CMake files for the component and the backend (`work/runtime/cmake/rex_fsr.cmake`), behind `REX_FSR` (off by default; `Build.ps1 -Fsr on`). No prebuilt AMD DLL is used: not the SDK's `amd_fidelityfx_dx12.dll` (the FidelityFX API) and not its `PrebuiltSignedDLL` folder |
+| Also compiled in | Microsoft's `d3dx12.h` from the SDK's DX12 backend, MIT; [notice](../outputs/FM4-source-control/third-party-notices/Microsoft-d3dx12-LICENSE.txt) |
+| Build-time tools | The SDK's `FidelityFX_SC.exe` with Microsoft's DirectX Shader Compiler (`dxcompiler.dll`, `dxil.dll`) from `sdk/tools/binary_store`: run at build time only, not stored and not shipped ([notices README](../outputs/FM4-source-control/third-party-notices/README.txt)) |
+| Exports | `Build.ps1 -Action export` copies `third-party-notices` into the export folder |
+| Fit with the runtime's license | MIT and the runtime's BSD-3-Clause are both permissive; each needs only its notice kept with the code and the binaries, which the notices folder and the export do |
+
+The review of 20 October 2026, when FSR was a candidate for an anti-aliasing or upscaling post pass beside the project's own TAA ([TAA, open items](analysis/taa.md#11-open-items-and-later)):
 
 | Version | Form | License | On the development GPU (RTX 5070 Ti Laptop) |
 |---|---|---|---|
 | FSR 2.x ([FidelityFX-FSR2](https://github.com/GPUOpen-Effects/FidelityFX-FSR2)) | Source (HLSL and C++) | MIT, checked in its `LICENSE.txt`; the only condition is that the notice "Copyright (c) 2022-2023 Advanced Micro Devices, Inc." and the permission text stay with the code | Runs; not vendor specific |
-| FSR 3.1 ([FidelityFX SDK](https://github.com/GPUOpen-LibrariesAndSDKs/FidelityFX-SDK) 1.1.x) | Source, released with SDK 1.1 | MIT according to the SDK's README; the `LICENSE.txt` of the SDK itself was not read yet | Runs; needs Shader Model 6.2 |
+| FSR 3.1 ([FidelityFX SDK](https://github.com/GPUOpen-LibrariesAndSDKs/FidelityFX-SDK) 1.1.x) | Source, released with SDK 1.1 | MIT, read in the `LICENSE.txt` of v1.1.4 on 25 October 2026 | Runs; needs Shader Model 6.2 |
 | FSR 4.0.2 (FidelityFX SDK 2.0) | Pre-built, signed DLLs only (`amd_fidelityfx_loader.dll` and `amd_fidelityfx_upscaler.dll`), which AMD requires; no source of the neural model | The redistribution terms of the DLLs are not stated on [AMD's SDK 2.0 page](https://gpuopen.com/learn/amd-fidelityfx-sdk-2-0/); press reports of an MIT license do not clearly cover the DLLs or the model | Does not run: FSR 4 needs a Radeon RX 9000 or newer, and the API falls back to FSR 3.1.5 elsewhere |
 
 Conclusions:
 
-- FSR 3.1 built from source is the usable candidate (for example its native AA mode on the single tile). Before any of it enters the repository: read the SDK's `LICENSE.txt`, add the AMD notice under `outputs/FM4-source-control/third-party-notices`, whitelist the files in `.gitignore` with review entries in `tracked-files.json`, and check that MIT code fits beside the runtime's license.
+- FSR 3.1 built from source is the one used (the table above). The repository holds only the integration and the notices; `check-staged-content.py` blocks any file that carries the SDK's source header outside the notices folder.
 - FSR 4 is not planned: it would mean redistributing AMD binaries on undocumented terms, and it does not run on the development computer.
 - DLSS (DLAA) needs its own review of NVIDIA's SDK license; not reviewed yet.
 - The plan for adding FSR 3.1 is in [FSR plan](analysis/fsr-plan.md).

@@ -129,7 +129,7 @@ The next validation priorities are a second computer, Disc 2 car races on the la
 | [docs/analysis/d3d-hle-n3.md](docs/analysis/d3d-hle-n3.md) | Stage N3 of the native port (section 16 of the design): resolves and readbacks on demand, resolves from the host render targets, sized targets and one-pass MSAA |
 | [docs/analysis/d3d-hle-n4.md](docs/analysis/d3d-hle-n4.md) | Stage N4 of the native port (section 17 of the design): taking CPU time off the render thread, with deferred constant buffers and the draw back end on the replay side |
 | [docs/analysis/d3d-hle-n5.md](docs/analysis/d3d-hle-n5.md) | Stage N5 of the native port (section 18 of the design): the panel's own resolution and aspect on the native path |
-| [docs/analysis/fsr-plan.md](docs/analysis/fsr-plan.md) | Plan for AMD FSR 3.1 beside TAA: version and license, build, the runtime integration at the scene_color point, upscaling later, validation and stages (not built) |
+| [docs/analysis/fsr-plan.md](docs/analysis/fsr-plan.md) | Plan for AMD FSR 3.1 beside TAA: version and license, the build (stage 0, linked behind `REX_FSR`), the runtime integration at the scene_color point, upscaling on N5's scales, validation and stages |
 | [docs/analysis/taa.md](docs/analysis/taa.md) | TAA at the existing render scale, in every look preset: current state, injection points, jitter, the scene camera, tiling, the resolve, knobs, validation and history |
 | [docs/analysis/texture-replacement.md](docs/analysis/texture-replacement.md) | Texture dumps and replacements keyed by a content hash: the hash, the DDS formats, and what is not covered |
 | [docs/analysis/b4-shader-research.md](docs/analysis/b4-shader-research.md) | Research on the editable shader path (HLSL through FXC, with overrides per hash) |
@@ -149,6 +149,10 @@ The next validation priorities are a second computer, Disc 2 car races on the la
 ## Licensing and attribution
 
 The repository contains reviewed integration code and a ReXGlue SDK fork (BSD-3-Clause, with Xenia-derived portions), and it keeps the upstream notices. The project does not assign a blanket license of its own, and it provides no rights to FM4 game content. See [docs/sources-and-licensing.md](docs/sources-and-licensing.md).
+
+## Credits
+
+AMD FidelityFX Super Resolution 3.1 (FSR 3.1), from the [AMD FidelityFX SDK](https://github.com/GPUOpen-LibrariesAndSDKs/FidelityFX-SDK), Copyright (C) 2024 Advanced Micro Devices, Inc., MIT license; built from source into the runtime when it is built with `-Fsr on`. See the [third-party notices](outputs/FM4-source-control/third-party-notices/README.txt).
 
 ## Pre-commit check
 

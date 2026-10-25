@@ -8,6 +8,7 @@ param(
     [string]$Python = 'python',
     [ValidateRange(1,64)][int]$Jobs = 4,
     [string]$Flavor,
+    [ValidateSet('on','off')][string]$Fsr,
     [string]$Out,
     [switch]$SingleTile,
     [switch]$Msaa,
@@ -46,6 +47,7 @@ if ($Disc2) { $arguments += @('--disc2', $Disc2) }
 foreach ($path in $Content) { $arguments += @('--content', $path) }
 if ($BuildRoot) { $arguments += @('--build-root', $BuildRoot) }
 if ($Flavor) { $arguments += @('--flavor', $Flavor) }
+if ($Fsr) { $arguments += @('--fsr', $Fsr) }
 if ($Out) { $arguments += @('--out', $Out) }
 if ($SingleTile) { $arguments += @('--single-tile') }
 if ($Msaa) { $arguments += @('--msaa') }
