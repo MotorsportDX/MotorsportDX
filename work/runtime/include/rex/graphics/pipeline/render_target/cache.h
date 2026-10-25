@@ -175,6 +175,9 @@ class RenderTargetCache {
   // native_draw_scale_variant at any.
   void SetSceneTextures(bool scene_textures) { scene_textures_ = scene_textures; }
   bool scene_textures() const { return scene_textures_; }
+  // The scene's logical width in guest pixels (native_logical_width, 18.21).
+  void SetSceneLogicalWidth(uint32_t width) { scene_logical_width_ = width; }
+  uint32_t scene_logical_width() const { return scene_logical_width_; }
   // Whether the last Update bound private surfaces (a scene draw).
   bool last_update_private() const { return last_update_private_; }
   uint32_t draw_resolution_scale_y() const { return draw_resolution_scale_y_; }
@@ -615,6 +618,12 @@ class RenderTargetCache {
   DrawScale GetKeyScale(RenderTargetKey key) const {
     return IsPrivateKey(key) ? scene_draw_scale() : DrawScale::Whole(draw_resolution_scale_x_);
   }
+  // A target's width in guest pixels: the scene's logical width for a private
+  // 1280-wide one (native_logical_width, d3d-hle-n5.md 18.21).
+  uint32_t GetKeyLogicalWidth(RenderTargetKey key) const {
+    const uint32_t width = key.GetWidth();
+    return width == 1280 && IsPrivateKey(key) ? scene_logical_width_ : width;
+  }
   // The height in pixels of a target of the surface: the EDRAM's rows, or for
   // a private 4x surface twice that, which holds the 720 lines of the scene.
   uint32_t GetSurfaceHeight(uint32_t pitch_tiles_at_32bpp, xenos::MsaaSamples msaa_samples,
@@ -739,6 +748,7 @@ class RenderTargetCache {
   DrawScale scene_draw_scale_;
   bool scene_draw_scale_set_ = false;
   bool scene_textures_ = false;
+  uint32_t scene_logical_width_ = 1280;
   bool last_update_private_ = false;
   uint32_t draw_resolution_scale_y_;
 

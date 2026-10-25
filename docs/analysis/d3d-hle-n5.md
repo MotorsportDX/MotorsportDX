@@ -91,6 +91,13 @@ The title renders 1280 guest pixels wide. The probe found nothing in the title h
 
 The scene at the logical width needs more EDRAM than exists (21:9 with 2x MSAA: 22 tiles across, 1,980 tiles each for colour and depth), which the private scene targets of 18.4 already cover.
 
+The main session's decisions of 25 October 2026, after the probe of 18.21:
+
+- **Hor+ and Vert+.** A screen of 16:9 or wider keeps the vertical field of view and widens the horizontal one: a logical width W at 720 lines (21:9: 1720). A screen narrower than 16:9 keeps 16:9's horizontal field of view and gains vertical: Vert+, 1280 wide and a logical height H (16:10: 800). The HUD and the menus stay in the centred 1280x720 either way.
+- **The projection in the host.** The scene draws through the camera widen their viewports to the logical size and scale clip x (or y) by 1280/W (or 720/H) through the system constants' NDC scale, which the translator applies to every vertex shader's position: every camera shader, without overrides, while the mirror, the shadows and the cube maps (not scene draws) keep their projections. The post passes that reconstruct positions from the camera (GTAO, the motion vectors, TAA's reprojection, the windshield) take the same scale.
+- **The culling** of the title (`CTrackPresentation::ComputeVisibility` `sub_82925860` and the cars' and objects') is widened by the same factor, after the host steps; until then the gaps at the edges are documented.
+- **The order:** the logical width with the HUD centred at 21:9 on this PC behind a switch, then 16:10 Vert+ on this laptop's panel, then the culling. Each step's gate: no change at 16:9 (freeze parity at 1x and 2x), at the other aspects no stretch (round wheels and objects) and the HUD centred, the post passes checked at the edges (GTAO crops, a TAA crop in motion, the motion vectors' debug view).
+
 ### 18.6 Option B: the title renders the full pixel size
 
 Rendering 3840x2160 in the title means guest surfaces of 6,480 tiles at 32bpp without MSAA against EDRAM's 2,048 and its 12-bit tile bases, guest resolve textures of about 33 MB each in the title's own heaps, readbacks four times as large, and every size the title derives from 1280x720 changed through hooks, the HUD's coordinates included. The host draw scale of the hybrid reaches the same pixels without any guest-side cost, so B stays a fallback for a case the hybrid cannot handle, and none is known.
@@ -360,3 +367,27 @@ The main session approved the design on 25 October 2026. `display_settings` (`pi
 - **What it needs.** Entry 0 in one pass with 4x MSAA and the private 4x pair (16.17) at the scene's scale. N3's attempt at entry 0 in one pass 4x did not boot (`n4p-onepass-4x`), which is why one pass 4x took entry 3 of its own. So the menus, the pre-race screens and photo mode at s are one item: find why entry 0 in one pass 4x does not boot, run the private 4x pair at a fractional scale (never run yet), then the menus, the pre-race screens and photo mode at s, with a parity gate of its own, since it changes `-Native` at whole scales too.
 
 The main session's decision of 25 October 2026: that item, "entry 0 at s", takes the place of photo mode's item 5 in the order of 18.9, after FSR 3.1; increment 2 (the aspect) comes first. Until then, at a fractional scale the front-end menus, the pre-race screens and photo mode render at k and are scaled up to the screen; the races, their HUD, the replays and the post-race screens render at s.
+
+### 18.21 Increment 2, step 1: the logical width (Hor+) in the host, 25 October 2026
+
+**The probe** for the title's projection, before the main session chose the host route: the image's only 16/9 float (`0x8201A35C`, next to 1/1280 and 1/720) is read by `sub_82395630` alone, a frustum-like calculation after a tangent that stores into an object at +376 to +396; patched to 21:9 for a run (the read-only page opened for the store, `n8a`), the frozen picture did not change, so it is not the main projection. The tangent (`sub_823057D0`, a double-precision routine) has 32 callers; `sub_82300B20` is a zoom ratio, tan(f k) / tan(f0 k). Finding the projection statically would take many more rounds, so the host does it instead.
+
+**The design** (`native_logical_width`, guest pixels at 720 lines, 1280 by default; it needs the scene draws' path, a fractional `native_draw_scale` or `native_draw_scale_variant`):
+
+- **Surfaces.** A private 1280-wide surface is created at the logical width (`GetKeyLogicalWidth`), as are the textures at the scene's scale that a full-screen resolve writes (`SceneTextureHostWidth`); the resolve fills them across the width. A resolve from such a surface is never dumped into the EDRAM buffer, as for one pass 4x, and a full-width resolve clear covers the logical width. Uniform draws (`rtv_uniform_draws`) stay off.
+- **Draws** (`draw_back_end::ApplyLogicalWidth`, in the command processor and the draw back end's replay). A scene draw whose guest viewport spans the full 1280 widens it to the logical width. A camera draw (depth or stencil on, and not at a constant depth: a viewport Z scale of 0 marks a screen-space draw such as the mask over the cockpit interior) also scales clip x by the old width over the new, so pixels keep their distance from the centre and the sides show more of the scene. Other full-width draws (the post chain's full-screen passes) stretch to fill. The HUD's draws, those after the post passes' final point (after the final combine itself), keep their viewports and scissors and move into the centred 1280. Full-width scissors widen the same way.
+- **Post passes.** The final size, the scene's guest width (`GuestSceneWidth`, which the GTAO radius, the camera motion and the scene constants take instead of the depth's pitch) and the camera's unpack (its guest viewport shifted by half the added width, `LogicalViewport`) follow the logical width, so GTAO, the motion vectors and TAA's reprojection reconstruct positions across it.
+- **Presentation.** The swap of a frame at the logical width presents it at its own aspect (the display width times W / 1280), so the presenter fits a 1720x720 picture to the window.
+
+The step gate on `I:\FM4-build-usa` (one pass 2x, `native_rt_surfaces=58`), W = 1720 (21:9):
+
+| Check | Result |
+|---|---|
+| no change at 16:9 (`native_logical_width` unset; every change is gated on W != 1280): `freeze` parity at real 1x with `original,taa=0` and at 2x with `aces` against the close gate's `n6z` | PASS: draws -0.0% and +0.6%, within the range of one binary (18.16) |
+| 21:9 at real 1x (the scene draws' path forced) and at 3/2 with `aces` (`n8c-freeze-*`) | 1720x720 and 2580x1080 captures; the cockpit, the stands and the car ahead not stretched (round wheels), more on both sides; the rewind menu and the race HUD (place, laps, the map, the gear and speed) in the centred 1280 |
+| the edges at 1:1 (3/2, `aces`) | GTAO under the railings and the wall at the left edge, the car and the mirror at the right edge, as in the centre |
+| motion vectors (`MOTION_DEBUG` 1, 3 and 5 in a race at 3/2) | the object slots right across the width; with the mask first treated as a camera draw the cockpit interior was recognized only in the centre 1280 and its motion broke at the old edges (`n8e` to `n8g`); with constant-depth draws kept screen-space the interior covers the width and the motion field is continuous (`n8h`, `n8i`) |
+| combined checks with perturbation, `career` at 3/2 with W = 1720 (`n8i-check-32-1720`) | reached its goal; the texture byte check 2,235 textures and the resolve byte check 5,170 resolves (the destinations at k), 0 mismatches; identity, bindings and guard only the perturbed; the error keys of every earlier check run |
+| culling | no gap visible at the edges in the frozen and moving frames checked; the culling hooks (18.5) stay the later step and get their own check |
+
+Next: 16:10 Vert+ (a logical height, 1280x800), then the culling.

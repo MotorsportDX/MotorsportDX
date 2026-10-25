@@ -1276,7 +1276,7 @@ void PostPasses::CaptureCamera(const RegisterFile& regs, const CameraSource& sou
       post_pass::CameraMatrices(source.layout, constants_read, source.constants[0],
                                 source.constants[1], source.constants[2], wvp, wv) &&
       post_pass::ProjectionFromCamera(wvp, wv, projection) &&
-      post_pass::UnpackFromProjection(projection, viewport, unpack);
+      post_pass::UnpackFromProjection(projection, LogicalViewport(viewport), unpack);
   // Another camera drawn into a scene-wide viewport (the rear-view mirror's
   // strip) has another aspect, or another projection than the scene's of this
   // frame. Then take nothing from the draw; from the fallback also not when
@@ -1499,7 +1499,8 @@ void PostPasses::OnResolve(const RegisterFile& regs, uint32_t address, uint32_t 
     // scene: the passes need the final's size.
     const DrawScale scene_scale = command_processor_.texture_cache_->scene_draw_scale();
     if (command_processor_.render_target_cache_->scene_textures() && !scene_scale.IsWhole() &&
-        scene_depth_.width != scene_scale.ScaleUp(depth_group_.pitch)) {
+        scene_depth_.width !=
+            command_processor_.texture_cache_->SceneTextureHostWidth(depth_group_.pitch)) {
       if (!logged_unscaled_scene_) {
         logged_unscaled_scene_ = true;
         REXGPU_INFO(
@@ -1773,8 +1774,8 @@ void PostPasses::UpdateMotion() {
   motion_.slots_own = 1;
   if (depth_group_.pitch && depth_group_.height) {
     motion_.camera_pixels = post_pass::CameraMotionPixels(
-        world_reprojection, camera_.unpack, previous_camera_.unpack, double(depth_group_.pitch),
-        double(depth_group_.height), double(scene_width_) / double(depth_group_.pitch),
+        world_reprojection, camera_.unpack, previous_camera_.unpack, double(GuestSceneWidth()),
+        double(depth_group_.height), double(scene_width_) / double(GuestSceneWidth()),
         double(scene_height_) / double(depth_group_.height), manifest_->jitter_motion_distance);
   }
   for (uint32_t slot = 0; slot < post_pass::kMotionSlots; ++slot) {
@@ -1972,7 +1973,7 @@ void PostPasses::FillSceneConstants(post_pass::SceneConstants& constants) const 
     constants.xy_mul_add[3] = unpack.y_add;
     constants.size[0] = scene_width_;
     constants.size[1] = scene_height_;
-    constants.guest_per_host[0] = float(depth_group_.pitch) / float(scene_width_);
+    constants.guest_per_host[0] = float(GuestSceneWidth()) / float(scene_width_);
     constants.guest_per_host[1] = float(depth_group_.height) / float(scene_height_);
     constants.guest_origin[0] = camera_.guest_origin;
     constants.guest_origin[1] = camera_.guest_origin;
@@ -2116,7 +2117,7 @@ void PostPasses::RunPoint(Point point) {
   // the GTAO pass computed its radius in pixels before the framework.
   const Manifest& manifest = *manifest_;
   float guest_per_host_x =
-      scene_width_ ? float(depth_group_.pitch) / float(scene_width_) : 1.0f;
+      scene_width_ ? float(GuestSceneWidth()) / float(scene_width_) : 1.0f;
   for (size_t i = 0; i < manifest.params.size(); ++i) {
     uint32_t source = manifest.params[i].focal_length_of;
     if (source == UINT32_MAX) continue;
@@ -2155,8 +2156,12 @@ void PostPasses::RunPoint(Point point) {
     // A private final target at a fractional scene scale (d3d-hle-n5.md
     // 18.13): its pixels are the scene's.
     const DrawScale scene_scale = command_processor_.texture_cache_->scene_draw_scale();
-    if (command_processor_.render_target_cache_->scene_textures() && !scene_scale.IsWhole()) {
-      final_width_ = std::min(scene_scale.ScaleUp(final_guest_width_), target.width);
+    if (command_processor_.render_target_cache_->scene_textures() &&
+        (!scene_scale.IsWhole() ||
+         command_processor_.render_target_cache_->scene_logical_width() != 1280)) {
+      final_width_ = std::min(
+          command_processor_.texture_cache_->SceneTextureHostWidth(final_guest_width_),
+          target.width);
       final_height_ = std::min(scene_scale.ScaleUp(final_guest_height_), target.height);
     } else {
       final_width_ = std::min(
@@ -2538,7 +2543,7 @@ void PostPasses::LogRun(int32_t variant_index) {
   // horizontal field of view of the guest viewport, for checking the camera.
   float w_depth_0 = unpack.w_numerator / unpack.w_depth_add;
   float w_depth_1 = unpack.w_numerator / (unpack.w_depth_mul + unpack.w_depth_add);
-  float half_width_pixels = float(depth_group_.pitch) * 0.5f;
+  float half_width_pixels = float(GuestSceneWidth()) * 0.5f;
   float fov_x = 2.0f * std::atan(half_width_pixels / unpack.pixels_per_unit_x) * 57.2957795f;
   std::string params;
   for (size_t i = 0; i < manifest_->params.size(); ++i) {
@@ -2698,6 +2703,26 @@ void PostPasses::UpdateJitter() {
   }
   ++jitter_count_;
   jitter_active_ = true;
+}
+
+uint32_t PostPasses::GuestSceneWidth() const {
+  const uint32_t logical = command_processor_.render_target_cache_->scene_logical_width();
+  return depth_group_.pitch == 1280 && command_processor_.render_target_cache_->scene_textures()
+             ? logical
+             : depth_group_.pitch;
+}
+
+post_pass::Viewport PostPasses::LogicalViewport(post_pass::Viewport viewport) const {
+  const uint32_t logical = command_processor_.render_target_cache_->scene_logical_width();
+  if (logical != 1280 && command_processor_.render_target_cache_->scene_textures()) {
+    viewport.x_offset += float(logical - 1280) * 0.5f;
+  }
+  return viewport;
+}
+
+bool PostPasses::IsAfterFinal() const {
+  // After the final combine's draw itself: once the final point has run.
+  return final_frame_ == command_processor_.GetCurrentFrame() && !final_pending_;
 }
 
 bool PostPasses::DrawJitter(const RegisterFile& regs, uint64_t vertex_shader_hash,

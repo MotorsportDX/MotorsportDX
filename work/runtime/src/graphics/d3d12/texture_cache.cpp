@@ -1524,7 +1524,7 @@ ID3D12Resource* D3D12TextureCache::RequestResolvedTexture(
   host_width_out = width * (scaled ? draw_resolution_scale_x() : 1);
   host_height_out = height * (scaled ? draw_resolution_scale_y() : 1);
   if (texture->key().scene_scaled) {
-    host_width_out = scene_draw_scale().ScaleUp(width);
+    host_width_out = SceneTextureHostWidth(width);
     host_height_out = scene_draw_scale().ScaleUp(height);
   }
   return texture_resource;
@@ -2017,7 +2017,7 @@ std::unique_ptr<TextureCache::Texture> D3D12TextureCache::CreateTexture(TextureK
   }
   // A texture at the scene's scale (18.15).
   if (key.scene_scaled) {
-    desc.Width = scene_draw_scale().ScaleUp(key.GetWidth());
+    desc.Width = SceneTextureHostWidth(key.GetWidth());
     desc.Height = scene_draw_scale().ScaleUp(key.GetHeight());
   }
   desc.DepthOrArraySize = key.GetDepthOrArraySize();

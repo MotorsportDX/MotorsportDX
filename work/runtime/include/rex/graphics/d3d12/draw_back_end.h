@@ -102,6 +102,16 @@ void ComputeViewportAndScissor(const RegisterFile& regs, uint32_t flags, uint32_
                                bool pixel_shader_writes_depth, draw_util::ViewportInfo& viewport,
                                draw_util::Scissor& scissor);
 
+// The scene's logical width in guest pixels (1280 unless native_logical_width
+// sets another, d3d-hle-n5.md 18.21), fixed for the run.
+void SetSceneLogicalWidth(uint32_t width);
+uint32_t SceneLogicalWidth();
+// A scene draw's full-width viewport and scissor widened to the logical width:
+// with kFlagLogicalCamera the clip x scaled to keep the pixels per degree,
+// with kFlagLogicalHud kept at 1280 in the centre, otherwise stretched.
+void ApplyLogicalWidth(uint32_t flags, DrawScale scene_scale, draw_util::ViewportInfo& viewport,
+                       draw_util::Scissor& scissor);
+
 // The kDrawBackEnd command, written by Encode and read by Decode only, so the
 // format can change without the back end. After the header: the masks of the
 // context register words present in context_words (one uint64_t each), the
@@ -190,6 +200,12 @@ constexpr uint32_t kFlagUniformScaleShift = 8;  // 2 bits x, 2 bits y.
 constexpr uint32_t kFlagKnobs = 1 << 12;
 // A scene draw: into the private surfaces at the scene's scale (18.13).
 constexpr uint32_t kFlagSceneScale = 1 << 13;
+// At a logical width other than 1280 (native_logical_width, d3d-hle-n5.md
+// 18.21): a scene draw through the camera (depth or stencil on), whose clip x
+// is scaled so the wider viewport shows more (Hor+), and a draw of the HUD
+// (after the post passes' final point), which stays in the centred 1280.
+constexpr uint32_t kFlagLogicalCamera = 1 << 14;
+constexpr uint32_t kFlagLogicalHud = 1 << 15;
 struct GroupFlags {
   uint32_t flags;
   uint16_t draw_resolution_scale_x;

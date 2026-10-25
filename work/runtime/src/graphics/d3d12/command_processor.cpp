@@ -57,6 +57,12 @@ REXCVAR_DEFINE_STRING(native_draw_scale, "", "GPU",
                       "be draw_resolution_scale_x and _y, the scale of the other surfaces. "
                       "Empty: the scene at the whole scale. RTV path with host_render_native only")
     .lifecycle(rex::cvar::Lifecycle::kRequiresRestart);
+REXCVAR_DEFINE_INT32(native_logical_width, 1280, "GPU",
+                     "The scene's width in guest pixels at 720 lines on the native path: above "
+                     "1280 the scene draws widen their viewports and show more on each side "
+                     "(Hor+, docs/analysis/d3d-hle-n5.md 18.21); needs the scene draws' path "
+                     "(a fractional native_draw_scale or native_draw_scale_variant)")
+    .lifecycle(rex::cvar::Lifecycle::kRequiresRestart);
 REXCVAR_DEFINE_BOOL(native_draw_scale_variant, false, "GPU",
                     "Diagnostic: draws into the private surfaces use the scene draws' path "
                     "(the scene_scale shader variant, the rational viewport and scissor) also "
@@ -2336,6 +2342,21 @@ bool D3D12CommandProcessor::SetupContext() {
                   scale->numerator, scale->denominator, draw_resolution_scale_x);
     }
   }
+  if (REXCVAR_GET(native_logical_width) != 1280) {
+    const int32_t width = REXCVAR_GET(native_logical_width);
+    if (!render_target_cache_->scene_textures()) {
+      REXGPU_ERROR("native_logical_width {} needs the scene draws' path (a fractional "
+                   "native_draw_scale or native_draw_scale_variant); the scene keeps 1280",
+                   width);
+    } else if (width < 1280 || width > 3840 || width % 8) {
+      REXGPU_ERROR("native_logical_width {} is not a multiple of 8 from 1280 to 3840", width);
+    } else {
+      draw_back_end::SetSceneLogicalWidth(uint32_t(width));
+      render_target_cache_->SetSceneLogicalWidth(uint32_t(width));
+      texture_cache_->SetSceneLogicalWidth(uint32_t(width));
+      REXGPU_INFO("Native logical width: {} at 720 lines (Hor+)", width);
+    }
+  }
 
   pipeline_cache_ = std::make_unique<PipelineCache>(
       *this, *register_file_, *render_target_cache_.get(), bindless_resources_used_);
@@ -3305,6 +3326,12 @@ void D3D12CommandProcessor::IssueSwap(uint32_t frontbuffer_ptr, uint32_t frontbu
   kernel::xboxkrnl::VdQueryVideoMode(&video_mode);
   uint32_t display_width = std::max(uint32_t(1), uint32_t(video_mode.display_width));
   uint32_t display_height = std::max(uint32_t(1), uint32_t(video_mode.display_height));
+  // A frame at the scene's logical width (18.21): its aspect, not the mode's.
+  const uint32_t logical_width = render_target_cache_->scene_logical_width();
+  if (logical_width != 1280 && frontbuffer_width_unscaled == 1280 &&
+      source_width_scaled == texture_cache_->SceneTextureHostWidth(1280)) {
+    display_width = display_width * logical_width / 1280;
+  }
 
   // With d3d12_submit_thread_async_swap, the frame is presented on the submit
   // thread after the swap submission.
@@ -3899,6 +3926,7 @@ bool D3D12CommandProcessor::IssueDraw(xenos::PrimitiveType primitive_type, uint3
   if (render_target_cache_->GetPath() == RenderTargetCache::Path::kHostRenderTargets &&
       REXCVAR_GET(rtv_uniform_draws) && is_rasterization_done && !memexport_used &&
       render_target_cache_->scene_draw_scale().IsWhole() &&
+      render_target_cache_->scene_logical_width() == 1280 &&
       GetDrawOverwrite(regs, primitive_type, index_count, pixel_shader, ps_param_gen_pos,
                        normalized_depth_control, normalized_color_mask,
                        uniform_draw_overwritten_slots, uniform_draw_values_may_be_uniform)) {
@@ -4120,6 +4148,22 @@ bool D3D12CommandProcessor::IssueDraw(xenos::PrimitiveType primitive_type, uint3
       host_render_targets_used && render_target_cache_->depth_float24_convert_in_pixel_shader();
   bool ps_writes_depth = pixel_shader && pixel_shader->writes_depth();
 
+  // At a logical width other than 1280 (18.21): a scene draw through the camera
+  // (depth or stencil on) widens its view, the HUD's draws stay in the centre.
+  uint32_t logical_flags = 0;
+  if (scene_draw && draw_back_end::SceneLogicalWidth() != 1280) {
+    if (post_passes_ && post_passes_->IsAfterFinal()) {
+      logical_flags = draw_back_end::kFlagLogicalHud;
+    } else if (normalized_depth_control.z_enable || normalized_depth_control.stencil_enable) {
+      // Not a screen-space draw at a constant depth (a viewport Z scale of 0),
+      // such as the mask FM4 draws over the cockpit interior.
+      const auto vte = regs.Get<reg::PA_CL_VTE_CNTL>();
+      if (!vte.vport_z_scale_ena || regs.Get<float>(XE_GPU_REG_PA_CL_VPORT_ZSCALE) != 0.0f) {
+        logical_flags = draw_back_end::kFlagLogicalCamera;
+      }
+    }
+  }
+
   // Build a cache key from all viewport-affecting state to skip redundant
   // recalculation when the viewport registers haven't changed between draws.
   ViewportCacheKey viewport_key;
@@ -4136,7 +4180,7 @@ bool D3D12CommandProcessor::IssueDraw(xenos::PrimitiveType primitive_type, uint3
                        (uint32_t(host_render_targets_used) << 1) | (uint32_t(ps_writes_depth) << 2) |
                        (uniform_draw_scale_x << 3) | (uniform_draw_scale_y << 5) |
                        (uint32_t(regs.Get<reg::RB_DEPTH_INFO>().depth_format) << 8) |
-                       (uint32_t(scene_draw) << 16);
+                       (uint32_t(scene_draw) << 16) | (logical_flags >> 14 << 17);
 
   draw_util::ViewportInfo viewport_info;
   if (draw_back_end_ == 2) {
@@ -4149,6 +4193,9 @@ bool D3D12CommandProcessor::IssueDraw(xenos::PrimitiveType primitive_type, uint3
                                      D3D12_VIEWPORT_BOUNDS_MAX, false, normalized_depth_control,
                                      convert_z_to_float24, host_render_targets_used,
                                      ps_writes_depth, viewport_info);
+      draw_util::Scissor unused_scissor = {};
+      draw_back_end::ApplyLogicalWidth(draw_back_end::kFlagSceneScale | logical_flags,
+                                       scene_draw_scale, viewport_info, unused_scissor);
     } else {
       draw_util::GetHostViewportInfo(regs, draw_resolution_scale_x * uniform_draw_scale_x,
                                      draw_resolution_scale_y * uniform_draw_scale_y, true,
@@ -4184,6 +4231,9 @@ bool D3D12CommandProcessor::IssueDraw(xenos::PrimitiveType primitive_type, uint3
   draw_util::GetScissor(regs, scissor);
   if (scene_draw) {
     draw_util::ScaleScissor(scene_draw_scale, scissor);
+    draw_util::ViewportInfo unused_viewport = {};
+    draw_back_end::ApplyLogicalWidth(draw_back_end::kFlagSceneScale | logical_flags,
+                                     scene_draw_scale, unused_viewport, scissor);
   } else {
     scissor.offset[0] *= draw_resolution_scale_x * uniform_draw_scale_x;
     scissor.offset[1] *= draw_resolution_scale_y * uniform_draw_scale_y;
@@ -4245,7 +4295,7 @@ bool D3D12CommandProcessor::IssueDraw(xenos::PrimitiveType primitive_type, uint3
                     (jitter_applied ? be::kFlagJitter : 0) |
                     (uniform_draw_scale_x << be::kFlagUniformScaleShift) |
                     (uniform_draw_scale_y << (be::kFlagUniformScaleShift + 2)) |
-                    (scene_draw ? be::kFlagSceneScale : 0);
+                    (scene_draw ? be::kFlagSceneScale | logical_flags : 0);
     capture.jitter[0] = jitter_applied ? jitter[0] : 0.0f;
     capture.jitter[1] = jitter_applied ? jitter[1] : 0.0f;
     capture.pipeline_handle = pipeline_handle;

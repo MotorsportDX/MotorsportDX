@@ -90,6 +90,12 @@ class TextureCache {
   // private surface at the scene's scale (18.15), so the textures over it are
   // scene_scaled. The next resolve to the range clears it.
   void MarkRangeAsSceneResolved(uint32_t start, uint32_t length);
+  // The scene's logical width in guest pixels (native_logical_width,
+  // d3d-hle-n5.md 18.21): a 1280-wide texture at the scene's scale has it.
+  void SetSceneLogicalWidth(uint32_t width) { scene_logical_width_ = width; }
+  uint32_t SceneTextureHostWidth(uint32_t guest_width) const {
+    return scene_draw_scale_.ScaleUp(guest_width == 1280 ? scene_logical_width_ : guest_width);
+  }
   bool IsRangeSceneResolved(uint32_t start, uint32_t length) const;
   // Ensures the memory backing the range in the scaled resolve address space is
   // allocated and returns whether it is.
@@ -656,6 +662,7 @@ class TextureCache {
   uint32_t draw_resolution_scale_x_;
   uint32_t draw_resolution_scale_y_;
   DrawScale scene_draw_scale_;
+  uint32_t scene_logical_width_ = 1280;
 
   static const LoadShaderInfo load_shader_info_[kLoadShaderCount];
 

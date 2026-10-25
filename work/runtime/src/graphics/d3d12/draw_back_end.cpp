@@ -504,6 +504,7 @@ void ComputeViewportAndScissor(const RegisterFile& regs, uint32_t flags, uint32_
                                    pixel_shader_writes_depth, viewport);
     draw_util::GetScissor(regs, scissor);
     draw_util::ScaleScissor(scene_scale, scissor);
+    ApplyLogicalWidth(flags, scene_scale, viewport, scissor);
     return;
   }
   draw_util::GetHostViewportInfo(regs, scale_x, scale_y, true, D3D12_VIEWPORT_BOUNDS_MAX,
@@ -516,6 +517,49 @@ void ComputeViewportAndScissor(const RegisterFile& regs, uint32_t flags, uint32_
   scissor.offset[1] *= scale_y;
   scissor.extent[0] *= scale_x;
   scissor.extent[1] *= scale_y;
+}
+
+namespace {
+uint32_t scene_logical_width = 1280;
+}  // namespace
+
+void SetSceneLogicalWidth(uint32_t width) { scene_logical_width = width; }
+
+uint32_t SceneLogicalWidth() { return scene_logical_width; }
+
+void ApplyLogicalWidth(uint32_t flags, DrawScale scene_scale, draw_util::ViewportInfo& viewport,
+                       draw_util::Scissor& scissor) {
+  if (!(flags & kFlagSceneScale) || scene_logical_width == 1280) {
+    return;
+  }
+  // The host widths of the guest's 1280 and of the logical width.
+  const uint32_t full = scene_scale.ScaleEdge(1280);
+  const uint32_t logical = scene_scale.ScaleEdge(scene_logical_width);
+  const uint32_t centre = (logical - full) / 2;
+  if (flags & kFlagLogicalHud) {
+    // The HUD in the centred 1280, whatever its viewport and scissor.
+    if (viewport.xy_extent[0]) {
+      viewport.xy_offset[0] += centre;
+    }
+    scissor.offset[0] += centre;
+    if (scissor.offset[0] + scissor.extent[0] > logical) {
+      scissor.extent[0] = logical > scissor.offset[0] ? logical - scissor.offset[0] : 0;
+    }
+    return;
+  }
+  if (viewport.xy_offset[0] == 0 && viewport.xy_extent[0] == full) {
+    viewport.xy_extent[0] = logical;
+    if (flags & kFlagLogicalCamera) {
+      // Pixels at the same distance from the centre as before: more of the
+      // scene on each side.
+      const float ratio = float(full) / float(logical);
+      viewport.ndc_scale[0] *= ratio;
+      viewport.ndc_offset[0] *= ratio;
+    }
+  }
+  if (scissor.offset[0] == 0 && scissor.extent[0] >= full) {
+    scissor.extent[0] = logical;
+  }
 }
 
 }  // namespace rex::graphics::d3d12::draw_back_end

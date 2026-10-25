@@ -85,6 +85,14 @@ class PostPasses {
   // A draw after its host viewport is known: the jitter of the scene draws of
   // this frame in host pixels (post_pass_jitter.h), if the draw is one of
   // them. rectangle: a rectangle list or a clear (a uniform draw).
+  // Whether the frame's final point has run: the draws after it are the HUD's.
+  bool IsAfterFinal() const;
+  // The scene's width in guest pixels: its depth's pitch, or the logical width
+  // where the scene is wider (native_logical_width, d3d-hle-n5.md 18.21).
+  uint32_t GuestSceneWidth() const;
+  // A scene-wide guest viewport in the logical width's guest pixels: shifted by
+  // half the added width, so the camera's unpack maps the wider scene.
+  post_pass::Viewport LogicalViewport(post_pass::Viewport viewport) const;
   bool DrawJitter(const RegisterFile& regs, uint64_t vertex_shader_hash,
                   const reg::RB_DEPTHCONTROL& depth_control, bool rectangle,
                   float jitter_out[2]) const;
