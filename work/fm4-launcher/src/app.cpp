@@ -1261,6 +1261,15 @@ void App::LookPage() {
       if (Segment("aa", method, {"TAA", "FSR 3.1"})) set_knob("aa", method ? "fsr" : "taa");
       reset_button("aa");
     }
+    // The auto exposure at the game's speed above 60 fps (adaptation).
+    bool adaptation = false;
+    try {
+      adaptation = PyFloat(effective("adaptation").value_or("0")) > 0;
+    } catch (const std::exception&) {
+    }
+    changed_label("adaptation", "60 fps exposure speed");
+    if (ImGui::Checkbox("##adaptation", &adaptation)) set_knob("adaptation", adaptation ? "1" : "0");
+    reset_button("adaptation");
   }
   for (const auto& group : kKnobGroups) {
     ImGui::Dummy(ImVec2(0, 2 * scale_));

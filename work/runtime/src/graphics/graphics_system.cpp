@@ -203,6 +203,7 @@ X_STATUS GraphicsSystem::SetupGuestGpu(runtime::FunctionDispatcher* function_dis
             REXGPU_INFO("Guest vblank rate {} Hz (reported refresh rate {} Hz)", rate_hz,
                         reported_rate_hz);
             vblank_rate_hz = rate_hz;
+            guest_vblank_rate_hz_.store(rate_hz, std::memory_order_relaxed);
             vsync_interval_ticks =
                 std::max(uint64_t(1), uint64_t(double(guest_tick_frequency) / rate_hz));
           }

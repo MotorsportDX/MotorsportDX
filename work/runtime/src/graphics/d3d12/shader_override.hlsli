@@ -48,6 +48,13 @@ uint xe_system_uint(uint offset) {
 float xe_system_float(uint offset) { return asfloat(xe_system_uint(offset)); }
 uint xe_flags() { return xe_system_uint(XE_SYS_FLAGS); }
 
+#ifdef XE_SYS_GUEST_VBLANK_RATE
+// The rate the runtime delivers guest vblanks at, in Hz (GraphicsSystem::
+// guest_vblank_rate): a host value after the system constants. It follows a
+// title that switches the rate while running; 0 before the first vblank.
+float xe_guest_vblank_rate() { return xe_system_float(XE_SYS_GUEST_VBLANK_RATE); }
+#endif
+
 #ifdef XE_SYS_MOD_KNOBS
 // Live knob <index> of the shader mods (shader_mod_live_knobs): the runtime
 // writes the numeric shader_mod_defines after the system constants and defines

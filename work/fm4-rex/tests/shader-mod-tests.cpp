@@ -72,9 +72,11 @@ constexpr uint32_t kInterpolators = 16;
 // Any index past the system views: only compiled, never bound (3 is the
 // runtime's).
 constexpr uint32_t kPostViews = 3;
-// The synthetic system constants are 16 vectors; the live knobs follow them
-// (ShaderOverrides::kKnobCount).
+// The synthetic system constants are 16 vectors; the host values (one vector,
+// ShaderOverrides::kHostValuesSize) and the live knobs
+// (ShaderOverrides::kKnobCount) follow them.
 constexpr uint32_t kSystemConstantVectors = 16;
+constexpr uint32_t kHostValueVectors = 1;
 constexpr uint32_t kKnobCount = 64;
 
 // What ShaderOverrides::BuildContract writes for a pixel shader with color
@@ -85,11 +87,14 @@ std::string Contract(bool post_ao, bool live_knobs) {
   auto line = [&out](const std::string& text) { out += text + "\n"; };
   if (live_knobs) {
     line("#define XE_SYSTEM_CONSTANT_VECTORS " +
-         std::to_string(kSystemConstantVectors + kKnobCount / 4));
-    line("#define XE_SYS_MOD_KNOBS " + std::to_string(kSystemConstantVectors * 16) + "u");
+         std::to_string(kSystemConstantVectors + kHostValueVectors + kKnobCount / 4));
+    line("#define XE_SYS_MOD_KNOBS " +
+         std::to_string((kSystemConstantVectors + kHostValueVectors) * 16) + "u");
   } else {
-    line("#define XE_SYSTEM_CONSTANT_VECTORS " + std::to_string(kSystemConstantVectors));
+    line("#define XE_SYSTEM_CONSTANT_VECTORS " +
+         std::to_string(kSystemConstantVectors + kHostValueVectors));
   }
+  line("#define XE_SYS_GUEST_VBLANK_RATE " + std::to_string(kSystemConstantVectors * 16) + "u");
   line("#define XE_SYS_FLAGS 0u");
   line("#define XE_SYS_TEXTURE_SWIZZLED_SIGNS 16u");
   line("#define XE_SYS_TEXTURES_RESOLUTION_SCALED 48u");
@@ -393,7 +398,8 @@ int main(int argc, char** argv) {
       {"FM4_LOOK_FOLIAGE_SATURATION", "1.2"}, {"FM4_LOOK_FOLIAGE_BRIGHTNESS", "1.1"},
       {"FM4_LOOK_ROAD_BRIGHTNESS", "0.9"}, {"FM4_LOOK_ROAD_CONTRAST", "0.3"},
       {"FM4_LOOK_ROAD_SPECULAR", "0.5"}, {"FM4_LOOK_ROAD_SHEEN", "1.0"},
-      {"FM4_LOOK_ROAD_SHEEN_GRAIN", "2.0"}, {"FM4_LOOK_COCKPIT_LIGHT", "0.3"}};
+      {"FM4_LOOK_ROAD_SHEEN_GRAIN", "2.0"}, {"FM4_LOOK_COCKPIT_LIGHT", "0.3"},
+      {"FM4_LOOK_ADAPTATION", "1.0"}};
   std::vector<std::filesystem::path> mods;
   for (const auto& entry : std::filesystem::directory_iterator(look)) {
     std::string name = entry.path().filename().string();

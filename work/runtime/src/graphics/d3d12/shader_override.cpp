@@ -626,14 +626,15 @@ std::string ShaderOverrides::BuildContract(
        shader.ucode_data_hash(), translation.modification());
   line("#define XE_PIXEL_SHADER 1");
 
-  // System constants (DxbcShaderTranslator::SystemConstants), and the live
-  // knobs after them.
+  // System constants (DxbcShaderTranslator::SystemConstants), the host values
+  // and the live knobs after them.
   if (live_knobs_) {
     line("#define XE_SYSTEM_CONSTANT_VECTORS {}", (kKnobsOffset + kKnobsSize + 15) / 16);
     line("#define XE_SYS_MOD_KNOBS {}u", kKnobsOffset);
   } else {
-    line("#define XE_SYSTEM_CONSTANT_VECTORS {}", (sizeof(SystemConstants) + 15) / 16);
+    line("#define XE_SYSTEM_CONSTANT_VECTORS {}", (kHostValuesOffset + kHostValuesSize + 15) / 16);
   }
+  line("#define XE_SYS_GUEST_VBLANK_RATE {}u", kHostValuesOffset);
   line("#define XE_SYS_FLAGS {}u", offsetof(SystemConstants, flags));
   line("#define XE_SYS_TEXTURE_SWIZZLED_SIGNS {}u",
        offsetof(SystemConstants, texture_swizzled_signs));

@@ -65,13 +65,20 @@ class ShaderOverrides {
     DrawScale scene_input_scale;
   };
 
-  // Live knobs: floats in the system constant buffer (b0) after
-  // DxbcShaderTranslator::SystemConstants, which the translations don't read.
-  // 64 of them take 256 bytes: with the 592 of the system constants, the
-  // buffer fits the 1024 bytes of four 256-byte placement steps.
-  static constexpr uint32_t kKnobCount = 64;
-  static constexpr uint32_t kKnobsOffset =
+  // Host values: one vector in the system constant buffer (b0) after
+  // DxbcShaderTranslator::SystemConstants, which the translations don't read,
+  // written for every draw while overrides are in use (16 bytes more than the
+  // 592 of the system constants, within the same 768-byte placement). X: the
+  // guest vblank rate in Hz (GraphicsSystem::guest_vblank_rate,
+  // xe_guest_vblank_rate in the overrides); Y to W: 0.
+  static constexpr uint32_t kHostValuesOffset =
       uint32_t((sizeof(DxbcShaderTranslator::SystemConstants) + 15) & ~size_t(15));
+  static constexpr uint32_t kHostValuesSize = 4 * uint32_t(sizeof(float));
+  // Live knobs: floats after the host values. 64 of them take 256 bytes: with
+  // the 608 before them, the buffer fits the 1024 bytes of four 256-byte
+  // placement steps.
+  static constexpr uint32_t kKnobCount = 64;
+  static constexpr uint32_t kKnobsOffset = kHostValuesOffset + kHostValuesSize;
   static constexpr uint32_t kKnobsSize = kKnobCount * uint32_t(sizeof(float));
 
   // nullptr if shader_override_path is empty or the host path is unsupported.

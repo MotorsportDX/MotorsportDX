@@ -816,6 +816,10 @@ LOOK_KNOBS={'sharpen':'FM4_LOOK_SHARPEN','bloom':'FM4_LOOK_BLOOM','exposure':'FM
             'contrast':'FM4_LOOK_CONTRAST','saturation':'FM4_LOOK_SATURATION',
             'vignette':'FM4_LOOK_VIGNETTE','motion_blur':'FM4_LOOK_MOTION_BLUR',
             'tonemap':'FM4_LOOK_TONEMAP',
+            # The auto exposure's adaptation at the game's speed at any guest vblank rate
+            # (work/fm4-rex/look/fm4-look.hlsli): 1 above 60 fps slows the title's per frame
+            # adaptation to its time at 60, 0 keeps it.
+            'adaptation':'FM4_LOOK_ADAPTATION',
             # Car paint (work/fm4-rex/look/fm4-paint.hlsli).
             'clearcoat':'FM4_LOOK_CLEARCOAT','clearcoat_roughness':'FM4_LOOK_CLEARCOAT_ROUGHNESS',
             'clearcoat_glint':'FM4_LOOK_CLEARCOAT_GLINT','flakes':'FM4_LOOK_FLAKES',

@@ -2536,6 +2536,8 @@ bool D3D12CommandProcessor::SetupContext() {
   shader_mod_knobs_source_ =
       (shader_overrides && shader_overrides->live_knobs()) ? shader_overrides : nullptr;
   shader_mod_knobs_generation_ = 0;
+  shader_mod_host_values_used_ = shader_overrides != nullptr;
+  std::memset(shader_mod_host_values_, 0, sizeof(shader_mod_host_values_));
 
   D3D12_HEAP_FLAGS heap_flag_create_not_zeroed = provider.GetHeapFlagCreateNotZeroed();
 
@@ -3103,6 +3105,7 @@ void D3D12CommandProcessor::ShutdownContext() {
   texture_cache_.reset();
 
   shader_mod_knobs_source_ = nullptr;
+  shader_mod_host_values_used_ = false;
   pipeline_cache_.reset();
 
   primitive_processor_.reset();
@@ -5910,6 +5913,15 @@ void D3D12CommandProcessor::UpdateSystemConstantValues(
       shader_mod_knobs_source_->UpdateKnobs(shader_mod_knobs_, shader_mod_knobs_generation_)) {
     dirty = true;
   }
+  // The host values of the shader mods: the guest vblank rate, which a title
+  // hook may switch while running (SetVblankRate).
+  if (shader_mod_host_values_used_) {
+    const float vblank_rate = float(graphics_system_->guest_vblank_rate());
+    if (vblank_rate != shader_mod_host_values_[0]) {
+      shader_mod_host_values_[0] = vblank_rate;
+      dirty = true;
+    }
+  }
 
   cbuffer_binding_system_.up_to_date &= !dirty;
 }
@@ -6139,11 +6151,14 @@ bool D3D12CommandProcessor::UpdateBindings(const D3D12Shader* vertex_shader,
 
   // Write the constant buffer data.
   if (!cbuffer_binding_system_.up_to_date) {
-    // With live knobs, they follow the system constants, where the translations
-    // don't read.
+    // With shader overrides, the host values follow the system constants, and
+    // with live knobs the knobs follow them, where the translations don't read.
     size_t system_constants_size =
-        shader_mod_knobs_source_ ? ShaderOverrides::kKnobsOffset + ShaderOverrides::kKnobsSize
-                                 : sizeof(system_constants_);
+        shader_mod_knobs_source_
+            ? ShaderOverrides::kKnobsOffset + ShaderOverrides::kKnobsSize
+            : shader_mod_host_values_used_
+                  ? ShaderOverrides::kHostValuesOffset + ShaderOverrides::kHostValuesSize
+                  : sizeof(system_constants_);
     uint8_t* system_constants = constant_buffer_pool_->Request(
         frame_current_, system_constants_size, D3D12_CONSTANT_BUFFER_DATA_PLACEMENT_ALIGNMENT,
         nullptr, nullptr, &cbuffer_binding_system_.address);
@@ -6151,9 +6166,13 @@ bool D3D12CommandProcessor::UpdateBindings(const D3D12Shader* vertex_shader,
       return false;
     }
     std::memcpy(system_constants, &system_constants_, sizeof(system_constants_));
-    if (shader_mod_knobs_source_) {
+    if (shader_mod_host_values_used_) {
       std::memset(system_constants + sizeof(system_constants_), 0,
-                  ShaderOverrides::kKnobsOffset - sizeof(system_constants_));
+                  ShaderOverrides::kHostValuesOffset - sizeof(system_constants_));
+      std::memcpy(system_constants + ShaderOverrides::kHostValuesOffset, shader_mod_host_values_,
+                  ShaderOverrides::kHostValuesSize);
+    }
+    if (shader_mod_knobs_source_) {
       std::memcpy(system_constants + ShaderOverrides::kKnobsOffset, shader_mod_knobs_,
                   ShaderOverrides::kKnobsSize);
     }

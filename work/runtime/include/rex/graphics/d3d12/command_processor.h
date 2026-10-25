@@ -1109,6 +1109,10 @@ class D3D12CommandProcessor : public CommandProcessor {
   DxbcShaderTranslator::SystemConstants system_constants_;
   // What UpdateSystemConstantValues passes to draw_back_end::ComputeSystemConstants.
   draw_back_end::SystemConstantInputs system_constant_inputs_ = {};
+  // With shader overrides: the host values written after the system constants
+  // (ShaderOverrides::kHostValuesOffset), the guest vblank rate in X.
+  bool shader_mod_host_values_used_ = false;
+  float shader_mod_host_values_[4] = {};
   // shader_mod_live_knobs: the knob values written after the system constants
   // (ShaderOverrides::kKnobsOffset), and where they come from (nullptr without
   // live knobs).

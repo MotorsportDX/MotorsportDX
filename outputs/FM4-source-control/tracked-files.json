@@ -1073,6 +1073,10 @@
       "provenance": "Original shader mods of this project (HLSL hooks on generated overrides); no game shader code or original game function bodies"
     },
     {
+      "path": "work/fm4-rex/look/shader_CAF3881F7C4CDCAA.mod.hlsli",
+      "provenance": "Original shader mods of this project (HLSL hooks on generated overrides); no game shader code or original game function bodies"
+    },
+    {
       "path": "work/fm4-rex/look/shader_CC80603592E71CB8.mod.hlsli",
       "provenance": "Original shader mods of this project (HLSL hooks on generated overrides); no game shader code or original game function bodies"
     },

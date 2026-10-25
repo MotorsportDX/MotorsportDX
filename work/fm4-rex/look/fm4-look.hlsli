@@ -7,6 +7,9 @@
 //   FM4_LOOK_SHARPEN      0...1  adaptive sharpening of the scene before tonemapping
 //   FM4_LOOK_BLOOM        >= 0   bloom energy (1: original)
 //   FM4_LOOK_EXPOSURE     stops  added to the auto exposure (0: original)
+//   FM4_LOOK_ADAPTATION   0, 1   1: the auto exposure adapts as fast as the game's at 60 fps
+//                                at any guest vblank rate (0: original, per frame, so faster
+//                                above 60); shader_CAF3881F7C4CDCAA.mod.hlsli
 //   FM4_LOOK_CONTRAST     0...1  S-curve on the final image (0: original)
 //   FM4_LOOK_SATURATION   >= 0   saturation of the final image (1: original)
 //   FM4_LOOK_VIGNETTE     >= 0   vignette strength (1: original, 0: off)

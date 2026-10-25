@@ -1587,18 +1587,34 @@ void D3D12CommandProcessor::ReplayDrawBackEndDraw(
     bindings.system_valid = false;
   }
   const bool knobs = (flags & be::kFlagKnobs) != 0;
+  // The shader overrides' host values: the guest vblank rate, read when the
+  // list is replayed (UpdateSystemConstantValues reads it for the PM4 path).
+  const bool host_values = shader_mod_host_values_used_;
+  if (host_values) {
+    const float vblank_rate = float(graphics_system_->guest_vblank_rate());
+    if (vblank_rate != replay.host_values[0]) {
+      replay.host_values[0] = vblank_rate;
+      bindings.system_valid = false;
+    }
+  }
   if (!bindings.system_valid) {
-    const size_t size = knobs ? ShaderOverrides::kKnobsOffset + ShaderOverrides::kKnobsSize
-                              : sizeof(back_end_replay_constants_);
+    const size_t size =
+        knobs         ? ShaderOverrides::kKnobsOffset + ShaderOverrides::kKnobsSize
+        : host_values ? ShaderOverrides::kHostValuesOffset + ShaderOverrides::kHostValuesSize
+                      : sizeof(back_end_replay_constants_);
     uint8_t* mapping = request(size, bindings.system);
     if (!mapping) {
       perf_trace::back_end_replay.dropped.fetch_add(1, std::memory_order_relaxed);
       return;
     }
     std::memcpy(mapping, &back_end_replay_constants_, sizeof(back_end_replay_constants_));
-    if (knobs) {
+    if (host_values) {
       std::memset(mapping + sizeof(back_end_replay_constants_), 0,
-                  ShaderOverrides::kKnobsOffset - sizeof(back_end_replay_constants_));
+                  ShaderOverrides::kHostValuesOffset - sizeof(back_end_replay_constants_));
+      std::memcpy(mapping + ShaderOverrides::kHostValuesOffset, replay.host_values,
+                  ShaderOverrides::kHostValuesSize);
+    }
+    if (knobs) {
       std::memcpy(mapping + ShaderOverrides::kKnobsOffset, replay.knobs,
                   ShaderOverrides::kKnobsSize);
     }

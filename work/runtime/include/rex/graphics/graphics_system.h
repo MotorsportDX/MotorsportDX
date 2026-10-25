@@ -91,6 +91,12 @@ class GraphicsSystem : public system::IGraphicsSystem {
     if (vblank_rate_hz_.exchange(hz, std::memory_order_relaxed) != hz) WakeVsyncWorker();
   }
   double vblank_rate() const { return vblank_rate_hz_.load(std::memory_order_relaxed); }
+  // The rate the vsync thread delivers guest vblanks at, in Hz: vblank_rate,
+  // or the refresh rate of the video mode without it (0 before the thread
+  // starts). Any thread; shader mods read it (xe_guest_vblank_rate).
+  double guest_vblank_rate() const {
+    return guest_vblank_rate_hz_.load(std::memory_order_relaxed);
+  }
 
   // Holds vblank_vrr to the fixed refresh grid while set, for example while a
   // title paces its frames over several vblanks on the CPU (the vsync thread
@@ -144,6 +150,7 @@ class GraphicsSystem : public system::IGraphicsSystem {
 
   std::atomic<bool> vsync_worker_running_;
   std::atomic<double> vblank_rate_hz_{0.0};
+  std::atomic<double> guest_vblank_rate_hz_{0.0};
   std::atomic<bool> vblank_vrr_paused_{false};
   std::unique_ptr<rex::thread::Event> vsync_wake_event_;
   system::object_ref<system::XHostThread> vsync_worker_thread_;

@@ -347,6 +347,8 @@ struct ReplayList {
   ReplayBindings bindings;
   std::vector<uint32_t> texture_indices[2];
   float knobs[kKnobCount];
+  // The shader overrides' host values (the guest vblank rate in X).
+  float host_values[4] = {};
 
   // At the start of each Execute: a new D3D12 command list.
   void BeginList() {
