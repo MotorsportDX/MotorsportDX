@@ -285,7 +285,7 @@ At 240 the command processor sets the limit: it needs about 4.3 ms per race fram
 against about 2.2 ms of GPU time. Values from 30 to 240 are accepted.
 
 The title's auto exposure adapts by a fixed share per frame, so above 60 fps it settles
-faster than on the Xbox 360; the look knob `adaptation=1` keeps the game's speed
+faster than on the Xbox 360; the presets' look knob `adaptation=1` keeps the game's speed
 ([Exposure adaptation](#exposure-adaptation)).
 
 #### -VSync
@@ -577,7 +577,7 @@ preset, knobs, or both. A preset sets only its own knobs. Later items win, so
 
 | Preset | Settings |
 | --- | --- |
-| `aces` (default) | `tonemap=aces`, `saturation=1.1`, `bloom=0.7`, `sharpen=0.4`, `clearcoat=1`, `clearcoat_glint=1`, `ao=0.6`, `sun=2`, `sky=0.7`, `taa=1`, `cockpit_fill=1`, `windshield=1`, `road_specular=0`, `road_sheen=0.4`, `glass=1`, `chrome=1`, `rims=1` |
+| `aces` (default) | `tonemap=aces`, `saturation=1.1`, `bloom=0.7`, `sharpen=0.4`, `clearcoat=1`, `clearcoat_glint=1`, `ao=0.6`, `sun=2`, `sky=0.7`, `taa=1`, `cockpit_fill=1`, `windshield=1`, `road_specular=0`, `road_sheen=0.4`, `glass=1`, `chrome=1`, `rims=1`, `adaptation=1` |
 | `gt` | the same with `tonemap=gt` (Hajime Uchimura's curve: a long linear middle, so midtone colors stay closest to the game's) |
 | `neutral` | the same with `tonemap=neutral` (Khronos PBR Neutral: linear up to 0.76, then only the brightest channel compressed) |
 | `original` | The game's own look with TAA (`taa=1`) and no shader mod. Clears the knobs given before it in the same value. `-Look "original,taa=0"` is the game's picture without any change. |
@@ -596,7 +596,7 @@ and `-Look original`.
 | `sharpen` | number | Sharpening. |
 | `bloom` | number | Bloom. |
 | `exposure` | number | Exposure. |
-| `adaptation` | 0 or 1, default 0 | 1: the auto exposure adapts as fast as the game's at 60 fps at every frame rate ([below](#exposure-adaptation)). In no preset yet. |
+| `adaptation` | 0 or 1, default 0 | 1: the auto exposure adapts as fast as the game's at 60 fps at every frame rate ([below](#exposure-adaptation)); 1 in `aces`, `gt` and `neutral` since 26 October 2026. |
 | `contrast` | number | Contrast. |
 | `saturation` | number | Saturation. |
 | `vignette` | number | Vignette. |
@@ -685,7 +685,7 @@ in the countdown and replays at the default rate, which run at 60 fps instead of
 30 ([-FrameRate](#-framerate)). After a change of the scene's brightness, such as a tunnel
 exit, the picture reaches its new exposure in about a quarter of the game's time at 240 fps.
 
-`-Look "aces,adaptation=1"` gives each frame the share that covers the same part of the
+`adaptation=1` gives each frame the share that covers the same part of the
 difference in the time of one 60 Hz vblank, `1 - (1 - share)^(60 / rate)`, with the guest vblank
 rate that the runtime passes to the shader mods (`xe_guest_vblank_rate`). That rate follows
 the title's scenarios as the launcher sets them (60 Hz in the menus and the 30 fps screens,
@@ -693,7 +693,8 @@ the race rate in races, twice the race rate in the countdown and replays), so th
 right in each of them. At 60 Hz it changes nothing. It is a shader mod of the auto exposure
 shader (`shader_CAF3881F7C4CDCAA.mod.hlsli`), so it works on the RTV path and the native
 path; `-Rov` keeps the title's adaptation. The GUI launcher shows it as the checkbox
-**60 fps exposure speed**. No preset sets it yet.
+**60 fps exposure speed**. The presets `aces`, `gt` and `neutral` set it since 26 October 2026;
+`-Look "aces,adaptation=0"` keeps the title's adaptation, as `original` does.
 
 Measured on 26 October 2026 in a frozen race frame whose exposure input was stepped: the
 exposure made 90% of its change 1.38 s after the step at 60 Hz, with and without the knob;

@@ -894,14 +894,16 @@ LOOK_TRACK_KNOBS={'road_gloss':('RoadSpecular.RoadSpecular','RoadSpecular.RoadSp
 # sharpening after the resolve), the cockpit interior's sky fill (cockpit_fill, since 26
 # October 2026 in place of the shadow floor cockpit_light=0.5), the cockpit glass (windshield),
 # the road's grained sheen instead of its sun highlight
-# (road_specular=0,road_sheen=0.4) and the glass, chrome and rim mods. pc is aces under its
+# (road_specular=0,road_sheen=0.4), the glass, chrome and rim mods, and since 26 October 2026
+# the auto exposure at the game's 60 fps speed above 60 fps (adaptation). pc is aces under its
 # earlier name (LOOK_ALIASES). original is the game's own picture with TAA and no shader mod;
 # 'original,taa=0' is the game's picture as the title draws it, the reference against -Rov.
 # No preset has the sky_* or foliage_* knobs: their A/B at 2x of 18 October 2026 showed only a
 # slightly deeper sky (docs/analysis/look-mod-coverage.md). Every preset has TAA, so races
 # render one tile without MSAA with them (auto_single_tile).
 _LOOK_MODS=('saturation=1.1,bloom=0.7,sharpen=0.4,clearcoat=1,clearcoat_glint=1,ao=0.6,sun=2,sky=0.7,'
-            'taa=1,cockpit_fill=1,windshield=1,road_specular=0,road_sheen=0.4,glass=1,chrome=1,rims=1')
+            'taa=1,cockpit_fill=1,windshield=1,road_specular=0,road_sheen=0.4,glass=1,chrome=1,rims=1,'
+            'adaptation=1')
 LOOK_PRESETS={'aces':'tonemap=aces,'+_LOOK_MODS,'gt':'tonemap=gt,'+_LOOK_MODS,
               'neutral':'tonemap=neutral,'+_LOOK_MODS,'original':'taa=1'}
 LOOK_ALIASES={'pc':'aces'}
@@ -1959,7 +1961,7 @@ def launcher_test_options(root):
              'texture_replace':str(root/'game-build')},
             {'look':'pc,clearcoat=0,sky=1,exposure=1e-05','quality':'xbox','display':'1440p'},
             {'look':'original,taa=0,sun=2.5','msaa':True,'frame_rate':240,'supersample':True},
-            {'look':'aces,adaptation=1','frame_rate':240},
+            {'look':'aces,adaptation=0','frame_rate':240},
             {'native':True,'resolution_scale':'panel'},
             {'native':True,'supersample':True},
             {'native':True,'display':'1080p'},
