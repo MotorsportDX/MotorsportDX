@@ -21,6 +21,7 @@
 #include <rex/input/input_system.h>
 #include <rex/input/mnk/mnk_input_driver.h>
 #include <rex/input/nop/nop_input_driver.h>
+#include <rex/input/pad_settings.h>
 #include <rex/input/sdl/sdl_input_driver.h>
 #include <rex/input/state_merge.h>
 #include <rex/input/xinput/xinput_input_driver.h>
@@ -242,6 +243,11 @@ X_RESULT InputSystem::GetState(uint32_t user_index, X_INPUT_STATE* out_state) {
     X_INPUT_STATE state = {};
     if (driver->GetDeviceState(id, &state) != X_ERROR_SUCCESS) {
       continue;
+    }
+    // Physical pads (not the keyboard and mouse or a stand-in): the steering anti-deadzone,
+    // before the merge picks the further deflected stick.
+    if (const DeviceInfo* info = DeviceInfoFor(id); info && !info->synthetic) {
+      MapPadSteering(state.gamepad, user_index);
     }
     if (REXCVAR_GET(input_diagnostics)) {
       static thread_local std::map<DeviceId, uint16_t> last_buttons;

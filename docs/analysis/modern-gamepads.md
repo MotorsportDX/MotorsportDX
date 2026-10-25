@@ -5,10 +5,10 @@ Design note for better support of modern pads: Xbox One and Series controllers (
 ## Summary
 
 - **Drivers.** Xbox class pads (the Series controller, the Elite, the Ally X's built-in pad) go through SDL's XInput driver today: two motors, no trigger rumble, no Share button, no paddles. SDL's Windows HID backend skips every XInput device, so its HIDAPI Xbox drivers never see them, and its GameInput driver cannot start in this build (the Windows SDK's `gameinput.h` predates the API version SDL requires). Trigger rumble for Xbox One and Series pads is available through SDL's RAWINPUT driver with its WGI correlation, or the stand-alone WGI driver. PlayStation pads always go through HIDAPI, with rumble, light bar, gyro and touchpad. **Recommended:** keep SDL's defaults as the default; offer `rawinput` (trigger rumble) and `wgi` as options; no GameInput option until SDL is built with the GameInput SDK's header.
-- **The title's own deadzones.** The title applies a radial deadzone with a linear, rescaled response to the sticks and a linear range to the triggers, from the player's profile: steering 0.24 to 0.95 of the stick, throttle 0.15 to 0.90 and brake 0.15 to 0.95 of the trigger. Measured through the diagnostic controller, the first 24% of the steering stick does nothing. The game's own steering deadzone setting is the right fix; a runtime anti-deadzone is offered as an option, off by default, because it adds up with a lowered in-game deadzone.
+- **The title's own deadzones.** The title applies a radial deadzone with a linear, rescaled response to the sticks and a linear range to the triggers, from the player's profile: steering 0.24 to 0.95 of the stick, throttle 0.15 to 0.90 and brake 0.15 to 0.95 of the trigger. Measured through the diagnostic controller, the first 24% of the steering stick does nothing. The game's own steering deadzone setting cannot lower it: the game keeps the inner edge at XInput's 7,849 or above. The fix is the runtime's steering anti-deadzone, which maps the stick into the deadzone the game reports, read live ([Stage 2](#the-steering-anti-deadzone-with-the-live-ranges)); off by default for now.
 - **Rumble.** `Media/ControllerRumble.xml` maps the car's state to the motors: the right motor carries the engine near its limiter and front tyre slip, the left one rear tyre slip, gear changes and impacts, both the surface; the effects add up. Measured in normal driving: 0.05 to 0.2 of full strength. Trigger rumble can be derived (throttle from the left motor, brake from the right), off by default; slip-only trigger effects need a hook in the title's rumble update and are left for later. The title sends no rumble while the AI drives.
 - **Latency.** The runtime adds about 1 ms at 60 and 120 Hz: SDL's update on the UI thread runs every millisecond, and the rest is the title polling once per frame. In 240 Hz races the UI thread is busy presenting and updates SDL only every 8.4 ms, so a new pad state waits 4 ms more on average. An SDL input thread of its own would fix that and is proposed as an opt-in, to be measured per driver (COM objects created on the UI thread may pull calls back to it); updating SDL on the guest's reading thread is allowed by SDL but runs driver code on guest threads, so it is not proposed.
-- **Defaults.** Every stage 2 option defaults to today's behaviour. Candidates for the owner's test: `rawinput` with trigger rumble on the Series controller, rumble strength 1.5 to 2, the game's steering deadzone lowered, the input thread at 240 Hz; the Ally X with `default` and `rawinput` and the latency probe.
+- **Defaults.** Every stage 2 option defaults to today's behaviour. Candidates for the owner's test: `rawinput` with trigger rumble on the Series controller, rumble strength 1.5 to 2, the steering anti-deadzone with a stick deadzone of 0.05 (the game's own setting cannot lower its deadzone), the input thread at 240 Hz; the Ally X with `default` and `rawinput` and the latency probe.
 
 ## Today's input path
 
@@ -125,9 +125,9 @@ Every row matches (m − 7,864.08) / (31,128.7 − 7,864.08) to four decimals. T
 ### What this means for modern pads
 
 - The first 24% of the steering stick's travel does nothing, and full lock comes at 95%. That is the title's design for the Xbox 360 pad: 24% is XInput's recommended left stick deadzone (7,849). On a pad whose stick centres precisely, the dead first quarter is the main reason small corrections do not steer.
-- The right fix is the title's own setting: lower `SteeringAxisDeadzoneInside` in the game's controller options (for example to 0.05 or 0.10, above the pad's own drift). It is saved in the profile and applies to every pad, and the title keeps rescaling from the deadzone edge, so there is no jump.
-- A runtime anti-deadzone (raw = inner + |x| · (32,767 − inner) / 32,767 along the stick's direction) would give the same result without touching the profile, but only while the profile keeps its 0.24: if the player also lowers the in-game deadzone, the two add up and the stick jumps at the centre. So it is an option for players who do not want to change the profile, off by default, with its inner value tied to the profile's (7,864 for the default 0.24).
-- The runtime's own inner deadzone is for pads that drift: with the in-game deadzone lowered, a worn stick's rest value can steer. It defaults to 0, so today's behaviour is unchanged.
+- The title's own setting does not lower it. `SteeringAxisDeadzoneInside` is the profile's value, but the title keeps the inner edge it hands the conversion at XInput's 7,849 or above: with the setting at 5 the conversion still received 7,849 ([keyboard controls](keyboard-controls.md#verification), 25 October 2026). The setting can only raise the deadzone.
+- So the fix is a runtime anti-deadzone: the stick's magnitude mapped into the title's range, inner + m · (outer − inner), which makes the title's output equal the stick's deflection. The range is the one the title hands its conversion, read live per guest user, as the keyboard's steering uses it, so it is exact for any profile ([Stage 2](#the-steering-anti-deadzone-with-the-live-ranges)).
+- The runtime's own inner deadzone is for pads that do not rest at 0: with the anti-deadzone on, a stick's rest value would steer. It defaults to 0, so today's behaviour is unchanged; 0.05 goes with the anti-deadzone.
 - The trigger ranges (15% to 90% throttle, 15% to 95% brake) are again profile settings. A runtime trigger range is only needed for pads whose triggers do not reach full travel (the 8-bit value stays below 230 for the throttle), and defaults to the identity.
 
 ## The title's rumble
@@ -222,7 +222,7 @@ Every default keeps today's behaviour. The owner's hardware test through an expo
 | Paddles 1 to 4, Misc1, touchpad click | an Xbox 360 button, Guide, or none | today's: Y, B, X, A; Guide; Guide | as today |
 | Stick inner deadzone (radial, rescaled), both sticks | 0 to 0.5 | 0 | 0 (raise only for a drifting stick) |
 | Stick outer edge | 0.5 to 1 | 1 | 1 |
-| Steering anti-deadzone (left stick only, radial) | 0 to 0.5 | 0 | 0, with the game's steering deadzone lowered instead; 0.24 only with the game's default |
+| Steering anti-deadzone (left stick only, radial; since the live ranges an on/off switch) | 0 to 0.5 (now off, on) | 0 (off) | on, with a stick deadzone of 0.05 |
 | Stick response curve (exponent on the magnitude) | 0.5 to 3 | 1 (linear) | 1 |
 | Trigger inner and outer range | 0 to 1 | 0 and 1 | as default |
 | Rumble strength (both motors) | 0 to 2 | 1 (the launchers: 1.5 since the [Ally X test](#the-owners-rog-xbox-ally-x-test)) | 1.5 to 2: the title's driving rumble is 0.05 to 0.2 of full |
@@ -234,7 +234,7 @@ Details:
 
 - **Driver option.** Named after what it does rather than "auto/GameInput/XInput": GameInput cannot start in this build, and "auto" is SDL's default. A driver that fails to start leaves the others running, so no choice can lose a pad. The pad report says which driver took it.
 - **Mapping.** On Windows the paddles and Misc1 of Xbox pads never arrive (no SDL driver in this build reads them there), so the mapping matters for PlayStation pads (the DualSense's microphone button is Misc1, its touchpad click the touchpad button) and other HIDAPI pads; an Elite's own profile can still map its paddles to buttons that XInput reports. A Guide target stays subject to `guide_button`.
-- **Shaping.** One helper for the physical drivers (`sdl` and `xinput`), never for the diagnostic controller or the keyboard and mouse driver, so e2e runs keep their exact values. Order: inner deadzone and outer edge on the stick's magnitude, rescaled from the deadzone's edge (as the title does, so there is no jump), then the curve, then the anti-deadzone, which lifts any non-zero magnitude into the title's own deadzone; triggers: inner and outer range on the 8-bit value. With the defaults it returns its input bit for bit. Unit tests cover the identity, the radial rescale, the anti-deadzone fed through the title's own formula (with the profile's 0.24, any stick past the runtime's deadzone must give the title a non-zero, rising steering output, checked against this note's measured transfer) and the clamps.
+- **Shaping.** One helper for the physical drivers (`sdl` and `xinput`), never for the diagnostic controller or the keyboard and mouse driver, so e2e runs keep their exact values. Order: inner deadzone and outer edge on the stick's magnitude, rescaled from the deadzone's edge (as the title does, so there is no jump), then the curve, then the anti-deadzone, which maps any non-zero magnitude into the title's own deadzone; triggers: inner and outer range on the 8-bit value. With the defaults it returns its input bit for bit. Unit tests cover the identity, the radial rescale, the anti-deadzone fed through the title's own formula (any stick past the runtime's deadzone must give the title a non-zero, rising steering output, checked against this note's measured transfer) and the clamps.
 - **Rumble.** The strength multiplies both motors and clamps at 65,535. Trigger rumble goes through `SDL_RumbleGamepadTriggers` with the same long duration as the motors, only on pads that report `SDL_PROP_GAMEPAD_CAP_TRIGGER_RUMBLE_BOOLEAN`: right trigger from the left motor and the throttle, left trigger from the right motor and the brake (see [Deriving trigger rumble](#deriving-trigger-rumble)). It is tested without a pad through a virtual SDL gamepad, whose `RumbleTriggers` callback records what the driver sends.
 - **Pad report.** One log line per pad at connect: name, SDL gamepad type, vendor and product ID, the driver (GUID byte 14), connection state and path, and the capabilities: rumble, trigger rumble, RGB, mono and player LEDs, gyro and accelerometer, paddles, Misc1, touchpads and the battery. The owner's logs then show what each pad exposes under each driver option.
 - **Input thread.** As described in [Updating SDL off the UI thread](#updating-sdl-off-the-ui-thread). `input_latency_probe` stays as the way to measure it.
@@ -333,14 +333,47 @@ So neither XInput nor RAWINPUT gives trigger rumble on the Ally X: as an Xbox 36
 
 **Exit and warnings.** Every run logged "SDL input: rumble stopped at exit" when the window closed. Every run also warned `SDL GameControllerDB: file 'gamecontrollerdb.txt' does not exist.`: the default name of `hid_mappings_file`, which no export ships. A missing file under the default name is now logged as information; the warning stays for a file the user named (a non-default source of the cvar).
 
-**The owner's notes.** The pad rumbled in the races, and rumble strength 1.5 felt best. The owner set the game's STEERING AXIS DEADZONE INSIDE to 10 and kept it.
+**The owner's notes.** The pad rumbled in the races, and rumble strength 1.5 felt best. The owner set the game's STEERING AXIS DEADZONE INSIDE to 10 and kept it; as the keyboard session found the same day, a value below 24 leaves the game's inner edge at 7,849, so the setting changed almost nothing.
 
 **Decisions** (the main session, 25 October 2026):
 
 - The launchers default to rumble strength 1.5 (`-Pad` knob `rumble`, `PAD_KNOBS` with `runtime_default` 1, in both launchers); the runtime cvar `pad_rumble_strength` keeps 1, the title's own scale.
-- [running.md](../running.md#the-games-steering-deadzone) recommends 10 as the starting value of the game's steering deadzone, a step higher if the car steers by itself.
+- The steering deadzone: first 10 in the game as the starting value; corrected the same day, when the game's floor of 7,849 came to light, to the runtime's anti-deadzone with the live range and a stick deadzone of 0.05, off by default until the owner's test ([below](#the-steering-anti-deadzone-with-the-live-ranges)).
 - The input thread stays off by default: no gain on the Ally X at its race rate, a gain only in 240 fps races on the main PC.
 - Trigger rumble on the Ally X waits for GameInput, which needs the GameInput SDK's header and the owner's approval.
+
+### The steering anti-deadzone with the live ranges
+
+25 October 2026. The keyboard session's hook in the title's input conversion
+([keyboard controls](keyboard-controls.md)) publishes, per guest user, the steering range the
+conversion receives (`SetTitleInputRanges`, [title_input_ranges.h](../../work/runtime/include/rex/input/title_input_ranges.h);
+before the profile loads, the profile's defaults). It also showed that the title keeps the inner
+edge at 7,849 or above whatever the profile says, so the game's setting cannot lower the
+steering deadzone. The runtime's anti-deadzone now uses that range:
+
+- `pad_steering_anti_deadzone` is an on/off switch (it was a fraction tied to the assumed 0.24).
+  When on, `MapIntoTitleDeadzone` ([pad_shaping.h](../../work/runtime/include/rex/input/pad_shaping.h))
+  maps the left stick's magnitude m (after the runtime's deadzone, outer edge and curve) to
+  inner + m · (outer − inner) of the live range, so the title's steering equals m from the first
+  movement and reaches full lock at full deflection. Each axis is rounded away from 0, so any
+  movement passes the title's deadzone; a centred stick stays centred; an identity range (another
+  title, nothing published) leaves the stick as it is.
+- `InputSystem::GetState` applies it to each physical pad (a device that is not synthetic: not the
+  keyboard and mouse, the stand-in or the e2e diagnostic controller) for the guest user it serves,
+  before the merge. The keyboard maps its steering into the same range (`StickFromTitle`), so the
+  new whole-stick merge rule compares a pad and the keyboard in the title's terms: the device that
+  steers further wins, with its whole stick. Without the anti-deadzone a pad's small deflection is
+  inside the title's deadzone and loses to any keyboard steering, as before.
+- The runtime's inner deadzone (`pad_stick_deadzone`) stays for sticks that do not rest at 0;
+  0.05 goes with the anti-deadzone. The launchers keep both off for now; the owner's checklist has
+  a profile with both on for each pad ([running.md](../running.md#controller-test-checklist)).
+- `fm4_pad_shaping_tests` checks, for the default inner edge (7,864.08) and the floor (7,849) with
+  the outer edge 31,128.7: the title's steering through its own formula equals the stick's
+  deflection within 0.0001 over the whole travel, is positive from the first step and rising,
+  full deflection gives full lock, the direction and diagonals are kept, a centred stick and an
+  identity range are left alone, a resting stick under a 0.05 runtime deadzone stays centred; and
+  in the merge, with the anti-deadzone the larger of the pad's and the keys' steering wins and
+  reaches the title unchanged, without it a pad's 20% loses to the keys' 5%.
 
 ## Left for later
 

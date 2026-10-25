@@ -1368,9 +1368,9 @@ void App::ControllerSection() {
   ImGui::TextColored(kSecondary, "Controller");
   Muted("A connected controller works without setup. These options change what it sends and how it "
         "rumbles; the defaults keep it as the game sees it, apart from rumble strength 1.5 (the game's driving "
-        "rumble is weak). The game's own steering deadzone comes first: PLAY CAREER > MY PROFILE > OPTIONS > "
-        "CONTROLLER, then X (ADVANCED) > STEERING AXIS DEADZONE INSIDE (24 by default; 10 is a good start for "
-        "small corrections to steer, a step higher if the car steers by itself; press A to save).");
+        "rumble is weak). The game ignores the first 24% of the steering stick, and its STEERING AXIS DEADZONE "
+        "INSIDE setting can only raise that; for small corrections to steer, turn on the steering anti-deadzone "
+        "with a stick deadzone of 0.05.");
   ImGui::Dummy(ImVec2(0, 2 * scale_));
   const char* drivers[] = {"default", "rawinput", "wgi"};
   int driver = 0;
@@ -1388,9 +1388,10 @@ void App::ControllerSection() {
          "Throttle trigger from wheelspin, brake trigger from locking: derived from the game's motors and how "
          "far each trigger is pressed. Needs a pad with trigger motors (Raw Input or WGI on Xbox pads).");
   slider("trigger_rumble_strength", "Trigger rumble strength", "Multiplies the derived trigger rumble.");
-  slider("anti_deadzone", "Steering anti-deadzone",
-         "Left stick: any movement starts this far out, past the game's own steering deadzone. Only with the "
-         "game's deadzone at its default (0.24); with a lowered in-game deadzone the two add up.");
+  toggle("anti_deadzone", "Steering anti-deadzone",
+         "Left stick: steers from the first movement. The game ignores the first 24% of the stick and cannot be "
+         "set lower; this maps the stick into the game's own deadzone as the game reports it. Pair it with a "
+         "stick deadzone of 0.05 under Sticks and triggers so a resting stick does not steer.");
   toggle("thread", "Input thread",
          "Reads the pad every millisecond off the UI thread: fresher input when the UI thread is busy (240 fps "
          "races).");

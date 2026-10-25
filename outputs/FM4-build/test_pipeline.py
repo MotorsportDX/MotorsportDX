@@ -602,8 +602,11 @@ class PipelineTests(unittest.TestCase):
         self.assertEqual(pipeline.pad_cvars('driver=rawinput'),
                          {'pad_rumble_strength': '1.5', 'sdl_joystick_driver': 'rawinput'})
         # Later items win, also back to a default.
-        self.assertEqual(pipeline.pad_cvars('rumble=2,anti_deadzone=0.24,rumble=1'),
-                         {'pad_steering_anti_deadzone': '0.24'})
+        self.assertEqual(pipeline.pad_cvars('rumble=2,anti_deadzone=1,rumble=1'),
+                         {'pad_steering_anti_deadzone': 'true'})
+        self.assertEqual(pipeline.pad_cvars('anti_deadzone=1,stick_deadzone=0.05'),
+                         {'pad_rumble_strength': '1.5', 'pad_steering_anti_deadzone': 'true',
+                          'pad_stick_deadzone': '0.05'})
         self.assertEqual(pipeline.pad_cvars('rumble=2,rumble=1.5'), {'pad_rumble_strength': '1.5'})
         self.assertEqual(pipeline.pad_cvars('rumble=1,right_paddle1=none,touchpad=back'),
                          {'pad_right_paddle1': 'none', 'pad_touchpad': 'back'})

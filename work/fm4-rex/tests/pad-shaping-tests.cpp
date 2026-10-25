@@ -1,8 +1,10 @@
 // CPU tests of the physical pads' stick and trigger shaping and rumble scaling
 // (rex/input/pad_shaping.h, docs/analysis/modern-gamepads.md): the identity at
 // the defaults, the radial rescale, the curve, the trigger range, the clamps,
-// the anti-deadzone fed through the title's own steering conversion, and the
-// derived trigger rumble. Returns 1 on failure.
+// the steering anti-deadzone fed through the title's own steering conversion
+// with the live ranges the title reports, its interplay with the keyboard's
+// steering in the device merge, and the derived trigger rumble. Returns 1 on
+// failure.
 
 #include <cmath>
 #include <cstdint>
@@ -10,11 +12,15 @@
 #include <initializer_list>
 #include <tuple>
 
+#include <rex/input/keyboard_model.h>
 #include <rex/input/pad_shaping.h>
+#include <rex/input/state_merge.h>
 
 namespace {
 
 using rex::input::DeriveTriggerRumble;
+using rex::input::MapIntoTitleDeadzone;
+using rex::input::MergeStick;
 using rex::input::ScaleMotor;
 using rex::input::ShapeStick;
 using rex::input::ShapeTrigger;
@@ -34,18 +40,28 @@ bool Near(double a, double b, double tolerance) {
   return std::fabs(a - b) <= tolerance;
 }
 
-// The title's steering from a stick (sub_822B3F18) with the profile's default
-// deadzones, 0.24 and 0.95 of 32767 (ForzaProfile.sch, measured in the e2e
-// sweep): (m - inner) / (outer - inner) along the stick's direction, clamped.
-double TitleSteering(int16_t x, int16_t y) {
-  constexpr double kInner = 7864.08;
-  constexpr double kOuter = 31128.7;
+// The profile's default steering deadzones, 0.24 and 0.95 of 32767
+// (ForzaProfile.sch, measured in the e2e sweep), and the inner edge the title
+// keeps when the profile asks for less (XInput's 7,849, keyboard-controls.md).
+constexpr double kInner = 7864.08;
+constexpr double kOuter = 31128.7;
+constexpr double kFloorInner = 7849.0;
+
+// The title's steering from a stick (sub_822B3F18): (m - inner) / (outer - inner)
+// along the stick's direction, clamped.
+double TitleSteering(int16_t x, int16_t y, double inner = kInner, double outer = kOuter) {
   const double m = std::sqrt(double(x) * x + double(y) * y);
-  if (m <= kInner) {
+  if (m <= inner) {
     return 0.0;
   }
-  const double scaled = double(x) * (m - kInner) / m / (kOuter - kInner);
+  const double scaled = double(x) * (m - inner) / m / (outer - inner);
   return std::fmax(-1.0, std::fmin(1.0, scaled));
+}
+
+// The magnitude of the title's steering vector, as the merge compares sticks.
+double TitleMagnitude(int16_t x, int16_t y, double inner = kInner, double outer = kOuter) {
+  const double m = std::sqrt(double(x) * x + double(y) * y);
+  return m <= inner ? 0.0 : std::fmin(1.0, (m - inner) / (outer - inner));
 }
 
 void Shape(int16_t& x, int16_t& y, const StickShaping& shaping) { ShapeStick(x, y, shaping); }
@@ -123,40 +139,86 @@ int main() {
   Check(Near(TitleSteering(30000, 0), 0.9515, 0.00005), "title: 30,000 gives 0.9515");
   Check(Near(TitleSteering(6000, 6000), 0.0189, 0.00005), "title: (6,000, 6,000) gives 0.0189");
 
-  // The anti-deadzone lifts every deflection past the runtime's deadzone into the title's
-  // own, so small movements steer, and the steering rises with the stick to full lock.
+  // The steering anti-deadzone maps the stick into the title's live range: the title's
+  // steering equals the stick's deflection from the first movement, for the default profile
+  // and for the inner edge the title keeps when the profile asks for less.
+  for (const double inner : {kInner, kFloorInner}) {
+    double worst = 0.0;
+    bool positive = true;
+    bool rising = true;
+    double previous = 0.0;
+    for (int x = 1; x <= 32767; x += 37) {
+      int16_t sx = int16_t(x), sy = 0;
+      MapIntoTitleDeadzone(sx, sy, inner, kOuter);
+      const double steering = TitleSteering(sx, sy, inner, kOuter);
+      worst = std::fmax(worst, std::fabs(steering - x / 32767.0));
+      positive = positive && steering > 0.0;
+      rising = rising && steering >= previous;
+      previous = steering;
+    }
+    // One raw step of the title's range is 1 / 23,265 (0.00004); the rounding away from 0
+    // adds at most one.
+    Check(worst < 0.0001, "anti-deadzone: the title's steering equals the stick's deflection");
+    Check(positive, "anti-deadzone: the smallest movement steers");
+    Check(rising, "anti-deadzone: the steering rises with the stick");
+    int16_t sx = 32767, sy = 0;
+    MapIntoTitleDeadzone(sx, sy, inner, kOuter);
+    Check(TitleSteering(sx, sy, inner, kOuter) == 1.0, "anti-deadzone: full deflection is full lock");
+  }
+  {
+    int16_t sx = 0, sy = 0;
+    MapIntoTitleDeadzone(sx, sy, kInner, kOuter);
+    Check(sx == 0 && sy == 0, "anti-deadzone: a centred stick stays centred");
+    sx = -16384, sy = 0;
+    MapIntoTitleDeadzone(sx, sy, kInner, kOuter);
+    Check(Near(TitleSteering(sx, sy), -0.5, 0.0001), "anti-deadzone keeps the direction");
+    sx = 11585, sy = 11585;  // half deflection on the diagonal
+    MapIntoTitleDeadzone(sx, sy, kInner, kOuter);
+    Check(sx == sy && Near(TitleMagnitude(sx, sy), 0.5, 0.0001),
+          "anti-deadzone: a diagonal keeps its direction and magnitude");
+    sx = 9000, sy = 0;
+    MapIntoTitleDeadzone(sx, sy, 0.0, 32767.0);
+    Check(sx == 9000, "anti-deadzone: an identity range leaves the stick as it is");
+    // Without it the first 24% does nothing.
+    Check(TitleSteering(int16_t(0.2 * 32767), 0) == 0.0, "without it 20% does not steer");
+  }
+  // With the runtime's inner deadzone for a stick that does not rest at 0: the rest reads
+  // centred, and the first movement past it steers.
   {
     StickShaping stick;
     stick.deadzone = 0.05;
-    stick.anti_deadzone = 0.24;
-    double previous = 0.0;
-    bool rising = true;
-    for (int x = 1700; x <= 32767; x += 500) {
-      int16_t sx = int16_t(x), sy = 0;
-      Shape(sx, sy, stick);
-      const double steering = TitleSteering(sx, sy);
-      // Strictly rising until the title's own outer edge (0.95) gives full lock.
-      rising = rising && (steering > previous || steering == 1.0);
-      previous = steering;
+    int16_t sx = 1500, sy = 0;
+    Shape(sx, sy, stick);
+    MapIntoTitleDeadzone(sx, sy, kInner, kOuter);
+    Check(sx == 0 && TitleSteering(sx, sy) == 0.0, "anti-deadzone: a resting stick stays centred");
+    sx = 1700, sy = 0;
+    Shape(sx, sy, stick);
+    MapIntoTitleDeadzone(sx, sy, kInner, kOuter);
+    Check(TitleSteering(sx, sy) > 0.0, "anti-deadzone: just past the runtime's deadzone steers");
+  }
+  // The device merge takes the whole stick that deflects further. The keyboard maps its
+  // steering into the same range (StickFromTitle), so with the anti-deadzone the merge
+  // compares the two in the title's terms: the larger steering wins and reaches the title
+  // unchanged. Without it, a pad's small deflection is inside the title's deadzone and loses
+  // to any keyboard steering.
+  {
+    const rex::input::keyboard::TitleRange range{kInner, kOuter};
+    bool larger_wins = true;
+    for (const double pad : {0.05, 0.3, 0.5, 0.9}) {
+      for (const double keys : {0.1, 0.4, 0.6, 1.0}) {
+        int16_t px = int16_t(pad * 32767), py = 0;
+        MapIntoTitleDeadzone(px, py, kInner, kOuter);
+        const int16_t kx = rex::input::keyboard::StickFromTitle(-keys, range);
+        int16_t mx = px, my = py;
+        MergeStick(mx, my, kx, 0);
+        larger_wins = larger_wins && Near(TitleMagnitude(mx, my), std::fmax(pad, keys), 0.0002);
+      }
     }
-    Check(rising, "anti-deadzone: every deflection past 5% steers, rising to full lock");
-    int16_t sx = 32767, sy = 0;
-    Shape(sx, sy, stick);
-    Check(TitleSteering(sx, sy) == 1.0, "anti-deadzone: full deflection is full lock");
-    sx = 1500, sy = 0;
-    Shape(sx, sy, stick);
-    Check(sx == 0 && TitleSteering(sx, sy) == 0.0, "anti-deadzone: rest stays centred");
-    // Without it the first 24% does nothing.
-    Check(TitleSteering(int16_t(0.2 * 32767), 0) == 0.0, "without it 20% does not steer");
-    stick = {};
-    stick.anti_deadzone = 0.24;
-    sx = int16_t(0.1 * 32767), sy = 0;
-    Shape(sx, sy, stick);
-    Check(Near(TitleSteering(sx, sy), 0.1 * 0.76 * 32767 / (31128.7 - 7864.08), 0.001),
-          "anti-deadzone 0.24: 10% of the stick gives the title about 10.7%");
-    sx = -3277, sy = 0;
-    Shape(sx, sy, stick);
-    Check(TitleSteering(sx, sy) < 0.0, "anti-deadzone keeps the direction");
+    Check(larger_wins, "merge: with the anti-deadzone the larger steering of pad and keys wins");
+    int16_t px = int16_t(0.2 * 32767), py = 0;  // no anti-deadzone
+    int16_t mx = px, my = py;
+    MergeStick(mx, my, rex::input::keyboard::StickFromTitle(0.05, range), 0);
+    Check(mx != px, "merge: without it a pad's 20% loses to the keys' 5%");
   }
 
   // Triggers.

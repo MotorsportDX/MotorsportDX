@@ -1314,7 +1314,7 @@ PAD_KNOBS={
     'stick_deadzone':{'cvar':'pad_stick_deadzone','default':'0','min':0.0,'max':0.5},
     'stick_outer':{'cvar':'pad_stick_outer','default':'1','min':0.5,'max':1.0},
     'stick_curve':{'cvar':'pad_stick_curve','default':'1','min':0.5,'max':3.0},
-    'anti_deadzone':{'cvar':'pad_steering_anti_deadzone','default':'0','min':0.0,'max':0.5},
+    'anti_deadzone':{'cvar':'pad_steering_anti_deadzone','default':'0','choices':['0','1']},
     'trigger_deadzone':{'cvar':'pad_trigger_deadzone','default':'0','min':0.0,'max':0.5},
     'trigger_outer':{'cvar':'pad_trigger_outer','default':'1','min':0.5,'max':1.0},
     'misc1':{'cvar':'pad_misc1','default':'guide','choices':list(PAD_BUTTONS)},
@@ -1799,7 +1799,7 @@ def launcher_test_options(root):
             {'native':True,'look':'pc,aa=fsr,sharpen=0.6','info':True},
             {'frame_rate':120,'vsync':'on'},
             {'pad':'driver=rawinput,trigger_rumble=1,rumble=1.5'},
-            {'pad':'driver=wgi,thread=1,stick_deadzone=0.08,anti_deadzone=0.24,stick_curve=1.4,'
+            {'pad':'driver=wgi,thread=1,stick_deadzone=0.08,anti_deadzone=1,stick_curve=1.4,'
                    'stick_outer=0.95,trigger_deadzone=0.05,trigger_outer=0.9,'
                    'trigger_rumble_strength=2,misc1=back,right_paddle1=none,touchpad=start'},
             {'pad':'driver=default,rumble=1.0,misc1=guide,thread=0','frame_rate':240},

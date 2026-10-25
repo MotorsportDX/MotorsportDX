@@ -11,6 +11,7 @@
 
 #include <rex/cvar.h>
 #include <rex/input/pad_settings.h>
+#include <rex/input/title_input_ranges.h>
 
 REXCVAR_DEFINE_DOUBLE(pad_stick_deadzone, 0.0, "Input",
                       "Physical pads: radial deadzone of both sticks, a fraction of full "
@@ -23,11 +24,11 @@ REXCVAR_DEFINE_DOUBLE(pad_stick_curve, 1.0, "Input",
                       "Physical pads: exponent on the stick deflection (1: linear, above 1: "
                       "finer near the centre)")
     .range(0.5, 3.0);
-REXCVAR_DEFINE_DOUBLE(pad_steering_anti_deadzone, 0.0, "Input",
-                      "Physical pads, left stick: any deflection starts at this fraction, past "
-                      "the game's own steering deadzone (0.24 in its default profile). Adds up "
-                      "with a lowered in-game deadzone")
-    .range(0.0, 0.5);
+REXCVAR_DEFINE_BOOL(pad_steering_anti_deadzone, false, "Input",
+                    "Physical pads, left stick: map the stick into the game's own steering "
+                    "deadzone as the game reports it (FM4: its profile's, at least 7,849 of "
+                    "32,767), so the steering follows the stick from the first movement; with "
+                    "pad_stick_deadzone for a stick that does not rest at 0");
 REXCVAR_DEFINE_DOUBLE(pad_trigger_deadzone, 0.0, "Input",
                       "Physical pads: triggers read 0 up to this fraction")
     .range(0.0, 0.5);
@@ -54,8 +55,8 @@ PadSettings CurrentPadSettings() {
   stick.outer = std::clamp(REXCVAR_GET(pad_stick_outer), 0.5, 1.0);
   stick.curve = std::clamp(REXCVAR_GET(pad_stick_curve), 0.5, 3.0);
   settings.right_stick = stick;
-  stick.anti_deadzone = std::clamp(REXCVAR_GET(pad_steering_anti_deadzone), 0.0, 0.5);
   settings.left_stick = stick;
+  settings.steering_anti_deadzone = REXCVAR_GET(pad_steering_anti_deadzone);
   settings.triggers.deadzone = std::clamp(REXCVAR_GET(pad_trigger_deadzone), 0.0, 0.5);
   settings.triggers.outer = std::clamp(REXCVAR_GET(pad_trigger_outer), 0.5, 1.0);
   settings.rumble_strength = std::clamp(REXCVAR_GET(pad_rumble_strength), 0.0, 2.0);
@@ -81,6 +82,18 @@ void ShapeGamepad(X_INPUT_GAMEPAD& gamepad, const PadSettings& settings) {
   }
   gamepad.left_trigger = ShapeTrigger(gamepad.left_trigger, settings.triggers);
   gamepad.right_trigger = ShapeTrigger(gamepad.right_trigger, settings.triggers);
+}
+
+void MapPadSteering(X_INPUT_GAMEPAD& gamepad, uint32_t user_index) {
+  if (!REXCVAR_GET(pad_steering_anti_deadzone)) {
+    return;
+  }
+  const keyboard::TitleRange range = GetTitleInputRanges(user_index).steering;
+  int16_t x = static_cast<int16_t>(gamepad.thumb_lx);
+  int16_t y = static_cast<int16_t>(gamepad.thumb_ly);
+  MapIntoTitleDeadzone(x, y, range.inner, range.outer);
+  gamepad.thumb_lx = x;
+  gamepad.thumb_ly = y;
 }
 
 }  // namespace rex::input

@@ -29,13 +29,8 @@ struct StickShaping {
   double outer = 1.0;
   // Exponent on the rescaled magnitude below 1 (1: linear).
   double curve = 1.0;
-  // Any non-zero magnitude starts here: lifts the stick past a deadzone the
-  // title applies after it (the profile's steering deadzone is 0.24).
-  double anti_deadzone = 0.0;
 
-  bool IsIdentity() const {
-    return deadzone == 0.0 && outer == 1.0 && curve == 1.0 && anti_deadzone == 0.0;
-  }
+  bool IsIdentity() const { return deadzone == 0.0 && outer == 1.0 && curve == 1.0; }
 };
 
 // An 8-bit trigger, in fractions of 255.
@@ -70,12 +65,36 @@ inline void ShapeStick(int16_t& x, int16_t& y, const StickShaping& shaping) {
   if (shaped < 1.0 && shaping.curve != 1.0) {
     shaped = std::pow(shaped, shaping.curve);
   }
-  if (shaping.anti_deadzone > 0.0) {
-    shaped = shaping.anti_deadzone + shaped * (1.0 - shaping.anti_deadzone);
-  }
   const double scale = shaped / magnitude;
   x = ClampStickAxis(fx * scale);
   y = ClampStickAxis(fy * scale);
+}
+
+// The steering anti-deadzone: maps a stick into the radial deadzone the title
+// applies after it, given as the raw magnitudes it rescales from (inner, outer;
+// FM4 reports its profile's steering range, title_input_ranges.h, and keeps the
+// inner edge at 7,849 or more). The stick's magnitude m (0..1 of full
+// deflection, above 1 on diagonals) becomes inner + m * (outer - inner), so the
+// title's (magnitude - inner) / (outer - inner) equals m from the first
+// movement, as the keyboard's StickFromTitle does for its steering. The
+// direction is kept; each axis is rounded away from 0, so any movement passes
+// the title's deadzone. A centred stick stays centred, and a range that is the
+// identity (or makes no sense) leaves the stick as it is.
+inline void MapIntoTitleDeadzone(int16_t& x, int16_t& y, double inner, double outer) {
+  if ((x == 0 && y == 0) || outer <= inner || (inner <= 0.0 && outer >= 32767.0)) {
+    return;
+  }
+  const double fx = x;
+  const double fy = y;
+  const double raw = std::sqrt(fx * fx + fy * fy);
+  const double target = inner + raw / 32767.0 * (outer - inner);
+  const double scale = target / raw;
+  auto away = [](double value) {
+    const double rounded = value < 0.0 ? -std::ceil(-value) : std::ceil(value);
+    return static_cast<int16_t>(std::clamp(rounded, -32768.0, 32767.0));
+  };
+  x = away(fx * scale);
+  y = away(fy * scale);
 }
 
 inline uint8_t ShapeTrigger(uint8_t value, const TriggerShaping& shaping) {
@@ -124,10 +143,12 @@ inline std::pair<uint16_t, uint16_t> DeriveTriggerRumble(uint16_t left_motor, ui
 // Everything a physical driver applies, read from the cvars by
 // CurrentPadSettings (rex/input/pad_settings.h).
 struct PadSettings {
-  // The left stick steers in the title's default layout; the anti-deadzone is
-  // its own.
+  // The left stick steers in the title's default layout; the steering
+  // anti-deadzone (MapIntoTitleDeadzone) is its own and follows the title's
+  // live range, so InputSystem applies it per guest user.
   StickShaping left_stick;
   StickShaping right_stick;
+  bool steering_anti_deadzone = false;
   TriggerShaping triggers;
   double rumble_strength = 1.0;
   bool trigger_rumble = false;

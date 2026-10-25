@@ -843,24 +843,33 @@ The design and the measurements behind the options are in
 The game applies deadzones of its own after the runtime, from the player's profile. The
 steering stick's inner deadzone is 24% by default: the first quarter of the stick's travel
 does nothing, and full lock comes at 95%. On a modern pad whose stick centres precisely, that
-dead quarter is the main reason small corrections do not steer. Lower it in the game:
+dead quarter is the main reason small corrections do not steer.
 
-1. In the main menu choose PLAY CAREER, then MY PROFILE.
-2. Choose OPTIONS, then CONTROLLER. The CONTROLLER LAYOUT screen opens.
-3. Press X (ADVANCED). The ADVANCED OPTIONS screen opens with STEERING AXIS DEADZONE INSIDE
-   highlighted, at 24.
-4. Lower it with Left; 10 is a good start (the owner's choice in their test). If the car
-   steers on its own with the stick at rest, raise it a step.
-5. Press A (SAVE).
+The game's own setting does not help: it keeps the inner edge at XInput's left stick
+deadzone, 7,849 of 32,767 (24%), or above, so lowering STEERING AXIS DEADZONE INSIDE below 24
+changes almost nothing (measured on 25 October 2026, see
+[keyboard controls](analysis/keyboard-controls.md#verification)); it can only raise the
+deadzone. Use the runtime's steering anti-deadzone instead:
 
-The setting is saved in the profile and applies to every pad. The game rescales the stick
-from the deadzone's edge, so a lower deadzone gives no jump. The same screen holds, in
-percent, STEERING AXIS DEADZONE OUTSIDE (95: full lock), the throttle range (ACCELERATION
-AXIS DEADZONE INSIDE and OUTSIDE, 15 and 90), the brake range (DECELERATION AXIS DEADZONE, 15
-and 95), the clutch and handbrake ranges, and VIBRATION SCALE, the game's own rumble scale,
-at 100 with its slider full; `rumble` above 1 is the way to stronger rumble. Y resets the
-screen to the defaults. The game's rumble switch is VIBRATION on the CONTROLLER LAYOUT
-screen.
+```powershell
+.\outputs\FM4-build\Build.ps1 -Action run @common -Pad 'anti_deadzone=1,stick_deadzone=0.05'
+```
+
+`anti_deadzone=1` maps the left stick into the deadzone the game reports for the player's
+profile (read live, so it stays exact whatever the profile says), so the steering follows the
+stick from the first movement and reaches full lock at full deflection. `stick_deadzone=0.05`
+keeps a stick that does not rest exactly at 0 from steering on its own; raise it a step if the
+car still drifts. Both are off by default for now. Leave the game's STEERING AXIS DEADZONE
+INSIDE at 24.
+
+The game's controller settings are at PLAY CAREER > MY PROFILE > OPTIONS > CONTROLLER (the
+CONTROLLER LAYOUT screen), then X (ADVANCED) for the ADVANCED OPTIONS screen, saved with A. It
+holds, in percent, STEERING AXIS DEADZONE INSIDE (24) and OUTSIDE (95: full lock), the
+throttle range (ACCELERATION AXIS DEADZONE INSIDE and OUTSIDE, 15 and 90), the brake range
+(DECELERATION AXIS DEADZONE, 15 and 95), the clutch and handbrake ranges, and VIBRATION SCALE,
+the game's own rumble scale, at 100 with its slider full; `rumble` above 1 is the way to
+stronger rumble. Y resets the screen to the defaults. The game's rumble switch is VIBRATION on
+the CONTROLLER LAYOUT screen.
 
 ### -Pad knobs
 
@@ -875,8 +884,8 @@ setting, named in the last column.
 | `trigger_rumble` | 0, 1 | 0 | Trigger rumble derived from the game's motors; see [Trigger rumble](#trigger-rumble). | `pad_trigger_rumble` |
 | `trigger_rumble_strength` | 0 to 2 | 1 | Multiplies the derived trigger rumble. | `pad_trigger_rumble_strength` |
 | `thread` | 0, 1 | 0 | Updates SDL's pads every millisecond on a thread of their own; see [Input thread](#input-thread). | `input_sdl_thread` |
-| `anti_deadzone` | 0 to 0.5 | 0 | Left stick only: any movement starts this far out, past the game's steering deadzone. 0.24 matches the game's default deadzone. With a lowered in-game deadzone the two add up and the stick jumps at the centre, so lower the game's deadzone or use this, not both. | `pad_steering_anti_deadzone` |
-| `stick_deadzone` | 0 to 0.5 | 0 | Both sticks: a radial deadzone, rescaled from its edge, for a stick that drifts once the game's deadzone is lowered. | `pad_stick_deadzone` |
+| `anti_deadzone` | 0, 1 | 0 | Left stick only: maps the stick into the game's own steering deadzone as the game reports it for the player's profile, so the steering follows the stick from the first movement and reaches full lock at full deflection; see [the game's steering deadzone](#the-games-steering-deadzone). Use it with `stick_deadzone`. | `pad_steering_anti_deadzone` |
+| `stick_deadzone` | 0 to 0.5 | 0 | Both sticks: a radial deadzone, rescaled from its edge, for a stick that does not rest at 0; 0.05 with `anti_deadzone`. | `pad_stick_deadzone` |
 | `stick_outer` | 0.5 to 1 | 1 | Both sticks: the deflection that gives full output. | `pad_stick_outer` |
 | `stick_curve` | 0.5 to 3 | 1 | Both sticks: an exponent on the deflection; above 1 is finer near the centre. | `pad_stick_curve` |
 | `trigger_deadzone` | 0 to 0.5 | 0 | Triggers read 0 up to this fraction. | `pad_trigger_deadzone` |
@@ -887,7 +896,10 @@ setting, named in the last column.
 
 - The stick and trigger knobs apply to physical pads (the SDL and XInput backends), never to
   the keyboard or the e2e harness's diagnostic controller. The order is: the deadzone and the
-  outer edge on the stick's magnitude, then the curve, then the anti-deadzone.
+  outer edge on the stick's magnitude, then the curve, then the anti-deadzone. The
+  anti-deadzone is applied per guest user, before the pad's stick and the keyboard's steering
+  are merged; the keyboard maps its steering into the same range, so the device that steers
+  further wins with its whole stick.
 - A Guide target reaches the game only with the runtime's `guide_button` setting on.
 - On Windows, Xbox pads report neither the Share button nor the Elite paddles in this build
   (no SDL driver here reads them); an Elite's own profile can map its paddles to other
@@ -957,10 +969,10 @@ normal play.
 ### Controller test checklist
 
 For the owner's test of the options on real pads, from an
-[export](#export-to-another-computer) with the GUI launcher. Lower the game's steering
-deadzone once ([above](#the-games-steering-deadzone)); the profile keeps it for every run.
-Play a Quick Race with the default car and track in each profile, at least two minutes of
-driving with wheelspin, braking and a kerb or two.
+[export](#export-to-another-computer) with the GUI launcher. Leave the game's STEERING AXIS
+DEADZONE INSIDE at 24, or set it back to 24: a lower value does nothing
+([above](#the-games-steering-deadzone)). Play a Quick Race with the default car and track in
+each profile, at least two minutes of driving with wheelspin, braking and a kerb or two.
 
 Xbox Series controller:
 
@@ -969,13 +981,17 @@ Xbox Series controller:
 | A | the defaults (`default` driver) |
 | B | Pad driver Raw Input, Trigger rumble on (Rumble strength 1.5, the default) |
 | C | as B with Rumble strength 2 |
+| D | the defaults with Steering anti-deadzone on and, under Sticks and triggers, Stick deadzone 0.05 |
 
 - Note for each profile whether the pad works in the menus and in races, whether the first
   rumble comes at once or only after a first input, whether the trigger rumble feels right
   (throttle on wheelspin, brake on locking) and which rumble strength you prefer.
-- Note the steering deadzone value you settled on.
+- For profile D: whether small corrections steer now, how the steering feels against A, and
+  whether the car steers by itself with the stick at rest (then raise the stick deadzone a
+  step and note the value that holds).
 
-ROG Xbox Ally X built-in pad, race frame rate 120 (its panel):
+ROG Xbox Ally X built-in pad, race frame rate 120 (its panel). Profiles A to D ran on
+25 October 2026 ([results](analysis/modern-gamepads.md#the-owners-rog-xbox-ally-x-test)):
 
 | Profile | Controller section | Extra cvars (Advanced page) |
 | --- | --- | --- |
@@ -983,10 +999,11 @@ ROG Xbox Ally X built-in pad, race frame rate 120 (its panel):
 | B | Pad driver Raw Input | `--input_latency_probe=true` |
 | C | the defaults, Input thread on | `--input_latency_probe=true` |
 | D | Pad driver Raw Input, Input thread on | `--input_latency_probe=true` |
+| E | the defaults with Steering anti-deadzone on and Stick deadzone 0.05 | none |
 
-- Note whether the pad works and rumbles in each profile. The Ally X's pad reports no trigger
-  rumble under either driver (`trigger_rumble=0`, 25 October 2026), so Trigger rumble does
-  nothing there.
+- The Ally X's pad reports no trigger rumble under XInput or Raw Input (`trigger_rumble=0`),
+  so Trigger rumble does nothing with those drivers.
+- For profile E: as profile D of the Series controller.
 
 What to send back, from the export folder's `logs\runtime.log` (the line types below,
 nothing else is needed). The log keeps the earlier runs; each run starts at its own
