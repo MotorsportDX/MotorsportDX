@@ -16,6 +16,7 @@ These rules apply to every AI agent working in this repository.
   - `docs/running.md`: launcher usage, options, look knobs, controls.
   - `docs/status/current.md`: the present state, verified results on the latest build, open gaps, next validation steps.
   - `docs/status/history.md`: dated results and past measurements.
+  - `docs/known-issues.md` and `docs/bug-reports.md`: for players, the known problems and tested hardware in plain terms, and how to report a bug. Keep them in step with `docs/status/current.md`.
   - `docs/e2e/`: e2e harness guide, trace variables, experiment switches.
   - `docs/analysis/`: research and design notes.
   - `docs/sources-and-licensing.md`: source inventory, third-party notices, review rules.

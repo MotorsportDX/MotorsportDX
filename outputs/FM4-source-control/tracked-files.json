@@ -41,6 +41,18 @@
       "provenance": "Project documentation; source inventory, third-party notices and review rules"
     },
     {
+      "path": "docs/known-issues.md",
+      "provenance": "Project documentation; known issues and tested hardware for preview players"
+    },
+    {
+      "path": "docs/bug-reports.md",
+      "provenance": "Project documentation; bug report guide: logs, traces and how to collect them"
+    },
+    {
+      "path": "docs/analysis/preview.md",
+      "provenance": "Project documentation; preview distribution form and readiness checklist"
+    },
+    {
       "path": "docs/status/current.md",
       "provenance": "Project documentation; current verification status, open gaps and next validation steps"
     },
@@ -366,6 +378,78 @@
     },
     {
       "path": "outputs/FM4-source-control/third-party-notices/README.txt",
+      "provenance": "Repository policy/tooling or upstream license"
+    },
+    {
+      "path": "outputs/FM4-source-control/third-party-notices/CLI11-LICENSE.txt",
+      "provenance": "Repository policy/tooling or upstream license"
+    },
+    {
+      "path": "outputs/FM4-source-control/third-party-notices/DearImGui-LICENSE.txt",
+      "provenance": "Repository policy/tooling or upstream license"
+    },
+    {
+      "path": "outputs/FM4-source-control/third-party-notices/FFmpeg-COPYING.LGPLv2.1.txt",
+      "provenance": "Repository policy/tooling or upstream license"
+    },
+    {
+      "path": "outputs/FM4-source-control/third-party-notices/FFmpeg-LICENSE.txt",
+      "provenance": "Repository policy/tooling or upstream license"
+    },
+    {
+      "path": "outputs/FM4-source-control/third-party-notices/Vendored-code-NOTICES.txt",
+      "provenance": "Repository policy/tooling or upstream license"
+    },
+    {
+      "path": "outputs/FM4-source-control/third-party-notices/aes_128-LICENSE.txt",
+      "provenance": "Repository policy/tooling or upstream license"
+    },
+    {
+      "path": "outputs/FM4-source-control/third-party-notices/des-LICENSE.txt",
+      "provenance": "Repository policy/tooling or upstream license"
+    },
+    {
+      "path": "outputs/FM4-source-control/third-party-notices/fmt-LICENSE.txt",
+      "provenance": "Repository policy/tooling or upstream license"
+    },
+    {
+      "path": "outputs/FM4-source-control/third-party-notices/inja-LICENSE.txt",
+      "provenance": "Repository policy/tooling or upstream license"
+    },
+    {
+      "path": "outputs/FM4-source-control/third-party-notices/libmspack-COPYING.LIB.txt",
+      "provenance": "Repository policy/tooling or upstream license"
+    },
+    {
+      "path": "outputs/FM4-source-control/third-party-notices/nlohmann-json-LICENSE.txt",
+      "provenance": "Repository policy/tooling or upstream license"
+    },
+    {
+      "path": "outputs/FM4-source-control/third-party-notices/o1heap-LICENSE.txt",
+      "provenance": "Repository policy/tooling or upstream license"
+    },
+    {
+      "path": "outputs/FM4-source-control/third-party-notices/simde-COPYING.txt",
+      "provenance": "Repository policy/tooling or upstream license"
+    },
+    {
+      "path": "outputs/FM4-source-control/third-party-notices/spdlog-LICENSE.txt",
+      "provenance": "Repository policy/tooling or upstream license"
+    },
+    {
+      "path": "outputs/FM4-source-control/third-party-notices/stb-LICENSE.txt",
+      "provenance": "Repository policy/tooling or upstream license"
+    },
+    {
+      "path": "outputs/FM4-source-control/third-party-notices/tomlplusplus-LICENSE.txt",
+      "provenance": "Repository policy/tooling or upstream license"
+    },
+    {
+      "path": "outputs/FM4-source-control/third-party-notices/utfcpp-LICENSE.txt",
+      "provenance": "Repository policy/tooling or upstream license"
+    },
+    {
+      "path": "outputs/FM4-source-control/third-party-notices/xxHash-LICENSE.txt",
       "provenance": "Repository policy/tooling or upstream license"
     },
     {

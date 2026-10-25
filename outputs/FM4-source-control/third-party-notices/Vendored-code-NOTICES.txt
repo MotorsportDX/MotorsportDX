@@ -1,0 +1,253 @@
+Notices of the small libraries and files that the ReXGlue SDK vendors in its thirdparty folder
+(rexglue/rexglue-sdk at commit f5337cdc947ff6d4c4196737e2c807a48f2a1fc2, most of them from Xenia).
+Setup copies them into <BuildRoot>\runtime-source\thirdparty; they are not stored in this
+repository. Where that copy carries a notice, the block below quotes it verbatim between the
+dashed lines; where it carries none, the block names the upstream license. README.txt says
+which binary each one ends up in.
+
+==========================================================================================
+crypto/TinySHA1.hpp (SHA-1), compiled into rexruntime.dll
+------------------------------------------------------------------------------------------
+/*
+ *
+ * TinySHA1 - a header only implementation of the SHA1 algorithm in C++. Based
+ * on the implementation in boost::uuid::details.
+ *
+ * SHA1 Wikipedia Page: http://en.wikipedia.org/wiki/SHA-1
+ *
+ * Copyright (c) 2012-22 SAURAV MOHAPATRA <mohaps@gmail.com>
+ *
+ * Permission to use, copy, modify, and distribute this software for any
+ * purpose with or without fee is hereby granted, provided that the above
+ * copyright notice and this permission notice appear in all copies.
+ *
+ * THE SOFTWARE IS PROVIDED "AS IS" AND THE AUTHOR DISCLAIMS ALL WARRANTIES
+ * WITH REGARD TO THIS SOFTWARE INCLUDING ALL IMPLIED WARRANTIES OF
+ * MERCHANTABILITY AND FITNESS. IN NO EVENT SHALL THE AUTHOR BE LIABLE FOR
+ * ANY SPECIAL, DIRECT, INDIRECT, OR CONSEQUENTIAL DAMAGES OR ANY DAMAGES
+ * WHATSOEVER RESULTING FROM LOSS OF USE, DATA OR PROFITS, WHETHER IN AN
+ * ACTION OF CONTRACT, NEGLIGENCE OR OTHER TORTIOUS ACTION, ARISING OUT OF
+ * OR IN CONNECTION WITH THE USE OR PERFORMANCE OF THIS SOFTWARE.
+ *
+ * Taken from https://github.com/mohaps/TinySHA1
+ * Modified for use by Xenia
+ */
+------------------------------------------------------------------------------------------
+
+==========================================================================================
+crypto/sha256.cpp and sha256.h (SHA-256), compiled into rexruntime.dll
+------------------------------------------------------------------------------------------
+// //////////////////////////////////////////////////////////
+// sha256.cpp
+// Copyright (c) 2014,2015 Stephan Brumme. All rights reserved.
+// see http://create.stephan-brumme.com/disclaimer.html
+//
+// Altered for use in Xenia. Licensed under zlib license when acquired.
+------------------------------------------------------------------------------------------
+Upstream (https://create.stephan-brumme.com/hash-library/) states the zlib license: the
+software may be used, altered and redistributed freely, provided that its origin is not
+misrepresented, altered versions are marked as such, and the notice is not removed from the
+source.
+
+==========================================================================================
+crypto/des (DES and 3DES), compiled into rexruntime.dll
+------------------------------------------------------------------------------------------
+MIT License, "Copyright (c) 2014 Faraz Fallahi": the full text is des-LICENSE.txt.
+------------------------------------------------------------------------------------------
+
+==========================================================================================
+crypto/rijndael-alg-fst.c and .h (AES), compiled into rexruntime.dll
+------------------------------------------------------------------------------------------
+/**
+ * rijndael-alg-fst.c
+ *
+ * @version 3.0 (December 2000)
+ *
+ * Optimised ANSI C code for the Rijndael cipher (now AES)
+ *
+ * @author Vincent Rijmen <vincent.rijmen@esat.kuleuven.ac.be>
+ * @author Antoon Bosselaers <antoon.bosselaers@esat.kuleuven.ac.be>
+ * @author Paulo Barreto <paulo.barreto@terra.com.br>
+ *
+ * This code is hereby placed in the public domain.
+ *
+ * THIS SOFTWARE IS PROVIDED BY THE AUTHORS ''AS IS'' AND ANY EXPRESS
+ * OR IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE IMPLIED
+ * WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR PURPOSE
+ * ARE DISCLAIMED.  IN NO EVENT SHALL THE AUTHORS OR CONTRIBUTORS BE
+ * LIABLE FOR ANY DIRECT, INDIRECT, INCIDENTAL, SPECIAL, EXEMPLARY, OR
+ * CONSEQUENTIAL DAMAGES (INCLUDING, BUT NOT LIMITED TO, PROCUREMENT OF
+ * SUBSTITUTE GOODS OR SERVICES; LOSS OF USE, DATA, OR PROFITS; OR
+ * BUSINESS INTERRUPTION) HOWEVER CAUSED AND ON ANY THEORY OF LIABILITY,
+ * WHETHER IN CONTRACT, STRICT LIABILITY, OR TORT (INCLUDING NEGLIGENCE
+ * OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE OF THIS SOFTWARE,
+ * EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
+ */
+------------------------------------------------------------------------------------------
+
+==========================================================================================
+dxbc/DXBCChecksum.cpp and .h (the DXBC container checksum, an MD5 variant), compiled into
+rexgpu-xenos.dll. Derived from the RSA Data Security, Inc. MD5 Message-Digest Algorithm.
+------------------------------------------------------------------------------------------
+// Xenia: removed Windows.h dependency.
+
+//=====================================================================
+// Copyright 2008-2016 (c), Advanced Micro Devices, Inc. All rights reserved.
+//
+/// \author AMD Developer Tools Team
+/// \file DXBCChecksum.cpp
+///
+//=====================================================================
+
+//=====================================================================
+// $Id: //devtools/main/Common/Src/ShaderUtils/DX10/DXBCChecksum.cpp#4 $
+//
+// Last checkin:  $DateTime: 2016/04/18 06:01:26 $
+// Last edited by: $Author:  AMD Developer Tools Team
+//=====================================================================
+// Free for all implementation of the MD5 hash algorithm
+
+/*
+**********************************************************************
+** DXBCChecksum.cpp                                                     **
+**                                                                  **
+** - Modified by Seth Sowerby, November 2007                        **
+**   Modified to match DXBC checksum algorithm used by Microsoft    **
+**                                                                  **
+**********************************************************************
+*/
+
+/*
+**********************************************************************
+** MD5.cpp                                                          **
+**                                                                  **
+** - Style modified by Tony Ray, January 2001                       **
+**   Added support for randomizing initialization constants         **
+** - Style modified by Dominik Reichl, April 2003                   **
+**   Optimized code                                                 **
+**                                                                  **
+**********************************************************************
+*/
+
+/*
+ **********************************************************************
+ ** MD5.c                                                            **
+ ** RSA Data Security, Inc. MD5 Message Digest Algorithm             **
+ ** Created: 2/17/90 RLR                                             **
+ ** Revised: 1/91 SRD,AJ,BSK,JT Reference C Version                  **
+ **********************************************************************
+ */
+
+/*
+ **********************************************************************
+ ** Copyright (C) 1990, RSA Data Security, Inc. All rights reserved. **
+ **                                                                  **
+ ** License to copy and use this software is granted provided that   **
+ ** it is identified as the "RSA Data Security, Inc. MD5 Message     **
+ ** Digest Algorithm" in all material mentioning or referencing this **
+ ** software or this function.                                       **
+ **                                                                  **
+ ** License is also granted to make and use derivative works         **
+ ** provided that such works are identified as "derived from the RSA **
+ ** Data Security, Inc. MD5 Message Digest Algorithm" in all         **
+ ** material mentioning or referencing the derived work.             **
+ **                                                                  **
+ ** RSA Data Security, Inc. makes no representations concerning      **
+ ** either the merchantability of this software or the suitability   **
+ ** of this software for any particular purpose.  It is provided "as **
+ ** is" without express or implied warranty of any kind.             **
+ **                                                                  **
+ ** These notices must be retained in any copies of any part of this **
+ ** documentation and/or software.                                   **
+ **********************************************************************
+ */
+------------------------------------------------------------------------------------------
+
+==========================================================================================
+renderdoc/renderdoc_app.h (the RenderDoc in-application API header), compiled into
+rexruntime.dll
+------------------------------------------------------------------------------------------
+/******************************************************************************
+ * The MIT License (MIT)
+ * 
+ * Copyright (c) 2015-2016 Baldur Karlsson
+ * 
+ * Permission is hereby granted, free of charge, to any person obtaining a copy
+ * of this software and associated documentation files (the "Software"), to deal
+ * in the Software without restriction, including without limitation the rights
+ * to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+ * copies of the Software, and to permit persons to whom the Software is
+ * furnished to do so, subject to the following conditions:
+ * 
+ * The above copyright notice and this permission notice shall be included in
+ * all copies or substantial portions of the Software.
+ * 
+ * THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+ * IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+ * FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+ * AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+ * LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+ * OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN
+ * THE SOFTWARE.
+ ******************************************************************************/
+------------------------------------------------------------------------------------------
+
+==========================================================================================
+dxc/include/dxcapi.h and DxbcConverter.h (DirectX Shader Compiler API declarations, from
+microsoft/DirectXShaderCompiler commit 6b6f40200bea5ed99367513f53f6a28e52fd3d0e), included by
+the runtime; the compiler itself is loaded at run time if present and is not shipped
+------------------------------------------------------------------------------------------
+//                                                                           //
+// dxcapi.h                                                                  //
+// Copyright (C) Microsoft Corporation. All rights reserved.                 //
+// This file is distributed under the University of Illinois Open Source     //
+// License. See LICENSE.TXT for details.                                     //
+------------------------------------------------------------------------------------------
+The vendored copy does not include that LICENSE.TXT (the University of Illinois/NCSA Open
+Source License, https://github.com/microsoft/DirectXShaderCompiler/blob/main/LICENSE.TXT).
+
+==========================================================================================
+pe/pe_image.h (Portable Executable structure definitions), compiled into rexruntime.dll
+------------------------------------------------------------------------------------------
+/* Xenia: minor tweaks to bring up to date with winnt.h */
+
+/* Copyright (c) Microsoft Corporation. All rights reserved. */
+/* NT image format (to be used when the Win32 SDK version of WINNT.H cannot) */
+------------------------------------------------------------------------------------------
+The vendored copy states no license beyond this line (open review item, see
+docs/sources-and-licensing.md).
+
+==========================================================================================
+disruptorplus (a lock-free ring buffer, header only), compiled into rexruntime.dll
+------------------------------------------------------------------------------------------
+Lewis Baker, https://github.com/lewissbaker/disruptorplus, MIT License upstream. The vendored
+copy has no license file or notice (open review item, see docs/sources-and-licensing.md).
+------------------------------------------------------------------------------------------
+
+==========================================================================================
+tiny-aes-c (AES), built as a static library by the runtime's CMake; no shipped binary links it
+------------------------------------------------------------------------------------------
+kokke, https://github.com/kokke/tiny-AES-c, The Unlicense (public domain) upstream. The
+vendored copy has no license file.
+------------------------------------------------------------------------------------------
+
+==========================================================================================
+ProggyTiny.ttf (the settings overlay's font, embedded as compressed data in
+work/runtime/src/ui/imgui_drawer.cpp, from Xenia), compiled into rexruntime.dll
+------------------------------------------------------------------------------------------
+Proggy fonts by Tristan Grimmer (https://github.com/bluescan/proggyfonts), "Copyright (c)
+2004, 2005 Tristan Grimmer", MIT License, as Dear ImGui's docs/FONTS.md lists them.
+------------------------------------------------------------------------------------------
+
+==========================================================================================
+AMD FidelityFX Contrast Adaptive Sharpening (CAS) and FidelityFX Super Resolution 1 (EASU
+and RCAS): compiled shader bytecode in work/runtime/src/ui/shaders/bytecode/d3d12_5_1 and
+vulkan_spirv (guest_output_ffx_cas_*_ps.h, guest_output_ffx_fsr_*_ps.h), from Xenia's
+presenter, compiled into rexruntime.dll
+------------------------------------------------------------------------------------------
+Advanced Micro Devices, Inc., MIT License (the license text of AMD-FidelityFX-SDK-LICENSE.txt
+with AMD's copyright line of each: FidelityFX CAS, https://github.com/GPUOpen-Effects/
+FidelityFX-CAS, 2020; FidelityFX FSR 1, https://github.com/GPUOpen-Effects/FidelityFX-FSR,
+2021; the upstream license files were not re-read in this review). The HLSL sources are not
+in the runtime fork, only the bytecode headers.
+------------------------------------------------------------------------------------------

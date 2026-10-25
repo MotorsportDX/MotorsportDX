@@ -24,7 +24,7 @@ Related pages:
 ## Requirements
 
 - A BuildRoot built by `Build.ps1` (the harness reads `local.json` and `build-result.json` from it).
-- Windows OCR with the en-US language (built into Windows 10/11).
+- Windows OCR with the en-US language: Windows installs it with the English (United States) language, which a Windows in another language may lack (Settings > Time & language > Language & region; `ocr-server.ps1` asks for `en-US`).
 - Goal mode only: a TypeSafe API key in the `TYPESAFE_API_KEY` environment variable (user scope is read even when the shell started earlier). Each step sends the OCR text of the current screen, the goal/route description and the recent steps to `https://api.typesafe.ai` (endpoint `/v1/systemone`). No images, saves, user data or personal data are sent. A quickrace run makes roughly 40-50 requests.
 - No packages beyond the Python standard library.
 

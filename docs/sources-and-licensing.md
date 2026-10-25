@@ -13,7 +13,7 @@ This repository is source-only. It records reviewed integration code, diagnostic
 - `work/fm4-launcher`: the GUI launcher, original code that ports the launch rules of `pipeline.py`. It is built against the runtime's third-party SDL3, Dear ImGui and JSON header, which are not stored.
 - `outputs/FM4-build`: the setup, generate, build, and run pipeline (`Build.ps1`, `pipeline.py`, and the loader), reviewed integration metadata (function bounds and switch recipes), the e2e harness and gates (`e2e/`), and `verification.json`.
 - `docs/`: project documentation, including the research notes in `docs/analysis/`.
-- The third-party notices in `outputs/FM4-source-control/third-party-notices`: the ReXGlue/Xenia copyright and BSD license notice, AMD's FidelityFX SDK license, Microsoft's `d3dx12.h` license, SDL's zlib license, the Microsoft.GameInput package's MIT license, and a `README.txt` that says what each covers.
+- The third-party notices in `outputs/FM4-source-control/third-party-notices`: the license text of every third-party component that the build compiles into a binary of the game, the runtime or the GUI launcher (the ReXGlue/Xenia notice, the libraries of [Third-party components](#third-party-components), AMD's FidelityFX SDK license, Microsoft's `d3dx12.h` license and the Microsoft.GameInput package's MIT license), copied from their pinned upstream revisions, and a `README.txt` that says what each covers and which binary holds it.
 - `outputs/FM4-build/sdl3-gameinput-v3.patch`: the change to the fetched SDL 3 source for GameInput API v3, applied by setup (it holds context lines of SDL's code, zlib, and marks what it alters; [Microsoft.GameInput](#third-party-code-microsoftgameinput)).
 - `work/runtime/cmake/rex_fsr.cmake`, `work/runtime/cmake/fsr-include`, `work/runtime/include/rex/graphics/d3d12/fsr.h`, `work/runtime/src/graphics/d3d12/fsr.cpp` and `work/fm4-rex/passes/fsr.hlsl`: the integration that builds AMD FSR 3.1 from the FidelityFX SDK source when `REX_FSR` is on and runs it at the scene_color point (original code of this project; it calls the SDK's API and holds none of its code). The SDK itself is not stored ([AMD FidelityFX SDK](#third-party-code-amd-fidelityfx-sdk-fsr-31)).
 
@@ -37,7 +37,7 @@ The SDK and the shipped shader sources keep their upstream attribution and licen
 - [AMD FidelityFX SDK license](../outputs/FM4-source-control/third-party-notices/AMD-FidelityFX-SDK-LICENSE.txt) and [Microsoft d3dx12.h license](../outputs/FM4-source-control/third-party-notices/Microsoft-d3dx12-LICENSE.txt), for a runtime built with `REX_FSR`
 - [SDL license](../outputs/FM4-source-control/third-party-notices/SDL-LICENSE.txt) (zlib), for the SDL 3 built into every runtime and altered by the GameInput patch
 - [Microsoft.GameInput license](../outputs/FM4-source-control/third-party-notices/Microsoft-GameInput-LICENSE.txt) (MIT), for the GameInput header and loader built into SDL
-- [What each notice covers](../outputs/FM4-source-control/third-party-notices/README.txt), including the DirectX Shader Compiler that the FSR build runs and does not ship
+- [What each notice covers and which binary holds it](../outputs/FM4-source-control/third-party-notices/README.txt), including the DirectX Shader Compiler that the FSR build runs and does not ship
 - [Runtime license (ReXGlue/Xenia)](../work/runtime/LICENSE)
 - [Xenia shader license](../work/runtime/src/graphics/shaders/fm4-resolve/LICENSE.xenia)
 - [Origin and adaptation of the resolve shader source](../work/runtime/src/graphics/shaders/fm4-resolve/PROVENANCE.txt)
@@ -48,6 +48,63 @@ Research notes:
 
 - [Visual style of FM4](analysis/visual-style.md): whether the look comes from shader code in the game or from parameters in the track assets.
 - [B4 shader research](analysis/b4-shader-research.md): the editable shader path (HLSL compiled through FXC, with overrides per hash).
+
+## Third-party components
+
+Reviewed on 25 October 2026 against the build's CMake files, the link map of `fm4_rex.exe` and the license files of the pinned revisions. No third-party library is stored in the repository: `setup` fetches the ReXGlue SDK at `f5337cdc947ff6d4c4196737e2c807a48f2a1fc2` with the 13 submodules of `THIRDPARTY_SUBMODULES` and the 11 vendored folders of `THIRDPARTY_VENDORED` in [pipeline.py](../outputs/FM4-build/pipeline.py), and the FidelityFX SDK at its pinned commit. Every license text is in [third-party-notices](../outputs/FM4-source-control/third-party-notices/README.txt), which `export` copies into each export.
+
+| Component | Version | License | In | Notice condition |
+|---|---|---|---|---|
+| ReXGlue SDK, with Xenia-derived portions | `f5337cd` (the fork in `work/runtime`) | BSD-3-Clause | every binary but the launcher | keep the notice in source and in the documentation of binaries |
+| SDL 3, altered by `outputs/FM4-build/sdl3-gameinput-v3.patch` | `8bf3b72` (3.5.0 development) | zlib | `rexruntime.dll`, `fm4_launcher.exe` | none for binaries; keep the notice in source and mark the altered source, which the patch does |
+| Microsoft.GameInput (the API v3 header and its loader, in SDL's GameInput driver) | 3.5.283 | MIT (those two files only) | `rexruntime.dll`, `fm4_launcher.exe`, inside SDL | the notice in all copies; see [below](#third-party-code-microsoftgameinput) |
+| Dear ImGui | 1.92.5 (`6d910d5`) | MIT | `rexruntime.dll`, `fm4_launcher.exe` | the notice in all copies |
+| {fmt} | 12.1.0 | MIT with an object code exception | `rexruntime.dll`, `fm4_rex.exe` | none for object code |
+| spdlog | `79524dd` | MIT | `rexruntime.dll`, `fm4_rex.exe` | the notice in all copies |
+| FFmpeg (libavcodec, libavutil; Xenia's fork) | `0604b46` | LGPL 2.1 or later (configured without GPL parts) | `rexruntime.dll`, static | license text, source offer, relinking; see [LGPL](#lgpl-ffmpeg-and-libmspack) |
+| libmspack (`lzxd.c` only) | 1.11 | LGPL 2.1 | `rexruntime.dll`, static | as FFmpeg |
+| toml++ | 3.4.0 | MIT | `rexruntime.dll`, `rexgpu-xenos.dll`, `rexglue.exe` | the notice in all copies |
+| xxHash | 0.8.3 | BSD-2-Clause | `rexruntime.dll`, `rexgpu-xenos.dll` | the notice in the documentation of binaries |
+| SIMD Everywhere | 0.8.2 | MIT | `rexruntime.dll` and the game's generated code (header code) | the notice in all copies |
+| CLI11 | `bfffd37` | BSD-3-Clause style | `rexruntime.dll`, `rexglue.exe` | the notice in the documentation of binaries |
+| inja | 3.5.0 | MIT | `rexglue.exe` (build time only) | the notice in all copies |
+| JSON for Modern C++ (nlohmann/json, from inja) | 3.11.3 | MIT | `fm4_launcher.exe`, `rexglue.exe` | the notice in all copies |
+| UTF8-CPP | `63d64de` | Boost Software License 1.0 | `rexruntime.dll` | none for object code |
+| o1heap | 3.0.0 | MIT | `rexruntime.dll` | the notice in all copies |
+| aes_128, DES, TinySHA1, SHA-256, Rijndael, `pe_image.h`, disruptorplus, `renderdoc_app.h`, the DXC API headers, stb_image, DXBCChecksum (vendored by the SDK, mostly from Xenia) | the SDK's commit | MIT, ISC style, zlib, public domain, NCSA, RSA MD5 notice; two without a stated license (see [open items](#open-items-before-a-public-release)) | `rexruntime.dll`, `rexgpu-xenos.dll` | the notices, quoted in `Vendored-code-NOTICES.txt` |
+| AMD FidelityFX CAS and FSR 1 (the presenter's shader bytecode, from Xenia) | in `work/runtime/src/ui/shaders/bytecode` | MIT | `rexruntime.dll` | the notice in all copies |
+| ProggyTiny font (Tristan Grimmer, embedded by Xenia's overlay code) | - | MIT | `rexruntime.dll` | the notice in all copies |
+| AMD FidelityFX SDK (FSR 3.1) and Microsoft `d3dx12.h` | v1.1.4 | MIT | `rexgpu-xenos.dll` with `-Fsr on` | the notice in all copies; see [below](#third-party-code-amd-fidelityfx-sdk-fsr-31) |
+| GNU binutils PowerPC disassembler (`thirdparty/disasm`) | the SDK's commit | GPL 2.0 or later | `rexglue.exe` only, never exported | source and license text if `rexglue.exe` were given to others |
+| DirectX Shader Compiler of the FidelityFX SDK | 1.8.2403 | Microsoft's DXC terms | build time only, with `-Fsr on` | not shipped |
+
+Not built: tiny-AES-c (compiled as a static library that no binary links), Vulkan, SPIR-V, glslang, Tracy, Catch2 and the upstream SDK's own FidelityFX option (`REXGLUE_ENABLE_FIDELITYFX`, off). The GUI launcher uses the Segoe UI fonts of Windows and ships no font. The project's look mods and post passes (`work/fm4-rex/look`, `work/fm4-rex/passes`) are the project's own HLSL; they implement published methods that their comments name: GTAO (Jimenez et al., 2016), interleaved gradient noise (Jimenez, 2014), the ACES fit of Krzysztof Narkowicz (2015), Uchimura's GT curve and the Khronos PBR Neutral curve.
+
+### LGPL: FFmpeg and libmspack
+
+`rexruntime.dll` links FFmpeg's libavcodec and libavutil and libmspack's LZX decoder statically. A binary that is passed to someone else must carry the LGPL text and this notice, come with an offer of those libraries' source as built, and allow relinking with a changed library (the runtime's source and build scripts). The project meets this by publishing source only: every user fetches the libraries at their pinned revisions and builds the binaries. The export carries the notices, and it is not distributed in any case ([Distribution](#distribution)).
+
+## Distribution
+
+What FM4-PC can be given to others as, a preview included ([preview plan](analysis/preview.md)):
+
+- **The source repository, with the build instructions.** It holds the integration code, the runtime fork, the tooling, the documentation and the third-party notices, and none of the game. Each player builds the game on their own computer from their own discs ([setup](setup.md)): `generate` reads the game's code from their `default.xex`, and `build` compiles it there.
+- **Not an export, a BuildRoot or any binary of it.** `fm4_rex.exe` and the two module DLLs are the game's code recompiled from the player's discs, so they carry the game, and the export's shader cache (`cache`) holds shaders translated from the game. An export is for the builder's own computers ([export](running.md#export-to-another-computer)). The runtime DLLs and the GUI launcher are not distributed on their own either: they are built in the same BuildRoot, and the LGPL terms above would apply to the runtime.
+- **Not game data.** Discs, extracted files, Disc 2 and DLC packages, title updates, saves, `loaded-image.bin`, the generated source, texture dumps, captures and screenshots of game assets in bulk, and logs and traces with the game's data are not distributed and are never committed. A few screenshots in a bug report are the player's own call.
+
+The repository keeps the game out in three ways: `.gitignore` denies every path that it does not list, [`tracked-files.json`](../outputs/FM4-source-control/tracked-files.json) lists every reviewed file, and [`check-staged-content.py`](../outputs/FM4-source-control/check-staged-content.py) blocks unlisted, binary and oversized files, translated function bodies and FidelityFX sources. A BuildRoot inside the repository (the default `work\portable-fm4`) is ignored, and `pipeline.py` refuses a BuildRoot inside `outputs`, `work\fm4-rex` or `work\runtime` and an export folder inside the repository or the BuildRoot.
+
+### History check, 25 October 2026
+
+Every commit of every ref of the development repository was scanned (352 commits on 32 local branches and the remote's 3 refs, 3,244 distinct file versions): no file has a NUL byte or a binary, image, audio, video, archive, executable, disc, save, log or trace extension, no path names a game file, a generated tree or a BuildRoot, and the only matches of the translated function pattern are the recompiler's templates and emitter (`work/runtime/resources/templates`, `work/runtime/src/codegen/function_graph.cpp`). The largest file ever committed is the runtime's `command_processor.cpp` (378,733 bytes). The shader bytecode headers in `work/runtime/src/*/shaders/bytecode` and `vulkan_spirv` are the runtime's own shaders from the upstream SDK and Xenia (with AMD's CAS and FSR 1), not the game's. The check covers only what Git holds; the repository has no Git LFS.
+
+## Open items before a public release
+
+- **No project license.** No license is assigned to the project's own code (`work/fm4-rex`, `work/fm4-launcher`, `outputs`, the docs); without one, others may read the source but have no right to reuse it. `work/runtime` stays BSD-3-Clause. The choice is the project owner's.
+- **Two vendored files without a stated license.** `pe_image.h` (a Microsoft copyright line only) and disruptorplus (MIT upstream; no license file in the SDK's copy), both from Xenia and fetched from the upstream SDK, not stored here.
+- **Notices not re-read from upstream.** The copyright years of AMD's FidelityFX CAS and FSR 1 licenses, and the DirectX Shader Compiler's `LICENSE.TXT`, which the SDK's copy of the DXC headers does not include; the review did not download them.
+- **`XenonRecomp-FM4-fixes.patch`** stays out of the repository until its provenance is reviewed.
+- **DLSS** would need its own review of NVIDIA's SDK license; not planned.
 
 ## Third-party code: AMD FidelityFX SDK (FSR 3.1)
 
@@ -106,7 +163,7 @@ The project owner approved, on 25 October 2026, the download of exactly one pack
 
 The check is an accident guard, not proof of licensing provenance. Even a listed source file needs review when it is edited.
 
-Hooks are not installed by cloning. When this file was last checked (17 October 2026), the working copy had no pre-commit hook installed, so run the check by hand before each commit.
+Hooks are not installed by cloning. When this file was last checked (25 October 2026), the working copy had no pre-commit hook installed, so run the check by hand before each commit.
 
 ## Build and reproduction notes
 

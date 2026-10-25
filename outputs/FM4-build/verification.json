@@ -1,54 +1,46 @@
 {
-  "date": "2026-10-13",
-  "platform": "Windows x64",
+  "date": "2026-10-25",
+  "platform": "Windows x64 (Windows 11), Intel Core Ultra 7 255HX, NVIDIA GeForce RTX 5070 Ti Laptop GPU",
   "toolchain": {
     "llvm": "20.1.8",
-    "windows_sdk": "10.0.26100.0"
+    "windows_sdk": "10.0.26100.0",
+    "python": "3.11",
+    "git": "2.55.0"
   },
-  "source_isolation": "SDK cloned from upstream; generation/build ran from an export of the Git index, with no pre-existing generated game source.",
-  "setup": "passed: pinned SDK checkout, patch, 8 resolve shaders, Release build and install",
-  "generate": "passed for main executable and both auxiliary modules",
+  "source_isolation": "A fresh git clone of local main at 5c346c9 in a new folder and a new BuildRoot; the upstream SDK, its submodules and the FidelityFX SDK fetched from GitHub by setup; no pre-existing generated game source.",
+  "release": "USA (media ID 26FF1101), with Disc 2 and eight DLC packages",
+  "setup": "passed: pinned SDK and 13 submodules, FidelityFX SDK v1.1.4, resolve shaders, Release runtime build and install",
+  "generate": "passed for the main executable and both auxiliary modules",
   "switch_tables_regenerated": 271,
-  "switch_tables_match_previous_build": true,
-  "function_registration_sets_match_previous_build": {
-    "default": 50233,
-    "xmedia": 3212,
-    "speech": 6715
-  },
-  "build": "passed: clean build and subsequent regenerate/build",
-  "script_unit_tests": {
-    "tests": 5,
-    "failures": 0,
-    "inputs": "synthetic"
+  "build": "passed after one fix: the launcher tests named BuildRoot\\cache as -TextureReplace, which a new BuildRoot does not have; pipeline.py now names game-build. Game build 141 s with -Jobs 8; all about 16 minutes",
+  "launcher_tests": {
+    "plans": 333,
+    "content_packages": 12
   },
   "instruction_tests": {
     "checks": 295650,
     "failures": 0,
     "half_checks": 68121,
-    "vector_checks": 227529,
-    "old_fma_differences": 264,
-    "old_dot_differences": 84
+    "vector_checks": 227529
   },
   "startup": {
-    "seconds": 60,
-    "alive_at_end": true,
-    "observed": "Startup logos and intro car video rendered",
-    "requested_close_exit_code": 0,
-    "disc2_packages_imported": 4,
-    "profile": "new isolated profile"
+    "observed": "warmcache on the new profile: the legal notice, the splash videos, the title screen and the intro video; e2e quickrace on a copy of the development profile: the main menu, Free Play and the car select (Disc 2 not imported by e2e)",
+    "race_reached": false,
+    "disc2_and_dlc_imported": false,
+    "exit": "closed by the harness"
   },
   "full_gameplay_verified": false,
   "limitations": [
-    "Only the tested Japan/Asia executable revision is supported.",
-    "Verification used a clean source export on the same Windows computer, not a second physical computer.",
-    "No race, full-mode coverage or performance validation was performed in this bootstrap test."
+    "Verification used a fresh clone on the development computer, not a second physical computer.",
+    "The runtime was built with REX_FSR off; the GUI launcher and export were not run from this BuildRoot.",
+    "The e2e Quick Race used a copy of the development profile: a new profile plays the intro video first."
   ],
   "game_artifacts_in_repository": false,
   "artifact_hashes": {
-    "fm4_rex.exe": "8960a1974874922172df1b5dda74fc0d0f8bcbd269a7909b48e6f5ea7a652530",
-    "fm4_rex_XMediaFacade_default.dll": "c0db4a674810588615051c0d84d261c23d07a7dca65e9ddb8328c0db0ac63835",
-    "fm4_rex_SpeechFacade_default.dll": "037fa99a73ccde59010cecf37038fed680f31e871b7a4dd971be1cc403741f2c",
-    "rexruntime.dll": "c4b793b66ba7cddb163a6f6648cd2a4a01fa00950434b7e46565f51d02a2fc7d",
-    "rexgpu-xenos.dll": "3130dc75d1ecdce6e0016beb7e87617329793d95b1bfda2a6af57f7a788a9045"
+    "fm4_rex.exe": "f4197ca65fbfee68de310214c784f221b56c50b86933f686667738795bbf6f08",
+    "fm4_rex_XMediaFacade_default.dll": "9cfbc01e55a130e1d2c31293e34697a6918c7f462c222949830f617b006e6897",
+    "fm4_rex_SpeechFacade_default.dll": "f0d3fdd6890b69d9d0eb0405ad9b517dbc9cceb0f52faaecc8cac7a4031bbfd0",
+    "rexruntime.dll": "3eb9586a036eb1a4a851b7833d308e54f4303b3b9b267ae8e7f80f53f1762c04",
+    "rexgpu-xenos.dll": "42a3100a73d8da36744c049be5616a7abeeb5daeef521b3d22a42298d656a740"
   }
 }

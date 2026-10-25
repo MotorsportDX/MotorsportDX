@@ -95,16 +95,22 @@ the saved list without generating again. The launcher imports a package into
 | Component | Requirement |
 | --- | --- |
 | System | Windows x64, a CPU compatible with x86-64-v2, a GPU that supports Direct3D 12 |
-| Git | Git for Windows, with HTTPS access to GitHub (for the SDK and pinned submodules) |
-| Python | **Python 3.11+ x64**. Use a real `python.exe`, not the Microsoft Store alias |
+| Git | Git for Windows, with HTTPS access to GitHub (for the SDK, its pinned submodules and the FidelityFX SDK). Setup uses partial and sparse clones; validated version: **2.55.0** |
+| Python | **Python 3.11+ x64**, for example from python.org. Use a real `python.exe`, not the Microsoft Store alias in `WindowsApps`. `py -0p` lists the installed versions with their paths: an install for all users is in `C:\Program Files\Python311`, one for the current user in `%LOCALAPPDATA%\Programs\Python\Python311`. Only the standard library is used |
 | Visual Studio | Visual Studio 2022 or Build Tools, workload **Desktop development with C++**, MSVC x64 tools |
 | Windows SDK | Includes `fxc.exe`. Validated version: **10.0.26100.0** |
 | Build tools | CMake **3.25+** and Ninja. Both can be installed through the Visual Studio Installer |
 | LLVM | **LLVM 20.x x64**. Validated version: **20.1.8** |
 
-Allow substantial disk space and time for the SDK source, its dependencies, the
-generated source, compilation and the Disc 2 import. The build directory can be on
-another drive.
+Disk space and time, measured on 25 October 2026 with a fresh clone and a new BuildRoot on
+the development laptop (Intel Core Ultra 7 255HX, 20 threads, 32 GB, `-Jobs 8`): `all`
+took about 16 minutes, of which the game's own compilation took 141 seconds, and the
+BuildRoot held 2.6 GB after `build` (1.1 GB of it the upstream SDK clone with its
+submodules). The first run then imports Disc 2 (2.8 GB) and the downloadable content
+packages into the BuildRoot, about their own size. Setup downloads the SDK, its submodules
+and the FidelityFX SDK from GitHub once. The build directory can be on another drive.
+`-Jobs` can go up to the number of threads when the computer has the memory; the default
+of 4 is slower.
 
 The `doctor` action checks the prerequisites and reports what is missing: Windows
 x64, 64-bit Python 3.11 or newer, `git`, `cmake`, `ninja`, `clang`, `clang++` and
@@ -121,6 +127,14 @@ software or change security settings.
 Run the commands in PowerShell from the root of the cloned repository. Replace the
 example paths with your own. Every stage must use the same `BuildRoot`. Quote paths
 that contain spaces.
+
+Windows does not run PowerShell scripts by default (the execution policy `Restricted`). Allow
+them for the current PowerShell window only, after you have reviewed `Build.ps1`; this
+changes no system setting and ends when the window closes:
+
+```powershell
+Set-ExecutionPolicy -Scope Process -ExecutionPolicy Bypass
+```
 
 ```powershell
 git clone https://github.com/dfebri446/FM4-PC.git
@@ -144,8 +158,9 @@ $discs = @{
 .\outputs\FM4-build\Build.ps1 -Action all @common @discs
 ```
 
-Remove the `Disc2` or `Content` entry if you do not use that content. If PowerShell
-blocks a script you have reviewed, launch it with a process-only policy:
+Remove the `Disc2` or `Content` entry if you do not use that content. Instead of
+`Set-ExecutionPolicy`, a single command can also run with a process-only policy; it takes
+the parameters written out, not `@common`:
 
 ```powershell
 powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\outputs\FM4-build\Build.ps1 -Action doctor -LLVMRoot 'C:\Program Files\LLVM' -Python 'C:\Python311\python.exe'
@@ -161,7 +176,7 @@ powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\outputs\FM4-build\Buil
 | `build` | Stage 3: builds the game executables, modules and runtime, and the GUI launcher. |
 | `all` | `setup`, then `generate`, then `build`. Does not launch the game. |
 | `run` | Launches the game. See [running.md](running.md). |
-| `warmcache` | Fills the shader cache by running the e2e Quick Race timeline once. See [running.md](running.md). |
+| `warmcache` | Fills the shader cache by running the e2e Quick Race timeline once, on a profile that has been played once to the main menu. See [running.md](running.md#shader-cache). |
 | `profbuild` | Builds `game-build-prof`, a copy with line tables and PDBs for profiling. Run `build` first. |
 | `export` | Copies the game and the GUI launcher into the `-Out` folder, to run on another computer. Run `build` first. See [running.md](running.md#export-to-another-computer). |
 
@@ -436,5 +451,15 @@ repository.
 - **The GUI launcher does not start on another computer:** install the Visual C++
   2015-2022 x64 redistributable. A missing `MSVCP140_ATOMIC_WAIT.dll` means an older
   one is installed.
-- **PowerShell blocks the script:** use the process-only execution policy shown in
-  [Commands](#commands).
+- **PowerShell blocks the script** (`running scripts is disabled on this system`): allow
+  scripts for the window with `Set-ExecutionPolicy -Scope Process -ExecutionPolicy Bypass`, as
+  in [Commands](#commands).
+- **`The term 'C:\Python311\python.exe' is not recognized`:** the `Python` path of `$common`
+  does not exist. `py -0p` prints the paths of the installed Pythons.
+- **`'vswhere.exe' is not recognized as an internal or external command`** at the start of
+  every action: printed by the Visual Studio developer environment that `Build.ps1` enters;
+  it is harmless, the actions still find the tools (`doctor` says `Preflight passed`).
+- **`Launcher tests failed`** or **`-TextureReplace is not a directory`** right after the
+  launcher build in a new BuildRoot: a build of the repository before 25 October 2026 ran one
+  launcher test against `BuildRoot\cache`, which exists only after the first run. Update the
+  repository, or run the game once and then `build` again.

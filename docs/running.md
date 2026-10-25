@@ -135,8 +135,10 @@ On the other computer:
    `user-data` in the export folder; it needs free space of about the size of the
    packages.
 
-The export contains executables built from your discs. Keep it for your own
-computers; do not publish it.
+The export contains executables built from your discs, and its shader cache holds shaders
+translated from the game. Keep it for your own computers; do not publish it or give it to
+others ([distribution](sources-and-licensing.md#distribution)). Its `third-party-notices`
+folder carries the license texts of the third-party code in the binaries.
 
 ## Launcher defaults
 
@@ -151,16 +153,20 @@ Running with no options gives this configuration:
   [-FullRateMirror](#-fullratemirror).
 - **Shadows** use the title's shadow map for every camera. See
   [-ShadowWorkaround](#-shadowworkaround).
-- **Race quality** is `high`, rendered in one tile without MSAA because the look has TAA. See
-  [-Quality](#-quality) and [-SingleTile and -Msaa](#-singletile-and--msaa).
+- **Race quality** is `high`, rendered in one tile without MSAA because the look has TAA, or
+  in one pass with 2x MSAA on the native path. See [-Quality](#-quality),
+  [-SingleTile and -Msaa](#-singletile-and--msaa) and [-Native](#-native).
 - **Look** is the `aces` preset (`pc` is its earlier name), with screen-space ambient occlusion,
-  temporal anti-aliasing, the cockpit interior's shadow floor, the cockpit glass, the road sheen
+  temporal anti-aliasing, the cockpit interior's sky fill, the cockpit glass, the road sheen
   and the glass, chrome and rim mods. See [Look](#look).
 - **Display** is `native`: borderless fullscreen on the primary monitor, with a render
-  scale of 2x on 1080p, 1440p and 2560x1600 screens and 3x on 4K. See
+  scale of 2x on 1080p, 1440p and 2560x1600 screens and 3x on 4K, and a 16:9 picture. On a
+  computer with integrated GPUs only the render scale is 1x. See
   [-Display](#-display-and-render-scale).
 - **Render path** is the host render target path (RTV) with the frame pacing and
   memory settings described in [Render path and frame pacing](#render-path-and-frame-pacing).
+  On a computer with integrated GPUs only it is the native path ([-Native](#-native)), which
+  also renders the screen's own aspect at `-ResolutionScale panel`.
 
 Performance on the defaults: Quick Race holds 60 fps on the development computer.
 The GPU time per race frame with `high` quality in its three 4x MSAA tiles and the `pc` look
@@ -1195,6 +1201,15 @@ directory can be deleted at any time. The run details are written to
 ```powershell
 .\outputs\FM4-build\Build.ps1 -Action warmcache @common
 ```
+
+Play the game once with `run` (or the GUI launcher) before `warmcache`, up to the main menu.
+The first start of a new profile plays the game's long intro video and its first-run screens,
+which the timeline does not drive: on a new BuildRoot `warmcache` stops at "PLAY CAREER timed
+out" (seen on 25 October 2026). That first `run` also imports Disc 2 and the downloadable
+content, which `warmcache` and the e2e harness do not import; without them the main menu
+offers INSTALL DISC 2. The timeline also reads the menus with Windows OCR in English (United States), as the
+e2e harness does ([e2e](e2e/README.md)); without that language and its optical character
+recognition, `warmcache` cannot find the menus. Playing fills the same cache.
 
 ## Data directories
 

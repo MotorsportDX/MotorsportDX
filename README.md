@@ -6,8 +6,9 @@ The repository does not include the game, original assets, recompiled code, or a
 
 ## Status
 
-- **Latest verification:** 16 October 2026, by the automated e2e harness on the current build. Setup, generate, and build from a clean copy of the Git files were checked on 13 and 14 October 2026. The USA release was checked on 18 October 2026 with a clean setup, generate, and build from its discs and a smoke gate.
-- **Status:** Builds from a clean source tree and runs Quick Race, photo mode, and career races through to the reward on the latest build (tested automatically). It is not yet a full port with all features and verified stability.
+- **Latest verification:** 25 October 2026. A fresh clone set up, generated and built the game from the USA discs on the development computer and booted to the menus. The automated e2e harness runs Quick Race, photo mode and career races through to the reward on the latest build.
+- **Tested hardware:** the development laptop (Intel Core Ultra 7 255HX, RTX 5070 Ti Laptop GPU) and, from exports, a ROG Xbox Ally X (Radeon 890M), where the project owner plays Quick Race, career, photo mode and replays. No other GPU has been tried.
+- **Status:** an experimental build, not yet a full port with all features and verified stability. What is known not to work or not tested is in [known issues](docs/known-issues.md); how to report a problem is in [bug reports](docs/bug-reports.md).
 - **Details:** [current status](docs/status/current.md) and [history](docs/status/history.md).
 
 ## Supported game version
@@ -48,7 +49,11 @@ Set-Location FM4-PC
 
 ### 2. Choose directories and check the toolchain
 
+Windows does not run PowerShell scripts by default. After you have reviewed `Build.ps1`, allow scripts for this PowerShell window only (no system setting changes), then set the directories:
+
 ```powershell
+Set-ExecutionPolicy -Scope Process -ExecutionPolicy Bypass
+
 $common = @{
     BuildRoot = 'D:\FM4-build'
     LLVMRoot  = 'C:\Program Files\LLVM'
@@ -59,7 +64,7 @@ $common = @{
 .\outputs\FM4-build\Build.ps1 -Action doctor @common
 ```
 
-`Build.ps1` sets up the Visual Studio x64 environment automatically. `LLVMRoot` is the LLVM installation directory, the one that contains a `bin` folder.
+`Build.ps1` sets up the Visual Studio x64 environment automatically. `LLVMRoot` is the LLVM installation directory, the one that contains a `bin` folder. `Python` is the path of a Python 3.11 or newer (x64); `py -0p` lists the installed ones. Raise `Jobs` towards the number of CPU threads to build faster: with 8 jobs, `all` took about 16 minutes on the development laptop.
 
 ### 3. Set up, generate, and build
 
@@ -82,7 +87,7 @@ Generated source, binaries, and logs stay in `BuildRoot`. Do not commit or uploa
 .\outputs\FM4-build\Build.ps1 -Action run @common
 ```
 
-By default the game runs in full screen on the primary monitor (`-Display native`), at `high` quality, with the `aces` look (`pc` is its earlier name). That look adds the project's post-processing, car paint clearcoat, screen-space ambient occlusion, TAA, a lighter cockpit interior and cockpit window glass; `gt` and `neutral` have the same mods with another tone curve. With TAA, races render one tile without MSAA. `-Look original` returns the FM4 look with TAA only, and `-Look "original,taa=0"` the unmodified picture. Quick Race holds a steady 60 fps on the development computer. Frequently used options include `-FrameRate 120` (30 to 240), `-Quality xbox|high|ultra`, `-Supersample`, and `-Info`, which shows a settings overlay that F2 toggles. The launcher reads the disc locations saved during `generate`. Discs are read from their input locations, and the game directory is not written to. Old saves are not copied automatically. Run options, look knobs, keyboard and controller controls, and data directories are described in [docs/running.md](docs/running.md).
+By default the game runs in full screen on the primary monitor (`-Display native`), at `high` quality, with the `aces` look (`pc` is its earlier name). That look adds the project's post-processing, car paint clearcoat, screen-space ambient occlusion, TAA, a lighter cockpit interior and cockpit window glass; `gt` and `neutral` have the same mods with another tone curve. With a discrete GPU the default render path is RTV: a 16:9 picture at a whole multiple of 720p, with races in one tile without MSAA. `-Native` (the default with integrated GPUs only) renders races in one pass with 2x MSAA at the screen's own resolution and aspect, Hor+ on ultrawide screens. `-Look original` returns the FM4 look with TAA only, and `-Look "original,taa=0"` the unmodified picture. Quick Race holds a steady 60 fps on the development computer. Frequently used options include `-FrameRate 120` (30 to 240), `-Quality xbox|high|ultra`, `-Supersample`, and `-Info`, which shows a settings overlay that F2 toggles. The launcher reads the disc locations saved during `generate`. Discs are read from their input locations, and the game directory is not written to. Old saves are not copied automatically. Run options, look knobs, keyboard and controller controls, and data directories are described in [docs/running.md](docs/running.md).
 
 `build` also builds a GUI launcher, `BuildRoot\game-build\fm4_launcher.exe`, which offers the same options, profiles, look sliders, key bindings, and Disc and content checks, and starts the game without Python or Visual Studio. To play on another computer, export the build and copy the folder there:
 
@@ -105,7 +110,7 @@ The end-to-end harness, [`e2e.py`](outputs/FM4-build/e2e/e2e.py), runs the game 
 - **Gameplay coverage incomplete:** not every car, track, and mode, long sessions, audio, Kinect, multiplayer, online, and most cars of downloadable content have been validated. One DLC car on a DLC track is covered by the `dlc` e2e scenario. Save migration between builds or computers, other GPUs, and performance are not guaranteed. "Not verified" does not mean "broken".
 - **Test driver:** the harness drives cars with FM4's own AI, through the rebuilt `engageaionstart` developer option. This is a test tool, not a player feature. Some FM4 menus ignore the first press, so the scenarios press until the expected screen is read.
 
-The next validation priorities are a second computer, Disc 2 car races on the latest build, photo overwrite and photos with an empty shader cache, and Autovista. The full list is in [current status](docs/status/current.md).
+The next validation priorities are a clean setup on a second computer, then audio, split screen, Rivals, Hot Lap, a full career season and more GPUs, which need testers who own the game, and a two-hour soak test. The full list is in [current status](docs/status/current.md), and the preview checklist in the [preview plan](docs/analysis/preview.md).
 
 ## Documentation
 
@@ -114,6 +119,8 @@ The next validation priorities are a second computer, Disc 2 car races on the la
 | [AGENTS.md](AGENTS.md) | Rules for AI agents working in this repository: language, documentation layout, and repository rules |
 | [docs/setup.md](docs/setup.md) | Prerequisites, setup, generate, build, BuildRoot layout, and troubleshooting |
 | [docs/running.md](docs/running.md) | Launcher run, options, look knobs, the controller options, controls, and data directories |
+| [docs/known-issues.md](docs/known-issues.md) | For players: the tested hardware, what works, known problems and what is not tested yet |
+| [docs/bug-reports.md](docs/bug-reports.md) | For players: what to write in a bug report, which logs and traces to send, and how to collect them |
 | [docs/status/current.md](docs/status/current.md) | Current state, what is verified on the latest build, open gaps, and next validation |
 | [docs/status/history.md](docs/status/history.md) | Dated history, past results, and dated test runs |
 | [docs/e2e/README.md](docs/e2e/README.md) | End-to-end harness overview, usage, gates, and scenarios |
@@ -146,15 +153,28 @@ The next validation priorities are a second computer, Disc 2 car races on the la
 | [docs/analysis/look-mod-coverage.md](docs/analysis/look-mod-coverage.md) | Which final combine, motion blur and car paint hashes each track and mode uses, and which have no look mod |
 | [docs/analysis/photo-autovista-replay.md](docs/analysis/photo-autovista-replay.md) | How photo mode, Autovista and replays render, what the gates cover, and the plan for them (M5) |
 | [docs/analysis/direct-race-launch.md](docs/analysis/direct-race-launch.md) | How GO RACE starts a Quick Race, what a launch without the menus would need, and an estimate (not built); the e2e fast route through the menus that was built instead |
-| [docs/sources-and-licensing.md](docs/sources-and-licensing.md) | Repository contents, attribution, licenses, and the pre-commit check |
+| [docs/analysis/preview.md](docs/analysis/preview.md) | What a preview can be (source only; every player builds from their own discs), and the checklist for a closed and a public preview |
+| [docs/sources-and-licensing.md](docs/sources-and-licensing.md) | Repository contents, the third-party components and their licenses, what may be distributed, the history check, and the pre-commit check |
 
 ## Licensing and attribution
 
-The repository contains reviewed integration code and a ReXGlue SDK fork (BSD-3-Clause, with Xenia-derived portions), and it keeps the upstream notices. The project does not assign a blanket license of its own, and it provides no rights to FM4 game content. See [docs/sources-and-licensing.md](docs/sources-and-licensing.md).
+The repository contains reviewed integration code and a ReXGlue SDK fork (BSD-3-Clause, with Xenia-derived portions), and it keeps the upstream notices. The project does not assign a blanket license of its own, and it provides no rights to FM4 game content. Only the source is distributed: the game's executables and DLLs that `build` makes, an export, and any game data stay with the player who built them ([distribution](docs/sources-and-licensing.md#distribution)). See [docs/sources-and-licensing.md](docs/sources-and-licensing.md).
+
+FM4-PC is not affiliated with or endorsed by Microsoft, Xbox Game Studios or Turn 10 Studios. Forza Motorsport and Xbox are trademarks of the Microsoft group of companies.
 
 ## Credits
 
-AMD FidelityFX Super Resolution 3.1 (FSR 3.1), from the [AMD FidelityFX SDK](https://github.com/GPUOpen-LibrariesAndSDKs/FidelityFX-SDK), Copyright (C) 2024 Advanced Micro Devices, Inc., MIT license; built from source into the runtime when it is built with `-Fsr on`. See the [third-party notices](outputs/FM4-source-control/third-party-notices/README.txt).
+FM4-PC builds on the work of these projects. Their license texts are in the [third-party notices](outputs/FM4-source-control/third-party-notices/README.txt), which every export carries; the versions, and the binary each one ends up in, are in [third-party components](docs/sources-and-licensing.md#third-party-components).
+
+- [ReXGlue SDK](https://github.com/rexglue/rexglue-sdk), Copyright (c) 2026 Tom Clay, BSD-3-Clause: the recompiler and the runtime that `work/runtime` forks.
+- [Xenia](https://xenia.jp), Copyright (c) 2022 Ben Vanik and Xenia project contributors, BSD-3-Clause: the Xbox 360 kernel, GPU and audio emulation that ReXGlue derives from, including the resolve shaders.
+- [SDL 3](https://github.com/libsdl-org/SDL), Sam Lantinga, zlib license: the window, input and audio layer.
+- [Dear ImGui](https://github.com/ocornut/imgui), Omar Cornut, MIT: the settings overlay and the GUI launcher.
+- [FFmpeg](https://ffmpeg.org) (Xenia's fork), LGPL 2.1 or later: XMA and WMA audio decoding. [libmspack](https://github.com/kyz/libmspack), Stuart Caie, LGPL 2.1: the LZX decompression of the executables.
+- [{fmt}](https://github.com/fmtlib/fmt) (Victor Zverovich), [spdlog](https://github.com/gabime/spdlog) (Gabi Melman), [toml++](https://github.com/marzer/tomlplusplus) (Mark Gillard), [SIMD Everywhere](https://github.com/simd-everywhere/simde) (Evan Nemerson), [o1heap](https://github.com/pavel-kirienko/o1heap) (Pavel Kirienko), [inja](https://github.com/pantor/inja) (Lars Berscheid) and [JSON for Modern C++](https://github.com/nlohmann/json) (Niels Lohmann), MIT; [xxHash](https://github.com/Cyan4973/xxHash) (Yann Collet), BSD-2-Clause; [CLI11](https://github.com/CLIUtils/CLI11) (University of Cincinnati), BSD-3-Clause; [UTF8-CPP](https://github.com/nemtrif/utfcpp) (Nemanja Trifunovic), Boost Software License.
+- The small libraries that ReXGlue vendors from Xenia: aes_128, DES, TinySHA1, Stephan Brumme's SHA-256, the Rijndael reference code, [stb_image](https://github.com/nothings/stb), disruptorplus, the RenderDoc API header, the DirectX Shader Compiler API headers, AMD's DXBC checksum (derived from the RSA Data Security, Inc. MD5 Message-Digest Algorithm) and the ProggyTiny font.
+- AMD FidelityFX: Contrast Adaptive Sharpening and FidelityFX Super Resolution 1 in the presenter (from Xenia), and FidelityFX Super Resolution 3.1 from the [AMD FidelityFX SDK](https://github.com/GPUOpen-LibrariesAndSDKs/FidelityFX-SDK), Copyright (C) 2024 Advanced Micro Devices, Inc., MIT, built from source into the runtime when it is built with `-Fsr on`, with Microsoft's `d3dx12.h` (MIT).
+- The recompiler uses the GNU binutils PowerPC disassembler (GPL 2.0 or later) at build time; it is not part of the game's binaries.
 
 [SDL 3](https://github.com/libsdl-org/SDL), Copyright (C) 1997-2026 Sam Lantinga, zlib license: the runtime's window, event and gamepad layer, built from source, with a patch for GameInput API v3.
 

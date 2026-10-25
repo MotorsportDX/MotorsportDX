@@ -1943,8 +1943,10 @@ def launcher_test_options(root):
             {'look':'aces,foliage_hue=-60,sky=1.2,road_gloss=0.5,sun=0,tonemap=filmic,taa_point=1',
              'supersample':True},
             {'look':'neutral,windshield=2,ao=0','resolution_scale':3,'display':'4k'},
+            # texture_replace must name a directory that exists: game-build holds the launcher
+            # the tests run, while cache appears only with the first run of the game.
             {'look':'original,taa=0,sharpen=0.5','ao':True,'texture_dump':str(root/'logs'),
-             'texture_replace':str(root/'cache')},
+             'texture_replace':str(root/'game-build')},
             {'look':'pc,clearcoat=0,sky=1,exposure=1e-05','quality':'xbox','display':'1440p'},
             {'look':'original,taa=0,sun=2.5','msaa':True,'frame_rate':240,'supersample':True},
             {'native':True,'resolution_scale':'panel'},
