@@ -23,6 +23,7 @@ Summary of the variables on this page:
 | `FM4_N0_TRACE`, `FM4_N0_KEYCHECK` | the title's D3D layer: replay paths, recordings, threads, ring allocations, emission hashes | every second, summary every 5 seconds | [D3D layer counters](#d3d-layer-counters-fm4_n0_trace) |
 | `REX_PM4_STATS` | packets per opcode, emission checks of IM_LOAD and LOAD_ALU_CONSTANT | every perf window | [PM4 statistics](#pm4-statistics-rex_pm4_stats) |
 | `REX_CP_SPLIT` | command-processor time per packet kind, in the perf trace | every perf window | [Performance trace](#performance-trace-rex_perf_trace_file) |
+| `FM4_SCENARIO_TRACE=1` | the title's tiling scenario: every change of `CTileBuffer::SetScenario`'s scenario (`sub_82883948`, r7) and of its caller's (`sub_828718C0`, r6), with the caller and the steady clock in ms, on stderr | every change | the render scenario names of photo mode and the menus are in the e2e events file (`push PhotoMode`) |
 | `REX_FRAME_GRAPH` | passes, resolves and GPU times (JSON lines) | `REX_FRAME_GRAPH_EVERY`, default 600 | [Frame graph](#frame-graph-rex_frame_graph) |
 | `REX_TRANSFER_DRAW_TRACE` | draws that needed ownership transfers | `REX_TRANSFER_DRAW_EVERY`, default 60 | [Transfer draws](#transfer-draws-rex_transfer_draw_trace) |
 | `REX_LATE_WRITE_TRACE`, `REX_STALE_PAGE_TRACE`, `REX_READBACK_SKIP_TRACE` | data race and stale data findings | every frame or every 4th frame | [Data race and stale data](#data-race-and-stale-data) |

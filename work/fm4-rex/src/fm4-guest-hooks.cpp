@@ -12,6 +12,7 @@
 #include <rex/memory.h>
 #include <rex/system/gpu_progress.h>
 
+#include <chrono>
 #include <cstdio>
 #include <cstdlib>
 
@@ -433,9 +434,56 @@ void FM4PatchTilingScenarios(uint8_t* base, bool early) {
   (void)patched;
 }
 
-// CTileBuffer::SetScenario (this, scenario).
+// CTileBuffer::SetScenario (this, r4 to r6, scenario in r7, ...; the scenario
+// is stored at this+7832). FM4_SCENARIO_TRACE=1 logs every
+// change of the scenario with its caller and the steady clock in ms (the e2e
+// harness's clock), and how many calls kept the previous one.
 REX_EXTERN(__imp__sub_82883948);
 REX_HOOK_RAW(sub_82883948) {
   FM4PatchTilingScenarios(base, false);
+  static const bool trace = [] {
+    const char* value = std::getenv("FM4_SCENARIO_TRACE");
+    return value && std::atoi(value) != 0;
+  }();
+  if (trace) {
+    static uint32_t previous = UINT32_MAX, previous_caller = 0, repeats = 0;
+    const uint32_t scenario = ctx.r7.u32, caller = uint32_t(ctx.lr);
+    if (scenario != previous || caller != previous_caller) {
+      const auto ms = std::chrono::duration_cast<std::chrono::milliseconds>(
+                          std::chrono::steady_clock::now().time_since_epoch())
+                          .count();
+      std::fprintf(stderr, "FM4 scenario: %u from %08x at %lld ms (the previous %u times)\n",
+                   scenario, caller, static_cast<long long>(ms), repeats);
+      previous = scenario;
+      previous_caller = caller;
+      repeats = 0;
+    }
+    ++repeats;
+  }
   __imp__sub_82883948(ctx, base);
+}
+
+// The caller of SetScenario (this, r4, r5, scenario in r6, ...). With
+// FM4_SCENARIO_TRACE=1 it logs its own caller when the scenario or the caller
+// changes, to tell photo mode's scenario 0 from the menus'.
+REX_EXTERN(__imp__sub_828718C0);
+REX_HOOK_RAW(sub_828718C0) {
+  static const bool trace = [] {
+    const char* value = std::getenv("FM4_SCENARIO_TRACE");
+    return value && std::atoi(value) != 0;
+  }();
+  if (trace) {
+    static uint32_t previous = UINT32_MAX, previous_caller = 0;
+    const uint32_t scenario = ctx.r6.u32, caller = uint32_t(ctx.lr);
+    if (scenario != previous || caller != previous_caller) {
+      const auto ms = std::chrono::duration_cast<std::chrono::milliseconds>(
+                          std::chrono::steady_clock::now().time_since_epoch())
+                          .count();
+      std::fprintf(stderr, "FM4 scenario caller: %u from %08x at %lld ms\n", scenario, caller,
+                   static_cast<long long>(ms));
+      previous = scenario;
+      previous_caller = caller;
+    }
+  }
+  __imp__sub_828718C0(ctx, base);
 }

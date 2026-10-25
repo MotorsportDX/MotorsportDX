@@ -367,6 +367,33 @@ On the build after 3f28619 with 12.1 and 12.2 (`game-build-s4`):
 - The CPU tests: `fm4_shader_mod_tests` compiles the override library with the bias define's `#ifdef`; the post pass shader tests pass with FSR's checks on the hardware adapter.
 
 
+### 12.4 The owner's ROG Xbox Ally X result for upscaling
+
+The export of 5c346c9 (logs in `D:\log_ally_5`) on the Radeon 890M at 117 Hz, the look `aces`, a Quick Race, the medians of the race windows (the owner's runs, relayed by the main session on 25 October 2026):
+
+| Run | Setting | fps | GPU a frame | Scene | The AA pass | `gtao` | `windshield` |
+|---|---|---|---|---|---|---|---|
+| 1 | 720p with TAA (the default with integrated GPUs) | 103.0 | 8.82 ms | 6.39 ms | `taa` 0.54 ms | 0.90 ms | 0.53 ms |
+| 2 | 1080p native with TAA | 56.9 | 17.14 ms | 11.93 ms | `taa` 1.14 ms | 1.76 ms | 1.01 ms |
+| 3 | 720 to 1080 with FSR quality | 64.6 | 15.15 ms | 9.07 ms | `fsr` 3.00 ms | 1.08 ms | 1.06 ms |
+| 4 | 720p with FSR's native AA | 83.5 | 11.44 ms | 6.70 ms | `fsr` 2.54 ms | 1.17 ms | 0.49 ms |
+
+Upscaling gains 14% over native 1080p there (15.15 against 17.14 ms). Where run 3's time goes against run 1, from the same perf files (the windows of the race after the start, medians; `scene` is the frame less the passes and the swap, so it holds the guest's draws, resolves, ownership transfers and texture loads; the medians do not add up exactly):
+
+| Part | Run 1 | Run 3 | Run 3 less run 1 |
+|---|---|---|---|
+| GPU a frame | 8.30 ms | 13.93 ms | +5.63 ms |
+| `fsr` against `taa` | 0.53 ms | 2.95 ms | +2.42 ms |
+| Full-screen resolves (3 a frame) | 0.75 ms (0.25 each) | 2.63 ms (0.88 each) | +1.88 ms |
+| Smaller resolves | 0.33 ms | 0.65 ms | +0.32 ms |
+| Ownership transfers | 0.13 ms | 1.01 ms | +0.88 ms |
+| Texture loads | 1.07 ms | 0.16 ms | -0.91 ms |
+| `windshield` (the final point, at s_out) | 0.64 ms | 1.10 ms | +0.46 ms |
+| `gtao`, `motion` | 1.26 ms | 1.27 ms | +0.01 ms |
+| The guest's draws (the scene less resolves, transfers and loads) | about 3.6 ms | about 3.9 ms | about +0.4 ms |
+
+The guest's own post chain and HUD at 1080 cost little more than at 720; the extra time is FSR, the full-screen resolves and the transfers at the output scale, and the windshield pass. At 1x the full-screen resolves go into guest memory and the textures are loaded after (0.25 ms a resolve and 1.07 ms of loads); with the scene at a scale they write the host textures straight (0.88 ms a resolve at 1080 from 720, 1.51 ms at 1080 native, run 2).
+
 ## Related
 
 - [TAA](taa.md), [motion vectors](motion-vectors.md#6-requirements-for-taa-and-the-upscalers), [post pass framework](post-pass-framework.md)
