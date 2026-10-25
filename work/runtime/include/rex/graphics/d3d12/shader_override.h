@@ -60,6 +60,9 @@ class ShaderOverrides {
     // The scene's scale, for translations with the scene_scale modification
     // (docs/analysis/d3d-hle-n5.md 18.13).
     DrawScale scene_draw_scale;
+    // The scene's input scale before the upscaler, with scene_input_scale too
+    // (docs/analysis/fsr-plan.md 11).
+    DrawScale scene_input_scale;
   };
 
   // Live knobs: floats in the system constant buffer (b0) after

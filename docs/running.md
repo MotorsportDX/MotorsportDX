@@ -59,7 +59,7 @@ the environment and the display description of sixteen sets of options (RTV, `-R
 
 | Page | Contents |
 | --- | --- |
-| Display | Screen (`-Display`), fullscreen, render scale, supersample, race frame rate, race quality, one tile with TAA or the MSAA tiles (`-Msaa`), the full-rate mirror and the settings overlay. The display and render scale that the options give are shown below them. |
+| Display | Screen (`-Display`), fullscreen, render scale, supersample, upscale (`-Upscale`, with the input and output lines beside it), race frame rate, race quality, one tile with TAA or the MSAA tiles (`-Msaa`), the full-rate mirror and the settings overlay. The display and render scale that the options give are shown below them. |
 | Look | The preset (`aces`, `gt`, `neutral`, `original`, `original` without TAA, or a saved look), the tone curve, TAA, and a slider for each [look knob](#look) in five groups: picture, lighting, car, sky and foliage, road. A changed knob is marked and has a Reset button. **Save as look** keeps the current value under a name. The `-Look` value is shown and can be edited. |
 | Controls | The Controller section: the options of `-Pad` (the pad driver, rumble strength, trigger rumble, the steering anti-deadzone and the input thread; stick and trigger shaping and the extra buttons folded), with the `-Pad` value shown and editable; see [Controller](#controller). Below it the keyboard bindings of the controller (the runtime's `keybind_*` settings). **Set** waits for a key; several keys are separated by commas, modifiers are written as `Shift+Up`. Unknown key names are marked and block Play. A connected controller needs no setup. |
 | Game data | Disc 1 and Disc 2, checked as `generate` checks them, the downloadable content folders and files, and the content packages found, with their import state. **Remove import** deletes an imported package from the user data (see [Data directories](#data-directories)). The texture pack is the `-TextureReplace` folder. |
@@ -221,6 +221,7 @@ takes a value.
 | `-Fullscreen` | off | Fullscreen with the `-Display` size and its render scale. |
 | `-Supersample` | off | Render one scale above the screen (up to 4x), then average the result down to the screen. |
 | `-ResolutionScale 1-4\|panel` | from `-Display` | Render at this multiple of 1280x720, or `panel`: the screen's own resolution (the native path in one pass only). Overrides the render scale of `-Display`. |
+| `-Upscale native\|quality\|balanced\|performance\|<ratio>` | `native` | With `-Native` and `aa=fsr`: FSR 3.1 renders the scene at fewer lines and upscales it to the render scale. See [-Upscale](#-upscale). |
 | `-Quality xbox\|high\|ultra` | `high` | Render quality of races. |
 | `-Look <preset/knobs>` | `aces` | Post-processing look and car paint. See [Look](#look). |
 | `-Pad <knobs>` | none | The physical controller: the SDL pad driver, rumble strength, trigger rumble, the input thread, stick and trigger shaping and the extra buttons. See [Controller](#controller). |
@@ -346,6 +347,33 @@ predate `-Quality high` and the clear coat.
 
 Alt+Enter switches between borderless fullscreen and the window in any run
 (`bind_fullscreen`). The render scale stays the same.
+
+#### -Upscale
+
+`-Upscale quality`, `balanced` or `performance` renders the race scene at fewer lines and
+lets AMD FSR 3.1 upscale it to the render scale ([FSR plan, 11](analysis/fsr-plan.md#11-stage-3-upscaling-on-n5s-scales-25-october-2026)).
+The scene renders at the output's lines divided by 1.5, 1.7 or 2 (a number such as
+`-Upscale 1.25` picks another ratio from 1 to 3), at least 720 lines; the shadow maps,
+the rear-view mirror and the other surfaces render at the whole part of that input scale,
+and the HUD, the title's post-processing and the menus' text stay at the render scale:
+
+| Output | `native` | `quality` | `balanced` | `performance` |
+| --- | --- | --- | --- | --- |
+| 1080p | 1080 | 720 | 720 (clamped to 720p) | 720 (clamped to 720p) |
+| 1440p | 1440 | 960 | 847 | 720 |
+| 2160p | 2160 | 1440 | 1271 | 1080 |
+
+The launch description names the lines ("FSR quality 960p -> 1440p", with "(clamped to
+720p)" where the input was raised to 720), and the GUI launcher shows them beside its
+Upscale choice. At a 720p output every mode renders natively. On a computer with
+integrated GPUs only, an upscale mode takes the screen's own resolution as its output, so
+the ROG Xbox Ally X renders 720p and upscales it to 1080p, where it otherwise renders 1x.
+`-Upscale` needs the native path in one pass with 2x MSAA (`-Native`, the default with
+integrated GPUs only) and FSR 3.1 as the anti-aliasing method (`-Look "aces,aa=fsr"`, a
+runtime built with `-Fsr on`); both launchers refuse it with `aa=taa` ("-Upscale quality
+needs aa=fsr in -Look: TAA does not upscale"). `native`, the default, renders at the render
+scale as before. Photo mode and the menus render at the whole part of the input scale and
+are scaled to the screen.
 
 #### -Quality
 
@@ -721,7 +749,7 @@ without it (the look's sharpening, no jitter, the tiles and MSAA of `-Quality`).
 - The `-Info` overlay shows "Anti-aliasing: TAA before the HUD, sharpen 0.4, scene jittered
   while the camera moves, a still one accumulated".
 - RTV only, like the other post passes; not with `-Rov` or `-Look "original,taa=0"`.
-- `aa=fsr` (`-Look "aces,aa=fsr"`) runs AMD FSR 3.1's native anti-aliasing (its upscaler at ratio 1) at the scene_color point instead of TAA, on a runtime built with `Build.ps1 -Fsr on` ([setup](setup.md#fsr-31-optional)): the scene is jittered in every frame, FSR accumulates still pictures itself, the look's `sharpen` becomes FSR's RCAS sharpening, and its output is written back into the game's scene. A runtime built without FSR keeps TAA at the scene_color point and logs a warning. The `-Info` overlay shows "Anti-aliasing: FSR 3.1 before the post chain (scene_color), sharpen 0.4, scene jittered every frame"; the GUI launcher offers TAA or FSR 3.1 under Temporal AA. `shader_mod_set FSR_DEBUG=1` shows FSR's debug view with `-ShaderDev`. It costs about three times TAA's GPU time (1.09 against 0.36 ms a race frame at 2x on this PC); the comparison and the A/B checklist are in [FSR plan, 9.9](analysis/fsr-plan.md#99-stage-2-the-checks-before-the-owners-ab-25-october-2026).
+- `aa=fsr` (`-Look "aces,aa=fsr"`; with [-Upscale](#-upscale) it also upscales) runs AMD FSR 3.1's native anti-aliasing (its upscaler at ratio 1) at the scene_color point instead of TAA, on a runtime built with `Build.ps1 -Fsr on` ([setup](setup.md#fsr-31-optional)): the scene is jittered in every frame, FSR accumulates still pictures itself, the look's `sharpen` becomes FSR's RCAS sharpening, and its output is written back into the game's scene. A runtime built without FSR keeps TAA at the scene_color point and logs a warning. The `-Info` overlay shows "Anti-aliasing: FSR 3.1 before the post chain (scene_color), sharpen 0.4, scene jittered every frame"; the GUI launcher offers TAA or FSR 3.1 under Temporal AA. `shader_mod_set FSR_DEBUG=1` shows FSR's debug view with `-ShaderDev`. It costs about three times TAA's GPU time (1.09 against 0.36 ms a race frame at 2x on this PC); the comparison and the A/B checklist are in [FSR plan, 9.9](analysis/fsr-plan.md#99-stage-2-the-checks-before-the-owners-ab-25-october-2026).
 - `taa_point=1` (`-Look "aces,taa_point=1"`) moves TAA to the scene_color point: it runs on the scene before the game's motion blur, bloom, exposure and final combine, and its output is written back into the game's scene, which those then sample. The occlusion gets its own temporal filter there (`GTAO_TEMPORAL`), and the look's `sharpen` stays in the final combine, after TAA. It costs about 0.47 ms of GPU time per race frame at 2x, and the `-Info` overlay shows "Anti-aliasing: TAA before the post chain (scene_color), the look's sharpening, scene jittered while the camera moves". The presets keep the final point; see [TAA, the comparison](analysis/taa.md#23-comparison).
 
 ### Cockpit glass

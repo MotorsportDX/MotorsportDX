@@ -1524,8 +1524,8 @@ ID3D12Resource* D3D12TextureCache::RequestResolvedTexture(
   host_width_out = width * (scaled ? draw_resolution_scale_x() : 1);
   host_height_out = height * (scaled ? draw_resolution_scale_y() : 1);
   if (texture->key().scene_scaled) {
-    host_width_out = SceneTextureHostWidth(width);
-    host_height_out = SceneTextureHostHeight(height);
+    host_width_out = SceneTextureHostWidth(width, texture->key().scene_input);
+    host_height_out = SceneTextureHostHeight(height, texture->key().scene_input);
   }
   return texture_resource;
 }
@@ -1608,7 +1608,7 @@ size_t D3D12TextureCache::GetResolveTextureTargets(uint32_t base_address, uint32
                                                    xenos::TextureFormat format,
                                                    ResolveTextureTarget* targets_out, bool scene,
                                                    xenos::Endian scene_endianness,
-                                                   uint32_t scene_depth) {
+                                                   uint32_t scene_depth, bool scene_input) {
   size_t count = 0;
   if (scene) {
     // Created from the key the fetches use, so the first frame is written.
@@ -1624,6 +1624,7 @@ size_t D3D12TextureCache::GetResolveTextureTargets(uint32_t base_address, uint32
         key.packed_mips = packed_mips;
         key.scaled_resolve = uint32_t(IsDrawResolutionScaled());
         key.scene_scaled = 1;
+        key.scene_input = uint32_t(scene_input);
         any |= FindTexture(key) != nullptr;
       }
     }
@@ -1656,6 +1657,7 @@ size_t D3D12TextureCache::GetResolveTextureTargets(uint32_t base_address, uint32
       // made the range scaled.
       variant_key.scaled_resolve = uint32_t(IsDrawResolutionScaled());
       variant_key.scene_scaled = uint32_t(scene);
+      variant_key.scene_input = uint32_t(scene && scene_input);
       auto* texture = static_cast<D3D12Texture*>(FindTexture(variant_key));
       if (!texture || texture->replacement() || !IsResolveTextureTargetKey(variant_key) ||
           !(texture->resource()->GetDesc().Flags & D3D12_RESOURCE_FLAG_ALLOW_UNORDERED_ACCESS)) {
@@ -1691,6 +1693,7 @@ size_t D3D12TextureCache::GetResolveTextureTargets(uint32_t base_address, uint32
         key.packed_mips = packed_mips;
         key.scaled_resolve = uint32_t(IsDrawResolutionScaled());
         key.scene_scaled = 1;
+        key.scene_input = uint32_t(scene_input);
         any_depth |= FindTexture(key) != nullptr;
       }
     }
@@ -1716,6 +1719,7 @@ size_t D3D12TextureCache::GetResolveTextureTargets(uint32_t base_address, uint32
         key.packed_mips = packed_mips;
         key.scaled_resolve = uint32_t(IsDrawResolutionScaled());
         key.scene_scaled = 1;
+        key.scene_input = uint32_t(scene_input);
         auto* texture = static_cast<D3D12Texture*>(FindTexture(key));
         if (!texture || count >= kMaxResolveTextureTargets ||
             !(texture->resource()->GetDesc().Flags & D3D12_RESOURCE_FLAG_ALLOW_UNORDERED_ACCESS)) {
@@ -2017,8 +2021,8 @@ std::unique_ptr<TextureCache::Texture> D3D12TextureCache::CreateTexture(TextureK
   }
   // A texture at the scene's scale (18.15).
   if (key.scene_scaled) {
-    desc.Width = SceneTextureHostWidth(key.GetWidth());
-    desc.Height = SceneTextureHostHeight(key.GetHeight());
+    desc.Width = SceneTextureHostWidth(key.GetWidth(), key.scene_input);
+    desc.Height = SceneTextureHostHeight(key.GetHeight(), key.scene_input);
   }
   desc.DepthOrArraySize = key.GetDepthOrArraySize();
   desc.MipLevels = key.mip_max_level + 1;

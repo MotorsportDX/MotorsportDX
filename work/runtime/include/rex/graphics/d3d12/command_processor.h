@@ -817,6 +817,8 @@ class D3D12CommandProcessor : public CommandProcessor {
   // Whether the draw being issued is a scene draw (docs/analysis/d3d-hle-n5.md 18.13), for
   // FillSystemConstantInputs.
   bool current_draw_scene_ = false;
+  // The scene draw is at the input scale (fsr-plan.md 11).
+  bool current_draw_scene_input_ = false;
 
   // Should bindless textures and samplers be used - many times faster
   // UpdateBindings than bindful (that becomes a significant bottleneck with

@@ -13,6 +13,7 @@ Json OptionsToJson(const Options& o) {
               {"supersample", o.supersample},
               {"frame_rate", o.frame_rate},
               {"vsync", o.vsync},
+              {"upscale", o.upscale},
               {"pad", o.pad},
               {"quality", o.quality},
               {"look", o.look},
@@ -52,6 +53,7 @@ Options OptionsFromJson(const Json& json) {
   get("supersample", o.supersample);
   get("frame_rate", o.frame_rate);
   get("vsync", o.vsync);
+  get("upscale", o.upscale);
   get("pad", o.pad);
   get("quality", o.quality);
   get("look", o.look);

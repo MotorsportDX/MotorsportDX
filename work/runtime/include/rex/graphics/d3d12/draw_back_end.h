@@ -210,6 +210,13 @@ constexpr uint32_t kFlagSceneScale = 1 << 13;
 // (after the post passes' final point), which stays in the centred 1280.
 constexpr uint32_t kFlagLogicalCamera = 1 << 14;
 constexpr uint32_t kFlagLogicalHud = 1 << 15;
+// With kFlagSceneScale while upscaling (docs/analysis/fsr-plan.md 11): into the
+// MSAA private surfaces at the scene's input scale.
+constexpr uint32_t kFlagSceneInput = 1 << 16;
+// The scale of a scene draw with the flags.
+inline DrawScale FlagsSceneScale(uint32_t flags, DrawScale scene_scale, DrawScale input_scale) {
+  return (flags & kFlagSceneInput) ? input_scale : scene_scale;
+}
 struct GroupFlags {
   uint32_t flags;
   uint16_t draw_resolution_scale_x;

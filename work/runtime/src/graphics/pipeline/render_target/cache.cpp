@@ -548,6 +548,7 @@ bool RenderTargetCache::Update(bool is_rasterization_done,
   const RegisterFile& regs = register_file();
   bool interlock_barrier_only = GetPath() == Path::kPixelShaderInterlock;
   last_update_private_ = false;
+  last_update_input_scale_ = false;
   // For this update only.
   const UniformDraw uniform_draw = uniform_draw_;
   uniform_draw_ = UniformDraw();
@@ -825,6 +826,7 @@ bool RenderTargetCache::Update(bool is_rasterization_done,
   if (private_rts) {
     perf_trace::CountOnePass(perf_trace::one_pass_draws);
     last_update_private_ = true;
+    last_update_input_scale_ = msaa_samples != xenos::MsaaSamples::k1X;
   }
   for (uint32_t i = 0; i < edram_bases_sorted_count; ++i) {
     const std::pair<uint32_t, uint32_t>& rt_base_index = edram_bases_sorted[i];
@@ -2185,7 +2187,8 @@ RenderTargetCache::RenderTarget* RenderTargetCache::GetOrCreateRenderTarget(Rend
   // A private surface at a fractional scene scale is created at its full
   // height: the growth copies by tile transfers at the whole scale (18.16).
   // Nor at a logical height (18.22): the scene's rows go below the guest's 720.
-  const bool sized = IsSizingEnabled() && tile_rows && GetKeyScale(key).IsWhole() &&
+  const bool sized = IsSizingEnabled() && tile_rows &&
+                     GetKeyScale(key) == DrawScale::Whole(draw_resolution_scale_x_) &&
                      !(scene_logical_height_ != 720 && key.GetWidth() == 1280 && IsPrivateKey(key));
   const uint32_t needed_rows = std::min(tile_rows, full_rows);
   const uint32_t rows =

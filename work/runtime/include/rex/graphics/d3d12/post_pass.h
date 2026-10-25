@@ -152,6 +152,9 @@ class PostPasses {
     float scale = 1.0f;
     // Sized like the final color rather than the scene depth.
     bool final_size = false;
+    // Sized like the scene at its output scale: the scene's size, or while
+    // upscaling the upscaler's output (docs/analysis/fsr-plan.md 11).
+    bool output_size = false;
     int32_t slot = -1;
     bool clear = false;
     // Two textures swapped at the swap of a frame that wrote it: the passes
@@ -526,6 +529,9 @@ class PostPasses {
   uint64_t scene_frame_ = UINT64_MAX;
   uint64_t scene_color_frame_ = UINT64_MAX;
   uint32_t scene_width_ = 0, scene_height_ = 0;
+  // The scene at its output scale (native_draw_scale) while upscaling from
+  // native_scene_input_scale (fsr-plan.md 11), else the scene's size.
+  uint32_t output_width_ = 0, output_height_ = 0;
   // The final point: armed by a final combine draw, run before the next draw.
   bool final_pending_ = false;
   uint64_t final_frame_ = UINT64_MAX;

@@ -14,7 +14,9 @@
 //                times FSR_COMPOSITION); all in the scene layout, as the motion vectors are
 //   fsr_output   pixel: FSR's output (linear) encoded to gamma 2, the game's alpha kept,
 //                into a texture that the framework writes back into the game's scene, so
-//                the motion blur, bloom, exposure and final combine sample it
+//                the motion blur, bloom, exposure and final combine sample it; at the
+//                output size, which is above the scene's while upscaling (the alpha from
+//                the scene pixel under the output pixel)
 // Colors are never the clear gray, which e2e counts as missing geometry.
 
 Texture2D<float4> fsr_scene : register(t0);
@@ -46,6 +48,11 @@ Texture2D<float4> fsr_output_scene : register(t1);
 
 float4 fsr_output(XePostPassVertex input) : SV_Target {
   int3 pixel = int3(input.position.xy, 0);
+  uint2 output_size, scene_size;
+  fsr_output_color.GetDimensions(output_size.x, output_size.y);
+  fsr_output_scene.GetDimensions(scene_size.x, scene_size.y);
+  int2 scene_pixel = min(int2(input.position.xy * float2(scene_size) / float2(output_size)),
+                         int2(scene_size) - 1);
   return float4(sqrt(max(fsr_output_color.Load(pixel).rgb, 0.0)),
-                fsr_output_scene.Load(pixel).a);
+                fsr_output_scene.Load(int3(scene_pixel, 0)).a);
 }

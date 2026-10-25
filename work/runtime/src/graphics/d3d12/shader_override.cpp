@@ -659,16 +659,17 @@ std::string ShaderOverrides::BuildContract(
 
   // Host configuration of the translator.
   uint32_t scale_x = config_.draw_resolution_scale_x, scale_y = config_.draw_resolution_scale_y;
-  if (modification.pixel.scene_scale && !config_.scene_draw_scale.IsWhole()) {
+  const DrawScale scene = modification.pixel.scene_input_scale ? config_.scene_input_scale
+                                                               : config_.scene_draw_scale;
+  if (modification.pixel.scene_scale && !scene.IsWhole()) {
     // A scene draw at a fractional scale (18.13): the macros as floats.
-    const DrawScale scene = config_.scene_draw_scale;
     line("#define XE_RESOLUTION_SCALE_X ({}.0 / {}.0)", scene.numerator, scene.denominator);
     line("#define XE_RESOLUTION_SCALE_Y ({}.0 / {}.0)", scene.numerator, scene.denominator);
     line("#define XE_REVERT_RESOLUTION_SCALE_AXES {}u",
          REXCVAR_GET(draw_resolution_scaled_texture_offsets) ? 3u : 0u);
   } else {
     if (modification.pixel.scene_scale) {
-      scale_x = scale_y = config_.scene_draw_scale.Floor();
+      scale_x = scale_y = scene.Floor();
     }
     line("#define XE_RESOLUTION_SCALE_X {}", scale_x);
     line("#define XE_RESOLUTION_SCALE_Y {}", scale_y);

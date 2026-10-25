@@ -77,7 +77,15 @@ class TextureCache {
   // The scene's scale on the native path (native_draw_scale, docs/analysis/d3d-hle-n5.md):
   // a fraction whose whole part is draw_resolution_scale_x and _y, or that scale itself.
   DrawScale scene_draw_scale() const { return scene_draw_scale_; }
-  void SetSceneDrawScale(DrawScale scale) { scene_draw_scale_ = scale; }
+  void SetSceneDrawScale(DrawScale scale) {
+    scene_draw_scale_ = scale;
+    scene_input_scale_ = scale;
+  }
+  // The scene's input scale before the upscaler (native_scene_input_scale,
+  // docs/analysis/fsr-plan.md 11): the textures of the resolves from the MSAA
+  // scene are at it while upscaling. The scene's scale otherwise.
+  DrawScale scene_input_scale() const { return scene_input_scale_; }
+  void SetSceneInputScale(DrawScale scale) { scene_input_scale_ = scale; }
 
   virtual void ClearCache();
 
@@ -88,20 +96,26 @@ class TextureCache {
   void MarkRangeAsResolved(uint32_t start_unscaled, uint32_t length_unscaled);
   // After MarkRangeAsResolved: the range holds a full-screen resolve of a
   // private surface at the scene's scale (18.15), so the textures over it are
-  // scene_scaled. The next resolve to the range clears it.
-  void MarkRangeAsSceneResolved(uint32_t start, uint32_t length);
+  // scene_scaled; with input, at the input scale (scene_input). The next
+  // resolve to the range clears it.
+  void MarkRangeAsSceneResolved(uint32_t start, uint32_t length, bool input = false);
   // The scene's logical width in guest pixels (native_logical_width,
   // d3d-hle-n5.md 18.21): a 1280-wide texture at the scene's scale has it.
   void SetSceneLogicalWidth(uint32_t width) { scene_logical_width_ = width; }
-  uint32_t SceneTextureHostWidth(uint32_t guest_width) const {
-    return scene_draw_scale_.ScaleUp(guest_width == 1280 ? scene_logical_width_ : guest_width);
+  // With input, at the input scale (a scene_input texture).
+  uint32_t SceneTextureHostWidth(uint32_t guest_width, bool input = false) const {
+    return (input ? scene_input_scale_ : scene_draw_scale_)
+        .ScaleUp(guest_width == 1280 ? scene_logical_width_ : guest_width);
   }
   // The logical height (native_logical_height, 18.22) of a 720-high one.
   void SetSceneLogicalHeight(uint32_t height) { scene_logical_height_ = height; }
-  uint32_t SceneTextureHostHeight(uint32_t guest_height) const {
-    return scene_draw_scale_.ScaleUp(guest_height == 720 ? scene_logical_height_ : guest_height);
+  uint32_t SceneTextureHostHeight(uint32_t guest_height, bool input = false) const {
+    return (input ? scene_input_scale_ : scene_draw_scale_)
+        .ScaleUp(guest_height == 720 ? scene_logical_height_ : guest_height);
   }
   bool IsRangeSceneResolved(uint32_t start, uint32_t length) const;
+  // Whether the range's scene resolve is at the input scale.
+  bool IsRangeSceneInputResolved(uint32_t start, uint32_t length) const;
   // Ensures the memory backing the range in the scaled resolve address space is
   // allocated and returns whether it is.
   virtual bool EnsureScaledResolveMemoryCommitted(uint32_t /*start_unscaled*/,
@@ -165,6 +179,36 @@ class TextureCache {
                                         binding->texture_signed->key().scene_scaled));
   }
 
+  // The active binding's texture when it is scene_scaled, for the scene
+  // texture read trace (native_scene_read_trace, docs/analysis/fsr-plan.md 11).
+  struct SceneTextureInfo {
+    uint32_t base;
+    uint32_t width;
+    uint32_t height;
+    uint32_t format;
+    // At the scene's input scale (scene_input).
+    bool input;
+  };
+  bool GetActiveSceneTexture(uint32_t fetch_constant_index, SceneTextureInfo& info) const {
+    const TextureBinding* binding = GetValidTextureBinding(fetch_constant_index);
+    if (!binding) {
+      return false;
+    }
+    const Texture* texture = binding->texture && binding->texture->key().scene_scaled
+                                 ? binding->texture
+                                 : (binding->texture_signed &&
+                                            binding->texture_signed->key().scene_scaled
+                                        ? binding->texture_signed
+                                        : nullptr);
+    if (!texture) {
+      return false;
+    }
+    const TextureKey& key = texture->key();
+    info = {uint32_t(key.base_page) << 12, uint32_t(key.width_minus_1) + 1,
+            uint32_t(key.height_minus_1) + 1, uint32_t(key.format), key.scene_input != 0};
+    return true;
+  }
+
   // The host textures the post passes wrote over (a write-back): what the
   // guest did with them until the next write-back. binds counts the texture
   // bindings of guest draws that bound one; other_binds those that bound
@@ -211,8 +255,11 @@ class TextureCache {
     // scene's scale (docs/analysis/d3d-hle-n5.md 18.15): sized by
     // DrawScale::ScaleUp, written only by the resolves, never loaded.
     uint32_t scene_scaled : 1;  // 98
+    // With scene_scaled, at the scene's input scale before the upscaler
+    // (docs/analysis/fsr-plan.md 11): a resolve from the MSAA scene.
+    uint32_t scene_input : 1;  // 99
     // Least important in ==, so placed last.
-    uint32_t is_valid : 1;  // 99
+    uint32_t is_valid : 1;  // 100
 
     TextureKey() { MakeInvalid(); }
     TextureKey(const TextureKey& key) { std::memcpy(this, &key, sizeof(*this)); }
@@ -667,6 +714,7 @@ class TextureCache {
   uint32_t draw_resolution_scale_x_;
   uint32_t draw_resolution_scale_y_;
   DrawScale scene_draw_scale_;
+  DrawScale scene_input_scale_;
   uint32_t scene_logical_width_ = 1280;
   uint32_t scene_logical_height_ = 720;
 
@@ -679,6 +727,8 @@ class TextureCache {
   std::unique_ptr<uint32_t[]> scaled_resolve_pages_;
   // Per 4 KB page of the physical memory, MarkRangeAsSceneResolved.
   uint64_t scene_resolved_pages_[(SharedMemory::kBufferSize >> 12) / 64] = {};
+  // Of those, the pages of a resolve at the input scale.
+  uint64_t scene_input_pages_[(SharedMemory::kBufferSize >> 12) / 64] = {};
   // Second level of the bit vector for faster rejection of non-scaled textures.
   // >> 12 for 4 KB pages, >> 5 for uint32_t level 1 bits, >> 6 for uint64_t
   // level 2 bits.

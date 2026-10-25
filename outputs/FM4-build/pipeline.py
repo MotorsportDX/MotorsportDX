@@ -1151,7 +1151,7 @@ def logical_view(width,height):
     return logical_width,logical_height,numerator//divisor,denominator//divisor
 
 def display_settings(display=DEFAULT_DISPLAY,fullscreen=False,supersample=False,
-                     resolution_scale=None,monitor=None,scene_scale=False):
+                     resolution_scale=None,monitor=None,scene_scale=False,upscale=False):
     """Cvars of -Display and a description. native: borderless fullscreen on the primary
     monitor; 720p, 1080p, 1440p, 4k: a window of that many pixels, or fullscreen with
     -Fullscreen or when it does not fit the monitor. The render scale is the smallest whole
@@ -1166,7 +1166,9 @@ def display_settings(display=DEFAULT_DISPLAY,fullscreen=False,supersample=False,
     d3d-hle-n5.md 18.23); the other scales render 16:9, letterboxed or pillarboxed. The
     presenter fits the picture to the window, averaging the render over each screen pixel when
     it is larger (present_area_downscale). monitor: (width, height, DPI scale, refresh, VRR min,
-    VRR max, integrated GPUs only) instead of the primary monitor's."""
+    VRR max, integrated GPUs only) instead of the primary monitor's. upscale: -Upscale renders
+    the scene below this scale (upscale_settings), so integrated GPUs take the screen's own
+    scale too."""
     monitor_width,monitor_height,dpi,*rest=monitor or primary_monitor()
     integrated=len(rest)>3 and bool(rest[3])
     if display=='native':
@@ -1180,6 +1182,7 @@ def display_settings(display=DEFAULT_DISPLAY,fullscreen=False,supersample=False,
                          "(-Native without -SingleTile, -Msaa or -MsaaSamples 0 or 4).")
     own=screen_scale(width,height)
     logical_width,logical_height=1280,720
+    integrated=integrated and not (scene_scale and upscale)
     if resolution_scale=='panel' or (scene_scale and not resolution_scale and not integrated
                                      and not supersample):
         logical_width,logical_height,numerator,denominator=logical_view(width,height)
@@ -1231,6 +1234,59 @@ def display_settings(display=DEFAULT_DISPLAY,fullscreen=False,supersample=False,
         aspect_note=f', {bars}' if logical else f', 16:9 {bars}'
     return cvars,(f'Display {display}: {screen}, render {scale_text} ({render_width}x{render_height})'
                   f'{view}{gpu_note}{aspect_note}')
+
+# -Upscale (docs/running.md#upscaling, docs/analysis/fsr-plan.md 11): FSR 3.1 renders the scene
+# at the output's lines divided by the mode's ratio and upscales it to the output scale.
+UPSCALE_MODES={'native':1.0,'quality':1.5,'balanced':1.7,'performance':2.0}
+DEFAULT_UPSCALE='native'
+
+def upscale_ratio(upscale):
+    """The ratio of an -Upscale mode or number (1: native)."""
+    upscale=upscale or DEFAULT_UPSCALE
+    ratio=UPSCALE_MODES.get(upscale)
+    if ratio is None:
+        try:
+            ratio=float(upscale)
+        except ValueError:
+            ratio=0.0
+        if not 1.0<=ratio<=3.0:
+            raise ValueError(f"Unknown -Upscale '{upscale}'; use {', '.join(UPSCALE_MODES)} or a "
+                             "ratio from 1 to 3.")
+    return ratio
+
+def upscale_settings(upscale,cvars,aa,scene_scale):
+    """The cvars of -Upscale over display_settings' cvars, and a description. native renders at
+    the output scale; quality, balanced, performance or a ratio from 1 to 3 render the scene at
+    round(output lines / ratio) lines (native_scene_input_scale, at least 720: lower is clamped
+    to 720p), the other surfaces at its whole part, and FSR upscales the scene to the output scale
+    (native_draw_scale). Needs aa=fsr and the native path in one pass with 2x MSAA."""
+    upscale=upscale or DEFAULT_UPSCALE
+    ratio=upscale_ratio(upscale)
+    if ratio==1.0:
+        return {},''
+    if not scene_scale:
+        raise ValueError("-Upscale needs the native path in one pass with 2x MSAA (-Native without "
+                         "-SingleTile, -Msaa or -MsaaSamples 0 or 4).")
+    if aa!='fsr':
+        raise ValueError(f"-Upscale {upscale} needs aa=fsr in -Look: TAA does not upscale.")
+    numerator,_,denominator=cvars.get('native_draw_scale',
+                                      cvars.get('draw_resolution_scale_x','1')).partition('/')
+    numerator,denominator=int(numerator),int(denominator or 1)
+    output_lines=(720*numerator+denominator//2)//denominator
+    lines=int(output_lines/ratio+0.5)
+    clamped=' (clamped to 720p)' if lines<720 else ''
+    lines=max(720,lines)
+    if lines>=output_lines:
+        return {},f'; upscale {upscale}: none at {output_lines}p{clamped}'
+    divisor=math.gcd(lines,720)
+    input_numerator,input_denominator=lines//divisor,720//divisor
+    whole=input_numerator//input_denominator
+    return ({'native_draw_scale':f'{numerator}/{denominator}' if denominator>1 else str(numerator),
+             'native_scene_input_scale':f'{input_numerator}/{input_denominator}'
+                                        if input_denominator>1 else str(input_numerator),
+             'draw_resolution_scale_x':str(whole),'draw_resolution_scale_y':str(whole),
+             'native_rt_surfaces':'58'},
+            f'; FSR {upscale} {lines}p -> {output_lines}p{clamped}')
 
 VSYNC_MODES=('auto','on','off')
 DEFAULT_VSYNC='auto'
@@ -1471,7 +1527,7 @@ def launch(root,single_tile=False,fixed_vblank=False,frame_rate=None,rov=False,
            resolution_scale=None,full_rate_mirror=False,look=None,shadow_workaround=False,
            quality=None,display=DEFAULT_DISPLAY,fullscreen=False,supersample=False,info=False,
            ao=False,shader_dev=False,texture_dump=None,texture_replace=None,msaa=False,
-           native=None,msaa_samples=None,vsync=DEFAULT_VSYNC,pad=None):
+           native=None,msaa_samples=None,vsync=DEFAULT_VSYNC,pad=None,upscale=DEFAULT_UPSCALE):
     state = json.loads((root/'local.json').read_text())
     disc1,disc2 = validate_discs(state['disc1'],state['disc2'])
     report=json.loads((root/'build-result.json').read_text())
@@ -1489,7 +1545,7 @@ def launch(root,single_tile=False,fixed_vblank=False,frame_rate=None,rov=False,
         shadow_workaround=shadow_workaround,quality=quality,display=display,fullscreen=fullscreen,
         supersample=supersample,info=info,ao=ao,shader_dev=shader_dev,texture_dump=texture_dump,
         texture_replace=texture_replace,msaa=msaa,content_manifest=manifest,native=native,
-        msaa_samples=msaa_samples,vsync=vsync,pad=pad)
+        msaa_samples=msaa_samples,vsync=vsync,pad=pad,upscale=upscale)
     print(description)
     if texture_dump:
         print(f'Texture dump: {cvars["texture_dump_path"]}')
@@ -1505,14 +1561,14 @@ def launch_plan(root,disc1,single_tile=False,fixed_vblank=False,frame_rate=None,
                 quality=None,display=DEFAULT_DISPLAY,fullscreen=False,supersample=False,info=False,
                 ao=False,shader_dev=False,texture_dump=None,texture_replace=None,msaa=False,
                 content_manifest=None,monitor=None,native=None,msaa_samples=None,
-                vsync=DEFAULT_VSYNC,pad=None):
+                vsync=DEFAULT_VSYNC,pad=None,upscale=DEFAULT_UPSCALE):
     """The cvars, the FM4_ environment and the display description of a run of the options of
     launch. The GUI launcher (work/fm4-launcher, plan.cpp) ports this function; launcher_tests
     compares the two. monitor: the primary monitor's (width, height, DPI scale, refresh Hz, VRR
     min Hz, VRR max Hz, integrated GPUs only) instead of the real one. native: True for -Native,
     False for -Rtv, None for the default: the native path with integrated GPUs only, unless
     -Rov or -Msaa (the main session's decision of 24 October 2026, d3d-hle-n4.md 17.25). pad:
-    the -Pad value (PAD_KNOBS)."""
+    the -Pad value (PAD_KNOBS). upscale: the -Upscale mode (upscale_settings)."""
     monitor=monitor or primary_monitor()
     native_auto=native is None
     if native_auto:
@@ -1567,8 +1623,13 @@ def launch_plan(root,disc1,single_tile=False,fixed_vblank=False,frame_rate=None,
             # every 1280-wide race surface private (d3d-hle-n5.md 18.11).
             cvars.update({'native_one_pass_msaa':str(msaa_samples),'native_rt_surfaces':'26'})
     screen,description=display_settings(display,fullscreen,supersample,resolution_scale,monitor,
-                                        scene_scale=bool(native and msaa_samples==2))
+                                        scene_scale=bool(native and msaa_samples==2),
+                                        upscale=upscale_ratio(upscale)>1.0)
     cvars.update(screen)
+    upscaled,upscale_description=upscale_settings(upscale,cvars,aa_method(look_knobs(look)),
+                                                  bool(native and msaa_samples==2))
+    cvars.update(upscaled)
+    description+=upscale_description
     present,frame_rate,present_description=present_settings(vsync,frame_rate,monitor)
     cvars.update(present)
     description+=f'; {present_description}'
@@ -1631,6 +1692,7 @@ def launcher_data():
             'displays':{name:list(size) for name,size in DISPLAYS.items()},
             'default_display':DEFAULT_DISPLAY,'max_resolution_scale':MAX_RESOLUTION_SCALE,
             'vsync':{'modes':list(VSYNC_MODES),'default':DEFAULT_VSYNC},
+            'upscale':{'modes':UPSCALE_MODES,'default':DEFAULT_UPSCALE},
             'pad':{'knobs':PAD_KNOBS},
             'gtao':passes_settings(PASSES_DIRECTORY,{}),
             'releases':{name:{'media_id':info['media_id'],'executables':info['executables']}
@@ -1708,7 +1770,11 @@ def launcher_test_options(root):
             {'native':True,'supersample':True},
             {'native':True,'display':'1080p'},
             {'native':True,'resolution_scale':2,'display':'1440p'},
-            {'resolution_scale':'panel','msaa_samples':2,'native':True,'display':'720p'}]
+            {'resolution_scale':'panel','msaa_samples':2,'native':True,'display':'720p'},
+            {'native':True,'look':'pc,aa=fsr','upscale':'quality','display':'4k'},
+            {'native':True,'look':'pc,aa=fsr','upscale':'balanced','display':'1440p'},
+            {'native':True,'look':'pc,aa=fsr','upscale':'performance'},
+            {'native':True,'look':'pc,aa=fsr','upscale':'1.25','display':'1080p'}]
 
 def launcher_tests(root):
     """Compares fm4_launcher.exe's port of launch_plan, disc check and content search with this
@@ -1866,6 +1932,10 @@ def main():
     parser.add_argument('--pad',
                         help="run: the controller's options as knobs, for example "
                              "'driver=rawinput,trigger_rumble=1,rumble=1.5' (PAD_KNOBS)")
+    parser.add_argument('--upscale',default=DEFAULT_UPSCALE,
+                        help='run: native (default), quality, balanced, performance or a ratio from '
+                             '1 to 3: FSR 3.1 renders the scene at fewer lines and upscales it to '
+                             'the output scale; needs -Native and aa=fsr in -Look')
     parser.add_argument('--vsync',choices=VSYNC_MODES,default=DEFAULT_VSYNC,
                         help='run: auto (default: on a VRR display, tearing presents held a refresh '
                              'apart and races under the refresh; else on), on (the refresh, no '
@@ -1951,7 +2021,8 @@ def main():
                                      args.shadow_workaround,args.quality,args.display,
                                      args.fullscreen,args.supersample,args.info,args.ao,
                                      args.shader_dev,args.texture_dump,args.texture_replace,args.msaa,
-                                     args.native,args.msaa_samples,args.vsync,args.pad)
+                                     args.native,args.msaa_samples,args.vsync,args.pad,
+                                     args.upscale)
     if args.action=='warmcache': warm_cache(root)
     if args.action=='profbuild': build_profiling(root,fxc,args.jobs)
     if args.action=='export':

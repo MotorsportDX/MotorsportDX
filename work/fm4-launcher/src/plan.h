@@ -58,6 +58,9 @@ struct Options {
   int msaa_samples = -1;     // -MsaaSamples; -1: unset (2 with -Native)
   int frame_rate = 0;        // 0: the title's 60
   std::string vsync;         // -VSync auto, on or off; empty: the default (auto)
+  // -Upscale native, quality, balanced, performance or a ratio from 1 to 3; empty: the default
+  // (native).
+  std::string upscale;
   int resolution_scale = 0;  // 0: from the display; kPanelScale: the screen's own (panel)
   std::string look;          // empty: the default look
   std::string quality;       // empty: the default quality
@@ -134,7 +137,19 @@ LogicalView LogicalViewOf(int width, int height);
 std::pair<Pairs, std::string> DisplaySettings(const LauncherData& data, const std::string& display,
                                               bool fullscreen, bool supersample,
                                               int resolution_scale, const Monitor& monitor,
-                                              bool scene_scale = false);
+                                              bool scene_scale = false, bool upscale = false);
+
+// upscale_ratio and upscale_settings of pipeline.py: the ratio of an -Upscale mode or number (1:
+// native), and the cvars of -Upscale over DisplaySettings' cvars with the description. aa: the
+// look's aa knob.
+double UpscaleRatio(const LauncherData& data, const std::string& upscale);
+std::pair<Pairs, std::string> UpscaleSettings(const LauncherData& data, const std::string& upscale,
+                                              const Pairs& cvars, const std::string& aa,
+                                              bool scene_scale);
+
+// The input and output lines of a plan's cvars for the GUI, such as "1440p -> 2160p" (with an
+// arrow), or empty when the plan does not upscale.
+std::string UpscaleText(const Pairs& cvars);
 
 // The render scale of a plan's cvars for the GUI: "3/2, 1920x1080" or "2x, 2560x1440".
 std::string RenderScaleText(const Pairs& cvars);

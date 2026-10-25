@@ -320,6 +320,8 @@ write_back = true
 # FSR's inputs at the scene_color point (fsr_prepare): the linear color, the
 # depth, the reactive and the transparency and composition masks; its output
 # (linear), and that output encoded and written back into the game's scene.
+# The output is at the scene's output size: above the inputs' while upscaling
+# (native_scene_input_scale, docs/analysis/fsr-plan.md 11).
 [textures.fsr_color]
 format = "R16G16B16A16_FLOAT"
 
@@ -334,6 +336,7 @@ format = "R8_UNORM"
 
 [textures.fsr_output]
 format = "R16G16B16A16_FLOAT"
+size = "output"
 
 # What shader mods mark as reactive with xe_post_mark_reactive (particles that
 # ghost under FSR; none yet): bound and cleared every frame only while a mod
@@ -344,6 +347,7 @@ reactive_mark = true
 
 [textures.fsr_scene_out]
 format = "R10G10B10A2_UNORM"
+size = "output"
 write_back = true
 
 # The cockpit glass (windshield.hlsl), in screen orientation: per block of 8x8

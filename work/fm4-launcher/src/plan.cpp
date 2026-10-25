@@ -9,6 +9,7 @@
 #include <map>
 #include <numeric>
 #include <sstream>
+#include <tuple>
 
 namespace fm4 {
 
@@ -593,7 +594,7 @@ LogicalView LogicalViewOf(int width, int height) {
 std::pair<Pairs, std::string> DisplaySettings(const LauncherData& data, const std::string& display,
                                               bool fullscreen, bool supersample,
                                               int resolution_scale, const Monitor& monitor,
-                                              bool scene_scale) {
+                                              bool scene_scale, bool upscale) {
   int width = monitor.width, height = monitor.height;
   if (display == "native") {
     fullscreen = true;
@@ -614,7 +615,9 @@ std::pair<Pairs, std::string> DisplaySettings(const LauncherData& data, const st
   const auto own = ScreenScale(width, height);
   int numerator, denominator;
   int logical_width = 1280, logical_height = 720;
-  if (panel || (scene_scale && !resolution_scale && !monitor.integrated_gpu && !supersample)) {
+  // -Upscale renders the scene below this scale, so integrated GPUs take the screen's own too.
+  const bool integrated = monitor.integrated_gpu && !(scene_scale && upscale);
+  if (panel || (scene_scale && !resolution_scale && !integrated && !supersample)) {
     const LogicalView view = LogicalViewOf(width, height);
     logical_width = view.width;
     logical_height = view.height;
@@ -622,11 +625,11 @@ std::pair<Pairs, std::string> DisplaySettings(const LauncherData& data, const st
     denominator = view.denominator;
   } else {
     int scale;
-    if (scene_scale && supersample && !resolution_scale && !monitor.integrated_gpu) {
+    if (scene_scale && supersample && !resolution_scale && !integrated) {
       scale = std::min(max_scale, own.first / own.second + 1);
     } else {
       const int cover =
-          monitor.integrated_gpu
+          integrated
               ? 1
               : static_cast<int>(std::ceil(std::min(width / 1280.0, height / 720.0) - 1e-6));
       scale = resolution_scale ? resolution_scale : std::min(max_scale, cover + (supersample ? 1 : 0));
@@ -671,8 +674,7 @@ std::pair<Pairs, std::string> DisplaySettings(const LauncherData& data, const st
   const std::string screen =
       fullscreen ? "fullscreen " + std::to_string(monitor.width) + "x" + std::to_string(monitor.height)
                  : "window " + std::to_string(width) + "x" + std::to_string(height);
-  const std::string gpu_note =
-      monitor.integrated_gpu && !resolution_scale ? " for an integrated GPU" : "";
+  const std::string gpu_note = integrated && !resolution_scale ? " for an integrated GPU" : "";
   const long long shown_width = fullscreen ? monitor.width : width;
   const long long shown_height = fullscreen ? monitor.height : height;
   std::string view;
@@ -691,14 +693,79 @@ std::pair<Pairs, std::string> DisplaySettings(const LauncherData& data, const st
                      view + gpu_note + aspect_note};
 }
 
+// A scale cvar such as "3/2" or "2" as numerator and denominator.
+std::pair<int, int> ParseScale(const std::string& text) {
+  const size_t slash = text.find('/');
+  if (slash == std::string::npos) return {std::stoi(text), 1};
+  return {std::stoi(text.substr(0, slash)), std::stoi(text.substr(slash + 1))};
+}
+
+double UpscaleRatio(const LauncherData& data, const std::string& option) {
+  const Json& upscale = data.json.at("upscale");
+  const std::string mode = option.empty() ? upscale.at("default").get<std::string>() : option;
+  if (upscale.at("modes").contains(mode)) return upscale.at("modes").at(mode).get<double>();
+  char* end = nullptr;
+  const double ratio = mode.empty() ? 0.0 : std::strtod(mode.c_str(), &end);
+  if (mode.empty() || *end || !(ratio >= 1.0 && ratio <= 3.0))
+    throw PlanError("Unknown -Upscale '" + mode +
+                    "'; use native, quality, balanced, performance or a ratio from 1 to 3.");
+  return ratio;
+}
+
+std::pair<Pairs, std::string> UpscaleSettings(const LauncherData& data, const std::string& option,
+                                              const Pairs& cvars, const std::string& aa,
+                                              bool scene_scale) {
+  const std::string upscale =
+      option.empty() ? data.json.at("upscale").at("default").get<std::string>() : option;
+  const double ratio = UpscaleRatio(data, upscale);
+  if (ratio == 1.0) return {};
+  if (!scene_scale)
+    throw PlanError(
+        "-Upscale needs the native path in one pass with 2x MSAA (-Native without -SingleTile, "
+        "-Msaa or -MsaaSamples 0 or 4).");
+  if (aa != "fsr")
+    throw PlanError("-Upscale " + upscale + " needs aa=fsr in -Look: TAA does not upscale.");
+  const auto [numerator, denominator] =
+      ParseScale(cvars.Get("native_draw_scale", cvars.Get("draw_resolution_scale_x", "1")));
+  const int output_lines = (720 * numerator + denominator / 2) / denominator;
+  int lines = static_cast<int>(output_lines / ratio + 0.5);
+  const std::string clamped = lines < 720 ? " (clamped to 720p)" : "";
+  lines = std::max(720, lines);
+  if (lines >= output_lines)
+    return {Pairs(), "; upscale " + upscale + ": none at " + std::to_string(output_lines) + "p" +
+                         clamped};
+  const int divisor = std::gcd(lines, 720);
+  const int input_numerator = lines / divisor, input_denominator = 720 / divisor;
+  const std::string whole = std::to_string(input_numerator / input_denominator);
+  Pairs result;
+  result.Set("native_draw_scale", denominator > 1 ? std::to_string(numerator) + "/" +
+                                                        std::to_string(denominator)
+                                                  : std::to_string(numerator));
+  result.Set("native_scene_input_scale",
+             input_denominator > 1
+                 ? std::to_string(input_numerator) + "/" + std::to_string(input_denominator)
+                 : std::to_string(input_numerator));
+  result.Set("draw_resolution_scale_x", whole);
+  result.Set("draw_resolution_scale_y", whole);
+  result.Set("native_rt_surfaces", "58");
+  return {result, "; FSR " + upscale + " " + std::to_string(lines) + "p -> " +
+                      std::to_string(output_lines) + "p" + clamped};
+}
+
+std::string UpscaleText(const Pairs& cvars) {
+  const std::string input = cvars.Get("native_scene_input_scale");
+  if (input.empty()) return "";
+  const auto [input_numerator, input_denominator] = ParseScale(input);
+  const auto [numerator, denominator] = ParseScale(cvars.Get("native_draw_scale", "1"));
+  return std::to_string((720 * input_numerator + input_denominator / 2) / input_denominator) +
+         "p \u2192 " + std::to_string((720 * numerator + denominator / 2) / denominator) + "p";
+}
+
 std::string RenderScaleText(const Pairs& cvars) {
   int numerator = std::stoi(cvars.Get("draw_resolution_scale_x", "1")), denominator = 1;
+  // The scene's scale, which -Upscale gives also when it is whole.
   const std::string fraction = cvars.Get("native_draw_scale");
-  const size_t slash = fraction.find('/');
-  if (slash != std::string::npos) {
-    numerator = std::stoi(fraction.substr(0, slash));
-    denominator = std::stoi(fraction.substr(slash + 1));
-  }
+  if (!fraction.empty()) std::tie(numerator, denominator) = ParseScale(fraction);
   const int width = std::stoi(cvars.Get("native_logical_width", "1280"));
   const int height = std::stoi(cvars.Get("native_logical_height", "720"));
   std::string text = (denominator > 1 ? std::to_string(numerator) + "/" + std::to_string(denominator)
@@ -837,8 +904,13 @@ Plan LaunchPlan(const LauncherData& data, const std::string& root, const std::st
                                   : options.display;
   auto [screen, description] = DisplaySettings(data, display, options.fullscreen,
                                                options.supersample, options.resolution_scale,
-                                               monitor, native && msaa_samples == 2);
+                                               monitor, native && msaa_samples == 2,
+                                               UpscaleRatio(data, options.upscale) > 1.0);
   Update(cvars, screen);
+  const auto [upscaled, upscale_description] =
+      UpscaleSettings(data, options.upscale, cvars, AaMethod(knobs), native && msaa_samples == 2);
+  Update(cvars, upscaled);
+  description += upscale_description;
   const PresentSettings present = PresentSettingsOf(data, options.vsync, options.frame_rate, monitor);
   Update(cvars, present.cvars);
   plan.description = description + "; " + present.description;

@@ -115,6 +115,7 @@ PipelineCache::PipelineCache(D3D12CommandProcessor& command_processor,
       render_target_cache_.msaa_2x_supported(), render_target_cache_.draw_resolution_scale_x(),
       render_target_cache_.draw_resolution_scale_y(), provider.GetGraphicsAnalysis() != nullptr);
   shader_translator_->SetSceneDrawScale(render_target_cache_.scene_draw_scale());
+  shader_translator_->SetSceneInputScale(render_target_cache_.scene_input_scale());
 
   if (edram_rov_used) {
     depth_only_pixel_shader_ = std::move(shader_translator_->CreateDepthOnlyPixelShader());
@@ -124,7 +125,8 @@ PipelineCache::PipelineCache(D3D12CommandProcessor& command_processor,
       {bindless_resources_used_, edram_rov_used,
        !render_target_cache_.gamma_render_target_as_unorm16(),
        render_target_cache_.msaa_2x_supported(), render_target_cache_.draw_resolution_scale_x(),
-       render_target_cache_.draw_resolution_scale_y(), render_target_cache_.scene_draw_scale()});
+       render_target_cache_.draw_resolution_scale_y(), render_target_cache_.scene_draw_scale(),
+       render_target_cache_.scene_input_scale()});
 }
 
 PipelineCache::~PipelineCache() {
@@ -398,6 +400,7 @@ void PipelineCache::InitializeShaderStorage(const std::filesystem::path& cache_r
           render_target_cache_.draw_resolution_scale_y(),
           provider.GetGraphicsAnalysis() != nullptr);
       translator.SetSceneDrawScale(render_target_cache_.scene_draw_scale());
+      translator.SetSceneInputScale(render_target_cache_.scene_input_scale());
       // If needed and possible, create objects needed for DXIL conversion and
       // disassembly on this thread.
       IDxbcConverter* dxbc_converter = nullptr;
@@ -3160,13 +3163,16 @@ ID3D12PipelineState* PipelineCache::CreateD3D12Pipeline(
   // more likely.
   // A scene draw at a fractional scale (the scene_scale modification,
   // docs/analysis/d3d-hle-n5.md 18.13): the scene's scale.
-  const bool scene_scale =
-      runtime_description.pixel_shader &&
-      DxbcShaderTranslator::Modification(runtime_description.pixel_shader->modification())
-          .pixel.scene_scale;
+  // With scene_input_scale, the input scale before the upscaler.
+  const DxbcShaderTranslator::Modification pixel_modification(
+      runtime_description.pixel_shader ? runtime_description.pixel_shader->modification() : 0);
+  const bool scene_scale = runtime_description.pixel_shader && pixel_modification.pixel.scene_scale;
+  const DrawScale scene_draw_scale = pixel_modification.pixel.scene_input_scale
+                                         ? render_target_cache_.scene_input_scale()
+                                         : render_target_cache_.scene_draw_scale();
   state_desc.RasterizerState.SlopeScaledDepthBias =
       description.depth_bias_slope_scaled *
-      (scene_scale ? render_target_cache_.scene_draw_scale().ToFloat()
+      (scene_scale ? scene_draw_scale.ToFloat()
                    : float(std::max(render_target_cache_.draw_resolution_scale_x(),
                                     render_target_cache_.draw_resolution_scale_y())));
   state_desc.RasterizerState.DepthClipEnable = description.depth_clip ? TRUE : FALSE;

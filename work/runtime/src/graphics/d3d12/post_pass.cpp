@@ -586,10 +586,11 @@ bool PostPasses::LoadManifest(Manifest& manifest) {
         texture.scale = float(number);
       }
       std::string size = (*fields)["size"].value_or(std::string("scene"));
-      if (size != "scene" && size != "final") {
-        return fail(fmt::format("texture {}: size is scene or final", texture.name));
+      if (size != "scene" && size != "final" && size != "output") {
+        return fail(fmt::format("texture {}: size is scene, final or output", texture.name));
       }
       texture.final_size = size == "final";
+      texture.output_size = size == "output";
       if (NodeNumber((*fields)["slot"].node(), number)) {
         if (number < 0.0 || number >= double(D3D12CommandProcessor::kPostPassViewCount)) {
           return fail(fmt::format("texture {}: slot must be 0 to {}", texture.name,
@@ -614,14 +615,14 @@ bool PostPasses::LoadManifest(Manifest& manifest) {
           (texture.format != DXGI_FORMAT_R10G10B10A2_UNORM || texture.final_size ||
            texture.scale != 1.0f || texture.mips != 1 || texture.history)) {
         return fail(fmt::format(
-            "texture {}: a write_back texture is R10G10B10A2_UNORM, scene sized, unscaled, one mip "
-            "and no history",
+            "texture {}: a write_back texture is R10G10B10A2_UNORM, scene or output sized, "
+            "unscaled, one mip and no history",
             texture.name));
       }
       manifest.uses_write_back |= texture.write_back;
       texture.reactive_mark = (*fields)["reactive_mark"].value_or(false);
       if (texture.reactive_mark) {
-        if (texture.format != DXGI_FORMAT_R8_UNORM || texture.final_size ||
+        if (texture.format != DXGI_FORMAT_R8_UNORM || texture.final_size || texture.output_size ||
             texture.scale != 1.0f || texture.mips != 1 || texture.history || texture.slot >= 0 ||
             texture.clear || texture.write_back || manifest.reactive_mark != UINT32_MAX) {
           return fail(fmt::format(
@@ -1533,16 +1534,20 @@ void PostPasses::OnResolve(const RegisterFile& regs, uint32_t address, uint32_t 
     // At a fractional scene scale or a logical size, a scene depth not at the
     // scene's size (photo mode's 4x MSAA tiles at the whole scale and 16:9,
     // d3d-hle-n5.md 18.17) leaves the frame without a scene: the passes need
-    // the final's size.
-    const DrawScale scene_scale = command_processor_.texture_cache_->scene_draw_scale();
+    // the final's size. While upscaling (fsr-plan.md 11), the scene depth is at
+    // the input scale.
     const RenderTargetCache& rt_cache = *command_processor_.render_target_cache_;
+    const bool upscaled = rt_cache.IsSceneUpscaled();
+    const DrawScale scene_scale = upscaled
+                                      ? command_processor_.texture_cache_->scene_input_scale()
+                                      : command_processor_.texture_cache_->scene_draw_scale();
     if (rt_cache.scene_textures() &&
-        (!scene_scale.IsWhole() || rt_cache.scene_logical_width() != 1280 ||
+        (!scene_scale.IsWhole() || upscaled || rt_cache.scene_logical_width() != 1280 ||
          rt_cache.scene_logical_height() != 720) &&
-        (scene_depth_.width !=
-             command_processor_.texture_cache_->SceneTextureHostWidth(depth_group_.pitch) ||
-         scene_depth_.height !=
-             command_processor_.texture_cache_->SceneTextureHostHeight(depth_group_.height))) {
+        (scene_depth_.width != command_processor_.texture_cache_->SceneTextureHostWidth(
+                                   depth_group_.pitch, upscaled) ||
+         scene_depth_.height != command_processor_.texture_cache_->SceneTextureHostHeight(
+                                    depth_group_.height, upscaled))) {
       if (!logged_unscaled_scene_) {
         logged_unscaled_scene_ = true;
         REXGPU_INFO(
@@ -1558,6 +1563,12 @@ void PostPasses::OnResolve(const RegisterFile& regs, uint32_t address, uint32_t 
     scene_frame_ = frame;
     scene_width_ = scene_depth_.width;
     scene_height_ = scene_depth_.height;
+    output_width_ = upscaled
+                        ? command_processor_.texture_cache_->SceneTextureHostWidth(depth_group_.pitch)
+                        : scene_width_;
+    output_height_ =
+        upscaled ? command_processor_.texture_cache_->SceneTextureHostHeight(depth_group_.height)
+                 : scene_height_;
     RunPoint(Point::kSceneDepth);
     // The scene color completed first.
     if (color_group_.frame == frame && color_group_.done && scene_color_frame_ != frame) {
@@ -1645,11 +1656,23 @@ void PostPasses::WriteBack() {
     }
     return;
   }
+  // While upscaling (docs/analysis/fsr-plan.md 11), an output-sized write-back
+  // goes into a texture at the scene's output scale: the range's scene class
+  // changes to it until its next resolve, and the bindings are looked up again
+  // so the game's next fetches bind it.
+  const bool upscaled = command_processor_.render_target_cache_->IsSceneUpscaled();
+  bool output_class = false;
   for (size_t i = 0; i < textures_.size(); ++i) {
     Texture& texture = textures_[i];
     if (!manifest_->textures[i].write_back || texture.written_frame != frame ||
         !texture.resource) {
       continue;
+    }
+    if (upscaled && manifest_->textures[i].output_size && !output_class) {
+      output_class = true;
+      command_processor_.texture_cache_->MarkRangeAsSceneResolved(
+          color_group_.base, color_group_.end - color_group_.base, false);
+      command_processor_.texture_cache_->TextureFetchConstantsWritten(0, 31);
     }
     Transition(texture.resource.Get(), texture.state, D3D12_RESOURCE_STATE_COPY_SOURCE);
     command_processor_.SubmitBarriers();
@@ -2211,10 +2234,11 @@ void PostPasses::RunPoint(Point point) {
     final_color_.rtv = target.rtv;
     final_color_.format = target.format;
     // A private final target at a fractional scene scale (d3d-hle-n5.md
-    // 18.13): its pixels are the scene's.
+    // 18.13), or while upscaling at any (fsr-plan.md 11, where a whole output
+    // scale is not the other surfaces'): its pixels are the scene's.
     const DrawScale scene_scale = command_processor_.texture_cache_->scene_draw_scale();
     if (command_processor_.render_target_cache_->scene_textures() &&
-        (!scene_scale.IsWhole() ||
+        (!scene_scale.IsWhole() || command_processor_.render_target_cache_->IsSceneUpscaled() ||
          command_processor_.render_target_cache_->scene_logical_width() != 1280 ||
          command_processor_.render_target_cache_->scene_logical_height() != 720)) {
       final_width_ = std::min(
@@ -2255,15 +2279,16 @@ void PostPasses::RunPoint(Point point) {
       }
       // Passes such as TAA leave the frame as it is when the final size is
       // not the scene's, which no known case has; report each new pair.
-      if ((final_width_ != scene_width_ || final_height_ != scene_height_) &&
+      // The scene at its output scale while upscaling (fsr-plan.md 11).
+      if ((final_width_ != output_width_ || final_height_ != output_height_) &&
           (final_width_ != mismatch_final_width_ || final_height_ != mismatch_final_height_ ||
-           scene_width_ != mismatch_scene_width_ || scene_height_ != mismatch_scene_height_)) {
+           output_width_ != mismatch_scene_width_ || output_height_ != mismatch_scene_height_)) {
         mismatch_final_width_ = final_width_;
         mismatch_final_height_ = final_height_;
-        mismatch_scene_width_ = scene_width_;
-        mismatch_scene_height_ = scene_height_;
+        mismatch_scene_width_ = output_width_;
+        mismatch_scene_height_ = output_height_;
         REXGPU_ERROR("Post passes: final size {}x{} differs from the scene's {}x{}", final_width_,
-                     final_height_, scene_width_, scene_height_);
+                     final_height_, output_width_, output_height_);
       }
     }
   }
@@ -2875,6 +2900,18 @@ void PostPasses::UpdateJitter() {
     return;
   }
   uint32_t phases = manifest.jitter_phases;
+  // While upscaling (docs/analysis/fsr-plan.md 11), the phases FSR asks for at
+  // the ratio, 8 ratio^2 (ffxFsr3UpscalerGetJitterPhaseCount), at most 64.
+  const RenderTargetCache& rt_cache = *command_processor_.render_target_cache_;
+  if (rt_cache.IsSceneUpscaled()) {
+    // The ratio as a fraction, exact: out / in = (n_out d_in) / (d_out n_in).
+    const uint64_t a = uint64_t(rt_cache.scene_draw_scale().numerator) *
+                       rt_cache.scene_input_scale().denominator;
+    const uint64_t b = uint64_t(rt_cache.scene_draw_scale().denominator) *
+                       rt_cache.scene_input_scale().numerator;
+    phases = uint32_t(std::clamp(uint64_t(8) * a * a / (b * b), uint64_t(phases),
+                                 uint64_t(post_pass::kMaxJitterPhases)));
+  }
   if (mode != "auto" && !mode.empty()) {
     // A number of phases: every frame after one with a scene, without a consumer.
     double forced;
@@ -3059,8 +3096,10 @@ void PostPasses::OnSwap() {
 // Resources.
 
 void PostPasses::TextureSize(const TextureDesc& desc, uint32_t& width, uint32_t& height) const {
-  uint32_t base_width = desc.final_size ? final_width_ : scene_width_;
-  uint32_t base_height = desc.final_size ? final_height_ : scene_height_;
+  uint32_t base_width =
+      desc.final_size ? final_width_ : (desc.output_size ? output_width_ : scene_width_);
+  uint32_t base_height =
+      desc.final_size ? final_height_ : (desc.output_size ? output_height_ : scene_height_);
   width = height = 0;
   if (base_width && base_height) {
     width = std::max(uint32_t(std::lround(double(base_width) * desc.scale)), uint32_t(1));

@@ -344,6 +344,7 @@ void TextureCache::MarkRangeAsResolved(uint32_t start_unscaled, uint32_t length_
        page <= page_last; ++page) {
     ever_resolved_pages_[page >> 6] |= UINT64_C(1) << (page & 63);
     scene_resolved_pages_[page >> 6] &= ~(UINT64_C(1) << (page & 63));
+    scene_input_pages_[page >> 6] &= ~(UINT64_C(1) << (page & 63));
   }
 
   if (IsDrawResolutionScaled()) {
@@ -370,7 +371,7 @@ void TextureCache::MarkRangeAsResolved(uint32_t start_unscaled, uint32_t length_
   shared_memory().RangeWrittenByGpu(start_unscaled, length_unscaled);
 }
 
-void TextureCache::MarkRangeAsSceneResolved(uint32_t start, uint32_t length) {
+void TextureCache::MarkRangeAsSceneResolved(uint32_t start, uint32_t length, bool input) {
   if (!length) {
     return;
   }
@@ -379,7 +380,27 @@ void TextureCache::MarkRangeAsSceneResolved(uint32_t start, uint32_t length) {
   for (uint32_t page = start >> 12, page_last = (start + length - 1) >> 12; page <= page_last;
        ++page) {
     scene_resolved_pages_[page >> 6] |= UINT64_C(1) << (page & 63);
+    if (input) {
+      scene_input_pages_[page >> 6] |= UINT64_C(1) << (page & 63);
+    } else {
+      scene_input_pages_[page >> 6] &= ~(UINT64_C(1) << (page & 63));
+    }
   }
+}
+
+bool TextureCache::IsRangeSceneInputResolved(uint32_t start, uint32_t length) const {
+  if (!length) {
+    return false;
+  }
+  start &= 0x1FFFFFFF;
+  length = std::min(length, 0x20000000 - start);
+  for (uint32_t page = start >> 12, page_last = (start + length - 1) >> 12; page <= page_last;
+       ++page) {
+    if (scene_input_pages_[page >> 6] & (UINT64_C(1) << (page & 63))) {
+      return true;
+    }
+  }
+  return false;
 }
 
 bool TextureCache::IsRangeSceneResolved(uint32_t start, uint32_t length) const {
@@ -951,6 +972,8 @@ TextureCache::Texture* TextureCache::FindOrCreateTexture(TextureKey key) {
        key.format == xenos::TextureFormat::k_24_8_FLOAT) &&
       IsRangeSceneResolved(key.base_page << 12, key.GetGuestLayout().base.level_data_extent_bytes)) {
     key.scene_scaled = 1;
+    key.scene_input = uint32_t(IsRangeSceneInputResolved(
+        key.base_page << 12, key.GetGuestLayout().base.level_data_extent_bytes));
   }
 
   auto get_host_extent = [this, &key](uint32_t& host_width_out, uint32_t& host_height_out,
@@ -958,8 +981,8 @@ TextureCache::Texture* TextureCache::FindOrCreateTexture(TextureKey key) {
     host_width_out = key.GetWidth();
     host_height_out = key.GetHeight();
     if (key.scene_scaled) {
-      host_width_out = SceneTextureHostWidth(host_width_out);
-      host_height_out = SceneTextureHostHeight(host_height_out);
+      host_width_out = SceneTextureHostWidth(host_width_out, key.scene_input);
+      host_height_out = SceneTextureHostHeight(host_height_out, key.scene_input);
     } else if (key.scaled_resolve) {
       host_width_out *= draw_resolution_scale_x();
       host_height_out *= draw_resolution_scale_y();

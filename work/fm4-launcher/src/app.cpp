@@ -1031,6 +1031,33 @@ void App::DisplayPage() {
   ImGui::Checkbox("##supersample", &o.supersample);
   ImGui::EndDisabled();
 
+  // -Upscale: native (the default), quality, balanced or performance; a ratio typed for
+  // Build.ps1 shows as native here until one of these is picked.
+  const char* upscales[] = {"native", "quality", "balanced", "performance"};
+  int upscale = 0;
+  for (int i = 1; i < 4; ++i)
+    if (o.upscale == upscales[i]) upscale = i;
+  Label("Upscale",
+        "FSR 3.1 renders the scene at fewer lines and upscales it to the render scale: Quality "
+        "1.5x, Balanced 1.7x, Performance 2x fewer, at least 720p. Needs the native path in one "
+        "pass and FSR 3.1 as the look's anti-aliasing method.");
+  if (Segment("upscale", upscale, {"Native", "Quality", "Balanced", "Performance"}))
+    o.upscale = upscale == 0 ? "" : upscales[upscale];
+  if (upscale) {
+    std::string upscale_error;
+    ImGui::SameLine();
+    if (const auto plan = PlanOf(o, upscale_error)) {
+      const std::string text = UpscaleText(plan->cvars);
+      ImGui::TextColored(kMuted, "%s",
+                         !text.empty() ? text.c_str()
+                         : plan->description.find("clamped to 720p") != std::string::npos
+                             ? "clamped to 720p: renders at the render scale"
+                             : "renders at the render scale");
+    } else {
+      ImGui::TextColored(kMuted, "%s", upscale_error.c_str());
+    }
+  }
+
   int rate = o.frame_rate ? o.frame_rate : 60;
   Label("Race frame rate", "Races, replays and the countdown. Menus, post-race and photo mode keep their own timing.");
   ImGui::SetNextItemWidth(320 * scale_);

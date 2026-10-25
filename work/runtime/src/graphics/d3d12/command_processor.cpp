@@ -19,6 +19,7 @@
 #include <filesystem>
 #include <map>
 #include <set>
+#include <tuple>
 #include <vector>
 #include <sstream>
 #include <utility>
@@ -52,11 +53,21 @@
 REXCVAR_DEFINE_BOOL(d3d12_bindless, true, "GPU/D3D12", "Use bindless resources where available")
     .lifecycle(rex::cvar::Lifecycle::kRequiresRestart);
 REXCVAR_DECLARE(bool, host_render_native);
+REXCVAR_DECLARE(int32_t, native_rt_surfaces);
+REXCVAR_DECLARE(int32_t, native_one_pass_msaa);
 REXCVAR_DEFINE_STRING(native_draw_scale, "", "GPU",
                       "The scene's draw resolution scale on the native path as a fraction, such "
                       "as 3/2 for 1920x1080 (docs/analysis/d3d-hle-n5.md); its whole part must "
                       "be draw_resolution_scale_x and _y, the scale of the other surfaces. "
                       "Empty: the scene at the whole scale. RTV path with host_render_native only")
+    .lifecycle(rex::cvar::Lifecycle::kRequiresRestart);
+REXCVAR_DEFINE_STRING(native_scene_input_scale, "", "GPU",
+                      "The scale the scene renders at before the upscaler on the native path "
+                      "(docs/analysis/fsr-plan.md 11), such as 4/3 for 960 lines: the MSAA scene "
+                      "surfaces are at it, the one-sample ones at native_draw_scale. From 1 to "
+                      "native_draw_scale; its whole part must be draw_resolution_scale_x and _y. "
+                      "Needs native_draw_scale and native_rt_surfaces bit 16. Empty: "
+                      "native_draw_scale")
     .lifecycle(rex::cvar::Lifecycle::kRequiresRestart);
 REXCVAR_DEFINE_INT32(native_logical_width, 1280, "GPU",
                      "The scene's width in guest pixels at 720 lines on the native path: above "
@@ -75,6 +86,12 @@ REXCVAR_DEFINE_BOOL(native_draw_scale_variant, false, "GPU",
                     "(the scene_scale shader variant, the rational viewport and scissor) also "
                     "at a whole native_draw_scale, to test it against the whole path "
                     "(docs/analysis/d3d-hle-n5.md 18.13)")
+    .lifecycle(rex::cvar::Lifecycle::kRequiresRestart);
+REXCVAR_DEFINE_BOOL(native_scene_read_trace, false, "GPU",
+                    "Diagnostic: log each shader fetch from a scene-scaled texture once (the "
+                    "shader, the fetch constant, the opcode, unnormalized coordinates, texel "
+                    "offsets, the draw's scale class) and each vertex fetch from a scene-resolved "
+                    "range, for the upscaling audit (docs/analysis/fsr-plan.md 11)")
     .lifecycle(rex::cvar::Lifecycle::kRequiresRestart);
 REXCVAR_DEFINE_BOOL(d3d12_reuse_draw_bindings_check, false, "GPU/D3D12",
                     "Compare every texture binding kept in sync with a key computed fresh from "
@@ -477,6 +494,67 @@ TransferDrawTrace* GetTransferDrawTrace() {
   }();
   return trace;
 }
+// native_scene_read_trace: every fetch from a scene-scaled texture and every
+// vertex fetch from a scene-resolved range, logged the first time each is seen.
+void TraceSceneTextureReads(const RegisterFile& regs, const TextureCache& texture_cache,
+                            const RenderTargetCache& render_target_cache,
+                            const Shader& vertex_shader, const Shader* pixel_shader,
+                            bool scene_draw, bool scene_input_draw, uint64_t frame) {
+  static std::set<std::tuple<uint64_t, uint32_t, uint32_t, uint32_t>> seen;
+  // The draw's class: 0 not a scene draw, 1 a scene draw at the scene's scale,
+  // 2 one at the input scale.
+  const uint32_t draw_class = scene_draw ? (scene_input_draw ? 2 : 1) : 0;
+  const char* const draw_names[] = {"other", "scene", "scene-input"};
+  for (const Shader* shader : {&vertex_shader, pixel_shader}) {
+    if (!shader) {
+      continue;
+    }
+    for (const Shader::TextureBinding& binding : shader->texture_bindings()) {
+      TextureCache::SceneTextureInfo info;
+      if (!texture_cache.GetActiveSceneTexture(binding.fetch_constant, info)) {
+        continue;
+      }
+      const ParsedTextureFetchInstruction& fetch = binding.fetch_instr;
+      const bool offsets = fetch.attributes.offset_x != 0.0f || fetch.attributes.offset_y != 0.0f;
+      const uint32_t fetch_bits = uint32_t(fetch.opcode) |
+                                  (uint32_t(fetch.attributes.unnormalized_coordinates) << 8) |
+                                  (uint32_t(offsets) << 9) | (draw_class << 10);
+      if (!seen.emplace(shader->ucode_data_hash(), binding.fetch_constant,
+                        fetch_bits | (uint32_t(info.input) << 12), info.base)
+               .second) {
+        continue;
+      }
+      REXGPU_INFO("Scene texture read: frame {} {} shader {:016X} fetch constant {} {} "
+                  "unnormalized {} offsets {} {} {}, texture {:08X} {}x{} format {} at the {} "
+                  "scale, draw {} (targets at {}/{})",
+                  frame, shader->type() == xenos::ShaderType::kVertex ? "vertex" : "pixel",
+                  shader->ucode_data_hash(), binding.fetch_constant,
+                  fetch.opcode_name ? fetch.opcode_name : "?",
+                  int(fetch.attributes.unnormalized_coordinates), fetch.attributes.offset_x,
+                  fetch.attributes.offset_y, int(offsets), info.base, info.width, info.height,
+                  info.format, info.input ? "input" : "output", draw_names[draw_class],
+                  render_target_cache.last_update_scale().numerator,
+                  render_target_cache.last_update_scale().denominator);
+    }
+  }
+  for (const Shader::VertexBinding& binding : vertex_shader.vertex_bindings()) {
+    const auto fetch = regs.GetVertexFetch(binding.fetch_constant);
+    const uint32_t address = fetch.address << 2, size = fetch.size << 2;
+    if (!texture_cache.IsRangeSceneResolved(address, size)) {
+      continue;
+    }
+    if (!seen.emplace(vertex_shader.ucode_data_hash(), binding.fetch_constant + 1000, draw_class,
+                      address)
+             .second) {
+      continue;
+    }
+    REXGPU_INFO("Scene vertex read: frame {} vertex shader {:016X} fetch constant {} range "
+                "{:08X} size {}, draw {}",
+                frame, vertex_shader.ucode_data_hash(), binding.fetch_constant, address, size,
+                draw_names[draw_class]);
+  }
+}
+
 void TraceTransferDraw(const RegisterFile& regs, const RenderTargetCache& cache,
                        const Shader& vertex_shader, const Shader* pixel_shader,
                        xenos::PrimitiveType primitive_type, uint32_t index_count,
@@ -2366,17 +2444,55 @@ bool D3D12CommandProcessor::SetupContext() {
       REXGPU_ERROR("native_draw_scale {} needs the native path (host render targets and "
                    "host_render_native); the scene keeps the whole scale",
                    text);
-    } else if (draw_resolution_scale_x != draw_resolution_scale_y ||
-               scale->Floor() != draw_resolution_scale_x) {
-      REXGPU_ERROR("native_draw_scale {} needs draw_resolution_scale_x and _y of {}, not {}x{}",
-                   text, scale->Floor(), draw_resolution_scale_x, draw_resolution_scale_y);
     } else {
-      texture_cache_->SetSceneDrawScale(*scale);
-      render_target_cache_->SetSceneDrawScale(*scale);
-      render_target_cache_->SetSceneTextures(!scale->IsWhole() ||
-                                             REXCVAR_GET(native_draw_scale_variant));
-      REXGPU_INFO("Native draw scale: {}/{} for the scene, {} for the other surfaces",
-                  scale->numerator, scale->denominator, draw_resolution_scale_x);
+      // The input scale before the upscaler (fsr-plan.md 11): the other
+      // surfaces are at its whole part.
+      std::optional<DrawScale> input_scale;
+      const std::string& input_text = REXCVAR_GET(native_scene_input_scale);
+      if (!input_text.empty()) {
+        input_scale = DrawScale::Parse(input_text);
+        if (!input_scale) {
+          REXGPU_ERROR("native_scene_input_scale {} is not a scale from 1 to 7, such as 4/3",
+                       input_text);
+        } else if (input_scale->ToFloat() > scale->ToFloat()) {
+          REXGPU_ERROR("native_scene_input_scale {} is above native_draw_scale {}; the scene "
+                       "is not upscaled",
+                       input_text, text);
+          input_scale.reset();
+        } else if (!REXCVAR_GET(native_one_pass_msaa) || !(REXCVAR_GET(native_rt_surfaces) & 16)) {
+          REXGPU_ERROR("native_scene_input_scale {} needs native_one_pass_msaa and "
+                       "native_rt_surfaces bit 16; the scene is not upscaled",
+                       input_text);
+          input_scale.reset();
+        } else if (*input_scale == *scale) {
+          input_scale.reset();
+        }
+      }
+      const uint32_t whole_scale = input_scale ? input_scale->Floor() : scale->Floor();
+      if (draw_resolution_scale_x != draw_resolution_scale_y ||
+          whole_scale != draw_resolution_scale_x) {
+        REXGPU_ERROR("native_draw_scale {} needs draw_resolution_scale_x and _y of {}, not {}x{}",
+                     input_scale ? input_text : text, whole_scale, draw_resolution_scale_x,
+                     draw_resolution_scale_y);
+      } else {
+        texture_cache_->SetSceneDrawScale(*scale);
+        render_target_cache_->SetSceneDrawScale(*scale);
+        if (input_scale) {
+          texture_cache_->SetSceneInputScale(*input_scale);
+          render_target_cache_->SetSceneInputScale(*input_scale);
+        }
+        render_target_cache_->SetSceneTextures(!scale->IsWhole() || input_scale ||
+                                               REXCVAR_GET(native_draw_scale_variant));
+        if (input_scale) {
+          REXGPU_INFO("Native draw scale: {}/{} for the scene, upscaled from {}/{}, {} for the "
+                      "other surfaces",
+                      scale->numerator, scale->denominator, input_scale->numerator,
+                      input_scale->denominator, draw_resolution_scale_x);
+        } else {
+          REXGPU_INFO("Native draw scale: {}/{} for the scene, {} for the other surfaces",
+                      scale->numerator, scale->denominator, draw_resolution_scale_x);
+        }
+      }
     }
   }
   if (REXCVAR_GET(native_logical_width) != 1280) {
@@ -3993,6 +4109,7 @@ bool D3D12CommandProcessor::IssueDraw(xenos::PrimitiveType primitive_type, uint3
   if (render_target_cache_->GetPath() == RenderTargetCache::Path::kHostRenderTargets &&
       REXCVAR_GET(rtv_uniform_draws) && is_rasterization_done && !memexport_used &&
       render_target_cache_->scene_draw_scale().IsWhole() &&
+      !render_target_cache_->IsSceneUpscaled() &&
       render_target_cache_->scene_logical_width() == 1280 &&
       render_target_cache_->scene_logical_height() == 720 &&
       GetDrawOverwrite(regs, primitive_type, index_count, pixel_shader, ps_param_gen_pos,
@@ -4110,14 +4227,22 @@ bool D3D12CommandProcessor::IssueDraw(xenos::PrimitiveType primitive_type, uint3
   // A scene draw (docs/analysis/d3d-hle-n5.md 18.13): into the private
   // surfaces at a fractional scene scale (or any with the diagnostic), drawn
   // with the scene_scale pixel shader variant, the rational viewport and
-  // scissor.
-  const DrawScale scene_draw_scale = render_target_cache_->scene_draw_scale();
+  // scissor. While upscaling (docs/analysis/fsr-plan.md 11), every draw into
+  // them, at the scale of the bound surfaces: the input scale for the MSAA
+  // ones (scene_input_scale), the scene's for the one-sample ones.
+  const bool scene_upscaled = render_target_cache_->IsSceneUpscaled();
+  const DrawScale scene_draw_scale = render_target_cache_->last_update_scale();
   const bool scene_draw = render_target_cache_->last_update_private() && !uniform_draw_set &&
-                          (!scene_draw_scale.IsWhole() || REXCVAR_GET(native_draw_scale_variant));
+                          (!scene_draw_scale.IsWhole() || scene_upscaled ||
+                           REXCVAR_GET(native_draw_scale_variant));
+  const bool scene_input_draw =
+      scene_draw && scene_upscaled && render_target_cache_->last_update_input_scale();
   if (scene_draw && pixel_shader) {
     pixel_shader_modification.pixel.scene_scale = 1;
+    pixel_shader_modification.pixel.scene_input_scale = uint32_t(scene_input_draw);
   }
   current_draw_scene_ = scene_draw;
+  current_draw_scene_input_ = scene_input_draw;
   FrameGraphRenderTargets(*render_target_cache_);
   TraceTransferDraw(regs, *render_target_cache_, *vertex_shader, pixel_shader, primitive_type,
                     index_count, ps_param_gen_pos, normalized_depth_control,
@@ -4197,6 +4322,10 @@ bool D3D12CommandProcessor::IssueDraw(xenos::PrimitiveType primitive_type, uint3
   perf_trace::ZoneEnd(perf_trace::Zone::kDrawPreTextures, pre_textures_start);
   perf_start = perf_trace::ZoneStart();
   texture_cache_->RequestTextures(used_texture_mask);
+  if (REXCVAR_GET(native_scene_read_trace)) {
+    TraceSceneTextureReads(regs, *texture_cache_, *render_target_cache_, *vertex_shader,
+                           pixel_shader, scene_draw, scene_input_draw, frame_current_);
+  }
   perf_trace::ZoneEnd(perf_trace::Zone::kDrawTextures, perf_start);
   const uint64_t state_start = perf_trace::DetailZoneStart();
 
@@ -4249,7 +4378,8 @@ bool D3D12CommandProcessor::IssueDraw(xenos::PrimitiveType primitive_type, uint3
                        (uint32_t(host_render_targets_used) << 1) | (uint32_t(ps_writes_depth) << 2) |
                        (uniform_draw_scale_x << 3) | (uniform_draw_scale_y << 5) |
                        (uint32_t(regs.Get<reg::RB_DEPTH_INFO>().depth_format) << 8) |
-                       (uint32_t(scene_draw) << 16) | (logical_flags >> 14 << 17);
+                       (uint32_t(scene_draw) << 16) | (logical_flags >> 14 << 17) |
+                       (uint32_t(scene_input_draw) << 19);
 
   draw_util::ViewportInfo viewport_info;
   if (draw_back_end_ == 2) {
@@ -4364,7 +4494,8 @@ bool D3D12CommandProcessor::IssueDraw(xenos::PrimitiveType primitive_type, uint3
                     (jitter_applied ? be::kFlagJitter : 0) |
                     (uniform_draw_scale_x << be::kFlagUniformScaleShift) |
                     (uniform_draw_scale_y << (be::kFlagUniformScaleShift + 2)) |
-                    (scene_draw ? be::kFlagSceneScale | logical_flags : 0);
+                    (scene_draw ? be::kFlagSceneScale | logical_flags : 0) |
+                    (scene_input_draw ? be::kFlagSceneInput : 0);
     capture.jitter[0] = jitter_applied ? jitter[0] : 0.0f;
     capture.jitter[1] = jitter_applied ? jitter[1] : 0.0f;
     capture.pipeline_handle = pipeline_handle;
@@ -5898,7 +6029,8 @@ void D3D12CommandProcessor::FillSystemConstantInputs(
   inputs.draw_resolution_scale_x = texture_cache_->draw_resolution_scale_x();
   inputs.draw_resolution_scale_y = texture_cache_->draw_resolution_scale_y();
   inputs.scene_draw = current_draw_scene_;
-  inputs.scene_scale = render_target_cache_->scene_draw_scale();
+  inputs.scene_scale = current_draw_scene_input_ ? render_target_cache_->scene_input_scale()
+                                                 : render_target_cache_->scene_draw_scale();
   inputs.textures_resolution_scaled = 0;
   uint32_t textures_remaining = used_texture_mask;
   uint32_t texture_index;
@@ -7903,8 +8035,9 @@ double D3D12CommandProcessor::OcclusionResolutionScale() const {
     return 1.0;
   }
   // At a fractional scene scale the queries' draws go into the private
-  // surfaces at the scene's scale (docs/analysis/d3d-hle-n5.md 18.16).
-  const DrawScale scene_scale = render_target_cache_->scene_draw_scale();
+  // surfaces at the scene's scale (docs/analysis/d3d-hle-n5.md 18.16), the
+  // MSAA scene at its input scale while upscaling (fsr-plan.md 11).
+  const DrawScale scene_scale = render_target_cache_->scene_input_scale();
   if (render_target_cache_->scene_textures() && !scene_scale.IsWhole()) {
     const double scale = scene_scale.ToFloat();
     return scale * scale;
@@ -7917,7 +8050,7 @@ uint64_t D3D12CommandProcessor::NormalizeOcclusionSamples(uint64_t samples) cons
   if (samples == 0 || !texture_cache_) {
     return samples;
   }
-  const DrawScale scene_scale = render_target_cache_->scene_draw_scale();
+  const DrawScale scene_scale = render_target_cache_->scene_input_scale();
   if (render_target_cache_->scene_textures() && !scene_scale.IsWhole()) {
     return uint64_t(double(samples) / OcclusionResolutionScale() + 0.5);
   }

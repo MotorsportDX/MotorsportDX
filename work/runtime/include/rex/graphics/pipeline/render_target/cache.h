@@ -170,6 +170,18 @@ class RenderTargetCache {
     scene_draw_scale_ = scale;
     scene_draw_scale_set_ = true;
   }
+  // The scale the scene is rendered at before the upscaler
+  // (native_scene_input_scale, docs/analysis/fsr-plan.md 11): the MSAA private
+  // surfaces are created at it, the one-sample ones at scene_draw_scale. The
+  // scene's scale when not upscaling.
+  DrawScale scene_input_scale() const {
+    return scene_input_scale_set_ ? scene_input_scale_ : scene_draw_scale();
+  }
+  void SetSceneInputScale(DrawScale scale) {
+    scene_input_scale_ = scale;
+    scene_input_scale_set_ = true;
+  }
+  bool IsSceneUpscaled() const { return !(scene_input_scale() == scene_draw_scale()); }
   // Whether the full-screen resolves of the private surfaces write textures
   // at the scene's scale (18.15): at a fractional scene scale, or with
   // native_draw_scale_variant at any.
@@ -183,6 +195,13 @@ class RenderTargetCache {
   uint32_t scene_logical_height() const { return scene_logical_height_; }
   // Whether the last Update bound private surfaces (a scene draw).
   bool last_update_private() const { return last_update_private_; }
+  // Whether the last Update bound MSAA private surfaces, which are at the
+  // input scale (scene_input_scale) rather than the scene's.
+  bool last_update_input_scale() const { return last_update_input_scale_; }
+  // The scale of the surfaces the last Update bound, for a scene draw.
+  DrawScale last_update_scale() const {
+    return last_update_input_scale_ ? scene_input_scale() : scene_draw_scale();
+  }
   uint32_t draw_resolution_scale_y() const { return draw_resolution_scale_y_; }
   bool IsDrawResolutionScaled() const {
     return draw_resolution_scale_x() > 1 || draw_resolution_scale_y() > 1;
@@ -617,9 +636,13 @@ class RenderTargetCache {
                         : IsPrivateColor(key.base_tiles, key.pitch_tiles_at_32bpp,
                                          key.msaa_samples, key.resource_format);
   }
-  // A private target's scale: the scene's.
+  // A private target's scale: the input scale for the MSAA scene surfaces, the
+  // scene's for the one-sample ones.
   DrawScale GetKeyScale(RenderTargetKey key) const {
-    return IsPrivateKey(key) ? scene_draw_scale() : DrawScale::Whole(draw_resolution_scale_x_);
+    if (!IsPrivateKey(key)) {
+      return DrawScale::Whole(draw_resolution_scale_x_);
+    }
+    return key.msaa_samples != xenos::MsaaSamples::k1X ? scene_input_scale() : scene_draw_scale();
   }
   // A target's width in guest pixels: the scene's logical width for a private
   // 1280-wide one (native_logical_width, d3d-hle-n5.md 18.21).
@@ -750,10 +773,13 @@ class RenderTargetCache {
   uint32_t draw_resolution_scale_x_;
   DrawScale scene_draw_scale_;
   bool scene_draw_scale_set_ = false;
+  DrawScale scene_input_scale_;
+  bool scene_input_scale_set_ = false;
   bool scene_textures_ = false;
   uint32_t scene_logical_width_ = 1280;
   uint32_t scene_logical_height_ = 720;
   bool last_update_private_ = false;
+  bool last_update_input_scale_ = false;
   uint32_t draw_resolution_scale_y_;
 
   DrawExtentEstimator draw_extent_estimator_;

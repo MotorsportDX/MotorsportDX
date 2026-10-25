@@ -1552,11 +1552,13 @@ bool D3D12RenderTargetCache::Resolve(const memory::Memory& memory, D3D12SharedMe
       // its 2,880 tiles do not fit the dump, so it has no byte check, and a
       // dump of it is counted as a violation.
       RenderTarget* private_surface = GetResolvePrivateSurface(resolve_info);
-      // A private surface at a fractional scene scale cannot be dumped into
+      // A private surface at a fractional scene scale (or, while upscaling,
+      // at a whole scale other than the other surfaces') cannot be dumped into
       // the EDRAM buffer at the whole scale either (18.16).
       const bool private_4x =
           private_surface && (private_surface->key().msaa_samples >= xenos::MsaaSamples::k4X ||
-                              !GetKeyScale(private_surface->key()).IsWhole() ||
+                              !(GetKeyScale(private_surface->key()) ==
+                                DrawScale::Whole(draw_resolution_scale_x())) ||
                               GetKeyLogicalWidth(private_surface->key()) !=
                                   private_surface->key().GetWidth() ||
                               (private_surface->key().GetWidth() == 1280 &&
@@ -1783,8 +1785,11 @@ bool D3D12RenderTargetCache::Resolve(const memory::Memory& memory, D3D12SharedMe
               }
             }
             if (scene) {
-              texture_cache.MarkRangeAsSceneResolved(resolve_info.copy_dest_extent_start,
-                                                     resolve_info.copy_dest_extent_length);
+              // From the MSAA scene while upscaling: at the input scale
+              // (docs/analysis/fsr-plan.md 11).
+              texture_cache.MarkRangeAsSceneResolved(
+                  resolve_info.copy_dest_extent_start, resolve_info.copy_dest_extent_length,
+                  IsSceneUpscaled() && host_source.multisampled);
             }
             ResolveHostIntoTextures(texture_cache, resolve_info, copy_shader_constants,
                                     host_source, scene);
@@ -2050,7 +2055,7 @@ RenderTargetCache::RenderTarget* D3D12RenderTargetCache::CreateRenderTarget(Rend
   // A private surface at the scene's fractional scale (18.13), and at the
   // scene's logical width (18.21).
   const DrawScale key_scale = GetKeyScale(key);
-  if (!key_scale.IsWhole() || GetKeyLogicalWidth(key) != key.GetWidth()) {
+  if (!(key_scale == DrawScale::Whole(draw_resolution_scale_x())) || GetKeyLogicalWidth(key) != key.GetWidth()) {
     resource_desc.Width = key_scale.ScaleUp(GetKeyLogicalWidth(key));
     resource_desc.Height = key_scale.ScaleUp(
         tile_rows *
@@ -5136,7 +5141,7 @@ void D3D12RenderTargetCache::PerformTransfersAndResolveClears(
       const bool dest_logical_height = IsPrivateKey(dest_rt_key) &&
                                        dest_rt_key.GetWidth() == 1280 &&
                                        scene_logical_height() != 720;
-      if (!dest_scale.IsWhole() || dest_logical_width != dest_rt_key.GetWidth() ||
+      if (!(dest_scale == DrawScale::Whole(draw_resolution_scale_x())) || dest_logical_width != dest_rt_key.GetWidth() ||
           dest_logical_height) {
         dest_clear_rect.left = LONG(dest_scale.ScaleEdge(resolve_clear_rectangle->x_pixels));
         dest_clear_rect.top = LONG(dest_scale.ScaleEdge(resolve_clear_rectangle->y_pixels));
@@ -6379,10 +6384,11 @@ bool D3D12RenderTargetCache::FindHostResolveSource(const draw_util::ResolveInfo&
                                   (resolve_info.coordinate_info.edram_offset_x_div_8 << 3);
   const uint32_t guest_offset_y = (relative_tiles / pitch_tiles) * tile_height +
                                   (resolve_info.coordinate_info.edram_offset_y_div_8 << 3);
-  const uint32_t offset_x = source_scale.IsWhole()
+  const bool source_whole = source_scale == DrawScale::Whole(draw_resolution_scale_x());
+  const uint32_t offset_x = source_whole
                                 ? guest_offset_x * draw_resolution_scale_x()
                                 : source_scale.ScaleEdge(guest_offset_x);
-  const uint32_t offset_y = source_scale.IsWhole()
+  const uint32_t offset_y = source_whole
                                 ? guest_offset_y * draw_resolution_scale_y()
                                 : source_scale.ScaleEdge(guest_offset_y);
   if (offset_x > 0xFFFF || offset_y > 0xFFFF) {
@@ -6401,7 +6407,7 @@ bool D3D12RenderTargetCache::FindHostResolveSource(const draw_util::ResolveInfo&
       (draw_util::GetD3D10SampleIndexForGuest2xMSAA(1, msaa_2x_supported_) << 10);
   source_out.host_offset = offset_x | (offset_y << 16);
   source_out.host_phase = 0;
-  if (!source_scale.IsWhole()) {
+  if (!source_whole) {
     // guest * n / d - host, in 1/256 of a source pixel.
     auto phase = [&source_scale](uint32_t guest, uint32_t host) {
       const int64_t exact = int64_t(guest) * source_scale.numerator * 256;
@@ -6413,8 +6419,7 @@ bool D3D12RenderTargetCache::FindHostResolveSource(const draw_util::ResolveInfo&
     source_out.host_phase =
         phase(guest_offset_x, offset_x) | (phase(guest_offset_y, offset_y) << 16);
   }
-  source_out.scale = source_scale.IsWhole() ? DrawScale::Whole(draw_resolution_scale_x())
-                                            : source_scale;
+  source_out.scale = source_whole ? DrawScale::Whole(draw_resolution_scale_x()) : source_scale;
   return host_resolve_pipelines_[kind][source_out.multisampled] != nullptr;
 }
 
@@ -6898,7 +6903,8 @@ void D3D12RenderTargetCache::ResolveHostIntoTextures(
                      xenos::DepthRenderTargetFormat::kD24FS8
                  ? 2u
                  : 1u)
-          : 0u);
+          : 0u,
+      scene && IsSceneUpscaled() && source.multisampled);
   perf_trace::CountNativeResolve(uint32_t(target_count));
   if (!target_count) {
     return;

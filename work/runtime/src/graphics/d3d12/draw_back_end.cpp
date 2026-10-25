@@ -1202,7 +1202,10 @@ void D3D12CommandProcessor::CaptureDrawBackEnd(const DrawBackEndCapture& capture
       const uint32_t scale_x = front.flags.draw_resolution_scale_x * uniform_scale_x;
       const uint32_t scale_y = front.flags.draw_resolution_scale_y * uniform_scale_y;
       be::ComputeViewportAndScissor(regs, capture.flags, scale_x, scale_y,
-                                    render_target_cache_->scene_draw_scale(), depth_control,
+                                    be::FlagsSceneScale(capture.flags,
+                                                        render_target_cache_->scene_draw_scale(),
+                                                        render_target_cache_->scene_input_scale()),
+                                    depth_control,
                                     pixel_shader && pixel_shader->writes_depth(),
                                     expected.viewport, expected.scissor);
       if (capture.flags & be::kFlagJitter) {
@@ -1329,7 +1332,8 @@ void D3D12CommandProcessor::ReplayDrawBackEnd(const uint8_t* arguments, Register
   inputs.draw_resolution_scale_x = list.flags.draw_resolution_scale_x;
   inputs.draw_resolution_scale_y = list.flags.draw_resolution_scale_y;
   inputs.scene_draw = (flags & be::kFlagSceneScale) != 0;
-  inputs.scene_scale = render_target_cache_->scene_draw_scale();
+  inputs.scene_scale = be::FlagsSceneScale(flags, render_target_cache_->scene_draw_scale(),
+                                           render_target_cache_->scene_input_scale());
   std::memcpy(inputs.texture_swizzled_signs, list.texture_swizzled_signs,
               sizeof(inputs.texture_swizzled_signs));
   std::memcpy(inputs.texture_integer_scale_bits, list.texture_integer_scale_bits,
@@ -1369,7 +1373,10 @@ void D3D12CommandProcessor::ReplayDrawBackEnd(const uint8_t* arguments, Register
     draw_util::ViewportInfo viewport;
     draw_util::Scissor scissor;
     be::ComputeViewportAndScissor(regs, flags, scale_x, scale_y,
-                                  render_target_cache_->scene_draw_scale(), depth_control,
+                                  be::FlagsSceneScale(flags,
+                                                      render_target_cache_->scene_draw_scale(),
+                                                      render_target_cache_->scene_input_scale()),
+                                  depth_control,
                                   pixel_shader && pixel_shader->writes_depth(), viewport, scissor);
     if (flags & be::kFlagJitter) {
       post_pass::AddJitterToNdcOffset(list.flags.jitter, viewport.xy_extent, viewport.ndc_offset);
@@ -1529,7 +1536,9 @@ void D3D12CommandProcessor::ReplayDrawBackEndDraw(
   draw_util::ViewportInfo viewport_info;
   draw_util::Scissor scissor;
   be::ComputeViewportAndScissor(regs, flags, scale_x, scale_y,
-                                render_target_cache_->scene_draw_scale(), depth_control,
+                                be::FlagsSceneScale(flags, render_target_cache_->scene_draw_scale(),
+                                                    render_target_cache_->scene_input_scale()),
+                                depth_control,
                                 pixel_shader && pixel_shader->writes_depth(), viewport_info,
                                 scissor);
   if (flags & be::kFlagJitter) {

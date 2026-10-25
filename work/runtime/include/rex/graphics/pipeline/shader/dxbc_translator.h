@@ -57,6 +57,9 @@ class DxbcShaderTranslator : public ShaderTranslator {
   // The native path's scene scale, used by pixel shaders translated with the
   // scene_scale modification (docs/analysis/d3d-hle-n5.md 18.13).
   void SetSceneDrawScale(DrawScale scale) { scene_draw_scale_ = scale; }
+  // The scene's input scale before the upscaler, used instead with the
+  // scene_input_scale modification (docs/analysis/fsr-plan.md 11).
+  void SetSceneInputScale(DrawScale scale) { scene_input_scale_ = scale; }
 
   // Stage linkage ordering and rules (must be respected not only within the
   // DxbcShaderTranslator, but also by everything else between the VS and the
@@ -188,6 +191,10 @@ class DxbcShaderTranslator : public ShaderTranslator {
       // (docs/analysis/d3d-hle-n5.md 18.13): the pixel position, memexport's
       // pixel and the resolution-scaled textures at SetSceneDrawScale's scale.
       uint32_t scene_scale : 1;
+      // With scene_scale, a scene draw into the MSAA surfaces at the input
+      // scale (SetSceneInputScale) while upscaling (docs/analysis/fsr-plan.md
+      // 11).
+      uint32_t scene_input_scale : 1;
     } pixel;
 
     explicit Modification(uint64_t modification_value = 0) : value(modification_value) {
@@ -966,6 +973,7 @@ class DxbcShaderTranslator : public ShaderTranslator {
   // translation: the scene's for a pixel shader with the scene_scale
   // modification, the whole scale otherwise, set in StartTranslation.
   DrawScale scene_draw_scale_;
+  DrawScale scene_input_scale_;
   DrawScale translation_scale_;
   float translation_scale_x_ = 1.0f;
   float translation_scale_y_ = 1.0f;

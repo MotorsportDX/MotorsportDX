@@ -1,6 +1,6 @@
 # FSR: plan
 
-A plan to add AMD FSR 3.1 to the runtime's post pass framework, first in its native anti-aliasing mode (no upscaling) beside the project's own [TAA](taa.md), and then as an upscaler on N5's scales. Stage 0 is done: the runtime builds and links the upscaler from the SDK source behind `REX_FSR` (section 3.1); nothing of it runs yet. Written on 20 October 2026 and updated against N5 on 25 October 2026 (sections 9 and 10); the license review is in [sources and licensing](../sources-and-licensing.md#third-party-code-amd-fidelityfx-sdk-fsr-31).
+A plan to add AMD FSR 3.1 to the runtime's post pass framework, first in its native anti-aliasing mode (no upscaling) beside the project's own [TAA](taa.md), and then as an upscaler on N5's scales. Stages 0 to 2 are done: the runtime builds the upscaler from the SDK source behind `REX_FSR` (section 3.1), runs its native anti-aliasing at the scene_color point (9.8) and was checked in the game (9.9); stage 3, upscaling, is section 11. Written on 20 October 2026 and updated against N5 on 25 October 2026 (sections 9 to 11); the license review is in [sources and licensing](../sources-and-licensing.md#third-party-code-amd-fidelityfx-sdk-fsr-31).
 
 ## Summary
 
@@ -8,7 +8,7 @@ A plan to add AMD FSR 3.1 to the runtime's post pass framework, first in its nat
 - **Mode**: native AA first (render size = output size, ratio 1.0), as an alternative to TAA, chosen with a look knob. TAA stays the default on every GPU until an A/B decides otherwise.
 - **Point**: the scene_color point ([TAA, section 2.2](taa.md#22-the-scene_color-point-option)), where the color, depth, motion vectors and masks share the scene layout, so nothing has to be rotated, and the output goes back into the game's scene through the existing write-back.
 - **Needs**: the single tile without MSAA (the default with TAA since 20 October 2026), the jitter on every frame of a scene (FSR accumulates still pictures itself), a way to run FSR's D3D12 backend inside the runtime's deferred command list, DXC for its Shader Model 6.2 shaders, and the license steps below.
-- **Not in the first stage**: upscaling. It builds on N5's scales: the native path renders the scene's private surfaces at a rational scale and every other surface at the integer scale, chosen per resolve destination, at the screen's logical size; upscaling splits the scene's scale into an input scale for the scene and an output scale for the post chain, the HUD and the swap (section 9).
+- **Not in the first stage**: upscaling. It builds on N5's scales: the native path renders the scene's private surfaces at a rational scale and every other surface at the integer scale, chosen per resolve destination, at the screen's logical size; upscaling splits the scene's scale into an input scale for the scene and an output scale for the post chain, the HUD and the swap (section 9, built in stage 3: section 11).
 - **The plan against N5** (25 October 2026) is section 9; the download stage 0 needs is section 10, approved by the project owner on 25 October 2026.
 
 ## 1. Why, and what it can gain
@@ -232,6 +232,104 @@ The project owner approved the download on 25 October 2026 (relayed by the main 
 - **Not fetched**: `samples`, `framework`, `docs`, `ffx-api`, `PrebuiltSignedDLL` (the SDK's own signed DLLs) and the samples' media (`UpdateMedia.bat`).
 - **Size**: the whole repository is about 411 MB (GitHub's figure, with the samples' media); the sparse checkout measures 39 MB of files, of which 34 MB are the binaries of `sdk/tools/binary_store`, and 36 MB of Git objects.
 - **Where**: outside the repository, into the BuildRoot (`<BuildRoot>\fidelityfx-sdk`), as the runtime's own upstream clone; only this project's integration code goes into Git, with AMD's notice under `outputs/FM4-source-control/third-party-notices`.
+
+## 11. Stage 3, upscaling on N5's scales (25 October 2026)
+
+The scene renders at an input scale s_in below the output scale s_out, and FSR 3.1 upscales it at the scene_color point (section 9.3). The native path in one pass with 2x MSAA only (`-Native`, `native_rt_surfaces=58`); RTV keeps FSR's native AA and `-Rov` is untouched. The main session approved the design on 25 October 2026.
+
+### 11.1 The two scene scales
+
+- **The cvars**: s_out is `native_draw_scale` (the screen's own scale, 18.19); s_in is `native_scene_input_scale` (a rational from 1 to s_out). Unset, or equal to s_out, renders as before. The runtime refuses s_in above s_out, and s_in without `native_one_pass_msaa` and bit 16 of `native_rt_surfaces`.
+- **`GetKeyScale`** picks by key: the MSAA private surfaces (the 2x scene colour at base 0 and its depth at 1024) at s_in, the one-sample private surfaces (the post chain's colour at base 0, the final picture and its depth at 720) at s_out, every other surface at k.
+- **k = floor(s_in)**, the main session's decision of 25 October 2026: the shadow maps, the environment cube, the rear-view mirror and the small destinations cost what the input scale costs. The visible cost: at 4K performance (s_in 3/2, s_out 3) k is 1, so the mirror and the shadows are at 1x there. On the ROG Xbox Ally X (s_out 3/2 from s_in 1) k is 1, as at 3/2 today.
+- **s_in is at least 1**, the main session's decision of 25 October 2026: N5 renders no scene below 1x, so a mode whose input falls below 720 lines is clamped to 720p, and the launchers say so ("clamped to 720p").
+- **The scene draws** take the scale of their bound surfaces: the viewport, the scissor, the occlusion normalization (the occlusion queries' draws go into the MSAA scene, at s_in) and the translation. A pixel shader drawing into the MSAA surfaces while upscaling is translated with a second modification bit, `scene_input_scale`, beside `scene_scale`, so a shader is translated at most once per scale; without upscaling the bit stays 0 and every existing translation is unchanged. The draw back end carries it as `kFlagSceneInput`. Every draw into the private surfaces is a scene draw while upscaling, also at whole scales (s_out 3 with k 2), and the uniform draws (the clears of the render target cache) are off.
+- **The places that took "a whole scale" for "the other surfaces' scale"** (the size of a new render target, a resolve clear's rectangle, a resolve source's offsets and scale, the sized targets, the EDRAM dump of a private surface) compare with k instead, which is the same for every scale without upscaling.
+
+### 11.2 The texture cache's scale class
+
+- The texture key's `scene_scaled` bit gets a second one, `scene_input`: a scene texture at s_in. `SceneTextureHostWidth` and `SceneTextureHostHeight` take it, and a second page map beside the scene-resolved pages says which ranges were resolved at s_in.
+- A full-screen resolve of an MSAA private surface while upscaling marks its range at s_in and writes the s_in textures; one of a one-sample private surface (the post chain) marks it at s_out. Small destinations resolve down to k with the box filter from either.
+- **The write-back** of FSR's output (`fsr_scene_out`, of the new manifest size `output`, the scene at s_out) marks the scene colour's range at s_out before the copy and drops the texture bindings, so the game's next fetches bind the s_out texture: the title's motion blur, bloom, exposure and final combine sample the upscaled scene. The next resolve of the range marks it at s_in again.
+
+### 11.3 Reads of the scene range (the audit before FSR's two sizes)
+
+The main session asked, before FSR's two sizes, for a list of the shaders that read the scene's range in unnormalized coordinates or through vertex fetches, since a read like that would need the s_in texture or a scaled variant. `native_scene_read_trace` (a diagnostic cvar) logs every fetch from a scene-scaled texture once per shader, fetch constant, opcode, coordinates, offsets, texture class and draw class, and every vertex fetch from a scene-resolved range. Run on 25 October 2026 with the scene upscaled from 720 to 1080 lines (s_in 1, s_out 3/2) in `photo` (the race, photo mode and its menus) and `career` (a career race, its replay and the post-race menus):
+
+- **No unnormalized fetch and no vertex fetch** of the scene's range in either run. Every read of the scene colour (`1B811000`), of the post chain's full-screen destinations (`1B479000`, `1B0E1000`) and of the scene depth's views (`1C0C1000`) is a normalized `tfetch2D` or a `getGradients`, so a texture of either class is sampled at the same place.
+- **Two fetches carry texel offsets**, which the translator divides by the draw's scale (`draw_resolution_scaled_texture_offsets`, on by default):
+  - pixel shader `6686E1B8EC8D0195`, offset (0.5, 0.5), reads the scene depth from a scene draw into the MSAA surfaces: both at s_in, so it matches;
+  - pixel shader `BCFAE662E7F38473`, offset (1, 1), reads the scene colour from a post chain draw at s_out. After FSR's write-back the colour is at s_out and it matches. In frames without the write-back (before the first scene with a camera) it reads the s_in texture with an offset meant for s_out: two thirds of a texel at 1080p from 720p, a slightly narrower filter tap. Accepted.
+- Scene draws at s_in read the previous frame's upscaled scene colour (six pixel shaders, `1D1DBE92CED7E7D7`, `6975A8589117B443`, `B85EF04779ABD438`, `C5862561EE9EC6CB`, `D5B19764A94E4929`, `E62CFDF09D758B6C`), and draws at k (the small destinations, bloom) read both classes; all normalized.
+
+So no shader needs the s_in texture or a scaled variant. The photo mode, replay and menu behaviour:
+- **Races and replays** are upscaled: the career replay runs FSR at 1280x720 to 1920x1080 as the race does (0.42 ms a frame).
+- **Photo mode** renders its tiles at k = floor(s_in) and runs no scene passes (18.17), so no FSR, then is scaled to the screen: at 1080p from 720p as before (k 1), at 4K quality at 2x instead of native's 3x.
+- **The menus and the pre-race screens** render at k (entry 0 at s, 18.20, is still to come) without FSR.
+
+### 11.4 FSR's two sizes and the jitter
+
+- `fsr_prepare` runs at the scene's size (s_in), `fsr_upscale` with that render size and the output size (`fsr_output`'s texture, size `output`), `fsr_output` at the output size, taking the game's alpha from the scene pixel under each output pixel.
+- The post passes take the scene depth at s_in while upscaling. The final point sizes its passes from the final picture at s_out, also when s_out is whole (1440p and 4K: a first build took the whole s_out for the other surfaces' k and ran the windshield pass in the top left 1280x720 of a 2560x1440 picture, which the final point's size check reported); the check compares the final picture with the output size.
+- The windshield pass already maps each final pixel to the scene pixel by the ratio of the sizes (`windshield.hlsl`).
+- **The jitter phases**: 8 ratio^2 while upscaling (FSR's `ffxFsr3UpscalerGetJitterPhaseCount`, from the exact ratio of the two scales: 18 at 1.5, 23 at 1.7, 32 at 2, at most 64), the manifest's 8 at s_in = s_out, so stages 1 and 2 stay as they were.
+
+### 11.5 The launchers' knob
+
+`-Upscale native|quality|balanced|performance|<ratio>` (`Build.ps1`, `pipeline.py --upscale`, the GUI launcher's Upscale choice on the Display page); native, the default, changes nothing. A mode renders `round(output lines / ratio)` lines, at least 720, the other surfaces at its whole part:
+
+| Output | native | quality (1.5) | balanced (1.7) | performance (2) |
+|---|---|---|---|---|
+| 1080p (s_out 3/2) | 1080 | 720 (1) | 720 (clamped from 635) | 720 (clamped from 540) |
+| 1440p (s_out 2) | 1440 | 960 (4/3) | 847 (847/720) | 720 (1) |
+| 2160p (s_out 3) | 2160 | 1440 (2) | 1271 (1271/720) | 1080 (3/2) |
+
+A ratio is the knob's number form: `-Upscale 1.25` renders 864 lines (6/5) for 1080p. The launch description adds "FSR quality 960p -> 1440p", with "(clamped to 720p)" where the input was raised to 720; at a 720p output every mode renders native ("upscale quality: none at 720p (clamped to 720p)"). The GUI shows the input and output lines beside the choice ("960p → 1440p"). With integrated GPUs only, an upscale mode takes the screen's own scale as its output (the Ally X's 1080p from 720p), where they otherwise render at 1x. Both launchers refuse an upscale mode with `aa=taa` ("-Upscale quality needs aa=fsr in -Look: TAA does not upscale") and off the native path in one pass with 2x MSAA.
+
+### 11.6 Later: a dynamic s_in
+
+Not in stage 3: an input scale that changes per frame (dynamic resolution). The s_in plumbing should not prevent it: the translation variant and the surfaces' sizes depend on s_in today, so a dynamic s_in would render into surfaces at the largest s_in with a per-frame viewport, and FSR takes a per-frame render size within its maximum.
+
+### 11.7 The gate (25 October 2026)
+
+On `I:\FM4-build-usa`, the game of stage 2's `game-build-fsr` with the runtime of the steps (built with `REX_FSR` on in `fsr-gate`), `-Native`, `native_rt_surfaces=58`, `aces,aa=fsr`, the title's AI driving, a fixed seed, at 60 Hz.
+
+**No change at s_in = s_out** (the frozen frame, `parity.py` against stage 2's runtime):
+
+| Case | Step 1 | Step 2 | Steps 1 to 3 |
+|---|---|---|---|
+| `-Native` 3/2, `aces,taa=0` | not run (the candidate timed out in the rewind menu) | PASS (draws +0.0%, 18.8% of the image above 4) | PASS (-0.1%, 28.6%) |
+| `-Native` 3/2, `aces` (TAA) | | PASS (-0.7%, 22.1%) | PASS (-0.7%, 26.9%) |
+| `-Native` 9/4 at 2, `aces,taa=0` | | | PASS (-0.0%, 26.2%) |
+| RTV 2x, `aces` | PASS (-0.0%, 29.4%) | PASS (+0.6%, 22.0%) | PASS (+0.5%, 39.1%) |
+| `-Rov` 1x, `original,taa=0` | PASS (+0.1%, 32.1%) | PASS (+0.1%, 31.2%) | PASS (+0.0%, 24.7%) |
+
+FSR jitters every frame, so a frozen frame with `aa=fsr` does not hold still (its own captures differ in 0.3% of the pixels, above the 0.05% limit); the `-Native` checks run without temporal AA (`aces,taa=0`) and with TAA (`aces`). Draws are within 0.7% and the predicated packets within 1.8%; the image shares are within the variance of two runs of one binary (18% to 41%).
+
+**GPU time a race frame** (the median of the race phase's windows; the `fsr` group is `fsr_prepare`, FSR and `fsr_output`):
+
+| Output | Mode | Input (k) | Frame | FSR | Scene |
+|---|---|---|---|---|---|
+| 1080p | native | 1080 (1) | 4.18 ms | 0.68 ms | 2.84 ms |
+| 1080p | quality | 720 (1) | 3.27 ms | 0.43 ms | 2.41 ms |
+| 1440p | native | 1440 (2) | 5.80 ms | 1.09 ms | 3.49 ms |
+| 1440p | quality | 960 (1) | 4.26 ms | 0.72 ms | 2.83 ms |
+| 1440p | balanced | 847 (1) | 4.02 ms | 0.66 ms | 2.72 ms |
+| 1440p | performance | 720 (1) | 3.69 ms | 0.61 ms | 2.52 ms |
+| 2160p | native | 2160 (3) | 12.19 ms | 2.59 ms | 6.57 ms |
+| 2160p | quality | 1440 (2) | 8.76 ms | 1.66 ms | 5.44 ms |
+| 2160p | balanced | 1271 (1) | 6.76 ms | 1.51 ms | 3.84 ms |
+| 2160p | performance | 1080 (1) | 6.22 ms | 1.37 ms | 3.56 ms |
+
+FSR's own cost follows the output size more than the input (1.37 to 1.66 ms at 2160p); the savings come from the scene and, where k drops, from the shadow maps and the mirror (2160p balanced and performance at k 1).
+
+**Pictures** (1:1 crops of the frozen frame from full-resolution captures, native against quality at each output; the crops stay outside the repository):
+- 1080p from 720p, 1440p from 960p and 2160p from 1440p keep the cable car's wires and the pylon's lattice; the upscaled ones are a little softer, most at 1080p from 720p, where far wires break up in places. The grandstand's crowd is alike. The HUD is identical (drawn at s_out after the scene).
+- The rear-view mirror renders at k, so it is softer where k drops (1440p quality at k 1 against native's 2; 2160p quality at k 2 against 3), the cost the main session accepted with k = floor(s_in).
+- The clock in the instrument cluster looks hazy in every upscaled mode and not at ratio 1: its glass is in FSR's reactive mask (`motion_mask` G marks car glass), so FSR keeps little history there, and an input below the output shows. An open item for the reactive mask (the glass of the gauges against the windows).
+- A whole upscaled race frame and photo mode at 1080p from 720p look complete, with the HUD sharp.
+
+**Runs**: the upscale smoke (`s3-up32from1-photo`, `-career`: race, photo mode, the replay) reached its goal with the error keys of stage 2's runs; the scene read trace is section 11.3. The final point reports "no single-sampled color render target" once, at the first frame with a scene, and runs from the next frame on.
 
 ## Related
 

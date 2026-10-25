@@ -499,6 +499,50 @@ class PipelineTests(unittest.TestCase):
             with self.assertRaises(ValueError):
                 plan((1920,1080,1.0),resolution_scale='panel',**options)
 
+    def test_upscale(self):
+        """-Upscale (fsr-plan.md 11): the scene at the output's lines over the ratio, at least 720
+        (lower is clamped and said so), the other surfaces at its whole part; native changes
+        nothing; integrated GPUs upscale to the screen's own scale; it needs aa=fsr and the
+        native path in one pass with 2x MSAA."""
+        disc=r'C:\FM4 test\Disc 1'
+        def plan(monitor,upscale,look='pc,aa=fsr',**options):
+            with tempfile.TemporaryDirectory(prefix='fm4 upscale test ') as directory:
+                return pipeline.launch_plan(Path(directory),disc,monitor=monitor,look=look,
+                                            upscale=upscale,**options)
+        def scales(cvars):
+            return (cvars.get('native_scene_input_scale'),cvars.get('native_draw_scale'),
+                    cvars.get('draw_resolution_scale_x'))
+        uhd,qhd,fhd=(3840,2160,2.0),(2560,1440,1.0),(1920,1080,1.0)
+        for monitor,mode,expected,text in (
+                (uhd,'quality',('2','3','2'),'FSR quality 1440p -> 2160p'),
+                (uhd,'balanced',('1271/720','3','1'),'FSR balanced 1271p -> 2160p'),
+                (uhd,'performance',('3/2','3','1'),'FSR performance 1080p -> 2160p'),
+                (qhd,'quality',('4/3','2','1'),'FSR quality 960p -> 1440p'),
+                (qhd,'balanced',('847/720','2','1'),'FSR balanced 847p -> 1440p'),
+                (qhd,'performance',('1','2','1'),'FSR performance 720p -> 1440p'),
+                (fhd,'quality',('1','3/2','1'),'FSR quality 720p -> 1080p'),
+                (fhd,'performance',('1','3/2','1'),'FSR performance 720p -> 1080p (clamped to 720p)'),
+                (fhd,'1.25',('6/5','3/2','1'),'FSR 1.25 864p -> 1080p')):
+            cvars,_,description=plan(monitor,mode,native=True)
+            self.assertEqual(scales(cvars),expected,(monitor,mode))
+            self.assertEqual(cvars['native_rt_surfaces'],'58')
+            self.assertIn(text,description)
+        native,_,description=plan(fhd,'native',native=True)
+        self.assertEqual(scales(native),(None,'3/2',None))
+        self.assertNotIn('FSR',description)
+        cvars,_,description=plan((1920,1080,1.5,120,48,120,True),'quality')
+        self.assertEqual(scales(cvars),('1','3/2','1'))
+        self.assertNotIn('integrated GPU,',description)
+        cvars,_,description=plan((1280,720,1.0),'quality',native=True,display='720p')
+        self.assertNotIn('native_scene_input_scale',cvars)
+        self.assertIn('upscale quality: none at 720p (clamped to 720p)',description)
+        for monitor,mode,options in ((fhd,'quality',{'native':True,'look':'pc'}),
+                                     (fhd,'quality',{'rov':True}),
+                                     (fhd,'quality',{'native':True,'msaa_samples':4}),
+                                     (fhd,'ultra',{'native':True}),(fhd,'4',{'native':True})):
+            with self.assertRaises(ValueError):
+                plan(monitor,mode,**options)
+
     def test_vrr_range_and_vsync(self):
         # The main PC's panel: a DisplayID 2.0 extension with Adaptive-Sync descriptors of 60 to
         # 240 Hz and 50 to 60 Hz.
