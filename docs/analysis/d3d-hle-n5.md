@@ -434,3 +434,26 @@ The plan sets `native_logical_width` or `native_logical_height` with the scale; 
 Tests: `test_screen_scale` covers the table, the integrated GPU's 16:9 at 1x and the bars; the launcher tests gained a 1920x1200 and a 3440x1440 monitor (234 plans). Built outside the launcher's CMake project, the port matched `pipeline.py` on the scale, the logical size, the `native_*` cvars and the description in all 234 plans (its look cvars differed there because that build read other look data, as in 18.19); the launcher's own `launcher_tests` on main is the check.
 
 The plan's cvars for this PC's panel (2560x1600: scale 2 through the scene draws' path, H = 800, `native_rt_surfaces=58`) in a `photo` run (`n9c-photo-2x-800`): the race (162.7 fps, GPU 6.1 ms a frame, 780.8 MB of render targets), photo mode and the save reach their goal with no GPU error. The first run (`n9b`) logged 18.17's "final size differs" in photo mode: its skip of a scene depth not at the scene's size applied only at a fractional scale, and now applies at a logical size too, comparing the height as well.
+
+### 18.24 Increment 2's close gate, 25 October 2026
+
+On `I:\FM4-build-usa`, main `fa59d95` (the main session's build, with `launcher_tests` at 234 plans and no failure), one pass 2x with `native_rt_surfaces=58`, at 240 Hz. A new e2e scenario, `camera_race`, runs a Quick Race (with the fast route) whose measured race phase cycles the race cameras with Back every 6 s (cockpit, hood, bumper, chase near, chase far), so the edges of every camera are seen at a logical size.
+
+| Check | Result |
+|---|---|
+| the cameras at 21:9 (3/2, W = 1720, `n9d-camera-32-1720`) and 16:10 (the plan's 2560x1600: 2 through the scene draws' path, H = 800, `n9z-camera-1610`) | both reached their goal with no GPU error; every camera shows the world to all four edges (the stands, the kerbs, the trees, the rocks, the sky, the road and the bonnet), nothing missing, so no culling hook (18.23); the HUD, the mirror strip of the hood and bumper cameras and the place and lap counters in the centred 1280x720. 1:1 crops of the left edge at 21:9 and of the top and the bottom at 16:10 in the chase cameras show the full detail of the scale |
+| no change at 16:9: `freeze` parity, native at real 1x with `original,taa=0` and at 2x with `aces`, against increment 1's close gate (`n6z`) | PASS: draws -0.0% and +0.0%, 19.1% and 27.8% of the image above 4 |
+| RTV smoke at 1x (`n9z-rtv1x`, against `n6z-rtv1x`; e2e's OCR changed) | 3 of 3 cells reached their goal; races 235.0 and 221.2 fps; `career` PASS, the WARNs capture statistics |
+| combined checks with perturbation, `career` at 21:9 (3/2, W = 1720) and 16:10 (the 2560x1600 plan) | both reached their goal; the resolve byte check 4,928 and 5,000 resolves and the texture byte check 2,105 and 5,112 textures, 0 mismatches; identity, bindings and guard only the perturbed; the error keys of every earlier check run |
+
+Perf at 3/2, the race of `photo` with `aces`, 3 runs each (`n9z-perf-*`):
+
+| View | Render | GPU ms a race frame | Race fps | Race p99 | Render targets |
+|---|---|---|---|---|---|
+| 16:9 | 1920x1080 | 3.61, 3.50, 3.75 | 238.9, 239.2, 237.3 | 4.81, 4.81, 5.01 ms | 346.7 MB |
+| 16:10 (H = 800) | 1920x1200 | 3.66, 3.97, 3.70 | 239.2, 233.6, 239.1 | 4.82, 5.47, 4.87 ms | 346.7 MB |
+| 21:9 (W = 1720) | 2580x1080 | 4.20, 4.34, 4.38 | 230.4, 224.2, 221.5 | 5.48, 5.76, 6.08 ms | 404.1 MB |
+
+16:10 adds about 0.15 ms (11% more pixels); its private surfaces already had the rows, so the render targets stay the same size. 21:9 adds about 0.7 ms (34% more pixels) and 57 MB. The plan's 2560x1600 at 2 took 6.1 ms in 18.23's run.
+
+Increment 2 is closed. The aspect is on in the launchers where the native path renders at the screen's own scale (18.23). What stays at 16:9 and the whole scale: the front-end menus, the pre-race screens and photo mode (18.20, "entry 0 at s").

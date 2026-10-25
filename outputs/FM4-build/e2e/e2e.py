@@ -270,6 +270,12 @@ FREEZE_ARGS = {'rtv_occlusion_debug': 'fake', 'query_occlusion_fake_sample_count
 # the race cameras (cockpit, hood, bumper, chase near, chase far, back to cockpit).
 _CAMERA = [[4, 'rt=255+back', 0.15], [0.2, 'rt=255', 0]] + [[6, 'rt=255+back', 0.15], [0.2, 'rt=255', 0]] * 5
 STEP_PRESETS = {'camera': _CAMERA}
+# A Quick Race whose measured race phase cycles the race cameras as the camera preset does: the
+# edges of every camera at a logical size (docs/analysis/d3d-hle-n5.md 18.24).
+SCENARIOS['camera_race'] = (SCENARIOS['quickrace'] + [[10, 'wait', 0], [1, 'phase:race', 0]]
+                            + _CAMERA + [[2, 'wait', 0], [1, 'phase:end', 0]])
+FAST_SCENARIOS['camera_race'] = (FAST_SCENARIOS['quickrace']
+                                 + SCENARIOS['camera_race'][len(SCENARIOS['quickrace']) + 1:])
 # Exact FM4 clear color: where it covers >= 1% of a race capture as a peak among the neutral grays
 # around it, geometry such as the road surface was not drawn (seen on the RTV path).
 CLEAR_GRAY = bytes([102, 102, 102])
