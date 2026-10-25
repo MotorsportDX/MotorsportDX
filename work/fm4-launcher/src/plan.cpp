@@ -454,13 +454,19 @@ Pairs OptionKnobs(const Json& table, const std::string& text, const std::string&
   return knobs;
 }
 
-// option_cvars of pipeline.py: the runtime cvars of the knobs that differ from their defaults.
+// option_cvars of pipeline.py: over the launchers' defaults that differ from the runtime's
+// (runtime_default), the runtime cvars of the knobs that differ from the runtime's defaults.
 Pairs OptionCvars(const Json& table, const std::string& text, const std::string& option) {
+  Pairs knobs;
+  for (const auto& [name, knob] : table.items())
+    if (knob.contains("runtime_default")) knobs.Set(name, knob.at("default").get<std::string>());
+  for (const auto& [name, value] : OptionKnobs(table, text, option).Items()) knobs.Set(name, value);
   Pairs cvars;
-  for (const auto& [name, value] : OptionKnobs(table, text, option).Items()) {
+  for (const auto& [name, value] : knobs.Items()) {
     const Json& knob = table.at(name);
     const std::string cvar = knob.at("cvar").get<std::string>();
-    const std::string fallback = knob.at("default").get<std::string>();
+    const std::string fallback =
+        knob.at(knob.contains("runtime_default") ? "runtime_default" : "default").get<std::string>();
     std::string text;
     if (knob.contains("choices")) {
       std::vector<std::string> choices;
@@ -468,10 +474,7 @@ Pairs OptionCvars(const Json& table, const std::string& text, const std::string&
       if (std::find(choices.begin(), choices.end(), value) == choices.end())
         throw PlanError(option + " " + name + " is one of " + Join(choices, ", ") + ", not '" +
                         value + "'.");
-      if (value == fallback) {
-        cvars.Erase(cvar);
-        continue;
-      }
+      if (value == fallback) continue;
       const bool boolean = choices == std::vector<std::string>{"0", "1"};
       text = boolean ? (value == "1" ? "true" : "false") : value;
     } else {
@@ -484,10 +487,7 @@ Pairs OptionCvars(const Json& table, const std::string& text, const std::string&
       if (!(low <= number && number <= high))
         throw PlanError(option + " " + name + " is a number from " + PyG(low) + " to " +
                         PyG(high) + ", not '" + value + "'.");
-      if (number == PyFloat(fallback)) {
-        cvars.Erase(cvar);
-        continue;
-      }
+      if (number == PyFloat(fallback)) continue;
       text = PyRepr(number);
     }
     cvars.Set(cvar, text);

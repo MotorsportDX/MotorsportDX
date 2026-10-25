@@ -1,6 +1,7 @@
 """Synthetic tests: no FM4 bytes or original game assets are needed."""
 import json
 import os
+import re
 from pathlib import Path
 import struct
 import tempfile
@@ -591,27 +592,40 @@ class PipelineTests(unittest.TestCase):
             self.assertIn(message, str(caught.exception))
 
     def test_pad_cvars(self):
-        # The defaults set no cvar, so a default plan is unchanged.
-        self.assertEqual(pipeline.pad_cvars(None), {})
+        # The launchers' defaults: rumble 1.5 over the runtime's 1, nothing else.
+        self.assertEqual(pipeline.pad_cvars(None), {'pad_rumble_strength': '1.5'})
+        # The runtime's defaults set no cvar, also rumble 1 against the launchers' 1.5.
         self.assertEqual(pipeline.pad_cvars('driver=default,rumble=1.0,thread=0,misc1=guide'), {})
-        self.assertEqual(pipeline.pad_cvars('driver=rawinput, trigger_rumble=1,rumble=1.5'),
+        self.assertEqual(pipeline.pad_cvars('driver=rawinput, trigger_rumble=1,rumble=2'),
                          {'sdl_joystick_driver': 'rawinput', 'pad_trigger_rumble': 'true',
-                          'pad_rumble_strength': '1.5'})
-        # Later items win, also back to the default.
+                          'pad_rumble_strength': '2.0'})
+        self.assertEqual(pipeline.pad_cvars('driver=rawinput'),
+                         {'pad_rumble_strength': '1.5', 'sdl_joystick_driver': 'rawinput'})
+        # Later items win, also back to a default.
         self.assertEqual(pipeline.pad_cvars('rumble=2,anti_deadzone=0.24,rumble=1'),
                          {'pad_steering_anti_deadzone': '0.24'})
-        self.assertEqual(pipeline.pad_cvars('right_paddle1=none,touchpad=back'),
+        self.assertEqual(pipeline.pad_cvars('rumble=2,rumble=1.5'), {'pad_rumble_strength': '1.5'})
+        self.assertEqual(pipeline.pad_cvars('rumble=1,right_paddle1=none,touchpad=back'),
                          {'pad_right_paddle1': 'none', 'pad_touchpad': 'back'})
         for bad in ('rumble=2.5', 'stick_outer=0.4', 'driver=gameinput', 'thread=on', 'misc1=z',
                     'rumble', 'paddle1=a', 'rumble=nan'):
             with self.assertRaises(ValueError, msg=bad):
                 pipeline.pad_cvars(bad)
-        # Every knob's cvar and default match the runtime's (the launcher reads this table).
+        # Every knob's cvar and runtime default match the runtime's (the launcher reads this
+        # table).
         runtime = Path(__file__).resolve().parents[2]/'work/runtime/src/input'
         sources = ((runtime/'pad_settings.cpp').read_text(encoding='utf-8') +
                    (runtime/'sdl/sdl_input_driver.cpp').read_text(encoding='utf-8'))
         for name, knob in pipeline.PAD_KNOBS.items():
-            self.assertIn(f"({knob['cvar']}, ", sources, name)
+            match = re.search(rf"\({knob['cvar']}, ([^,]+),", sources)
+            self.assertIsNotNone(match, name)
+            value = {'true': '1', 'false': '0'}.get(match.group(1).strip(),
+                                                    match.group(1).strip().strip('"'))
+            expected = knob.get('runtime_default', knob['default'])
+            if 'choices' in knob:
+                self.assertEqual(value, expected, name)
+            else:
+                self.assertEqual(float(value), float(expected), name)
 
     def test_full_rate(self):
         """Replays and the countdown run at the race frame rate (FM4_FULL_RATE), shared with

@@ -1295,16 +1295,20 @@ VSYNC_MODES=('auto','on','off')
 DEFAULT_VSYNC='auto'
 
 # -Pad: the physical controller's options (docs/running.md#controller,
-# docs/analysis/modern-gamepads.md), knob name to its runtime cvar, its default, and its choices
-# or its range (bool knobs are 0 or 1). Only knobs that differ from their default become cvars,
-# so the default plan sets none. The GUI launcher reads this table from launcher.json.
+# docs/analysis/modern-gamepads.md), knob name to its runtime cvar, the launchers' default, and its
+# choices or its range (bool knobs are 0 or 1). A knob whose launchers' default differs from the
+# runtime's ('runtime_default') applies it when -Pad leaves the knob out: rumble 1.5, since the
+# title's driving rumble is 0.05 to 0.2 of full and the owner preferred 1.5 on the ROG Xbox Ally X
+# (25 October 2026). Only values that differ from the runtime's default become cvars. The GUI
+# launcher reads this table from launcher.json.
 PAD_BUTTONS=('a','b','x','y','lb','rb','back','start','ls','rs','up','down','left','right','guide',
              'none')
 PAD_KNOBS={
     'driver':{'cvar':'sdl_joystick_driver','default':'default',
               'choices':['default','rawinput','wgi']},
     'thread':{'cvar':'input_sdl_thread','default':'0','choices':['0','1']},
-    'rumble':{'cvar':'pad_rumble_strength','default':'1','min':0.0,'max':2.0},
+    'rumble':{'cvar':'pad_rumble_strength','default':'1.5','runtime_default':'1','min':0.0,
+              'max':2.0},
     'trigger_rumble':{'cvar':'pad_trigger_rumble','default':'0','choices':['0','1']},
     'trigger_rumble_strength':{'cvar':'pad_trigger_rumble_strength','default':'1','min':0.0,'max':2.0},
     'stick_deadzone':{'cvar':'pad_stick_deadzone','default':'0','min':0.0,'max':0.5},
@@ -1353,17 +1357,20 @@ def option_knobs(text,table,option):
     return knobs
 
 def option_cvars(text,table,option):
-    """The runtime cvars of a -Pad or -Keyboard value: the knobs that differ from their
-    defaults."""
+    """The runtime cvars of a -Pad or -Keyboard value over the launchers' defaults that differ
+    from the runtime's (a knob's 'runtime_default'): the knobs whose value differs from the
+    runtime's default ('runtime_default', else 'default')."""
+    knobs={name:knob['default'] for name,knob in table.items() if 'runtime_default' in knob}
+    knobs.update(option_knobs(text,table,option))
     cvars={}
-    for name,value in option_knobs(text,table,option).items():
+    for name,value in knobs.items():
         knob=table[name]
+        base=knob.get('runtime_default',knob['default'])
         if 'choices' in knob:
             if value not in knob['choices']:
                 raise ValueError(f"{option} {name} is one of {', '.join(knob['choices'])}, "
                                  f"not {value!r}.")
-            if value==knob['default']:
-                cvars.pop(knob['cvar'],None)
+            if value==base:
                 continue
             text={'0':'false','1':'true'}.get(value,value) if knob['choices']==['0','1'] else value
         else:
@@ -1374,8 +1381,7 @@ def option_cvars(text,table,option):
             if not knob['min']<=number<=knob['max']:
                 raise ValueError(f"{option} {name} is a number from {knob['min']:g} to "
                                  f"{knob['max']:g}, not {value!r}.")
-            if number==float(knob['default']):
-                cvars.pop(knob['cvar'],None)
+            if number==float(base):
                 continue
             text=repr(number)
         cvars[knob['cvar']]=text
@@ -1387,7 +1393,8 @@ def pad_knobs(pad):
     return option_knobs(pad,PAD_KNOBS,'-Pad')
 
 def pad_cvars(pad):
-    """The runtime cvars of a -Pad value: the knobs that differ from their defaults."""
+    """The runtime cvars of a -Pad value over the launchers' defaults: the knobs whose value
+    differs from the runtime's default."""
     return option_cvars(pad,PAD_KNOBS,'-Pad')
 
 def keyboard_cvars(keyboard):

@@ -1367,9 +1367,10 @@ void App::ControllerSection() {
 
   ImGui::TextColored(kSecondary, "Controller");
   Muted("A connected controller works without setup. These options change what it sends and how it "
-        "rumbles; the defaults keep it as the game sees it. The game's own steering deadzone comes first: "
-        "PLAY CAREER > MY PROFILE > OPTIONS > CONTROLLER, then X (ADVANCED) > STEERING AXIS DEADZONE INSIDE "
-        "(24 by default; lower it, for example to 5-10, for small corrections to steer, and press A to save).");
+        "rumbles; the defaults keep it as the game sees it, apart from rumble strength 1.5 (the game's driving "
+        "rumble is weak). The game's own steering deadzone comes first: PLAY CAREER > MY PROFILE > OPTIONS > "
+        "CONTROLLER, then X (ADVANCED) > STEERING AXIS DEADZONE INSIDE (24 by default; 10 is a good start for "
+        "small corrections to steer, a step higher if the car steers by itself; press A to save).");
   ImGui::Dummy(ImVec2(0, 2 * scale_));
   const char* drivers[] = {"default", "rawinput", "wgi"};
   int driver = 0;
@@ -1380,7 +1381,9 @@ void App::ControllerSection() {
         "rumble on Xbox One and Series pads (through Windows.Gaming.Input). WGI: Windows.Gaming.Input with "
         "XInput off, a fallback if Raw Input misbehaves.");
   if (Segment("driver", driver, {"Default", "Raw Input", "WGI"})) set_knob("driver", drivers[driver]);
-  slider("rumble", "Rumble strength", "Multiplies the game's two rumble motors (1: as the game sends them).");
+  slider("rumble", "Rumble strength",
+         "Multiplies the game's two rumble motors (1: as the game sends them; 1.5 by default, since the game's "
+         "driving rumble is only 0.05 to 0.2 of full).");
   toggle("trigger_rumble", "Trigger rumble",
          "Throttle trigger from wheelspin, brake trigger from locking: derived from the game's motors and how "
          "far each trigger is pressed. Needs a pad with trigger motors (Raw Input or WGI on Xbox pads).");

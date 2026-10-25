@@ -60,7 +60,7 @@ Notes on the rows:
 - **Duplicates.** None in any column: RAWINPUT stops the XInput driver from adding pads (`AddXInputDevice` returns early when RAWINPUT is on), DirectInput skips `IG_` paths and Xbox IDs while XInput or RAWINPUT is on, WGI skips what an earlier driver claims, and HIDAPI claims PlayStation pads before any other driver. Turning XInput off without turning DirectInput off would hand Xbox pads to DirectInput (one combined trigger axis, no rumble), which is why the WGI column needs both off.
 - **RAWINPUT caveats.** It needs a pad input before the correlation exists ("Controller isn't correlated yet, try hitting a button first"), so the first rumble of a session can fail until a button or stick moves; in a race this is immediate. It is disabled in remote desktop sessions. Its source notes that XInput used together with raw input switched off a Series controller connected through the Xbox Wireless Adapter; the XInput correlation (`SDL_JOYSTICK_RAWINPUT_CORRELATE_XINPUT`) is on by default. The runtime's SDL driver comment already warns that RAWINPUT's correlation delays battery information.
 - **Enhanced reports.** SDL switches Bluetooth PlayStation pads to their full report mode by default, which, per SDL's hint text, breaks DirectInput for other (non-SDL) applications until the pad is power-cycled. The runtime keeps SDL's default.
-- **The Ally X.** SDL lists `0B05:1B4C` as the "ASUS ROG Ally X built-in controller", an Xbox 360 class pad (`controller_list.h`); this is the 2024 Ally X, and the PID of the 2025 ROG Xbox Ally X is not in SDL's lists. SDL also treats a Microsoft `045E:028E` pad on a system with the Ally's BMI320 accelerometer and gyroscope as the Ally (`IsROGAlly`) and fuses those sensors into the gamepad (`SDL_GAMECONTROLLER_SENSOR_FUSION`, on unless set to 0). Whether the Ally X's pad has trigger motors, and through which Windows API they are reachable, cannot be read from the source; the pad report proposed below logs what SDL sees.
+- **The Ally X.** SDL lists `0B05:1B4C` as the "ASUS ROG Ally X built-in controller", an Xbox 360 class pad (`controller_list.h`); this is the 2024 Ally X, and the owner's 2025 ROG Xbox Ally X reports the same IDs ([its test](#the-owners-rog-xbox-ally-x-test)). SDL also treats a Microsoft `045E:028E` pad on a system with the Ally's BMI320 accelerometer and gyroscope as the Ally (`IsROGAlly`) and fuses those sensors into the gamepad (`SDL_GAMECONTROLLER_SENSOR_FUSION`, on unless set to 0). Whether the Ally X's pad has trigger motors, and through which Windows API they are reachable, cannot be read from the source; the pad report logs what SDL sees, and on the owner's Ally X neither XInput nor RAWINPUT reports trigger rumble.
 - **Which driver opened a pad.** SDL has no public call for it. Byte 14 of the joystick GUID is the driver's signature: `x` XInput, `r` RAWINPUT, `w` WGI, `g` GameInput, `h` HIDAPI, `v` virtual (`SDL_joystick.c`); DirectInput GUIDs have 0 there.
 
 ### Recommendation
@@ -225,7 +225,7 @@ Every default keeps today's behaviour. The owner's hardware test through an expo
 | Steering anti-deadzone (left stick only, radial) | 0 to 0.5 | 0 | 0, with the game's steering deadzone lowered instead; 0.24 only with the game's default |
 | Stick response curve (exponent on the magnitude) | 0.5 to 3 | 1 (linear) | 1 |
 | Trigger inner and outer range | 0 to 1 | 0 and 1 | as default |
-| Rumble strength (both motors) | 0 to 2 | 1 | 1.5 to 2: the title's driving rumble is 0.05 to 0.2 of full |
+| Rumble strength (both motors) | 0 to 2 | 1 (the launchers: 1.5 since the [Ally X test](#the-owners-rog-xbox-ally-x-test)) | 1.5 to 2: the title's driving rumble is 0.05 to 0.2 of full |
 | Trigger rumble, derived from the motors | off, on | off | on, with `rawinput` |
 | Trigger rumble strength | 0 to 2 | 1 | 1 |
 | SDL input thread (1 ms updates off the UI thread) | off, on | off | on at 240 Hz; compare on the Ally X with `input_latency_probe` |
@@ -302,14 +302,52 @@ Build: `I:\FM4-build-usa`, snapshot `snapshots\gp-s2` of 25 October 2026, from c
 
 **Smoke gate**, fast route, 240 Hz, against `s1b-rtv1x` (the FSR session's stage 1 binary): `career` PASS (`gp2s`). `photo` failed at the fast route's boot step: the main menu's `push UI_Homespace` came 0.84 s after the title scene, during the previous step's 2.5 s wait, so the check never saw it after a press, and the next presses went into the career. The same failure is in earlier runs of other sessions (`n3p-rov-a`, `n4pth2-fnu`, `n5b-freeze-1x-rov`, `n6z-nat1x-240-photo`, `n6z-nat2x-240-photo`). `photo_view` failed with it, for want of a saved photo. Re-run (`gp2s2`): both reached their goal, WARN on capture statistics only (race 212.6 fps against 207.9, p99 6.89 against 6.83 ms; the photo loads).
 
-Not covered here: real pads (the owner's [test checklist](../running.md#controller-test-checklist)), RAWINPUT's WGI correlation and the WGI driver with a device, the focus-loss stop of trigger rumble (the probe reads the pads in the background, so it does not apply there), the XInput backend's options and its rumble at exit, and PlayStation pads.
+Not covered here: real pads (the owner's [test checklist](../running.md#controller-test-checklist); the Ally X's results follow), RAWINPUT's WGI correlation and the WGI driver with a device, the focus-loss stop of trigger rumble (the probe reads the pads in the background, so it does not apply there), the XInput backend's options and its rumble at exit, and PlayStation pads.
+
+### The owner's ROG Xbox Ally X test
+
+The owner ran the checklist's four Ally X profiles on the built-in pad on 25 October 2026, from an export of `f4891c4` (stage 2 in main): A `default`, B `rawinput`, C `default` with the input thread, D `rawinput` with the input thread, each with `--input_latency_probe=true`, the launcher defaults otherwise (the native path, the race limit at 117 fps under the 120 Hz VRR panel). The logs are the export's `runtime.2.log`, `runtime.1.log` and `runtime.log` with the four perf traces.
+
+**The pad report.** The built-in pad is `0B05:1B4C`, SDL type `xbox360`, so this ROG Xbox Ally X has the same IDs as the 2024 ROG Ally X in SDL's list (see [the matrix notes](#the-matrix)):
+
+- `default`: `name="XInput Controller #1" driver=xinput rumble=1 trigger_rumble=0`.
+- `rawinput`: `name="ASUSTeK Computer Inc." driver=rawinput rumble=1 trigger_rumble=0`, path `\\?\HID#VID_0B05&PID_1B4C&MI_05&IG_00...`.
+- Both: no gyroscope or accelerometer (SDL's Ally sensor fusion is for a `045E:028E` pad), no paddles, Misc1 or touchpad, `connection=unknown`, battery 10.
+
+So neither XInput nor RAWINPUT gives trigger rumble on the Ally X: as an Xbox 360 class pad it is not of the Xbox One family that RAWINPUT's trigger rumble needs. Its triggers do have motors: they vibrate in other games, the owner reports. GameInput is the one route left to reach them, and it is not in this build ([Left for later](#left-for-later)). `pad_trigger_rumble` does nothing there; `pad_rumble_strength` applies to its two motors.
+
+**Latency**, the probe's 5 s windows of the races (the title's read gap p50 under 12 ms), medians over the windows, in ms:
+
+| Profile | `driver` | `thread` | Race windows | SDL update gaps mean / p99 | New value to update mean | Update to the title's read mean | Age at the read mean / p99 | Title's read gap p50 |
+| --- | --- | --- | --- | --- | --- | --- | --- | --- |
+| A | `default` | off | 19 | 0.73 / 2.10 | 0.82 | 4.83 | 5.72 / 13.13 | 9.79 |
+| B | `rawinput` | off | 19 | 0.68 / 2.12 | 0.75 | 4.75 | 5.52 / 12.63 | 9.53 |
+| C | `default` | on | 19 | 1.55 / 2.26 | 0.86 | 5.01 | 5.85 / 12.70 | 9.58 |
+| D | `rawinput` | on | 15 | 1.57 / 2.22 | 0.99 | 5.44 | 6.52 / 13.98 | 10.19 |
+
+- The races ran at about 100 fps (read gaps of 9.5 to 10.2 ms), below the 117 fps limit. At that rate the UI thread keeps up on the Ally X as on the main PC at 60 and 120 Hz: it updates the pads every 0.7 ms, and a new state waits 0.8 ms for its update.
+- The input thread does not help there: its 1 ms sleep gives 1.55 ms between updates, longer than the UI thread's, and the age at the read is the same or 0.3 to 1 ms higher. It stays off by default; it is worth having only where the UI thread falls behind, as in 240 fps races on the main PC.
+- `rawinput` reads the pad as fast as `default` (5.52 against 5.72 ms with the thread off).
+- In the menus (60 fps) the age at the read is 8.6 to 9.5 ms, as on the main PC.
+- The probe's virtual pad was the second pad (guest user 1), so it received no rumble in these runs; the title rumbles user 0, the built-in pad.
+
+**Exit and warnings.** Every run logged "SDL input: rumble stopped at exit" when the window closed. Every run also warned `SDL GameControllerDB: file 'gamecontrollerdb.txt' does not exist.`: the default name of `hid_mappings_file`, which no export ships. A missing file under the default name is now logged as information; the warning stays for a file the user named (a non-default source of the cvar).
+
+**The owner's notes.** The pad rumbled in the races, and rumble strength 1.5 felt best. The owner set the game's STEERING AXIS DEADZONE INSIDE to 10 and kept it.
+
+**Decisions** (the main session, 25 October 2026):
+
+- The launchers default to rumble strength 1.5 (`-Pad` knob `rumble`, `PAD_KNOBS` with `runtime_default` 1, in both launchers); the runtime cvar `pad_rumble_strength` keeps 1, the title's own scale.
+- [running.md](../running.md#the-games-steering-deadzone) recommends 10 as the starting value of the game's steering deadzone, a step higher if the car steers by itself.
+- The input thread stays off by default: no gain on the Ally X at its race rate, a gain only in 240 fps races on the main PC.
+- Trigger rumble on the Ally X waits for GameInput, which needs the GameInput SDK's header and the owner's approval.
 
 ## Left for later
 
 - **PlayStation glyphs.** The title draws Xbox button glyphs. A texture replacement set per pad type ([texture replacement](texture-replacement.md)) chosen from the pad report is the likely route.
 - **Gyro steering.** The DualSense reports its gyroscope through HIDAPI, and SDL fuses the Ally's own IMU into an Xbox 360 class pad on the Ally (`IsROGAlly`). Mapping it onto the steering axis (with a centre reset) is a separate feature.
 - **Trigger effects from the title's state.** Slip-only trigger rumble, and DualSense adaptive triggers (resistance from the brake, a pulse on locking), need the rumble mixer's per-effect values (`TireTractionFront`, `TireTractionRear`, the engine speed), so a hook in the title's rumble update first.
-- **GameInput.** Needs SDL built with the GameInput SDK's v1 or v2 header (a download, owner's approval). It would give the Xbox Share button and trigger rumble without RAWINPUT's correlation, but no paddles.
+- **GameInput.** Needs SDL built with the GameInput SDK's v1 or v2 header (a download, owner's approval). It would give the Xbox Share button and trigger rumble without RAWINPUT's correlation, but no paddles; it is also the one route left to the ROG Xbox Ally X's trigger motors, which XInput and RAWINPUT do not reach.
 - **Elite paddles as paddles on Windows.** Only SDL's HIDAPI Xbox drivers read them, and on Windows those never see an XInput device; libusb is not built in.
 
 ## Evidence

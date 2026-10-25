@@ -380,8 +380,15 @@ void SDLInputDriver::OnWindowAvailable(rex::ui::Window* window) {
       if (!REXCVAR_GET(hid_mappings_file).empty()) {
         std::filesystem::path mappings_path(REXCVAR_GET(hid_mappings_file));
         if (!std::filesystem::exists(mappings_path)) {
-          REXLOG_WARN("SDL GameControllerDB: file '{}' does not exist.",
-                      REXCVAR_GET(hid_mappings_file));
+          // The default name is optional (SDL's built-in mappings cover the common pads);
+          // only a file the user named is worth a warning.
+          if (rex::cvar::GetFlagSource("hid_mappings_file") == rex::cvar::Source::kDefault) {
+            REXLOG_INFO("SDL GameControllerDB: no '{}'; SDL's built-in mappings apply.",
+                        REXCVAR_GET(hid_mappings_file));
+          } else {
+            REXLOG_WARN("SDL GameControllerDB: file '{}' does not exist.",
+                        REXCVAR_GET(hid_mappings_file));
+          }
         } else {
           auto mappings_result =
               SDL_AddGamepadMappingsFromFile(REXCVAR_GET(hid_mappings_file).c_str());

@@ -118,7 +118,8 @@ bool TaaEnabled(const Pairs& knobs);
 std::vector<std::string> LookDefines(const LauncherData& data, const Pairs& knobs);
 
 // pad_knobs and pad_cvars of pipeline.py: the knobs of a -Pad value (later items win), and the
-// runtime cvars of those that differ from their defaults (launcher.json "pad").
+// runtime cvars of those, over the launchers' defaults, that differ from the runtime's defaults
+// (launcher.json "pad"; a knob's runtime_default when the launchers' default differs).
 Pairs PadKnobs(const LauncherData& data, const std::string& pad);
 Pairs PadCvars(const LauncherData& data, const std::string& pad);
 // keyboard_cvars of pipeline.py: the same for a -Keyboard value (launcher.json "keyboard").

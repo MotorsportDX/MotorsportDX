@@ -224,7 +224,7 @@ takes a value.
 | `-Upscale native\|quality\|balanced\|performance\|<ratio>` | `native` | With `-Native` and `aa=fsr`: FSR 3.1 renders the scene at fewer lines and upscales it to the render scale. See [-Upscale](#-upscale). |
 | `-Quality xbox\|high\|ultra` | `high` | Render quality of races. |
 | `-Look <preset/knobs>` | `aces` | Post-processing look and car paint. See [Look](#look). |
-| `-Pad <knobs>` | none | The physical controller: the SDL pad driver, rumble strength, trigger rumble, the input thread, stick and trigger shaping and the extra buttons. See [Controller](#controller). |
+| `-Pad <knobs>` | `rumble=1.5` | The physical controller: the SDL pad driver, rumble strength, trigger rumble, the input thread, stick and trigger shaping and the extra buttons. See [Controller](#controller). |
 | `-Keyboard <knobs>` | none | The keyboard's steering and pedal model: its rates, the precision share and mouse steering. See [Keyboard](#keyboard). |
 | `-ShaderDev` | off | Shader mod development: the look mods reload when a file in `work/fm4-rex/look` is saved, and the knobs change live. See [Shader mod development](#shader-mod-development). |
 | `-TextureDump <dir>` | off | Write each new game texture once as `<hash>.dds` to this directory. See [Texture replacement](#texture-replacement). |
@@ -827,7 +827,10 @@ dumped or replaced.
 A connected controller works without setup through the runtime's SDL backend. The game
 knows only the Xbox 360 pad: two rumble motors, 8-bit triggers and no paddles. `-Pad`, and
 the Controller section of the GUI launcher's Controls page, change how the runtime reads a
-modern pad and how it rumbles. Every default keeps the pad as the game has always seen it.
+modern pad and how it rumbles. Every default keeps the pad as the game has always seen it,
+except the rumble strength: the launchers default to 1.5, because the game's driving rumble is
+weak (0.05 to 0.2 of full strength) and 1.5 felt best in the owner's test on the ROG Xbox Ally
+X (25 October 2026). The runtime's own default stays 1, the game's own scale.
 The design and the measurements behind the options are in
 [modern gamepads](analysis/modern-gamepads.md).
 
@@ -846,8 +849,8 @@ dead quarter is the main reason small corrections do not steer. Lower it in the 
 2. Choose OPTIONS, then CONTROLLER. The CONTROLLER LAYOUT screen opens.
 3. Press X (ADVANCED). The ADVANCED OPTIONS screen opens with STEERING AXIS DEADZONE INSIDE
    highlighted, at 24.
-4. Lower it with Left, for example to 5 or 10. If the car steers on its own with the stick at
-   rest, raise it a step.
+4. Lower it with Left; 10 is a good start (the owner's choice in their test). If the car
+   steers on its own with the stick at rest, raise it a step.
 5. Press A (SAVE).
 
 The setting is saved in the profile and applies to every pad. The game rescales the stick
@@ -861,13 +864,14 @@ screen.
 
 ### -Pad knobs
 
-Knobs are `name=value`, separated by commas; a later knob wins. A knob at its default sets
-nothing. Each knob is a runtime setting, named in the last column.
+Knobs are `name=value`, separated by commas; a later knob wins. A knob left out takes the
+launchers' default; a value equal to the runtime's default sets nothing. Each knob is a runtime
+setting, named in the last column.
 
 | Knob | Values | Default | Description | Runtime setting |
 | --- | --- | --- | --- | --- |
 | `driver` | `default`, `rawinput`, `wgi` | `default` | SDL's Windows pad drivers; see [Pad drivers](#pad-drivers). | `sdl_joystick_driver` |
-| `rumble` | 0 to 2 | 1 | Multiplies the game's two motors, clamped at full strength. The game's rumble in normal driving is 0.05 to 0.2 of full strength, so 1.5 to 2 makes it easier to feel. | `pad_rumble_strength` |
+| `rumble` | 0 to 2 | 1.5 (the runtime's: 1) | Multiplies the game's two motors, clamped at full strength. The game's rumble in normal driving is 0.05 to 0.2 of full strength, so the launchers default to 1.5; `rumble=1` gives the game's own strength. | `pad_rumble_strength` |
 | `trigger_rumble` | 0, 1 | 0 | Trigger rumble derived from the game's motors; see [Trigger rumble](#trigger-rumble). | `pad_trigger_rumble` |
 | `trigger_rumble_strength` | 0 to 2 | 1 | Multiplies the derived trigger rumble. | `pad_trigger_rumble_strength` |
 | `thread` | 0, 1 | 0 | Updates SDL's pads every millisecond on a thread of their own; see [Input thread](#input-thread). | `input_sdl_thread` |
@@ -895,7 +899,7 @@ nothing. Each knob is a runtime setting, named in the last column.
 | `driver` | What SDL uses | Xbox One and Series pads | ROG Xbox Ally X built-in pad |
 | --- | --- | --- | --- |
 | `default` | SDL's defaults: XInput for Xbox class pads, HIDAPI for PlayStation pads | two motors, no trigger rumble | XInput, two motors |
-| `rawinput` | Raw Input, with Windows.Gaming.Input (WGI) correlating the triggers and the trigger motors | two motors; trigger rumble once correlated, which needs a first button or stick input | Raw Input; trigger rumble only if the pad reports Xbox One family IDs |
+| `rawinput` | Raw Input, with Windows.Gaming.Input (WGI) correlating the triggers and the trigger motors | two motors; trigger rumble once correlated, which needs a first button or stick input | Raw Input, two motors; no trigger rumble (an Xbox 360 class pad; checked on the owner's Ally X) |
 | `wgi` | WGI, with XInput and DirectInput off | two motors and trigger rumble; the axes read 0 without window focus | WGI, if WGI lists the pad |
 
 PlayStation pads go through SDL's HIDAPI drivers with every choice (rumble, light bar,
@@ -926,9 +930,9 @@ only every 8.4 ms, so a new pad state waited about 4 ms longer before the game c
 thread stops updating them. Measured with the latency probe on the main PC (25 October 2026):
 in 240 fps races a new state was 2.8 ms old on average when the game read it (5.6 ms at the
 99th percentile) instead of 6.6 ms (12.2 ms), with `default` and `rawinput` alike; at 60 and
-120 fps, where the UI thread keeps up, it made no difference. It is off by default until it
-has been tried with real pads and on the ROG Xbox Ally X (see the
-[checklist](#controller-test-checklist)).
+120 fps, where the UI thread keeps up, it made no difference. On the ROG Xbox Ally X (races at
+about 100 fps under its 117 fps limit) it brought no gain either: its 1 ms sleep updates the
+pads every 1.55 ms, and the UI thread already did every 0.7 ms. It stays off by default.
 
 ### Pad report and latency probe
 
@@ -963,7 +967,7 @@ Xbox Series controller:
 | Profile | Controller section |
 | --- | --- |
 | A | the defaults (`default` driver) |
-| B | Pad driver Raw Input, Trigger rumble on, Rumble strength 1.5 |
+| B | Pad driver Raw Input, Trigger rumble on (Rumble strength 1.5, the default) |
 | C | as B with Rumble strength 2 |
 
 - Note for each profile whether the pad works in the menus and in races, whether the first
@@ -980,9 +984,9 @@ ROG Xbox Ally X built-in pad, race frame rate 120 (its panel):
 | C | the defaults, Input thread on | `--input_latency_probe=true` |
 | D | Pad driver Raw Input, Input thread on | `--input_latency_probe=true` |
 
-- Note whether the pad works and rumbles in each profile. Profile B's pad report says whether
-  the Ally X's pad has trigger motors (`trigger_rumble=1`); if it has, also try Trigger
-  rumble on.
+- Note whether the pad works and rumbles in each profile. The Ally X's pad reports no trigger
+  rumble under either driver (`trigger_rumble=0`, 25 October 2026), so Trigger rumble does
+  nothing there.
 
 What to send back, from the export folder's `logs\runtime.log` (the line types below,
 nothing else is needed). The log keeps the earlier runs; each run starts at its own
