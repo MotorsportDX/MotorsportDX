@@ -839,9 +839,12 @@ LOOK_KNOBS={'sharpen':'FM4_LOOK_SHARPEN','bloom':'FM4_LOOK_BLOOM','exposure':'FM
             'road_specular':'FM4_LOOK_ROAD_SPECULAR','road_sheen':'FM4_LOOK_ROAD_SHEEN',
             'road_roughness':'FM4_LOOK_ROAD_ROUGHNESS','road_sheen_grain':'FM4_LOOK_ROAD_SHEEN_GRAIN',
             'road_debug':'FM4_LOOK_ROAD_DEBUG',
-            # Cockpit interior and driver (work/fm4-rex/look/fm4-cockpit.hlsli): the least share
-            # of the sun's direct light that the interior keeps in its own shadow.
-            'cockpit_light':'FM4_LOOK_COCKPIT_LIGHT',
+            # Cockpit interior and driver (work/fm4-rex/look/fm4-cockpit.hlsli): cockpit_fill, the
+            # sky's fill of the shaded interior (the game's hemispherical term, weighted by the
+            # normal and limited by the track lightmap's shade); cockpit_light, the least share
+            # of the sun's direct light that the interior keeps in its own shadow (no preset
+            # since 26 October 2026: it swings with the sun's direction and lights tunnels).
+            'cockpit_fill':'FM4_LOOK_COCKPIT_FILL','cockpit_light':'FM4_LOOK_COCKPIT_LIGHT',
             # Ambient occlusion of the GTAO post pass on the scene; above 0 it also turns
             # the post passes on (ao_cvars).
             'ao':'FM4_LOOK_AO'}
@@ -882,8 +885,9 @@ LOOK_TRACK_KNOBS={'road_gloss':('RoadSpecular.RoadSpecular','RoadSpecular.RoadSp
 # (since 20 October 2026; before, aces, gt and neutral had only the clear coat, ambient
 # occlusion and the sun knob): the color grade, the clear coat with its sun highlight limited
 # to 1 (clearcoat_glint), ambient occlusion, the sun glare, the sky brightness, TAA (taa=1, its
-# sharpening after the resolve), the cockpit interior's shadow floor (cockpit_light), the
-# cockpit glass (windshield), the road's grained sheen instead of its sun highlight
+# sharpening after the resolve), the cockpit interior's sky fill (cockpit_fill, since 26
+# October 2026 in place of the shadow floor cockpit_light=0.5), the cockpit glass (windshield),
+# the road's grained sheen instead of its sun highlight
 # (road_specular=0,road_sheen=0.4) and the glass, chrome and rim mods. pc is aces under its
 # earlier name (LOOK_ALIASES). original is the game's own picture with TAA and no shader mod;
 # 'original,taa=0' is the game's picture as the title draws it, the reference against -Rov.
@@ -891,7 +895,7 @@ LOOK_TRACK_KNOBS={'road_gloss':('RoadSpecular.RoadSpecular','RoadSpecular.RoadSp
 # slightly deeper sky (docs/analysis/look-mod-coverage.md). Every preset has TAA, so races
 # render one tile without MSAA with them (auto_single_tile).
 _LOOK_MODS=('saturation=1.1,bloom=0.7,sharpen=0.4,clearcoat=1,clearcoat_glint=1,ao=0.6,sun=2,sky=0.7,'
-            'taa=1,cockpit_light=0.5,windshield=1,road_specular=0,road_sheen=0.4,glass=1,chrome=1,rims=1')
+            'taa=1,cockpit_fill=1,windshield=1,road_specular=0,road_sheen=0.4,glass=1,chrome=1,rims=1')
 LOOK_PRESETS={'aces':'tonemap=aces,'+_LOOK_MODS,'gt':'tonemap=gt,'+_LOOK_MODS,
               'neutral':'tonemap=neutral,'+_LOOK_MODS,'original':'taa=1'}
 LOOK_ALIASES={'pc':'aces'}

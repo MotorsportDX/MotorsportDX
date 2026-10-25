@@ -565,7 +565,7 @@ preset, knobs, or both. A preset sets only its own knobs. Later items win, so
 
 | Preset | Settings |
 | --- | --- |
-| `aces` (default) | `tonemap=aces`, `saturation=1.1`, `bloom=0.7`, `sharpen=0.4`, `clearcoat=1`, `clearcoat_glint=1`, `ao=0.6`, `sun=2`, `sky=0.7`, `taa=1`, `cockpit_light=0.5`, `windshield=1`, `road_specular=0`, `road_sheen=0.4`, `glass=1`, `chrome=1`, `rims=1` |
+| `aces` (default) | `tonemap=aces`, `saturation=1.1`, `bloom=0.7`, `sharpen=0.4`, `clearcoat=1`, `clearcoat_glint=1`, `ao=0.6`, `sun=2`, `sky=0.7`, `taa=1`, `cockpit_fill=1`, `windshield=1`, `road_specular=0`, `road_sheen=0.4`, `glass=1`, `chrome=1`, `rims=1` |
 | `gt` | the same with `tonemap=gt` (Hajime Uchimura's curve: a long linear middle, so midtone colors stay closest to the game's) |
 | `neutral` | the same with `tonemap=neutral` (Khronos PBR Neutral: linear up to 0.76, then only the brightest channel compressed) |
 | `original` | The game's own look with TAA (`taa=1`) and no shader mod. Clears the knobs given before it in the same value. `-Look "original,taa=0"` is the game's picture without any change. |
@@ -613,7 +613,8 @@ and `-Look original`.
 | `road_roughness` | number, default 0.5 | Roughness of that highlight: lower is a smaller, brighter glare. |
 | `road_sheen_grain` | number, default 1 | How much that highlight follows the aggregate and the skid marks: it scales the highlight by the asphalt texel's brightness against the texture's local mean, to this power (and on the Top Gear and Crown Jewel road by the darkening of the skid marks). `0` gives an even sheen. |
 | `road_debug` | 0 to 7 | Debug views of the lit road `ROAD_BLND_2`: 1 the highlight's share of the light, 2 without the highlight, 3 the highlight alone, 4 which light the diffuse takes, 5 the parts of the specular amount. With `road_sheen` above 0, on every lit road shader: 6 the image times the sheen's grain, 7 the sheen alone. See [look mod coverage](analysis/look-mod-coverage.md#road-surface-18-october-2026). |
-| `cockpit_light` | number, 0 to 1 | The least share of the sun's direct light that the cockpit interior and the driver keep in the car's own shadow (`fm4-cockpit.hlsli`), in every car shader set: it raises the floor of their shadow term, which the game sets to 0. In the sun the shaded gauges, cluster and gloves become readable while the exposure, the windows and the bloom stay as they are. Faces turned away from the sun and the black dashboard top and wheel rim stay dark. See [cockpit brightness](analysis/cockpit-brightness.md). |
+| `cockpit_fill` | number, 0 to 2; 1 in `aces`, `gt` and `neutral` | The sky's fill of the shaded cockpit interior (`fm4-cockpit.hlsli`), in the race, 16-car, split-screen and UI car shader sets: it scales the game's own hemispherical term of the interior by 1 + 20 times the knob, weighted by how much a surface faces up and lessened by 65% where the track lightmap shades the car (tunnels, rock walls, stands), and gives the driver a floor of 0.25 times the knob on the car's own shadow. The gauges, cluster and dashboard stay readable with the sun ahead, beside or behind, and the interior does not glow in tunnels. `0` is the game's interior. See [Cockpit light](#cockpit-light). |
+| `cockpit_light` | number, 0 to 1; no preset since 26 October 2026 | The least share of the sun's direct light that the cockpit interior and the driver keep in the car's own shadow (`fm4-cockpit.hlsli`), in every car shader set: it raises the floor of their shadow term, which the game sets to 0. It follows the sun's direction against the car and also lights the interior where the world is shaded, so the interior swings between lit and black as the car turns and glows in tunnels. See [Cockpit light](#cockpit-light). |
 | `ao` | number, `0` turns it off | Strength of the screen-space ambient occlusion. |
 | `taa` | `1` on (in every preset), `0` off | Temporal anti-aliasing before the HUD, with the scene jittered while the camera moves and on a still camera, whose frames it accumulates; the look's `sharpen` moves after it, and races render one tile without MSAA. See [Temporal anti-aliasing](#temporal-anti-aliasing). |
 | `taa_point` | `0` (default) or `1` | With `taa`: `1` runs TAA at the scene_color point, before the game's post chain, instead of before the HUD; the look's `sharpen` stays in the final combine. See [Temporal anti-aliasing](#temporal-anti-aliasing). |
@@ -638,12 +639,28 @@ and Maple Valley, `sky_saturation=1.15,sky_contrast=0.3,sky_horizon=0.5` gave a 
 blue sky, and `foliage_saturation=1.15` was barely visible (see
 [look mod coverage](analysis/look-mod-coverage.md#in-game-checks-sky-and-vegetation-18-october-2026)).
 For autumn colors try `-Look "pc,foliage_hue=-45"`.
-`pc` sets `cockpit_light=0.5` and `windshield=1` since 20 October 2026; `-Look "pc,cockpit_light=0,windshield=0"`
-is the `pc` look before them. In an A/B at 2x on the Bernese Alps on top of `pc` (nine frozen cockpit
-frames), `cockpit_light=0.5` took the gauges from 1 to 4 of 255 to 37 to 62 and the gloves from 2 to 8
-to 7 to 48 in four of the frames; in the other five the shaded faces were turned away from the sun
-and changed by less than 4. The windows and the other cameras stay as they
-were (see [cockpit brightness](analysis/cockpit-brightness.md#the-cockpit_light-knob-19-october-2026)).
+### Cockpit light
+
+In the sun the car's roof shades most of the cockpit interior, and FM4 draws the shaded part with a small
+hemispherical term only, near black against an exposure set by the windows. Since 26 October 2026 the
+presets `aces`, `gt` and `neutral` set `cockpit_fill=1`, a sky fill from that term; from 20 to 26 October
+2026 they set `cockpit_light=0.5`, a floor of the sun's direct light, which the project owner saw swing
+between much too bright and much too dark with the sun's position.
+
+- Over a lap of the Bernese Alps with the AI driver (1x, the gauges' mean luma of 255): 1.2 to 92.6 with
+  `cockpit_light=0.5`, 88.8 in the tunnel; 1.0 to 12.8 with neither knob, the same as `-Look original`
+  and `-Rov`; 12.0 to 29.7 with `cockpit_fill=1`, 21.5 in the open and 24.6 in the tunnel.
+- `-Look "aces,cockpit_fill=0"` is the game's interior; `-Look "aces,cockpit_fill=0,cockpit_light=0.5"`
+  the look of 20 to 26 October 2026.
+- The fill covers the 22 interior shaders that have the track lightmap and a hemispherical scale and the
+  six driver shaders; the 16 others (the showroom set and the `cockpit_*` material shaders) keep the
+  game's interior. It lights only the cockpit interiors and the driver, also where they show through a
+  car's windows, not the windows themselves; a brighter interior can lower the auto exposure a little in
+  dark scenes.
+- `windshield=1` (since 20 October 2026; `-Look "aces,windshield=0"` turns it off) adds the glass
+  ([Cockpit glass](#cockpit-glass)).
+
+See [cockpit brightness](analysis/cockpit-brightness.md#the-cause-the-cockpit_light-floor-25-october-2026).
 
 ### Sun glare
 

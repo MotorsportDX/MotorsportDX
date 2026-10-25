@@ -118,7 +118,7 @@ Proposal: a look knob for the interior's shadow floor, for example `cockpit_ligh
 
 ## The `cockpit_light` knob (19 October 2026)
 
-`-Look "...,cockpit_light=<0 to 1>"` raises the shadow floor of the interior and the driver ([`fm4-cockpit.hlsli`](../../work/fm4-rex/look/fm4-cockpit.hlsli); [running](../running.md#look)). The default 0 is the game's interior; `pc` sets 0.5 since 20 October 2026 ([on top of pc](#in-the-pc-preset-20-october-2026)).
+`-Look "...,cockpit_light=<0 to 1>"` raises the shadow floor of the interior and the driver ([`fm4-cockpit.hlsli`](../../work/fm4-rex/look/fm4-cockpit.hlsli); [running](../running.md#look)). The default 0 is the game's interior; `pc` set 0.5 from 20 to 26 October 2026 ([on top of pc](#in-the-pc-preset-20-october-2026)), and no preset sets it since ([the sky fill](#the-sky-fill-in-the-presets-26-october-2026)).
 
 - **Interior shaders with a floor constant** (38 hashes, the material atlas class `cockpit`): 21 with `MinCockpitShadow` and 17 with `MinShadowValue`, of the race, 16-car, split-screen, UI and `shaders_slod_v16` sets and the `cockpit_*` material shaders. Each ucode reads the constant's X in a `max` with the shadow term (after the track lightmap's `min`); the mod's `XE_HOOK_CONSTANT` makes that X at least the knob. Five of the material shaders are shared with the engine bay (`engine_*` sources), which the floor lifts as well.
 - **The driver** (six hashes without a floor constant): the body `30712480E0AB46E4` (default.xex) and the suit `89F06E34104DF40C` (WhiteFelt), `85CB5573E78162CB` (ApendagesSuede), `1891C4772E7E7617` (Sleeves), `A4ECA613BEDB4468` (Stitching) and `C5CF0F92A4F120F2` (logos). Their shadow term is `min` of the track lightmap's share, `saturate((L * L - c60.x) / (c60.y - c60.x))` (fetch 1 for the body, 10 for the suit), and one tap of the variance shadow map darkened to p^4 (the ucode squares the Chebyshev bound twice); the suit then takes a small literal floor. The mod raises the lightmap texel and the second moment of the shadow map texel (with the pixel's depth from the interpolator of the fetch's coordinate) so that each term is at least the knob, which equals a floor after the `min`.
@@ -162,7 +162,7 @@ Crops (1:1 at 2560x1440, not in the repository) are in `I:\FM4-build-pass\e2e\co
 
 ## In the pc Preset (20 October 2026)
 
-`pc` sets `cockpit_light=0.5` and `windshield=1` since 20 October 2026, at the project owner's request. Run `pc2-cockpit-ab` (`I:\FM4-build-pass`, the USA Disc 1 and profile, 2x, `-Look pc` with `--shader-dev`, nine cockpit freezes, live defines: the new `pc`, the earlier one, each knob alone):
+`pc` set `cockpit_light=0.5` and `windshield=1` from 20 October 2026, at the project owner's request; since 26 October 2026 the presets set `cockpit_fill=1` instead of the floor ([the sky fill](#the-sky-fill-in-the-presets-26-october-2026)). Run `pc2-cockpit-ab` (`I:\FM4-build-pass`, the USA Disc 1 and profile, 2x, `-Look pc` with `--shader-dev`, nine cockpit freezes, live defines: the new `pc`, the earlier one, each knob alone):
 
 | Freeze | Earlier `pc`: gauges, hand, road | New `pc`: gauges, hand, road |
 |---|---|---|
@@ -175,7 +175,7 @@ Crops (1:1 at 2560x1440, not in the repository) are in `I:\FM4-build-pass\e2e\co
 - `cockpit_light` makes every change inside the car; the glass alone lowers the patches seen through the windows by 1 to 5 and leaves the interior as it is.
 - In freezes 3 to 7 the gauges and the gloves face away from the sun, so the floor (through N·L) lifts them little.
 - The 1:1 crops show readable gauges and white gloves, a light haze on the windows, and no artifacts.
-- The smoke gate of the new `pc` against the earlier one is in [current status](../status/current.md#pc-with-the-cockpit-knobs-20-october-2026).
+- The smoke gate of the new `pc` against the earlier one is in [current status](../status/history.md#20-october-2026-pc-with-the-cockpit-knobs).
 
 ## Windshield and Side Windows
 
@@ -200,9 +200,69 @@ The user saw the interior in the cockpit camera turn from very bright to very da
 - Nearly every frame with `FM4_CAPTURE_STATS=1` (`n4cs-*`: 6,300 to 6,600 distinct frames at 60 fps, 22,400 at 240): no path jumps from one frame to the next. The largest change of the interior patches between two consecutive frames is 13.1 luma (of 255) for `-Rov` with full readback and `rov_occlusion_async=all`, 10.4 for RTV with `-Look original`, 15.2 for RTV with the default look, 7.8 for `-Native` and 7.1 for RTV at 240 fps; the whole frame changes by at most 4 to 7. Over 500 ms the interior changes by up to 20 to 26 in every path, at the same places.
 - The sun query (the awaited occlusion report) saw no sample in the whole lap in any path (8,459 to 9,203 awaited reports a run, `REX_OCCLUSION_SEGMENT_TRACE`): on this circuit and with this car the sun is never in view from the cockpit, so the sun glare could not be tested.
 
-So on this lap the emulation does not add swings: the slow ones are the title's exposure following the windows (above), and no sudden ones occur. The sudden, sun-dependent swings need the place where the user sees them (the track, the time of day, the car, the camera and the point of the lap); the sun glare from the awaited occlusion reports (which washes the screen out at about 4,000 counted samples, [current status](../status/current.md#open-issues)) and the default look's `sun=2` are the next suspects there.
+So on this lap the emulation does not add swings: the slow ones are the title's exposure following the windows (above), and no sudden ones occur. The sudden, sun-dependent swings need the place where the user sees them (the track, the time of day, the car, the camera and the point of the lap); the sun glare from the awaited occlusion reports (which washes the screen out at about 4,000 counted samples, [current status](../status/current.md#open-issues)) and the default look's `sun=2` are the next suspects there. The same day the swings were traced to the default look's `cockpit_light`, not to the emulation or the glare: see [the cause](#the-cause-the-cockpit_light-floor-25-october-2026).
 
 **The capture statistics** (`FM4_CAPTURE_STATS=1`, [e2e](../e2e/README.md)): between the captures every 2 s, the guest output is captured as often as it can be and the mean luma of the frame and of six patches is appended to `capture/stats.csv`, so a jump from one frame to the next shows.
+
+## The cause: the cockpit_light floor (25 October 2026)
+
+The project owner reported the swings again: in both cockpit views the interior turns from much too bright to much too dark within a moment, depending on where the sun is. The cause is the default look's `cockpit_light=0.5` alone. The game itself, the emulation, the sun glare, the cockpit glass, the tone curve, the AO and TAA do not make the swing.
+
+**Why the floor swings.** The floor raises the interior's shadow term to at least 0.5 (the [knob](#the-cockpit_light-knob-19-october-2026)), so the interior takes half of the sun's direct light, times N·L, where the car's own roof and pillars shade it. That light follows the sun's direction relative to the car: with the sun behind or beside the car the gauges and gloves face it and light up; with the sun ahead they face away and keep nothing. In a corner the car turns through that range within one to three seconds. The floor also sits after the `min` with the track lightmap, so it lights the interior where the world is shaded: in the tunnel and the rock cuttings, where the auto exposure rises for the dark windows, the interior glows. The game draws the shaded interior with its small ambient term only, near black and steady.
+
+**Over a lap** (`I:\FM4-build-usa`, game build of `5c346c9`, 1x, 60 Hz, Quick Race on the Bernese Alps Festival Circuit with the AI driver in the cockpit camera, `FM4_FIXED_SEED=1`, `FM4_CAPTURE_STATS=1`, about 6,600 distinct frames a run; the patches of [the setup](#setup) at 1x): the range of the 1 s means from the start to 125 s, the largest change within 1 s, and the means in the open (sky patch above 100) and in the tunnel (70 to 95 s, sky below 40).
+
+| Run | Look | Gauges: range, within 1 s, open, tunnel | Hand: range, within 1 s, tunnel |
+|---|---|---|---|
+| `ck-lap-today` | default (`aces`) | 1.2 to 92.6, 32.0, 28.9, 88.8 | 4.0 to 103.4, 81.6, 93.7 |
+| `ck-ae240` | default, 240 Hz | 1.3 to 93.4, 35.8, 29.7, 89.4 | 5.7 to 104.8, 80.6, 94.0 |
+| `ck-lap-a` | `aces,cockpit_light=0` | 1.0 to 12.8, 16.2, 2.2, 4.8 | 2.0 to 67.6, 52.8, 30.4 |
+| `n4cs-rtvo60` | `original` | 1.5 to 12.9, 14.6, 2.9, 5.6 | 2.2 to 66.8, 55.5, 32.8 |
+| `n4cs-rov60` | `-Rov`, `original` | 1.6 to 10.9, 9.5, 2.6, 5.3 | 3.7 to 61.9, 51.1, 32.4 |
+
+With `cockpit_light=0` and otherwise the default look, the interior patches follow `-Look original` and `-Rov` over the whole lap: the swing is the knob's. The hand patch's 1 s changes come from the glove moving through the patch as the driver steers (the steps take three to four frames); in the default look the gloves are white, so the patch changes more. The game's own adaptation is slow and the same in every path (see the lap above). At 240 Hz the default look swings as at 60.
+
+**The other knobs, in frozen frames** (`ck-ab1b`: 2x, `--shader-dev`, `--keep-ppm`, four rewind freezes on the same lap, each knob switched live and held 8 s for TAA and the glass to settle; patches at 2560x1440). In each freeze, `windshield=0` changes only the window pixels (the road and sky patches by 0.4 to 14, the interior patches by at most 0.1), `ao=0` changes the interior by at most 0.2, and `tonemap=filmic` in place of ACES brightens it by 1 to 5 (the ACES toe). `cockpit_light` 0.5 against 0: the gauges 39.1 against 1.3, 53.3 against 3.5, 12.4 against 1.2 and 39.3 against 3.0 in the four freezes.
+
+**The sun glare** (`sun=2`). On the Bernese Alps lap the sun is never in view from the cockpit (above). On Road Atlanta (the same car and route, `ck-lap-ra`) it shows at the top of the windshield from 4 s to 18 s of the race. A lap with `sun=0` (`ck-lap-ra-sun0`) gives the same patches within 2 of 255 in every second, also while the sun shows (frame 63.5 against 65.3, sky 216.6 against 218.4): the glare adds a little light to the windows and does not move the exposure. The interior swings there as well, gauges 0.8 to 50.3 in both laps, from the same floor.
+
+**The adaptation at high frame rates.** In a lap at 240 Hz (`ck-ae240b`, `REX_DRAW_LIST_CONSTANTS=CAF3881F7C4CDCAA:2-2`, every 120th frame) the auto exposure's share of the new value, `c2.x`, is 0.045 in all 283 sampled race frames, as at 60 Hz. The title adapts per frame, so at 240 Hz the whole picture's exposure settles four times as fast as the game does at 60 (a time constant of about 0.09 s against 0.36 s), and at 120 Hz twice as fast. That is a change against the game at every frame rate above 60 for every pixel, not a cockpit swing: the lap at 240 Hz has the same interior ranges as at 60 (above). Scaling `c2.x` to the frame time on RTV and the native path (1 - 0.955^(60 / rate)) would give the game's speed; it is not built.
+
+## Two fixes (25 October 2026)
+
+**(a) As the game.** The presets stop setting `cockpit_light`. The interior is the game's: steady, and near black on the sunny parts of a lap, the state the knob was made for on 19 October 2026 (gauges 1.0 to 12.8 over the lap, `ck-lap-a` above).
+
+**(b) Natural: the floor becomes a sky fill.** The light the shaded interior lacks is the sky's and the bounce's through the windows, which does not follow the sun's direction. The prototype of 25 October 2026 (live defines with separate strengths for each part, the gain k, the normal weight, the shade g and the driver's floor) keeps the floor at 0 in the interior and instead:
+
+- scales the game's own hemispherical term of the interior shaders (the baked per-vertex ambient times `shLightScalars.y`, `CockpitHemisphericalScalar` of `TrackSettings.xml`; `XE_HOOK_CONSTANT` on c69) by 1 + k × w × s;
+- weights it by the sky's share for the pixel's interpolated normal, w = (1 + N.y) / 2 (`XE_HOOK_INPUT`, interpolator 1, world Y up): the dashboard top facing up gets the most, the gauges facing the driver half, the headliner facing down almost none;
+- limits it by the track lightmap's share of the sun under the car, as the interior shader computes it (`XE_HOOK_TFETCH` on fetch 10 and c60): s = 1 - g × (1 - share), so in tunnels and in the shade of rock walls and stands a part 1 - g of the fill stays;
+- gives the driver's shaders a floor of their own that raises only the car's shadow map term, so the track lightmap's share still limits it.
+
+Measured on the lap above (`ck-lap-*`, 1x) and in the freezes of `ck-hemi2x` (2x, live defines, one freeze with the sun ahead and one with it behind):
+
+| Variant | Gauges over the lap: range, within 1 s, open, tunnel | Freeze, sun ahead / behind: gauges | Notes |
+|---|---|---|---|
+| today, floor 0.5 | 1.2 to 92.6, 32.0, 28.9, 88.8 | 1.4 / 35.3 | |
+| (a) | 1.0 to 12.8, 16.2, 2.2, 4.8 | 1.2 / 1.2 | |
+| fill k=8, uniform (w = 1), g = 1, driver 0.25 (`ck-lap-b8`) | 1.9 to 20.8, 19.2, 14.0, 4.8 | 13.1 / 13.1 | the light headliner and pillars turn flat light gray (1:1 crops) |
+| fill k=20, w by the normal, g = 1, driver 0.25 (`ck-lap-h20`) | 1.9 to 29.9, 29.4, 20.2, 4.9 | 19.0 / 18.6 | the headliner stays dark; every shadow edge drops the gauges to the game's within a second |
+| fill k=20, w by the normal, g = 0.65, driver 0.25 (`ck-lap-h20p`) | 12.0 to 29.7, 17.2, 21.5, 24.6 | (as above in the sun) | the steadiest: the gauges keep 12 to 30 over the whole lap |
+
+In the 1:1 crops at 2x (`I:\FM4-build-usa\e2e\ck-report`, not in the repository) the sky fill shows black gauge faces with readable yellow numbers and the dark red dashboard with the sun ahead, behind and in the rock cutting, where today's floor gives white gauge faces and white gloves with the sun behind and in the tunnel and black gauges with the sun ahead. The driver's floor 0.25 keeps the gloves gray in the shade and the game's in the tunnel. In the tunnel at 2x (laps `ck-lap2x-today`, `-a` and `-bp` with g = 0.65, the capture at 84.7 s to 84.9 s): the gauges 82.1 today, 4.7 with (a) and 21.8 with the sky fill, the hand 98.6, 31.5 and 31.2; with the sky fill the gauges read as in the open and the gloves are the game's. In a darker frozen frame the brighter interior lowers the auto exposure a little (`ck-cut2x`: the road patch from 88.7 to 77.0 at k=16 uniform); with the normal weight at k=20 the frame mean rises by 5 to 6 and the road and sky patches stay as they are (`ck-hemi2x`).
+
+Coverage of (b): the 20 interior shaders that have the track lightmap and `shLightScalars`, the two cockpit chrome shaders (`670B85AE4903DC7E`, `B1C51D0C3686C920`, their ambient is `ChromeAmbientScale`), and the six driver shaders. The two `shaders_slod_v16` shaders and the 14 `cockpit_*` material shaders have no track lightmap constants (and the material shaders an `AmbientColor` instead), so (b) would leave them as the game draws them; none of them drew in the races of the material atlas.
+
+## The sky fill in the presets (26 October 2026)
+
+The main session chose (b) with g = 0.65. Since 26 October 2026 the presets `aces`, `gt` and `neutral` (and `pc`) set `cockpit_fill=1` and no longer `cockpit_light`; `original` keeps the game's interior ([running](../running.md#cockpit-light)).
+
+- **`cockpit_fill`** (`FM4_LOOK_COCKPIT_FILL`, 0 to 2, [`fm4-cockpit.hlsli`](../../work/fm4-rex/look/fm4-cockpit.hlsli)): the hemispherical term times 1 + 20 × fill × w × s, with w = (1 + N.y) / 2 and s = 1 - 0.65 × (1 - the track lightmap's share), and the driver's shadow map floor 0.25 × fill. At 1 it is the measured `ck-lap-h20p`. The gain, the shade and the driver's floor are defines of the file (`FM4_COCKPIT_FILL_GAIN`, `_SHADE`, `_DRIVER`), not knobs. `-Look "aces,cockpit_fill=0"` is (a).
+- **`cockpit_light`** keeps its meaning (the floor of the sun's direct light, also on the track lightmap) and is in no preset; `-Look "aces,cockpit_fill=0,cockpit_light=0.5"` is the look of 20 to 26 October 2026.
+- The mods: the 22 interior shaders of the fill define `FM4_COCKPIT_AMBIENT_CONSTANT` (69, or 81 with `FM4_COCKPIT_AMBIENT_COMPONENT 0` for the chrome), `FM4_COCKPIT_LIGHTMAP_FETCH 10` and the hooks of the lightmap fetch and the normal (interpolator 1, interpolator 0 for `F7174B6D1F50A4F3`); the other 16 interior mods are those of `cockpit_light` alone. Each shader's lightmap fetch comes before its reads of the scale and the floor (checked in the ucode of every contract).
+- RTV and the native path only; `-Rov`, `-Look original` and `-Look "original,taa=0"` load no mod.
+
+The gate of 26 October 2026 ([current status](../status/current.md#cockpit-sky-fill-26-october-2026)): over the Bernese Alps lap at 1x the gauges keep 10.2 to 32.0 (21.5 in the open, 24.5 in the tunnel, `ck-fin-lap`), the 2x lap gives the crops of `ck-reportinal` (the grid, the sun ahead, the tunnel and the shade), the parity of `original,taa=0` on RTV and `-Rov` passes, and the smoke gate at 240 Hz passes 3 of 3 cells. On a light interior, the career's Ford Ka on Tsukuba, the fill lights the gray dashboard and wheel evenly (the interior's mean luma 83 to 94 against the game's 30 to 43) without clipping; on Laguna Seca, the track with the brightest hemispherical light, the Abarth's gauges read 19.3 to 28.6, as on the Bernese Alps. Light interiors are where a lower `cockpit_fill` may suit; the project owner judges the strength through an export.
 
 ## Related
 

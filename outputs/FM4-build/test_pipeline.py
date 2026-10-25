@@ -369,17 +369,23 @@ class PipelineTests(unittest.TestCase):
     def test_look_cockpit_knob(self):
         with tempfile.TemporaryDirectory(prefix='fm4 look test ') as directory:
             root=Path(directory)
-            # cockpit_light is a define of fm4-cockpit.hlsli: 0, the game's interior, by default;
-            # pc has 0.5 since 20 October 2026, aces, gt and neutral since 20 October 2026.
+            # cockpit_fill and cockpit_light are defines of fm4-cockpit.hlsli: 0, the game's
+            # interior, by default. The presets have cockpit_fill=1 since 26 October 2026 and no
+            # longer cockpit_light (0.5 from 20 October 2026); original has neither.
             defines=dict(define.split('=',1) for define in
-                         pipeline.look_cvars(root,'pc,cockpit_light=0.3')['shader_mod_defines'].split(';'))
+                         pipeline.look_cvars(root,'pc,cockpit_light=0.3,cockpit_fill=0.5')
+                         ['shader_mod_defines'].split(';'))
             self.assertEqual(defines['FM4_LOOK_COCKPIT_LIGHT'],'0.3')
-            self.assertIn('FM4_LOOK_COCKPIT_LIGHT=0.5',pipeline.look_cvars(root,'pc')['shader_mod_defines'])
-            # aces, gt and neutral too since 20 October 2026; original not.
+            self.assertEqual(defines['FM4_LOOK_COCKPIT_FILL'],'0.5')
+            pc=pipeline.look_cvars(root,'pc')['shader_mod_defines'].split(';')
+            self.assertIn('FM4_LOOK_COCKPIT_FILL=1.0',pc)
+            self.assertFalse([define for define in pc if define.startswith('FM4_LOOK_COCKPIT_LIGHT')])
             for look in pipeline.LOOK_PRESETS:
-                self.assertEqual(pipeline.look_knobs(look).get('cockpit_light'),
-                                 None if look=='original' else '0.5')
+                self.assertEqual(pipeline.look_knobs(look).get('cockpit_fill'),
+                                 None if look=='original' else '1')
+                self.assertIsNone(pipeline.look_knobs(look).get('cockpit_light'))
             self.assertEqual(pipeline.look_knob_defaults()['FM4_LOOK_COCKPIT_LIGHT'],'0.0')
+            self.assertEqual(pipeline.look_knob_defaults()['FM4_LOOK_COCKPIT_FILL'],'0.0')
 
     def test_one_pass_msaa(self):
         """-Native runs races in one pass with 2x MSAA by default: the title's 2x scenario made
