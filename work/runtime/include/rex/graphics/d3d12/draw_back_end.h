@@ -106,6 +106,10 @@ void ComputeViewportAndScissor(const RegisterFile& regs, uint32_t flags, uint32_
 // sets another, d3d-hle-n5.md 18.21), fixed for the run.
 void SetSceneLogicalWidth(uint32_t width);
 uint32_t SceneLogicalWidth();
+// The scene's logical height in guest pixels at 1280 wide (720 unless
+// native_logical_height sets another, Vert+, d3d-hle-n5.md 18.22).
+void SetSceneLogicalHeight(uint32_t height);
+uint32_t SceneLogicalHeight();
 // A scene draw's full-width viewport and scissor widened to the logical width:
 // with kFlagLogicalCamera the clip x scaled to keep the pixels per degree,
 // with kFlagLogicalHud kept at 1280 in the centre, otherwise stretched.

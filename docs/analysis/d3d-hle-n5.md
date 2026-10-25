@@ -391,3 +391,21 @@ The step gate on `I:\FM4-build-usa` (one pass 2x, `native_rt_surfaces=58`), W = 
 | culling | no gap visible at the edges in the frozen and moving frames checked; the culling hooks (18.5) stay the later step and get their own check |
 
 Next: 16:10 Vert+ (a logical height, 1280x800), then the culling.
+
+### 18.22 Increment 2, step 2: the logical height (Vert+) for 16:10, 25 October 2026
+
+`native_logical_height` (guest pixels at 1280 wide, 720 by default, a multiple of 8 up to 1024) is 18.21's logical width on the vertical axis, for screens narrower than 16:9 (18.5): 16:10 keeps 16:9's horizontal field of view and shows more above and below at 1280x800.
+
+- **The same machinery per axis.** `ApplyLogicalWidth` handles both axes: full-height viewports grow to the logical height, camera draws scale clip y by 720 over H, the HUD moves into the vertical centre, full-height scissors and resolve clears cover it. The scene textures of a 720-high full-screen destination take the logical height (`SceneTextureHostHeight`), the post passes take `GuestSceneHeight` and shift the unpack's guest viewport by half the added height, and the swap presents at the logical aspect. A private 1280-wide surface keeps its full EDRAM height (1,024 lines at 2x MSAA), so H is at most 1024, and it is not sized to the guest's rows (bit 8) while H is set.
+- **e2e.** `ocr-server.ps1` takes an optional crop (`path|scale|x,y`, the centred fractions of the capture), and `e2e.py` passes the share of the logical size the 1280x720 HUD covers. At 1280x800 the reduction to 720 lines had blurred the menu text ("RESUME FROM HEHE"), and the rewind and photo steps timed out (`n8j`); with the crop the same steps pass (`n8k`).
+
+The step gate on `I:\FM4-build-usa`, H = 800 (16:10):
+
+| Check | Result |
+|---|---|
+| no change at 16:9 | every change is gated on H != 720; 18.21's parity at 1x and 2x stands for the width path, which a 21:9 `freeze` at 3/2 with `aces` reran (`n8l-freeze-32-aces-1720`, 2580x1080, no error) |
+| 16:10 at real 1x and at 3/2 with `aces` (`n8k-freeze-1x-orig-800`, `n8j-freeze-32-aces-800`) | 1280x800 and 1920x1200 captures; more of the roof and the sky above and of the dashboard below, nothing stretched; the rewind menu and the race HUD 40 guest lines lower, in the centre; the still picture holds (0.0% from capture to capture) |
+| `photo` at 3/2 (`n8k-photo-32-800`) | the race, photo mode and the save reach their goal |
+| combined checks with perturbation, `career` at 3/2 with H = 800 (`n8l-check-32-800`) | reached its goal; the texture byte check 2,220 textures and the resolve byte check 5,217 resolves, 0 mismatches; identity, bindings and guard only the perturbed; the error keys of every earlier check run |
+
+Next: the culling (18.5), then the launcher's logical size from the panel's aspect (a 16:10 panel at s = 20/9 with H = 800 fills 2560x1600 without a letterbox).

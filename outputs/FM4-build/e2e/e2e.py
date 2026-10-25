@@ -459,9 +459,28 @@ def check_actions(steps):
                 raise ValueError(f'step {index}: {error}') from None
 
 
+# The centred part of a capture that holds the 1280x720 HUD, as fractions of its width and
+# height: less than 1 when the scene renders at a logical size other than 16:9
+# (native_logical_width and _height, docs/analysis/d3d-hle-n5.md 18.22). main sets it.
+OCR_CROP = (1.0, 1.0)
+
+
+def logical_crop(args):
+    """OCR_CROP of the run's cvars."""
+    width, height = 1280, 720
+    for item in args:
+        name, _, value = item.lstrip('-').partition('=')
+        if name == 'native_logical_width' and value.isdigit():
+            width = int(value)
+        elif name == 'native_logical_height' and value.isdigit():
+            height = int(value)
+    return (1280 / max(width, 1280), 720 / max(height, 720))
+
+
 class Ocr:
     """Persistent Windows OCR process (ocr-server.ps1)."""
     def __init__(self):
+        self.crop = OCR_CROP
         self.process = subprocess.Popen(
             ['powershell.exe', '-NoProfile', '-ExecutionPolicy', 'Bypass', '-File',
              str(HERE / 'ocr-server.ps1')], stdin=subprocess.PIPE, stdout=subprocess.PIPE,
@@ -476,7 +495,8 @@ class Ocr:
         return self.read_scaled(ppm, 2) or self.read_scaled(ppm, 1)
 
     def read_scaled(self, ppm, scale):
-        self.process.stdin.write(f'{ppm}|{scale}\n')
+        crop = f'|{self.crop[0]:.6f},{self.crop[1]:.6f}' if self.crop != (1.0, 1.0) else ''
+        self.process.stdin.write(f'{ppm}|{scale}{crop}\n')
         self.process.stdin.flush()
         # OCR text may contain control characters such as tabs.
         result = json.loads(self.process.stdout.readline(), strict=False)
@@ -1084,6 +1104,8 @@ def run_once(options, out):
     # presents a second on the main PC at 240 Hz); --arg present_skip_superseded=false runs the
     # players' present path (docs/analysis/d3d-hle-n4.md 17.22).
     args['present_skip_superseded'] = 'true'
+    global OCR_CROP
+    OCR_CROP = logical_crop(options.arg)
     for item in options.arg:
         key, value = item.lstrip('-').split('=', 1)
         args[key] = value

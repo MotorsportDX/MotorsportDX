@@ -2184,7 +2184,9 @@ RenderTargetCache::RenderTarget* RenderTargetCache::GetOrCreateRenderTarget(Rend
   // EDRAM's.
   // A private surface at a fractional scene scale is created at its full
   // height: the growth copies by tile transfers at the whole scale (18.16).
-  const bool sized = IsSizingEnabled() && tile_rows && GetKeyScale(key).IsWhole();
+  // Nor at a logical height (18.22): the scene's rows go below the guest's 720.
+  const bool sized = IsSizingEnabled() && tile_rows && GetKeyScale(key).IsWhole() &&
+                     !(scene_logical_height_ != 720 && key.GetWidth() == 1280 && IsPrivateKey(key));
   const uint32_t needed_rows = std::min(tile_rows, full_rows);
   const uint32_t rows =
       sized ? std::min(full_rows, (needed_rows + 7) & ~uint32_t(7)) : full_rows;

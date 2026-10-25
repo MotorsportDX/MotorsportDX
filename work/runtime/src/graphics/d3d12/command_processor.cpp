@@ -63,6 +63,12 @@ REXCVAR_DEFINE_INT32(native_logical_width, 1280, "GPU",
                      "(Hor+, docs/analysis/d3d-hle-n5.md 18.21); needs the scene draws' path "
                      "(a fractional native_draw_scale or native_draw_scale_variant)")
     .lifecycle(rex::cvar::Lifecycle::kRequiresRestart);
+REXCVAR_DEFINE_INT32(native_logical_height, 720, "GPU",
+                     "The scene's height in guest pixels at 1280 wide on the native path: above "
+                     "720 the scene draws heighten their viewports and show more above and "
+                     "below (Vert+, docs/analysis/d3d-hle-n5.md 18.22); needs the scene draws' "
+                     "path, as native_logical_width")
+    .lifecycle(rex::cvar::Lifecycle::kRequiresRestart);
 REXCVAR_DEFINE_BOOL(native_draw_scale_variant, false, "GPU",
                     "Diagnostic: draws into the private surfaces use the scene draws' path "
                     "(the scene_scale shader variant, the rational viewport and scissor) also "
@@ -2357,6 +2363,21 @@ bool D3D12CommandProcessor::SetupContext() {
       REXGPU_INFO("Native logical width: {} at 720 lines (Hor+)", width);
     }
   }
+  if (REXCVAR_GET(native_logical_height) != 720) {
+    const int32_t height = REXCVAR_GET(native_logical_height);
+    if (!render_target_cache_->scene_textures()) {
+      REXGPU_ERROR("native_logical_height {} needs the scene draws' path (a fractional "
+                   "native_draw_scale or native_draw_scale_variant); the scene keeps 720",
+                   height);
+    } else if (height < 720 || height > 1024 || height % 8) {
+      REXGPU_ERROR("native_logical_height {} is not a multiple of 8 from 720 to 1024", height);
+    } else {
+      draw_back_end::SetSceneLogicalHeight(uint32_t(height));
+      render_target_cache_->SetSceneLogicalHeight(uint32_t(height));
+      texture_cache_->SetSceneLogicalHeight(uint32_t(height));
+      REXGPU_INFO("Native logical height: {} at 1280 wide (Vert+)", height);
+    }
+  }
 
   pipeline_cache_ = std::make_unique<PipelineCache>(
       *this, *register_file_, *render_target_cache_.get(), bindless_resources_used_);
@@ -3332,6 +3353,11 @@ void D3D12CommandProcessor::IssueSwap(uint32_t frontbuffer_ptr, uint32_t frontbu
       source_width_scaled == texture_cache_->SceneTextureHostWidth(1280)) {
     display_width = display_width * logical_width / 1280;
   }
+  const uint32_t logical_height = render_target_cache_->scene_logical_height();
+  if (logical_height != 720 && frontbuffer_height_unscaled == 720 &&
+      source_height_scaled == texture_cache_->SceneTextureHostHeight(720)) {
+    display_height = display_height * logical_height / 720;
+  }
 
   // With d3d12_submit_thread_async_swap, the frame is presented on the submit
   // thread after the swap submission.
@@ -3927,6 +3953,7 @@ bool D3D12CommandProcessor::IssueDraw(xenos::PrimitiveType primitive_type, uint3
       REXCVAR_GET(rtv_uniform_draws) && is_rasterization_done && !memexport_used &&
       render_target_cache_->scene_draw_scale().IsWhole() &&
       render_target_cache_->scene_logical_width() == 1280 &&
+      render_target_cache_->scene_logical_height() == 720 &&
       GetDrawOverwrite(regs, primitive_type, index_count, pixel_shader, ps_param_gen_pos,
                        normalized_depth_control, normalized_color_mask,
                        uniform_draw_overwritten_slots, uniform_draw_values_may_be_uniform)) {
@@ -4151,7 +4178,8 @@ bool D3D12CommandProcessor::IssueDraw(xenos::PrimitiveType primitive_type, uint3
   // At a logical width other than 1280 (18.21): a scene draw through the camera
   // (depth or stencil on) widens its view, the HUD's draws stay in the centre.
   uint32_t logical_flags = 0;
-  if (scene_draw && draw_back_end::SceneLogicalWidth() != 1280) {
+  if (scene_draw &&
+      (draw_back_end::SceneLogicalWidth() != 1280 || draw_back_end::SceneLogicalHeight() != 720)) {
     if (post_passes_ && post_passes_->IsAfterFinal()) {
       logical_flags = draw_back_end::kFlagLogicalHud;
     } else if (normalized_depth_control.z_enable || normalized_depth_control.stencil_enable) {

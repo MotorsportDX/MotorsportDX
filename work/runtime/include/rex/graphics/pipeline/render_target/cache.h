@@ -178,6 +178,9 @@ class RenderTargetCache {
   // The scene's logical width in guest pixels (native_logical_width, 18.21).
   void SetSceneLogicalWidth(uint32_t width) { scene_logical_width_ = width; }
   uint32_t scene_logical_width() const { return scene_logical_width_; }
+  // The scene's logical height in guest pixels (native_logical_height, 18.22).
+  void SetSceneLogicalHeight(uint32_t height) { scene_logical_height_ = height; }
+  uint32_t scene_logical_height() const { return scene_logical_height_; }
   // Whether the last Update bound private surfaces (a scene draw).
   bool last_update_private() const { return last_update_private_; }
   uint32_t draw_resolution_scale_y() const { return draw_resolution_scale_y_; }
@@ -749,6 +752,7 @@ class RenderTargetCache {
   bool scene_draw_scale_set_ = false;
   bool scene_textures_ = false;
   uint32_t scene_logical_width_ = 1280;
+  uint32_t scene_logical_height_ = 720;
   bool last_update_private_ = false;
   uint32_t draw_resolution_scale_y_;
 

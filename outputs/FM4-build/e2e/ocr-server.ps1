@@ -32,7 +32,11 @@ public static class Fm4Ppm {
   // than 720 lines (1920x1080, 2560x1440, 3840x2160) are first averaged down to
   // 720 lines, each pixel over the source pixels it covers, so boxes and the
   // rectangles below stay in 720p pixels.
-  public static byte[] Load(string path, int scale, out int width, out int height) {
+  // A capture of a scene at a logical size other than 16:9 (native_logical_width
+  // and _height) holds the 1280x720 HUD in its centre: crop_x and crop_y are the
+  // centred part of the width and the height that is read.
+  public static byte[] Load(string path, int scale, double crop_x, double crop_y,
+                            out int width, out int height) {
     byte[] data = File.ReadAllBytes(path);
     int pos = 0;
     Func<string> token = () => {
@@ -42,9 +46,13 @@ public static class Fm4Ppm {
       return System.Text.Encoding.ASCII.GetString(data, start, pos - start);
     };
     if (token() != "P6") throw new InvalidDataException("not P6");
-    int sw = int.Parse(token()), sh = int.Parse(token());
+    int full_width = int.Parse(token()), sh = int.Parse(token());
     token();
     pos++;
+    int sw = (int)Math.Round(full_width * crop_x);
+    int cx = (full_width - sw) / 2;
+    int cy = (sh - (int)Math.Round(sh * crop_y)) / 2;
+    sh = (int)Math.Round(sh * crop_y);
     int h = Math.Min(sh, 720), w = (int)((long)sw * h / sh);
     width = w * scale;
     height = h * scale;
@@ -60,7 +68,7 @@ public static class Fm4Ppm {
         int r = 0, gr = 0, b = 0;
         for (int sy = y0; sy < y1; sy++)
           for (int sx = x0; sx < x1; sx++) {
-            int s = pos + (sy * sw + sx) * 3;
+            int s = pos + ((cy + sy) * full_width + cx + sx) * 3;
             r += data[s]; gr += data[s + 1]; b += data[s + 2];
           }
         int n = (y1 - y0) * (x1 - x0);
@@ -95,8 +103,12 @@ while ($null -ne ($request = [Console]::In.ReadLine())) {
   try {
     $parts = $request -split '\|'
     $scale = if ($parts.Count -gt 1) { [int]$parts[1] } else { 2 }
+    $crop = if ($parts.Count -gt 2) { $parts[2] -split ',' } else { @('1', '1') }
     $width = 0; $height = 0
-    $pixels = [Fm4Ppm]::Load($parts[0], $scale, [ref]$width, [ref]$height)
+    $pixels = [Fm4Ppm]::Load($parts[0], $scale,
+      [double]::Parse($crop[0], [Globalization.CultureInfo]::InvariantCulture),
+      [double]::Parse($crop[1], [Globalization.CultureInfo]::InvariantCulture),
+      [ref]$width, [ref]$height)
     $buffer = [System.Runtime.InteropServices.WindowsRuntime.WindowsRuntimeBufferExtensions]::AsBuffer($pixels)
     $bitmap = [Windows.Graphics.Imaging.SoftwareBitmap]::CreateCopyFromBuffer($buffer,
       [Windows.Graphics.Imaging.BitmapPixelFormat]::Bgra8, $width, $height)

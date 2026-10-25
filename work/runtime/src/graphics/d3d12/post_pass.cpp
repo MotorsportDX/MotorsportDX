@@ -1775,8 +1775,8 @@ void PostPasses::UpdateMotion() {
   if (depth_group_.pitch && depth_group_.height) {
     motion_.camera_pixels = post_pass::CameraMotionPixels(
         world_reprojection, camera_.unpack, previous_camera_.unpack, double(GuestSceneWidth()),
-        double(depth_group_.height), double(scene_width_) / double(GuestSceneWidth()),
-        double(scene_height_) / double(depth_group_.height), manifest_->jitter_motion_distance);
+        double(GuestSceneHeight()), double(scene_width_) / double(GuestSceneWidth()),
+        double(scene_height_) / double(GuestSceneHeight()), manifest_->jitter_motion_distance);
   }
   for (uint32_t slot = 0; slot < post_pass::kMotionSlots; ++slot) {
     post_pass::MatrixD reprojection = world_reprojection;
@@ -1974,7 +1974,7 @@ void PostPasses::FillSceneConstants(post_pass::SceneConstants& constants) const 
     constants.size[0] = scene_width_;
     constants.size[1] = scene_height_;
     constants.guest_per_host[0] = float(GuestSceneWidth()) / float(scene_width_);
-    constants.guest_per_host[1] = float(depth_group_.height) / float(scene_height_);
+    constants.guest_per_host[1] = float(GuestSceneHeight()) / float(scene_height_);
     constants.guest_origin[0] = camera_.guest_origin;
     constants.guest_origin[1] = camera_.guest_origin;
     constants.w_numerator = unpack.w_numerator;
@@ -2158,11 +2158,14 @@ void PostPasses::RunPoint(Point point) {
     const DrawScale scene_scale = command_processor_.texture_cache_->scene_draw_scale();
     if (command_processor_.render_target_cache_->scene_textures() &&
         (!scene_scale.IsWhole() ||
-         command_processor_.render_target_cache_->scene_logical_width() != 1280)) {
+         command_processor_.render_target_cache_->scene_logical_width() != 1280 ||
+         command_processor_.render_target_cache_->scene_logical_height() != 720)) {
       final_width_ = std::min(
           command_processor_.texture_cache_->SceneTextureHostWidth(final_guest_width_),
           target.width);
-      final_height_ = std::min(scene_scale.ScaleUp(final_guest_height_), target.height);
+      final_height_ = std::min(
+          command_processor_.texture_cache_->SceneTextureHostHeight(final_guest_height_),
+          target.height);
     } else {
       final_width_ = std::min(
           final_guest_width_ * command_processor_.texture_cache_->draw_resolution_scale_x(),
@@ -2712,10 +2715,18 @@ uint32_t PostPasses::GuestSceneWidth() const {
              : depth_group_.pitch;
 }
 
+uint32_t PostPasses::GuestSceneHeight() const {
+  const uint32_t logical = command_processor_.render_target_cache_->scene_logical_height();
+  return depth_group_.height == 720 && command_processor_.render_target_cache_->scene_textures()
+             ? logical
+             : depth_group_.height;
+}
+
 post_pass::Viewport PostPasses::LogicalViewport(post_pass::Viewport viewport) const {
-  const uint32_t logical = command_processor_.render_target_cache_->scene_logical_width();
-  if (logical != 1280 && command_processor_.render_target_cache_->scene_textures()) {
-    viewport.x_offset += float(logical - 1280) * 0.5f;
+  const RenderTargetCache& cache = *command_processor_.render_target_cache_;
+  if (cache.scene_textures()) {
+    viewport.x_offset += float(cache.scene_logical_width() - 1280) * 0.5f;
+    viewport.y_offset += float(cache.scene_logical_height() - 720) * 0.5f;
   }
   return viewport;
 }

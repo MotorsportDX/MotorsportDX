@@ -90,6 +90,8 @@ class PostPasses {
   // The scene's width in guest pixels: its depth's pitch, or the logical width
   // where the scene is wider (native_logical_width, d3d-hle-n5.md 18.21).
   uint32_t GuestSceneWidth() const;
+  // The same for the height (native_logical_height, 18.22).
+  uint32_t GuestSceneHeight() const;
   // A scene-wide guest viewport in the logical width's guest pixels: shifted by
   // half the added width, so the camera's unpack maps the wider scene.
   post_pass::Viewport LogicalViewport(post_pass::Viewport viewport) const;

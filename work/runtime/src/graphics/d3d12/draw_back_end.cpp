@@ -521,44 +521,57 @@ void ComputeViewportAndScissor(const RegisterFile& regs, uint32_t flags, uint32_
 
 namespace {
 uint32_t scene_logical_width = 1280;
+uint32_t scene_logical_height = 720;
 }  // namespace
 
 void SetSceneLogicalWidth(uint32_t width) { scene_logical_width = width; }
 
 uint32_t SceneLogicalWidth() { return scene_logical_width; }
 
+void SetSceneLogicalHeight(uint32_t height) { scene_logical_height = height; }
+
+uint32_t SceneLogicalHeight() { return scene_logical_height; }
+
 void ApplyLogicalWidth(uint32_t flags, DrawScale scene_scale, draw_util::ViewportInfo& viewport,
                        draw_util::Scissor& scissor) {
-  if (!(flags & kFlagSceneScale) || scene_logical_width == 1280) {
+  if (!(flags & kFlagSceneScale) ||
+      (scene_logical_width == 1280 && scene_logical_height == 720)) {
     return;
   }
-  // The host widths of the guest's 1280 and of the logical width.
-  const uint32_t full = scene_scale.ScaleEdge(1280);
-  const uint32_t logical = scene_scale.ScaleEdge(scene_logical_width);
-  const uint32_t centre = (logical - full) / 2;
-  if (flags & kFlagLogicalHud) {
-    // The HUD in the centred 1280, whatever its viewport and scissor.
-    if (viewport.xy_extent[0]) {
-      viewport.xy_offset[0] += centre;
+  // Each axis: the host sizes of the guest's 1280x720 and of the logical size.
+  const uint32_t guest_size[2] = {1280, 720};
+  const uint32_t logical_size[2] = {scene_logical_width, scene_logical_height};
+  for (uint32_t i = 0; i < 2; ++i) {
+    if (logical_size[i] == guest_size[i]) {
+      continue;
     }
-    scissor.offset[0] += centre;
-    if (scissor.offset[0] + scissor.extent[0] > logical) {
-      scissor.extent[0] = logical > scissor.offset[0] ? logical - scissor.offset[0] : 0;
+    const uint32_t full = scene_scale.ScaleEdge(guest_size[i]);
+    const uint32_t logical = scene_scale.ScaleEdge(logical_size[i]);
+    const uint32_t centre = (logical - full) / 2;
+    if (flags & kFlagLogicalHud) {
+      // The HUD in the centred 1280x720, whatever its viewport and scissor.
+      if (viewport.xy_extent[i]) {
+        viewport.xy_offset[i] += centre;
+      }
+      scissor.offset[i] += centre;
+      if (scissor.offset[i] + scissor.extent[i] > logical) {
+        scissor.extent[i] = logical > scissor.offset[i] ? logical - scissor.offset[i] : 0;
+      }
+      continue;
     }
-    return;
-  }
-  if (viewport.xy_offset[0] == 0 && viewport.xy_extent[0] == full) {
-    viewport.xy_extent[0] = logical;
-    if (flags & kFlagLogicalCamera) {
-      // Pixels at the same distance from the centre as before: more of the
-      // scene on each side.
-      const float ratio = float(full) / float(logical);
-      viewport.ndc_scale[0] *= ratio;
-      viewport.ndc_offset[0] *= ratio;
+    if (viewport.xy_offset[i] == 0 && viewport.xy_extent[i] == full) {
+      viewport.xy_extent[i] = logical;
+      if (flags & kFlagLogicalCamera) {
+        // Pixels at the same distance from the centre as before: more of the
+        // scene on each side.
+        const float ratio = float(full) / float(logical);
+        viewport.ndc_scale[i] *= ratio;
+        viewport.ndc_offset[i] *= ratio;
+      }
     }
-  }
-  if (scissor.offset[0] == 0 && scissor.extent[0] >= full) {
-    scissor.extent[0] = logical;
+    if (scissor.offset[i] == 0 && scissor.extent[i] >= full) {
+      scissor.extent[i] = logical;
+    }
   }
 }
 

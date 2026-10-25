@@ -1558,7 +1558,9 @@ bool D3D12RenderTargetCache::Resolve(const memory::Memory& memory, D3D12SharedMe
           private_surface && (private_surface->key().msaa_samples >= xenos::MsaaSamples::k4X ||
                               !GetKeyScale(private_surface->key()).IsWhole() ||
                               GetKeyLogicalWidth(private_surface->key()) !=
-                                  private_surface->key().GetWidth());
+                                  private_surface->key().GetWidth() ||
+                              (private_surface->key().GetWidth() == 1280 &&
+                               scene_logical_height() != 720));
       if (private_surface) {
         perf_trace::CountOnePass(perf_trace::one_pass_resolves);
       }
@@ -5131,7 +5133,11 @@ void D3D12RenderTargetCache::PerformTransfersAndResolveClears(
       D3D12_RECT dest_clear_rect = clear_rect;
       const DrawScale dest_scale = GetKeyScale(dest_rt_key);
       const uint32_t dest_logical_width = GetKeyLogicalWidth(dest_rt_key);
-      if (!dest_scale.IsWhole() || dest_logical_width != dest_rt_key.GetWidth()) {
+      const bool dest_logical_height = IsPrivateKey(dest_rt_key) &&
+                                       dest_rt_key.GetWidth() == 1280 &&
+                                       scene_logical_height() != 720;
+      if (!dest_scale.IsWhole() || dest_logical_width != dest_rt_key.GetWidth() ||
+          dest_logical_height) {
         dest_clear_rect.left = LONG(dest_scale.ScaleEdge(resolve_clear_rectangle->x_pixels));
         dest_clear_rect.top = LONG(dest_scale.ScaleEdge(resolve_clear_rectangle->y_pixels));
         uint32_t right = resolve_clear_rectangle->x_pixels + resolve_clear_rectangle->width_pixels;
@@ -5140,8 +5146,12 @@ void D3D12RenderTargetCache::PerformTransfersAndResolveClears(
           right = std::max(right, dest_logical_width);
         }
         dest_clear_rect.right = LONG(dest_scale.ScaleEdge(right));
-        dest_clear_rect.bottom = LONG(dest_scale.ScaleEdge(
-            resolve_clear_rectangle->y_pixels + resolve_clear_rectangle->height_pixels));
+        uint32_t bottom = resolve_clear_rectangle->y_pixels + resolve_clear_rectangle->height_pixels;
+        // A full-height clear covers the scene's logical height (18.22).
+        if (dest_logical_height && resolve_clear_rectangle->y_pixels == 0 && bottom >= 720) {
+          bottom = std::max(bottom, scene_logical_height());
+        }
+        dest_clear_rect.bottom = LONG(dest_scale.ScaleEdge(bottom));
       }
       if (dest_rt_key.is_depth) {
         uint32_t depth_guest_clear_value = (uint32_t(clear_value) >> 8) & 0xFFFFFF;
@@ -6963,7 +6973,8 @@ void D3D12RenderTargetCache::ResolveHostIntoTextures(
     // A full-screen destination at the scene's logical width (18.21).
     const uint32_t texture_width =
         scene_texture ? dest_scale.ScaleUp(width == 1280 ? scene_logical_width() : width) : 0;
-    const uint32_t texture_height = scene_texture ? dest_scale.ScaleUp(height) : 0;
+    const uint32_t texture_height =
+        scene_texture ? dest_scale.ScaleUp(height == 720 ? scene_logical_height() : height) : 0;
     root_constants[constant_count++] = HostSourceScale(source.scale, dest_scale);
     root_constants[constant_count++] = texture_width | (texture_height << 16);
     root_constants[constant_count++] = source.host_phase;

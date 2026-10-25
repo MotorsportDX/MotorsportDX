@@ -959,7 +959,7 @@ TextureCache::Texture* TextureCache::FindOrCreateTexture(TextureKey key) {
     host_height_out = key.GetHeight();
     if (key.scene_scaled) {
       host_width_out = SceneTextureHostWidth(host_width_out);
-      host_height_out = scene_draw_scale_.ScaleUp(host_height_out);
+      host_height_out = SceneTextureHostHeight(host_height_out);
     } else if (key.scaled_resolve) {
       host_width_out *= draw_resolution_scale_x();
       host_height_out *= draw_resolution_scale_y();

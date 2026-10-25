@@ -96,6 +96,11 @@ class TextureCache {
   uint32_t SceneTextureHostWidth(uint32_t guest_width) const {
     return scene_draw_scale_.ScaleUp(guest_width == 1280 ? scene_logical_width_ : guest_width);
   }
+  // The logical height (native_logical_height, 18.22) of a 720-high one.
+  void SetSceneLogicalHeight(uint32_t height) { scene_logical_height_ = height; }
+  uint32_t SceneTextureHostHeight(uint32_t guest_height) const {
+    return scene_draw_scale_.ScaleUp(guest_height == 720 ? scene_logical_height_ : guest_height);
+  }
   bool IsRangeSceneResolved(uint32_t start, uint32_t length) const;
   // Ensures the memory backing the range in the scaled resolve address space is
   // allocated and returns whether it is.
@@ -663,6 +668,7 @@ class TextureCache {
   uint32_t draw_resolution_scale_y_;
   DrawScale scene_draw_scale_;
   uint32_t scene_logical_width_ = 1280;
+  uint32_t scene_logical_height_ = 720;
 
   static const LoadShaderInfo load_shader_info_[kLoadShaderCount];
 
