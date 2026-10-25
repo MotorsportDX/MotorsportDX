@@ -308,6 +308,7 @@ class App {
   void DisplayPage();
   void LookPage();
   void ControlsPage();
+  void ControllerSection();
   void GameDataPage();
   void AdvancedPage();
   void Footer();
@@ -366,6 +367,8 @@ class App {
   std::string new_name_;
   std::string look_edit_;
   bool look_editing_ = false;
+  std::string pad_edit_;
+  bool pad_editing_ = false;
   std::optional<Package> remove_candidate_;
   std::mutex dialog_mutex_;
   std::vector<std::pair<DialogTarget, std::vector<std::string>>> dialog_results_;
@@ -1269,9 +1272,142 @@ void App::LookPage() {
   Muted("Changes apply when the game starts: the look mods are compiled then.");
 }
 
+// The physical controller's options (-Pad, PAD_KNOBS of pipeline.py, docs/running.md#controller):
+// every widget edits one knob of Options::pad, and a knob at its default is left out.
+void App::ControllerSection() {
+  Options& o = settings_.Active().options;
+  const Json& table = data_.json.at("pad").at("knobs");
+  Pairs knobs;
+  std::string error;
+  try {
+    knobs = PadKnobs(data_, o.pad);
+    PadCvars(data_, o.pad);
+  } catch (const std::exception& exception) {
+    error = exception.what();
+  }
+  const auto fallback = [&](const char* name) { return table.at(name).at("default").get<std::string>(); };
+  const auto value_of = [&](const char* name) {
+    const std::string* value = knobs.Find(name);
+    return value ? *value : fallback(name);
+  };
+  const auto set_knob = [&](const char* name, const std::string& value) {
+    if (value == fallback(name))
+      knobs.Erase(name);
+    else
+      knobs.Set(name, value);
+    std::vector<std::string> items;
+    for (const auto& [knob, text] : knobs.Items()) items.push_back(knob + "=" + text);
+    std::string joined;
+    for (const auto& item : items) joined += (joined.empty() ? "" : ",") + item;
+    o.pad = joined;
+  };
+  const auto number = [&](const char* name) {
+    try {
+      return static_cast<float>(PyFloat(value_of(name)));
+    } catch (const std::exception&) {
+      return static_cast<float>(PyFloat(fallback(name)));
+    }
+  };
+  const auto slider = [&](const char* name, const char* label, const char* help) {
+    Label(label, help);
+    float value = number(name);
+    ImGui::PushID(name);
+    ImGui::SetNextItemWidth(300 * scale_);
+    const Json& knob = table.at(name);
+    if (ImGui::SliderFloat("##value", &value, knob.at("min").get<float>(), knob.at("max").get<float>(), "%.2f")) {
+      const std::string text = FormatKnob(value, 0.01f);
+      set_knob(name, PyFloat(text) == PyFloat(fallback(name)) ? fallback(name) : text);
+    }
+    if (knobs.Has(name)) {
+      ImGui::SameLine();
+      if (ImGui::SmallButton("Reset")) set_knob(name, fallback(name));
+    }
+    ImGui::PopID();
+  };
+  const auto toggle = [&](const char* name, const char* label, const char* help) {
+    Label(label, help);
+    bool on = value_of(name) == "1";
+    ImGui::PushID(name);
+    if (ImGui::Checkbox("##on", &on)) set_knob(name, on ? "1" : "0");
+    ImGui::PopID();
+  };
+
+  ImGui::TextColored(kSecondary, "Controller");
+  Muted("A connected controller works without setup. These options change what it sends and how it "
+        "rumbles; the defaults keep it as the game sees it. The game's own steering deadzone comes first: "
+        "PLAY CAREER > MY PROFILE > OPTIONS > CONTROLLER, then X (ADVANCED) > STEERING AXIS DEADZONE INSIDE "
+        "(24 by default; lower it, for example to 5-10, for small corrections to steer, and press A to save).");
+  ImGui::Dummy(ImVec2(0, 2 * scale_));
+  const char* drivers[] = {"default", "rawinput", "wgi"};
+  int driver = 0;
+  for (int i = 0; i < 3; ++i)
+    if (value_of("driver") == drivers[i]) driver = i;
+  Label("Pad driver",
+        "Default: SDL's own (XInput for Xbox pads, HIDAPI for PlayStation pads). Raw Input: adds trigger "
+        "rumble on Xbox One and Series pads (through Windows.Gaming.Input). WGI: Windows.Gaming.Input with "
+        "XInput off, a fallback if Raw Input misbehaves.");
+  if (Segment("driver", driver, {"Default", "Raw Input", "WGI"})) set_knob("driver", drivers[driver]);
+  slider("rumble", "Rumble strength", "Multiplies the game's two rumble motors (1: as the game sends them).");
+  toggle("trigger_rumble", "Trigger rumble",
+         "Throttle trigger from wheelspin, brake trigger from locking: derived from the game's motors and how "
+         "far each trigger is pressed. Needs a pad with trigger motors (Raw Input or WGI on Xbox pads).");
+  slider("trigger_rumble_strength", "Trigger rumble strength", "Multiplies the derived trigger rumble.");
+  slider("anti_deadzone", "Steering anti-deadzone",
+         "Left stick: any movement starts this far out, past the game's own steering deadzone. Only with the "
+         "game's deadzone at its default (0.24); with a lowered in-game deadzone the two add up.");
+  toggle("thread", "Input thread",
+         "Reads the pad every millisecond off the UI thread: fresher input when the UI thread is busy (240 fps "
+         "races).");
+  ImGui::PushStyleColor(ImGuiCol_Header, kField);
+  if (ImGui::CollapsingHeader("Sticks and triggers")) {
+    slider("stick_deadzone", "Stick deadzone", "Both sticks: read as centred up to this fraction (for a drifting stick).");
+    slider("stick_outer", "Stick outer edge", "Both sticks: the deflection that gives full output.");
+    slider("stick_curve", "Stick curve", "Both sticks: 1 is linear, above 1 finer near the centre.");
+    slider("trigger_deadzone", "Trigger deadzone", "Triggers read 0 up to this fraction.");
+    slider("trigger_outer", "Trigger outer edge", "The trigger travel that gives full output.");
+  }
+  if (ImGui::CollapsingHeader("Extra buttons")) {
+    struct Extra {
+      const char* name;
+      const char* label;
+    };
+    static const Extra extras[] = {{"misc1", "Share / microphone"},   {"right_paddle1", "Paddle P1 (upper right)"},
+                                   {"right_paddle2", "Paddle P2 (lower right)"}, {"left_paddle1", "Paddle P3 (upper left)"},
+                                   {"left_paddle2", "Paddle P4 (lower left)"},    {"touchpad", "Touchpad click"}};
+    for (const auto& extra : extras) {
+      Label(extra.label, "The Xbox 360 button it presses. Guide works only with the guide_button cvar.");
+      const std::string current = value_of(extra.name);
+      ImGui::PushID(extra.name);
+      ImGui::SetNextItemWidth(160 * scale_);
+      if (ImGui::BeginCombo("##button", current.c_str())) {
+        for (const auto& choice : table.at(extra.name).at("choices")) {
+          const std::string text = choice.get<std::string>();
+          if (ImGui::Selectable(text.c_str(), text == current)) set_knob(extra.name, text);
+        }
+        ImGui::EndCombo();
+      }
+      ImGui::PopID();
+    }
+    Muted("On Windows, Xbox pads report neither paddles nor Share: an Elite's own profile can map its paddles "
+          "to other buttons. These apply to PlayStation and other pads that report them.");
+  }
+  ImGui::PopStyleColor();
+  ImGui::TextColored(kMuted, "Controller value (Build.ps1 -Pad)");
+  if (!pad_editing_) pad_edit_ = o.pad;
+  ImGui::SetNextItemWidth(-1);
+  ImGui::InputText("##pad", &pad_edit_);
+  pad_editing_ = ImGui::IsItemActive();
+  if (ImGui::IsItemDeactivatedAfterEdit()) o.pad = pad_edit_;
+  if (!error.empty()) Colored(kDanger, error);
+  ImGui::Dummy(ImVec2(0, 6 * scale_));
+  ImGui::Separator();
+  ImGui::Dummy(ImVec2(0, 4 * scale_));
+}
+
 void App::ControlsPage() {
-  Muted("Keyboard bindings of the controller. A connected controller works without setup. Several keys "
-        "are separated by commas, modifiers are written as Shift+Up.");
+  ControllerSection();
+  Muted("Keyboard bindings of the controller. Several keys are separated by commas, modifiers are written "
+        "as Shift+Up.");
   ImGui::Dummy(ImVec2(0, 4 * scale_));
   if (ImGui::BeginTable("binds", 3, ImGuiTableFlags_RowBg | ImGuiTableFlags_BordersInnerH | ImGuiTableFlags_PadOuterX)) {
     ImGui::TableSetupColumn("Control", ImGuiTableColumnFlags_WidthFixed, 190 * scale_);

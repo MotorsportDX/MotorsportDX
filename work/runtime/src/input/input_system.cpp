@@ -75,6 +75,12 @@ void InputSystem::SetActiveCallback(std::function<bool()> callback) {
   }
 }
 
+void InputSystem::StopVibration() {
+  for (auto& driver : drivers_) {
+    driver->StopVibration();
+  }
+}
+
 void InputSystem::SetDeviceAssignment(std::unique_ptr<DeviceAssignment> assignment) {
   assignment_ = std::move(assignment);
   if (assignment_) {
@@ -304,12 +310,18 @@ X_RESULT InputSystem::SetState(uint32_t user_index, X_INPUT_VIBRATION* vibration
   bool any_synthetic = false;
   bool pad_rumbled = false;
   X_RESULT pad_error = X_ERROR_DEVICE_NOT_CONNECTED;
+  // The triggers the guest last read for this user, for derived trigger rumble.
+  X_INPUT_GAMEPAD user_state = {};
+  if (user_index < kMaxGuestUsers && merged_states_valid_[user_index]) {
+    user_state = merged_states_[user_index].gamepad;
+  }
   for (DeviceId id : ids) {
     auto* driver = DriverForDevice(id);
     const DeviceInfo* info = DeviceInfoFor(id);
     if (!driver || !info) {
       continue;
     }
+    driver->SetDeviceUserState(id, user_state);
     X_RESULT result = driver->SetDeviceVibration(id, vibration);
     if (info->synthetic) {
       any_synthetic = true;

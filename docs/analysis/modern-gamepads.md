@@ -1,6 +1,6 @@
 # Modern gamepads
 
-Design note for better support of modern pads: Xbox One and Series controllers (with the Elite paddles), the PS5 DualSense and the DualShock 4, and the built-in controller of the ROG Xbox Ally X. Forza Motorsport 4 knows only the Xbox 360 pad: `XamInputGetState` and `XamInputSetState` carry two rumble motors, 8-bit triggers and no paddles. This is stage 1 (25 October 2026): evidence from the code and from logs, and the proposed options and defaults. Stage 2 implements them with today's behaviour as the default; the owner's hardware test through an export decides the final defaults. The owner's pads are an Xbox Series controller and the Ally X's built-in controller, so the PlayStation rows below come from the SDL source only.
+Design note for better support of modern pads: Xbox One and Series controllers (with the Elite paddles), the PS5 DualSense and the DualShock 4, and the built-in controller of the ROG Xbox Ally X. Forza Motorsport 4 knows only the Xbox 360 pad: `XamInputGetState` and `XamInputSetState` carry two rumble motors, 8-bit triggers and no paddles. Stage 1 (25 October 2026) gathered evidence from the code and from logs and proposed options and defaults. Stage 2 (25 October 2026) implements them with today's behaviour as the default ([Stage 2](#stage-2)); the owner's hardware test through an export decides the final defaults. The owner's pads are an Xbox Series controller and the Ally X's built-in controller, so the PlayStation rows below come from the SDL source only.
 
 ## Summary
 
@@ -239,6 +239,70 @@ Details:
 - **Pad report.** One log line per pad at connect: name, SDL gamepad type, vendor and product ID, the driver (GUID byte 14), connection state and path, and the capabilities: rumble, trigger rumble, RGB, mono and player LEDs, gyro and accelerometer, paddles, Misc1, touchpads and the battery. The owner's logs then show what each pad exposes under each driver option.
 - **Input thread.** As described in [Updating SDL off the UI thread](#updating-sdl-off-the-ui-thread). `input_latency_probe` stays as the way to measure it.
 - **Launcher.** A Controller section in both launchers (the GUI launcher and `Build.ps1 -Action run`), as recent options such as `aa` were added, with `launcher_tests`; [running.md](../running.md) gains the options and a note on the game's own controller settings (the steering deadzone above all), and [status](../status/current.md) the verification.
+
+## Stage 2
+
+Stage 2 (25 October 2026) implements the options of the table above, every default unchanged, as the main session decided: no GameInput option, the anti-deadzone, trigger rumble and the input thread off by default, trigger rumble only on pads that report `SDL_PROP_GAMEPAD_CAP_TRIGGER_RUMBLE_BOOLEAN`, and a Guide target still subject to `guide_button`. How to use them is in [running.md](../running.md#controller).
+
+### What changed
+
+- **Driver hints.** `sdl_joystick_driver` (`default`, `rawinput`, `wgi`) sets SDL's hints before `SDL_INIT_GAMEPAD` ([sdl_input_driver.cpp](../../work/runtime/src/input/sdl/sdl_input_driver.cpp) `ApplyDriverHints`); `default` sets none.
+- **Mapping.** `pad_misc1`, `pad_right_paddle1`, `pad_left_paddle1`, `pad_right_paddle2`, `pad_left_paddle2` and `pad_touchpad` name the guest button of SDL's buttons 15 to 20, defaulting to the earlier table (Guide, Y, B, X, A, Guide). The guest buttons are now the union of the held SDL buttons' targets, so a guest button held through two SDL buttons stays held until both are released.
+- **Shaping.** One header-only helper ([pad_shaping.h](../../work/runtime/include/rex/input/pad_shaping.h)) shapes the sticks and triggers that the `sdl` and `xinput` backends return, from the `pad_*` cvars ([pad_settings.cpp](../../work/runtime/src/input/pad_settings.cpp)); at the defaults it returns its input bit for bit. The diagnostic controller and the keyboard and mouse driver do not use it.
+- **Rumble.** `pad_rumble_strength` multiplies both motors in both backends. `pad_trigger_rumble` derives the trigger motors as in [Deriving trigger rumble](#deriving-trigger-rumble), from the triggers the guest last read for the pad's user (`InputSystem::SetState` passes them through the new `SetDeviceUserState`). It sends zero when the motors are zero, while an overlay takes the input, without window focus (SDL stops reading the pads then, so the triggers would go stale; not when background events are on, as for the probe), and with the option turned off.
+- **Rumble at exit.** Closing the game window ends the process in `ReXApp::OnClosing` (`std::_Exit` after `TerminateTitle`) before the input drivers' own `OnClosing` runs, so the SDL driver's teardown never stopped anything: a pad kept the title's last motors, and with trigger rumble its trigger motors. `InputDriver::StopVibration`, called there before `TerminateTitle`, zeroes every SDL pad's motors and trigger motors and ignores later vibration calls (also a call that was waiting for the pads' lock). The XInput backend does not implement it yet.
+- **Pad report.** One `SDL pad report:` line per pad at connect.
+- **Input thread.** `input_sdl_thread` starts a thread that initialises COM as multithreaded and calls `SDL_UpdateGamepads` every millisecond, with `SDL_HINT_AUTO_UPDATE_JOYSTICKS=0`; it is joined before the pads close. `GetDeviceState` then queues no `SDL_PumpEvents` on the UI thread. The guest's threads read the thread's state from an atomic flag.
+- **Probe.** The latency probe's virtual pad has rumble and trigger rumble callbacks and logs what it received, so the rumble paths can be checked without a physical pad.
+- **Launchers.** `-Pad` knobs in `Build.ps1` and `pipeline.py` (`PAD_KNOBS`, carried to the GUI launcher in `launcher.json`), the GUI launcher's Controller section on its Controls page, and three option sets in `launcher_tests`.
+
+### Where SDL reads each driver
+
+The SDL source answers the COM question of [Updating SDL off the UI thread](#updating-sdl-off-the-ui-thread) for the two drivers that matter here:
+
+- **XInput** (`default`): `SDL_UpdateJoysticks` polls `XInputGetState`, so with the input thread the pads are read there, with no COM.
+- **RAWINPUT** (`rawinput`): the pads' HID reports do not wait for any update at all. SDL's joystick thread (`SDL_JoystickThread` in `SDL_windowsjoystick.c`, on by default through `SDL_HINT_JOYSTICK_THREAD`) owns the message window that RAWINPUT registers for raw input, and handles each `WM_INPUT` as it arrives (`RAWINPUT_WindowProc`), posting the sticks and buttons from that thread. Only the correlated parts, the separate triggers and the trigger motors through WGI and XInput, are read in `SDL_UpdateJoysticks` (`RAWINPUT_UpdateOtherAPIs`). Windows declares WGI's `Gamepad` class agile, so calling it from the input thread should not be marshalled to the UI thread; that part needs a physical Xbox pad to measure (see [Verification](#verification)).
+
+### Verification
+
+Build: `I:\FM4-build-usa`, snapshot `snapshots\gp-s2` of 25 October 2026, from commit `4154562` (`build-result.json`: that head, not dirty), fm4_rex.exe sha256 `6b7a5fa4...`, rexruntime.dll `5a6ffdb8...`; the rumble at exit on `snapshots\gp-s4`, from commit `c795512` (not dirty). The CPU tests: `fm4_pad_shaping_tests` passes (the identity at the defaults, the radial rescale, the curve, the trigger range, the clamps, the anti-deadzone through the title's measured steering transfer, the derived trigger rumble), and `launcher_tests` passes with the three new `-Pad` option sets (270 plans). This PC has no physical pad connected, so every pad in these runs is the probe's virtual pad (driver `virtual` in its pad report).
+
+**Latency.** `input_latency_probe` runs with the AI driving (`engageaionstart`), 45 s of race, launcher defaults otherwise; the values are medians over the race's nine 5 s windows, in ms:
+
+| Race frame rate | `driver` | `thread` | SDL update gaps mean / p99 | New value to update mean / p99 | Update to the title's read mean / p99 | Age at the read mean / p99 | Run |
+| --- | --- | --- | --- | --- | --- | --- | --- |
+| 240 | `default` | off | 2.89 / 8.44 | 4.22 / 8.24 | 2.35 / 5.11 | 6.56 / 12.22 | `gp2-def240-t0` |
+| 240 | `default` | on | 1.39 / 1.93 | 0.85 / 1.74 | 1.98 / 4.31 | 2.79 / 5.64 | `gp2-def240-t1` |
+| 240 | `rawinput` | off | 2.89 / 8.44 | 4.28 / 8.23 | 2.38 / 4.97 | 6.77 / 12.00 | `gp2-raw240-t0` |
+| 240 | `rawinput` | on | 1.42 / 1.91 | 0.85 / 1.66 | 1.87 / 4.56 | 2.73 / 5.71 | `gp2-raw240-t1` |
+| 120 | `default` | off | 0.68 / 2.37 | 0.74 / 2.06 | 3.86 / 8.67 | 4.53 / 8.98 | `gp2-def120-t0` |
+| 120 | `default` | on | 1.42 / 1.94 | 0.83 / 1.70 | 3.99 / 8.22 | 4.77 / 9.29 | `gp2-def120-t1` |
+| 120 | `rawinput` | on | 1.42 / 1.91 | 0.86 / 1.90 | 3.64 / 8.17 | 4.50 / 9.15 | `gp2-raw120-t1` |
+| 60 | `default` | off | 0.84 / 2.36 | 0.78 / 2.26 | 8.05 / 16.85 | 8.83 / 17.27 | `gp2-def60-t0` |
+| 60 | `default` | on | 1.42 / 1.86 | 0.81 / 1.57 | 8.27 / 16.26 | 9.08 / 17.10 | `gp2-def60-t1` |
+| 60 | `rawinput` | on | 1.43 / 1.82 | 0.80 / 1.69 | 7.87 / 16.29 | 8.66 / 17.33 | `gp2-raw60-t1` |
+| 60 | `wgi` | on | 1.42 / 1.85 | 0.75 / 1.63 | 7.83 / 16.31 | 8.60 / 17.38 | `gp2-wgi60-t1` |
+
+- In 240 Hz races the thread removes the UI thread's wait: the pads are updated every 1.4 ms instead of in pairs every 8.4 ms, a new state waits 0.85 ms instead of 4.2 ms for its update, and its age at the title's read falls from 6.6 to 2.8 ms on average and from 12.2 to 5.6 ms at the 99th percentile. The thread off reproduces stage 1's 240 Hz numbers (`gp-ai240`).
+- At 60 and 120 Hz the UI thread keeps up on this PC, and the thread changes nothing beyond the windows' spread: the update interval grows from about 0.7 to 0.8 ms to 1.4 ms (`SDL_DelayNS` of 1 ms plus the update), and the wait for an update stays at about 0.8 ms on average.
+- `rawinput` and `wgi` behave like `default` with the thread on: their updates take no longer, so nothing was marshalled to the UI thread. With only the virtual pad, though, neither RAWINPUT's WGI correlation nor the WGI driver had a device to read; the owner's Series controller and the Ally X runs of the [checklist](../running.md#controller-test-checklist) are needed for that.
+- The thread is kept as an opt-in for every driver; nothing here argues for turning it off for one.
+
+**Trigger rumble** through the virtual pad's `RumbleTriggers` callback, human-driven runs at 60 Hz with the stage 1 driving script (full throttle, brake held, full lock into the barrier):
+
+- `gp2-trig60`, `pad_trigger_rumble=true`, `pad_rumble_strength=1.5`, the input thread on: the motors arrive scaled by 1.5 (11,468 as 17,202, 19,660 as 29,490, impacts clamped at 65,535). The right trigger follows the left motor and the throttle: up to 11,468 under rear wheelspin at full throttle and 19,660 on gear changes, the unscaled motor times the trigger's pressure. The left trigger follows the right motor and the brake: up to 13,361 with the brake held. In the last window, with both motors and triggers at rest, trigger rumble is back at 0.
+- `gp2-trigoff60`, the defaults: the motors arrive unscaled (11,468, 4,915, 19,660), and no trigger rumble reaches the pad in any window.
+
+**Rumble at exit**, the window closed normally (`CloseMainWindow`, WM_CLOSE) while a run goes on; the e2e harness itself kills the game, which no code can answer. On `gp-s2` the driver's teardown never ran. With `StopVibration` after `TerminateTitle` (commit `8be86aa`, snapshot `gp-s3`), a window closed during the boot hung after "Window closing" until the harness killed it, while `gp-s2` closed at the same point hard-exited 0.2 s later (`gp2-closeboot-s2`): a guest thread that `TerminateTitle` stops can still own a lock that the stop then waits for (which one was not identified). With `StopVibration` before `TerminateTitle` (commit `c795512`, snapshot `gp-s4`):
+
+- `gp2-closedrive`, closed 8 s into `gp2-trig60`'s driving: in the seconds before the close the motors reached 29,490 (the left one, 1.5 times 19,660) and the brake trigger 7,562; then "SDL input: rumble stopped at exit" with both at 0, and the hard exit 0.2 s later.
+- `gp2-close60` (2 s into full throttle, the motors still at 0) and `gp2-closeboot` (in the splash videos): the same stop and exit, without a hang.
+
+**The game's steering deadzone.** `gp2-menu` (e2e steps through the career home menu) shows the path on screen: MY PROFILE > OPTIONS lists CONTROLLER, HUD, AUDIO, VIDEO, MULTISCREEN and HEAD TRACKING; CONTROLLER opens the CONTROLLER LAYOUT screen (LAYOUT, D PAD STEERING, VIBRATION, SWITCH GEAR UP/DOWN), whose footer has X ADVANCED; X opens ADVANCED OPTIONS with STEERING AXIS DEADZONE INSIDE highlighted at 24, then OUTSIDE 95, ACCELERATION 15 and 90, DECELERATION 15 and 95, CLUTCH and HANDBRAKE 10 and 100, and VIBRATION SCALE 100 (its slider full), saved with A. The values are the profile's defaults of [the table above](#the-deadzones-are-the-players-profile-settings) in percent.
+
+**Smoke gate**, fast route, 240 Hz, against `s1b-rtv1x` (the FSR session's stage 1 binary): `career` PASS (`gp2s`). `photo` failed at the fast route's boot step: the main menu's `push UI_Homespace` came 0.84 s after the title scene, during the previous step's 2.5 s wait, so the check never saw it after a press, and the next presses went into the career. The same failure is in earlier runs of other sessions (`n3p-rov-a`, `n4pth2-fnu`, `n5b-freeze-1x-rov`, `n6z-nat1x-240-photo`, `n6z-nat2x-240-photo`). `photo_view` failed with it, for want of a saved photo. Re-run (`gp2s2`): both reached their goal, WARN on capture statistics only (race 212.6 fps against 207.9, p99 6.89 against 6.83 ms; the photo loads).
+
+Not covered here: real pads (the owner's [test checklist](../running.md#controller-test-checklist)), RAWINPUT's WGI correlation and the WGI driver with a device, the focus-loss stop of trigger rumble (the probe reads the pads in the background, so it does not apply there), the XInput backend's options and its rumble at exit, and PlayStation pads.
 
 ## Left for later
 

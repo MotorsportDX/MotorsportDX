@@ -64,6 +64,7 @@ struct Options {
   std::string display;       // empty: the default display
   std::string texture_dump;     // empty: off
   std::string texture_replace;  // empty: off
+  std::string pad;              // -Pad knobs; empty: the controller's defaults
   // Applied at Play, outside the launch plan (pipeline.py has no counterpart): the performance
   // trace into logs\perf-<profile>-<time>.jsonl, and cvars given as --name=value, applied last.
   bool perf_trace = false;
@@ -111,6 +112,11 @@ std::string ResolvePath(const std::string& text);
 Pairs LookKnobs(const LauncherData& data, const std::string& look);
 bool TaaEnabled(const Pairs& knobs);
 std::vector<std::string> LookDefines(const LauncherData& data, const Pairs& knobs);
+
+// pad_knobs and pad_cvars of pipeline.py: the knobs of a -Pad value (later items win), and the
+// runtime cvars of those that differ from their defaults (launcher.json "pad").
+Pairs PadKnobs(const LauncherData& data, const std::string& pad);
+Pairs PadCvars(const LauncherData& data, const std::string& pad);
 
 // screen_scale of pipeline.py: the largest 16:9 picture that fits the screen, as a reduced
 // fraction of 1280x720.

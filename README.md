@@ -113,7 +113,7 @@ The next validation priorities are a second computer, Disc 2 car races on the la
 | --- | --- |
 | [AGENTS.md](AGENTS.md) | Rules for AI agents working in this repository: language, documentation layout, and repository rules |
 | [docs/setup.md](docs/setup.md) | Prerequisites, setup, generate, build, BuildRoot layout, and troubleshooting |
-| [docs/running.md](docs/running.md) | Launcher run, options, look knobs, controls, and data directories |
+| [docs/running.md](docs/running.md) | Launcher run, options, look knobs, the controller options, controls, and data directories |
 | [docs/status/current.md](docs/status/current.md) | Current state, what is verified on the latest build, open gaps, and next validation |
 | [docs/status/history.md](docs/status/history.md) | Dated history, past results, and dated test runs |
 | [docs/e2e/README.md](docs/e2e/README.md) | End-to-end harness overview, usage, gates, and scenarios |
@@ -139,7 +139,7 @@ The next validation priorities are a second computer, Disc 2 car races on the la
 | [docs/analysis/releases.md](docs/analysis/releases.md) | How the Japan/Asia and USA releases differ, and why one build serves both |
 | [docs/analysis/title-updates.md](docs/analysis/title-updates.md) | What the title updates contain and change, the runtime's patch support, and what supporting one would take |
 | [docs/analysis/dlc-structure.md](docs/analysis/dlc-structure.md) | How FM4 content packages are laid out, mounted and licensed, and what a new mod package would need |
-| [docs/analysis/modern-gamepads.md](docs/analysis/modern-gamepads.md) | Modern pads (Xbox Series and Elite, DualSense, DualShock 4, the ROG Xbox Ally X): SDL's Windows drivers per pad, the title's own deadzones and rumble, input latency, and the proposed options |
+| [docs/analysis/modern-gamepads.md](docs/analysis/modern-gamepads.md) | Modern pads (Xbox Series and Elite, DualSense, DualShock 4, the ROG Xbox Ally X): SDL's Windows drivers per pad, the title's own deadzones and rumble, input latency, and the stage 2 options with their verification |
 | [docs/analysis/rain-feasibility.md](docs/analysis/rain-feasibility.md) | Whether the physics still has a wet grip modifier (it does not read one), and how a hook or a surface file overlay could lower grip for a wet race |
 | [docs/analysis/material-atlas.md](docs/analysis/material-atlas.md) | Summary of the material atlas: names and registers of the game's constant tables |
 | [docs/analysis/look-mod-coverage.md](docs/analysis/look-mod-coverage.md) | Which final combine, motion blur and car paint hashes each track and mode uses, and which have no look mod |

@@ -39,6 +39,8 @@ class InputSystem : public system::IInputSystem {
   void AddDriver(std::unique_ptr<InputDriver> driver);
   void AttachWindow(rex::ui::Window* window);
   void SetActiveCallback(std::function<bool()> callback);
+  // Every driver's StopVibration, before the process exits.
+  void StopVibration();
 
   /// Replaces any previous assignment. Call before the guest starts polling.
   void SetDeviceAssignment(std::unique_ptr<DeviceAssignment> assignment);

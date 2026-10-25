@@ -1665,6 +1665,18 @@
       "provenance": "runtime-fork"
     },
     {
+      "path": "work/runtime/include/rex/input/pad_settings.h",
+      "provenance": "runtime-fork"
+    },
+    {
+      "path": "work/runtime/include/rex/input/pad_shaping.h",
+      "provenance": "runtime-fork"
+    },
+    {
+      "path": "work/runtime/src/input/pad_settings.cpp",
+      "provenance": "runtime-fork"
+    },
+    {
       "path": "work/runtime/include/rex/graphics/video_mode_util.h",
       "provenance": "runtime-fork"
     },
@@ -4540,6 +4552,10 @@
     {
       "path": "work/fm4-rex/tests/draw-scale-tests.cpp",
       "provenance": "Synthetic tests/oracle; no game input data"
+    },
+    {
+      "path": "work/fm4-rex/tests/pad-shaping-tests.cpp",
+      "provenance": "Synthetic tests/oracle; the title's steering conversion as measured (numbers only, no game data)"
     },
     {
       "path": "work/fm4-rex/tests/shader-mod-tests.cpp",

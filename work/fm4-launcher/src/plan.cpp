@@ -432,6 +432,64 @@ Pairs LookKnobs(const LauncherData& data, const std::string& look) {
   return knobs;
 }
 
+Pairs PadKnobs(const LauncherData& data, const std::string& pad) {
+  const Json& table = data.json.at("pad").at("knobs");
+  Pairs knobs;
+  for (const auto& part : Split(pad, ',')) {
+    const std::string item = Strip(part);
+    if (item.empty()) continue;
+    const auto equals = item.find('=');
+    const std::string name = Strip(item.substr(0, equals));
+    if (equals == std::string::npos || !table.contains(name)) {
+      std::vector<std::string> names;
+      for (const auto& [knob, value] : table.items()) names.push_back(knob);
+      throw PlanError("Unknown -Pad knob '" + item + "'; use name=value with " + Join(names, ", ") + ".");
+    }
+    knobs.Set(name, Strip(item.substr(equals + 1)));
+  }
+  return knobs;
+}
+
+Pairs PadCvars(const LauncherData& data, const std::string& pad) {
+  const Json& table = data.json.at("pad").at("knobs");
+  Pairs cvars;
+  for (const auto& [name, value] : PadKnobs(data, pad).Items()) {
+    const Json& knob = table.at(name);
+    const std::string cvar = knob.at("cvar").get<std::string>();
+    const std::string fallback = knob.at("default").get<std::string>();
+    std::string text;
+    if (knob.contains("choices")) {
+      std::vector<std::string> choices;
+      for (const auto& choice : knob.at("choices")) choices.push_back(choice.get<std::string>());
+      if (std::find(choices.begin(), choices.end(), value) == choices.end())
+        throw PlanError("-Pad " + name + " is one of " + Join(choices, ", ") + ", not '" + value + "'.");
+      if (value == fallback) {
+        cvars.Erase(cvar);
+        continue;
+      }
+      const bool boolean = choices == std::vector<std::string>{"0", "1"};
+      text = boolean ? (value == "1" ? "true" : "false") : value;
+    } else {
+      const double low = knob.at("min").get<double>(), high = knob.at("max").get<double>();
+      double number = std::nan("");
+      try {
+        number = PyFloat(value);
+      } catch (const PlanError&) {
+      }
+      if (!(low <= number && number <= high))
+        throw PlanError("-Pad " + name + " is a number from " + PyG(low) + " to " + PyG(high) +
+                        ", not '" + value + "'.");
+      if (number == PyFloat(fallback)) {
+        cvars.Erase(cvar);
+        continue;
+      }
+      text = PyRepr(number);
+    }
+    cvars.Set(cvar, text);
+  }
+  return cvars;
+}
+
 bool TaaEnabled(const Pairs& knobs) {
   const std::string text = knobs.Get("taa", "0");
   const double value = PyFloat(text);
@@ -801,6 +859,8 @@ Plan LaunchPlan(const LauncherData& data, const std::string& root, const std::st
     cvars.Set("texture_replace_path", ResolvePath(options.texture_replace));
   }
   if (!content_manifest.empty()) env.Set("FM4_CONTENT_MANIFEST", content_manifest);
+  // The physical controller's options.
+  Update(cvars, PadCvars(data, options.pad));
   env.Set("FM4_INFO", InfoOverlay(data, cvars, env, look, quality, plan.description));
   if (options.info) env.Set("FM4_INFO_SHOW", "1");
   return plan;

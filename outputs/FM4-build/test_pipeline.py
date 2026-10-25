@@ -523,6 +523,29 @@ class PipelineTests(unittest.TestCase):
                          {'present_vsync': 'true'})
         self.assertEqual(pipeline.present_settings('off', 240, ally), ({}, 240, 'VSync off'))
 
+    def test_pad_cvars(self):
+        # The defaults set no cvar, so a default plan is unchanged.
+        self.assertEqual(pipeline.pad_cvars(None), {})
+        self.assertEqual(pipeline.pad_cvars('driver=default,rumble=1.0,thread=0,misc1=guide'), {})
+        self.assertEqual(pipeline.pad_cvars('driver=rawinput, trigger_rumble=1,rumble=1.5'),
+                         {'sdl_joystick_driver': 'rawinput', 'pad_trigger_rumble': 'true',
+                          'pad_rumble_strength': '1.5'})
+        # Later items win, also back to the default.
+        self.assertEqual(pipeline.pad_cvars('rumble=2,anti_deadzone=0.24,rumble=1'),
+                         {'pad_steering_anti_deadzone': '0.24'})
+        self.assertEqual(pipeline.pad_cvars('right_paddle1=none,touchpad=back'),
+                         {'pad_right_paddle1': 'none', 'pad_touchpad': 'back'})
+        for bad in ('rumble=2.5', 'stick_outer=0.4', 'driver=gameinput', 'thread=on', 'misc1=z',
+                    'rumble', 'paddle1=a', 'rumble=nan'):
+            with self.assertRaises(ValueError, msg=bad):
+                pipeline.pad_cvars(bad)
+        # Every knob's cvar and default match the runtime's (the launcher reads this table).
+        runtime = Path(__file__).resolve().parents[2]/'work/runtime/src/input'
+        sources = ((runtime/'pad_settings.cpp').read_text(encoding='utf-8') +
+                   (runtime/'sdl/sdl_input_driver.cpp').read_text(encoding='utf-8'))
+        for name, knob in pipeline.PAD_KNOBS.items():
+            self.assertIn(f"({knob['cvar']}, ", sources, name)
+
     def test_full_rate(self):
         """Replays and the countdown run at the race frame rate (FM4_FULL_RATE), shared with
         e2e.py, and the overlay says so; without the variable the line is gone."""

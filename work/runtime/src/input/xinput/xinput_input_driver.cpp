@@ -16,6 +16,7 @@
 #include <rex/chrono/clock.h>
 #include <rex/cvar.h>
 #include <rex/input/flags.h>
+#include <rex/input/pad_settings.h>
 #include <rex/input/xinput/xinput_input_driver.h>
 #include <rex/logging.h>
 #include <rex/ui/virtual_key.h>
@@ -223,6 +224,7 @@ X_RESULT XinputInputDriver::GetDeviceState(DeviceId id, X_INPUT_STATE* out_state
   out_state->gamepad.thumb_ly = native_state.state.Gamepad.sThumbLY;
   out_state->gamepad.thumb_rx = native_state.state.Gamepad.sThumbRX;
   out_state->gamepad.thumb_ry = native_state.state.Gamepad.sThumbRY;
+  ShapeGamepad(out_state->gamepad, CurrentPadSettings());
 
   return result;
 }
@@ -236,9 +238,10 @@ X_RESULT XinputInputDriver::SetDeviceVibration(DeviceId id, X_INPUT_VIBRATION* v
   if (skipper) {
     return skipper;
   }
+  const double strength = CurrentPadSettings().rumble_strength;
   XINPUT_VIBRATION native_vibration;
-  native_vibration.wLeftMotorSpeed = vibration->left_motor_speed;
-  native_vibration.wRightMotorSpeed = vibration->right_motor_speed;
+  native_vibration.wLeftMotorSpeed = ScaleMotor(vibration->left_motor_speed, strength);
+  native_vibration.wRightMotorSpeed = ScaleMotor(vibration->right_motor_speed, strength);
   auto xiss = (decltype(&XInputSetState))XInputSetState_;
   DWORD result = xiss(user_index, &native_vibration);
   if (result == ERROR_DEVICE_NOT_CONNECTED) {

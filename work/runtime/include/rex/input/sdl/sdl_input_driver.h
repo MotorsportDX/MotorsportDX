@@ -11,10 +11,12 @@
 
 #pragma once
 
+#include <array>
 #include <atomic>
 #include <memory>
 #include <mutex>
 #include <optional>
+#include <thread>
 #include <vector>
 
 #include <rex/input/input_driver.h>
@@ -40,9 +42,11 @@ class SDLInputDriver final : public InputDriver, public rex::ui::WindowListener 
   X_RESULT GetDeviceCapabilities(DeviceId id, uint32_t flags,
                                  X_INPUT_CAPABILITIES* out_caps) override;
   X_RESULT SetDeviceVibration(DeviceId id, X_INPUT_VIBRATION* vibration) override;
+  void SetDeviceUserState(DeviceId id, const X_INPUT_GAMEPAD& gamepad) override;
   X_RESULT GetDeviceKeystroke(DeviceId id, uint32_t flags,
                               X_INPUT_KEYSTROKE* out_keystroke) override;
   void OnWindowAvailable(rex::ui::Window* window) override;
+  void StopVibration() override;
 
  private:
   enum class RepeatState {
@@ -68,6 +72,16 @@ class SDLInputDriver final : public InputDriver, public rex::ui::WindowListener 
     DeviceId id;
     // Per pad rather than per guest user, so it survives reassignment.
     KeystrokeState keystroke;
+    // The SDL buttons held, one bit per SDL_GamepadButton below kSdlButtonCount;
+    // the guest buttons are their mapped union.
+    uint32_t sdl_buttons = 0;
+    // The pad reports trigger motors (SDL_PROP_GAMEPAD_CAP_TRIGGER_RUMBLE_BOOLEAN),
+    // and the last trigger rumble sent to it was not zero.
+    bool trigger_rumble_capable = false;
+    bool trigger_rumble_sent = false;
+    // The guest's last read of this pad's user (InputSystem, SetDeviceUserState).
+    uint8_t user_left_trigger = 0;
+    uint8_t user_right_trigger = 0;
     // The latency probe's virtual pad (input_latency_probe): its last right stick X and the
     // SDL time of the update that sent it, until a read takes it.
     bool probe = false;
@@ -97,6 +111,14 @@ class SDLInputDriver final : public InputDriver, public rex::ui::WindowListener 
   bool TestSDLVersion() const;
   void UpdateXCapabilities(ControllerState& state);
   void QueueControllerUpdate();
+  // The SDL joystick driver hints of sdl_joystick_driver, before SDL_INIT_GAMEPAD.
+  void ApplyDriverHints();
+  // The guest button an SDL button maps to (0: none).
+  uint16_t GuestButton(uint32_t sdl_button) const;
+  void LogPadReport(const ControllerState& state) const;
+  void StopTriggerRumbleLocked();
+  void StartInputThread();
+  void StopInputThread();
   void StartLatencyProbe();
   void StopLatencyProbe();
   void ObserveProbeReadLocked(ControllerState& controller);
@@ -115,6 +137,21 @@ class SDLInputDriver final : public InputDriver, public rex::ui::WindowListener 
   // Never rewound, so a handle held past a disconnect resolves to nothing.
   uint64_t next_device_id_ = 1;
   std::unique_ptr<LatencyProbe> probe_;
+  // The guest buttons of SDL's Misc1, the four paddles and the touchpad click
+  // (pad_misc1, pad_right_paddle1, ...), resolved at Setup.
+  std::array<uint16_t, 6> extra_buttons_ = {};
+  // The window's keyboard focus: trigger rumble stops without it, unless SDL reads the pads
+  // in the background too (SDL_HINT_JOYSTICK_ALLOW_BACKGROUND_EVENTS, set for the probe).
+  std::atomic<bool> has_focus_{true};
+  bool background_events_ = false;
+  // StopVibration ran: the process is exiting, and no more rumble is sent.
+  std::atomic<bool> vibration_stopped_{false};
+  // input_sdl_thread: SDL's pad updates on a thread of their own. The guest's threads read
+  // input_thread_running_ (QueueControllerUpdate), never input_thread_, which only the UI
+  // thread starts and joins.
+  std::thread input_thread_;
+  std::atomic<bool> input_thread_running_{false};
+  std::atomic<bool> input_thread_stop_{false};
 };
 
 }  // namespace rex::input::sdl

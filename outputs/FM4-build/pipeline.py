@@ -595,8 +595,9 @@ def post_pass_tests(root,jobs):
     (Direct3D 12 on the CPU) as the framework runs them, FXC compiles of the override library and
     the look mods with and without XE_POST_VIEWS (the library's post pass code is only compiled
     with it), the track lighting file edits of the look's track knobs (fm4-track-settings.h), and
-    the texture replacement content hash and DDS files (docs/analysis/texture-replacement.md), and
-    the draw resolution scale as a fraction (docs/analysis/d3d-hle-n5.md).
+    the texture replacement content hash and DDS files (docs/analysis/texture-replacement.md),
+    the draw resolution scale as a fraction (docs/analysis/d3d-hle-n5.md), and the physical pads'
+    stick and trigger shaping (docs/analysis/modern-gamepads.md).
     work/fm4-rex/tests, synced here like the runtime, built against the installed runtime headers. The WARP scene's checks were set with a GTAO radius of 1 m."""
     source,build=root/'project/tests',root/'tests-build'
     inventory=json.loads((REPO/'outputs/FM4-source-control/tracked-files.json').read_text())
@@ -615,13 +616,14 @@ def post_pass_tests(root,jobs):
         log=root/'logs/tests-configure.log')
     run(['cmake','--build',build,'--parallel',jobs,'--target','fm4_post_pass_camera_tests',
          'fm4_post_pass_shader_tests','fm4_shader_mod_tests','fm4_track_settings_tests',
-         'fm4_texture_replacement_tests','fm4_draw_scale_tests'],
+         'fm4_texture_replacement_tests','fm4_draw_scale_tests','fm4_pad_shaping_tests'],
         log=root/'logs/tests-build.log')
     run([build/'fm4_track_settings_tests.exe'],cwd=build,log=root/'logs/track-settings-tests.log')
     run([build/'fm4_texture_replacement_tests.exe'],cwd=build,
         log=root/'logs/texture-replacement-tests.log')
     run([build/'fm4_post_pass_camera_tests.exe'],cwd=build,log=root/'logs/post-pass-camera-tests.log')
     run([build/'fm4_draw_scale_tests.exe'],cwd=build,log=root/'logs/draw-scale-tests.log')
+    run([build/'fm4_pad_shaping_tests.exe'],cwd=build,log=root/'logs/pad-shaping-tests.log')
     run([build/'fm4_post_pass_shader_tests.exe',root/'runtime-source/src/graphics/d3d12/post_pass.hlsli',
          PASSES_DIRECTORY,'GTAO_RADIUS=1'],cwd=build,log=root/'logs/post-pass-shader-tests.log')
     # FSR's checks run on the first hardware adapter (WARP crashes in FSR's shading change
@@ -1233,6 +1235,73 @@ def display_settings(display=DEFAULT_DISPLAY,fullscreen=False,supersample=False,
 VSYNC_MODES=('auto','on','off')
 DEFAULT_VSYNC='auto'
 
+# -Pad: the physical controller's options (docs/running.md#controller,
+# docs/analysis/modern-gamepads.md), knob name to its runtime cvar, its default, and its choices
+# or its range (bool knobs are 0 or 1). Only knobs that differ from their default become cvars,
+# so the default plan sets none. The GUI launcher reads this table from launcher.json.
+PAD_BUTTONS=('a','b','x','y','lb','rb','back','start','ls','rs','up','down','left','right','guide',
+             'none')
+PAD_KNOBS={
+    'driver':{'cvar':'sdl_joystick_driver','default':'default',
+              'choices':['default','rawinput','wgi']},
+    'thread':{'cvar':'input_sdl_thread','default':'0','choices':['0','1']},
+    'rumble':{'cvar':'pad_rumble_strength','default':'1','min':0.0,'max':2.0},
+    'trigger_rumble':{'cvar':'pad_trigger_rumble','default':'0','choices':['0','1']},
+    'trigger_rumble_strength':{'cvar':'pad_trigger_rumble_strength','default':'1','min':0.0,'max':2.0},
+    'stick_deadzone':{'cvar':'pad_stick_deadzone','default':'0','min':0.0,'max':0.5},
+    'stick_outer':{'cvar':'pad_stick_outer','default':'1','min':0.5,'max':1.0},
+    'stick_curve':{'cvar':'pad_stick_curve','default':'1','min':0.5,'max':3.0},
+    'anti_deadzone':{'cvar':'pad_steering_anti_deadzone','default':'0','min':0.0,'max':0.5},
+    'trigger_deadzone':{'cvar':'pad_trigger_deadzone','default':'0','min':0.0,'max':0.5},
+    'trigger_outer':{'cvar':'pad_trigger_outer','default':'1','min':0.5,'max':1.0},
+    'misc1':{'cvar':'pad_misc1','default':'guide','choices':list(PAD_BUTTONS)},
+    'right_paddle1':{'cvar':'pad_right_paddle1','default':'y','choices':list(PAD_BUTTONS)},
+    'left_paddle1':{'cvar':'pad_left_paddle1','default':'b','choices':list(PAD_BUTTONS)},
+    'right_paddle2':{'cvar':'pad_right_paddle2','default':'x','choices':list(PAD_BUTTONS)},
+    'left_paddle2':{'cvar':'pad_left_paddle2','default':'a','choices':list(PAD_BUTTONS)},
+    'touchpad':{'cvar':'pad_touchpad','default':'guide','choices':list(PAD_BUTTONS)},
+}
+
+def pad_knobs(pad):
+    """The knobs of a -Pad value, 'driver=rawinput,trigger_rumble=1,rumble=1.5' (later items
+    win)."""
+    knobs={}
+    for item in filter(None,(part.strip() for part in (pad or '').split(','))):
+        name,equals,value=item.partition('=')
+        name,value=name.strip(),value.strip()
+        if not equals or name not in PAD_KNOBS:
+            raise ValueError(f"Unknown -Pad knob {item!r}; use name=value with "
+                             f"{', '.join(PAD_KNOBS)}.")
+        knobs[name]=value
+    return knobs
+
+def pad_cvars(pad):
+    """The runtime cvars of a -Pad value: the knobs that differ from their defaults."""
+    cvars={}
+    for name,value in pad_knobs(pad).items():
+        knob=PAD_KNOBS[name]
+        if 'choices' in knob:
+            if value not in knob['choices']:
+                raise ValueError(f"-Pad {name} is one of {', '.join(knob['choices'])}, not {value!r}.")
+            if value==knob['default']:
+                cvars.pop(knob['cvar'],None)
+                continue
+            text={'0':'false','1':'true'}.get(value,value) if knob['choices']==['0','1'] else value
+        else:
+            try:
+                number=float(value)
+            except ValueError:
+                number=float('nan')
+            if not knob['min']<=number<=knob['max']:
+                raise ValueError(f"-Pad {name} is a number from {knob['min']:g} to {knob['max']:g}, "
+                                 f"not {value!r}.")
+            if number==float(knob['default']):
+                cvars.pop(knob['cvar'],None)
+                continue
+            text=repr(number)
+        cvars[knob['cvar']]=text
+    return cvars
+
 def present_settings(vsync,frame_rate,monitor):
     """Cvars, the race frame rate and a description of -VSync (docs/analysis/d3d-hle-n4.md 17.23).
     off: the host presents at once, tearing allowed (the runtime's default, and e2e's). on: on the
@@ -1402,7 +1471,7 @@ def launch(root,single_tile=False,fixed_vblank=False,frame_rate=None,rov=False,
            resolution_scale=None,full_rate_mirror=False,look=None,shadow_workaround=False,
            quality=None,display=DEFAULT_DISPLAY,fullscreen=False,supersample=False,info=False,
            ao=False,shader_dev=False,texture_dump=None,texture_replace=None,msaa=False,
-           native=None,msaa_samples=None,vsync=DEFAULT_VSYNC):
+           native=None,msaa_samples=None,vsync=DEFAULT_VSYNC,pad=None):
     state = json.loads((root/'local.json').read_text())
     disc1,disc2 = validate_discs(state['disc1'],state['disc2'])
     report=json.loads((root/'build-result.json').read_text())
@@ -1420,7 +1489,7 @@ def launch(root,single_tile=False,fixed_vblank=False,frame_rate=None,rov=False,
         shadow_workaround=shadow_workaround,quality=quality,display=display,fullscreen=fullscreen,
         supersample=supersample,info=info,ao=ao,shader_dev=shader_dev,texture_dump=texture_dump,
         texture_replace=texture_replace,msaa=msaa,content_manifest=manifest,native=native,
-        msaa_samples=msaa_samples,vsync=vsync)
+        msaa_samples=msaa_samples,vsync=vsync,pad=pad)
     print(description)
     if texture_dump:
         print(f'Texture dump: {cvars["texture_dump_path"]}')
@@ -1436,13 +1505,14 @@ def launch_plan(root,disc1,single_tile=False,fixed_vblank=False,frame_rate=None,
                 quality=None,display=DEFAULT_DISPLAY,fullscreen=False,supersample=False,info=False,
                 ao=False,shader_dev=False,texture_dump=None,texture_replace=None,msaa=False,
                 content_manifest=None,monitor=None,native=None,msaa_samples=None,
-                vsync=DEFAULT_VSYNC):
+                vsync=DEFAULT_VSYNC,pad=None):
     """The cvars, the FM4_ environment and the display description of a run of the options of
     launch. The GUI launcher (work/fm4-launcher, plan.cpp) ports this function; launcher_tests
     compares the two. monitor: the primary monitor's (width, height, DPI scale, refresh Hz, VRR
     min Hz, VRR max Hz, integrated GPUs only) instead of the real one. native: True for -Native,
     False for -Rtv, None for the default: the native path with integrated GPUs only, unless
-    -Rov or -Msaa (the main session's decision of 24 October 2026, d3d-hle-n4.md 17.25)."""
+    -Rov or -Msaa (the main session's decision of 24 October 2026, d3d-hle-n4.md 17.25). pad:
+    the -Pad value (PAD_KNOBS)."""
     monitor=monitor or primary_monitor()
     native_auto=native is None
     if native_auto:
@@ -1528,6 +1598,8 @@ def launch_plan(root,disc1,single_tile=False,fixed_vblank=False,frame_rate=None,
         cvars['texture_replace_path']=Path(texture_replace).resolve()
     if content_manifest:
         env['FM4_CONTENT_MANIFEST']=str(content_manifest)
+    # The physical controller's options.
+    cvars.update(pad_cvars(pad))
     # The settings overlay: F2 in game, shown at start with -Info.
     env['FM4_INFO']=info_overlay(cvars,env,look,DEFAULT_QUALITY if quality is None else quality,
                                  description)
@@ -1559,6 +1631,7 @@ def launcher_data():
             'displays':{name:list(size) for name,size in DISPLAYS.items()},
             'default_display':DEFAULT_DISPLAY,'max_resolution_scale':MAX_RESOLUTION_SCALE,
             'vsync':{'modes':list(VSYNC_MODES),'default':DEFAULT_VSYNC},
+            'pad':{'knobs':PAD_KNOBS},
             'gtao':passes_settings(PASSES_DIRECTORY,{}),
             'releases':{name:{'media_id':info['media_id'],'executables':info['executables']}
                         for name,info in RELEASES.items()},
@@ -1616,6 +1689,11 @@ def launcher_test_options(root):
             {'native':True,'look':'gt','frame_rate':240,'fixed_vblank':True},
             {'native':True,'look':'pc,aa=fsr,sharpen=0.6','info':True},
             {'frame_rate':120,'vsync':'on'},
+            {'pad':'driver=rawinput,trigger_rumble=1,rumble=1.5'},
+            {'pad':'driver=wgi,thread=1,stick_deadzone=0.08,anti_deadzone=0.24,stick_curve=1.4,'
+                   'stick_outer=0.95,trigger_deadzone=0.05,trigger_outer=0.9,'
+                   'trigger_rumble_strength=2,misc1=back,right_paddle1=none,touchpad=start'},
+            {'pad':'driver=default,rumble=1.0,misc1=guide,thread=0','frame_rate':240},
             {'native':True,'frame_rate':240,'vsync':'off'},
             {'native':False},
             {'msaa':True},
@@ -1785,6 +1863,9 @@ def main():
     parser.add_argument('--info',action='store_true',
                         help='run: show the settings overlay (display, quality, look, ...) at start; '
                              'F2 toggles it in any run')
+    parser.add_argument('--pad',
+                        help="run: the controller's options as knobs, for example "
+                             "'driver=rawinput,trigger_rumble=1,rumble=1.5' (PAD_KNOBS)")
     parser.add_argument('--vsync',choices=VSYNC_MODES,default=DEFAULT_VSYNC,
                         help='run: auto (default: on a VRR display, tearing presents held a refresh '
                              'apart and races under the refresh; else on), on (the refresh, no '
@@ -1870,7 +1951,7 @@ def main():
                                      args.shadow_workaround,args.quality,args.display,
                                      args.fullscreen,args.supersample,args.info,args.ao,
                                      args.shader_dev,args.texture_dump,args.texture_replace,args.msaa,
-                                     args.native,args.msaa_samples,args.vsync)
+                                     args.native,args.msaa_samples,args.vsync,args.pad)
     if args.action=='warmcache': warm_cache(root)
     if args.action=='profbuild': build_profiling(root,fxc,args.jobs)
     if args.action=='export':

@@ -506,6 +506,12 @@ void ReXApp::OnClosing(ui::UIEvent& e) {
   (void)e;
   REXLOG_INFO("Window closing, shutting down...");
   shutting_down_.store(true, std::memory_order_release);
+  // The pads' motors (and trigger motors) would otherwise keep the title's
+  // last vibration after the hard exit below. Before TerminateTitle, whose
+  // stopped guest threads may still own the input locks.
+  if (runtime_ && runtime_->input_system()) {
+    static_cast<rex::input::InputSystem*>(runtime_->input_system())->StopVibration();
+  }
   if (runtime_ && runtime_->kernel_state()) {
     runtime_->kernel_state()->TerminateTitle();
   }

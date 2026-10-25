@@ -61,7 +61,7 @@ the environment and the display description of sixteen sets of options (RTV, `-R
 | --- | --- |
 | Display | Screen (`-Display`), fullscreen, render scale, supersample, race frame rate, race quality, one tile with TAA or the MSAA tiles (`-Msaa`), the full-rate mirror and the settings overlay. The display and render scale that the options give are shown below them. |
 | Look | The preset (`aces`, `gt`, `neutral`, `original`, `original` without TAA, or a saved look), the tone curve, TAA, and a slider for each [look knob](#look) in five groups: picture, lighting, car, sky and foliage, road. A changed knob is marked and has a Reset button. **Save as look** keeps the current value under a name. The `-Look` value is shown and can be edited. |
-| Controls | The keyboard bindings of the controller (the runtime's `keybind_*` settings). **Set** waits for a key; several keys are separated by commas, modifiers are written as `Shift+Up`. Unknown key names are marked and block Play. A connected controller needs no setup. |
+| Controls | The Controller section: the options of `-Pad` (the pad driver, rumble strength, trigger rumble, the steering anti-deadzone and the input thread; stick and trigger shaping and the extra buttons folded), with the `-Pad` value shown and editable; see [Controller](#controller). Below it the keyboard bindings of the controller (the runtime's `keybind_*` settings). **Set** waits for a key; several keys are separated by commas, modifiers are written as `Shift+Up`. Unknown key names are marked and block Play. A connected controller needs no setup. |
 | Game data | Disc 1 and Disc 2, checked as `generate` checks them, the downloadable content folders and files, and the content packages found, with their import state. **Remove import** deletes an imported package from the user data (see [Data directories](#data-directories)). The texture pack is the `-TextureReplace` folder. |
 | Advanced | Fixed vblank, the shadow workaround, `-SingleTile`, `--ao`, `-Rov`, the native path (`-Native`, and its MSAA: one pass with 2x, the default, one pass with 4x as `-MsaaSamples 4`, or one tile without MSAA as `-MsaaSamples 0`), the performance trace, extra cvars, the texture dump folder, the user data folder, and buttons that open the logs and the user data and copy the command line. |
 
@@ -223,6 +223,7 @@ takes a value.
 | `-ResolutionScale 1-4\|panel` | from `-Display` | Render at this multiple of 1280x720, or `panel`: the screen's own resolution (the native path in one pass only). Overrides the render scale of `-Display`. |
 | `-Quality xbox\|high\|ultra` | `high` | Render quality of races. |
 | `-Look <preset/knobs>` | `aces` | Post-processing look and car paint. See [Look](#look). |
+| `-Pad <knobs>` | none | The physical controller: the SDL pad driver, rumble strength, trigger rumble, the input thread, stick and trigger shaping and the extra buttons. See [Controller](#controller). |
 | `-ShaderDev` | off | Shader mod development: the look mods reload when a file in `work/fm4-rex/look` is saved, and the knobs change live. See [Shader mod development](#shader-mod-development). |
 | `-TextureDump <dir>` | off | Write each new game texture once as `<hash>.dds` to this directory. See [Texture replacement](#texture-replacement). |
 | `-TextureReplace <dir>` | off | Use `<hash>.dds` files from this directory instead of the game textures with that hash. See [Texture replacement](#texture-replacement). |
@@ -791,6 +792,184 @@ Both options are off by default and cost nothing then. With either one on, each
 texture load is hashed on the CPU (an untiling copy of its base level). Render
 targets, cube maps, arrays, 3D textures and textures that change all the time are never
 dumped or replaced.
+
+## Controller
+
+A connected controller works without setup through the runtime's SDL backend. The game
+knows only the Xbox 360 pad: two rumble motors, 8-bit triggers and no paddles. `-Pad`, and
+the Controller section of the GUI launcher's Controls page, change how the runtime reads a
+modern pad and how it rumbles. Every default keeps the pad as the game has always seen it.
+The design and the measurements behind the options are in
+[modern gamepads](analysis/modern-gamepads.md).
+
+```powershell
+.\outputs\FM4-build\Build.ps1 -Action run @common -Pad 'driver=rawinput,trigger_rumble=1,rumble=1.5'
+```
+
+### The game's steering deadzone
+
+The game applies deadzones of its own after the runtime, from the player's profile. The
+steering stick's inner deadzone is 24% by default: the first quarter of the stick's travel
+does nothing, and full lock comes at 95%. On a modern pad whose stick centres precisely, that
+dead quarter is the main reason small corrections do not steer. Lower it in the game:
+
+1. In the main menu choose PLAY CAREER, then MY PROFILE.
+2. Choose OPTIONS, then CONTROLLER. The CONTROLLER LAYOUT screen opens.
+3. Press X (ADVANCED). The ADVANCED OPTIONS screen opens with STEERING AXIS DEADZONE INSIDE
+   highlighted, at 24.
+4. Lower it with Left, for example to 5 or 10. If the car steers on its own with the stick at
+   rest, raise it a step.
+5. Press A (SAVE).
+
+The setting is saved in the profile and applies to every pad. The game rescales the stick
+from the deadzone's edge, so a lower deadzone gives no jump. The same screen holds, in
+percent, STEERING AXIS DEADZONE OUTSIDE (95: full lock), the throttle range (ACCELERATION
+AXIS DEADZONE INSIDE and OUTSIDE, 15 and 90), the brake range (DECELERATION AXIS DEADZONE, 15
+and 95), the clutch and handbrake ranges, and VIBRATION SCALE, the game's own rumble scale,
+at 100 with its slider full; `rumble` above 1 is the way to stronger rumble. Y resets the
+screen to the defaults. The game's rumble switch is VIBRATION on the CONTROLLER LAYOUT
+screen.
+
+### -Pad knobs
+
+Knobs are `name=value`, separated by commas; a later knob wins. A knob at its default sets
+nothing. Each knob is a runtime setting, named in the last column.
+
+| Knob | Values | Default | Description | Runtime setting |
+| --- | --- | --- | --- | --- |
+| `driver` | `default`, `rawinput`, `wgi` | `default` | SDL's Windows pad drivers; see [Pad drivers](#pad-drivers). | `sdl_joystick_driver` |
+| `rumble` | 0 to 2 | 1 | Multiplies the game's two motors, clamped at full strength. The game's rumble in normal driving is 0.05 to 0.2 of full strength, so 1.5 to 2 makes it easier to feel. | `pad_rumble_strength` |
+| `trigger_rumble` | 0, 1 | 0 | Trigger rumble derived from the game's motors; see [Trigger rumble](#trigger-rumble). | `pad_trigger_rumble` |
+| `trigger_rumble_strength` | 0 to 2 | 1 | Multiplies the derived trigger rumble. | `pad_trigger_rumble_strength` |
+| `thread` | 0, 1 | 0 | Updates SDL's pads every millisecond on a thread of their own; see [Input thread](#input-thread). | `input_sdl_thread` |
+| `anti_deadzone` | 0 to 0.5 | 0 | Left stick only: any movement starts this far out, past the game's steering deadzone. 0.24 matches the game's default deadzone. With a lowered in-game deadzone the two add up and the stick jumps at the centre, so lower the game's deadzone or use this, not both. | `pad_steering_anti_deadzone` |
+| `stick_deadzone` | 0 to 0.5 | 0 | Both sticks: a radial deadzone, rescaled from its edge, for a stick that drifts once the game's deadzone is lowered. | `pad_stick_deadzone` |
+| `stick_outer` | 0.5 to 1 | 1 | Both sticks: the deflection that gives full output. | `pad_stick_outer` |
+| `stick_curve` | 0.5 to 3 | 1 | Both sticks: an exponent on the deflection; above 1 is finer near the centre. | `pad_stick_curve` |
+| `trigger_deadzone` | 0 to 0.5 | 0 | Triggers read 0 up to this fraction. | `pad_trigger_deadzone` |
+| `trigger_outer` | 0.5 to 1 | 1 | The trigger travel that gives full output, for triggers that do not reach the end. | `pad_trigger_outer` |
+| `misc1` | `a`, `b`, `x`, `y`, `lb`, `rb`, `back`, `start`, `ls`, `rs`, `up`, `down`, `left`, `right`, `guide`, `none` | `guide` | The Xbox 360 button that SDL's Misc1 presses (the DualSense microphone button). | `pad_misc1` |
+| `right_paddle1`, `left_paddle1`, `right_paddle2`, `left_paddle2` | as `misc1` | `y`, `b`, `x`, `a` | The buttons of paddles P1, P3, P2 and P4. | `pad_right_paddle1`, ... |
+| `touchpad` | as `misc1` | `guide` | The button of the PlayStation touchpad click. | `pad_touchpad` |
+
+- The stick and trigger knobs apply to physical pads (the SDL and XInput backends), never to
+  the keyboard or the e2e harness's diagnostic controller. The order is: the deadzone and the
+  outer edge on the stick's magnitude, then the curve, then the anti-deadzone.
+- A Guide target reaches the game only with the runtime's `guide_button` setting on.
+- On Windows, Xbox pads report neither the Share button nor the Elite paddles in this build
+  (no SDL driver here reads them); an Elite's own profile can map its paddles to other
+  buttons. `misc1`, the paddles and `touchpad` apply to PlayStation and other pads that
+  report them.
+
+### Pad drivers
+
+| `driver` | What SDL uses | Xbox One and Series pads | ROG Xbox Ally X built-in pad |
+| --- | --- | --- | --- |
+| `default` | SDL's defaults: XInput for Xbox class pads, HIDAPI for PlayStation pads | two motors, no trigger rumble | XInput, two motors |
+| `rawinput` | Raw Input, with Windows.Gaming.Input (WGI) correlating the triggers and the trigger motors | two motors; trigger rumble once correlated, which needs a first button or stick input | Raw Input; trigger rumble only if the pad reports Xbox One family IDs |
+| `wgi` | WGI, with XInput and DirectInput off | two motors and trigger rumble; the axes read 0 without window focus | WGI, if WGI lists the pad |
+
+PlayStation pads go through SDL's HIDAPI drivers with every choice (rumble, light bar,
+sensors, touchpad). A driver that does not start leaves SDL's others running, so no choice
+loses a pad. Raw Input is off in remote desktop sessions. GameInput is not offered: SDL's
+GameInput driver cannot start in this build (the Windows SDK's `gameinput.h` is older than
+the version SDL requires).
+
+### Trigger rumble
+
+With `trigger_rumble=1`, a pad with trigger motors (`trigger_rumble=1` in its
+[pad report](#pad-report-and-latency-probe)) rumbles its triggers from the game's two motors:
+the right trigger from the left motor, scaled by how far the throttle is pressed, and the
+left trigger from the right motor, scaled by the brake. Wheelspin buzzes the throttle and a
+locking front axle the brake; gear changes, impacts and kerbs also buzz a pressed trigger. A
+released trigger stays still. Trigger rumble is zero while the motors are, while the window
+has no focus, and while an overlay takes the input. The game sends no rumble while its AI
+drives the player's car. On Xbox pads only `rawinput` and `wgi` give trigger rumble. With the
+SDL backend (the default), closing the game window stops every pad's motors and trigger
+motors, with or without these options; a game process that is killed cannot stop them.
+
+### Input thread
+
+SDL updates the pads in the UI thread's event loop, every millisecond while a pad is open.
+In 240 fps races the UI thread is busy presenting, and on the main PC it updated the pads
+only every 8.4 ms, so a new pad state waited about 4 ms longer before the game could read it.
+`thread=1` updates the pads on a thread of their own every millisecond instead, and the UI
+thread stops updating them. Measured with the latency probe on the main PC (25 October 2026):
+in 240 fps races a new state was 2.8 ms old on average when the game read it (5.6 ms at the
+99th percentile) instead of 6.6 ms (12.2 ms), with `default` and `rawinput` alike; at 60 and
+120 fps, where the UI thread keeps up, it made no difference. It is off by default until it
+has been tried with real pads and on the ROG Xbox Ally X (see the
+[checklist](#controller-test-checklist)).
+
+### Pad report and latency probe
+
+When a pad connects, `runtime.log` gets one line for it with what SDL exposes under the
+chosen driver: the name, type, vendor and product ID, the SDL driver that opened it
+(`xinput`, `rawinput`, `wgi`, `hidapi`, `dinput`, ...), the connection, the capabilities
+(rumble, trigger rumble, LEDs, gyroscope and accelerometer, paddles, Misc1, touchpad) and
+the battery. For example, the probe's virtual pad:
+
+```text
+SDL pad report: device=1 name="FM4 latency probe" type=standard vendor=0000 product=0000 driver=virtual connection=unknown rumble=1 trigger_rumble=1 rgb_led=0 mono_led=0 player_led=0 gyro=0 accel=0 paddles=0 misc1=0 touchpad_button=0 touchpads=0 power=unknown battery=-1 path="" guid=ff00bd8a464d34206c6174656e007601
+```
+
+`--input_latency_probe=true` (on the GUI launcher's Advanced page, Extra cvars) attaches a
+virtual SDL pad whose right stick moves by 256, inside every deadzone, at random times, and
+logs every 5 seconds how long a new state took to reach the game (`SDL latency probe (ms):`):
+the gaps between SDL's pad updates, the wait from a new value to the update that sent it,
+from there to the game's read, the whole age at the read, and the gaps between the game's
+reads, then the rumble the virtual pad received. It is a measurement tool; leave it off for
+normal play.
+
+### Controller test checklist
+
+For the owner's test of the options on real pads, from an
+[export](#export-to-another-computer) with the GUI launcher. Lower the game's steering
+deadzone once ([above](#the-games-steering-deadzone)); the profile keeps it for every run.
+Play a Quick Race with the default car and track in each profile, at least two minutes of
+driving with wheelspin, braking and a kerb or two.
+
+Xbox Series controller:
+
+| Profile | Controller section |
+| --- | --- |
+| A | the defaults (`default` driver) |
+| B | Pad driver Raw Input, Trigger rumble on, Rumble strength 1.5 |
+| C | as B with Rumble strength 2 |
+
+- Note for each profile whether the pad works in the menus and in races, whether the first
+  rumble comes at once or only after a first input, whether the trigger rumble feels right
+  (throttle on wheelspin, brake on locking) and which rumble strength you prefer.
+- Note the steering deadzone value you settled on.
+
+ROG Xbox Ally X built-in pad, race frame rate 120 (its panel):
+
+| Profile | Controller section | Extra cvars (Advanced page) |
+| --- | --- | --- |
+| A | the defaults | `--input_latency_probe=true` |
+| B | Pad driver Raw Input | `--input_latency_probe=true` |
+| C | the defaults, Input thread on | `--input_latency_probe=true` |
+| D | Pad driver Raw Input, Input thread on | `--input_latency_probe=true` |
+
+- Note whether the pad works and rumbles in each profile. Profile B's pad report says whether
+  the Ally X's pad has trigger motors (`trigger_rumble=1`); if it has, also try Trigger
+  rumble on.
+
+What to send back, from the export folder's `logs\runtime.log` (the line types below,
+nothing else is needed). The log keeps the earlier runs; each run starts at its own
+`SDL joystick driver option:` line, so note which profile ran in which order:
+
+```powershell
+Select-String -Path logs\runtime.log -Pattern 'SDL pad report:','SDL joystick driver option:','SDL input','SDL latency probe' | ForEach-Object Line
+```
+
+- `SDL pad report:`: what each pad exposes under the driver of that run.
+- `SDL joystick driver option:` and `SDL input thread`: which options the run used.
+- `SDL input: rumble stopped at exit`: the pads' rumble was stopped when the window closed.
+- `SDL latency probe (ms):` (every 5 seconds) and `SDL latency probe at exit:`: the probe's
+  timings and the rumble it received.
+
+The lines contain the pads' names and device paths, not the Windows user name.
 
 ## Controls
 

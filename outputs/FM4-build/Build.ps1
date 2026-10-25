@@ -27,6 +27,7 @@ param(
     [ValidateSet('1','2','3','4','panel')][string]$ResolutionScale,
     [ValidateRange(30,240)][int]$FrameRate,
     [ValidateSet('auto','on','off')][string]$VSync,
+    [string]$Pad,
     [string]$Look,
     [switch]$ShaderDev,
     [string]$TextureDump,
@@ -67,6 +68,7 @@ if ($Info) { $arguments += @('--info') }
 if ($ResolutionScale) { $arguments += @('--resolution-scale', "$ResolutionScale") }
 if ($FrameRate) { $arguments += @('--frame-rate', "$FrameRate") }
 if ($VSync) { $arguments += @('--vsync', $VSync) }
+if ($Pad) { $arguments += @('--pad', $Pad) }
 if ($Look) { $arguments += @('--look', $Look) }
 if ($ShaderDev) { $arguments += @('--shader-dev') }
 if ($TextureDump) { $arguments += @('--texture-dump', $TextureDump) }

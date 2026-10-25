@@ -41,10 +41,20 @@ class InputDriver {
   virtual X_RESULT GetDeviceCapabilities(DeviceId id, uint32_t flags,
                                          X_INPUT_CAPABILITIES* out_caps) = 0;
   virtual X_RESULT SetDeviceVibration(DeviceId id, X_INPUT_VIBRATION* vibration) = 0;
+  /// The state the guest last read for the user this device serves, merged
+  /// over all of that user's devices. InputSystem passes it right before each
+  /// SetDeviceVibration; a driver that derives trigger rumble from the
+  /// triggers the guest saw uses it.
+  virtual void SetDeviceUserState(DeviceId /*id*/, const X_INPUT_GAMEPAD& /*gamepad*/) {}
   virtual X_RESULT GetDeviceKeystroke(DeviceId id, uint32_t flags,
                                       X_INPUT_KEYSTROKE* out_keystroke) = 0;
 
   virtual void OnWindowAvailable(rex::ui::Window* /*window*/) {}
+
+  /// Stops every pad's rumble for good before the process exits without
+  /// tearing the drivers down (ReXApp::OnClosing, before TerminateTitle, so
+  /// the guest's threads still run); later vibration calls are ignored.
+  virtual void StopVibration() {}
 
   void set_is_active_callback(std::function<bool()> is_active_callback) {
     is_active_callback_ = is_active_callback;

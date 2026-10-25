@@ -15,20 +15,69 @@
 #include <filesystem>
 #include <string>
 #include <thread>
+#include <tuple>
 
 #include <rex/assert.h>
 #include <rex/chrono/clock.h>
 #include <rex/cvar.h>
 #include <rex/input/flags.h>
+#include <rex/input/pad_settings.h>
 #include <rex/input/sdl/sdl_input_driver.h>
 #include <rex/logging.h>
+#include <rex/platform.h>
 #include <rex/ui/virtual_key.h>
+
+#if REX_PLATFORM_WIN32
+#include <windows.h>  // NOLINT(build/include_order)
+#include <objbase.h>  // NOLINT(build/include_order)
+#endif
 
 REXCVAR_DEFINE_STRING(hid_mappings_file, "gamecontrollerdb.txt", "Input",
                       "Path to SDL gamecontroller mappings file");
 REXCVAR_DEFINE_BOOL(input_latency_probe, false, "Input",
                     "Attach a virtual SDL gamepad that times new pad states until the guest "
                     "reads them; logs a summary every 5 seconds");
+REXCVAR_DEFINE_STRING(sdl_joystick_driver, "default", "Input",
+                      "SDL's Windows pad drivers: default (SDL's own: XInput for Xbox class pads, "
+                      "HIDAPI for PlayStation pads), rawinput (Raw Input with Windows.Gaming.Input "
+                      "correlation: trigger rumble on Xbox One and Series pads), wgi "
+                      "(Windows.Gaming.Input, with XInput and DirectInput off)")
+    .allowed({"default", "rawinput", "wgi"})
+    .lifecycle(rex::cvar::Lifecycle::kRequiresRestart);
+REXCVAR_DEFINE_BOOL(input_sdl_thread, false, "Input",
+                    "Update SDL's pads every millisecond on a thread of their own instead of the "
+                    "UI thread's event loop, which a busy UI thread delays")
+    .lifecycle(rex::cvar::Lifecycle::kRequiresRestart);
+REXCVAR_DEFINE_STRING(pad_misc1, "guide", "Input",
+                      "Guest button of SDL's Misc1 (Xbox Series Share, DualSense microphone)")
+    .allowed({"a", "b", "x", "y", "lb", "rb", "back", "start", "ls", "rs", "up", "down", "left",
+              "right", "guide", "none"})
+    .lifecycle(rex::cvar::Lifecycle::kRequiresRestart);
+REXCVAR_DEFINE_STRING(pad_right_paddle1, "y", "Input",
+                      "Guest button of the upper right paddle (Xbox Elite P1)")
+    .allowed({"a", "b", "x", "y", "lb", "rb", "back", "start", "ls", "rs", "up", "down", "left",
+              "right", "guide", "none"})
+    .lifecycle(rex::cvar::Lifecycle::kRequiresRestart);
+REXCVAR_DEFINE_STRING(pad_left_paddle1, "b", "Input",
+                      "Guest button of the upper left paddle (Xbox Elite P3)")
+    .allowed({"a", "b", "x", "y", "lb", "rb", "back", "start", "ls", "rs", "up", "down", "left",
+              "right", "guide", "none"})
+    .lifecycle(rex::cvar::Lifecycle::kRequiresRestart);
+REXCVAR_DEFINE_STRING(pad_right_paddle2, "x", "Input",
+                      "Guest button of the lower right paddle (Xbox Elite P2)")
+    .allowed({"a", "b", "x", "y", "lb", "rb", "back", "start", "ls", "rs", "up", "down", "left",
+              "right", "guide", "none"})
+    .lifecycle(rex::cvar::Lifecycle::kRequiresRestart);
+REXCVAR_DEFINE_STRING(pad_left_paddle2, "a", "Input",
+                      "Guest button of the lower left paddle (Xbox Elite P4)")
+    .allowed({"a", "b", "x", "y", "lb", "rb", "back", "start", "ls", "rs", "up", "down", "left",
+              "right", "guide", "none"})
+    .lifecycle(rex::cvar::Lifecycle::kRequiresRestart);
+REXCVAR_DEFINE_STRING(pad_touchpad, "guide", "Input",
+                      "Guest button of the touchpad click (PlayStation pads)")
+    .allowed({"a", "b", "x", "y", "lb", "rb", "back", "start", "ls", "rs", "up", "down", "left",
+              "right", "guide", "none"})
+    .lifecycle(rex::cvar::Lifecycle::kRequiresRestart);
 
 namespace rex::input::sdl {
 
@@ -40,6 +89,107 @@ constexpr uint32_t kRumbleDurationMs = 0xFFFF;
 // The probe's right stick X alternates between 0 and this, far inside any stick deadzone.
 constexpr int16_t kProbeValue = 256;
 constexpr uint64_t kProbeWindowNs = 5'000'000'000;
+
+// SDL_GamepadButton values up to the touchpad click; newer SDL buttons (Misc2 and on) are
+// not mapped.
+constexpr uint32_t kSdlButtonCount = SDL_GAMEPAD_BUTTON_TOUCHPAD + 1;
+
+// The guest buttons of SDL's standard buttons, in SDL_GamepadButton order.
+constexpr std::array<uint16_t, 15> kStandardButtons = {
+    X_INPUT_GAMEPAD_A,          X_INPUT_GAMEPAD_B,
+    X_INPUT_GAMEPAD_X,          X_INPUT_GAMEPAD_Y,
+    X_INPUT_GAMEPAD_BACK,       X_INPUT_GAMEPAD_GUIDE,
+    X_INPUT_GAMEPAD_START,      X_INPUT_GAMEPAD_LEFT_THUMB,
+    X_INPUT_GAMEPAD_RIGHT_THUMB, X_INPUT_GAMEPAD_LEFT_SHOULDER,
+    X_INPUT_GAMEPAD_RIGHT_SHOULDER, X_INPUT_GAMEPAD_DPAD_UP,
+    X_INPUT_GAMEPAD_DPAD_DOWN,  X_INPUT_GAMEPAD_DPAD_LEFT,
+    X_INPUT_GAMEPAD_DPAD_RIGHT,
+};
+static_assert(SDL_GAMEPAD_BUTTON_SOUTH == 0);
+static_assert(SDL_GAMEPAD_BUTTON_DPAD_RIGHT == 14);
+static_assert(SDL_GAMEPAD_BUTTON_MISC1 == 15 && SDL_GAMEPAD_BUTTON_TOUCHPAD == 20);
+
+// A guest button by its cvar name (pad_misc1 and the paddles).
+uint16_t GuestButtonNamed(const std::string& name) {
+  static const std::array<std::pair<const char*, uint16_t>, 15> kNames = {{
+      {"a", X_INPUT_GAMEPAD_A},
+      {"b", X_INPUT_GAMEPAD_B},
+      {"x", X_INPUT_GAMEPAD_X},
+      {"y", X_INPUT_GAMEPAD_Y},
+      {"lb", X_INPUT_GAMEPAD_LEFT_SHOULDER},
+      {"rb", X_INPUT_GAMEPAD_RIGHT_SHOULDER},
+      {"back", X_INPUT_GAMEPAD_BACK},
+      {"start", X_INPUT_GAMEPAD_START},
+      {"ls", X_INPUT_GAMEPAD_LEFT_THUMB},
+      {"rs", X_INPUT_GAMEPAD_RIGHT_THUMB},
+      {"up", X_INPUT_GAMEPAD_DPAD_UP},
+      {"down", X_INPUT_GAMEPAD_DPAD_DOWN},
+      {"left", X_INPUT_GAMEPAD_DPAD_LEFT},
+      {"right", X_INPUT_GAMEPAD_DPAD_RIGHT},
+      {"guide", X_INPUT_GAMEPAD_GUIDE},
+  }};
+  for (const auto& [text, button] : kNames) {
+    if (name == text) {
+      return button;
+    }
+  }
+  return 0;
+}
+
+// The SDL driver that opened a joystick: byte 14 of its GUID (SDL_joystick.c, the
+// SDL_IsJoystick* helpers); DirectInput GUIDs have 0 there.
+std::string JoystickDriverName(const SDL_GUID& guid) {
+  switch (guid.data[14]) {
+    case 'x':
+      return "xinput";
+    case 'r':
+      return "rawinput";
+    case 'w':
+      return "wgi";
+    case 'g':
+      return "gameinput";
+    case 'h':
+      return "hidapi";
+    case 'v':
+      return "virtual";
+    case 'm':
+      return "mfi";
+    case 0:
+      return "dinput";
+    default:
+      return fmt::format("0x{:02X}", guid.data[14]);
+  }
+}
+
+const char* ConnectionName(SDL_JoystickConnectionState state) {
+  switch (state) {
+    case SDL_JOYSTICK_CONNECTION_WIRED:
+      return "wired";
+    case SDL_JOYSTICK_CONNECTION_WIRELESS:
+      return "wireless";
+    case SDL_JOYSTICK_CONNECTION_UNKNOWN:
+      return "unknown";
+    default:
+      return "invalid";
+  }
+}
+
+const char* PowerName(SDL_PowerState state) {
+  switch (state) {
+    case SDL_POWERSTATE_ON_BATTERY:
+      return "battery";
+    case SDL_POWERSTATE_NO_BATTERY:
+      return "no_battery";
+    case SDL_POWERSTATE_CHARGING:
+      return "charging";
+    case SDL_POWERSTATE_CHARGED:
+      return "charged";
+    case SDL_POWERSTATE_UNKNOWN:
+      return "unknown";
+    default:
+      return "error";
+  }
+}
 
 }  // namespace
 
@@ -62,6 +212,13 @@ struct SDLInputDriver::LatencyProbe {
   std::vector<double> update_gaps, pump_waits, read_waits, ages, read_gaps;
   uint64_t last_read_ns = 0;
   uint64_t window_start_ns = 0;
+  // What the driver sent to the virtual pad (its Rumble and RumbleTriggers callbacks; SDL
+  // calls them only when the values change): changes in the window, the largest values, and
+  // the last ones, each as left << 16 | right.
+  uint32_t rumble_changes = 0, trigger_changes = 0;
+  uint32_t rumble_max_left = 0, rumble_max_right = 0, trigger_max_left = 0,
+           trigger_max_right = 0;
+  uint32_t rumble_last = 0, trigger_last = 0;
 
   static void SDLCALL Update(void* userdata) {
     auto* probe = static_cast<LatencyProbe*>(userdata);
@@ -73,6 +230,38 @@ struct SDLInputDriver::LatencyProbe {
         probe->update_gaps.push_back(double(now - last) / 1e6);
       }
     }
+  }
+
+  static bool SDLCALL Rumble(void* userdata, Uint16 low, Uint16 high) {
+    auto* probe = static_cast<LatencyProbe*>(userdata);
+    std::lock_guard lock(probe->mutex);
+    ++probe->rumble_changes;
+    probe->rumble_max_left = std::max<uint32_t>(probe->rumble_max_left, low);
+    probe->rumble_max_right = std::max<uint32_t>(probe->rumble_max_right, high);
+    probe->rumble_last = uint32_t(low) << 16 | high;
+    return true;
+  }
+
+  static bool SDLCALL RumbleTriggers(void* userdata, Uint16 left, Uint16 right) {
+    auto* probe = static_cast<LatencyProbe*>(userdata);
+    std::lock_guard lock(probe->mutex);
+    ++probe->trigger_changes;
+    probe->trigger_max_left = std::max<uint32_t>(probe->trigger_max_left, left);
+    probe->trigger_max_right = std::max<uint32_t>(probe->trigger_max_right, right);
+    probe->trigger_last = uint32_t(left) << 16 | right;
+    return true;
+  }
+
+  // The rumble part of a summary; clears the window's counts and maxima. Under mutex.
+  std::string RumbleSummary() {
+    std::string text = fmt::format(
+        "rumble changes={} max={},{} last={},{}; trigger rumble changes={} max={},{} last={},{}",
+        rumble_changes, rumble_max_left, rumble_max_right, rumble_last >> 16, rumble_last & 0xFFFF,
+        trigger_changes, trigger_max_left, trigger_max_right, trigger_last >> 16,
+        trigger_last & 0xFFFF);
+    rumble_changes = trigger_changes = 0;
+    rumble_max_left = rumble_max_right = trigger_max_left = trigger_max_right = 0;
+    return text;
   }
 
   static std::string Summary(std::vector<double>& values) {
@@ -108,7 +297,30 @@ X_STATUS SDLInputDriver::Setup() {
     return X_STATUS_UNSUCCESSFUL;
   }
 
+  // In SDL_GamepadButton order from Misc1.
+  extra_buttons_ = {GuestButtonNamed(REXCVAR_GET(pad_misc1)),
+                    GuestButtonNamed(REXCVAR_GET(pad_right_paddle1)),
+                    GuestButtonNamed(REXCVAR_GET(pad_left_paddle1)),
+                    GuestButtonNamed(REXCVAR_GET(pad_right_paddle2)),
+                    GuestButtonNamed(REXCVAR_GET(pad_left_paddle2)),
+                    GuestButtonNamed(REXCVAR_GET(pad_touchpad))};
   return X_STATUS_SUCCESS;
+}
+
+void SDLInputDriver::ApplyDriverHints() {
+  // Set before SDL_INIT_GAMEPAD: the drivers read them as they start
+  // (docs/analysis/modern-gamepads.md, "SDL drivers on Windows").
+  const std::string mode = REXCVAR_GET(sdl_joystick_driver);
+  if (mode == "rawinput") {
+    SDL_SetHint(SDL_HINT_JOYSTICK_RAWINPUT, "1");
+  } else if (mode == "wgi") {
+    // With XInput on, WGI leaves XInput devices to it; with DirectInput on, DirectInput
+    // would claim them first.
+    SDL_SetHint(SDL_HINT_JOYSTICK_WGI, "1");
+    SDL_SetHint(SDL_HINT_XINPUT_ENABLED, "0");
+    SDL_SetHint(SDL_HINT_JOYSTICK_DIRECTINPUT, "0");
+  }
+  REXLOG_INFO("SDL joystick driver option: {}", mode);
 }
 
 void SDLInputDriver::OnWindowAvailable(rex::ui::Window* window) {
@@ -152,7 +364,10 @@ void SDLInputDriver::OnWindowAvailable(rex::ui::Window* window) {
       // started by the e2e harness need not have it.
       if (REXCVAR_GET(input_latency_probe)) {
         SDL_SetHint(SDL_HINT_JOYSTICK_ALLOW_BACKGROUND_EVENTS, "1");
+        background_events_ = true;
       }
+      ApplyDriverHints();
+      has_focus_ = attached_window_->HasFocus();
 
       // Initialize game controller subsystem
       if (!SDL_InitSubSystem(SDL_INIT_GAMEPAD)) {
@@ -181,6 +396,9 @@ void SDLInputDriver::OnWindowAvailable(rex::ui::Window* window) {
       if (REXCVAR_GET(input_latency_probe)) {
         StartLatencyProbe();
       }
+      if (REXCVAR_GET(input_sdl_thread)) {
+        StartInputThread();
+      }
       REXLOG_INFO("SDL input driver initialized successfully");
     });
   }
@@ -192,6 +410,12 @@ void SDLInputDriver::OnClosing(rex::ui::UIEvent&) {
     if (sdl_pumpevents_queued_) {
       attached_window_->app_context().CallInUIThreadSynchronous(
           [this]() { attached_window_->app_context().ExecutePendingFunctionsFromUIThread(); });
+    }
+    // The thread updates SDL's pads, so it ends before they close.
+    StopInputThread();
+    {
+      auto guard = DrainAndLock();
+      StopTriggerRumbleLocked();
     }
     StopLatencyProbe();
     for (auto& controller : controllers_) {
@@ -210,9 +434,61 @@ void SDLInputDriver::OnClosing(rex::ui::UIEvent&) {
   }
 }
 
-void SDLInputDriver::OnLostFocus(rex::ui::UISetupEvent&) {}
+void SDLInputDriver::OnLostFocus(rex::ui::UISetupEvent&) {
+  has_focus_ = false;
+  if (background_events_) {
+    REXLOG_INFO("SDL input: the window lost focus; pads are still read");
+    return;
+  }
+  REXLOG_INFO("SDL input: the window lost focus; trigger rumble stops");
+  if (SDL_Gamepad_initialized_) {
+    auto guard = DrainAndLock();
+    StopTriggerRumbleLocked();
+  }
+}
 
-void SDLInputDriver::OnGotFocus(rex::ui::UISetupEvent&) {}
+void SDLInputDriver::OnGotFocus(rex::ui::UISetupEvent&) {
+  has_focus_ = true;
+  REXLOG_INFO("SDL input: the window has focus");
+}
+
+void SDLInputDriver::StopVibration() {
+  vibration_stopped_ = true;
+  if (!SDL_Gamepad_initialized_) {
+    return;
+  }
+  // The guest still runs (ReXApp::OnClosing calls this before TerminateTitle) and holds the
+  // lock only briefly; the wait is bounded anyway, since the process exits right after.
+  std::unique_lock<std::mutex> lock(controllers_mutex_, std::defer_lock);
+  for (int attempt = 0; attempt < 100 && !lock.try_lock(); ++attempt) {
+    std::this_thread::sleep_for(std::chrono::milliseconds(1));
+  }
+  if (!lock.owns_lock()) {
+    REXLOG_WARN("SDL input: the pads are busy; rumble not stopped at exit");
+    return;
+  }
+  for (auto& controller : controllers_) {
+    SDL_RumbleGamepad(controller.sdl, 0, 0, 0);
+    if (controller.trigger_rumble_sent) {
+      SDL_RumbleGamepadTriggers(controller.sdl, 0, 0, 0);
+      controller.trigger_rumble_sent = false;
+    }
+  }
+  REXLOG_INFO("SDL input: rumble stopped at exit");
+  if (probe_) {
+    std::lock_guard probe_lock(probe_->mutex);
+    REXLOG_INFO("SDL latency probe at exit: {}", probe_->RumbleSummary());
+  }
+}
+
+void SDLInputDriver::StopTriggerRumbleLocked() {
+  for (auto& controller : controllers_) {
+    if (controller.trigger_rumble_sent) {
+      SDL_RumbleGamepadTriggers(controller.sdl, 0, 0, 0);
+      controller.trigger_rumble_sent = false;
+    }
+  }
+}
 
 void SDLInputDriver::EnumerateDevices(std::vector<DeviceInfo>& out) {
   // Polling can start before the window exists and the subsystems are up.
@@ -294,6 +570,8 @@ X_RESULT SDLInputDriver::GetDeviceState(DeviceId id, X_INPUT_STATE* out_state) {
     // Simulate an "untouched" controller. When we become active again the
     // pressed buttons aren't lost and will be visible again.
     std::memset(&out_state->gamepad, 0, sizeof(out_state->gamepad));
+  } else {
+    ShapeGamepad(out_state->gamepad, CurrentPadSettings());
   }
   return X_ERROR_SUCCESS;
 }
@@ -301,22 +579,61 @@ X_RESULT SDLInputDriver::GetDeviceState(DeviceId id, X_INPUT_STATE* out_state) {
 X_RESULT SDLInputDriver::SetDeviceVibration(DeviceId id, X_INPUT_VIBRATION* vibration) {
   assert(sdl_events_initialized_ && SDL_Gamepad_initialized_);
 
+  if (vibration_stopped_) {
+    return X_ERROR_SUCCESS;
+  }
+
   QueueControllerUpdate();
 
   auto guard = DrainAndLock();
 
+  // Again under the lock: StopVibration may have run while this call waited for it.
+  if (vibration_stopped_) {
+    return X_ERROR_SUCCESS;
+  }
   auto controller = FindController(id);
   if (!controller) {
     return X_ERROR_DEVICE_NOT_CONNECTED;
   }
 
+  const PadSettings settings = CurrentPadSettings();
+  const uint16_t left_motor = vibration->left_motor_speed;
+  const uint16_t right_motor = vibration->right_motor_speed;
+
+  // Trigger rumble (pad_trigger_rumble) from the guest's motors and the triggers it read.
+  // It is zero while the motors are, while an overlay takes the input (is_active), and with
+  // the option off; also without focus, where SDL stops reading the pads and the triggers'
+  // last values would go stale (unless background events are on, as for the probe). Nothing
+  // is sent to a pad that never had it.
+  if (controller->trigger_rumble_capable &&
+      (settings.trigger_rumble || controller->trigger_rumble_sent)) {
+    uint16_t left_trigger = 0;
+    uint16_t right_trigger = 0;
+    if (settings.trigger_rumble && (has_focus_ || background_events_) && is_active()) {
+      std::tie(left_trigger, right_trigger) = DeriveTriggerRumble(
+          left_motor, right_motor, controller->user_left_trigger, controller->user_right_trigger,
+          settings.trigger_rumble_strength);
+    }
+    SDL_RumbleGamepadTriggers(controller->sdl, left_trigger, right_trigger, kRumbleDurationMs);
+    controller->trigger_rumble_sent = left_trigger || right_trigger;
+  }
+
   // XInput vibration holds until the guest changes it, but SDL rumble expires,
   // and a zero duration expires on the next SDL_UpdateJoysticks. Arm it for
   // SDL's maximum instead; each call cancels the previous effect anyway.
-  return SDL_RumbleGamepad(controller->sdl, vibration->left_motor_speed,
-                           vibration->right_motor_speed, kRumbleDurationMs)
+  return SDL_RumbleGamepad(controller->sdl, ScaleMotor(left_motor, settings.rumble_strength),
+                           ScaleMotor(right_motor, settings.rumble_strength), kRumbleDurationMs)
              ? X_ERROR_SUCCESS
              : X_ERROR_FUNCTION_FAILED;
+}
+
+void SDLInputDriver::SetDeviceUserState(DeviceId id, const X_INPUT_GAMEPAD& gamepad) {
+  auto guard = DrainAndLock();
+  auto controller = FindController(id);
+  if (controller) {
+    controller->user_left_trigger = gamepad.left_trigger;
+    controller->user_right_trigger = gamepad.right_trigger;
+  }
 }
 
 X_RESULT SDLInputDriver::GetDeviceKeystroke(DeviceId id, uint32_t flags,
@@ -538,6 +855,8 @@ void SDLInputDriver::OnControllerDeviceAddedLocked(const SDL_Event& event) {
   state.sdl = controller;
   state.id = AllocateDeviceId();
   state.probe = probe_ && event.gdevice.which == probe_->id;
+  state.trigger_rumble_capable = SDL_GetBooleanProperty(
+      SDL_GetGamepadProperties(controller), SDL_PROP_GAMEPAD_CAP_TRIGGER_RUMBLE_BOOLEAN, false);
   state.state_changed = true;  // XInput starts with packet_number = 1
   UpdateXCapabilities(state);
   controllers_.push_back(state);
@@ -547,6 +866,50 @@ void SDLInputDriver::OnControllerDeviceAddedLocked(const SDL_Event& event) {
 
   REXLOG_INFO("SDL OnControllerDeviceAdded: connection order {}, device {}.", ordinal,
               static_cast<uint64_t>(state.id));
+  LogPadReport(state);
+}
+
+void SDLInputDriver::LogPadReport(const ControllerState& state) const {
+  // One line per pad for the owner's logs (docs/running.md): what SDL exposes of it under
+  // the chosen sdl_joystick_driver.
+  SDL_Gamepad* gamepad = state.sdl;
+  SDL_Joystick* joystick = SDL_GetGamepadJoystick(gamepad);
+  const SDL_GUID guid = SDL_GetJoystickGUID(joystick);
+  char guid_text[33] = {};
+  SDL_GUIDToString(guid, guid_text, static_cast<int>(sizeof(guid_text)));
+  const SDL_PropertiesID properties = SDL_GetGamepadProperties(gamepad);
+  auto capability = [&](const char* name) {
+    return SDL_GetBooleanProperty(properties, name, false) ? 1 : 0;
+  };
+  int paddles = 0;
+  for (auto button : {SDL_GAMEPAD_BUTTON_RIGHT_PADDLE1, SDL_GAMEPAD_BUTTON_LEFT_PADDLE1,
+                      SDL_GAMEPAD_BUTTON_RIGHT_PADDLE2, SDL_GAMEPAD_BUTTON_LEFT_PADDLE2}) {
+    paddles += SDL_GamepadHasButton(gamepad, button) ? 1 : 0;
+  }
+  int battery = -1;
+  const SDL_PowerState power = SDL_GetGamepadPowerInfo(gamepad, &battery);
+  const char* name = SDL_GetGamepadName(gamepad);
+  const char* path = SDL_GetGamepadPath(gamepad);
+  const char* type = SDL_GetGamepadStringForType(SDL_GetGamepadType(gamepad));
+  REXLOG_INFO(
+      "SDL pad report: device={} name=\"{}\" type={} vendor={:04X} product={:04X} driver={} "
+      "connection={} rumble={} trigger_rumble={} rgb_led={} mono_led={} player_led={} gyro={} "
+      "accel={} paddles={} misc1={} touchpad_button={} touchpads={} power={} battery={} "
+      "path=\"{}\" guid={}",
+      static_cast<uint64_t>(state.id), name ? name : "", type ? type : "unknown",
+      SDL_GetGamepadVendor(gamepad), SDL_GetGamepadProduct(gamepad), JoystickDriverName(guid),
+      ConnectionName(SDL_GetGamepadConnectionState(gamepad)),
+      capability(SDL_PROP_GAMEPAD_CAP_RUMBLE_BOOLEAN),
+      capability(SDL_PROP_GAMEPAD_CAP_TRIGGER_RUMBLE_BOOLEAN),
+      capability(SDL_PROP_GAMEPAD_CAP_RGB_LED_BOOLEAN),
+      capability(SDL_PROP_GAMEPAD_CAP_MONO_LED_BOOLEAN),
+      capability(SDL_PROP_GAMEPAD_CAP_PLAYER_LED_BOOLEAN),
+      SDL_GamepadHasSensor(gamepad, SDL_SENSOR_GYRO) ? 1 : 0,
+      SDL_GamepadHasSensor(gamepad, SDL_SENSOR_ACCEL) ? 1 : 0, paddles,
+      SDL_GamepadHasButton(gamepad, SDL_GAMEPAD_BUTTON_MISC1) ? 1 : 0,
+      SDL_GamepadHasButton(gamepad, SDL_GAMEPAD_BUTTON_TOUCHPAD) ? 1 : 0,
+      SDL_GetNumGamepadTouchpads(gamepad), PowerName(power), battery, path ? path : "",
+      guid_text);
 }
 
 void SDLInputDriver::OnControllerDeviceRemovedLocked(const SDL_Event& event) {
@@ -605,42 +968,18 @@ void SDLInputDriver::OnControllerDeviceAxisMotionLocked(const SDL_Event& event) 
   controllers_.at(*idx).state_changed = true;
 }
 
-void SDLInputDriver::OnControllerDeviceButtonChangedLocked(const SDL_Event& event) {
-  // Define a lookup table to map between SDL and XInput button codes.
-  // These need to be in the order of the SDL_GamepadButton enum.
-  static constexpr std::array<std::underlying_type<X_INPUT_GAMEPAD_BUTTON>::type, 21>
-      xbutton_lookup = {
-          // Standard buttons:
-          X_INPUT_GAMEPAD_A,
-          X_INPUT_GAMEPAD_B,
-          X_INPUT_GAMEPAD_X,
-          X_INPUT_GAMEPAD_Y,
-          X_INPUT_GAMEPAD_BACK,
-          X_INPUT_GAMEPAD_GUIDE,
-          X_INPUT_GAMEPAD_START,
-          X_INPUT_GAMEPAD_LEFT_THUMB,
-          X_INPUT_GAMEPAD_RIGHT_THUMB,
-          X_INPUT_GAMEPAD_LEFT_SHOULDER,
-          X_INPUT_GAMEPAD_RIGHT_SHOULDER,
-          X_INPUT_GAMEPAD_DPAD_UP,
-          X_INPUT_GAMEPAD_DPAD_DOWN,
-          X_INPUT_GAMEPAD_DPAD_LEFT,
-          X_INPUT_GAMEPAD_DPAD_RIGHT,
-          // There are additional buttons only available on some controllers.
-          // For now just assign sensible defaults
-          // Misc:
-          X_INPUT_GAMEPAD_GUIDE,
-          // Xbox Elite paddles:
-          X_INPUT_GAMEPAD_Y,
-          X_INPUT_GAMEPAD_B,
-          X_INPUT_GAMEPAD_X,
-          X_INPUT_GAMEPAD_A,
-          // PS touchpad button
-          X_INPUT_GAMEPAD_GUIDE,
-      };
-  static_assert(SDL_GAMEPAD_BUTTON_SOUTH == 0);
-  static_assert(SDL_GAMEPAD_BUTTON_DPAD_RIGHT == 14);
+uint16_t SDLInputDriver::GuestButton(uint32_t sdl_button) const {
+  if (sdl_button < kStandardButtons.size()) {
+    return kStandardButtons[sdl_button];
+  }
+  if (sdl_button < kSdlButtonCount) {
+    // Misc1, the paddles and the touchpad click (pad_misc1, pad_right_paddle1, ...).
+    return extra_buttons_[sdl_button - kStandardButtons.size()];
+  }
+  return 0;
+}
 
+void SDLInputDriver::OnControllerDeviceButtonChangedLocked(const SDL_Event& event) {
   auto idx = GetControllerIndexFromInstanceID(event.gdevice.which);
   if (!idx) {
     // The pad can be removed between the event being posted and drained.
@@ -648,22 +987,29 @@ void SDLInputDriver::OnControllerDeviceButtonChangedLocked(const SDL_Event& even
   }
   auto& controller = controllers_.at(*idx);
 
-  uint16_t xbuttons = controller.state.gamepad.buttons;
-  // Lookup the XInput button code.
-  if (event.gbutton.button >= xbutton_lookup.size()) {
+  if (event.gbutton.button >= kSdlButtonCount) {
     // A newer SDL Version may have added new buttons.
     REXLOG_INFO("SDL HID: Unknown button was pressed: {}.", event.gbutton.button);
     return;
   }
-  auto xbutton = xbutton_lookup.at(event.gbutton.button);
-  // Pressed or released?
+  const uint32_t bit = uint32_t(1) << event.gbutton.button;
   if (event.gbutton.down) {
-    if (xbutton == X_INPUT_GAMEPAD_GUIDE && !REXCVAR_GET(guide_button)) {
-      return;
-    }
-    xbuttons |= xbutton;
+    controller.sdl_buttons |= bit;
   } else {
-    xbuttons &= ~xbutton;
+    controller.sdl_buttons &= ~bit;
+  }
+  // The union of the held buttons' guest buttons, so a guest button held through two SDL
+  // buttons (a paddle mapped to A, and A) stays held until both are released. Guide only
+  // with guide_button.
+  uint16_t xbuttons = 0;
+  for (uint32_t button = 0; button < kSdlButtonCount; ++button) {
+    if (controller.sdl_buttons & (uint32_t(1) << button)) {
+      const uint16_t xbutton = GuestButton(button);
+      if (xbutton == X_INPUT_GAMEPAD_GUIDE && !REXCVAR_GET(guide_button)) {
+        continue;
+      }
+      xbuttons |= xbutton;
+    }
   }
   controller.state.gamepad.buttons = xbuttons;
   controller.state_changed = true;
@@ -759,6 +1105,10 @@ void SDLInputDriver::StartLatencyProbe() {
   desc.name = "FM4 latency probe";
   desc.userdata = probe.get();
   desc.Update = LatencyProbe::Update;
+  // Rumble and trigger rumble callbacks give the pad those capabilities, so the driver's
+  // rumble paths can be checked without a physical pad.
+  desc.Rumble = LatencyProbe::Rumble;
+  desc.RumbleTriggers = LatencyProbe::RumbleTriggers;
   probe->id = SDL_AttachVirtualJoystick(&desc);
   if (!probe->id) {
     REXLOG_ERROR("SDL latency probe: cannot attach a virtual gamepad: {}", SDL_GetError());
@@ -794,9 +1144,50 @@ void SDLInputDriver::StopLatencyProbe() {
   if (probe_->thread.joinable()) {
     probe_->thread.join();
   }
+  {
+    std::lock_guard lock(probe_->mutex);
+    REXLOG_INFO("SDL latency probe at shutdown: {}", probe_->RumbleSummary());
+  }
   SDL_CloseJoystick(probe_->joystick);
   SDL_DetachVirtualJoystick(probe_->id);
   probe_.reset();
+}
+
+void SDLInputDriver::StartInputThread() {
+  // SDL's event loop stops updating the pads while the thread does (SDL documents
+  // SDL_UpdateGamepads as safe from any thread). COM is initialised for the drivers that
+  // use it (DirectInput, Windows.Gaming.Input); see docs/analysis/modern-gamepads.md,
+  // "Updating SDL off the UI thread".
+  SDL_SetHint(SDL_HINT_AUTO_UPDATE_JOYSTICKS, "0");
+  input_thread_stop_ = false;
+  // Set before the thread exists: a guest read in between skips one queued pump, and the
+  // thread's first update follows at once.
+  input_thread_running_ = true;
+  input_thread_ = std::thread([this]() {
+#if REX_PLATFORM_WIN32
+    const HRESULT com = CoInitializeEx(nullptr, COINIT_MULTITHREADED);
+#endif
+    SDL_SetCurrentThreadPriority(SDL_THREAD_PRIORITY_HIGH);
+    while (!input_thread_stop_.load(std::memory_order_relaxed)) {
+      SDL_UpdateGamepads();
+      SDL_DelayNS(1'000'000);
+    }
+#if REX_PLATFORM_WIN32
+    if (SUCCEEDED(com)) {
+      CoUninitialize();
+    }
+#endif
+  });
+  REXLOG_INFO("SDL input thread: pads updated every millisecond off the UI thread");
+}
+
+void SDLInputDriver::StopInputThread() {
+  if (!input_thread_running_.exchange(false)) {
+    return;
+  }
+  input_thread_stop_ = true;
+  input_thread_.join();
+  SDL_ResetHint(SDL_HINT_AUTO_UPDATE_JOYSTICKS);
 }
 
 void SDLInputDriver::ObserveProbeReadLocked(ControllerState& controller) {
@@ -822,10 +1213,10 @@ void SDLInputDriver::ObserveProbeReadLocked(ControllerState& controller) {
   }
   REXLOG_INFO(
       "SDL latency probe (ms): joystick update gaps {}; new value to update {}; update to "
-      "guest read {}; age at read {}; guest read gaps {}",
+      "guest read {}; age at read {}; guest read gaps {}; {}",
       LatencyProbe::Summary(probe.update_gaps), LatencyProbe::Summary(probe.pump_waits),
       LatencyProbe::Summary(probe.read_waits), LatencyProbe::Summary(probe.ages),
-      LatencyProbe::Summary(probe.read_gaps));
+      LatencyProbe::Summary(probe.read_gaps), probe.RumbleSummary());
   probe.update_gaps.clear();
   probe.pump_waits.clear();
   probe.read_waits.clear();
@@ -835,6 +1226,10 @@ void SDLInputDriver::ObserveProbeReadLocked(ControllerState& controller) {
 }
 
 void SDLInputDriver::QueueControllerUpdate() {
+  // The input thread updates the pads itself, and SDL's event loop no longer does.
+  if (input_thread_running_.load(std::memory_order_relaxed)) {
+    return;
+  }
   // Pump SDL events to ensure controller state is up to date.
   bool is_queued = false;
   sdl_pumpevents_queued_.compare_exchange_strong(is_queued, true);
