@@ -229,6 +229,7 @@
 !/work/fm4-rex/passes/gtao.hlsl
 !/work/fm4-rex/passes/motion.hlsl
 !/work/fm4-rex/passes/taa.hlsl
+!/work/fm4-rex/passes/fsr.hlsl
 !/work/fm4-rex/passes/scene_pattern.hlsl
 !/work/fm4-rex/passes/windshield.hlsl
 !/work/fm4-rex/passes/passes.toml

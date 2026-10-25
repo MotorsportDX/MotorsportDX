@@ -33,9 +33,12 @@ THIRDPARTY_SUBMODULES = ('cli11','libmspack','FFmpeg','tomlplusplus','simde','xx
 FFX_URL = 'https://github.com/GPUOpen-LibrariesAndSDKs/FidelityFX-SDK'
 FFX_TAG = 'v1.1.4'
 FFX_REV = 'c6efa6bf7f2027b3ec94f28578bb5965eabb9e55'
-FFX_PATHS = ('/LICENSE.txt','/sdk/LICENSE.txt','/sdk/CMakeLists.txt','/sdk/toolchain.cmake',
-                 '/sdk/include/','/sdk/src/components/fsr3upscaler/','/sdk/src/backends/dx12/',
-                 '/sdk/src/backends/shared/','/sdk/src/shared/','/sdk/tools/binary_store/')
+# /.gitattributes: the repository's line endings (eol=lf), which a checkout from the mirror
+# bundle needs to match one from GitHub.
+FFX_PATHS = ('/.gitattributes','/LICENSE.txt','/sdk/LICENSE.txt','/sdk/CMakeLists.txt',
+             '/sdk/toolchain.cmake','/sdk/include/','/sdk/src/components/fsr3upscaler/',
+             '/sdk/src/backends/dx12/','/sdk/src/backends/shared/','/sdk/src/shared/',
+             '/sdk/tools/binary_store/')
 NOTICES = REPO/'outputs/FM4-source-control/third-party-notices'
 RESOLVE_SHADERS = [f'resolve_full_{bits}bpp{suffix}' for bits in (8,16,32,64) for suffix in ('','_scaled')]
 # The fast copy of 32bpp 4x MSAA surfaces with a per-pixel EDRAM address, in place of upstream's
@@ -574,6 +577,18 @@ def build_game(root,fxc,jobs,flavor=(),fsr=None):
         launcher_tests(root)
     print('Build and instruction tests passed. Run with Build.ps1 -Action run using the same -BuildRoot.')
 
+def runtime_fsr(build):
+    """The FidelityFX SDK checkout of a runtime build folder configured with REX_FSR on, else
+    None."""
+    cache=Path(build)/'CMakeCache.txt'
+    if not cache.is_file():
+        return None
+    text=cache.read_text(errors='replace')
+    if not re.search(r'^REX_FSR:BOOL=ON$',text,re.M):
+        return None
+    match=re.search(r'^REX_FSR_SDK_DIR:PATH=(.+)$',text,re.M)
+    return Path(match.group(1).strip()) if match else None
+
 def post_pass_tests(root,jobs):
     """CPU tests of the runtime's post passes (docs/analysis/post-pass-framework.md) and of the
     shader mods, no GPU: the scene camera math, the GTAO passes of work/fm4-rex/passes on WARP
@@ -590,8 +605,13 @@ def post_pass_tests(root,jobs):
             destination=source/Path(entry['path']).relative_to('work/fm4-rex/tests')
             destination.parent.mkdir(parents=True,exist_ok=True)
             copy_source(REPO/entry['path'],destination)
+    # With a runtime built with REX_FSR, the WARP tests run FSR's pass too (the runtime's
+    # fsr.cpp and the FidelityFX SDK's libraries, built again for the tests).
+    sdk=runtime_fsr(root/'runtime-build')
+    fsr=([f'-DREX_RUNTIME_SOURCE={(root/"runtime-source").as_posix()}']+
+         (['-DREX_FSR=ON',f'-DREX_FSR_SDK_DIR={sdk.as_posix()}'] if sdk else ['-DREX_FSR=OFF']))
     run(['cmake','-S',source,'-B',build,'-G','Ninja','-DCMAKE_BUILD_TYPE=Release',
-         '-DCMAKE_CXX_COMPILER=clang++',f'-DREX_HEADER_ROOT={root/"runtime-install/include"}'],
+         '-DCMAKE_CXX_COMPILER=clang++',f'-DREX_HEADER_ROOT={root/"runtime-install/include"}',*fsr],
         log=root/'logs/tests-configure.log')
     run(['cmake','--build',build,'--parallel',jobs,'--target','fm4_post_pass_camera_tests',
          'fm4_post_pass_shader_tests','fm4_shader_mod_tests','fm4_track_settings_tests',
@@ -604,6 +624,17 @@ def post_pass_tests(root,jobs):
     run([build/'fm4_draw_scale_tests.exe'],cwd=build,log=root/'logs/draw-scale-tests.log')
     run([build/'fm4_post_pass_shader_tests.exe',root/'runtime-source/src/graphics/d3d12/post_pass.hlsli',
          PASSES_DIRECTORY,'GTAO_RADIUS=1'],cwd=build,log=root/'logs/post-pass-shader-tests.log')
+    # FSR's checks run on the first hardware adapter (WARP crashes in FSR's shading change
+    # pyramid pass), not while the game runs, so a measurement there stays undisturbed.
+    if sdk:
+        if subprocess.run(['tasklist','/FI','IMAGENAME eq fm4_rex.exe'],capture_output=True,
+                          text=True).stdout.count('fm4_rex.exe'):
+            print('FSR post pass tests not run: fm4_rex.exe is running.')
+        else:
+            run([build/'fm4_post_pass_shader_tests.exe',
+                 root/'runtime-source/src/graphics/d3d12/post_pass.hlsli',PASSES_DIRECTORY,
+                 'GTAO_RADIUS=1','--hardware'],cwd=build,
+                log=root/'logs/post-pass-shader-tests-hardware.log')
     run([build/'fm4_shader_mod_tests.exe',root/'runtime-source/src/graphics/d3d12/shader_override.hlsli',
          LOOK_DIRECTORY,';'.join(look_defines(look_knobs(DEFAULT_LOOK)))],cwd=build,
         log=root/'logs/shader-mod-tests.log')
@@ -700,10 +731,15 @@ SUN_LIMIT=1200
 # taa_point=1 moves TAA to the scene_color point (TAA_POINT): before the game's post chain, its
 # output written back into the scene, with the occlusion's own temporal filter; the look's
 # sharpening then stays in the final combine, after TAA.
+# aa=fsr (with taa above 0): AMD FSR 3.1's native anti-aliasing at the scene_color point in
+# place of TAA (FSR, work/fm4-rex/passes/fsr.hlsl, docs/analysis/fsr-plan.md), with the scene
+# jittered in every frame and the look's sharpening as FSR's RCAS (FSR_SHARPNESS, none in the
+# final combine); a runtime built without FSR (Build.ps1 -Fsr) runs TAA at that point instead.
+# aa=taa, the default, is TAA.
 # windshield above 0: the glass of the cockpit camera's windshield and side windows, which the
 # title does not draw there (work/fm4-rex/passes/windshield.hlsl, docs/analysis/windshield.md):
 # the strength of its tint, dashboard reflection, glare and dust (WINDSHIELD), up to 2.
-LOOK_PASS_KNOBS=('taa','taa_point','windshield')
+LOOK_PASS_KNOBS=('taa','taa_point','aa','windshield')
 # Knobs that take a name instead of a number.
 LOOK_NAMES={'tonemap':{'filmic':0,'gt':1,'aces':2,'neutral':3}}
 # Knobs that edit the title's per-track lighting files instead of shaders (FM4_TRACK_SETTINGS,
@@ -800,6 +836,13 @@ def taa_scene_point(knobs):
         raise RuntimeError(f'taa_point is 0 (final) or 1 (scene_color), not {value!r}.')
     return value=='1'
 
+def aa_method(knobs):
+    """The aa knob: taa (the default) or fsr."""
+    value=knobs.get('aa','taa')
+    if value not in ('taa','fsr'):
+        raise RuntimeError(f'aa is taa or fsr, not {value!r}.')
+    return value
+
 def windshield_strength(knobs):
     """The windshield knob: 0 (off, the default) to 2."""
     value=float(knobs.get('windshield','0'))
@@ -810,7 +853,8 @@ def windshield_strength(knobs):
 def look_defines(knobs):
     """The shader_mod_defines of look knobs: NAME=VALUE with the hlsli names and numbers, and
     with taa the pass params TAA and TAA_SHARPEN (the look's sharpening, which then is 0), or at
-    the scene_color point (taa_point=1) TAA_POINT with the look's sharpening kept."""
+    the scene_color point (taa_point=1) TAA_POINT with the look's sharpening kept, or with
+    aa=fsr FSR at the scene_color point with the look's sharpening as FSR_SHARPNESS."""
     defines=[]
     for name,value in knobs.items():
         if name in LOOK_RUNTIME_KNOBS or name in LOOK_TRACK_KNOBS or name in LOOK_PASS_KNOBS:
@@ -825,7 +869,16 @@ def look_defines(knobs):
             raise RuntimeError(f'Unknown {name} {value!r}; use {", ".join(names)}.')
         defines.append(f'{LOOK_KNOBS[name]}={float(value)!r}')
     scene_point=taa_scene_point(knobs)
-    if taa_enabled(knobs) and scene_point:
+    fsr=aa_method(knobs)=='fsr'
+    if fsr and not taa_enabled(knobs):
+        raise RuntimeError('aa=fsr needs taa above 0 (the look turns temporal anti-aliasing on).')
+    if fsr:
+        # FSR at the scene_color point, the look's sharpening as its RCAS.
+        sharpen=float(knobs.get('sharpen','0'))
+        defines=[d for d in defines if not d.startswith('FM4_LOOK_SHARPEN=')]
+        defines+=['FM4_LOOK_SHARPEN=0.0','TAA=1','TAA_SHARPEN=0.0','TAA_POINT=1','FSR=1',
+                  f'FSR_SHARPNESS={sharpen!r}']
+    elif taa_enabled(knobs) and scene_point:
         defines+=['TAA=1','TAA_SHARPEN=0.0','TAA_POINT=1']
     elif taa_enabled(knobs):
         sharpen=float(knobs.get('sharpen','0'))
@@ -1252,7 +1305,9 @@ def info_overlay(cvars,env,look,quality,display=None):
         quality={0:'low',1:'medium',2:'high',3:'ultra'}.get(int(gtao['GTAO_QUALITY']),'high')
         lines.append(f"Ambient occlusion: GTAO, {applied}, radius {gtao['GTAO_RADIUS']:g} m, "
                      f'{quality}')
-    if dict(defines).get('TAA')=='1' and dict(defines).get('TAA_POINT')=='1':
+    if dict(defines).get('FSR')=='1':
+        lines.append(f"Anti-aliasing: FSR 3.1 before the post chain (scene_color), sharpen {float(dict(defines)['FSR_SHARPNESS']):g}, scene jittered every frame (TAA there in a runtime without FSR)")
+    elif dict(defines).get('TAA')=='1' and dict(defines).get('TAA_POINT')=='1':
         lines.append("Anti-aliasing: TAA before the post chain (scene_color), the look's sharpening, "
                      'scene jittered while the camera moves, a still one accumulated')
     elif dict(defines).get('TAA')=='1':
@@ -1559,6 +1614,7 @@ def launcher_test_options(root):
             {'native':True,'single_tile':True,'look':'original,taa=0'},
             {'native':True,'msaa':True},
             {'native':True,'look':'gt','frame_rate':240,'fixed_vblank':True},
+            {'native':True,'look':'pc,aa=fsr,sharpen=0.6','info':True},
             {'frame_rate':120,'vsync':'on'},
             {'native':True,'frame_rate':240,'vsync':'off'},
             {'native':False},

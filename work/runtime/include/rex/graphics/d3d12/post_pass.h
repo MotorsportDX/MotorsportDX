@@ -27,6 +27,13 @@
  * after one in which the consuming pass ran, while the scene camera moves and
  * the frames come fast enough (post_pass_jitter.h).
  *
+ * A pass of type "fsr" at the scene_color point runs AMD FSR 3.1's upscaler (fsr.h) on
+ * textures of the manifest: srv = [color, depth, motion vectors, reactive, composition], the
+ * last two optional, uav = [output]; its params FSR_SHARPNESS and FSR_DEBUG and the define
+ * FSR_DEPTH_NEAR (fsr.hlsl prepares the inputs). It records into the replayed command list
+ * through DeferredCommandList::D3DCallback. Without REX_FSR, or when its context cannot be
+ * created, the param FSR stays 0 (the manifest's TAA runs instead).
+ *
  * Params and defines come from shader_mod_defines by name, and shader_mod_set
  * changes them while running (params at once, defines with a recompile). With
  * shader_mod_hot_reload, a saved manifest or pass file is reloaded. Off unless
@@ -45,6 +52,7 @@
 #include <utility>
 #include <vector>
 
+#include <rex/graphics/d3d12/fsr.h>
 #include <rex/graphics/d3d12/post_pass_camera.h>
 #include <rex/graphics/d3d12/post_pass_jitter.h>
 #include <rex/graphics/d3d12/post_pass_layout.h>
@@ -153,6 +161,12 @@ class PostPasses {
     // host texture of the scene, which the game's next fetches of the scene
     // bind (the write-back; R10G10B10A2_UNORM, the scene's size).
     bool write_back = false;
+    // reactive_mark: the texture shader overrides write with xe_post_mark_reactive
+    // (R8_UNORM, the scene's size; one per manifest): bound in
+    // kPostPassReactiveMarkUAV and cleared at every swap while an override or mod file
+    // calls the function (ShaderOverrides::uses_reactive_mark), read by passes like any
+    // texture (FSR's reactive mask, fsr_prepare).
+    bool reactive_mark = false;
     // Usage by the passes.
     bool uav = false, rtv = false;
   };
@@ -161,6 +175,8 @@ class PostPasses {
     std::string name;
     Point point = Point::kSceneDepth;
     bool pixel = false;
+    // type = "fsr": FSR's upscaler (no shader).
+    bool fsr = false;
     std::string shader, entry;
     std::vector<std::pair<std::string, std::string>> defines;
     std::vector<Binding> srvs, uavs, rtvs;
@@ -211,6 +227,9 @@ class PostPasses {
     bool jitter = false;
     uint32_t jitter_phases = 8;
     std::vector<Condition> jitter_conditions;
+    // [jitter] every_frame_if: while it holds, the jitter of every frame, without the gate
+    // (FSR accumulates still pictures itself and expects the jitter in every frame).
+    std::vector<Condition> jitter_every_frame_conditions;
     std::vector<std::string> jitter_consumers;
     std::vector<uint64_t> jitter_exclude;
     // [jitter] min_motion and min_frame_rate: a number, or the param of that
@@ -234,6 +253,8 @@ class PostPasses {
     bool uses_scene_color = false, uses_previous_color = false, uses_previous_depth = false;
     bool uses_scene_stencil = false;
     bool uses_write_back = false;
+    // The reactive_mark texture, or UINT32_MAX.
+    uint32_t reactive_mark = UINT32_MAX;
     // The defines as compiled (after shader_mod_defines).
     std::vector<std::pair<std::string, std::string>> compiled_defines;
     std::vector<uint8_t> vertex_shader;
@@ -414,8 +435,16 @@ class PostPasses {
   bool RequestExternal(const ResolveGroup& group, ExternalKind kind, External& out);
   // False if the pass did not dispatch or draw (an input or output missing).
   bool RunPass(PassDesc& pass, D3D12_GPU_VIRTUAL_ADDRESS scene_constants);
+  // A pass of type "fsr" (constants: the point's scene constants).
+  bool RunFsr(PassDesc& pass, const post_pass::SceneConstants& constants);
+  // The value of the float param or define of that name, else fallback.
+  float NamedParam(const char* name, float fallback) const;
+  float NamedDefine(const char* name, float fallback) const;
   bool BindingSize(const Binding& binding, uint32_t& width, uint32_t& height) const;
   void CopyHistory();
+  // At the swap: binds and clears the reactive mark for the next frame's draws while an
+  // override writes it, else leaves a null view in its slot.
+  void UpdateReactiveMark();
   // Copies the write-back textures written at this frame's scene_color point
   // into the texture cache's host texture of the scene.
   void WriteBack();
@@ -574,6 +603,19 @@ class PostPasses {
   uint64_t write_back_frame_ = UINT64_MAX;
   TextureCache::WriteBackCounts write_back_counts_;
   bool warned_stencil_ = false;
+
+  // FSR (passes of type "fsr"): the context of the current sizes, those replaced (released
+  // once the GPU is past the submission), the last frame it ran in, and whether it failed
+  // (FSR then stays 0).
+  std::unique_ptr<FsrUpscaler> fsr_;
+  std::vector<std::pair<uint64_t, std::unique_ptr<FsrUpscaler>>> retired_fsr_;
+  uint64_t fsr_frame_ = UINT64_MAX;
+  bool fsr_failed_ = false;
+  bool warned_fsr_unavailable_ = false;
+  // The time from the previous swap to the last one.
+  double last_frame_seconds_ = 0.0;
+  // The resource bound in kPostPassReactiveMarkUAV (nullptr: a null view).
+  ID3D12Resource* reactive_mark_bound_ = nullptr;
 };
 
 }  // namespace rex::graphics::d3d12

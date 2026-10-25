@@ -99,6 +99,12 @@ double WindshieldStrength(const Pairs& knobs) {
   return value;
 }
 
+std::string AaMethod(const Pairs& knobs) {
+  const std::string value = knobs.Get("aa", "taa");
+  if (value != "taa" && value != "fsr") throw PlanError("aa is taa or fsr, not '" + value + "'.");
+  return value;
+}
+
 bool TaaScenePoint(const Pairs& knobs) {
   const std::string value = knobs.Get("taa_point", "0");
   if (value != "0" && value != "1")
@@ -289,7 +295,12 @@ std::string InfoOverlay(const LauncherData& data, const Pairs& cvars, const Pair
     lines.push_back("Ambient occlusion: GTAO, " + applied + ", radius " + PyG(radius) + " m, " +
                     (gtao_quality != qualities.end() ? gtao_quality->second : "high"));
   }
-  if (define("TAA") && *define("TAA") == "1" && define("TAA_POINT") && *define("TAA_POINT") == "1") {
+  if (define("FSR") && *define("FSR") == "1") {
+    lines.push_back("Anti-aliasing: FSR 3.1 before the post chain (scene_color), sharpen " +
+                    PyG(PyFloat(*define("FSR_SHARPNESS"))) +
+                    ", scene jittered every frame (TAA there in a runtime without FSR)");
+  } else if (define("TAA") && *define("TAA") == "1" && define("TAA_POINT") &&
+             *define("TAA_POINT") == "1") {
     lines.push_back(
         "Anti-aliasing: TAA before the post chain (scene_color), the look's sharpening, "
         "scene jittered while the camera moves, a still one accumulated");
@@ -456,7 +467,16 @@ std::vector<std::string> LookDefines(const LauncherData& data, const Pairs& knob
     defines.push_back(look_knobs.at(name).get<std::string>() + "=" + PyRepr(number));
   }
   const bool scene_point = TaaScenePoint(knobs);
-  if (TaaEnabled(knobs) && scene_point) {
+  const bool fsr = AaMethod(knobs) == "fsr";
+  if (fsr && !TaaEnabled(knobs))
+    throw PlanError("aa=fsr needs taa above 0 (the look turns temporal anti-aliasing on).");
+  if (fsr) {
+    // FSR at the scene_color point, the look's sharpening as its RCAS.
+    const double sharpen = PyFloat(knobs.Get("sharpen", "0"));
+    std::erase_if(defines, [](const std::string& d) { return d.starts_with("FM4_LOOK_SHARPEN="); });
+    defines.insert(defines.end(), {"FM4_LOOK_SHARPEN=0.0", "TAA=1", "TAA_SHARPEN=0.0", "TAA_POINT=1",
+                                   "FSR=1", "FSR_SHARPNESS=" + PyRepr(sharpen)});
+  } else if (TaaEnabled(knobs) && scene_point) {
     defines.insert(defines.end(), {"TAA=1", "TAA_SHARPEN=0.0", "TAA_POINT=1"});
   } else if (TaaEnabled(knobs)) {
     const double sharpen = PyFloat(knobs.Get("sharpen", "0"));

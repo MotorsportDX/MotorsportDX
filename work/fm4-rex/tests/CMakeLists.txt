@@ -26,6 +26,23 @@ add_executable(fm4_post_pass_shader_tests post-pass-shader-tests.cpp)
 target_include_directories(fm4_post_pass_shader_tests SYSTEM PRIVATE "${REX_HEADER_ROOT}")
 target_compile_definitions(fm4_post_pass_shader_tests PRIVATE NOMINMAX WIN32_LEAN_AND_MEAN)
 target_link_libraries(fm4_post_pass_shader_tests PRIVATE d3d12 dxgi d3dcompiler)
+# The passes of type fsr run AMD FSR 3.1 through the runtime's fsr.cpp (a stub without
+# REX_FSR); with REX_FSR (a runtime built with it) on the FidelityFX SDK's libraries of its
+# cmake/rex_fsr.cmake.
+set(REX_RUNTIME_SOURCE "" CACHE PATH "The runtime's source (BuildRoot/runtime-source)")
+if(NOT EXISTS "${REX_RUNTIME_SOURCE}/src/graphics/d3d12/fsr.cpp")
+  message(FATAL_ERROR "Set REX_RUNTIME_SOURCE to the runtime's source")
+endif()
+target_sources(fm4_post_pass_shader_tests PRIVATE
+               "${REX_RUNTIME_SOURCE}/src/graphics/d3d12/fsr.cpp")
+option(REX_FSR "Run the fsr passes with AMD FSR 3.1 (REX_FSR_SDK_DIR)" OFF)
+if(REX_FSR)
+  set(REX_FSR_SDK_DIR "" CACHE PATH "The FidelityFX SDK v1.1.4 checkout")
+  include("${REX_RUNTIME_SOURCE}/cmake/rex_fsr.cmake")
+  target_compile_definitions(fm4_post_pass_shader_tests PRIVATE REX_FSR=1)
+  target_link_libraries(fm4_post_pass_shader_tests PRIVATE ffx_fsr3upscaler_x64
+                        ffx_backend_dx12_x64)
+endif()
 # FXC compiles of the shader override library and the look mods on a synthetic
 # contract; arguments: shader_override.hlsli, the look directory.
 add_executable(fm4_shader_mod_tests shader-mod-tests.cpp)

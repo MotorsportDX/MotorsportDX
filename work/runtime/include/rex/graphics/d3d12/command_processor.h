@@ -179,6 +179,9 @@ class D3D12CommandProcessor : public CommandProcessor {
     kGammaRampTableSRV,
     kGammaRampPWLSRV,
       kOcclusionCounterRawUAV,
+    // The post passes' reactive mark texture (R8_UNORM, xe_post_mark_reactive in shader
+    // overrides), a null view while no override writes it.
+    kPostPassReactiveMarkUAV,
 
     // Beyond this point, SRVs are accessible to shaders through an unbounded
     // range - no descriptors of other types bound to shaders alongside
@@ -225,6 +228,9 @@ class D3D12CommandProcessor : public CommandProcessor {
   // Sets the current cached values to external ones. This is for cache
   // invalidation primarily. A submission must be open.
   void SetExternalPipeline(ID3D12PipelineState* pipeline);
+  // After a DeferredCommandList::D3DCallback, which may bind its own root signatures and
+  // pipeline: the next draw binds the guest's again.
+  void InvalidateCommandListState();
   void SetExternalGraphicsRootSignature(ID3D12RootSignature* root_signature);
   void SetViewport(const D3D12_VIEWPORT& viewport);
   void SetScissorRect(const D3D12_RECT& scissor_rect);

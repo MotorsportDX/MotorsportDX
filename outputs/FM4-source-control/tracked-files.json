@@ -641,6 +641,10 @@
       "provenance": "Original post pass of this project (temporal anti-aliasing of the final color with jitter, motion vectors and a variance clip); no game shader code or original game function bodies"
     },
     {
+      "path": "work/fm4-rex/passes/fsr.hlsl",
+      "provenance": "Original post pass of this project (the inputs and output of AMD FSR 3.1 at the scene_color point); no game shader code, no FidelityFX SDK code, no original game function bodies"
+    },
+    {
       "path": "work/fm4-rex/passes/scene_pattern.hlsl",
       "provenance": "Original post pass of this project (a test pattern written back into the scene texture, the check of the scene_color write-back); no game shader code or original game function bodies"
     },
@@ -4623,6 +4627,10 @@
     },
     {
       "path": "work/runtime/include/rex/graphics/d3d12/draw_back_end.h",
+      "provenance": "runtime-fork"
+    },
+    {
+      "path": "work/runtime/include/rex/graphics/d3d12/fsr.h",
       "provenance": "runtime-fork"
     },
     {

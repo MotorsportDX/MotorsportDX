@@ -7,6 +7,7 @@
 #include <rex/graphics/d3d12/post_pass.h>
 
 #include <algorithm>
+#include <atomic>
 #include <cctype>
 #include <charconv>
 #include <cmath>
@@ -618,6 +619,20 @@ bool PostPasses::LoadManifest(Manifest& manifest) {
             texture.name));
       }
       manifest.uses_write_back |= texture.write_back;
+      texture.reactive_mark = (*fields)["reactive_mark"].value_or(false);
+      if (texture.reactive_mark) {
+        if (texture.format != DXGI_FORMAT_R8_UNORM || texture.final_size ||
+            texture.scale != 1.0f || texture.mips != 1 || texture.history || texture.slot >= 0 ||
+            texture.clear || texture.write_back || manifest.reactive_mark != UINT32_MAX) {
+          return fail(fmt::format(
+              "texture {}: the reactive_mark texture is R8_UNORM, scene sized, unscaled, one mip, "
+              "not history, slot, clear or write_back, and the only one",
+              texture.name));
+        }
+        // Written by the overrides as a UAV, cleared by UpdateReactiveMark.
+        texture.uav = texture.clear = true;
+        manifest.reactive_mark = uint32_t(manifest.textures.size());
+      }
       manifest.textures.push_back(texture);
     }
   }
@@ -724,13 +739,14 @@ bool PostPasses::LoadManifest(Manifest& manifest) {
         return pass_fail("point is scene_depth, scene_color or final");
       }
       std::string type = (*fields)["type"].value_or(std::string("compute"));
-      if (type != "compute" && type != "pixel") {
-        return pass_fail("type is compute or pixel");
+      if (type != "compute" && type != "pixel" && type != "fsr") {
+        return pass_fail("type is compute, pixel or fsr");
       }
       pass.pixel = type == "pixel";
+      pass.fsr = type == "fsr";
       pass.shader = (*fields)["shader"].value_or(std::string());
       pass.entry = (*fields)["entry"].value_or(std::string("main"));
-      if (pass.shader.empty()) {
+      if (pass.shader.empty() && !pass.fsr) {
         return pass_fail("no shader file");
       }
       if (const toml::table* defines = (*fields)["defines"].as_table()) {
@@ -768,6 +784,19 @@ bool PostPasses::LoadManifest(Manifest& manifest) {
       if (pass.pixel ? (pass.rtvs.empty() || !pass.uavs.empty())
                      : (pass.uavs.empty() || !pass.rtvs.empty())) {
         return pass_fail("a compute pass writes uav, a pixel pass rtv");
+      }
+      if (pass.fsr) {
+        // FSR's inputs and output (fsr.h): textures of the manifest at the scene_color point.
+        bool textures_only = true;
+        for (const Binding& binding : pass.srvs) {
+          textures_only &= binding.builtin == Builtin::kNone && !binding.previous;
+        }
+        if (pass.point != Point::kSceneColor || pass.srvs.size() < 3 || pass.srvs.size() > 5 ||
+            pass.uavs.size() != 1 || !textures_only || pass.uavs[0].builtin != Builtin::kNone) {
+          return pass_fail(
+              "an fsr pass runs at scene_color on textures of the manifest: srv [color, depth, "
+              "motion vectors, reactive, composition] (the last two optional), uav [output]");
+        }
       }
       for (const Binding& output : pass.pixel ? pass.rtvs : pass.uavs) {
         bool final_write = output.builtin == Builtin::kFinalColor && pass.pixel &&
@@ -860,7 +889,7 @@ bool PostPasses::LoadManifest(Manifest& manifest) {
     }
   }
   for (const TextureDesc& texture : manifest.textures) {
-    if (texture.clear && !texture.uav && !texture.rtv) {
+    if (texture.clear && !texture.uav && !texture.rtv && !texture.reactive_mark) {
       return fail(fmt::format("texture {} is cleared but no pass writes it", texture.name));
     }
   }
@@ -876,6 +905,12 @@ bool PostPasses::LoadManifest(Manifest& manifest) {
     if (auto condition = (*jitter)["if"].value<std::string>()) {
       std::string error;
       if (!parse_conditions(*condition, manifest.jitter_conditions, error)) {
+        return fail("jitter: " + error);
+      }
+    }
+    if (auto condition = (*jitter)["every_frame_if"].value<std::string>()) {
+      std::string error;
+      if (!parse_conditions(*condition, manifest.jitter_every_frame_conditions, error)) {
         return fail("jitter: " + error);
       }
     }
@@ -972,6 +1007,7 @@ bool PostPasses::CompileManifest(Manifest& manifest) {
   bool any_pixel = false;
   for (size_t i = 0; i < manifest.passes.size(); ++i) {
     PassDesc& pass = manifest.passes[i];
+    if (pass.fsr) continue;
     any_pixel |= pass.pixel;
     std::vector<std::pair<std::string, std::string>> defines = manifest.compiled_defines;
     for (const auto& define : pass.defines) {
@@ -1957,6 +1993,20 @@ void PostPasses::UpdateParams(int32_t variant_index) {
       }
     }
   }
+  // FSR=1 without the upscaler (a runtime without REX_FSR, or a context that could not be
+  // created): 0, so the manifest's TAA runs instead.
+  for (size_t i = 0; i < manifest.params.size(); ++i) {
+    if (manifest.params[i].name != "FSR" || values[i] <= 0.0) continue;
+    if (!FsrUpscaler::Available() || fsr_failed_) {
+      if (!warned_fsr_unavailable_) {
+        warned_fsr_unavailable_ = true;
+        REXGPU_WARN("Post passes: FSR={} but {}; TAA runs instead", values[i],
+                    fsr_failed_ ? "its context could not be created"
+                                : "the runtime is built without FSR (REX_FSR)");
+      }
+      values[i] = 0.0;
+    }
+  }
   for (size_t i = 0; i < manifest.params.size(); ++i) {
     const ParamDesc& param = manifest.params[i];
     // In float, as the clamps of the cvars of the GTAO pass were.
@@ -2234,7 +2284,7 @@ void PostPasses::RunPoint(Point point) {
   // Each pass's GPU time in the perf trace, by group (d3d-hle-n4.md 17.24).
   const auto run_timed = [&](PassDesc& pass) {
     const uint32_t timestamp = command_processor_.BeginPostPassTimestamp(pass.name);
-    const bool ran = RunPass(pass, constants_address);
+    const bool ran = pass.fsr ? RunFsr(pass, constants) : RunPass(pass, constants_address);
     command_processor_.EndPostPassTimestamp(timestamp);
     return ran;
   };
@@ -2256,10 +2306,47 @@ void PostPasses::RunPoint(Point point) {
       Transition(textures_[i].resource.Get(), textures_[i].state, kShaderResource);
     }
   }
+  // The draws after the point may still mark: back to a UAV.
+  if (point == Point::kSceneColor && reactive_mark_bound_ && manifest.reactive_mark != UINT32_MAX) {
+    Texture& mark = textures_[manifest.reactive_mark];
+    if (mark.resource.Get() == reactive_mark_bound_) {
+      Transition(mark.resource.Get(), mark.state, D3D12_RESOURCE_STATE_UNORDERED_ACCESS);
+    }
+  }
   command_processor_.SubmitBarriers();
   if (point == Point::kSceneDepth) {
     LogRun(variant_index);
   }
+}
+
+void PostPasses::UpdateReactiveMark() {
+  const Manifest& manifest = *manifest_;
+  ID3D12Resource* bound = nullptr;
+  if (manifest.reactive_mark != UINT32_MAX && overrides_.uses_reactive_mark() && scene_width_ &&
+      EnsureTexture(manifest.reactive_mark)) {
+    Texture& mark = textures_[manifest.reactive_mark];
+    bound = mark.resource.Get();
+    Transition(bound, mark.state, D3D12_RESOURCE_STATE_UNORDERED_ACCESS);
+    command_processor_.SubmitBarriers();
+    const UINT zero[4] = {};
+    command_processor_.GetDeferredCommandList().D3DClearUnorderedAccessViewUint(
+        Gpu(mark.uavs[0]), LocalCpu(DescriptorKind::kCpu, mark.clear_uav), bound, zero, 0,
+        nullptr);
+  }
+  if (bound == reactive_mark_bound_) {
+    return;
+  }
+  reactive_mark_bound_ = bound;
+  D3D12_UNORDERED_ACCESS_VIEW_DESC desc = {};
+  desc.Format = DXGI_FORMAT_R8_UNORM;
+  desc.ViewDimension = D3D12_UAV_DIMENSION_TEXTURE2D;
+  command_processor_.GetD3D12Provider().GetDevice()->CreateUnorderedAccessView(
+      bound, nullptr, &desc,
+      command_processor_
+          .GetSystemBindlessViewHandlePair(
+              D3D12CommandProcessor::SystemBindlessView::kPostPassReactiveMarkUAV)
+          .first);
+  REXGPU_INFO("Post passes: reactive mark {}", bound ? "bound" : "unbound");
 }
 
 bool PostPasses::BindingSize(const Binding& binding, uint32_t& width, uint32_t& height) const {
@@ -2452,6 +2539,125 @@ bool PostPasses::RunPass(PassDesc& pass, D3D12_GPU_VIRTUAL_ADDRESS scene_constan
   if (query_open) {
     command_processor_.OpenRTVOcclusionQuery();
   }
+  return true;
+}
+
+float PostPasses::NamedParam(const char* name, float fallback) const {
+  const Manifest& manifest = *manifest_;
+  for (size_t i = 0; i < manifest.params.size(); ++i) {
+    if (manifest.params[i].name != name) continue;
+    if (manifest.params[i].is_uint) return float(param_values_[i]);
+    float value;
+    std::memcpy(&value, &param_values_[i], sizeof(value));
+    return value;
+  }
+  return fallback;
+}
+
+float PostPasses::NamedDefine(const char* name, float fallback) const {
+  for (const auto& define : manifest_->compiled_defines) {
+    double value;
+    if (define.first == name && ParseNumber(define.second, value)) return float(value);
+  }
+  return fallback;
+}
+
+namespace {
+
+// The arguments of FSR's callback in the deferred command list (trivially copyable).
+struct FsrCall {
+  FsrUpscaler* upscaler;
+  FsrUpscaler::Dispatch dispatch;
+};
+
+void RecordFsr(ID3D12GraphicsCommandList* command_list, const void* arguments) {
+  FsrCall call;
+  std::memcpy(&call, arguments, sizeof(call));
+  std::string error;
+  if (!call.upscaler->Record(command_list, call.dispatch, &error)) {
+    static std::atomic<bool> reported = false;
+    if (!reported.exchange(true)) {
+      REXGPU_ERROR("Post passes: {}", error);
+    }
+  }
+}
+
+}  // namespace
+
+bool PostPasses::RunFsr(PassDesc& pass, const post_pass::SceneConstants& constants) {
+  for (const Binding& binding : pass.srvs) {
+    if (!EnsureTexture(binding.texture)) return false;
+  }
+  if (!EnsureTexture(pass.uavs[0].texture)) return false;
+  Texture& color = textures_[pass.srvs[0].texture];
+  Texture& output = textures_[pass.uavs[0].texture];
+  FsrUpscaler::Description description;
+  description.render_width = color.width;
+  description.render_height = color.height;
+  description.output_width = output.width;
+  description.output_height = output.height;
+  description.fp16 = NamedParam("FSR_FP16", 1.0f) > 0.0f;
+  const uint64_t frame = command_processor_.GetCurrentFrame();
+  bool reset = false;
+  if (!fsr_ || !(fsr_->description() == description)) {
+    if (fsr_) {
+      retired_fsr_.emplace_back(command_processor_.GetCurrentSubmission(), std::move(fsr_));
+    }
+    std::string error;
+    auto start = std::chrono::steady_clock::now();
+    fsr_ = FsrUpscaler::Create(command_processor_.GetD3D12Provider().GetDevice(), description,
+                               &error);
+    if (!fsr_) {
+      REXGPU_ERROR("Post passes: FSR {}x{}: {}", description.render_width,
+                   description.render_height, error);
+      fsr_failed_ = true;
+      params_valid_ = false;
+      return false;
+    }
+    REXGPU_INFO("Post passes: FSR {} at {}x{} to {}x{}{}, created in {:.1f} ms",
+                FsrUpscaler::Version(), description.render_width, description.render_height,
+                description.output_width, description.output_height,
+                description.fp16 ? "" : ", 32-bit shaders",
+                std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - start)
+                    .count());
+    reset = true;
+  }
+  // Its accumulation restarts where the history breaks: a frame without it before, a scene
+  // without a previous one, a camera cut.
+  reset |= fsr_frame_ == UINT64_MAX || fsr_frame_ + 1 != frame || !previous_scene_ ||
+           IsCameraCut();
+  fsr_frame_ = frame;
+
+  FsrCall call = {fsr_.get(), {}};
+  FsrUpscaler::Dispatch& dispatch = call.dispatch;
+  ID3D12Resource** inputs[] = {&dispatch.color, &dispatch.depth, &dispatch.motion_vectors,
+                               &dispatch.reactive, &dispatch.composition};
+  for (size_t i = 0; i < pass.srvs.size(); ++i) {
+    Texture& texture = textures_[pass.srvs[i].texture];
+    Transition(texture.resource.Get(), texture.state,
+               D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE);
+    *inputs[i] = texture.resource.Get();
+  }
+  Transition(output.resource.Get(), output.state, D3D12_RESOURCE_STATE_UNORDERED_ACCESS);
+  output.written = true;
+  output.written_frame = frame;
+  dispatch.output = output.resource.Get();
+  dispatch.jitter[0] = constants.jitter[0];
+  dispatch.jitter[1] = constants.jitter[1];
+  dispatch.frame_milliseconds =
+      last_frame_seconds_ > 0.0 ? float(std::min(last_frame_seconds_, 0.25) * 1000.0) : 16.7f;
+  dispatch.sharpness = std::clamp(NamedParam("FSR_SHARPNESS", 0.0f), 0.0f, 1.0f);
+  dispatch.reset = reset;
+  dispatch.camera_near_plane = NamedDefine("FSR_DEPTH_NEAR", 0.01f);
+  // The vertical field of view from the focal length in host pixels.
+  dispatch.vertical_fov =
+      constants.focal[1] > 0.0f
+          ? 2.0f * std::atan(0.5f * float(description.render_height) / constants.focal[1])
+          : 1.0f;
+  dispatch.debug_view = NamedParam("FSR_DEBUG", 0.0f) > 0.0f;
+  command_processor_.SubmitBarriers();
+  command_processor_.GetDeferredCommandList().D3DCallback(RecordFsr, &call, sizeof(call));
+  command_processor_.InvalidateCommandListState();
   return true;
 }
 
@@ -2650,6 +2856,7 @@ void PostPasses::UpdateJitter() {
                              ? std::chrono::duration<double>(now - last_swap_time_).count()
                              : 0.0;
   last_swap_time_ = now;
+  last_frame_seconds_ = frame_seconds;
   if (!manifest_) {
     return;
   }
@@ -2693,10 +2900,13 @@ void PostPasses::UpdateJitter() {
         !previous_camera_.view_known) {
       return;
     }
-    if (!ConditionsHold(manifest.jitter_conditions) || !jitter_gate_.Armed(settings)) {
+    const bool every_frame = !manifest.jitter_every_frame_conditions.empty() &&
+                             ConditionsHold(manifest.jitter_every_frame_conditions);
+    if (!ConditionsHold(manifest.jitter_conditions) ||
+        !(every_frame || jitter_gate_.Armed(settings))) {
       return;
     }
-    jitter_still_ = jitter_gate_.Still(settings);
+    jitter_still_ = !every_frame && jitter_gate_.Still(settings);
   }
   // x,y in host pixels, or the Halton (2, 3) sequence.
   const std::string& offset = REXCVAR_GET(post_pass_jitter_offset);
@@ -2788,6 +2998,7 @@ void PostPasses::OnSwap() {
       Transition(texture.resource.Get(), texture.state, kShaderResource);
     }
     command_processor_.SubmitBarriers();
+    UpdateReactiveMark();
   }
   // This frame's scene becomes the history, or the history ends.
   uint64_t frame = command_processor_.GetCurrentFrame();
@@ -2825,6 +3036,8 @@ void PostPasses::OnSwap() {
 
   uint64_t completed = command_processor_.GetCompletedSubmission();
   std::erase_if(retired_, [completed](const auto& retired) { return retired.first <= completed; });
+  std::erase_if(retired_fsr_,
+                [completed](const auto& retired) { return retired.first <= completed; });
   ReleasePendingDescriptors(false);
 
   // Defines changed by shader_mod_set: params at once, defines recompile.

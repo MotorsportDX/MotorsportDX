@@ -14,7 +14,7 @@ This repository is source-only. It records reviewed integration code, diagnostic
 - `outputs/FM4-build`: the setup, generate, build, and run pipeline (`Build.ps1`, `pipeline.py`, and the loader), reviewed integration metadata (function bounds and switch recipes), the e2e harness and gates (`e2e/`), and `verification.json`.
 - `docs/`: project documentation, including the research notes in `docs/analysis/`.
 - The third-party notices in `outputs/FM4-source-control/third-party-notices`: the ReXGlue/Xenia copyright and BSD license notice, AMD's FidelityFX SDK license, Microsoft's `d3dx12.h` license, and a `README.txt` that says what each covers.
-- `work/runtime/cmake/rex_fsr.cmake`, `work/runtime/cmake/fsr-include` and `work/runtime/src/graphics/d3d12/fsr.cpp`: the integration that builds AMD FSR 3.1 from the FidelityFX SDK source when `REX_FSR` is on. The SDK itself is not stored ([AMD FidelityFX SDK](#third-party-code-amd-fidelityfx-sdk-fsr-31)).
+- `work/runtime/cmake/rex_fsr.cmake`, `work/runtime/cmake/fsr-include`, `work/runtime/include/rex/graphics/d3d12/fsr.h`, `work/runtime/src/graphics/d3d12/fsr.cpp` and `work/fm4-rex/passes/fsr.hlsl`: the integration that builds AMD FSR 3.1 from the FidelityFX SDK source when `REX_FSR` is on and runs it at the scene_color point (original code of this project; it calls the SDK's API and holds none of its code). The SDK itself is not stored ([AMD FidelityFX SDK](#third-party-code-amd-fidelityfx-sdk-fsr-31)).
 
 ### Excluded
 

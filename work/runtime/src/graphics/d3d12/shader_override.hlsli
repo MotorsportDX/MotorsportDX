@@ -621,6 +621,24 @@ float4 xe_post_texture(uint slot, float2 uv) {
 float xe_post_ao(float2 uv) { return xe_post_texture(0u, uv).x; }
 
 #if XE_PIXEL_SHADER
+// The post passes' reactive mark (the manifest's reactive_mark texture, cleared every frame):
+// FSR's reactive mask takes it (fsr_prepare), so a pixel marked 0 to 1 takes that much more
+// of the current frame. For the pixel shaders of what moves across a surface without motion
+// vectors of its own and visibly ghosts (particles), called from their mods with the
+// fragment's input. While no override or mod file calls it, the texture is neither bound nor
+// cleared (a null view: the write does nothing).
+RWTexture2D<unorm float> xe_post_reactive_mark : register(u0, space4);
+void xe_post_mark_reactive(float4 position, float value) {
+  uint2 size;
+  xe_post_reactive_mark.GetDimensions(size.x, size.y);
+  uint2 pixel = uint2(position.xy);
+  if (all(pixel < size)) {
+    xe_post_reactive_mark[pixel] = saturate(value);
+  }
+}
+#endif  // XE_PIXEL_SHADER
+
+#if XE_PIXEL_SHADER
 #define XE_LOD_DEFAULT XE_LOD_COMPUTED
 #define XE_SAMPLER_DEFAULT(fetch) XE_SAMPLER##fetch##_FFF
 #else

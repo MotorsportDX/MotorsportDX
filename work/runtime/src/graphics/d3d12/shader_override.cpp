@@ -13,6 +13,7 @@
 #include <cstdlib>
 #include <cstring>
 #include <fstream>
+#include <initializer_list>
 #include <iterator>
 #include <list>
 #include <sstream>
@@ -233,6 +234,23 @@ class OverrideInclude final : public ID3DInclude {
 };
 
 // shader_<16 hex digits>[...]<suffix> in a directory.
+// Whether a .hlsl or .hlsli file of the directories calls xe_post_mark_reactive (the reactive
+// mask of the post passes' FSR, shader_override.hlsli).
+bool ScanReactiveMark(std::initializer_list<const std::filesystem::path*> directories) {
+  for (const std::filesystem::path* directory : directories) {
+    std::error_code error;
+    if (directory->empty()) continue;
+    for (const auto& entry : std::filesystem::directory_iterator(*directory, error)) {
+      std::string extension = entry.path().extension().string();
+      if (extension != ".hlsl" && extension != ".hlsli") continue;
+      std::ifstream file(entry.path(), std::ios::binary);
+      std::string text((std::istreambuf_iterator<char>(file)), std::istreambuf_iterator<char>());
+      if (text.find("xe_post_mark_reactive(") != std::string::npos) return true;
+    }
+  }
+  return false;
+}
+
 void ScanShaderFiles(const std::filesystem::path& directory, const char* suffix,
                      std::unordered_set<uint64_t, rex::IdentityHasher<uint64_t>>& hashes_out) {
   std::error_code error;
@@ -390,6 +408,8 @@ std::unique_ptr<ShaderOverrides> ShaderOverrides::Create(const HostConfig& confi
   overrides->use_generated_ = use_generated;
   overrides->mod_directory_ = mod_path;
   ScanShaderFiles(overrides->mod_directory_, ".mod.hlsli", overrides->mod_shaders_);
+  overrides->uses_reactive_mark_ =
+      ScanReactiveMark({&overrides->directory_, &overrides->mod_directory_});
   // NAME=VALUE;NAME=VALUE
   overrides->mod_defines_ = ParseDefines(REXCVAR_GET(shader_mod_defines), ";");
   overrides->live_knobs_ = REXCVAR_GET(shader_mod_live_knobs);
@@ -1302,6 +1322,7 @@ bool ShaderOverrides::PollChanges() {
   difference(mod_shaders_, mod_shaders);
   pixel_shaders_ = std::move(pixel_shaders);
   mod_shaders_ = std::move(mod_shaders);
+  uses_reactive_mark_ = ScanReactiveMark({&directory_, &mod_directory_});
 
   // The files the overrides were compiled from.
   {

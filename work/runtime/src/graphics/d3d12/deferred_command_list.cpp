@@ -41,7 +41,7 @@ void DeferredCommandList::Execute(ID3D12GraphicsCommandList* command_list,
   ID3D12PipelineState* current_pipeline_state = nullptr;
   // REX_N4_REPLAY_SPLIT: time stamp counter ticks by command kind.
   const bool split = perf_trace::ReplaySplitEnabled();
-  constexpr size_t kKinds = size_t(Command::kDrawBackEnd) + 1;
+  constexpr size_t kKinds = size_t(Command::kCallback) + 1;
   uint64_t split_tsc[kKinds] = {};
   uint32_t split_counts[kKinds] = {};
   const uint64_t execute_start = split ? __rdtsc() : 0;
@@ -55,6 +55,8 @@ void DeferredCommandList::Execute(ID3D12GraphicsCommandList* command_list,
     back_end_replay_->BeginList();
     back_end = &back_end_replay_->d3d;
   }
+  // The list's descriptor heaps, bound again after a callback.
+  const SetDescriptorHeapsArguments* last_descriptor_heaps = nullptr;
   while (stream_remaining != 0) {
     const CommandHeader& header = *reinterpret_cast<const CommandHeader*>(stream);
     stream += kCommandHeaderSizeElements;
@@ -277,6 +279,7 @@ void DeferredCommandList::Execute(ID3D12GraphicsCommandList* command_list,
       } break;
       case Command::kSetDescriptorHeaps: {
         auto& args = *reinterpret_cast<const SetDescriptorHeapsArguments*>(stream);
+        last_descriptor_heaps = &args;
         UINT num_descriptor_heaps = 0;
         ID3D12DescriptorHeap* descriptor_heaps[2];
         if (args.cbv_srv_uav_descriptor_heap != nullptr) {
@@ -359,6 +362,37 @@ void DeferredCommandList::Execute(ID3D12GraphicsCommandList* command_list,
         const_cast<D3D12CommandProcessor&>(command_processor_)
             .ReplayDrawBackEnd(reinterpret_cast<const uint8_t*>(stream), *register_shadow_,
                                *back_end_replay_, command_list);
+      } break;
+      case Command::kCallback: {
+        Callback function;
+        std::memcpy(&function, stream, sizeof(Callback));
+        function(command_list, reinterpret_cast<const uint8_t*>(stream) + sizeof(Callback));
+        // It may have bound its own heaps and pipeline: the list's heaps again (as the
+        // command that bound them would), and no pipeline known.
+        if (last_descriptor_heaps) {
+          ID3D12DescriptorHeap* descriptor_heaps[2];
+          UINT num_descriptor_heaps = 0;
+          if (last_descriptor_heaps->cbv_srv_uav_descriptor_heap) {
+            descriptor_heaps[num_descriptor_heaps++] =
+                last_descriptor_heaps->cbv_srv_uav_descriptor_heap;
+          }
+          ID3D12DescriptorHeap* sampler_heap = last_descriptor_heaps->sampler_descriptor_heap;
+          if (back_end && !sampler_heap) {
+            sampler_heap = command_processor_.back_end_sampler_heap();
+          }
+          if (sampler_heap) {
+            descriptor_heaps[num_descriptor_heaps++] = sampler_heap;
+          }
+          if (num_descriptor_heaps) {
+            command_list->SetDescriptorHeaps(num_descriptor_heaps, descriptor_heaps);
+          }
+        }
+        current_pipeline_state = nullptr;
+        if (back_end) {
+          back_end->pipeline = nullptr;
+          back_end->root_signature = nullptr;
+          back_end->root_parameters_set = 0;
+        }
       } break;
       default:
         assert_unhandled_case(header.command);

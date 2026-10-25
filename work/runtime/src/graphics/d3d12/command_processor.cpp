@@ -31,6 +31,7 @@
 #include <rex/dbg.h>
 #include <rex/perf/counter.h>
 #include <rex/graphics/d3d12/command_processor.h>
+#include <rex/graphics/d3d12/fsr.h>
 #include <rex/graphics/d3d12/graphics_system.h>
 #include <rex/graphics/d3d12/post_pass.h>
 #include <rex/graphics/d3d12/post_pass_jitter.h>
@@ -199,11 +200,6 @@ REXCVAR_DEFINE_INT32(async_shader_draw_wait_us, 0, "GPU/D3D12",
     .lifecycle(rex::cvar::Lifecycle::kHotReload);
 
 namespace rex::graphics::d3d12 {
-
-#if REX_FSR
-// fsr.cpp.
-void LogFsrLink();
-#endif
 
 namespace {
 
@@ -1875,6 +1871,13 @@ void D3D12CommandProcessor::SetExternalPipeline(ID3D12PipelineState* pipeline) {
   }
 }
 
+void D3D12CommandProcessor::InvalidateCommandListState() {
+  current_guest_pipeline_ = nullptr;
+  current_external_pipeline_ = nullptr;
+  current_graphics_root_signature_ = nullptr;
+  current_graphics_root_up_to_date_ = 0;
+}
+
 void D3D12CommandProcessor::SetExternalGraphicsRootSignature(ID3D12RootSignature* root_signature) {
   if (current_graphics_root_signature_ != root_signature) {
     current_graphics_root_signature_ = root_signature;
@@ -1965,9 +1968,16 @@ bool D3D12CommandProcessor::SetupContext() {
   }
   InvalidateAllVertexBufferResidency();
   UpdateDebugMarkersEnabled();
-#if REX_FSR
-  LogFsrLink();
-#endif
+  if (FsrUpscaler::Available()) {
+    REXGPU_INFO("FSR {}: linked", FsrUpscaler::Version());
+    FsrUpscaler::SetMessageSink([](bool error, const std::string& message) {
+      if (error) {
+        REXGPU_ERROR("{}", message);
+      } else {
+        REXGPU_WARN("{}", message);
+      }
+    });
+  }
 
   const ui::d3d12::D3D12Provider& provider = GetD3D12Provider();
   ID3D12Device* device = provider.GetDevice();
@@ -2235,7 +2245,7 @@ bool D3D12CommandProcessor::SetupContext() {
       root_bindless_sampler_range.OffsetInDescriptorsFromTableStart = 0;
     }
     // View heap.
-    D3D12_DESCRIPTOR_RANGE root_bindless_view_ranges[5];
+    D3D12_DESCRIPTOR_RANGE root_bindless_view_ranges[6];
     {
       auto& parameter = root_parameters_bindless[kRootParameter_Bindless_ViewHeap];
       parameter.ParameterType = D3D12_ROOT_PARAMETER_TYPE_DESCRIPTOR_TABLE;
@@ -2257,6 +2267,19 @@ bool D3D12CommandProcessor::SetupContext() {
         counter_range = range;
         counter_range.BaseShaderRegister = UINT(DxbcShaderTranslator::UAVRegister::kOcclusionCounter);
         counter_range.OffsetInDescriptorsFromTableStart = UINT(SystemBindlessView::kOcclusionCounterRawUAV);
+      }
+      // The post passes' reactive mark (shader overrides: xe_post_reactive_mark, u0 in
+      // space 4).
+      {
+        assert_true(parameter.DescriptorTable.NumDescriptorRanges <
+                    rex::countof(root_bindless_view_ranges));
+        auto& range = root_bindless_view_ranges[parameter.DescriptorTable.NumDescriptorRanges++];
+        range.RangeType = D3D12_DESCRIPTOR_RANGE_TYPE_UAV;
+        range.NumDescriptors = 1;
+        range.BaseShaderRegister = 0;
+        range.RegisterSpace = 4;
+        range.OffsetInDescriptorsFromTableStart =
+            UINT(SystemBindlessView::kPostPassReactiveMarkUAV);
       }
       // Used UAV and SRV ranges must not overlap on Nvidia Fermi, so textures
       // have OffsetInDescriptorsFromTableStart after all static descriptors of
@@ -2696,6 +2719,16 @@ bool D3D12CommandProcessor::SetupContext() {
         provider.OffsetViewDescriptor(view_bindless_heap_cpu_start_,
                                       uint32_t(SystemBindlessView::kNullRawUAV)),
         nullptr, 0);
+    // kPostPassReactiveMarkUAV: null until the post passes bind their reactive mark.
+    {
+      D3D12_UNORDERED_ACCESS_VIEW_DESC null_uav_desc = {};
+      null_uav_desc.Format = DXGI_FORMAT_R8_UNORM;
+      null_uav_desc.ViewDimension = D3D12_UAV_DIMENSION_TEXTURE2D;
+      device->CreateUnorderedAccessView(
+          nullptr, nullptr, &null_uav_desc,
+          provider.OffsetViewDescriptor(view_bindless_heap_cpu_start_,
+                                        uint32_t(SystemBindlessView::kPostPassReactiveMarkUAV)));
+    }
     // kNullTexture2DArray.
     D3D12_SHADER_RESOURCE_VIEW_DESC null_srv_desc;
     null_srv_desc.Format = DXGI_FORMAT_R8G8B8A8_UNORM;

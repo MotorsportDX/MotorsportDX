@@ -220,6 +220,18 @@ class PipelineTests(unittest.TestCase):
             self.assertNotIn('TAA',defines_of('pc,taa=0,taa_point=1')[1])
             with self.assertRaises(RuntimeError):
                 pipeline.look_cvars(root,'pc,taa_point=2')
+            # aa=fsr: FSR at the scene_color point, the look's sharpening as its RCAS.
+            defines=defines_of('pc,aa=fsr')[1]
+            self.assertEqual((defines['FSR'],defines['FSR_SHARPNESS'],defines['TAA'],
+                              defines['TAA_POINT'],defines['FM4_LOOK_SHARPEN']),
+                             ('1','0.4','1','1','0.0'))
+            self.assertNotIn('FSR',defines_of('pc,aa=taa')[1])
+            for look in ('pc,aa=dlss','pc,taa=0,aa=fsr'):
+                with self.assertRaises(RuntimeError):
+                    pipeline.look_cvars(root,look)
+            overlay=pipeline.info_overlay(pipeline.look_cvars(root,'pc,aa=fsr'),{},'pc,aa=fsr','high')
+            self.assertIn('Anti-aliasing: FSR 3.1 before the post chain (scene_color), sharpen 0.4, '
+                          'scene jittered every frame',overlay)
             overlay=pipeline.info_overlay(pipeline.look_cvars(root,'pc,taa_point=1'),{},
                                           'pc,taa_point=1','high')
             self.assertIn('Anti-aliasing: TAA before the post chain (scene_color)',overlay)

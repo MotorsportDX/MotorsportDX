@@ -26,10 +26,16 @@
 // synthetic final image in screen orientation), and history textures swap at
 // the end of each frame; the motion debug view is checked there, drawn rotated
 // 180 degrees over the frame. The passes of the scene_color point run the same
-// way on a synthetic scene color (TAA at that point, TAA_POINT 1).
+// way on a synthetic scene color (TAA at that point, TAA_POINT 1). Built with
+// REX_FSR, the passes of FSR 3.1 at the scene_color point run the same way
+// (fsr.hlsl, and the pass of type fsr through the runtime's fsr.cpp on WARP): a
+// still edge converges and holds, a moving box leaves no trail, a cut resets.
+// FSR's shading change pyramid pass crashes WARP itself, so on WARP the FSR
+// checks are skipped with a note; --hardware runs everything on the first
+// hardware adapter instead, where they run (the build runs both).
 //
 // usage: fm4_post_pass_shader_tests <post_pass.hlsli> <passes directory>
-//                                   [occlusion.pgm] [NAME=VALUE ...]
+//                                   [occlusion.pgm] [NAME=VALUE ...] [--hardware]
 // NAME=VALUE sets params and defines over passes.toml, as shader_mod_defines
 // does in the runtime.
 
@@ -57,6 +63,7 @@
 
 #include <toml++/toml.hpp>
 
+#include <rex/graphics/d3d12/fsr.h>
 #include <rex/graphics/d3d12/post_pass_camera.h>
 #include <rex/graphics/d3d12/post_pass_jitter.h>
 #include <rex/graphics/d3d12/post_pass_layout.h>
@@ -68,6 +75,10 @@ namespace {
 
 constexpr uint32_t kWidth = 640, kHeight = 360;
 int failures = 0;
+// Checks not run (FSR's on WARP or without a hardware adapter), reported apart.
+int skipped = 0;
+// FSR's checks (step 5 of the scene_color point's TAA frames).
+constexpr int kFsrChecks = 6;
 
 void Check(bool condition, const char* what, double value) {
   std::printf("%s %s (%.3f)\n", condition ? "ok  " : "FAIL", what, value);
@@ -189,6 +200,8 @@ struct Pass {
   uint32_t group[2] = {8, 8};
   std::string condition, blend;
   bool pixel = false;
+  // type = "fsr": FSR's upscaler (fsr.h), no shader.
+  bool fsr = false;
   ComPtr<ID3DBlob> code;
   ComPtr<ID3D12PipelineState> pipeline;
 };
@@ -292,10 +305,13 @@ int main(int argc, char** argv) {
   }
   const char* image_path = nullptr;
   std::map<std::string, std::string> overrides;
+  bool hardware = false;
   for (int i = 3; i < argc; ++i) {
     std::string argument = argv[i];
     size_t equals = argument.find('=');
-    if (equals == std::string::npos) {
+    if (argument == "--hardware") {
+      hardware = true;
+    } else if (equals == std::string::npos) {
       image_path = argv[i];
     } else {
       overrides[argument.substr(0, equals)] = argument.substr(equals + 1);
@@ -393,6 +409,7 @@ int main(int argc, char** argv) {
       }
       bool pixel = fields["type"].value_or(std::string("compute")) == "pixel";
       pass.pixel = pixel;
+      pass.fsr = fields["type"].value_or(std::string()) == "fsr";
       pass.point = fields["point"].value_or(std::string());
       pass.blend = fields["blend"].value_or(std::string("none"));
       if (pass.point != "scene_depth") {
@@ -535,10 +552,30 @@ int main(int argc, char** argv) {
   ComPtr<IDXGIFactory4> factory;
   ComPtr<IDXGIAdapter> warp;
   ComPtr<ID3D12Device> device;
-  if (!Succeeded(CreateDXGIFactory2(0, IID_PPV_ARGS(&factory)), "DXGI factory") ||
-      !Succeeded(factory->EnumWarpAdapter(IID_PPV_ARGS(&warp)), "WARP adapter") ||
-      !Succeeded(D3D12CreateDevice(warp.Get(), D3D_FEATURE_LEVEL_11_0, IID_PPV_ARGS(&device)),
-                 "WARP device")) {
+  if (!Succeeded(CreateDXGIFactory2(0, IID_PPV_ARGS(&factory)), "DXGI factory")) return 1;
+  if (hardware) {
+    // The first hardware adapter with Direct3D 12.
+    ComPtr<IDXGIAdapter1> adapter;
+    for (UINT i = 0; factory->EnumAdapters1(i, &adapter) == S_OK; ++i) {
+      DXGI_ADAPTER_DESC1 desc;
+      adapter->GetDesc1(&desc);
+      if (!(desc.Flags & DXGI_ADAPTER_FLAG_SOFTWARE) &&
+          SUCCEEDED(D3D12CreateDevice(adapter.Get(), D3D_FEATURE_LEVEL_11_0, IID_PPV_ARGS(&device)))) {
+        std::printf("adapter: %ls\n", desc.Description);
+        break;
+      }
+    }
+    if (!device) {
+      std::printf("FSR checks skipped: no hardware adapter (WARP crashes in "
+                  "FSR3-SHADING-CHANGE-PYRAMID, open item)\npost pass shader tests: passed, %d "
+                  "skipped\n",
+                  kFsrChecks);
+      return 0;
+    }
+  } else if (!Succeeded(factory->EnumWarpAdapter(IID_PPV_ARGS(&warp)), "WARP adapter") ||
+             !Succeeded(D3D12CreateDevice(warp.Get(), D3D_FEATURE_LEVEL_11_0,
+                                          IID_PPV_ARGS(&device)),
+                        "WARP device")) {
     return 1;
   }
 
@@ -617,6 +654,7 @@ int main(int argc, char** argv) {
     return Succeeded(result, pass.name.c_str());
   };
   for (size_t i = 0; i < compiled_only.size(); ++i) {
+    if (compiled_only[i].fsr) continue;
     ComPtr<ID3DBlob> code;
     if (!compile(compiled_only[i], compiled_only_pixel[i] ? "ps_5_1" : "cs_5_1", code)) return 1;
     compiled_only[i].code = code;
@@ -1383,6 +1421,11 @@ int main(int argc, char** argv) {
     Texture* texture = find_texture(name);
     return texture ? texture->previous : nullptr;
   };
+  // FSR's upscaler for the passes of type fsr (created at the first one), and
+  // the jitter (scene layout, host pixels) and reset of the frame being run.
+  std::unique_ptr<rex::graphics::d3d12::FsrUpscaler> fsr_upscaler;
+  float fsr_jitter[2] = {};
+  bool fsr_reset = false;
   // Runs the passes of a point after the scene depth (final, or scene_color
   // with final_color standing in for scene_color) with the params of the
   // manifest and set; set also overrides defines in the passes' if.
@@ -1417,6 +1460,66 @@ int main(int argc, char** argv) {
           return false;
         }
         if (!enabled) continue;
+      }
+      if (pass.fsr) {
+        // As PostPasses::RunFsr: the inputs and the output, then FSR's own
+        // dispatches, after which the list's descriptor heap is bound again.
+        rex::graphics::d3d12::FsrUpscaler::Dispatch dispatch;
+        ID3D12Resource** inputs[] = {&dispatch.color, &dispatch.depth, &dispatch.motion_vectors,
+                                     &dispatch.reactive, &dispatch.composition};
+        for (size_t i = 0; i < pass.srvs.size() && i < std::size(inputs); ++i) {
+          Texture* texture = find_texture(pass.srvs[i].texture);
+          if (!texture) {
+            std::printf("FAIL pass %s: no texture %s\n", pass.name.c_str(),
+                        pass.srvs[i].texture.c_str());
+            ++failures;
+            return false;
+          }
+          transition(texture->resource.Get(), texture->state,
+                     D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE);
+          *inputs[i] = texture->resource.Get();
+        }
+        Texture* output = pass.uavs.empty() ? nullptr : find_texture(pass.uavs[0].texture);
+        if (!output) {
+          std::printf("FAIL pass %s: no output\n", pass.name.c_str());
+          ++failures;
+          return false;
+        }
+        transition(output->resource.Get(), output->state, D3D12_RESOURCE_STATE_UNORDERED_ACCESS);
+        dispatch.output = output->resource.Get();
+        std::string error;
+        if (!fsr_upscaler) {
+          rex::graphics::d3d12::FsrUpscaler::Description description;
+          description.render_width = description.output_width = kWidth;
+          description.render_height = description.output_height = kHeight;
+          description.debug_checking = true;
+          fsr_upscaler =
+              rex::graphics::d3d12::FsrUpscaler::Create(device.Get(), description, &error);
+          if (!fsr_upscaler) {
+            std::printf("FAIL pass %s: %s\n", pass.name.c_str(), error.c_str());
+            ++failures;
+            return false;
+          }
+        }
+        dispatch.jitter[0] = fsr_jitter[0];
+        dispatch.jitter[1] = fsr_jitter[1];
+        dispatch.reset = fsr_reset;
+        dispatch.sharpness = float(condition_values["FSR_SHARPNESS"]);
+        dispatch.debug_view = condition_values["FSR_DEBUG"] > 0.0;
+        for (const auto& define : defines) {
+          if (define.first == "FSR_DEPTH_NEAR") {
+            dispatch.camera_near_plane = float(std::atof(define.second.c_str()));
+          }
+        }
+        // The camera's 60 degrees.
+        dispatch.vertical_fov = float(60.0 * 3.14159265358979 / 180.0);
+        if (!fsr_upscaler->Record(list.Get(), dispatch, &error)) {
+          std::printf("FAIL pass %s: %s\n", pass.name.c_str(), error.c_str());
+          ++failures;
+          return false;
+        }
+        list->SetDescriptorHeaps(1, heaps);
+        continue;
       }
       D3D12_GPU_DESCRIPTOR_HANDLE srvs[post_pass::kMaxSrvs], uavs[post_pass::kMaxUavs];
       for (auto& handle : srvs) handle = gpu(frame_depth_srv);
@@ -1751,6 +1854,9 @@ int main(int argc, char** argv) {
         constants.final_uv_scale[0] = constants.final_uv_scale[1] = 1.0f;
         constants.jitter[0] = frame.jitter[0];
         constants.jitter[1] = frame.jitter[1];
+        fsr_jitter[0] = frame.jitter[0];
+        fsr_jitter[1] = frame.jitter[1];
+        fsr_reset = !frame.history_valid;
         constants.jitter_phase = frame.phase;
         constants.jitter_phases = frame.phases;
         constants.still_frames = frame.camera_still ? frame.still_frames : 0u;
@@ -2248,6 +2354,116 @@ int main(int argc, char** argv) {
           Check(line_dropped == 0, "taa: a jittered thin line keeps its history", line_dropped);
         }
       }
+
+      // 5. FSR 3.1 at the scene_color point (fsr.hlsl and the pass of type fsr):
+      //    the same frames, its output read from its write-back texture, the
+      //    jitter in every frame and no sharpening.
+      if (scene_point && find_texture("fsr_scene_out")) {
+        if (!rex::graphics::d3d12::FsrUpscaler::Available()) {
+          std::printf("FSR checks skipped: the tests are built without FSR (REX_FSR)\n");
+          skipped += kFsrChecks;
+        } else if (!hardware) {
+          std::printf("FSR checks skipped on WARP (WARP crashes in FSR3-SHADING-CHANGE-PYRAMID, "
+                      "open item); --hardware runs them\n");
+          skipped += kFsrChecks;
+        } else {
+          std::printf("fsr %s at the scene_color point\n",
+                      rex::graphics::d3d12::FsrUpscaler::Version().c_str());
+          rex::graphics::d3d12::FsrUpscaler::SetMessageSink(
+              [](bool error, const std::string& message) {
+                std::printf("%s %s\n", error ? "FAIL" : "note", message.c_str());
+                if (error) ++failures;
+              });
+          scene_out_texture = find_texture("fsr_scene_out");
+          std::map<std::string, double> fsr_on = {
+              {"TAA", 1.0}, {"TAA_POINT", 1.0}, {"FSR", 1.0}, {"FSR_SHARPNESS", 0.0}};
+          // 5a. A still edge over 48 frames (six cycles of the jitter): it
+          //     converges to the pixel coverage and holds still, while the
+          //     input flips between 0 and 1 on the edge.
+          double fsr_input_change = 0.0;
+          std::vector<float> fsr_previous_input;
+          for (uint32_t index = 0; index < 48 && ok; ++index) {
+            Frame frame = jittered_edge(index);
+            if (!fsr_previous_input.empty()) {
+              for (size_t i = 0; i < frame.rgb.size(); ++i) {
+                fsr_input_change =
+                    std::fmax(fsr_input_change, std::fabs(frame.rgb[i] - fsr_previous_input[i]));
+              }
+            }
+            fsr_previous_input = frame.rgb;
+            ok = run_taa(frame, fsr_on, index == 46 ? 0 : index == 47 ? 1 : -1);
+          }
+          if (!ok) return 1;
+          double fsr_change = 0.0;
+          double fsr_error = edge_error(read_taa(0), read_taa(1), fsr_change);
+          std::printf("fsr: still edge: mean |linear - coverage| %.3f, largest change between the "
+                      "last two frames %.3f (input %.3f)\n",
+                      fsr_error, fsr_change, fsr_input_change);
+          Check(fsr_error < 0.1, "fsr: a still edge converges to its pixel coverage", fsr_error);
+          Check(fsr_change < 0.1 && fsr_change * 5.0 < fsr_input_change,
+                "fsr: a still edge holds still", fsr_change);
+
+          // 5b. The white box moving 4 pixels to the right per frame over the
+          //     dark ground, nearer than it, with its motion vectors: no trail
+          //     behind it, and the box stays white.
+          double fsr_trail = 0.0, fsr_box_low = 1.0;
+          for (uint32_t index = 0; index < 16 && ok; ++index) {
+            Frame frame = new_frame();
+            jitter_of(index, frame.jitter);
+            frame.history_valid = index > 0;
+            double left = 100.0 + 4.0 * index;
+            for (uint32_t y = 0; y < kHeight; ++y) {
+              for (uint32_t x = 0; x < kWidth; ++x) {
+                double sx = x + 0.5 + frame.jitter[0], sy = y + 0.5 + frame.jitter[1];
+                bool in_box = sx >= left && sx < left + 40.0 && sy >= 120.0 && sy < 220.0;
+                for (int k = 0; k < 3; ++k) {
+                  frame.rgb[(y * kWidth + x) * 3 + k] = in_box ? 1.0f : 0.0f;
+                }
+                if (x + 0.5 >= left && x + 0.5 < left + 40.0 && y + 0.5 >= 120.0 &&
+                    y + 0.5 < 220.0) {
+                  uint32_t s = scene_index(x, y);
+                  frame.depth[s] = 0.2f;
+                  frame.motion[s * 2] = 4.0f;
+                }
+              }
+            }
+            frame.previous_depth = frame.depth;
+            ok = run_taa(frame, fsr_on, index == 15 ? 2 : -1);
+            if (index == 15 && ok) {
+              std::vector<float> out = read_taa(2);
+              for (uint32_t y = 124; y < 216; ++y) {
+                for (uint32_t x = 0; x < kWidth; ++x) {
+                  double linear = out[(y * kWidth + x) * 3] * out[(y * kWidth + x) * 3];
+                  if (x + 0.5 < left - 2.0 && x + 0.5 > 100.0) {
+                    fsr_trail = std::fmax(fsr_trail, linear);
+                  }
+                  if (x + 0.5 > left + 2.0 && x + 0.5 < left + 38.0) {
+                    fsr_box_low = std::fmin(fsr_box_low, linear);
+                  }
+                }
+              }
+            }
+          }
+          if (!ok) return 1;
+          std::printf("fsr: moving box: trail %.3f, box at least %.3f\n", fsr_trail, fsr_box_low);
+          Check(fsr_trail < 0.05, "fsr: no trail behind a moving box", fsr_trail);
+          Check(fsr_box_low > 0.9, "fsr: the moving box keeps its color", fsr_box_low);
+
+          // 5c. A cut (no valid history: FSR's reset) to a white frame after
+          //     the box: it comes out white, nothing of the box's frames left.
+          {
+            Frame frame = new_frame();
+            frame.history_valid = false;
+            std::fill(frame.rgb.begin(), frame.rgb.end(), 1.0f);
+            if (!run_taa(frame, fsr_on, 3)) return 1;
+            std::vector<float> out = read_taa(3);
+            float darkest = *std::min_element(out.begin(), out.end());
+            Check(darkest > 0.99f, "fsr: a cut resets the accumulation", darkest);
+          }
+          rex::graphics::d3d12::FsrUpscaler::SetMessageSink(nullptr);
+          fsr_upscaler.reset();
+        }
+      }
     }
   }
 
@@ -2310,7 +2526,10 @@ int main(int argc, char** argv) {
   Check(wall_corner > 4.0 * std::fmax(open_ground, 0.01), "corner darker than open ground",
         wall_corner);
   Check(worst_w < 1.5 / 255.0 + 1.0e-3, "W debug output matches the traced W", worst_w * 255.0);
-  std::printf(failures ? "post pass shader tests: %d failed\n" : "post pass shader tests: passed\n",
-              failures);
+  if (failures) {
+    std::printf("post pass shader tests: %d failed, %d skipped\n", failures, skipped);
+  } else {
+    std::printf("post pass shader tests: passed, %d skipped\n", skipped);
+  }
   return failures ? 1 : 0;
 }

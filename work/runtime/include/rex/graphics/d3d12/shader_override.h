@@ -151,6 +151,9 @@ class ShaderOverrides {
   // for every translated pixel shader (Reload is true if its binary changed),
   // then EndReload.
   bool hot_reload() const { return hot_reload_; }
+  // An override or mod file calls xe_post_mark_reactive: the post passes then bind and clear
+  // their reactive mark texture every frame (otherwise it is neither bound nor cleared).
+  bool uses_reactive_mark() const { return uses_reactive_mark_; }
   bool PollChanges();
   bool NeedsReload(const D3D12Shader::D3D12Translation& translation) const;
   bool Reload(D3D12Shader::D3D12Translation& translation);
@@ -252,6 +255,7 @@ class ShaderOverrides {
 
   // Hot reload.
   bool hot_reload_ = false;
+  bool uses_reactive_mark_ = false;
   std::chrono::steady_clock::time_point last_poll_;
   mutable std::mutex entries_mutex_;
   std::unordered_map<const D3D12Shader::D3D12Translation*, Entry> entries_;

@@ -2,8 +2,8 @@
 # screen passes that run inside the guest frame, written as HLSL files and this
 # manifest. See docs/analysis/post-pass-framework.md for the format,
 # docs/analysis/gtao-design.md for GTAO, docs/analysis/motion-vectors.md for
-# the motion vectors, docs/analysis/taa.md for TAA and docs/analysis/windshield.md
-# for the cockpit glass.
+# the motion vectors, docs/analysis/taa.md for TAA, docs/analysis/fsr-plan.md
+# for FSR and docs/analysis/windshield.md for the cockpit glass.
 
 [scene]
 # Vertex shaders that carry the scene camera: <ucode hash>:rows:<WVP>:<WV>
@@ -118,6 +118,10 @@ WINDSHIELD_GLARE_RADIUS = 0.25
 WINDSHIELD_DUST = 1.0
 WINDSHIELD_GLARE_COLOR = "float3(1.0, 0.95, 0.85)"
 WINDSHIELD_MIN_INTERIOR = 0.1
+# FSR (fsr.hlsl and the runtime's fsr pass): the view distance in meters at
+# which FSR's depth is 1 (FSR_DEPTH_NEAR / W, an inverted projection with an
+# infinite far plane); nearer than anything FM4 draws.
+FSR_DEPTH_NEAR = 0.01
 
 # Run-time params, constants of every pass (b1); shader_mod_defines,
 # shader_mod_set and shader_mod_defines.txt override them by name, live.
@@ -211,6 +215,21 @@ TAA_DEBUG = { value = 0, min = 0, max = 7 }
 # and the weight of the current frame when still.
 GTAO_TEMPORAL = { value = 1, min = 0, max = 1 }
 GTAO_TEMPORAL_BLEND = { value = 0.15, min = 0.01, max = 1.0 }
+# AMD FSR 3.1's native anti-aliasing at the scene_color point instead of TAA
+# (fsr.hlsl and the pass fsr_upscale; the look's aa=fsr knob): 1 runs it, with
+# the jitter of every frame; it stays 0 in a runtime built without FSR
+# (REX_FSR), where TAA runs instead. Its RCAS sharpening (the look's sharpen),
+# how much of the current frame the car glass takes (motion_mask G, FSR's
+# reactive mask), the weight of the pixels without known motion in FSR's
+# transparency and composition mask (motion_mask R), FSR's own debug view
+# instead of the image (1), and FSR's 16-bit shaders where the GPU has 16-bit
+# operations, its default (0: 32-bit ones, an A/B; a new context).
+FSR = { value = 0, min = 0, max = 1 }
+FSR_SHARPNESS = { value = 0.0, min = 0.0, max = 1.0 }
+FSR_REACTIVE = { value = 0.8, min = 0.0, max = 1.0 }
+FSR_COMPOSITION = { value = 1.0, min = 0.0, max = 1.0 }
+FSR_DEBUG = { value = 0, min = 0, max = 1 }
+FSR_FP16 = { value = 1, min = 0, max = 1 }
 # The cockpit glass (windshield.hlsl): the strength of all its effects, 0 off
 # (the look's windshield knob), and its debug views: 1 the pixel kinds, 2 the
 # added light alone, 3 the dust.
@@ -295,6 +314,35 @@ history = true
 format = "R8G8B8A8_UNORM"
 
 [textures.taa_scene_out]
+format = "R10G10B10A2_UNORM"
+write_back = true
+
+# FSR's inputs at the scene_color point (fsr_prepare): the linear color, the
+# depth, the reactive and the transparency and composition masks; its output
+# (linear), and that output encoded and written back into the game's scene.
+[textures.fsr_color]
+format = "R16G16B16A16_FLOAT"
+
+[textures.fsr_depth]
+format = "R32_FLOAT"
+
+[textures.fsr_reactive]
+format = "R8_UNORM"
+
+[textures.fsr_composition]
+format = "R8_UNORM"
+
+[textures.fsr_output]
+format = "R16G16B16A16_FLOAT"
+
+# What shader mods mark as reactive with xe_post_mark_reactive (particles that
+# ghost under FSR; none yet): bound and cleared every frame only while a mod
+# calls the function, else zero; fsr_prepare adds it to FSR's reactive mask.
+[textures.reactive_mark]
+format = "R8_UNORM"
+reactive_mark = true
+
+[textures.fsr_scene_out]
 format = "R10G10B10A2_UNORM"
 write_back = true
 
@@ -440,7 +488,7 @@ name = "taa_resolve"
 point = "final"
 shader = "taa.hlsl"
 entry = "taa_resolve"
-if = "TAA > 0 && TAA_POINT == 0 && XE_SCENE > 0"
+if = "TAA > 0 && TAA_POINT == 0 && FSR == 0 && XE_SCENE > 0"
 srv = ["final_color", "scene_depth", "motion_vectors", "motion_mask", "previous:taa_history",
        "previous_depth", "previous:taa_phases", "previous:taa_unchanged"]
 uav = ["taa_history", "taa_debug", "taa_phases", "taa_unchanged"]
@@ -451,7 +499,7 @@ point = "final"
 type = "pixel"
 shader = "taa.hlsl"
 entry = "taa_output"
-if = "TAA > 0 && TAA_POINT == 0 && XE_SCENE > 0"
+if = "TAA > 0 && TAA_POINT == 0 && FSR == 0 && XE_SCENE > 0"
 srv = ["taa_history", "taa_debug"]
 rtv = ["final_color"]
 
@@ -514,7 +562,7 @@ point = "scene_color"
 shader = "taa.hlsl"
 entry = "taa_resolve"
 defines = { TAA_SCENE = 1 }
-if = "TAA > 0 && TAA_POINT > 0 && XE_SCENE > 0"
+if = "TAA > 0 && TAA_POINT > 0 && FSR == 0 && XE_SCENE > 0"
 srv = ["scene_color", "scene_depth", "motion_vectors", "motion_mask",
        "previous:taa_scene_history", "previous_depth"]
 uav = ["taa_scene_history", "taa_scene_debug"]
@@ -526,9 +574,39 @@ type = "pixel"
 shader = "taa.hlsl"
 entry = "taa_output"
 defines = { TAA_SCENE = 1 }
-if = "TAA > 0 && TAA_POINT > 0 && XE_SCENE > 0"
+if = "TAA > 0 && TAA_POINT > 0 && FSR == 0 && XE_SCENE > 0"
 srv = ["taa_scene_history", "taa_scene_debug", "scene_color"]
 rtv = ["taa_scene_out"]
+
+# FSR's native anti-aliasing at the scene_color point instead of TAA there:
+# its inputs, FSR itself (the runtime's upscaler, a pass of type fsr), and its
+# output written back into the game's scene before the post chain.
+[[passes]]
+name = "fsr_prepare"
+point = "scene_color"
+shader = "fsr.hlsl"
+entry = "fsr_prepare"
+if = "FSR > 0 && XE_SCENE > 0"
+srv = ["scene_color", "scene_depth", "motion_mask", "reactive_mark"]
+uav = ["fsr_color", "fsr_depth", "fsr_reactive", "fsr_composition"]
+
+[[passes]]
+name = "fsr_upscale"
+point = "scene_color"
+type = "fsr"
+if = "FSR > 0 && XE_SCENE > 0"
+srv = ["fsr_color", "fsr_depth", "motion_vectors", "fsr_reactive", "fsr_composition"]
+uav = ["fsr_output"]
+
+[[passes]]
+name = "fsr_output"
+point = "scene_color"
+type = "pixel"
+shader = "fsr.hlsl"
+entry = "fsr_output"
+if = "FSR > 0 && XE_SCENE > 0"
+srv = ["fsr_output", "scene_color"]
+rtv = ["fsr_scene_out"]
 
 [[passes]]
 name = "motion_debug_show"
@@ -559,7 +637,8 @@ srv = ["scene_color"]
 rtv = ["scene_written"]
 
 # The scene draws move by a sub-pixel Halton (2, 3) offset per frame while TAA
-# runs, in frames after one in which taa_resolve or taa_scene_resolve ran, while
+# runs, in frames after one in which taa_resolve, taa_scene_resolve or
+# fsr_upscale ran; with FSR in every such frame (every_frame_if), else while
 # the scene camera moved by TAA_JITTER_MOTION host pixels (the static world at
 # motion_distance meters) in one of the last motion_hold frames and the median
 # frame rate is TAA_JITTER_RATE or more, and with TAA_STILL once it has not
@@ -567,7 +646,8 @@ rtv = ["scene_written"]
 [jitter]
 phases = 8
 if = "TAA > 0 && TAA_JITTER > 0"
-consumer = ["taa_resolve", "taa_scene_resolve"]
+consumer = ["taa_resolve", "taa_scene_resolve", "fsr_upscale"]
+every_frame_if = "FSR > 0"
 min_motion = "TAA_JITTER_MOTION"
 min_frame_rate = "TAA_JITTER_RATE"
 still = "TAA_STILL"

@@ -11,13 +11,14 @@
 # SDK's shader compiler (tools/binary_store/FidelityFX_SC.exe and its DXC) into headers in the
 # build tree. No prebuilt AMD DLL is used.
 #
-# Expects the target rexgpu-xenos. Defines REX_FSR=1 on it and adds d3d12/fsr.cpp.
+# With the target rexgpu-xenos, links them into it and defines REX_FSR=1 there (d3d12/fsr.cpp
+# then holds the upscaler); without it (the CPU tests, work/fm4-rex/tests), only the libraries.
 
 if(NOT REX_FSR)
     return()
 endif()
 
-if(NOT WIN32 OR NOT REXGLUE_USE_D3D12)
+if(NOT WIN32)
     message(FATAL_ERROR "REX_FSR needs Windows and the D3D12 backend")
 endif()
 
@@ -97,10 +98,9 @@ foreach(_rex_fsr_target IN ITEMS ffx_fsr3upscaler_x64 ffx_backend_dx12_x64)
         CXX_STANDARD 17)
 endforeach()
 
-target_sources(rexgpu-xenos PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}/d3d12/fsr.cpp")
-set_source_files_properties("${CMAKE_CURRENT_SOURCE_DIR}/d3d12/fsr.cpp"
-    PROPERTIES SKIP_PRECOMPILE_HEADERS ON)
-target_compile_definitions(rexgpu-xenos PRIVATE REX_FSR=1)
-target_link_libraries(rexgpu-xenos PRIVATE ffx_fsr3upscaler_x64 ffx_backend_dx12_x64)
+if(TARGET rexgpu-xenos)
+    target_compile_definitions(rexgpu-xenos PRIVATE REX_FSR=1)
+    target_link_libraries(rexgpu-xenos PRIVATE ffx_fsr3upscaler_x64 ffx_backend_dx12_x64)
+endif()
 
 message(STATUS "  FSR 3.1: on, from ${REX_FSR_SDK_DIR}")

@@ -462,6 +462,22 @@ class DeferredCommandList {
     return WriteCommand(Command::kDrawBackEnd, arguments_size_bytes);
   }
 
+  // Code that records into the real command list at this position of the replay, on the
+  // thread that replays the list (FSR's dispatch, fsr.h): function(command_list, arguments)
+  // with a copy of arguments_size_bytes of arguments (trivially copyable, pointer aligned).
+  // The callback may bind its own descriptor heaps, root signatures and pipeline state; the
+  // replay binds the list's descriptor heaps again after it and forgets the pipeline, and the
+  // recorder calls D3D12CommandProcessor::InvalidateCommandListState after recording it.
+  using Callback = void (*)(ID3D12GraphicsCommandList* command_list, const void* arguments);
+  void D3DCallback(Callback function, const void* arguments, size_t arguments_size_bytes) {
+    auto* args = reinterpret_cast<uint8_t*>(
+        WriteCommand(Command::kCallback, sizeof(Callback) + arguments_size_bytes));
+    std::memcpy(args, &function, sizeof(Callback));
+    if (arguments_size_bytes) {
+      std::memcpy(args + sizeof(Callback), arguments, arguments_size_bytes);
+    }
+  }
+
   void InsertDebugMarker(const char* label_name) {
     size_t label_len = std::strlen(label_name);
     uint8_t* args_ptr = reinterpret_cast<uint8_t*>(
@@ -516,6 +532,7 @@ class DeferredCommandList {
     kInsertDebugMarker,
     kDeferredConstants,
     kDrawBackEnd,
+    kCallback,
   };
 
   struct CommandHeader {

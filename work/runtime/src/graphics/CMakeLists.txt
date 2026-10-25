@@ -94,6 +94,7 @@ if(REXGLUE_USE_D3D12)
         d3d12/pipeline_cache.cpp
         d3d12/shader_override.cpp
         d3d12/post_pass.cpp
+        d3d12/fsr.cpp
     )
 
     # The HLSL libraries of shader overrides and of post passes, embedded as
@@ -156,6 +157,9 @@ rex_target_pch(rexgpu-xenos
     <rex/graphics/format/ucode.h>
     <rex/graphics/pipeline/shader/shader.h>
 )
+
+# fsr.cpp includes the FidelityFX SDK's headers (with its own d3dx12.h) when REX_FSR is on.
+set_source_files_properties(d3d12/fsr.cpp PROPERTIES SKIP_PRECOMPILE_HEADERS ON)
 
 if(REXGPU_XENOS_DXBC_THIRDPARTY_SOURCES)
     set_source_files_properties(${REXGPU_XENOS_DXBC_THIRDPARTY_SOURCES}

@@ -113,7 +113,7 @@ const std::vector<KnobGroup> kKnobGroups = {
 
 // The defaults of the knobs that are not shader defines (launcher.json has the others).
 const std::map<std::string, std::string> kOtherKnobDefaults = {
-    {"sky", "1"}, {"road_gloss", "1"}, {"taa", "0"}, {"windshield", "0"}};
+    {"sky", "1"}, {"road_gloss", "1"}, {"taa", "0"}, {"aa", "taa"}, {"windshield", "0"}};
 
 struct Bind {
   const char* cvar;
@@ -1215,6 +1215,13 @@ void App::LookPage() {
     changed_label("taa", "Temporal AA");
     if (ImGui::Checkbox("##taa", &taa)) set_knob("taa", taa ? "1" : "0");
     reset_button("taa");
+    // TAA or FSR 3.1's native anti-aliasing (aa=fsr, TAA in a runtime without FSR).
+    if (taa) {
+      int method = effective("aa").value_or("taa") == "fsr" ? 1 : 0;
+      changed_label("aa", "Method");
+      if (Segment("aa", method, {"TAA", "FSR 3.1"})) set_knob("aa", method ? "fsr" : "taa");
+      reset_button("aa");
+    }
   }
   for (const auto& group : kKnobGroups) {
     ImGui::Dummy(ImVec2(0, 2 * scale_));
