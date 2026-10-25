@@ -141,6 +141,8 @@ Shader mods change a generated override without copying it. With `--arg shader_m
 
 `--arg shader_mod_defines=NAME=VALUE;...` sets its defines. The defaults change nothing.
 
+A mod can also read `xe_guest_vblank_rate()`: the rate in Hz at which the runtime delivers guest vblanks, which follows a title that switches it while running (`fm4-vblank-rate.cpp`). It is a host value after the system constants, written for every draw while overrides are in use (`ShaderOverrides::kHostValuesOffset`), and defined only in contracts that have `XE_SYS_GUEST_VBLANK_RATE`. The auto exposure mod of the look knob `adaptation` uses it ([running.md](../running.md#exposure-adaptation)).
+
 The look mods (`work/fm4-rex/look`, see below) are shader mods of this kind.
 
 ### Iterating on overrides and mods

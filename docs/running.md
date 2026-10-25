@@ -60,7 +60,7 @@ the environment and the display description of sixteen sets of options (RTV, `-R
 | Page | Contents |
 | --- | --- |
 | Display | Screen (`-Display`), fullscreen, render scale, supersample, upscale (`-Upscale`, with the input and output lines beside it), race frame rate, race quality, one tile with TAA or the MSAA tiles (`-Msaa`), the full-rate mirror and the settings overlay. The display and render scale that the options give are shown below them. |
-| Look | The preset (`aces`, `gt`, `neutral`, `original`, `original` without TAA, or a saved look), the tone curve, TAA, and a slider for each [look knob](#look) in five groups: picture, lighting, car, sky and foliage, road. A changed knob is marked and has a Reset button. **Save as look** keeps the current value under a name. The `-Look` value is shown and can be edited. |
+| Look | The preset (`aces`, `gt`, `neutral`, `original`, `original` without TAA, or a saved look), the tone curve, TAA, the exposure speed of 60 fps (`adaptation`), and a slider for each [look knob](#look) in five groups: picture, lighting, car, sky and foliage, road. A changed knob is marked and has a Reset button. **Save as look** keeps the current value under a name. The `-Look` value is shown and can be edited. |
 | Controls | The Controller section: the options of `-Pad` (the pad driver, rumble strength, trigger rumble, the steering anti-deadzone and the input thread; stick and trigger shaping and the extra buttons folded), with the `-Pad` value shown and editable; see [Controller](#controller). Then the Keyboard section: the options of `-Keyboard` (smooth steering and pedals, their rates and the precision share; mouse steering folded), with the `-Keyboard` value; see [Keyboard](#keyboard). Below it the keyboard bindings, by their function in the game's DEFAULT LAYOUT 1 (the runtime's `keybind_*` settings). **Set** waits for a key; several keys are separated by commas, modifiers are written as `Shift+Up`. Unknown key names are marked and block Play. A connected controller needs no setup. |
 | Game data | Disc 1 and Disc 2, checked as `generate` checks them, the downloadable content folders and files, and the content packages found, with their import state. **Remove import** deletes an imported package from the user data (see [Data directories](#data-directories)). The texture pack is the `-TextureReplace` folder. |
 | Advanced | Fixed vblank, the shadow workaround, `-SingleTile`, `--ao`, `-Rov`, the native path (`-Native`, and its MSAA: one pass with 2x, the default, one pass with 4x as `-MsaaSamples 4`, or one tile without MSAA as `-MsaaSamples 0`), the performance trace, extra cvars, the texture dump folder, the user data folder, and buttons that open the logs and the user data and copy the command line. |
@@ -283,6 +283,10 @@ Measured with Quick Race, three runs: 118 to 120 fps, frame p99 8.8 to 9.8 ms, a
 every frame fully rendered. At 240, races run at 220 to 235 fps (p99 5.3 to 6.2 ms).
 At 240 the command processor sets the limit: it needs about 4.3 ms per race frame,
 against about 2.2 ms of GPU time. Values from 30 to 240 are accepted.
+
+The title's auto exposure adapts by a fixed share per frame, so above 60 fps it settles
+faster than on the Xbox 360; the look knob `adaptation=1` keeps the game's speed
+([Exposure adaptation](#exposure-adaptation)).
 
 #### -VSync
 
@@ -592,6 +596,7 @@ and `-Look original`.
 | `sharpen` | number | Sharpening. |
 | `bloom` | number | Bloom. |
 | `exposure` | number | Exposure. |
+| `adaptation` | 0 or 1, default 0 | 1: the auto exposure adapts as fast as the game's at 60 fps at every frame rate ([below](#exposure-adaptation)). In no preset yet. |
 | `contrast` | number | Contrast. |
 | `saturation` | number | Saturation. |
 | `vignette` | number | Vignette. |
@@ -669,6 +674,33 @@ between much too bright and much too dark with the sun's position.
   ([Cockpit glass](#cockpit-glass)).
 
 See [cockpit brightness](analysis/cockpit-brightness.md#the-cause-the-cockpit_light-floor-25-october-2026).
+
+### Exposure adaptation
+
+The game's auto exposure moves towards the scene's brightness by a fixed share of the
+difference in every frame (0.045, the same at every frame rate), made for the Xbox 360's
+60 fps. Above 60 fps it therefore settles faster than the game does: four times as fast at
+`-FrameRate 240` (a time constant of about 0.09 s instead of 0.36 s), twice at 120, and twice
+in the countdown and replays at the default rate, which run at 60 fps instead of the title's
+30 ([-FrameRate](#-framerate)). After a change of the scene's brightness, such as a tunnel
+exit, the picture reaches its new exposure in about a quarter of the game's time at 240 fps.
+
+`-Look "aces,adaptation=1"` gives each frame the share that covers the same part of the
+difference in the time of one 60 Hz vblank, `1 - (1 - share)^(60 / rate)`, with the guest vblank
+rate that the runtime passes to the shader mods (`xe_guest_vblank_rate`). That rate follows
+the title's scenarios as the launcher sets them (60 Hz in the menus and the 30 fps screens,
+the race rate in races, twice the race rate in the countdown and replays), so the same knob is
+right in each of them. At 60 Hz it changes nothing. It is a shader mod of the auto exposure
+shader (`shader_CAF3881F7C4CDCAA.mod.hlsli`), so it works on the RTV path and the native
+path; `-Rov` keeps the title's adaptation. The GUI launcher shows it as the checkbox
+**60 fps exposure speed**. No preset sets it yet.
+
+Measured on 26 October 2026 in a frozen race frame whose exposure input was stepped: the
+exposure made 90% of its change 1.38 s after the step at 60 Hz, with and without the knob;
+at 240 Hz on the native path (229 fps) 1.40 s with the knob and 0.40 s without it. The knob
+follows the guest vblank rate, not the frame rate a race reaches: below its target the
+exposure adapts slower than the game's in proportion (2.3 s at 159 of 240 fps). Details in
+the [current status](status/current.md#auto-exposure-adaptation-above-60-fps-26-october-2026).
 
 ### Sun glare
 

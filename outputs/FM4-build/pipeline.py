@@ -1959,6 +1959,7 @@ def launcher_test_options(root):
              'texture_replace':str(root/'game-build')},
             {'look':'pc,clearcoat=0,sky=1,exposure=1e-05','quality':'xbox','display':'1440p'},
             {'look':'original,taa=0,sun=2.5','msaa':True,'frame_rate':240,'supersample':True},
+            {'look':'aces,adaptation=1','frame_rate':240},
             {'native':True,'resolution_scale':'panel'},
             {'native':True,'supersample':True},
             {'native':True,'display':'1080p'},
