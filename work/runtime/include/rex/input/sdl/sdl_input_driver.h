@@ -12,6 +12,7 @@
 #pragma once
 
 #include <atomic>
+#include <memory>
 #include <mutex>
 #include <optional>
 #include <vector>
@@ -67,7 +68,14 @@ class SDLInputDriver final : public InputDriver, public rex::ui::WindowListener 
     DeviceId id;
     // Per pad rather than per guest user, so it survives reassignment.
     KeystrokeState keystroke;
+    // The latency probe's virtual pad (input_latency_probe): its last right stick X and the
+    // SDL time of the update that sent it, until a read takes it.
+    bool probe = false;
+    bool probe_unread = false;
+    int16_t probe_value = 0;
+    uint64_t probe_pumped_ns = 0;
   };
+  struct LatencyProbe;
 
   // WindowListener
   void OnClosing(rex::ui::UIEvent& e) override;
@@ -89,6 +97,9 @@ class SDLInputDriver final : public InputDriver, public rex::ui::WindowListener 
   bool TestSDLVersion() const;
   void UpdateXCapabilities(ControllerState& state);
   void QueueControllerUpdate();
+  void StartLatencyProbe();
+  void StopLatencyProbe();
+  void ObserveProbeReadLocked(ControllerState& controller);
 
   rex::ui::Window* attached_window_ = nullptr;
   bool sdl_events_initialized_;
@@ -103,6 +114,7 @@ class SDLInputDriver final : public InputDriver, public rex::ui::WindowListener 
   std::vector<SDL_Event> pending_events_;
   // Never rewound, so a handle held past a disconnect resolves to nothing.
   uint64_t next_device_id_ = 1;
+  std::unique_ptr<LatencyProbe> probe_;
 };
 
 }  // namespace rex::input::sdl

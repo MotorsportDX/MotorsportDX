@@ -9,8 +9,12 @@
  * @modified    Tom Clay, 2026 - Adapted for ReXGlue runtime
  */
 
+#include <algorithm>
 #include <array>
+#include <chrono>
 #include <filesystem>
+#include <string>
+#include <thread>
 
 #include <rex/assert.h>
 #include <rex/chrono/clock.h>
@@ -22,6 +26,9 @@
 
 REXCVAR_DEFINE_STRING(hid_mappings_file, "gamecontrollerdb.txt", "Input",
                       "Path to SDL gamecontroller mappings file");
+REXCVAR_DEFINE_BOOL(input_latency_probe, false, "Input",
+                    "Attach a virtual SDL gamepad that times new pad states until the guest "
+                    "reads them; logs a summary every 5 seconds");
 
 namespace rex::input::sdl {
 
@@ -30,7 +37,60 @@ namespace {
 // SDL clamps to SDL_MAX_RUMBLE_DURATION_MS, which is not a public constant.
 constexpr uint32_t kRumbleDurationMs = 0xFFFF;
 
+// The probe's right stick X alternates between 0 and this, far inside any stick deadzone.
+constexpr int16_t kProbeValue = 256;
+constexpr uint64_t kProbeWindowNs = 5'000'000'000;
+
 }  // namespace
+
+// input_latency_probe: a virtual SDL gamepad stands in for a pad whose reports arrive at
+// random times. A thread of its own flips the right stick X every 20 to 49 ms; SDL sends the
+// new value on its next joystick update (normally the UI thread's event loop, which polls
+// every millisecond while a joystick is open), and the guest sees it on its next state read.
+// Per window it logs the gaps between joystick updates, the wait from a new value to the
+// update that sent it, from that update to the guest's read, the whole age at the read, and
+// the gaps between the guest's reads of this pad. Diagnostic only, off by default.
+struct SDLInputDriver::LatencyProbe {
+  SDL_JoystickID id = 0;
+  SDL_Joystick* joystick = nullptr;
+  std::thread thread;
+  std::atomic<bool> stop{false};
+  // When each of the two values was last set, by value.
+  std::atomic<uint64_t> set_ns[2] = {};
+  std::atomic<uint64_t> last_update_ns{0};
+  std::mutex mutex;
+  std::vector<double> update_gaps, pump_waits, read_waits, ages, read_gaps;
+  uint64_t last_read_ns = 0;
+  uint64_t window_start_ns = 0;
+
+  static void SDLCALL Update(void* userdata) {
+    auto* probe = static_cast<LatencyProbe*>(userdata);
+    const uint64_t now = SDL_GetTicksNS();
+    const uint64_t last = probe->last_update_ns.exchange(now);
+    if (last) {
+      std::lock_guard lock(probe->mutex);
+      if (probe->update_gaps.size() < 100000) {
+        probe->update_gaps.push_back(double(now - last) / 1e6);
+      }
+    }
+  }
+
+  static std::string Summary(std::vector<double>& values) {
+    if (values.empty()) {
+      return "none";
+    }
+    std::sort(values.begin(), values.end());
+    double sum = 0;
+    for (double value : values) {
+      sum += value;
+    }
+    auto at = [&](double share) {
+      return values[std::min(values.size() - 1, size_t(share * double(values.size())))];
+    };
+    return fmt::format("n={} mean={:.2f} p50={:.2f} p99={:.2f} max={:.2f}", values.size(),
+                       sum / double(values.size()), at(0.5), at(0.99), values.back());
+  }
+};
 
 SDLInputDriver::SDLInputDriver(rex::ui::Window* window, size_t window_z_order)
     : InputDriver(window, window_z_order),
@@ -112,6 +172,9 @@ void SDLInputDriver::OnWindowAvailable(rex::ui::Window* window) {
           }
         }
       }
+      if (REXCVAR_GET(input_latency_probe)) {
+        StartLatencyProbe();
+      }
       REXLOG_INFO("SDL input driver initialized successfully");
     });
   }
@@ -124,6 +187,7 @@ void SDLInputDriver::OnClosing(rex::ui::UIEvent&) {
       attached_window_->app_context().CallInUIThreadSynchronous(
           [this]() { attached_window_->app_context().ExecutePendingFunctionsFromUIThread(); });
     }
+    StopLatencyProbe();
     for (auto& controller : controllers_) {
       SDL_CloseGamepad(controller.sdl);
     }
@@ -205,6 +269,10 @@ X_RESULT SDLInputDriver::GetDeviceState(DeviceId id, X_INPUT_STATE* out_state) {
   auto controller = FindController(id);
   if (!controller) {
     return X_ERROR_DEVICE_NOT_CONNECTED;
+  }
+
+  if (controller->probe) {
+    ObserveProbeReadLocked(*controller);
   }
 
   // Make sure packet_number is only incremented by 1, even if there have been
@@ -463,6 +531,7 @@ void SDLInputDriver::OnControllerDeviceAddedLocked(const SDL_Event& event) {
   ControllerState state = {};
   state.sdl = controller;
   state.id = AllocateDeviceId();
+  state.probe = probe_ && event.gdevice.which == probe_->id;
   state.state_changed = true;  // XInput starts with packet_number = 1
   UpdateXCapabilities(state);
   controllers_.push_back(state);
@@ -507,6 +576,12 @@ void SDLInputDriver::OnControllerDeviceAxisMotionLocked(const SDL_Event& event) 
       break;
     case SDL_GAMEPAD_AXIS_RIGHTX:
       pad.thumb_rx = event.gaxis.value;
+      if (controllers_.at(*idx).probe) {
+        auto& probe = controllers_.at(*idx);
+        probe.probe_value = event.gaxis.value;
+        probe.probe_pumped_ns = event.gaxis.timestamp;
+        probe.probe_unread = true;
+      }
       break;
     case SDL_GAMEPAD_AXIS_RIGHTY:
       pad.thumb_ry = ~event.gaxis.value;
@@ -666,6 +741,91 @@ void SDLInputDriver::UpdateXCapabilities(ControllerState& state) {
   c.gamepad.thumb_ry = static_cast<int16_t>(0xFFFFu);
   c.vibration.left_motor_speed = 0xFFFFu;
   c.vibration.right_motor_speed = 0xFFFFu;
+}
+
+void SDLInputDriver::StartLatencyProbe() {
+  auto probe = std::make_unique<LatencyProbe>();
+  SDL_VirtualJoystickDesc desc;
+  SDL_INIT_INTERFACE(&desc);
+  desc.type = SDL_JOYSTICK_TYPE_GAMEPAD;
+  desc.naxes = SDL_GAMEPAD_AXIS_COUNT;
+  desc.nbuttons = SDL_GAMEPAD_BUTTON_DPAD_RIGHT + 1;
+  desc.name = "FM4 latency probe";
+  desc.userdata = probe.get();
+  desc.Update = LatencyProbe::Update;
+  probe->id = SDL_AttachVirtualJoystick(&desc);
+  if (!probe->id) {
+    REXLOG_ERROR("SDL latency probe: cannot attach a virtual gamepad: {}", SDL_GetError());
+    return;
+  }
+  probe->joystick = SDL_OpenJoystick(probe->id);
+  if (!probe->joystick) {
+    REXLOG_ERROR("SDL latency probe: cannot open the virtual gamepad: {}", SDL_GetError());
+    SDL_DetachVirtualJoystick(probe->id);
+    return;
+  }
+  probe->window_start_ns = SDL_GetTicksNS();
+  auto* raw = probe.get();
+  probe->thread = std::thread([raw]() {
+    int16_t value = 0;
+    for (uint32_t step = 0; !raw->stop.load(); ++step) {
+      // Out of step with the guest's frames and SDL's polling.
+      std::this_thread::sleep_for(std::chrono::milliseconds(20 + (step * 7919) % 30));
+      value = value ? 0 : kProbeValue;
+      raw->set_ns[value != 0].store(SDL_GetTicksNS());
+      SDL_SetJoystickVirtualAxis(raw->joystick, SDL_GAMEPAD_AXIS_RIGHTX, value);
+    }
+  });
+  REXLOG_INFO("SDL latency probe: virtual gamepad {} attached", static_cast<uint32_t>(probe->id));
+  probe_ = std::move(probe);
+}
+
+void SDLInputDriver::StopLatencyProbe() {
+  if (!probe_) {
+    return;
+  }
+  probe_->stop = true;
+  if (probe_->thread.joinable()) {
+    probe_->thread.join();
+  }
+  SDL_CloseJoystick(probe_->joystick);
+  SDL_DetachVirtualJoystick(probe_->id);
+  probe_.reset();
+}
+
+void SDLInputDriver::ObserveProbeReadLocked(ControllerState& controller) {
+  auto& probe = *probe_;
+  const uint64_t now = SDL_GetTicksNS();
+  std::lock_guard lock(probe.mutex);
+  if (probe.last_read_ns) {
+    probe.read_gaps.push_back(double(now - probe.last_read_ns) / 1e6);
+  }
+  probe.last_read_ns = now;
+  if (controller.probe_unread) {
+    controller.probe_unread = false;
+    const uint64_t set = probe.set_ns[controller.probe_value != 0].load();
+    const uint64_t pumped = controller.probe_pumped_ns;
+    if (set && set <= pumped && pumped <= now) {
+      probe.pump_waits.push_back(double(pumped - set) / 1e6);
+      probe.read_waits.push_back(double(now - pumped) / 1e6);
+      probe.ages.push_back(double(now - set) / 1e6);
+    }
+  }
+  if (now - probe.window_start_ns < kProbeWindowNs) {
+    return;
+  }
+  REXLOG_INFO(
+      "SDL latency probe (ms): joystick update gaps {}; new value to update {}; update to "
+      "guest read {}; age at read {}; guest read gaps {}",
+      LatencyProbe::Summary(probe.update_gaps), LatencyProbe::Summary(probe.pump_waits),
+      LatencyProbe::Summary(probe.read_waits), LatencyProbe::Summary(probe.ages),
+      LatencyProbe::Summary(probe.read_gaps));
+  probe.update_gaps.clear();
+  probe.pump_waits.clear();
+  probe.read_waits.clear();
+  probe.ages.clear();
+  probe.read_gaps.clear();
+  probe.window_start_ns = now;
 }
 
 void SDLInputDriver::QueueControllerUpdate() {
