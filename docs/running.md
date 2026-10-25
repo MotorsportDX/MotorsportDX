@@ -314,8 +314,14 @@ picture that fits the screen, at a fractional scale of 1280x720 where it needs o
 at 9/4, 2880x1620, letterboxed). The launcher sets `native_draw_scale` and the
 `native_rt_surfaces` the fraction needs together ([D3D-level HLE,
 18.19](analysis/d3d-hle-n5.md#1819-increment-3-the-screens-own-resolution-in-the-launcher-25-october-2026)).
-On 16:10 and other screens that are not 16:9 the picture is letterboxed or pillarboxed
-until the aspect work (increment 2), and the description says so. Integrated GPUs keep
+A screen of another aspect than 16:9 renders its own aspect: wider than 16:9 with more on
+each side (Hor+, 720 lines and a wider logical width: 3440x1440 renders 1720x720 at 2),
+narrower with more above and below (Vert+, 1280 wide and a taller logical height: 2560x1600
+renders 1280x800 at 2, 1920x1200 at 3/2); the HUD and the menus stay in the centred 16:9
+([D3D-level HLE, 18.23](analysis/d3d-hle-n5.md#1823-increment-2-step-3-the-launchers-logical-size-25-october-2026)).
+Where the logical size, rounded to a multiple of 8, misses the screen by a few pixels
+(2560x1080 renders 2556x1080), the presenter pillarboxes or letterboxes them, and the
+description says so. Integrated GPUs keep
 1x automatically; `-ResolutionScale panel` (the GUI's "Screen's own resolution") picks
 the screen's own resolution on them. `-Supersample` on the native path renders at the
 whole part of the screen's scale plus one. Photo mode stays at the whole scale and is

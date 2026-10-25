@@ -409,3 +409,26 @@ The step gate on `I:\FM4-build-usa`, H = 800 (16:10):
 | combined checks with perturbation, `career` at 3/2 with H = 800 (`n8l-check-32-800`) | reached its goal; the texture byte check 2,220 textures and the resolve byte check 5,217 resolves, 0 mismatches; identity, bindings and guard only the perturbed; the error keys of every earlier check run |
 
 Next: the culling (18.5), then the launcher's logical size from the panel's aspect (a 16:10 panel at s = 20/9 with H = 800 fills 2560x1600 without a letterbox).
+
+### 18.23 Increment 2, step 3: the launcher's logical size, 25 October 2026
+
+**The culling** (18.5's third item). A race at 32:9 (`native_logical_width=2560` at 1x, `n9a`, 91 captures with the straights, the corners, a car alongside, the trees, the rocks, the stands and the banners) shows geometry up to both edges, with nothing missing in the frames compared: the title's culling is conservative (a frustum wider than the view, or culling by track section), so the 16:9 frustum does not bite at 21:9 or 32:9 in the cockpit camera. The main session's decision of 25 October 2026: no culling hook unless a gap shows up. The chase cameras are not covered (e2e's camera cycle runs only after goal navigation); increment 2's close gate cycles the cameras at 21:9 and 16:10 and compares both edges at 1:1, and a gap there brings the hook back. On the way, `ocr-server.ps1` reads a 16:9 capture (the menus, at k) whole and crops only the others: at 32:9 the crop had cut the menu's text.
+
+**The launcher.** The main session's rule of 25 October 2026, in `logical_view` (`pipeline.py`) and its port `LogicalViewOf` (`plan.cpp`), wherever the native path renders at the screen's own scale (18.19):
+
+- aspect a = width / height of 16:9 or more: Hor+, a logical height of 720 and a logical width of 720 a rounded to a multiple of 8 (at most 3840), scale height / 720;
+- a below 16:9: Vert+, a logical width of 1280 and a logical height of 1280 / a rounded to a multiple of 8 (at most 1024), scale width / 1280.
+
+| Screen | Logical size | Scale | Render |
+|---|---|---|---|
+| 2560x1600 | 1280x800, Vert+ | 2 | 2560x1600 |
+| 1920x1200 | 1280x800, Vert+ | 3/2 | 1920x1200 |
+| 2880x1800 | 1280x800, Vert+ | 9/4 | 2880x1800 |
+| 3440x1440 | 1720x720, Hor+ | 2 | 3440x1440 |
+| 2560x1080 | 1704x720, Hor+ | 3/2 | 2556x1080, pillarboxed by 4 pixels |
+| 1920x1080 | 1280x720 | 3/2 | 1920x1080 |
+| 3840x2160 | 1280x720 | 3 | 3840x2160 |
+
+The plan sets `native_logical_width` or `native_logical_height` with the scale; a logical size at a whole scale takes the scene draws' path (`native_draw_scale` at the whole scale with `native_draw_scale_variant`) and `native_rt_surfaces=58`. The description names the logical size and Hor+ or Vert+, and says when the presenter adds bars. The other scales (integrated GPUs' automatic 1x, `-Supersample`, `-ResolutionScale 1` to `4`) and RTV and `-Rov` keep 16:9, letterboxed or pillarboxed. The GUI's render scale labels show the logical size's render and Hor+ or Vert+.
+
+Tests: `test_screen_scale` covers the table, the integrated GPU's 16:9 at 1x and the bars; the launcher tests gained a 1920x1200 and a 3440x1440 monitor (234 plans). Built outside the launcher's CMake project, the port matched `pipeline.py` on the scale, the logical size, the `native_*` cvars and the description in all 234 plans (its look cvars differed there because that build read other look data, as in 18.19); the launcher's own `launcher_tests` on main is the check.

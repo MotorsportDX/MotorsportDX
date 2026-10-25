@@ -928,6 +928,29 @@ def screen_scale(width,height):
     divisor=math.gcd(numerator,denominator)
     return numerator//divisor,denominator//divisor
 
+def logical_view(width,height):
+    """The scene's logical size and scale for a screen of width x height pixels on the native
+    path (docs/analysis/d3d-hle-n5.md 18.23): as wide as 16:9 or wider, Hor+ (720 lines, the
+    width 720 times the aspect, rounded to a multiple of 8, at most 3840, and the scale
+    height / 720); narrower, Vert+ (1280 wide, the height 1280 over the aspect, rounded to a
+    multiple of 8, at most 1024, and the scale width / 1280). Returns (logical width, logical
+    height, numerator, denominator) with the scale reduced, at most 720 in the denominator
+    (rounded down) and at least 1."""
+    if width*9>=height*16:
+        logical_width=min(3840,max(1280,(1440*width+8*height)//(16*height)*8))
+        logical_height=720
+        numerator,denominator=height,720
+    else:
+        logical_width=1280
+        logical_height=min(1024,max(720,(2560*height+8*width)//(16*width)*8))
+        numerator,denominator=width,1280
+    if denominator>720:
+        numerator,denominator=numerator*720//denominator,720
+    if numerator<denominator:
+        numerator,denominator=1,1
+    divisor=math.gcd(numerator,denominator)
+    return logical_width,logical_height,numerator//divisor,denominator//divisor
+
 def display_settings(display=DEFAULT_DISPLAY,fullscreen=False,supersample=False,
                      resolution_scale=None,monitor=None,scene_scale=False):
     """Cvars of -Display and a description. native: borderless fullscreen on the primary
@@ -939,7 +962,9 @@ def display_settings(display=DEFAULT_DISPLAY,fullscreen=False,supersample=False,
     one pass with 2x MSAA, which renders the scene at a fractional scale, d3d-hle-n5.md 18.19;
     one pass with 4x is not tested at one yet) it is the screen's own scale instead, the largest 16:9 picture that fits (screen_scale: 1080p 3/2,
     1440p 2, a 2560x1600 monitor 2, letterboxed), except with integrated GPUs only (1x) or
-    -Supersample (its whole part plus one); -ResolutionScale panel picks it on every GPU. The
+    -Supersample (its whole part plus one); -ResolutionScale panel picks it on every GPU. That
+    scale renders the screen's aspect too (logical_view: Hor+ wider than 16:9, Vert+ narrower,
+    d3d-hle-n5.md 18.23); the other scales render 16:9, letterboxed or pillarboxed. The
     presenter fits the picture to the window, averaging the render over each screen pixel when
     it is larger (present_area_downscale). monitor: (width, height, DPI scale, refresh, VRR min,
     VRR max, integrated GPUs only) instead of the primary monitor's."""
@@ -955,9 +980,10 @@ def display_settings(display=DEFAULT_DISPLAY,fullscreen=False,supersample=False,
         raise ValueError("-ResolutionScale panel needs the native path in one pass with 2x MSAA "
                          "(-Native without -SingleTile, -Msaa or -MsaaSamples 0 or 4).")
     own=screen_scale(width,height)
+    logical_width,logical_height=1280,720
     if resolution_scale=='panel' or (scene_scale and not resolution_scale and not integrated
                                      and not supersample):
-        numerator,denominator=own
+        logical_width,logical_height,numerator,denominator=logical_view(width,height)
     else:
         if scene_scale and supersample and not resolution_scale and not integrated:
             scale=min(MAX_RESOLUTION_SCALE,own[0]//own[1]+1)
@@ -974,23 +1000,38 @@ def display_settings(display=DEFAULT_DISPLAY,fullscreen=False,supersample=False,
         # Render targets and resolved textures at N times 1280x720 on both axes;
         # CPU readbacks of resolves are downscaled.
         cvars['draw_resolution_scale_x']=cvars['draw_resolution_scale_y']=str(whole)
-    if denominator>1:
-        # The scene at the fraction, the other surfaces at its whole part; bit 32: the resolves
-        # write the scene's textures at that scale (d3d-hle-n5.md 18.15).
-        cvars.update({'native_draw_scale':f'{numerator}/{denominator}','native_rt_surfaces':'58'})
-    render_width=-(-1280*numerator//denominator)
-    render_height=-(-720*numerator//denominator)
+    logical=(logical_width,logical_height)!=(1280,720)
+    if denominator>1 or logical:
+        # The scene at the fraction (or, for a logical size, at the whole scale through the
+        # scene draws' path), the other surfaces at its whole part; bit 32: the resolves write
+        # the scene's textures at that scale (d3d-hle-n5.md 18.15).
+        cvars.update({'native_draw_scale':f'{numerator}/{denominator}' if denominator>1
+                      else str(numerator),'native_rt_surfaces':'58'})
+        if denominator==1:
+            cvars['native_draw_scale_variant']='true'
+    if logical_width!=1280:
+        cvars['native_logical_width']=str(logical_width)
+    if logical_height!=720:
+        cvars['native_logical_height']=str(logical_height)
+    render_width=-(-logical_width*numerator//denominator)
+    render_height=-(-logical_height*numerator//denominator)
     scale_text=f'{numerator}/{denominator}' if denominator>1 else f'{numerator}x'
     screen=(f'fullscreen {monitor_width}x{monitor_height}' if fullscreen
             else f'window {width}x{height}')
     gpu_note=' for an integrated GPU' if integrated and not resolution_scale else ''
     shown_width,shown_height=(monitor_width,monitor_height) if fullscreen else (width,height)
+    view=''
+    if logical:
+        view=(f', logical {logical_width}x{logical_height} '
+              +('Hor+' if logical_width!=1280 else 'Vert+'))
+    # What the presenter adds around the picture: the screen's aspect against the render's.
     aspect_note=''
-    if scene_scale and shown_width*9!=shown_height*16:
-        aspect_note=(', 16:9 '+('letterboxed' if shown_width*9<shown_height*16 else 'pillarboxed')
-                     +' until the aspect work')
+    if scene_scale and shown_width*render_height!=shown_height*render_width:
+        bars=('letterboxed' if shown_width*render_height<shown_height*render_width
+              else 'pillarboxed')
+        aspect_note=f', {bars}' if logical else f', 16:9 {bars}'
     return cvars,(f'Display {display}: {screen}, render {scale_text} ({render_width}x{render_height})'
-                  f'{gpu_note}{aspect_note}')
+                  f'{view}{gpu_note}{aspect_note}')
 
 VSYNC_MODES=('auto','on','off')
 DEFAULT_VSYNC='auto'
@@ -1355,11 +1396,12 @@ def build_launcher(root,jobs):
 # Options of the launcher tests: each with each monitor (width, height, DPI scale, refresh Hz,
 # VRR min Hz, VRR max Hz, integrated GPUs only; the main PC's panel, a fixed 60 Hz screen, a
 # 144 Hz VRR screen, a fixed 1280x800 screen, the ROG Xbox Ally X's panel and GPU, a 1440p
-# screen and a 2880x1800 one).
+# screen, a 2880x1800 one, a 1920x1200 one and a 21:9 3440x1440 one).
 LAUNCHER_TEST_MONITORS=((2560,1600,1.5,240,60,240,False),(1920,1080,1.0,60,0,0,False),
                         (3840,2160,2.0,144,48,144,False),(1280,800,1.25,60,0,0,False),
                         (1920,1080,1.5,120,48,120,True),(2560,1440,1.0,165,48,165,False),
-                        (2880,1800,2.0,120,48,120,False))
+                        (2880,1800,2.0,120,48,120,False),(1920,1200,1.0,60,0,0,False),
+                        (3440,1440,1.0,144,48,144,False))
 def launcher_test_options(root):
     return [{},
             {'look':'gt','quality':'ultra','frame_rate':120,'display':'1080p'},

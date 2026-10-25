@@ -49,6 +49,11 @@ public static class Fm4Ppm {
     int full_width = int.Parse(token()), sh = int.Parse(token());
     token();
     pos++;
+    // A 16:9 capture (the menus, at the whole scale) is read whole.
+    if (Math.Abs((long)full_width * 9 - (long)sh * 16) <= 16) {
+      crop_x = 1.0;
+      crop_y = 1.0;
+    }
     int sw = (int)Math.Round(full_width * crop_x);
     int cx = (full_width - sw) / 2;
     int cy = (sh - (int)Math.Round(sh * crop_y)) / 2;

@@ -116,6 +116,13 @@ std::vector<std::string> LookDefines(const LauncherData& data, const Pairs& knob
 // fraction of 1280x720.
 std::pair<int, int> ScreenScale(int width, int height);
 
+// logical_view of pipeline.py: the scene's logical size and scale for a screen on the native
+// path (Hor+ wider than 16:9, Vert+ narrower, d3d-hle-n5.md 18.23).
+struct LogicalView {
+  int width = 1280, height = 720, numerator = 1, denominator = 1;
+};
+LogicalView LogicalViewOf(int width, int height);
+
 // display_settings of pipeline.py: cvars and the description. scene_scale: the native path in
 // one pass with 2x MSAA, which renders at the screen's own scale.
 std::pair<Pairs, std::string> DisplaySettings(const LauncherData& data, const std::string& display,
