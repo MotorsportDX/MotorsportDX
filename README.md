@@ -168,17 +168,14 @@ Motorsport DX builds on the work of these projects. Their license texts are in t
 
 - [ReXGlue SDK](https://github.com/rexglue/rexglue-sdk), Copyright (c) 2026 Tom Clay, BSD-3-Clause: the recompiler and the runtime that `work/runtime` forks.
 - [Xenia](https://xenia.jp), Copyright (c) 2022 Ben Vanik and Xenia project contributors, BSD-3-Clause: the Xbox 360 kernel, GPU and audio emulation that ReXGlue derives from, including the resolve shaders.
-- [SDL 3](https://github.com/libsdl-org/SDL), Sam Lantinga, zlib license: the window, input and audio layer.
+- [SDL 3](https://github.com/libsdl-org/SDL), Copyright (C) 1997-2026 Sam Lantinga, zlib license: the window, input and audio layer, built from source with a patch for GameInput API v3.
+- The GameInput API v3 header and loader from Microsoft's [Microsoft.GameInput](https://www.nuget.org/packages/Microsoft.GameInput) package, Copyright (c) Microsoft Corporation, MIT license: built into SDL's GameInput driver for the pad driver choice `gameinput`.
 - [Dear ImGui](https://github.com/ocornut/imgui), Omar Cornut, MIT: the settings overlay and the GUI launcher.
 - [FFmpeg](https://ffmpeg.org) (Xenia's fork), LGPL 2.1 or later: XMA and WMA audio decoding. [libmspack](https://github.com/kyz/libmspack), Stuart Caie, LGPL 2.1: the LZX decompression of the executables.
 - [{fmt}](https://github.com/fmtlib/fmt) (Victor Zverovich), [spdlog](https://github.com/gabime/spdlog) (Gabi Melman), [toml++](https://github.com/marzer/tomlplusplus) (Mark Gillard), [SIMD Everywhere](https://github.com/simd-everywhere/simde) (Evan Nemerson), [o1heap](https://github.com/pavel-kirienko/o1heap) (Pavel Kirienko), [inja](https://github.com/pantor/inja) (Lars Berscheid) and [JSON for Modern C++](https://github.com/nlohmann/json) (Niels Lohmann), MIT; [xxHash](https://github.com/Cyan4973/xxHash) (Yann Collet), BSD-2-Clause; [CLI11](https://github.com/CLIUtils/CLI11) (University of Cincinnati), BSD-3-Clause; [UTF8-CPP](https://github.com/nemtrif/utfcpp) (Nemanja Trifunovic), Boost Software License.
 - The small libraries that ReXGlue vendors from Xenia: aes_128, DES, TinySHA1, Stephan Brumme's SHA-256, the Rijndael reference code, [stb_image](https://github.com/nothings/stb), disruptorplus, the RenderDoc API header, the DirectX Shader Compiler API headers, AMD's DXBC checksum (derived from the RSA Data Security, Inc. MD5 Message-Digest Algorithm) and the ProggyTiny font.
 - AMD FidelityFX: Contrast Adaptive Sharpening and FidelityFX Super Resolution 1 in the presenter (from Xenia), and FidelityFX Super Resolution 3.1 from the [AMD FidelityFX SDK](https://github.com/GPUOpen-LibrariesAndSDKs/FidelityFX-SDK), Copyright (C) 2024 Advanced Micro Devices, Inc., MIT, built from source into the runtime when it is built with `-Fsr on`, with Microsoft's `d3dx12.h` (MIT).
 - The recompiler uses the GNU binutils PowerPC disassembler (GPL 2.0 or later) at build time; it is not part of the game's binaries.
-
-[SDL 3](https://github.com/libsdl-org/SDL), Copyright (C) 1997-2026 Sam Lantinga, zlib license: the runtime's window, event and gamepad layer, built from source, with a patch for GameInput API v3.
-
-The GameInput API v3 header and loader from Microsoft's [Microsoft.GameInput](https://www.nuget.org/packages/Microsoft.GameInput) package, Copyright (c) Microsoft Corporation, MIT license: built into SDL's GameInput driver for the pad driver choice `gameinput`.
 
 ## Pre-commit check
 
