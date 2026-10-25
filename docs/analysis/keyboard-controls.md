@@ -1,6 +1,6 @@
 # Keyboard controls
 
-Design note for driving Forza Motorsport 4 well on a keyboard. The title knows only the Xbox 360 pad; the runtime's keyboard and mouse driver turns keys into a virtual pad. Stage 1 (25 October 2026) gathers the evidence and proposes the model, the handling of the title's deadzones, a racing layout, the tests and the options. Stage 2 implements them after the main session's review; the owner's test on the laptop through an export decides the final defaults.
+Design note for driving Forza Motorsport 4 well on a keyboard. The title knows only the Xbox 360 pad; the runtime's keyboard and mouse driver turns keys into a virtual pad. Stage 1 (25 October 2026) gathers the evidence and proposes the model, the handling of the title's deadzones, a racing layout, the tests and the options. Stage 2 (25 October 2026) implements them as the main session decided ([Stage 2](#stage-2)); the owner's test on the laptop through an export decides the final rates. How to use it is in [running.md](../running.md#keyboard).
 
 ## Summary
 
@@ -82,13 +82,30 @@ PLAY CAREER > MY PROFILE > OPTIONS > CONTROLLER opens the CONTROLLER LAYOUT scre
 
 The footer has A SAVE, B CANCEL, X ADVANCED (the deadzones; see [modern gamepads](modern-gamepads.md#verification)) and Y RESET TO DEFAULT.
 
-The profile's `ControllerOptions` ([ForzaProfile.sch](modern-gamepads.md#the-deadzones-are-the-players-profile-settings)) hold the screen's settings: `Layout` (0, DEFAULT LAYOUT 1), `DPad` (0, D-pad steering off), `RumbleSetting` (1), `InvertGearUpDown`, `InvertHandbrakeClutch`, `InvertCameraLookBack` and `RewindOnBack` (all 0). So the player can swap shift up and down, the handbrake and the clutch, and the camera and look back, and move rewind to Back, in the game itself. The LAYOUT row cycles further layouts with its arrows; their diagrams, the rest of the option list and the diagram with D-PAD STEERING on were not captured in stage 1, because another session's gate held the GPU for the whole session (the capture run is queued; see [Evidence](#evidence)).
+The profile's `ControllerOptions` ([ForzaProfile.sch](modern-gamepads.md#the-deadzones-are-the-players-profile-settings)) hold the screen's settings: `Layout` (0, DEFAULT LAYOUT 1), `DPad` (0, D-pad steering off), `RumbleSetting` (1), `InvertGearUpDown`, `InvertHandbrakeClutch`, `InvertCameraLookBack` and `RewindOnBack` (all 0). So the player can swap shift up and down, the handbrake and the clutch, and the camera and look back, and move rewind to Back, in the game itself; the screen lists them below SWITCH GEAR UP/DOWN as SWITCH HANDBRAKE/CLUTCH and the rest (run `kb-options`).
+
+The LAYOUT row has 13 layouts, DEFAULT LAYOUT 1 to 13, without wrapping (run `kb-layouts`). All keep the left stick for steering, Back for the camera, Start for pause, the D-pad for the telemetry and the right stick press for the heat damage:
+
+| Layouts | What moves against DEFAULT LAYOUT 1 |
+| --- | --- |
+| 2 to 5 | Only the face buttons: shift up, shift down, handbrake and rewind in other orders |
+| 6, 7 | Shift down and up on LB and RB; clutch, look back, handbrake and rewind on the face buttons |
+| 8 | Gas and brake on A and X; shift down and up on the triggers |
+| 9 | Gas and brake on A and B; clutch and look back on the triggers |
+| 10 | Clutch and handbrake on the right stick (no free look); the face buttons switch the camera |
+| 11 | Shifting on the right stick; handbrake on RB |
+| 12 | Gas and brake on the right stick; clutch and handbrake on the triggers |
+| 13 | Gas on the left trigger, brake on the right one (swapped) |
+
+With D-PAD STEERING on (run `kb-options`, frame 35) the diagram labels the D-pad STEERING as well as the left stick, and the telemetry toggle is gone.
 
 Every one of these is a pad input, so a keyboard layout that names keys by pad input follows whatever the player chooses in the game: with SWITCH GEAR UP/DOWN on, the key on B shifts down.
 
 ### The menus
 
-The e2e harness navigates every front-end menu with the D-pad and A and B (the fast route and the menu scenarios in [e2e.py](../../outputs/FM4-build/e2e/e2e.py)); some menus ignore the first press after they open, and the career home menu hides after a few idle seconds and shows again on the first press. Pause in a race is Start. Today W and S also move the left stick in the menus; whether the menus take the left stick, and from what deflection, is not measured yet (the queued run probes it on the main menu). The racing layout below does not depend on it: the arrow keys are the D-pad.
+The e2e harness navigates every front-end menu with the D-pad and A and B (the fast route and the menu scenarios in [e2e.py](../../outputs/FM4-build/e2e/e2e.py)); some menus ignore the first press after they open, and the career home menu hides after a few idle seconds and shows again on the first press. Pause in a race is Start.
+
+The menus also take the left stick, from a deflection between 37% and full, with a repeat while it is held (run `kb-assists`, main menu, before a profile loads): X at 12,000 held for 0.3 s left the highlight on PLAY CAREER (frame 16), X at 32,767 held for 0.3 s moved it two items to AUTOVISTA (frame 17), and X at -32,767 moved it back (frame 18). The racing layout does not depend on it: the arrow keys are the D-pad, which moves one item per press.
 
 ## Steering and pedal model
 
@@ -124,7 +141,7 @@ Precision 0.5. At 60 fps a steering attack of 0.30 s is 18 frames from centre to
 
 ### Clutch and handbrake
 
-In DEFAULT LAYOUT 1 the clutch (LB) and the handbrake (A) are buttons: a button has no analog value, so their keys press them as today. The profile has analog ranges for both (`ClutchDeadzoneInside` and `Outside` 0.10 and 1.00, `HandbrakeDeadzoneInside` and `Outside` 0.10 and 1.00), for layouts or devices that put them on an axis. The model works per pad axis (left stick X, left trigger, right trigger), whatever the game's layout puts there, and the deadzone compensation uses the ranges the title passes for that axis, so a layout with the clutch on a trigger would get a ramped clutch with that trigger's knobs; the knobs are named after their function in DEFAULT LAYOUT 1.
+In DEFAULT LAYOUT 1 the clutch (LB) and the handbrake (A) are buttons: a button has no analog value, so their keys press them as today. The profile has analog ranges for both (`ClutchDeadzoneInside` and `Outside` 0.10 and 1.00, `HandbrakeDeadzoneInside` and `Outside` 0.10 and 1.00), for the layouts that put them on an axis (9 and 12 put the clutch on a trigger, 10 on the right stick). The model works per pad axis (left stick X, left trigger, right trigger), whatever the game's layout puts there, and the deadzone compensation uses the ranges the title passes for that axis, so in layouts 9 and 12 the clutch key on the left trigger ramps with the brake's knobs; the knobs are named after their function in DEFAULT LAYOUT 1. Layouts 8, 9, 12 and 13 move the gas and brake off the triggers or swap them, so the keyboard is meant for the others.
 
 ### Mouse steering
 
@@ -136,7 +153,7 @@ As an alternative mode, the mouse's X motion steers:
 
 ### Speed-sensitive steering
 
-The runtime cannot see the car's speed. No hook reads the car's state, and the values the input path already passes through (the pad state, the deadzones, the rumble motors) carry no speed. The title computes speed-dependent effects internally (the wheel's force feedback scales its centring spring with speed: `SpringScaleSpeed0` and `1` in `Media/ControllerFFB.ini`), but reaching the speed means finding the car's state in guest memory, which is the postponed telemetry work. So speed-sensitive steering is left for later. Until then the game's own help applies: the ASSISTS & DIFFICULTY screen before a Quick Race has STEERING (ASSISTED with the e2e profile's EASY difficulty, run `fr-f1-race`, frame 21), next to BRAKING, STABILITY CONTROL and TRACTION CONTROL, which also soften digital pedals. What each steering level does was not captured (queued with the layouts).
+The runtime cannot see the car's speed. No hook reads the car's state, and the values the input path already passes through (the pad state, the deadzones, the rumble motors) carry no speed. The title computes speed-dependent effects internally (the wheel's force feedback scales its centring spring with speed: `SpringScaleSpeed0` and `1` in `Media/ControllerFFB.ini`), but reaching the speed means finding the car's state in guest memory, which is the postponed telemetry work. So speed-sensitive steering is left for later. Until then the game's own help applies: the ASSISTS & DIFFICULTY screen before a Quick Race has STEERING with ASSISTED (the e2e profile's EASY difficulty), NORMAL and SIMULATION, next to BRAKING, STABILITY CONTROL and TRACTION CONTROL, which also soften digital pedals (runs `fr-f1-race`, frame 21, and `kb-assists`). Its description: ASSISTED guides the car's steering when necessary, to reduce weaving and keep the car on the track; NORMAL gives full control but damps some physical effects to make driving easier (`kb-assists`, frame 34). Neither mentions the speed.
 
 ## The game's deadzones
 
@@ -148,7 +165,7 @@ Two ways to make the keyboard's 0..1 reach the title linearly from the first key
    - pedal v > 0: raw = inner + v · (outer − inner), rounded up to the next byte above inner so that the smallest v gives a non-zero output; v = 1 gives the outer edge or more, full pedal;
    - s = 0 and v = 0 give a raw 0, released.
 
-**Recommended: the live deadzones.** They follow the profile, before and after it loads and whatever the player sets, so nothing jumps; the cost is one hook that copies six floats per poll. The interface is generic: a runtime call `SetTitleInputRanges(user, ranges)` that a title integration may make, with no compensation when none is made (another title, or a build without the hook). A runtime knob turns the compensation off for comparisons.
+**Recommended: the live deadzones.** They follow the profile, before and after it loads and whatever the player sets, so nothing jumps (stage 2 found that the game keeps the steering's inner edge at 7,849 or above whatever the setting; see [Verification](#verification)); the cost is one hook that copies six floats per poll. The interface is generic: a runtime call `SetTitleInputRanges(user, ranges)` that a title integration may make, with no compensation when none is made (another title, or a build without the hook). A runtime knob turns the compensation off for comparisons.
 
 The compensation lives in the keyboard driver, not in the title: forcing the title's deadzones to 0 for the keyboard would also remove them from a pad merged into the same user. A pad and the keyboard used at the same moment on the same axis merge to the larger raw value, as today.
 
@@ -181,7 +198,7 @@ In the menus the same keys are the pad's buttons: the arrow keys move (D-pad), S
 - **Kept free:** Alt with any key (the driver ignores it: Alt+Enter toggles fullscreen), F2 (settings overlay), F3, F4, F7 and the backtick (the runtime's overlays and console).
 - **The precision key is a modifier.** Today a bare modifier can never fire, and a held modifier silences every other binding. The rule changes to: a binding whose key is itself a modifier (`Control`, `Shift`) fires while it is held, and a modifier bound that way is left out when the other bindings compare their modifiers, so W, A, S, D and E keep working with Ctrl held. Bindings with a modifier prefix (`Shift+Up`) work as before. Ctrl rather than Shift because pressing Shift five times in a row opens Windows' Sticky Keys prompt and takes the focus. Ctrl with Escape opens the Start menu, so pause with Enter while holding precision.
 - **What changes for existing players:** the steering and pedals ramp instead of jumping (`smooth=0` restores the digital keys); W and S no longer move the left stick (the menus move with the arrow keys, as they already can); the arrow keys no longer move the right stick (free look is on I, J, K, L, or the mouse with "Mouse moves the right stick"); shift up and down move to E and Q (Backspace still presses B); LB, RB and Y move from 1, 3 and P to Z, V and R; Escape and C are new. Bindings a player changed in the GUI launcher stay as they are. The runtime's own defaults, used outside the launchers, do not change.
-- **The game's D-PAD STEERING** (`ControllerOptions/DPad`, read with the other controller options by the profile loader `sub_82425B90`) lets the D-pad steer through the title's own handling, which was not traced. With it on, the arrow keys would steer instead of toggling the telemetry; it goes into the owner's checklist as a comparison with the model, not as a default.
+- **The game's D-PAD STEERING** (`ControllerOptions/DPad`, read with the other controller options by the profile loader `sub_82425B90`) lets the D-pad steer through the title's own handling, which was not traced; with it on, the CONTROLLER LAYOUT screen labels the D-pad STEERING and drops the telemetry toggle. With it on, the arrow keys steer; it goes into the owner's checklist as a comparison with the model, not as a default.
 
 ## Testing
 
@@ -219,11 +236,47 @@ Runtime cvars in the keyboard driver, and knobs in both launchers as for `-Pad`:
 - `mouse_steering=1` takes the mouse's X for the steering and leaves the right stick to the keys; it replaces `mnk_mouse` (the GUI launcher's "Mouse moves the right stick") while it is on.
 - `launcher_tests` gets option sets with the knobs; [running.md](../running.md) gets a Keyboard section (the layout by function, the knobs, the game's own options that matter, an owner's test checklist), and [status](../status/current.md) the verification.
 
+## Stage 2
+
+Stage 2 (25 October 2026) implements the proposal with the main session's decisions: the model on by default in the launchers (`smooth=1`) and digital in the runtime, the racing layout above, the live deadzones read without changing the title's results and the profile's defaults until the first conversion, mouse steering off by default, and speed-sensitive steering left for the telemetry work.
+
+### What changed
+
+- **The model** ([keyboard_model.h](../../work/runtime/include/rex/input/keyboard_model.h), header only): `AdvanceAxis` (attack, release, reversal at the faster rate; 0 at once), `SteeringKeys` (the key pressed last wins), `StickFromTitle` and `TriggerFromTitle` (a value 0..1 into the title's inner..outer, rounded away from the deadzone so any non-zero value counts), and the binding parser and matcher.
+- **The keyboard driver** ([mnk_input_driver.cpp](../../work/runtime/src/input/mnk/mnk_input_driver.cpp)): with `mnk_smooth` on, every key event (UI thread) and every `GetDeviceState` (the title's poll) first advances the steering, throttle and brake to that moment on the steady clock with the targets of the keys held until then, then takes the new keys. The steering goes to the left stick's X with the Y at 0 (unless `keybind_lstick_up` or `_down` are held), the brake to the left trigger, the throttle to the right one, each through the ranges of guest user 0. Focus loss and an overlay taking the input reset the values to 0. With `mnk_smooth` off and no mouse steering the output is the earlier digital one, bit for bit. Mouse steering accumulates the mouse's X, decays with `mnk_mouse_steer_centering` and adds to the keys' steering.
+- **Bindings.** A binding whose key is a modifier (`Control`) fires while it is held, and that modifier is left out of every binding's comparison; the others keep their exact match (`Up` is silent with Shift held, `Shift+Up` needs it). `keybind_precision` is new, empty in the runtime.
+- **The title's ranges** ([title_input_ranges.h](../../work/runtime/include/rex/input/title_input_ranges.h)): `SetTitleInputRanges` per user, `SetDefaultTitleInputRanges`, and `GetTitleInputRanges`, which returns a user's published ranges or the defaults (the identity until an integration sets them). FM4 sets the profile's defaults at startup (`FM4InstallInputRanges`) and publishes the floats in the hook of `sub_822B4130` ([fm4-ui-diagnostics.cpp](../../work/fm4-rex/src/fm4-ui-diagnostics.cpp)) when it is called from the input poll (the return address `0x822B5F6C`), user `r27`, before the original runs: the hook only reads registers, so the title's conversion is unchanged.
+- **The merge of two devices** ([state_merge.h](../../work/runtime/include/rex/input/state_merge.h)): each stick now comes whole, both axes, from the device that deflects it further (`MergeStick`; the first device on a tie), instead of each axis from the larger one. So the keyboard's steering, mapped past the title's deadzone, and a pad never combine into a deflection neither has, and the title's radial deadzone sees one device's stick; the triggers stay the larger of the two and the buttons the union.
+- **`--name=`** on the command line sets a string cvar to empty ([cvar.cpp](../../work/runtime/src/core/cvar.cpp)). CLI11 took the next argument as the value instead, which swallowed it; the launchers pass `keybind_lstick_up=` and `keybind_lstick_down=` this way.
+- **Key injection.** The diagnostic controller reads an optional `keys` line ([fm4-test-input.h](../../work/fm4-rex/src/fm4-test-input.h)) and passes it to `rex::input::mnk::SetInjectedKeys`; `e2e.py` writes it for `key=<name>` actions ([e2e architecture](../e2e/architecture.md#diagnostic-controller-fm4_test_input_file)).
+- **Launchers.** `launch_cvars` has the racing layout and `mnk_smooth=true`; `-Keyboard` knobs (`KEYBOARD_KNOBS` in [pipeline.py](../../outputs/FM4-build/pipeline.py), carried in `launcher.json`) in `Build.ps1` and the GUI launcher, whose Controls page has a Keyboard section and lists the bindings by function; three `-Keyboard` option sets in `launcher_tests`.
+
+### Verification
+
+Build: `I:\FM4-build-usa`, snapshot `snapshots\kb-s1` of 25 October 2026, from commit `9865a5a` on local main `3f28619` (`build-result.json`: that head, not dirty; the runtime with `REX_FSR` on), fm4_rex.exe sha256 `88f1c6da...`, rexruntime.dll `18ba4c7d...`. The CPU tests: `fm4_keyboard_model_tests` passes (the rates, the reversal, last-pressed-wins, the same values at 60, 120 and 240 polls a second with and without a double poll, a 7 ms tap, the steering and pedals through the title's conversions with the profile's deadzones, a lowered one and XInput's constants, the binding rule with Ctrl held, Ctrl and W giving 50% throttle, the whole-stick merge), `launcher_tests` passes with the three `-Keyboard` option sets (333 plans), and `test_pipeline.py` and `test_e2e_tools.py` pass.
+
+**Driving with the model.** e2e runs on `kb-s1`, a human-driven Quick Race (the fast route's menus, no `engageaionstart`), `--profile copy`, with the keys injected through the diagnostic controller (`key=` actions): throttle, steering right, release, left, right pressed last (a reversal), precision with throttle and steering, brake, three 0.1 s taps. `FM4_INPUT_TRACE_FILE` gives the raw state the keyboard produced and the title's own output for user 0 at every poll; the rates are the medians of the changes between consecutive polls inside the range (per second of full lock or full pedal):
+
+| Run | Race frame rate | Poll gap | Steering up / down | Throttle up / down | Brake up / down | First steering after 0 |
+| --- | --- | --- | --- | --- | --- | --- |
+| Expected | | | 3.333 / 5.000 | 4.0 / 10.0 | 6.667 / 10.0 | one poll of attack |
+| `kb-drive60` | 60 | 16.72 ms | 3.333 / 5.000 (p10 to p90: 3.304 to 3.366, 4.959 to 5.039) | 3.980 / 10.025 | 6.686 / 9.952 | 0.053 to 0.059 |
+| `kb-drive240` | 240 | 4.19 ms | 3.333 / 5.000 (3.308 to 3.356, 4.979 to 5.013) | 3.902 / 10.210 | 6.567 / 9.878 | 0.013 to 0.016 |
+| `kb-drive60-dz` | 60, steering deadzone 5 in the game | 16.69 ms | 3.333 / 5.000 | 3.952 / 9.953 | 6.698 / 10.052 | 0.054 to 0.056 |
+
+- The title's steering rises from the first poll after a press (0.056 at 60 Hz is one 16.7 ms poll at 3.33 per second; at 240 Hz 0.014 for 4.2 ms) and reaches full lock 0.3 s after the press, at both frame rates. The pedals' rates spread more (8-bit triggers, 191 steps between the deadzone's edges), with the same medians.
+- The reversal: from -0.83 to -0.09 in 150 ms (5 per second, the release rate, faster than the attack), then on at the attack rate. Precision: the throttle holds 0.498 (raw 134 of 38.25 to 229.5) and the steering -0.500.
+- The raw state carries the compensation: the first steering sample is raw X 9,164 (past the inner 7,864), the full throttle raw 230 (the outer edge 229.5).
+- **The game's steering deadzone has a floor.** `kb-dz` lowered STEERING AXIS DEADZONE INSIDE from 24 to 5 in the run's profile copy (the screen showed 5 and was saved with A); in `kb-drive60-dz`, which ran with that profile, the conversion received 7,849 for the inner edge instead of 7,864.08, not 1,638 (0.05 of 32,767). The game keeps XInput's left stick deadzone (7,849, `XINPUT_GAMEPAD_LEFT_THUMB_DEADZONE`) as the least inner edge, so lowering the setting below 24 changes almost nothing. The keyboard follows the value it receives either way: no jump, the same rates.
+- **Menus and pause with keys.** `kb-menu` on `kb-s1`: on the main menu three injected Right presses and `Space` opened FREE PLAY (QUICK RACE showed), `Backspace` went back to the main menu, and in the race `Escape` opened the pause menu (RESUME, RESTART, PHOTO MODE) and `Backspace` closed it.
+- Every run reached its goal. The trace shows a second conversion per poll, of a pad object built from the first connected user's state with XInput's constant deadzones (`sub_822B5E60` calls `sub_822B4130` again after the user loop, returning to `0x822B60F8`); the hook publishes only the user loop's.
+
+Not covered: real keys on the laptop (the owner's [checklist](../running.md#keyboard-test-checklist)), the feel of the rates, mouse steering beyond the unit tests (no desktop input in e2e), the game's D-PAD STEERING, and which of the two converted objects the car reads (the profile's deadzones, which the player tunes for driving, are on the user's).
+
 ## Left for later
 
 - **Key glyphs.** The title's prompts show Xbox buttons. Keyboard glyphs need a texture replacement set ([texture replacement](texture-replacement.md)), switched by the device in use.
 - **Speed-sensitive steering.** Needs the car's speed from the telemetry work; then the steering's limit (or its attack) can fall with speed.
-- **The captures that the busy GPU prevented in stage 1:** the other controller layouts, the option list and D-PAD STEERING's diagram, the descriptions of the STEERING assist levels, and the left stick in the menus. They are the first step of stage 2 and may adjust the layout (if another game layout suits the keyboard better), not the model.
 
 ## Evidence
 
@@ -232,4 +285,5 @@ Runtime cvars in the keyboard driver, and knobs in both launchers as for `-Pad`:
 - The ASSISTS & DIFFICULTY screen: `I:\FM4-build-usa\e2e\fr-f1-race`, frame 21.
 - The title's deadzones, their raw values and the measured stick and trigger transfer: [modern gamepads](modern-gamepads.md#the-titles-input-code) (runs `gp-sweep` and `gp2-menu`).
 - The input poll `sub_822B5E60` and the profile loader `sub_82425B90` in the recompiled default.xex; the option names in `Media/ProfileSchema/ForzaProfile.sch` and in the loaded image.
-- Queued, not run in stage 1: `e2e\kb-layouts` (the controller screen's layouts and options, D-PAD STEERING on) and `e2e\kb-assists` (the left stick on the main menu, the ASSISTS & DIFFICULTY rows and the STEERING levels).
+- Stage 2, on `snapshots\kb-s1`: `I:\FM4-build-usa\e2e\kb-drive60`, `kb-drive240`, `kb-dz` (the steering deadzone lowered to 5 in its profile copy), `kb-drive60-dz` (driven with that profile) and `kb-menu`, each with `input-trace.txt`.
+- Captures of 25 October 2026 on `game-build` from `f4891c4`, at 2x with the PPM files kept, `--profile copy`: `I:\FM4-build-usa\e2e\kb-layouts` (the 13 layouts, frames 28 to 64; its last step, back to layout 1, timed out, since the row does not wrap), `kb-options` (D-PAD STEERING on, frame 35, and the option list; its last check timed out once the list scrolled) and `kb-assists` (the left stick on the main menu, frames 16 to 18, and the ASSISTS & DIFFICULTY rows with their descriptions, frames 28 to 65).

@@ -72,10 +72,11 @@ All hooks are opt-in. Without their variable they do nothing, and a normal launc
 
 ### Diagnostic controller (FM4_TEST_INPUT_FILE)
 
-The file holds one line of seven integers and an optional eighth and ninth:
+The file holds one line of seven integers and an optional eighth and ninth, and an optional line of keyboard keys:
 
 ```
 <buttons> <left trigger> <right trigger> <lx> <ly> <rx> <ry> [<pulse> [<race frame>]]
+[keys <key name> ...]
 ```
 
 - `buttons` is the XInput bit mask: up `0x1`, down `0x2`, left `0x4`, right `0x8`, start `0x10`, back `0x20`, LB `0x100`, RB `0x200`, A `0x1000`, B `0x2000`, X `0x4000`, Y `0x8000` (`BUTTONS` in `e2e.py`).
@@ -83,6 +84,7 @@ The file holds one line of seven integers and an optional eighth and ninth:
 - `pulse` (optional, off when missing or 0) is a second button mask. These buttons alternate between pressed and released on each state poll of the title (`XamInputGetState`), starting with pressed, instead of following the file. In a race the title polls the pad about once per frame, on its main thread (twice per presented frame in the countdown; now and then a frame polls twice or not at all), and reacts to presses on their edge, so a pulsed button acts on the first frame the title accepts it, or the one after, whatever the wall-clock time. In `e2e.py` the action is the button name after `~` (`~y`). Keystrokes do not see pulses.
 - `race frame` (optional, with `pulse`) delays the pulse to that frame of the race. Race frames count the title's session updates (one per main loop pass, [`fm4-race-clock.cpp`](../../work/fm4-rex/src/fm4-race-clock.cpp)) since it pushed its race render scenario (`*_Race`, [`fm4-vblank-rate.cpp`](../../work/fm4-rex/src/fm4-vblank-rate.cpp)), not pad polls, which drift against the race. The pulse starts on the first poll at or after the given frame, so the first press lands on the same session update in every run. Outside a race (before it starts, and after its render scenario is popped) the pulse waits. A ninth field that is not a frame from 0 to 2,147,483,647 is ignored, so the pulse starts at once; `e2e.py` checks every action of a run before the launch. In `e2e.py`: `~y@720`. The `freeze` scenario pulses Y this way ([frozen frames](frozen-frames.md)).
 - A change of the pulse is logged as `FM4 test input: pulse=<mask> from race frame <n> after <n> pulsed polls` (-1: no race frame), and the first pulse on a race frame as `FM4 test input: pulse starts at race frame <n> (session update <n>, input poll <n>, swap <n>, session time <s>)`: the title's session updates, the controller's state polls and the title's `D3DDevice_Swap` calls so far, and the session time.
+- An optional second line, `keys <names>`, holds keyboard keys (the `keybind_*` key names, separated by spaces, `+` or `,`): the diagnostic controller passes them to the keyboard driver (`rex::input::mnk::SetInjectedKeys`), which treats them as held beside the real keys, through its bindings and its steering and pedal model ([keyboard controls](../analysis/keyboard-controls.md)), also without window focus but not while an overlay takes the input. The launchers' cvars turn the keyboard driver and its model on in e2e runs too. In `e2e.py` the action is `key=<name>`, one part per key (`key=W+key=D`); the next action without them releases them. A change is logged as `FM4 test input: keys=<names> (<n> held)`. The keyboard driver picks a change up at its next state poll, so a key's timing has the 50 ms grain of the file reads.
 - The driver reads the file at most every 50 ms. A missing, partial or out-of-range file means all controls are released.
 - It also produces keystroke events (`GetDeviceKeystroke`) from button changes, for callers that read keystrokes instead of the pad state.
 - Every button change is logged to stderr as `FM4 test input: buttons=...`. `fm4-ui-diagnostics.cpp` logs the game's own reads (`FM4 guest input`, `FM4 converted input`).

@@ -37,7 +37,7 @@ The launcher then:
 4. Prints the display and render scale that it chose and starts the game.
 
 The game window runs fullscreen on the primary monitor by default. Use Alt+Enter to
-switch to a window (see [Controls](#controls)).
+switch to a window (see [Keyboard](#keys)).
 
 ## GUI launcher
 
@@ -61,7 +61,7 @@ the environment and the display description of sixteen sets of options (RTV, `-R
 | --- | --- |
 | Display | Screen (`-Display`), fullscreen, render scale, supersample, upscale (`-Upscale`, with the input and output lines beside it), race frame rate, race quality, one tile with TAA or the MSAA tiles (`-Msaa`), the full-rate mirror and the settings overlay. The display and render scale that the options give are shown below them. |
 | Look | The preset (`aces`, `gt`, `neutral`, `original`, `original` without TAA, or a saved look), the tone curve, TAA, and a slider for each [look knob](#look) in five groups: picture, lighting, car, sky and foliage, road. A changed knob is marked and has a Reset button. **Save as look** keeps the current value under a name. The `-Look` value is shown and can be edited. |
-| Controls | The Controller section: the options of `-Pad` (the pad driver, rumble strength, trigger rumble, the steering anti-deadzone and the input thread; stick and trigger shaping and the extra buttons folded), with the `-Pad` value shown and editable; see [Controller](#controller). Below it the keyboard bindings of the controller (the runtime's `keybind_*` settings). **Set** waits for a key; several keys are separated by commas, modifiers are written as `Shift+Up`. Unknown key names are marked and block Play. A connected controller needs no setup. |
+| Controls | The Controller section: the options of `-Pad` (the pad driver, rumble strength, trigger rumble, the steering anti-deadzone and the input thread; stick and trigger shaping and the extra buttons folded), with the `-Pad` value shown and editable; see [Controller](#controller). Then the Keyboard section: the options of `-Keyboard` (smooth steering and pedals, their rates and the precision share; mouse steering folded), with the `-Keyboard` value; see [Keyboard](#keyboard). Below it the keyboard bindings, by their function in the game's DEFAULT LAYOUT 1 (the runtime's `keybind_*` settings). **Set** waits for a key; several keys are separated by commas, modifiers are written as `Shift+Up`. Unknown key names are marked and block Play. A connected controller needs no setup. |
 | Game data | Disc 1 and Disc 2, checked as `generate` checks them, the downloadable content folders and files, and the content packages found, with their import state. **Remove import** deletes an imported package from the user data (see [Data directories](#data-directories)). The texture pack is the `-TextureReplace` folder. |
 | Advanced | Fixed vblank, the shadow workaround, `-SingleTile`, `--ao`, `-Rov`, the native path (`-Native`, and its MSAA: one pass with 2x, the default, one pass with 4x as `-MsaaSamples 4`, or one tile without MSAA as `-MsaaSamples 0`), the performance trace, extra cvars, the texture dump folder, the user data folder, and buttons that open the logs and the user data and copy the command line. |
 
@@ -225,6 +225,7 @@ takes a value.
 | `-Quality xbox\|high\|ultra` | `high` | Render quality of races. |
 | `-Look <preset/knobs>` | `aces` | Post-processing look and car paint. See [Look](#look). |
 | `-Pad <knobs>` | none | The physical controller: the SDL pad driver, rumble strength, trigger rumble, the input thread, stick and trigger shaping and the extra buttons. See [Controller](#controller). |
+| `-Keyboard <knobs>` | none | The keyboard's steering and pedal model: its rates, the precision share and mouse steering. See [Keyboard](#keyboard). |
 | `-ShaderDev` | off | Shader mod development: the look mods reload when a file in `work/fm4-rex/look` is saved, and the knobs change live. See [Shader mod development](#shader-mod-development). |
 | `-TextureDump <dir>` | off | Write each new game texture once as `<hash>.dds` to this directory. See [Texture replacement](#texture-replacement). |
 | `-TextureReplace <dir>` | off | Use `<hash>.dds` files from this directory instead of the game textures with that hash. See [Texture replacement](#texture-replacement). |
@@ -999,23 +1000,130 @@ Select-String -Path logs\runtime.log -Pattern 'SDL pad report:','SDL joystick dr
 
 The lines contain the pads' names and device paths, not the Windows user name.
 
-## Controls
+## Keyboard
 
-The controller uses the SDL backend. The keyboard mapping is the launcher's default,
-set by `launch_cvars` in [pipeline.py](../outputs/FM4-build/pipeline.py).
+The game knows only the Xbox 360 pad; the runtime's keyboard driver turns keys into a
+virtual pad. The launchers bind the keys in a racing layout by the function each pad input
+has in the game's DEFAULT LAYOUT 1, and turn on a steering and pedal model: the steering,
+throttle and brake move at limited rates instead of jumping to full, and their values are
+mapped into the game's own deadzones, so a short press steers a little and a held key
+steers more. The design and the measurements are in
+[keyboard controls](analysis/keyboard-controls.md).
 
-| Key | Function |
+```powershell
+.\outputs\FM4-build\Build.ps1 -Action run @common -Keyboard 'steer_attack=0.4,precision=0.6'
+```
+
+### Keys
+
+| Function in a race | Keys | Pad input |
+| --- | --- | --- |
+| Gas | `W` | right trigger |
+| Brake | `S` | left trigger |
+| Steer left / right | `A` / `D` | left stick |
+| Precision (hold): half lock and half pedal | `Ctrl` | |
+| Shift up | `E`, `Backspace` | B |
+| Shift down | `Q` | X |
+| Handbrake | `Space` | A |
+| Clutch | `Z` | LB |
+| Look straight back | `V` | RB |
+| Rewind | `R` | Y |
+| Switch camera | `C`, `Tab` | Back |
+| Pause | `Escape`, `Enter` | Start |
+| Telemetry | arrow keys | D-pad |
+| Free look | `I`, `J`, `K`, `L` | right stick |
+| Toggle heat damage | `H` | right stick press |
+| Switch between borderless fullscreen and the window | `Alt+Enter` | (`bind_fullscreen`) |
+| Show or hide the settings overlay | `F2` | |
+
+In the menus the same keys are the pad's buttons: the arrow keys move, `Space` selects
+(A), `Backspace` or `E` goes back (B), `Q` and `R` are X and Y (for example ADVANCED and
+RESET TO DEFAULT on the controller screen), `Z` and `V` are LB and RB, and `Enter` or
+`Escape` is Start.
+
+- The keyboard driver ignores keys pressed with Alt, so `Alt+Enter` does not also press
+  Start. `F2`, `F3`, `F4`, `F7` and the backtick stay free for the overlays and the console.
+- `Ctrl` works while the other keys are held: a modifier bound as a key of its own is left
+  out when the other bindings compare their modifiers. `Ctrl+Escape` opens the Windows Start
+  menu, so pause with `Enter` while holding precision.
+- The keys press pad inputs, so the game's own controller options move the functions:
+  with SWITCH GEAR UP/DOWN on, `E` shifts down. The game has 13 layouts (LAYOUT on the
+  CONTROLLER LAYOUT screen); 8, 9, 12 and 13 move the gas and brake off the triggers, where
+  the model does not reach them.
+- The game's D-PAD STEERING (CONTROLLER LAYOUT screen) makes the D-pad, so the arrow keys,
+  steer through the game's own handling instead of toggling the telemetry.
+- The game's assists apply on top: STEERING (ASSISTED, NORMAL, SIMULATION), BRAKING,
+  STABILITY CONTROL and TRACTION CONTROL on the ASSISTS & DIFFICULTY screen.
+- The GUI launcher's Controls page edits the bindings and keeps the ones you changed; Reset
+  goes back to this layout.
+
+### What changed for keyboard players (25 October 2026)
+
+- The steering, throttle and brake ramp up and back instead of jumping to full;
+  `-Keyboard smooth=0` (or Smooth steering and pedals off on the Controls page) gives the
+  digital keys back with the same layout.
+- `W` and `S` no longer push the left stick up and down, and the arrow keys no longer move
+  the right stick. The menus still move with the arrow keys; free look is on `I`, `J`, `K`,
+  `L` (or the mouse with "Mouse moves the right stick").
+- Shift up and down are `E` and `Q` (`Backspace` still presses B). LB, RB and Y moved from
+  `1`, `3` and `P` to `Z`, `V` and `R`; `Escape` pauses, `C` switches the camera, `Ctrl` is
+  the new precision key and `H` toggles the heat damage.
+- Bindings you changed in the GUI launcher stay as you set them. Outside the launchers the
+  runtime keeps its own defaults and digital keys.
+
+### -Keyboard knobs
+
+Knobs are `name=value`, separated by commas; a later knob wins. A knob at its default sets
+nothing. The GUI launcher's Controls page has them in its Keyboard section.
+
+| Knob | Values | Default | Description | Runtime setting |
+| --- | --- | --- | --- | --- |
+| `smooth` | 0, 1 | 1 | The steering and pedal model; 0: digital keys, full at once. | `mnk_smooth` |
+| `steer_attack` | 0 to 2 s | 0.3 | Seconds from centre to full lock while a steering key is held. | `mnk_steer_attack` |
+| `steer_release` | 0 to 2 s | 0.2 | Seconds from full lock back to centre after it is released. A reversal (the other key) runs back to centre at the faster of the attack and the release, then on at the attack. | `mnk_steer_release` |
+| `throttle_attack`, `throttle_release` | 0 to 2 s | 0.25, 0.1 | The same for the throttle. | `mnk_throttle_attack`, `mnk_throttle_release` |
+| `brake_attack`, `brake_release` | 0 to 2 s | 0.15, 0.1 | The same for the brake. | `mnk_brake_attack`, `mnk_brake_release` |
+| `precision` | 0.1 to 1 | 0.5 | The share of full lock and full pedal while the precision key is held. | `mnk_precision` |
+| `title_deadzones` | 0, 1 | 1 | Map the keys into the game's own deadzones (read live from the game, so a lowered in-game deadzone gives no jump); 0 for comparisons. | `mnk_title_deadzones` |
+| `mouse_steering` | 0, 1 | 0 | The mouse's horizontal motion steers, with auto-centring; the right stick then gets no mouse motion. | `mnk_mouse_steering` |
+| `mouse_steer_sensitivity` | 0.1 to 10 | 1 | Thousandths of full lock per count of mouse motion. | `mnk_mouse_steer_sensitivity` |
+| `mouse_steer_centering` | 0 to 5 s | 1 | Time constant of the return to centre while the mouse rests; 0 turns it off. | `mnk_mouse_steer_centering` |
+
+With both steering keys held, the one pressed last wins. The model runs on the clock, not
+per frame, so it behaves the same at 60, 120 and 240 fps. A connected pad and the keyboard
+work together on player 1: each stick comes from the device that deflects it further, the
+triggers from the one pressed further.
+
+### Keyboard test checklist
+
+For the owner's test on the laptop, from an [export](#export-to-another-computer) with the
+GUI launcher. Play a Quick Race with the default car and track in each profile, at least two
+minutes with corners in both directions, braking into a hairpin and a kerb or two. Keep the
+game's assists as they are (the export's profile), and note them.
+
+| Profile | Keyboard section |
 | --- | --- |
-| `W` / `S` | Gas / brake |
-| `A` / `D` | Steer left / right |
-| `Space` / `Backspace` | Controller A / B |
-| `Enter` / `Tab` | Start / Back |
-| Arrow keys | D-pad |
-| `Alt+Enter` | Switch between borderless fullscreen and the window (`bind_fullscreen`) |
-| `F2` | Show or hide the settings overlay |
+| A | the defaults |
+| B | Steering attack 0.2, Steering release 0.15 |
+| C | Steering attack 0.45, Steering release 0.3 |
+| D | Smooth steering and pedals off (the earlier digital keys) |
+| E | the defaults, with the game's D-PAD STEERING on, steering with the arrow keys |
+| F | the defaults, Mouse steering on |
 
-The keyboard controller ignores keys pressed with Alt, so Alt+Enter does not also
-press Start.
+- For each profile: can you hold a steady line through a long corner, correct a slide
+  without overcorrecting, and keep the car straight on a straight? Which steering attack
+  feels right?
+- Throttle and brake: can you feed in the throttle out of a corner without wheelspin, and
+  brake hard enough? Do the throttle and brake rates need changing?
+- Precision (`Ctrl`): useful in tight corners and on the throttle? Is 0.5 the right share?
+- Menus: do the arrow keys, `Space`, `Backspace`, `Enter` and `Escape` work everywhere you
+  went? Anything that does not respond, or presses twice?
+- Profile E: how does the game's own D-pad steering compare with the defaults?
+- Profile F: is mouse steering usable, and how does the auto-centring feel?
+- Note the race frame rate (the laptop's panel) and the steering deadzone in the game's
+  options, if you changed it.
+
+Nothing needs to be sent from the logs for this test; the notes are the result.
 
 ## Shader cache
 
