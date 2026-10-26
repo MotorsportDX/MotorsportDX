@@ -493,6 +493,7 @@ Each row gives the date of the change, the setting that was replaced, and what h
 | 20 Oct 2026 | A still camera's still pixels clipped to the 5x5's minimum and maximum (`TAA_STILL` 1) | The clip of a moving camera | 20 Oct: a pixel unchanged against the same phase a cycle ago keeps its history unclipped, its luma within that of its phases (`TAA_STILL_PHASES` 1) |
 | 25 Oct 2026 | The project's display name Motorsport DX (README, docs, the GUI launcher's and the game's window titles, the notices) | FM4-PC | The program files, `FM4_*` variables, folders and the repository keep FM4 names until a second step |
 | 26 Oct 2026 | The GUI launcher's program `MotorsportDX.exe` (the CMake target keeps `fm4_launcher`) | `fm4_launcher.exe` | `build` and `export` remove the old file; shortcuts point at the new one |
+| 26 Oct 2026 | Five race quality tiers, `-Quality low\|medium\|high\|extrahigh\|ultra` (`high` the default): soft particles in every tier, the GTAO quality per tier, `ultra`'s 4x MSAA on the native path where the plan is a whole scale at 16:9; `xbox` an alias of `medium` ([quality presets](../analysis/quality-presets.md)) | `-Quality xbox\|high\|ultra` ([16 October 2026](#16-october-2026-race-quality-presets)); `xbox`, the title's own without soft particles, ran its races without the look's scene passes (GTAO, TAA, motion vectors, the windshield) on RTV and the native path | None recorded |
 
 ## 6. Corrections and qualifications of earlier entries
 

@@ -57,6 +57,12 @@ above.
   away on later visits (the shader cache).
 - **Sun glare** looks different from the Xbox and between quality settings; this is a known
   limit of the emulated GPU, and the default look evens it out.
+- **16-car races at the Low and Medium race quality** (and `xbox`, Medium's earlier name) use
+  the game's cheaper 16-car car shader. Forced onto a 12-car race, it painted the player's red
+  car pink to white in the cockpit view on every render path; a real 16-car race has not been
+  checked, nor whether the Xbox shows the same. High and above use the full car shader. Before 26 October 2026 the Xbox race quality also ran races
+  without the look's ambient occlusion, anti-aliasing and cockpit glass; the five quality
+  presets fixed that.
 - **Saves:** each build starts with its own profile in the BuildRoot. Saves from other
   builds, other computers or an Xbox are not imported, and moving a profile between builds is
   not guaranteed to work.

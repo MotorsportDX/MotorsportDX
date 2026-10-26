@@ -140,6 +140,7 @@ The next validation priorities are a clean setup on a second computer, then audi
 | [docs/analysis/d3d-hle-n5.md](docs/analysis/d3d-hle-n5.md) | Stage N5 of the native port (section 18 of the design): the panel's own resolution and aspect on the native path |
 | [docs/analysis/fsr-plan.md](docs/analysis/fsr-plan.md) | Plan for AMD FSR 3.1 beside TAA: version and license, the build (stage 0, linked behind `REX_FSR`), native anti-aliasing at the scene_color point (stage 1, the look's `aa=fsr`), upscaling on N5's scales, validation and stages |
 | [docs/analysis/taa.md](docs/analysis/taa.md) | TAA at the existing render scale, in every look preset: current state, injection points, jitter, the scene camera, tiling, the resolve, knobs, validation and history |
+| [docs/analysis/quality-presets.md](docs/analysis/quality-presets.md) | The five race quality presets (`-Quality low` to `ultra`): what each tier sets, the measurements behind them, and why every tier has soft particles |
 | [docs/analysis/texture-replacement.md](docs/analysis/texture-replacement.md) | Texture dumps and replacements keyed by a content hash: the hash, the DDS formats, and what is not covered |
 | [docs/analysis/b4-shader-research.md](docs/analysis/b4-shader-research.md) | Research on the editable shader path (HLSL through FXC, with overrides per hash) |
 | [docs/analysis/shader-mod-iteration.md](docs/analysis/shader-mod-iteration.md) | Iterating on shader mods: the DXBC cache, hot reload and live look knobs |

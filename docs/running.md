@@ -237,7 +237,7 @@ takes a value.
 | `-ResolutionScale 1-4\|panel` | from `-Display` | Render at this multiple of 1280x720, or `panel`: the screen's own resolution (the native path in one pass only). Overrides the render scale of `-Display`. |
 | `-Upscale native\|quality\|balanced\|performance\|<ratio>` | `native` | With `-Native` and `aa=fsr` or `aa=taau`: FSR 3.1 or TAAU renders the scene at fewer lines and upscales it to the render scale. See [-Upscale](#-upscale). |
 | `-Entry0 s\|k` | `s` | With `-Native` in one pass with 2x MSAA: the front-end menus, Autovista, the career home and photo mode (the title's tiling entry 0) at the render scale with 4x MSAA (`s`), so they fill the screen at its resolution, and the menus, Autovista and the career home run the scene passes (GTAO) at every scale; the saved photo stays 1280x720. `k` renders them at the whole scale below and scales them to the screen, as before 26 October 2026: the fallback for integrated GPUs (at 3/2 the menus take about 0.7 to 1.5 ms of GPU time more with `s` on this PC). The GUI launcher's "Menus at the render scale". See [D3D-level HLE, 18.26](analysis/d3d-hle-n5.md#1826-entry-0-at-s-with-photo-mode-in-its-three-tiles-26-october-2026). |
-| `-Quality xbox\|high\|ultra` | `high` | Render quality of races. |
+| `-Quality low\|medium\|high\|extrahigh\|ultra` | `high` | Detail of races in five tiers (`xbox` is `medium`). See [-Quality](#-quality). |
 | `-Look <preset/knobs>` | `aces` | Post-processing look and car paint. See [Look](#look). |
 | `-Pad <knobs>` | `rumble=1.5` | The physical controller: the SDL pad driver, rumble strength, trigger rumble, the input thread, stick and trigger shaping and the extra buttons. See [Controller](#controller). |
 | `-Keyboard <knobs>` | none | The keyboard's steering and pedal model: its rates, the precision share and mouse steering. See [Keyboard](#keyboard). |
@@ -407,33 +407,42 @@ log2 of the input over the output scale).
 
 #### -Quality
 
-Sets the render quality of races through their render scenarios
-(`FM4_RACE_SETTINGS`, `fm4-render-overrides.cpp`). It applies to the N-Car, Autocross
-and Bowling scenarios, not to split screen.
+Sets the detail of races in five tiers: `low`, `medium`, `high` (the default), `extrahigh`
+and `ultra` ("Low" to "Ultra" in the GUI launcher). `xbox`, the name of the title's own
+settings until 26 October 2026, is an alias of `medium`. The tiers set the race render
+scenarios (`FM4_RACE_SETTINGS`, `fm4-render-overrides.cpp`; the N-Car, Autocross and Bowling
+scenarios, not split screen), the quality of the look's ambient occlusion (GTAO) and, for
+`ultra`, the MSAA of the native path. Anisotropic filtering is 16x in every tier. The render
+scale, `-Upscale` and the look are separate options.
 
-- `xbox` keeps the title's own settings.
-- `high` (the default) gives races what the title gives its replays and photo mode: 4x
-  MSAA in three predicated tiles (`TilingScenario` 0, the title's 4xMSAA scenario,
-  instead of 1, which is 2xMSAA in two), soft particles, shadows of collidable objects,
-  full-detail wheels, and car LOD transitions at twice the distance (30/50/100 m). It
-  also undoes the cuts that the title makes for 16-car races: the cheaper car shader,
-  no damage, an environment map that is never updated, half-rate bloom, and no
-  collidables in the mirror.
-- `ultra` also keeps every car at its top LOD (`CarKeepLOD0`, as 1-car races do) and
-  renders the mirror every frame, with up to 11 cars.
+| Tier | Race render scenarios | GTAO | MSAA on the native path |
+|---|---|---|---|
+| `low` | The title's own with soft particles, at most 3 cars in the rear-view mirror and no collidable objects there | low (2x2) | 2x |
+| `medium` (`xbox`) | The title's own with soft particles | medium (2x4) | 2x |
+| `high` | What the title gives its replays and photo mode: soft particles, shadows of collidable objects, full-detail wheels, car LOD transitions at twice the distance (30/50/100 m), and none of the cuts the title makes for 16-car races (the cheaper car shader, no damage, an environment map that is never updated, half-rate bloom, no collidables in the mirror) | high (3x6) | 2x |
+| `extrahigh` | `high`, and every car at its top LOD (`CarKeepLOD0`, as 1-car races do) | ultra (4x8) | 2x |
+| `ultra` | `extrahigh`, and the mirror every frame with up to 11 cars | ultra (4x8) | 4x where the native plan is a whole scale at 16:9 without `-Upscale` (for example 1440p and 4K), otherwise 2x |
 
-With a look that has TAA (every preset, since 20 October 2026) races at every quality render
-one tile without MSAA instead of the tiles above, and TAA anti-aliases it; the other settings
-of the quality stay. `-Msaa` keeps the tiles, and so do `-Rov` and a look without TAA (see
-[-SingleTile and -Msaa](#-singletile-and--msaa)). The measurements below are of the tiles.
+Every tier has soft particles because without them the title resolves no scene depth in
+races, so the look's scene passes (GTAO, TAA, motion vectors, the windshield) do not run
+there: until 26 October 2026 `xbox` races ran without them, on RTV and on the native path.
+`ultra`'s 4x MSAA has no fractional scale and no logical size yet, so where the plan has one
+(1080p at 3/2, a 16:10 screen in Vert+, `-Supersample` at 1080p) or upscales, `ultra` keeps
+2x; the plan description and the settings overlay say which one runs ("Ultra: 4x MSAA").
+`-MsaaSamples` overrides it.
 
-Measured at 240 Hz in the 12-car race phase of the photo scenario: `xbox` 219 to 224
-fps in three runs (GPU 2.3 ms a frame). `high` 178 to 225 fps in four runs, 201 on
-average (GPU 2.8 ms), because the three tiles execute 4,500 to 8,300 draws a frame
-depending on where the cars are (about 5,200 on `xbox`). `ultra` 144.8 fps (median of
-three runs, GPU 3.1 ms, command processor busy 974 ms a second). All three hold 60 fps
-with room to spare. `high`, at 178 fps in the worst run, leaves room for 120 Hz (not
-measured at 120 Hz). `ultra` is meant for 60 to 120 Hz.
+On a discrete GPU the tiers differ little in GPU time: at 2x (2560x1440) on the native path
+and 240 Hz, on the development laptop's RTX 5070 Ti Laptop GPU, a 12-car race frame takes
+4.5 ms on `low`, 4.7 on `medium`, 5.0 on `high`, 5.3 on `extrahigh` and 6.1 ms on `ultra`. The render scale and `-Upscale` change it far
+more. Most of the difference is the GTAO quality (0.31 to 1.04 ms) and `ultra`'s mirror (half
+again as many draws and 1.5 ms more time on the render thread). Details:
+[quality presets](analysis/quality-presets.md).
+
+With a look that has TAA (every preset, since 20 October 2026) races on RTV render one tile
+without MSAA, and on the native path one pass with 2x MSAA (4x at `ultra` where it applies);
+the other settings of the tier stay. `-Msaa` keeps the title's tiles: two with 2x MSAA at
+`low` and `medium`, three with 4x MSAA (`TilingScenario` 0) from `high` up, and so do `-Rov`
+and a look without TAA (see [-SingleTile and -Msaa](#-singletile-and--msaa)).
 
 #### -Info
 
@@ -543,7 +552,7 @@ Photo mode and split screen keep their own settings.
 - `-SingleTile` renders one tile also with a look without TAA, and then the swap applies FXAA.
   Measured with Quick Race on `-Rov`: 58.6 fps instead of 54.3, frame p95 20 ms instead of
   33 ms, GPU 13 ms instead of 17.5 ms. Without TAA, edges are visibly more jagged than with
-  MSAA (2x with `-Quality xbox`, 4x with `high`): thin cables break up.
+  MSAA (2x at `-Quality low` and `medium`, 4x from `high` up): thin cables break up.
 - Measured with TAA at 2x and 240 Hz (19 October 2026, one run each): GPU 5.54 ms a race frame
   and 173.3 fps in one tile against 6.50 ms and 149.0 fps in the three 4x MSAA tiles of `high`;
   in 1:1 crops the two look nearly alike.
