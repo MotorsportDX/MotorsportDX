@@ -980,6 +980,15 @@ Plan LaunchPlan(const LauncherData& data, const std::string& root, const std::st
       UpscaleSettings(data, options.upscale, cvars, AaMethod(knobs), native && msaa_samples == 2);
   Update(cvars, upscaled);
   description += upscale_description;
+  if (!options.entry0.empty() && options.entry0 != "s" && options.entry0 != "k")
+    throw PlanError("Unknown -Entry0 '" + options.entry0 + "'; use s, k.");
+  if (native && msaa_samples == 2 && options.entry0 != "k") {
+    // The title's tiling entry 0 (the boot, the menus, photo mode) at the scene's scale: one
+    // pass with 4x MSAA in a private 4x pair, photo mode in its three tiles there
+    // (d3d-hle-n5.md 18.26). 'k' keeps it at the whole scale, scaled to the screen.
+    env.Set("FM4_ONE_PASS_ENTRY0", "4");
+    cvars.Set("native_rt_surfaces", std::to_string(std::stoi(cvars.Get("native_rt_surfaces")) | 64));
+  }
   const PresentSettings present = PresentSettingsOf(data, options.vsync, options.frame_rate, monitor);
   Update(cvars, present.cvars);
   plan.description = description + "; " + present.description;

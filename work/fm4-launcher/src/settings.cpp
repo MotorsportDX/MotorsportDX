@@ -14,6 +14,7 @@ Json OptionsToJson(const Options& o) {
               {"frame_rate", o.frame_rate},
               {"vsync", o.vsync},
               {"upscale", o.upscale},
+              {"entry0", o.entry0},
               {"pad", o.pad},
               {"keyboard", o.keyboard},
               {"quality", o.quality},
@@ -55,6 +56,7 @@ Options OptionsFromJson(const Json& json) {
   get("frame_rate", o.frame_rate);
   get("vsync", o.vsync);
   get("upscale", o.upscale);
+  get("entry0", o.entry0);
   get("pad", o.pad);
   get("keyboard", o.keyboard);
   get("quality", o.quality);

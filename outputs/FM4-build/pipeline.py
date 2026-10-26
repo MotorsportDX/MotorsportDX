@@ -1469,6 +1469,19 @@ def upscale_settings(upscale,cvars,aa,scene_scale):
              'native_rt_surfaces':'58'},
             f'; {"FSR" if aa=="fsr" else "TAAU"} {upscale} {lines}p -> {output_lines}p{clamped}')
 
+# -Entry0: the menus and photo mode (the title's tiling entry 0) on the native path in one pass
+# at the scene's scale (s, the default), or at the whole scale below it, scaled to the screen
+# (k: the fallback for integrated GPUs if 4x MSAA at the screen's size costs too much there).
+ENTRY0_SCALES=('s','k')
+DEFAULT_ENTRY0='s'
+
+def entry0_scale(entry0):
+    """The -Entry0 value: s (the default) or k."""
+    entry0=entry0 or DEFAULT_ENTRY0
+    if entry0 not in ENTRY0_SCALES:
+        raise ValueError(f"Unknown -Entry0 '{entry0}'; use {', '.join(ENTRY0_SCALES)}.")
+    return entry0
+
 VSYNC_MODES=('auto','on','off')
 DEFAULT_VSYNC='auto'
 
@@ -1752,7 +1765,7 @@ def launch(root,single_tile=False,fixed_vblank=False,frame_rate=None,rov=False,
            quality=None,display=DEFAULT_DISPLAY,fullscreen=False,supersample=False,info=False,
            ao=False,shader_dev=False,texture_dump=None,texture_replace=None,msaa=False,
            native=None,msaa_samples=None,vsync=DEFAULT_VSYNC,pad=None,upscale=DEFAULT_UPSCALE,
-           keyboard=None):
+           keyboard=None,entry0=None):
     state = json.loads((root/'local.json').read_text())
     disc1,disc2 = validate_discs(state['disc1'],state['disc2'])
     report=json.loads((root/'build-result.json').read_text())
@@ -1770,7 +1783,8 @@ def launch(root,single_tile=False,fixed_vblank=False,frame_rate=None,rov=False,
         shadow_workaround=shadow_workaround,quality=quality,display=display,fullscreen=fullscreen,
         supersample=supersample,info=info,ao=ao,shader_dev=shader_dev,texture_dump=texture_dump,
         texture_replace=texture_replace,msaa=msaa,content_manifest=manifest,native=native,
-        msaa_samples=msaa_samples,vsync=vsync,pad=pad,upscale=upscale,keyboard=keyboard)
+        msaa_samples=msaa_samples,vsync=vsync,pad=pad,upscale=upscale,keyboard=keyboard,
+        entry0=entry0)
     print(description)
     if texture_dump:
         print(f'Texture dump: {cvars["texture_dump_path"]}')
@@ -1786,7 +1800,7 @@ def launch_plan(root,disc1,single_tile=False,fixed_vblank=False,frame_rate=None,
                 quality=None,display=DEFAULT_DISPLAY,fullscreen=False,supersample=False,info=False,
                 ao=False,shader_dev=False,texture_dump=None,texture_replace=None,msaa=False,
                 content_manifest=None,monitor=None,native=None,msaa_samples=None,
-                vsync=DEFAULT_VSYNC,pad=None,upscale=DEFAULT_UPSCALE,keyboard=None):
+                vsync=DEFAULT_VSYNC,pad=None,upscale=DEFAULT_UPSCALE,keyboard=None,entry0=None):
     """The cvars, the FM4_ environment and the display description of a run of the options of
     launch. The GUI launcher (work/fm4-launcher, plan.cpp) ports this function; launcher_tests
     compares the two. monitor: the primary monitor's (width, height, DPI scale, refresh Hz, VRR
@@ -1856,6 +1870,12 @@ def launch_plan(root,disc1,single_tile=False,fixed_vblank=False,frame_rate=None,
                                                   bool(native and msaa_samples==2))
     cvars.update(upscaled)
     description+=upscale_description
+    if native and msaa_samples==2 and entry0_scale(entry0)=='s':
+        # The title's tiling entry 0 (the boot, the menus, photo mode) at the scene's scale: one
+        # pass with 4x MSAA in a private 4x pair, photo mode in its three tiles there
+        # (d3d-hle-n5.md 18.26). 'k' keeps it at the whole scale, scaled to the screen.
+        env['FM4_ONE_PASS_ENTRY0']='4'
+        cvars['native_rt_surfaces']=str(int(cvars['native_rt_surfaces'])|64)
     present,frame_rate,present_description=present_settings(vsync,frame_rate,monitor)
     cvars.update(present)
     description+=f'; {present_description}'
@@ -2023,7 +2043,9 @@ def launcher_test_options(root):
             {'native':True,'look':'pc,aa=fsr,fsr_sharpen=0.5','upscale':'quality','display':'1080p'},
             {'native':True,'look':'pc,aa=taau','upscale':'quality','display':'1080p','info':True},
             {'native':True,'look':'pc,aa=taau','upscale':'1.25','display':'1080p'},
-            {'native':True,'look':'pc,aa=taau'}]
+            {'native':True,'look':'pc,aa=taau'},
+            {'native':True,'entry0':'k','display':'1080p'},
+            {'native':True,'look':'pc,aa=fsr','upscale':'quality','display':'1440p','entry0':'s'}]
 
 def launcher_tests(root):
     """Compares MotorsportDX.exe's port of launch_plan, disc check and content search with this
@@ -2196,6 +2218,9 @@ def main():
                         help='run: native (default), quality, balanced, performance or a ratio from '
                              '1 to 3: FSR 3.1 renders the scene at fewer lines and upscales it to '
                              'the output scale; needs -Native and aa=fsr or aa=taau in -Look')
+    parser.add_argument('--entry0',choices=ENTRY0_SCALES,
+                        help="run: with -Native, the menus and photo mode at the scene's scale (s, "
+                             'the default) or at the whole scale below it (k)')
     parser.add_argument('--keyboard',
                         help="run: the keyboard's steering and pedal model as knobs, for example "
                              "'steer_attack=0.4,precision=0.6' (KEYBOARD_KNOBS)")
@@ -2286,7 +2311,7 @@ def main():
                                      args.fullscreen,args.supersample,args.info,args.ao,
                                      args.shader_dev,args.texture_dump,args.texture_replace,args.msaa,
                                      args.native,args.msaa_samples,args.vsync,args.pad,
-                                     args.upscale,args.keyboard)
+                                     args.upscale,args.keyboard,args.entry0)
     if args.action=='warmcache': warm_cache(root)
     if args.action=='profbuild': build_profiling(root,fxc,args.jobs)
     if args.action=='export':

@@ -458,6 +458,8 @@ Perf at 3/2, the race of `photo` with `aces`, 3 runs each (`n9z-perf-*`):
 
 Increment 2 is closed. The aspect is on in the launchers where the native path renders at the screen's own scale (18.23). What stays at 16:9 and the whole scale: the front-end menus, the pre-race screens and photo mode (18.20, "entry 0 at s").
 
+On 26 October 2026 the project owner chose to keep the HUD in the centred 16:9 area on wider screens; anchoring the HUD to the screen's edges is not planned.
+
 ### 18.25 Entry 0 at s: the probe, parked (25 October 2026)
 
 The item of 18.20, "entry 0 at s": the title's tiling entry 0 (4x MSAA in three tiles) in one pass with a private 4x pair, so the menus and photo mode render at the scene's scale. Its first step, the probe, is done; the main session parked the item after it for the integrated GPUs' upscaling (FSR plan, 12.4), on 25 October 2026.
@@ -468,3 +470,36 @@ The item of 18.20, "entry 0 at s": the title's tiling entry 0 (4x MSAA in three 
 - **The scenario calls** (`FM4_SCENARIO_TRACE`, [traces](../e2e/traces.md)): `CTileBuffer::SetScenario` (`sub_82883948`, the scenario in r7) is called with 0 at the boot, the menus and photo mode, and with 1 for the pre-race screens, the races and the replays, all through `sub_828718C0` from `sub_82384E30`. Photo mode is the render scenario `PhotoMode` on top of the stack 3 ms before its `SetScenario(0)`; the menus' calls come without it. So entry 0 serves the boot, the menus and photo mode; the pre-race screens and the replays are already at s.
 - **The fallback the main session chose:** photo mode on the tiled entry 0 at k (the table written back at its `SetScenario(0)`), the menus on entry 0 in one pass at s. Open before coding it: photo mode's tiled colour has the same key as entry 0's one-pass colour, so the runtime must learn when photo mode is on (proposed: a marker from the title at the `PhotoMode` push and pop, applied in order by the render thread).
 - **The pre-race car** is as bright with entry 0 in one pass as tiled (the same moment of the intro, mean 73.6 against 72.4); a brighter capture was a fade one capture apart.
+
+### 18.26 Entry 0 at s, with photo mode in its three tiles (26 October 2026)
+
+The owner asked to finish the parked item of 18.25 and photo mode at the native resolution; the main session approved the design below on 26 October 2026.
+
+**How it works.**
+- **The menus.** `FM4_ONE_PASS_ENTRY0=4` keeps entry 0 in one 1280x720 pass with 4x MSAA for the boot and the menus, and `native_rt_surfaces` bit 64 keeps its colour (base 0, pitch 32, 4x, each format) and depth (base 832) in a private pair at the scene's scale.
+- **Photo mode.** At `SetScenario(0)` with the render scenario `PhotoMode` on top, the hook writes entry 0's original three tile rows back into the table, which the title reads at the call. Any other `SetScenario(0)` gets the one-pass rows.
+- **Why photo mode cannot be shared at k.** Its three tiles cannot render in shared surfaces at the whole scale. The title creates its EDRAM layout once at boot, from the largest tile (`sub_82883948` creates the device's surfaces only while none exist), so with one-pass entry 0 its depth sits at 2,880 tiles (read as 832) for every scenario. That depth overlaps the last 192 tiles of each 1,024-tile colour tile. In shared surfaces the overlap aliases: white bands at the bottom of each tile, near lines 256 and 512.
+- **Photo mode in the private pair.** Photo mode therefore draws its three tiles into entry 0's private pair, which keeps colour and depth apart. Every pass of tiled photo mode is 4x, so the mix of 4x and 2x passes of 18.25 does not occur. This puts photo mode at the scene's scale too.
+- **Upscaling.** The pair is at the output scale (`IsSceneInputSamples`).
+- **Memory.** The pair is sized to the scene's logical height (720 lines at 16:9) instead of the doubled EDRAM height of the other private 4x surfaces. With `native_rt_surfaces_memory_cap_mb` set, a private target that has not been bound for 20,000 updates (the races' 2x pair in the menus, entry 0's pair in the races) may be evicted; it is drawn again from a clear when it comes back. The launchers set no cap, so both pairs stay resident.
+- **Launchers.** Both launchers set it with `-Native` in one pass 2x (`-Entry0 s`, the default). `-Entry0 k` (the GUI launcher's "Menus at the render scale" off) keeps entry 0, photo mode included, tiled at the whole scale, as the fallback for integrated GPUs. e2e follows with `--native` (`--entry0`), and `native_rt_surfaces` given without bit 64 keeps it off.
+- **The pre-race screens** use scenario 1 (18.25), so they were at s already.
+
+**The gate** (`I:\FM4-build-usa`, the candidate `game-build-e0`, the baseline `game-build-quirky` with entry 0 tiled at k, `aces`, one run each):
+
+| Check | Result |
+|---|---|
+| The menus at the screen's size (`photo`, `photo_view`) | at 3/2 every capture is 1920x1080 except the first (the boot's legal text, before the first scenario); entry 0 at k had 15 and 31 captures at 1280x720. 1:1 crops of the car select: the text, the plate and the car sharper. Under upscaling (1440p quality, `aa=fsr`) the menus and photo mode are 2560x1440 |
+| Photo mode at s | correct at 3/2 and 1x, no seams at the tiles' edges; at 1:1 against k the grille, the bonnet's vents and the wipers are sharper |
+| The saved photo | 1280x720 (and the 416x240 thumbnail) at 3/2 and 1x, the same picture as k's (taken at another moment, so not pixel equal: two runs at k differ as much); `photo_view` loads it in a new process at 3/2 and 1x |
+| The scene passes | Autovista at 3/2: GTAO 0.42 to 0.44 ms a frame with entry 0 at s, none at k ("runs no scene passes"); at 16:10 (2x, H = 800) 0.83 to 0.85 ms against none, so both the fractional scale and the logical size turned them off. The career home at 3/2: 0.44 to 0.49 ms against none. Photo mode at fractional scales still runs no scene passes: its tiles resolve with row offsets, which the resolve at the scene's scale does not take, so its scene depth stays at the whole scale (as before; at 1x GTAO 0.19 and TAA 0.14 ms run as before) |
+| Integer scales | the 2D menus at 1x identical to k's (0.0% of the image above 4, the transitions apart); the 3D career home menu 21.7% above 4, at the edges and in textures (above 16 only 4.5%): one pass against three 4x tiles |
+| The races (`freeze`) | PASS at 3/2 (draws +0.1%, 34.3% above 4) and 2 (+0.0%, 31.6%) |
+| RTV 2x (`aces`), `-Rov` 1x (`original,taa=0`) | PASS: +0.0%, 27.2%; +0.0%, 27.5% (against `game-build-quirky` run the same hour) |
+| 240 Hz smoke at 3/2 | `photo` raced at 238.3 fps (p99 5.02 ms), photo mode 30.0; `career` 236.7 fps (p99 5.23 ms), the replay 118.4; the baseline's error keys |
+
+GPU time a frame at 3/2 on this PC (medians of the screens' windows): the menus (`UI_NoCar`) 1.75 against 1.09 ms at k, the career home (`UI_Homespace`) 2.62 against 1.16 ms, photo mode 4.23 against 3.50 ms. The pre-race screens are unchanged (scenario 1). On the 890M, scaled by the scene's ratio of 12.4 (3.4 times), about +2 ms in the menus, +5 ms in the career home and +2.5 ms in photo mode (30 fps); an estimate, which `-Entry0 k` falls back from if the Ally X pays too much.
+
+Render target memory at 3/2 (`rt_memory`): 439.2 MB after the menus and through the race, 454.7 MB after photo mode, against 331.2 and 346.7 MB at k: the 4x pair at 720 lines takes 108 MB, and both pairs stay resident.
+
+Open: the scene passes in photo mode at fractional scales and logical sizes (the tiles' resolves at the scene's scale).

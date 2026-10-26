@@ -388,12 +388,33 @@ REX_HOOK_RAW(sub_82BB96E0) { TracePhotoEncoder(ctx, base, __imp__sub_82BB96E0); 
 // (the title probably places it after the 1280x720 colour, as at 4x). The native
 // path only; RTV and -Rov run the title's table.
 //
-// FM4_ONE_PASS_ENTRY0=4 makes scenario 0 (4xMSAA, three tiles: the user
-// interface, the front-end menus, the pre-race screens and photo mode) one
-// 1280x720 tile with 4x MSAA, early as entry 3's 4x: the title sizes
-// that entry's surface at boot ("entry 0 at s", docs/analysis/d3d-hle-n5.md
-// 18.25).
+// FM4_ONE_PASS_ENTRY0=4 makes scenario 0 (4xMSAA, three tiles: the boot, the
+// user interface, the front-end menus and photo mode) one 1280x720 tile with
+// 4x MSAA, early as entry 3's 4x: the title sizes that entry's surface at boot
+// ("entry 0 at s", docs/analysis/d3d-hle-n5.md 18.25 and 18.26). Photo mode
+// keeps the title's three tiles: CTileBuffer::SetScenario writes them back
+// while the render scenario PhotoMode is on top. The title placed entry 0's
+// depth after the one-pass colour at boot (2,880 tiles, read as 832), where it
+// overlaps the last 192 tiles of a 1,024-tile colour tile; the runtime's
+// private 4x pair (native_rt_surfaces bit 64) keeps them apart, so photo mode
+// draws its tiles into that pair at the scene's scale.
+bool FM4RenderScenarioOnTop(const char* name);
 namespace {
+// Entry 0's words from +4 (the sample count, the tile counts, the tile
+// rectangles) as the title has them and as one pass.
+constexpr uint32_t kEntry0Words = 17;
+uint32_t entry0_original[kEntry0Words], entry0_one_pass[kEntry0Words];
+bool entry0_switch = false;
+void ReadEntry0(uint8_t* base, uint32_t* words) {
+  for (uint32_t i = 0; i < kEntry0Words; ++i) {
+    words[i] = rex::memory::load_and_swap<uint32_t>(base + 0x82D883C8u + 4 + 4 * i);
+  }
+}
+void WriteEntry0(uint8_t* base, const uint32_t* words) {
+  for (uint32_t i = 0; i < kEntry0Words; ++i) {
+    rex::memory::store_and_swap<uint32_t>(base + 0x82D883C8u + 4 + 4 * i, words[i]);
+  }
+}
 void PatchOnePassScenario(uint8_t* base, uint32_t scenario, uint32_t samples) {
   const uint32_t entry = 0x82D883C8u + scenario * 0x4D0u;
   auto store = [base](uint32_t address, uint32_t word) {
@@ -416,7 +437,10 @@ void FM4PatchTilingScenarios(uint8_t* base, bool early) {
     const char* entry0 = std::getenv("FM4_ONE_PASS_ENTRY0");
     if (entry0 && std::atoi(entry0) == 4) {
       static const bool entry0_patched = [base]() {
+        ReadEntry0(base, entry0_original);
         PatchOnePassScenario(base, 0, 4);
+        ReadEntry0(base, entry0_one_pass);
+        entry0_switch = true;
         return true;
       }();
       (void)entry0_patched;
@@ -438,9 +462,25 @@ void FM4PatchTilingScenarios(uint8_t* base, bool early) {
 // is stored at this+7832). FM4_SCENARIO_TRACE=1 logs every
 // change of the scenario with its caller and the steady clock in ms (the e2e
 // harness's clock), and how many calls kept the previous one.
+namespace {
+// Photo mode (the render scenario PhotoMode on top) at SetScenario(0): entry 0
+// as the title's three tiles; any other SetScenario(0): one pass. The title
+// reads the rows at the call.
+void SwitchEntry0(uint8_t* base, uint32_t scenario) {
+  if (!entry0_switch || scenario != 0) return;
+  static bool rows_tiled = false;
+  const bool tiled = FM4RenderScenarioOnTop("PhotoMode");
+  if (tiled != rows_tiled) {
+    WriteEntry0(base, tiled ? entry0_original : entry0_one_pass);
+    rows_tiled = tiled;
+  }
+}
+}  // namespace
+
 REX_EXTERN(__imp__sub_82883948);
 REX_HOOK_RAW(sub_82883948) {
   FM4PatchTilingScenarios(base, false);
+  SwitchEntry0(base, ctx.r7.u32);
   static const bool trace = [] {
     const char* value = std::getenv("FM4_SCENARIO_TRACE");
     return value && std::atoi(value) != 0;

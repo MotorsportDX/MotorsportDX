@@ -61,6 +61,9 @@ struct Options {
   // -Upscale native, quality, balanced, performance or a ratio from 1 to 3; empty: the default
   // (native).
   std::string upscale;
+  // -Entry0 s (the menus and photo mode at the scene's scale with -Native) or k (at the whole
+  // scale below it); empty: the default (s).
+  std::string entry0;
   int resolution_scale = 0;  // 0: from the display; kPanelScale: the screen's own (panel)
   std::string look;          // empty: the default look
   std::string quality;       // empty: the default quality

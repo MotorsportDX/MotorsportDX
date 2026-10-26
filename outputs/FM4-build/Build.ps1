@@ -28,6 +28,7 @@ param(
     [ValidateRange(30,240)][int]$FrameRate,
     [ValidateSet('auto','on','off')][string]$VSync,
     [string]$Upscale,
+    [ValidateSet('s','k')][string]$Entry0,
     [string]$Pad,
     [string]$Keyboard,
     [string]$Look,
@@ -71,6 +72,7 @@ if ($ResolutionScale) { $arguments += @('--resolution-scale', "$ResolutionScale"
 if ($FrameRate) { $arguments += @('--frame-rate', "$FrameRate") }
 if ($VSync) { $arguments += @('--vsync', $VSync) }
 if ($Upscale) { $arguments += @('--upscale', $Upscale) }
+if ($Entry0) { $arguments += @('--entry0', $Entry0) }
 if ($Pad) { $arguments += @('--pad', $Pad) }
 if ($Keyboard) { $arguments += @('--keyboard', $Keyboard) }
 if ($Look) { $arguments += @('--look', $Look) }

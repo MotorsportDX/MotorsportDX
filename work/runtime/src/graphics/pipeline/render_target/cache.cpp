@@ -2052,6 +2052,16 @@ bool RenderTargetCache::IsPrivateEntry0() const {
          (REXCVAR_GET(native_rt_surfaces) & 64);
 }
 
+uint32_t RenderTargetCache::PrivateEntry0Rows(RenderTargetKey key) const {
+  if (!IsPrivateEntry0() || key.msaa_samples != xenos::MsaaSamples::k4X ||
+      key.pitch_tiles_at_32bpp != 32 || key.base_tiles != (key.is_depth ? 832u : 0u) ||
+      !IsPrivateKey(key)) {
+    return 0;
+  }
+  // Rows of 8 lines (4x).
+  return (scene_logical_height_ + 7) / 8;
+}
+
 bool RenderTargetCache::IsSceneInputSamples(xenos::MsaaSamples msaa_samples) const {
   return msaa_samples != xenos::MsaaSamples::k1X &&
          (msaa_samples == xenos::MsaaSamples::k2X || REXCVAR_GET(native_one_pass_msaa) == 4);
@@ -2208,10 +2218,16 @@ void RenderTargetCache::EvictRenderTargets() {
       used.emplace(render_target->key());
     }
   }
+  // A private target (no EDRAM tile names it) only once it has not been bound
+  // for a while: the races' 2x pair in the menus, entry 0's 4x pair in the
+  // races (18.26); they are drawn again from a clear when they come back.
+  constexpr uint64_t kPrivateIdleUpdates = 20000;
   std::vector<RenderTarget*> candidates;
   for (const auto& render_target_pair : render_targets_) {
     if (render_target_pair.second && used.find(render_target_pair.first) == used.end() &&
-        !IsPrivateKey(render_target_pair.first)) {
+        (!IsPrivateKey(render_target_pair.first) ||
+         render_target_pair.second->last_bound_ + kPrivateIdleUpdates <
+             render_target_update_clock_)) {
       candidates.push_back(render_target_pair.second);
     }
   }
@@ -2238,7 +2254,10 @@ void RenderTargetCache::EvictRenderTargets() {
 RenderTargetCache::RenderTarget* RenderTargetCache::GetOrCreateRenderTarget(RenderTargetKey key,
                                                                           uint32_t tile_rows) {
   assert_true(GetPath() == Path::kHostRenderTargets);
-  const uint32_t full_rows = GetFullTileRows(key);
+  // Entry 0's private 4x pair is one tile of the scene's size (18.26).
+  const uint32_t entry0_rows = PrivateEntry0Rows(key);
+  const uint32_t full_rows =
+      entry0_rows ? std::min(entry0_rows, GetFullTileRows(key)) : GetFullTileRows(key);
   // native_rt_surfaces bit 8: the rows asked for, rounded up to 8, at most the
   // EDRAM's.
   // A private surface at a fractional scene scale is created at its full

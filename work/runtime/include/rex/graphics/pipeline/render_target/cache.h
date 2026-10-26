@@ -627,6 +627,10 @@ class RenderTargetCache {
   // native_rt_surfaces bit 64 with one pass 2x: the title's tiling entry 0 in
   // one pass with 4x MSAA has a private pair too (d3d-hle-n5.md 18.25).
   bool IsPrivateEntry0() const;
+  // The tile rows of entry 0's private 4x pair (one tile of the scene's
+  // logical size, 720 lines at 16:9, not the doubled EDRAM height of the
+  // other private 4x surfaces), or 0 for any other key.
+  uint32_t PrivateEntry0Rows(RenderTargetKey key) const;
   // Whether private surfaces of the sample count are at the scene's input scale
   // while upscaling: the races' MSAA scene (2x, or 4x with one pass 4x races);
   // entry 0's 4x pair beside 2x races is at the output scale.

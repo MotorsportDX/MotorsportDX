@@ -131,6 +131,14 @@ void Apply(const char* event, const std::string& name) {
 }
 }  // namespace
 
+// The render scenario on top of the stack is the named one (photo mode is
+// "PhotoMode", pushed on top of the race): fm4-guest-hooks.cpp's tiling entry 0
+// switch (FM4_ONE_PASS_ENTRY0).
+bool FM4RenderScenarioOnTop(const char* name) {
+  std::lock_guard lock(mutex);
+  return !names.empty() && names.back() == name;
+}
+
 void FM4InstallVblankRate(rex::Runtime* rt) {
   const char* frame_rate = std::getenv("FM4_FRAME_RATE");
   const char* enabled = std::getenv("FM4_VBLANK_SWITCH");

@@ -1276,7 +1276,14 @@ def run_once(options, out):
             # Bit 8: the host render targets sized to the tiles the title uses (16.15); bit 16:
             # every 1280-wide race surface private (d3d-hle-n5.md 18.11).
             args.setdefault('native_one_pass_msaa', one_pass_samples)
-            args.setdefault('native_rt_surfaces', '26')
+            # Bit 64 with one pass 2x: the title's tiling entry 0 (the menus, photo mode) at
+            # the scene's scale, as the launchers' -Entry0 s (d3d-hle-n5.md 18.26); --entry0 k,
+            # or native_rt_surfaces given without bit 64, keeps it at the whole scale.
+            entry0 = one_pass_samples == '2' and options.entry0 != 'k'
+            args.setdefault('native_rt_surfaces', '90' if entry0 else '26')
+            if (entry0 and int(args['native_rt_surfaces']) & 64 and
+                    not any(item.startswith('FM4_ONE_PASS_ENTRY0=') for item in options.env)):
+                options.env = ['FM4_ONE_PASS_ENTRY0=4'] + options.env
         elif not (single_tile if not tiling else tiling[-1] == '2'):
             cause = ('--msaa' if options.msaa else f'--env FM4_TILING_SCENARIO={tiling[-1]}'
                      if tiling else f'the look {look!r} (no TAA)')
@@ -1757,6 +1764,9 @@ def main():
                                           '(default: the launcher\'s), e.g. xbox')
     parser.add_argument('--native', action='store_true',
                         help='stage N1 of the native path (host_render_thread) like Build.ps1 -Native')
+    parser.add_argument('--entry0', choices=['s', 'k'], default='s',
+                        help="with --native in one pass 2x: the menus and photo mode at the scene's "
+                             "scale (s, as Build.ps1 -Entry0 s) or at the whole scale (k)")
     parser.add_argument('--msaa-samples', type=int, choices=[0, 2, 4],
                         help='with --native, like Build.ps1 -MsaaSamples: races in one pass with 2x '
                              '(the default) or 4x MSAA, or 0 for one tile without MSAA')

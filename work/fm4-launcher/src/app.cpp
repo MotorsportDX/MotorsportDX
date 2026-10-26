@@ -1067,6 +1067,14 @@ void App::DisplayPage() {
     }
   }
 
+  // -Entry0: the menus and photo mode at the render scale (s, the default) or at the whole
+  // scale below it (k).
+  bool entry0 = o.entry0 != "k";
+  Label("Menus at the render scale",
+        "The native path renders the menus and photo mode at the render scale with 4x MSAA. "
+        "Off: at the whole scale below it, scaled to the screen (less GPU time).");
+  if (ImGui::Checkbox("##entry0", &entry0)) o.entry0 = entry0 ? "" : "k";
+
   int rate = o.frame_rate ? o.frame_rate : 60;
   Label("Race frame rate", "Races, replays and the countdown. Menus, post-race and photo mode keep their own timing.");
   ImGui::SetNextItemWidth(320 * scale_);
