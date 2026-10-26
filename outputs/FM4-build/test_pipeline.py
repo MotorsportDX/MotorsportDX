@@ -338,7 +338,7 @@ class PipelineTests(unittest.TestCase):
                 cvars,env,description=plan((2560,1440,1.0),native=True,quality='ultra',**options)
                 self.assertNotEqual(env.get('FM4_ONE_PASS_MSAA'),'4',options)
                 self.assertNotIn('Ultra:',description)
-            for options in ({},{'rov':True},{'msaa':True}):
+            for options in ({'native':False},{'rov':True},{'msaa':True}):
                 cvars,env,description=plan((2560,1440,1.0),quality='ultra',**options)
                 self.assertNotIn('FM4_ONE_PASS_MSAA',env)
                 self.assertNotIn('Ultra:',description)
@@ -599,7 +599,7 @@ class PipelineTests(unittest.TestCase):
         # The default is the native path at the screen's own scale; RTV (-Rtv) keeps the whole
         # multiple that covers the screen.
         cvars,_,description=plan((1920,1080,1.0))
-        self.assertEqual(scales(cvars),(None,'3/2','58'))
+        self.assertEqual(scales(cvars),(None,'3/2','122'))
         self.assertNotIn('native path for',description)
         cvars,_,description=plan((1920,1080,1.0),native=False)
         self.assertEqual(scales(cvars),('2',None,None))

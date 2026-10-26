@@ -253,7 +253,7 @@ takes a value.
 | `-Rtv` | off | RTV, the PM4 path on host render targets, instead of the native path: the reference beside `-Rov`. |
 | `-SingleTile` | with TAA | Render races as one 720p tile without MSAA also with a look without TAA, then with FXAA on the swap. A look with TAA (every preset) renders one tile anyway. |
 | `-Msaa` | off | Keep the tiles and MSAA of `-Quality` with a look that has TAA. |
-| `-MsaaSamples 4` or `0` | 2 with `-Native` | With `-Native`: 4 renders races in one pass with 4x MSAA, 0 in one tile without MSAA, instead of one pass with 2x MSAA. See [-Native](#-native). |
+| `-MsaaSamples 4` or `0` | 2 on the native path | On the native path: 4 renders races in one pass with 4x MSAA, 0 in one tile without MSAA, instead of one pass with 2x MSAA. See [-Native](#-native). |
 | `-FixedVblank` | off | Hold every swap to the fixed 60 Hz vblank grid. |
 | `-FullRateMirror` | off | Render the rear-view mirror in every frame of every race. |
 | `-ShadowWorkaround` | off | Render the shadow map only with the cockpit camera, as the old Xenia workaround did. |
