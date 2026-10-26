@@ -710,6 +710,9 @@ vblank), as `fm4-vblank-rate.cpp` reports it; the frame interval is the title's 
 between its presented frames, averaged over about eight frames, each at most 50 ms. The
 runtime passes both to the shader mods (`xe_guest_design_frame_rate`, `xe_guest_frame_interval`),
 so a race below its target rate, such as on the ROG Xbox Ally X, keeps the game's speed too.
+The power is at least `60 / vblank rate`, the most frames the title can present at that rate,
+so a switch of the scenario, which the averaged interval follows a few frames late, never
+slows it, and at most 1: below the title's own rate it adapts per frame, as the title does.
 At a 60 Hz guest vblank (the menus, the 30 fps screens, and races without `-FrameRate`) it
 changes nothing. It is a shader mod of the auto exposure shader
 (`shader_CAF3881F7C4CDCAA.mod.hlsli`), so it works on the RTV path and the native path;

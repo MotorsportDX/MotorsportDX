@@ -12,7 +12,10 @@
 // gives c2.x the share that covers the same part of the difference in the frame's time at the
 // game's speed: 1 - (1 - c2.x)^(design rate x frame interval), with the title's design frame
 // rate for the scenario (60, or 30) and its measured frame interval, so a race below its
-// target rate keeps the game's speed too. Without those (a runtime or title integration that
+// target rate keeps the game's speed too. The power is at least 60 / vblank rate (the most
+// frames the title can present at that rate, so a scenario switch, which the averaged
+// interval follows late, never slows it) and at most 1 (below the title's own rate it adapts
+// per frame, as the title does). Without those (a runtime or title integration that
 // does not report them) the share is for one frame at the vblank rate,
 // 1 - (1 - c2.x)^(60 / rate). At a 60 Hz vblank, and in contracts without the rate, c2 stays
 // as it is. It does not include fm4-look.hlsli, whose fetch 0 helpers need a point sampler
@@ -32,10 +35,13 @@ float4 fm4_adaptation_constant(uint n, float4 value) {
 #ifdef XE_SYS_GUEST_FRAME_INTERVAL
       float interval = xe_guest_frame_interval();
       float design = xe_guest_design_frame_rate();
+      // At least one frame at the vblank rate (the averaged interval lags a switch of the
+      // scenario), at most one of the title's frames (never a larger step than its own).
       if (interval > 0.0 && design > 0.0) {
-        frames = design * interval;
+        frames = max(design * interval, frames);
       }
 #endif
+      frames = min(frames, 1.0);
       value.x = 1.0 - pow(saturate(1.0 - value.x), frames);
     }
   }
