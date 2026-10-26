@@ -416,6 +416,21 @@ class SummaryTests(unittest.TestCase):
         c = compare.normalize({'fps_mean': 60, 'errors': {}, 'draws_per_frame_mean': 10})
         self.assertEqual(compare.check_fail(b, c), [])
 
+    def test_compare_fails_photo_mode_clear_color(self):
+        # Photo mode's captures or the final one showing the clear color fail; as many as the
+        # baseline's, or a summary without the fields, do not.
+        base = {'fps_mean': 60, 'errors': {}}
+        b = compare.normalize(dict(base, clear_gray_photo_frames=[], clear_gray_final=False))
+        lost = compare.normalize(dict(base, clear_gray_photo_frames=['frame-070'],
+                                      clear_gray_final=True))
+        self.assertEqual(len(compare.check_fail(b, lost)), 2)
+        self.assertEqual(compare.check_fail(lost, lost), [])
+        self.assertEqual(compare.check_fail(compare.normalize(dict(base)), b), [])
+        # The repeat summaries' counts.
+        self.assertEqual(len(compare.check_fail(
+            compare.normalize(dict(base, clear_gray_photo_frames=0, clear_gray_final=0)),
+            compare.normalize(dict(base, clear_gray_photo_frames=3, clear_gray_final=1)))), 2)
+
 
 class CoverageTests(unittest.TestCase):
     """coverage.py: the writers of each phase from the n0 trace's alloc table and the checks."""

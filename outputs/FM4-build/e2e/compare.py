@@ -133,6 +133,15 @@ def check_fail(b, c):
         fail.append(f"frame_ms_p99 {p[1]:.2f} is more than 20% above baseline {p[0]:.2f}")
     for k in sorted(set(c["errors"]) - set(b["errors"])):
         fail.append(f"new error key in candidate: {k} (x{c['errors'][k]})")
+    # Photo mode or the final capture showing the clear color: its scene lost (d3d-hle-n5.md
+    # 18.27), which the capture statistics' warnings alone let through.
+    count = lambda d, k: d.get(k) if isinstance(d.get(k), (int, bool)) else len(d.get(k) or [])
+    p = count(b, "clear_gray_photo_frames"), count(c, "clear_gray_photo_frames")
+    if p[1] > p[0]:
+        fail.append(f"photo mode captures showing the clear color (its scene lost) {p[0]} -> {p[1]}")
+    p = int(count(b, "clear_gray_final")), int(count(c, "clear_gray_final"))
+    if p[1] > p[0]:
+        fail.append(f"final captures showing the clear color (missing geometry) {p[0]} -> {p[1]}")
     bp, cp = b.get("phases") or {}, c.get("phases") or {}
     for name in sorted(set(bp) - set(cp)):
         fail.append(f"phase {name} missing in candidate")

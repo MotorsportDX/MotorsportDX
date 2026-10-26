@@ -354,22 +354,28 @@ def stop_reason(events):
     return None
 
 
-# Exact FM4 clear color: where it covers >= 1% of a race capture as a peak among the neutral grays
-# around it, geometry such as the road surface was not drawn (seen on the RTV path).
-CLEAR_GRAY = bytes([102, 102, 102])
+# FM4's clear color (102, 102, 102), which a look's tonemapping moves by a step or two (101 or
+# 100 with aces): where one neutral gray near it covers >= 1% of a capture as a peak among the
+# neutral grays around it, geometry such as the road surface was not drawn (seen on the RTV
+# path, and in photo mode with its scene lost).
+CLEAR_GRAYS = range(96, 109)
 
 
 def is_clear_gray(rgb, width, height):
-    """The capture shows the clear color where geometry is missing: (102, 102, 102) covers at
-    least 1% of it more than the mean of the neutral grays 97-101 and 103-107 do. Asphalt
-    smoothed by TAA hits 102 by chance in 1% of a capture and more, but as part of an even spread
-    of neutral grays; a surface left undrawn is a peak of that one value. Runs of a color count
-    once per pixel; misaligned matches are negligible."""
-    clear = rgb.count(CLEAR_GRAY)
-    if clear < 0.01 * width * height:
-        return False
-    around = [rgb.count(bytes([v, v, v])) for v in (*range(97, 102), *range(103, 108))]
-    return clear - sum(around) / len(around) >= 0.01 * width * height
+    """The capture shows the clear color where geometry is missing: one neutral gray of
+    CLEAR_GRAYS covers at least 1% of it more than the mean of the five neutral grays on each
+    side of it do. Asphalt smoothed by TAA hits such a value by chance in 1% of a capture and
+    more, but as part of an even spread of neutral grays; a surface left undrawn is a peak of
+    that one value. Runs of a color count once per pixel; misaligned matches are negligible."""
+    counts = {v: rgb.count(bytes([v, v, v])) for v in range(CLEAR_GRAYS.start - 5,
+                                                             CLEAR_GRAYS.stop + 5)}
+    for value in CLEAR_GRAYS:
+        if counts[value] < 0.01 * width * height:
+            continue
+        around = [counts[v] for v in (*range(value - 5, value), *range(value + 1, value + 6))]
+        if counts[value] - sum(around) / len(around) >= 0.01 * width * height:
+            return True
+    return False
 
 
 def washed_out_bands(rgb, width, height, bands=4):
@@ -1491,6 +1497,12 @@ def run_once(options, out):
         'n0_trace': n0_trace, 'n0_trace_offset': n0_offset,
         'final_capture': final_stats,
         'clear_gray_frames': clear_gray_frames,
+        # Those of photo mode, and whether the last capture (final.png) is one: compare.py
+        # fails a candidate on them (photo mode lost its scene on 26 October 2026, d3d-hle-n5.md
+        # 18.27, with only capture statistics' warnings).
+        'clear_gray_photo_frames': [f for f in clear_gray_frames
+                                    if f in phase_frames.get('photo', [])],
+        'clear_gray_final': bool(frames) and frames[-1].stem in clear_gray_frames,
         'washed_out_frames': washed_out_frames,
         'cpu_power': sampler.summary(),
         'affinity': {'mask': options.affinity, 'sets': sampler.affinity_sets} if options.affinity else None,
@@ -1548,6 +1560,8 @@ def aggregate(runs):
         'final_captures': [r['final_capture'] for r in runs],
         'cpu_power': [r.get('cpu_power') for r in runs],
         'clear_gray_frames': sum(len(r.get('clear_gray_frames', [])) for r in runs),
+        'clear_gray_photo_frames': sum(len(r.get('clear_gray_photo_frames', [])) for r in runs),
+        'clear_gray_final': sum(bool(r.get('clear_gray_final')) for r in runs),
         'washed_out_frames': sum(len(r.get('washed_out_frames', {})) for r in runs),
         'errors': errors,
         'top_errors': sorted(errors.items(), key=lambda kv: -kv[1])[:10],

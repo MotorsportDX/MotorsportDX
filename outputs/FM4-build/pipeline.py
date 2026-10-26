@@ -602,13 +602,10 @@ def setup(root, fxc, jobs, fsr=None):
                                                         'gameinput_version':GAMEINPUT_VERSION,
                                                         'runtime':'work/runtime'}))
 
-def generate(root, disc1, disc2, content, jobs):
-    install, project = root/'runtime-install', root/'project'
-    cli = install/'bin/rexglue.exe'
-    if not cli.is_file() or not (root/'setup-complete.json').is_file():
-        raise RuntimeError('Run setup first.')
-    project.mkdir(exist_ok=True)
-    # Only source files from the source-only checkout are copied. No developer cache.
+def sync_title(project):
+    """Copies the title's sources (work/fm4-rex/src and tests, its CMakeLists.txt) into the
+    project, unchanged files untouched. Only source files from the source-only checkout are
+    copied. No developer cache."""
     inventory=json.loads((REPO/'outputs/FM4-source-control/tracked-files.json').read_text())
     for entry in inventory['files']:
         name=entry['path']
@@ -617,6 +614,14 @@ def generate(root, disc1, disc2, content, jobs):
             destination.parent.mkdir(parents=True,exist_ok=True)
             copy_source(REPO/name,destination)
     copy_source(REPO/'work/fm4-rex/CMakeLists.txt',project/'CMakeLists.txt')
+
+def generate(root, disc1, disc2, content, jobs):
+    install, project = root/'runtime-install', root/'project'
+    cli = install/'bin/rexglue.exe'
+    if not cli.is_file() or not (root/'setup-complete.json').is_file():
+        raise RuntimeError('Run setup first.')
+    project.mkdir(exist_ok=True)
+    sync_title(project)
     (project/'generated').mkdir(exist_ok=True)
     copy_source(HERE/'rexglue.cmake',project/'generated/rexglue.cmake')
     copy_source(HERE/'guard-generated.py',project/'guard-generated.py')
@@ -677,6 +682,9 @@ def build_game(root,fxc,jobs,flavor=(),fsr=None):
     validate_discs(state['disc1'],state['disc2'])
     # Edits in work/runtime are picked up here: sync, incremental build, install.
     build_runtime(root,fxc,jobs,fsr)
+    # And edits in work/fm4-rex: a build of the project as generate left it ran without the
+    # title's hooks of later commits (photo mode of entry 0 at s, 26 October 2026).
+    sync_title(project)
     suffix=build.name[len('game-build'):]
     # clang++ drives lld-link, so linker options go through -Xlinker.
     lto_jobs=f'-Xlinker /opt:lldltojobs={jobs}'

@@ -803,7 +803,8 @@ class PipelineTests(unittest.TestCase):
 
     def test_clear_gray(self):
         """The e2e clear color check: smooth neutral grays that pass 102 (asphalt under TAA) are no
-        missing geometry; 102 over 1% of the capture more than the grays around it is."""
+        missing geometry; 102, or a gray near it (a look's tonemapping), over 1% of the capture more
+        than the grays around it is."""
         width,height=200,100
         # Neutral grays 92-112 in turn, so 102 alone covers about 4.8% of the image.
         smooth=b''.join(bytes([92+(x+y)%21]*3) for y in range(height) for x in range(width))
@@ -813,6 +814,10 @@ class PipelineTests(unittest.TestCase):
             missing=bytearray(smooth)
             missing[-rows*width*3:]=bytes([102]*3)*(rows*width)
             self.assertTrue(is_clear_gray(bytes(missing),width,height),rows)
+        # The clear color through a look's tonemapping (101 with aces in photo mode).
+        missing=bytearray(smooth)
+        missing[-50*width*3:]=bytes([101]*3)*(50*width)
+        self.assertTrue(is_clear_gray(bytes(missing),width,height))
         self.assertFalse(is_clear_gray(bytes([30,30,30])*width*height,width,height))
 
     def test_washed_out_bands(self):

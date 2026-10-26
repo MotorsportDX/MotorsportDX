@@ -300,6 +300,8 @@ cache. The Disc paths are saved in `BuildRoot\local.json`.
 `build` first mirrors `work/runtime` again and rebuilds the runtime incrementally, so
 runtime edits need only this stage. It then:
 
+- copies the title's sources (`work/fm4-rex/src`, `tests` and `CMakeLists.txt`) into the
+  private project again, leaving unchanged files untouched, as `generate` does;
 - compiles the application and both modules;
 - stages the matching runtime and GPU DLLs;
 - runs the arithmetic instruction tests, the post pass tests (the GTAO passes on WARP)
@@ -320,9 +322,12 @@ runtime edits need only this stage. It then:
 
 ### Rebuilding after edits
 
-- After editing `work/fm4-rex`, run `generate` and then `build` to refresh the
-  private project.
-- After editing `work/runtime` or `work/fm4-launcher`, `build` is enough.
+- After editing `work/runtime`, `work/fm4-rex` or `work/fm4-launcher`, `build` is enough.
+  Before 26 October 2026 `build` did not copy `work/fm4-rex`: a game built that way after a
+  title edit without `generate` lacks the edit (on 26 October 2026, main's build of `15f828c`
+  ran photo mode without its hooks of entry 0 at s and lost the scene).
+- Run `generate` again for a new disc release, new content packages, or a change of the
+  generator's inputs (`outputs/FM4-build/*.toml`, `rexglue.cmake`).
 - A `BuildRoot` created before the runtime fork (one that contains `sdk-source`) is
   rejected. Choose a new `BuildRoot`.
 
