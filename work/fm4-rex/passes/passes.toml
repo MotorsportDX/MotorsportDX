@@ -373,23 +373,22 @@ size = "output"
 write_back = true
 
 # The cockpit glass (windshield.hlsl), in screen orientation: per block of 8x8
-# final pixels the mean color and share of its interior pixels and of its
-# window pixels, the kind of each final pixel (R window, G interior), the
+# scene pixels the mean color and share of its interior pixels and of its
+# window pixels, the kind of each scene pixel (R window, G interior), the
 # interior's share of the frame (one texel), the light the glass adds, and the
-# composed frame.
+# composed frame. The analysis is at the scene's size, which while upscaling is
+# the input's (docs/analysis/fsr-plan.md 15), the composition at the final
+# size.
 [textures.windshield_interior]
 format = "R16G16B16A16_FLOAT"
-size = "final"
 scale = 0.125
 
 [textures.windshield_window]
 format = "R16G16B16A16_FLOAT"
-size = "final"
 scale = 0.125
 
 [textures.windshield_kind]
 format = "R8G8_UNORM"
-size = "final"
 
 [textures.windshield_frame]
 format = "R32_FLOAT"
@@ -398,7 +397,6 @@ scale = 0.0001
 
 [textures.windshield_light]
 format = "R16G16B16A16_FLOAT"
-size = "final"
 scale = 0.125
 
 [textures.windshield_out]

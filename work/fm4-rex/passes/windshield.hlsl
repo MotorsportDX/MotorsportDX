@@ -26,12 +26,16 @@
 //   the windshield only).
 //
 // Entry points of passes.toml (final point, screen orientation; final_color is
-// display referred, about gamma 2):
-//   windshield_reduce   compute, a group per block of 8x8 final pixels, a
-//                       thread per pixel, into 1/8 of the final size: per block
-//                       the mean linear color of its interior pixels and
-//                       their share, and the same of its window pixels;
-//                       per final pixel its kind (R window, G interior)
+// display referred, about gamma 2). The analysis runs at the scene's size
+// (its pixels, the scene depth's, in screen orientation), which while
+// upscaling is the input's (docs/analysis/fsr-plan.md 15), and the
+// composition at the final size:
+//   windshield_reduce   compute, a group per block of 8x8 scene pixels, a
+//                       thread per pixel, into 1/8 of the scene size: per
+//                       block the mean linear color of its interior pixels
+//                       (final_color at the pixel's place) and their share,
+//                       and the same of its window pixels; per scene pixel
+//                       its kind (R window, G interior)
 //   windshield_frame    compute, one thread group: the interior's share of
 //                       the frame, into one texel
 //   windshield_light    compute, 1/8 of the final size: the light the glass
@@ -64,6 +68,12 @@ static const int kBlock = 8;
 float3 WindshieldLinear(float3 color) { return color * color; }
 float3 WindshieldDisplay(float3 color) { return sqrt(max(color, 0.0)); }
 float WindshieldLuma(float3 color) { return dot(color, float3(0.299, 0.587, 0.114)); }
+
+// The final pixel at the place of a scene pixel in screen orientation.
+int2 WindshieldFinalPixel(int2 screen_pixel) {
+  int2 pixel = int2((float2(screen_pixel) + 0.5) * float2(xe_final_size) / float2(xe_scene_size));
+  return clamp(pixel, 0, int2(xe_final_size) - 1);
+}
 
 // The scene texture pixel of a final pixel.
 int2 WindshieldScenePixel(int2 final_pixel) {
@@ -100,7 +110,7 @@ bool WindshieldCockpit(float interior_share) {
 uint2 WindshieldLowSize() { return xe_pass_size; }
 
 // ---------------------------------------------------------------------------
-// windshield_reduce: one block of 8x8 final pixels per thread.
+// windshield_reduce: one block of 8x8 scene pixels per group.
 
 Texture2D<float4> reduce_final : register(t0);
 Texture2D<float> reduce_depth : register(t1);
@@ -123,12 +133,13 @@ void windshield_reduce(uint3 group : SV_GroupID, uint3 thread : SV_GroupThreadID
   // frame in the block (edge blocks have fewer).
   float4 interior = 0.0, window = 0.0;
   float inside = 0.0;
-  if (all(pixel < int2(xe_final_size))) {
+  if (all(pixel < int2(xe_scene_size))) {
     inside = 1.0;
-    int2 scene = WindshieldScenePixel(pixel);
+    int2 last = int2(xe_scene_size) - 1;
+    int2 scene = kSceneRotated ? last - pixel : pixel;
     uint kind = WindshieldKind(reduce_depth.Load(int3(scene, 0)), reduce_stencil.Load(int3(scene, 0)));
     reduce_kind_out[pixel] = float2(kind == kKindWindow ? 1.0 : 0.0, kind == kKindInterior ? 1.0 : 0.0);
-    float3 color = WindshieldLinear(reduce_final.Load(int3(pixel, 0)).rgb);
+    float3 color = WindshieldLinear(reduce_final.Load(int3(WindshieldFinalPixel(pixel), 0)).rgb);
     if (kind == kKindInterior) {
       interior = float4(color, 1.0);
     } else if (kind == kKindWindow) {
@@ -374,16 +385,17 @@ void windshield_compose(uint3 id : SV_DispatchThreadID) {
     return;
   }
   float4 final = compose_final.Load(int3(pixel, 0));
-  // Coverage: the window share of the 3x3 around the pixel weighted 1 2 1
-  // (four bilinear taps between the pixels), so the edges of the pillars stay
-  // soft against the scene jitter.
+  // Coverage: the window share of the 3x3 kind pixels (at the scene's size)
+  // around the pixel weighted 1 2 1 (four bilinear taps between them), so the
+  // edges of the pillars stay soft against the scene jitter.
   float2 uv = (float2(pixel) + 0.5) / float2(xe_final_size);
-  float2 half_pixel = 0.5 / float2(xe_final_size);
+  float2 half_pixel = 0.5 / float2(xe_scene_size);
   float coverage = 0.25 * (compose_kind.SampleLevel(xe_linear_clamp, uv - half_pixel, 0.0).r +
                            compose_kind.SampleLevel(xe_linear_clamp, uv + half_pixel, 0.0).r +
                            compose_kind.SampleLevel(xe_linear_clamp, uv + float2(half_pixel.x, -half_pixel.y), 0.0).r +
                            compose_kind.SampleLevel(xe_linear_clamp, uv + float2(-half_pixel.x, half_pixel.y), 0.0).r);
-  float2 own = compose_kind.Load(int3(pixel, 0));
+  int2 kind_pixel = min(int2(uv * float2(xe_scene_size)), int2(xe_scene_size) - 1);
+  float2 own = compose_kind.Load(int3(kind_pixel, 0));
   uint kind = own.r > 0.5 ? kKindWindow : own.g > 0.5 ? kKindInterior : kKindMask;
   if (WINDSHIELD_DEBUG == 1u) {
     float3 color = final.rgb;
@@ -411,7 +423,7 @@ void windshield_compose(uint3 id : SV_DispatchThreadID) {
     return;
   }
   // The light of the 1/8 textures, smoothed by four bilinear taps.
-  float2 tap = 0.75 * float(kBlock) / float2(xe_final_size);
+  float2 tap = 0.75 * float(kBlock) / float2(xe_scene_size);
   float4 light = 0.25 * (compose_light.SampleLevel(xe_linear_clamp, uv + tap * float2(-1.0, -1.0), 0.0) +
                          compose_light.SampleLevel(xe_linear_clamp, uv + tap * float2(1.0, -1.0), 0.0) +
                          compose_light.SampleLevel(xe_linear_clamp, uv + tap * float2(-1.0, 1.0), 0.0) +

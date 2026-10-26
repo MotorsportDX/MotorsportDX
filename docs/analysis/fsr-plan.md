@@ -473,6 +473,27 @@ On `I:\FM4-build-usa` with `game-build-quirky` (the runtime of 43c8c81, unchange
 - The 240 Hz smoke with `aa=taau` at 1080p from 720p reached its goals with the baseline's error keys: `photo` raced at 238.6 fps (p99 4.96 ms) with photo mode at 29.9, `career` at 237.4 fps (p99 5.02 ms) with the replay at 119.4.
 - `test_pipeline` and the launcher tests (387 plans, with `aa=taau` at quality, at 1.25 and without `-Upscale`) pass.
 
+## 15. The windshield's analysis at the input scale (26 October 2026)
+
+Item (d) of the integrated GPU proposal: the final point runs at the output scale, and on the 890M the `windshield` group costs 1.10 ms a frame at 1080p from 720p against 0.64 ms at 720p (12.4). Of the final point's passes only the windshield runs while upscaling: TAA at the final point does not (FSR and TAAU are at the scene_color point), and the motion debug view is a debug view.
+
+The analysis now runs at the scene's size, which while upscaling is the input's: `windshield_reduce` (a thread per pixel, the kind of each pixel and the 8x8 blocks' means), the kind texture and the 1/8 textures of the interior, the window and the light (`windshield_light`'s reflection search and glare taps, unchanged in frame terms). The composition stays at the final size: `windshield_compose` reads the kind texture's 3x3 around the pixel (1 2 1, four bilinear taps one kind texel apart) and the light texture as before, the dust and the history at the final size, and `windshield_output` draws it. Without upscaling the scene's size is the final size, so nothing changes there (the mapping between the two sizes is the identity).
+
+GPU time a race frame on this PC at 1080p from 720p, against the passes before the change (`post_pass_path` to a copy of them, the same binary):
+
+| Run | `windshield` before | after | GPU a frame before | after |
+|---|---|---|---|---|
+| FSR quality | 0.18 ms | 0.13 ms | 3.24 ms | 3.10 ms |
+| TAAU quality | 0.17 ms | 0.13 ms | 2.89 ms | 2.93 ms |
+
+The pass costs about 28% less; on the 890M, by the same share, about 0.3 ms of its 1.10 ms (an estimate; the next export measures it). The frame totals move within the runs' noise.
+
+The checks (`game-build-quirky`, the passes before the change against these):
+
+- No change without upscaling: the frozen frame on `-Native` 3/2 with `aces` (the windshield on) passes parity (draws +0.2%, 36.9% of the image above 4), RTV 2x with `aces` passes (+0.0%, 31.7%), `-Rov` 1x with `original,taa=0` (no passes) passes against the run of 14.4 (-0.2%, 25.3%).
+- Under upscaling (FSR quality at 1080p): 18.5% of the image above 4 against the passes before, where two runs of those differ in 24.8%; the draws within 0.1%. In 1:1 crops the glass's tint, the dashboard's reflection, the dust in the glare and the pillars' edges look the same.
+- The 240 Hz smoke at 1080p from 720p reached its goals with the baseline's error keys: `photo` with FSR raced at 237.6 fps (p99 4.98 ms), photo mode at 29.9; `career` with TAAU at 235.9 fps (p99 5.38 ms), the replay at 118.9.
+
 ## Related
 
 - [TAA](taa.md), [motion vectors](motion-vectors.md#6-requirements-for-taa-and-the-upscalers), [post pass framework](post-pass-framework.md)
