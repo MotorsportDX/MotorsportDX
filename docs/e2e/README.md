@@ -24,6 +24,8 @@ Related pages:
 ## Requirements
 
 - A BuildRoot built by `Build.ps1` (the harness reads `local.json` and `build-result.json` from it).
+- Disc 2 and the downloadable content that `local.json` names (`-Disc2`, `-Content`). `e2e.py`, and so `matrix.py` and `Build.ps1 -Action warmcache`, imports them into the BuildRoot profile before its first launch ([content import](#content-import)). A BuildRoot generated without `-Disc2` has no Disc 2: the Quick Race car asks for it, and the [race check](#race-check) fails the run.
+- A profile that has been played once up to the main menu ([a new profile](#a-new-profile)).
 - Windows OCR with the en-US language: Windows installs it with the English (United States) language, which a Windows in another language may lack (Settings > Time & language > Language & region; `ocr-server.ps1` asks for `en-US`).
 - Goal mode only: a TypeSafe API key in the `TYPESAFE_API_KEY` environment variable (user scope is read even when the shell started earlier). Each step sends the OCR text of the current screen, the goal/route description and the recent steps to `https://api.typesafe.ai` (endpoint `/v1/systemone`). No images, saves, user data or personal data are sent. A quickrace run makes roughly 40-50 requests.
 - No packages beyond the Python standard library.
@@ -44,7 +46,7 @@ python outputs\FM4-build\e2e\e2e.py --build-root D:\FM4-build --out D:\FM4-build
 
 The `quickrace` goal starts the game, opens Free Play > Quick Race, accepts the default car and track, starts the race and holds the throttle. Add `--steps camera` to cycle the race cameras (Back every 6 s) once the race runs.
 
-The run exits with code 1 when the game crashes, the goal is not reached in time, or a step fails. In the last two cases `goal_reached` is `false` in `summary.json`.
+The run exits with code 1 when the game crashes, the goal is not reached in time, a step fails, or a run that should reach a race ends without one (the [race check](#race-check)). In the last three cases `goal_reached` is `false` in `summary.json`, and the last line of the output says why (`FAIL: ...`).
 
 Without network access (Jev unreachable), `--scenario quickrace` drives the same route on a fixed timeline; it reaches the race reliably with the copied profile.
 
@@ -75,7 +77,7 @@ Without network access (Jev unreachable), `--scenario quickrace` drives the same
 | `--repeat` | 1 | run N times into `<out>\run1..runN` and aggregate into `<out>\summary.json` |
 | `--resummarize` | off | recompute `summary.json` of existing runs in `--out` from their `perf.jsonl` |
 | `--affinity` | off | confine the game process to these logical processors, a mask such as `0xC3` (`cpu_power.py`: set after the launch and again each second where the runtime reset it), as a proxy for a smaller CPU; `summary.json` records `affinity` with the mask and how often it was set. On a CPU with efficient cores, Windows parks cores inside a mask of them, so only masks of performance cores are valid ([d3d-hle-n4.md 17.19](../analysis/d3d-hle-n4.md)) |
-| `--min-free-gb` | 15 | refuse to start a run with less free space on the drive of `--out` (logs, perf trace, captures and the profile copy); `matrix.py` checks the same once before its first cell. Both also refuse when a content package that an import marker of the BuildRoot profile names (`<user-data>\<package>.import-complete`) is missing or empty under `<user-data>\0000000000000000\4D530910\00000002`, and `e2e.py` warns when a build process (compiler, linker, ninja, CMake, MSBuild) runs beside the run |
+| `--min-free-gb` | 15 | refuse to start a run with less free space on the drive of `--out` (logs, perf trace, captures and the profile copy); `matrix.py` checks the same once before its first cell. Both also import Disc 2 and the content packages of `local.json` that are not imported yet ([content import](#content-import)), then refuse when a content package that an import marker of the BuildRoot profile names (`<user-data>\<package>.import-complete`) is missing or empty under `<user-data>\0000000000000000\4D530910\00000002`, and `e2e.py` warns when a build process (compiler, linker, ninja, CMake, MSBuild) runs beside the run |
 
 The harness passes `--cvar` values from `pipeline.launch_cvars`, the look (`pipeline.look_cvars`) and `pipeline.ao_cvars`, then the `--arg` items, so an `--arg` overrides them.
 
@@ -111,6 +113,27 @@ e2e.py ... --out <BuildRoot>\e2e\dlc --scenario dlc --profile copy
 Every scenario except `boot` starts with one A per splash video read on screen (Microsoft Studios, Dolby), which skips it: the main menu shows after about 30 s instead of 47. A at a fixed rate is not used, because it also skips the short title screen and selects PLAY CAREER in the main menu.
 
 `e2e.py` runs the game with `headless=true`: XAM prompts such as the keyboard for a photo name answer with their default text (nobody can type into the host dialog). Rendering is not affected.
+
+### Race check
+
+The scenarios that drive into a race (`quickrace`, `race`, `photo`, `menu_race`, `camera_race`, `freeze`, `career`, `career_finish`, `dlc`) and the `quickrace` goal reach their goal only when the title pushed a race render scenario: a `push <cars>_Race` line in the screen events (`events.txt`, written at the end of the 3-2-1). The menu route presses through the Quick Race menus with fixed delays and checks no screen after the main menu, so before this check a run that stopped at a prompt passed: on a BuildRoot without Disc 2 the car select opened the INSERT DISC 2 prompt and `quickrace` reported its goal reached (25 October 2026). A timeline that ends before the push (a cold shader cache slows the countdown down) waits up to 60 s more for it, and stops waiting at the Disc 2 prompt. `--steps` without `--goal` has no race check; a binary that writes no screen events gets a warning instead (the check cannot run).
+
+A failed run's `failed_step` also says what the screen events show about where it stopped:
+
+| Screen event | `failed_step` says |
+| --- | --- |
+| `scene <id> 031_LOAD_DISC_2` (any scene with `DISC` in its name) | the title asks for Disc 2: it is not imported into the BuildRoot profile; generate again with `-Disc2` when `local.json` names none |
+| `scene <id> 830_GAMMA_ADJUST` or `1_C_INI_IE_LOADING` | a new profile: play once first ([a new profile](#a-new-profile)) |
+
+`summary.json` records `race_check` (whether the run had it) and `race_started_s` (seconds from the launch to the first race push).
+
+### Content import
+
+`Build.ps1 -Action run` and the GUI launcher import Disc 2 and the downloadable content packages into `<BuildRoot>\user-data` at their launch (`FM4_CONTENT_MANIFEST`, [`fm4-content-installer.cpp`](../../work/fm4-rex/src/fm4-content-installer.cpp)). `e2e.py` does the same before its first launch of a BuildRoot: when a package that `local.json` names (`disc2`, `content`) has no import marker (`<user-data>\<package>.import-complete` with the package's size) or no directory under `<user-data>\0000000000000000\4D530910\00000002`, it starts the game once in its import mode (`FM4_CONTENT_MANIFEST` with `FM4_CONTENT_INSTALL_ONLY=1`, `headless=true`), which installs the packages and exits before the title starts (about 15 s for Disc 2 and eight DLC packages). `matrix.py` does it once before its first cell, and `Build.ps1 -Action warmcache` through `e2e.py`. The import goes into the BuildRoot profile, where a `--profile` copy links the packages from; the logs are `<BuildRoot>\logs\e2e-import.log` and `e2e-import-stderr.log`. When the import fails, the run stops with a message before the launch. When `local.json` names no Disc 2, `e2e.py` prints a note: races on Disc 2's cars and tracks stop at its prompt.
+
+### A new profile
+
+The timelines start from a profile that has been played once up to the main menu. The first start of a new profile plays the game's long intro video, then the gamma adjustment (`830_GAMMA_ADJUST`) and the intro race (`1_C_INI_IE_LOADING`), and only then the main menu. The timelines do not drive that: the intro race is a whole race with screens after it, not a step or two, so a timeline change cannot cover it. On a new BuildRoot, `warmcache` and the scenarios therefore stop at "PLAY CAREER timed out" (seen on 25 October 2026), and `failed_step` says to play once first: start the game with `Build.ps1 -Action run` (or the GUI launcher) and play up to the main menu, then run the harness. The scenarios that write saves run on `--profile copy` of that profile.
 
 ### Scenario steps
 
@@ -274,7 +297,8 @@ The statistics come from the steady part of the perf trace: without `--measure`,
 | `crashed` | `null`, or the exit or harness error text |
 | `goal`, `scenario` | the goal, or the scenario (`null` when `--steps` was given) |
 | `goal_reached` | `null` when there is no goal or check; `true` once a check or goal passed; `false` when a step failed or the goal was not reached |
-| `failed_step` | the step that timed out, with its text |
+| `failed_step` | the step that timed out, with its text, or `no race: ...` from the [race check](#race-check); followed by what the screen events say about where the run stopped (the Disc 2 prompt, a new profile) |
+| `race_check`, `race_started_s` | whether the run had the race check, and the seconds from the launch to the first race push (`null` without one) |
 | `args`, `profile`, `look` | the `--arg` items, the `--profile` given and the look that ran |
 | `binary` | path, SHA-256 and file time of the `fm4_rex.exe` that ran |
 | `seconds`, `timeline` | wall time, and the time and action of each step |

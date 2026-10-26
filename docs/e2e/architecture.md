@@ -31,6 +31,8 @@ The harness and the game share no sockets, pipes or shared memory. Every channel
 
 ## Launch
 
+Before the first launch, `main` calls `import_content`: the packages of `local.json` (`pipeline.validate_content` of `disc2` and `content`) that the game's importer would not skip (`package_imported`: the marker `<user-data>\<package>.import-complete` with the package's size, and the package's directory) are imported into `<BuildRoot>\user-data` by one start of the game in its import mode (`FM4_CONTENT_MANIFEST` from `pipeline.write_content_manifest`, `FM4_CONTENT_INSTALL_ONLY=1`, the cvars of `pipeline.launch_cvars` with `headless=true`), which exits before the title starts. `matrix.py` calls it once before its first cell. Then `check_content` checks the markers of the BuildRoot profile ([README](README.md#content-import)).
+
 `run_once` in [`e2e.py`](../../outputs/FM4-build/e2e/e2e.py) builds the command line and the environment, then starts the game with `subprocess.Popen` (working directory: the BuildRoot; stdout and stderr: `<out>\stderr.log`).
 
 Command line: `<BuildRoot>\<game-build>\fm4_rex.exe --name=value ...`. The values come, in this order (later ones win), from:
@@ -119,7 +121,9 @@ The unix time is the wall clock of the harness timeline (`time.time()`), the ste
 | `push <name>`, `pop <name>` | `CRenderThreadLink::PushDynamicRenderSettings` and `PopDynamicRenderSettings` ([`fm4-vblank-rate.cpp`](../../work/fm4-rex/src/fm4-vblank-rate.cpp)) | a render scenario is pushed or popped: `UI_NoCar`, `UI_Homespace`, `12-Car_PreRace`, `12-Car_321_and_PostRace` (the countdown), `12-Car_Race` (the race starts), photo mode, replays |
 | `countdown placed`, `countdown start <n>` | the countdown's update `sub_8239D450` ([`fm4-race-clock.cpp`](../../work/fm4-rex/src/fm4-race-clock.cpp)) | the countdown places the cars on the grid (after START RACE), and its 3-2-1 starts `n` session updates later |
 
-The writer only observes: it changes no guest register or memory. `e2e.py` sets the variable in every run, reads the file for `@` checks and copies the events into `summary.json` (`events`, in seconds from the launch). A binary without the writer ignores the variable and writes no file, so the `@` checks of `--fast-route` time out.
+The writer only observes: it changes no guest register or memory. `e2e.py` sets the variable in every run, reads the file for `@` checks and the race check, and copies the events into `summary.json` (`events`, in seconds from the launch). A binary without the writer ignores the variable and writes no file, so the `@` checks of `--fast-route` time out, and the race check cannot run (a warning).
+
+The race check (`race_needed`, `race_verdict`): a run of a race scenario (`RACE_SCENARIOS`) or of a goal with `race` that passed its other checks fails without a `push <name>_Race` event after its launch. After the timeline and `--tail`, `run_once` waits up to `RACE_WAIT_S` (60) for the push unless the Disc 2 prompt's scene shows. `stop_reason` adds to a failed run's `failed_step` what the events show: a scene with `DISC` in its name (`031_LOAD_DISC_2`), or the first-run scenes of a new profile (`830_GAMMA_ADJUST`, `1_C_INI_IE_LOADING`).
 
 The harness treats a capture as complete only when its size matches the PPM header (`complete_ppm`), and uses the newest complete one written after the last input (`newest_capture`).
 
@@ -206,7 +210,8 @@ After the game exits or is killed, `run_once`:
 
 1. converts every PPM to a PNG at half size (`ppm_to_png`, its own PNG writer, no image library), and deletes the PPM unless `--keep-ppm` is given;
 2. computes luma statistics of the last capture (`capture_stats`) and counts captures in which the FM4 clear color (102,102,102) covers at least 1% (`clear_gray_frames`) and the race's captures with a band washed out to white (`washed_out_frames`);
-3. reads `perf.jsonl` and `runtime.log`, and writes `summary.json` (fields in [README.md](README.md#reading-summaryjson)).
+3. applies the race check to `goal_reached` and `failed_step` (`race_verdict`);
+4. reads `perf.jsonl` and `runtime.log`, and writes `summary.json` (fields in [README.md](README.md#reading-summaryjson)).
 
 ### Gates and comparison
 

@@ -474,5 +474,148 @@ class CpuPowerTest(unittest.TestCase):
         self.assertEqual(race['threads']['D3D12 Pipelines'], [4.5, 4])
 
 
+class RaceCheckTests(unittest.TestCase):
+    """The race check: race scenarios and goals need a race push (screen events)."""
+    # The events of a Quick Race stopped at the Disc 2 prompt on a BuildRoot without Disc 2
+    # (clean-quickrace, 25 October 2026), in seconds from the launch.
+    DISC = [(25.28, 'push UI_Homespace'), (43.46, 'push UI_NoCar'), (51.59, 'scene 34 108_C_BUY_CARSELECT'),
+            (62.89, 'scene 122 031_LOAD_DISC_2')]
+    RACE = [(130.02, 'push 12-Car_321_and_PostRace'), (130.02, 'countdown placed'),
+            (139.8, 'push 12-Car_Race')]
+    # A new profile (warmcache on that BuildRoot): the gamma adjustment, then the intro race.
+    FIRST_RUN = [(29.49, 'scene 243 830_GAMMA_ADJUST'), (37.09, 'scene 0 1_C_INI_IE_LOADING')]
+
+    def options(self, scenario='quickrace', goal=None, steps=None):
+        return type('Options', (), {'scenario': scenario, 'goal': goal, 'steps': steps})()
+
+    def at(self, events, started=1000.0):
+        return [(started + t, text) for t, text in events]
+
+    def test_race_needed(self):
+        self.assertTrue(e2e.race_needed(self.options()))
+        self.assertTrue(e2e.race_needed(self.options(goal='quickrace', steps='camera')))
+        for scenario in ('boot', 'photo_view', 'career_progress'):
+            self.assertFalse(e2e.race_needed(self.options(scenario)), scenario)
+        self.assertFalse(e2e.race_needed(self.options(steps='[[1, "wait", 0]]')))
+        # Every scenario that drives (throttle or a race-frame pulse) is a race scenario.
+        for scenarios in (e2e.SCENARIOS, e2e.FAST_SCENARIOS):
+            for name, steps in scenarios.items():
+                drives = any(step[1].startswith(('rt=', '~y@')) for step in steps)
+                self.assertEqual(name in e2e.RACE_SCENARIOS, drives, name)
+
+    def test_disc_prompt_fails(self):
+        with contextlib.redirect_stdout(io.StringIO()):
+            reached, failed, race_s = e2e.race_verdict(True, None, None, True, self.at(self.DISC), 1000.0)
+        self.assertFalse(reached)
+        self.assertIsNone(race_s)
+        self.assertIn('no race', failed)
+        self.assertIn('031_LOAD_DISC_2', failed)
+        self.assertIn('-Disc2', failed)
+
+    def test_race_passes(self):
+        events = self.at(self.DISC[:3] + self.RACE)
+        self.assertEqual(e2e.race_verdict(True, None, None, True, events, 1000.0), (True, None, 139.8))
+        # Without the race check, or after a crash, the verdict stays as it was.
+        self.assertEqual(e2e.race_verdict(True, None, None, False, self.at(self.DISC), 1000.0),
+                         (True, None, None))
+        self.assertEqual(e2e.race_verdict(True, None, 'exited with 1', True, self.at(self.DISC[:3]), 1000.0),
+                         (True, None, None))
+        # Events of an earlier run do not count.
+        with contextlib.redirect_stdout(io.StringIO()):
+            reached, _, _ = e2e.race_verdict(True, None, None, True, self.at(self.RACE, 900.0), 1000.0)
+        self.assertTrue(reached)  # no events of this run: the check cannot run
+
+    def test_no_events_warns(self):
+        output = io.StringIO()
+        with contextlib.redirect_stdout(output):
+            self.assertEqual(e2e.race_verdict(True, None, None, True, [], 1000.0), (True, None, None))
+        self.assertIn('race check could not run', output.getvalue())
+
+    def test_failed_step_gets_reason(self):
+        failed = "step 4: ?a -> 'PLAY CAREER' timed out"
+        reached, reason, _ = e2e.race_verdict(False, failed, None, True, self.at(self.FIRST_RUN), 1000.0)
+        self.assertFalse(reached)
+        self.assertTrue(reason.startswith(failed + '; a new profile (scene 830_GAMMA_ADJUST)'))
+        self.assertEqual(e2e.race_verdict(False, failed, None, True, self.at(self.DISC[:3]), 1000.0)[1], failed)
+
+
+class ContentImportTests(unittest.TestCase):
+    """import_content: Disc 2 and the -Content packages imported before the first launch."""
+
+    def package(self, path):
+        path.parent.mkdir(parents=True, exist_ok=True)
+        header = bytearray(0x364)
+        header[:4] = b'CON '
+        header[0x344:0x348] = (2).to_bytes(4, 'big')
+        header[0x360:0x364] = (0x4D530910).to_bytes(4, 'big')
+        path.write_bytes(bytes(header))
+        return path
+
+    def build_root(self, root, disc2=True):
+        disc2_dir = root / 'Disc 2'
+        packages = ([self.package(disc2_dir / 'content/0000000000000000/4d530910/00000002' /
+                                  f'4d5309100000000{index}') for index in range(1, 5)] if disc2 else [])
+        (root / 'local.json').write_text(json.dumps({'disc1': str(root / 'Disc 1'),
+                                                     'disc2': str(disc2_dir) if disc2 else None,
+                                                     'content': []}))
+        return packages
+
+    def install(self, user_data, package):
+        (user_data / '0000000000000000/4D530910/00000002' / package.name).mkdir(parents=True, exist_ok=True)
+        (user_data / f'{package.name}.import-complete').write_text(f'{package.stat().st_size}\n1\n1\n')
+
+    def test_package_imported(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            package, user_data = self.build_root(root)[0], root / 'user-data'
+            self.assertFalse(e2e.package_imported(user_data, package))
+            self.install(user_data, package)
+            self.assertTrue(e2e.package_imported(user_data, package))
+            # A changed package (another size) is imported again, as the game's importer does.
+            package.write_bytes(package.read_bytes() + b'x')
+            self.assertFalse(e2e.package_imported(user_data, package))
+
+    def test_import_runs_once(self):
+        from unittest import mock
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            packages, user_data = self.build_root(root), root / 'user-data'
+            self.install(user_data, packages[0])
+            calls = []
+
+            def game(command, env, **kwargs):
+                calls.append(env)
+                for package in packages:
+                    self.install(user_data, package)
+                return 0
+            with mock.patch.object(e2e.subprocess, 'call', game), contextlib.redirect_stdout(io.StringIO()):
+                e2e.import_content(root)
+                self.assertEqual(len(calls), 1)
+                self.assertEqual(calls[0]['FM4_CONTENT_INSTALL_ONLY'], '1')
+                self.assertEqual(Path(calls[0]['FM4_CONTENT_MANIFEST']).read_text(encoding='utf-8').splitlines(),
+                                 [str(package) for package in packages])
+                # Everything imported: no launch.
+                e2e.import_content(root)
+                self.assertEqual(len(calls), 1)
+
+    def test_import_failure_and_no_disc2(self):
+        from unittest import mock
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            self.build_root(root)
+            with mock.patch.object(e2e.subprocess, 'call', lambda *a, **k: 1), \
+                    contextlib.redirect_stdout(io.StringIO()):
+                with self.assertRaises(SystemExit) as raised:
+                    e2e.import_content(root)
+            self.assertIn('content import failed', str(raised.exception))
+            self.assertIn('4d53091000000001', str(raised.exception))
+            self.build_root(root, disc2=False)
+            output = io.StringIO()
+            with mock.patch.object(e2e.subprocess, 'call', lambda *a, **k: self.fail('launched')), \
+                    contextlib.redirect_stdout(output):
+                e2e.import_content(root)
+            self.assertIn('names no Disc 2', output.getvalue())
+
+
 if __name__ == '__main__':
     unittest.main()

@@ -24,7 +24,7 @@ from pathlib import Path
 HERE = Path(__file__).resolve().parent
 sys.path.insert(0, str(HERE.parent))
 import pipeline  # noqa: E402
-from e2e import FAST_SCENARIOS, MIN_FREE_GB, check_content, check_free_space  # noqa: E402
+from e2e import FAST_SCENARIOS, MIN_FREE_GB, check_content, check_free_space, import_content  # noqa: E402
 
 TIERS = {
     'smoke': (('photo', 'photo_view', 'career'), (240,), 1),
@@ -135,8 +135,10 @@ def main():
         if later in scenarios and earlier not in scenarios:
             parser.error(f'{later} runs on the profile of the {earlier} cell; run {earlier} too')
     scenarios = sorted(scenarios, key=lambda s: s not in PROFILE_FROM.values())
-    # A full drive or missing content packages fail here once instead of in every cell.
+    # A full drive or missing content packages fail here once instead of in every cell; Disc 2 and
+    # the content packages of local.json are imported before the first cell when they are not yet.
     check_free_space(root / 'e2e', MIN_FREE_GB)
+    import_content(root, options.game_build)
     check_content(root)
     build = Path(options.game_build) if options.no_snapshot else snapshot(root, options.game_build, options.name)
     # An AI driver drives the player's car, so every race follows the track and the load per

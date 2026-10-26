@@ -88,7 +88,8 @@ D:\Games\FM4\DLC\
 The paths are saved in `local.json` by `generate` and `all`. `run -Content` replaces
 the saved list without generating again. The launcher imports a package into
 `BuildRoot\user-data` on the first run that lists it, and keeps it there; see
-[running.md](running.md#data-directories).
+[running.md](running.md#data-directories). The e2e harness and `warmcache` import
+the same packages before their first launch ([content import](e2e/README.md#content-import)).
 
 ## Prerequisites
 

@@ -66,7 +66,7 @@ How to judge a cell:
 
 | Signal | Meaning | Action |
 |---|---|---|
-| `exit 1`, `0/1`, `goal_reached` false | the run crashed or a step timed out | read `failed_step` in `summary.json`, `steps.jsonl` and `final.png`, then `runtime.log` and `stderr.log`. Re-run the cell once to tell a menu-timing flake from a regression before reporting either |
+| `exit 1`, `0/1`, `goal_reached` false | the run crashed, a step timed out, or a race scenario ended without a race (`failed_step` starts with `no race`; it names the Disc 2 prompt or a new profile when the screen events show one, [race check](../../../docs/e2e/README.md#race-check)) | read `failed_step` in `summary.json`, `steps.jsonl` and `final.png`, then `runtime.log` and `stderr.log`. Re-run the cell once to tell a menu-timing flake from a regression before reporting either |
 | new error key (FAIL) | the runtime logged an error the baseline did not have | find the line in `runtime.log`; this is a real finding until explained |
 | `clear_gray_frames` rose (WARN) | captures show the clear color (102,102,102): geometry such as the road was not drawn | treat as a regression; look at the frames it lists. See the RTV missing-road issue in [docs/status/current.md](../../../docs/status/current.md) |
 | `washed_out_frames` rose (WARN), or `e2e.py` prints its WARN line | race captures have a band washed out to white: the scene was lost (seen with stale title objects, [d3d-hle-n4.md 17.15](../../../docs/analysis/d3d-hle-n4.md#1715-the-close-gate-23-october-2026)) | treat as a regression; look at the frames it lists, and check `binary.source` in `summary.json` |

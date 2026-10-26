@@ -33,7 +33,8 @@ the preview cannot start without it.
 | --- | --- | --- |
 | A fresh clone follows README and [setup](../setup.md) to a built game on the development computer that runs a Quick Race (25 October 2026, [current status](../status/current.md#clean-setup-from-a-fresh-clone-25-october-2026)) | Done | Done |
 | The bugs and gaps that clean setup found are fixed: the launcher test that needed `BuildRoot\cache`, the execution policy, the Python path, the `vswhere` message, disk space and time, and `warmcache`, which needs a profile played once and the English OCR language | Done | Done |
-| `warmcache` and the e2e timelines on a new profile: the game's intro video and first-run screens are not driven, so a tester plays once first | Not done (documented) | Not done (documented) |
+| `warmcache` and the e2e timelines on a new profile: the game's intro video, gamma adjustment and intro race are not driven, so a tester plays once first; a failed run says so ([e2e](../e2e/README.md#a-new-profile)) | Not done (documented) | Not done (documented) |
+| The e2e harness and `warmcache` pass a Quick Race only when the race starts (not at the INSERT DISC 2 prompt), and import Disc 2 and the downloadable content before their first launch ([race check](../e2e/README.md#race-check), [content import](../e2e/README.md#content-import), 26 October 2026) | Done | Done |
 | Testers can clone the source: GitHub's `main` is about 184 commits behind local `main` (25 October 2026), and nothing is pushed without the owner | **Blocker** (push to a private repository with the testers invited, or another channel the owner chooses) | **Blocker** (push to a public repository) |
 | A named preview commit or tag | Not done (recommended) | **Blocker** |
 | A clean setup on a second computer (another user's Windows, other paths and versions) | Not done: the first testers are that test | **Blocker** |

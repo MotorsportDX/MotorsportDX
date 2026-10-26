@@ -282,6 +282,72 @@ SCENARIOS['camera_race'] = (SCENARIOS['quickrace'] + [[10, 'wait', 0], [1, 'phas
                             + _CAMERA + [[2, 'wait', 0], [1, 'phase:end', 0]])
 FAST_SCENARIOS['camera_race'] = (FAST_SCENARIOS['quickrace']
                                  + SCENARIOS['camera_race'][len(SCENARIOS['quickrace']) + 1:])
+# The race check (docs/e2e/README.md, "Race check"): the scenarios (and --goal goals) that drive
+# into a race reach their goal only when the title pushed a race render scenario ('push
+# <cars>_Race', at the end of the 3-2-1). The menu route presses through the Quick Race menus
+# with fixed delays, so without the check a run stopped at a prompt (INSERT DISC 2 on a
+# BuildRoot without Disc 2, 25 October 2026) passed. A run whose timeline ends before the push
+# waits up to RACE_WAIT_S for it (a cold shader cache slows the countdown down).
+RACE_SCENARIOS = {'quickrace', 'race', 'photo', 'menu_race', 'camera_race', 'freeze', 'career',
+                  'career_finish', 'dlc'}
+RACE_EVENT = re.compile(r'^push \S+_Race$')
+RACE_WAIT_S = 60
+# Screens that explain a run stopped short (scene events): the title's Disc 2 prompt, and the
+# first-run screens of a new profile (the gamma adjustment, then the loading of the intro race),
+# which no timeline drives.
+DISC_PROMPT_SCENE = re.compile(r'^scene \d+ (\S*DISC\S*)$')
+FIRST_RUN_SCENE = re.compile(r'^scene \d+ (830_GAMMA_ADJUST|1_C_INI_IE_LOADING)$')
+
+
+def race_needed(options):
+    """Whether the run's goal includes a race (the race check)."""
+    if options.goal:
+        return GOALS[options.goal].get('race', False)
+    return not options.steps and options.scenario in RACE_SCENARIOS
+
+
+def race_started(events, started):
+    """Seconds from the launch to the first race push in the screen events, or None."""
+    return next((round(t - started, 2) for t, text in events if t >= started and RACE_EVENT.match(text)), None)
+
+
+def race_verdict(goal_reached, failed_step, crashed, needs_race, events, started):
+    """(goal_reached, failed_step, race_started_s) after the race check: a run whose goal includes
+    a race and that reached its other checks fails without a race push, and a failed run's
+    failed_step gets what the screen events say about where it stopped."""
+    events = [e for e in events if e[0] >= started]
+    race_s = race_started(events, started)
+    if goal_reached and needs_race and race_s is None and not crashed:
+        if events:
+            goal_reached = False
+            failed_step = 'no race: the title never pushed a race render scenario (no "push *_Race" screen event)'
+        else:
+            # A binary from before the screen events (fm4-test-events.cpp) writes none.
+            print('Warning: no screen events, so the race check could not run (a binary without '
+                  'FM4_TEST_EVENTS_FILE support?)', flush=True)
+    if goal_reached is False:
+        reason = stop_reason(events)
+        if reason:
+            failed_step = f'{failed_step}; {reason}' if failed_step else reason
+    return goal_reached, failed_step, race_s
+
+
+def stop_reason(events):
+    """What the screen events say about a run that stopped short of its goal, or None."""
+    for _, text in events:
+        if match := DISC_PROMPT_SCENE.match(text):
+            return (f'the title asks for Disc 2 (scene {match[1]}): Disc 2 is not imported into the '
+                    'BuildRoot profile. When local.json names no Disc 2, generate again with -Disc2 '
+                    '<the extracted Disc 2 folder> (Build.ps1 -Action generate); the next e2e run '
+                    'imports it before the launch')
+    for _, text in events:
+        if match := FIRST_RUN_SCENE.match(text):
+            return (f'a new profile (scene {match[1]}): its first start plays the intro video, the '
+                    'gamma adjustment and the intro race, which the timelines do not drive. Play once '
+                    'with Build.ps1 -Action run (or the GUI launcher) up to the main menu first')
+    return None
+
+
 # Exact FM4 clear color: where it covers >= 1% of a race capture as a peak among the neutral grays
 # around it, geometry such as the road surface was not drawn (seen on the RTV path).
 CLEAR_GRAY = bytes([102, 102, 102])
@@ -332,6 +398,8 @@ GOALS = {
                   'Pre-race menu: START RACE.'],
         # Screens this goal never needs; code backs out of them.
         'off_route': {'autovista', 'community_or_marketplace', 'career_menu', 'pause_menu'},
+        # The race check (RACE_SCENARIOS) applies: Jev's race judgment needs a race push too.
+        'race': True,
     },
 }
 
@@ -1260,6 +1328,7 @@ def run_once(options, out):
     phase_steady = []
     mod_defines = ModDefines(args.get('shader_mod_path'))
     screen = Screen(capture, process, out / 'steps.jsonl', events_file)
+    needs_race = race_needed(options)
     try:
         if options.goal:
             goal_reached = navigate(options.goal, process, input_file, capture, out,
@@ -1307,6 +1376,16 @@ def run_once(options, out):
             time.sleep(0.1)
         if process.poll() is not None:
             raise RuntimeError(f'exited with {process.returncode}')
+        # The race check: a timeline that ended before the race push waits for it, unless the
+        # title shows its Disc 2 prompt.
+        deadline = time.time() + RACE_WAIT_S
+        while goal_reached and needs_race and time.time() < deadline:
+            events = read_events(events_file)
+            if race_started(events, started) is not None or any(DISC_PROMPT_SCENE.match(e) for _, e in events):
+                break
+            if process.poll() is not None:
+                raise RuntimeError(f'exited with {process.returncode}')
+            time.sleep(0.2)
     except RuntimeError as error:
         crashed = str(error)
     except Exception as error:
@@ -1319,6 +1398,9 @@ def run_once(options, out):
             process.kill()
             process.wait()
         stderr.close()
+
+    goal_reached, failed_step, race_s = race_verdict(goal_reached, failed_step, crashed, needs_race,
+                                                     read_events(events_file), started)
 
     frames = sorted(capture.glob('frame-*.ppm'))
     phase_frames = frames_by_phase(frames, phase_times, time.time())
@@ -1365,6 +1447,8 @@ def run_once(options, out):
     summary = {
         'crashed': crashed, 'goal': options.goal, 'scenario': None if options.steps else options.scenario,
         'goal_reached': goal_reached, 'failed_step': failed_step, 'args': options.arg, 'profile': options.profile,
+        # The race check: seconds from the launch to the first race push (None: no push or no check).
+        'race_check': needs_race, 'race_started_s': race_s,
         'look': look, 'draw_scale': draw_scale,
         # The binary the run used: a baseline variance or a parity verdict holds for one binary.
         'binary': {'path': str(exe), 'sha256': pipeline.digest(exe),
@@ -1415,8 +1499,8 @@ def aggregate(runs):
             errors[key] = errors.get(key, 0) + count
     summary = {
         'repeat': len(runs),
-        'runs': [dict(crashed=r['crashed'], goal_reached=r['goal_reached'], fps_median=r.get('fps_median'))
-                 for r in runs],
+        'runs': [dict(crashed=r['crashed'], goal_reached=r['goal_reached'], fps_median=r.get('fps_median'),
+                      race_started_s=r.get('race_started_s')) for r in runs],
         'crashed': next((r['crashed'] for r in runs if r['crashed']), None),
         'goal': runs[0]['goal'], 'scenario': runs[0].get('scenario'), 'route': runs[0].get('route'),
         'args': runs[0]['args'],
@@ -1589,6 +1673,60 @@ def check_content(build_root):
                          'them or import them again (Build.ps1 -Content) first.')
 
 
+def package_imported(user_data, package):
+    """Whether the game's importer (fm4-content-installer.cpp) would skip the package: its marker
+    <user-data>/<name>.import-complete records the package's size, and the package's directory
+    exists under <user-data>/0000000000000000/4D530910/00000002."""
+    marker = user_data / f'{package.name}.import-complete'
+    try:
+        size = int(marker.read_text().split()[0])
+    except (OSError, ValueError, IndexError):
+        return False
+    installed = user_data / '0000000000000000' / '4D530910' / '00000002' / package.name
+    return size == package.stat().st_size and installed.is_dir()
+
+
+def import_content(build_root, game_build='game-build'):
+    """Imports Disc 2 and the -Content packages that local.json names into the BuildRoot profile
+    before the first launch, as Build.ps1 -Action run and the GUI launcher do at theirs: the game's
+    import mode (FM4_CONTENT_MANIFEST with FM4_CONTENT_INSTALL_ONLY) installs them and exits before
+    the title starts. Runs only when a package is not imported yet; a --profile copy links the
+    imported packages from the BuildRoot profile. Exits with a message when the import fails."""
+    sys.path[:0] = [str(HERE), str(HERE.parent)]
+    import pipeline
+    state = json.loads((build_root / 'local.json').read_text())
+    if not state.get('disc2'):
+        print('Note: local.json names no Disc 2, so races on its tracks stop at the INSERT DISC 2 '
+              'prompt (the race check fails them): generate again with -Disc2 to import it.', flush=True)
+    try:
+        packages = pipeline.validate_content(state.get('disc2'), state.get('content'))
+    except (OSError, ValueError) as error:
+        raise SystemExit(f'Content packages of local.json: {error}')
+    user_data = build_root / 'user-data'
+    pending = [package for package in packages if not package_imported(user_data, package)]
+    if not pending:
+        return
+    exe = build_root / game_build / 'fm4_rex.exe'
+    log = build_root / 'logs' / 'e2e-import.log'
+    log.parent.mkdir(parents=True, exist_ok=True)
+    print(f'Importing {len(pending)} content package(s) into {user_data} before the first launch '
+          f'(log: {log})', flush=True)
+    manifest = pipeline.write_content_manifest(build_root, packages)
+    args = {k: str(v) for k, v in pipeline.launch_cvars(build_root, state['disc1'], log).items()}
+    args['headless'] = 'true'
+    env = {k: v for k, v in os.environ.items() if not k.startswith(('FM4_', 'REX_'))}
+    env.update(FM4_CONTENT_MANIFEST=str(manifest), FM4_CONTENT_INSTALL_ONLY='1')
+    with open(build_root / 'logs' / 'e2e-import-stderr.log', 'w', encoding='utf-8', errors='replace') as stderr:
+        code = subprocess.call([str(exe)] + [f'--{k}={v}' for k, v in args.items()], cwd=build_root,
+                               env=env, stdout=stderr, stderr=subprocess.STDOUT)
+    missing = [package.name for package in pending if not package_imported(user_data, package)]
+    if code or missing:
+        raise SystemExit(f'The content import failed (exit code {code}; not imported: '
+                         f'{", ".join(missing) or "none"}). See {build_root / "logs" / "e2e-import-stderr.log"}, '
+                         'or import with Build.ps1 -Action run once, then run e2e again.')
+    print(f'Imported {len(pending)} content package(s).', flush=True)
+
+
 def main():
     parser = argparse.ArgumentParser()
     parser.add_argument('--build-root', required=True, help='BuildRoot used by Build.ps1')
@@ -1649,6 +1787,7 @@ def main():
         parser.error(f'--fast-route covers {", ".join(sorted(FAST_SCENARIOS))}, not {options.scenario}')
     if not options.resummarize:
         check_free_space(out, options.min_free_gb)
+        import_content(Path(options.build_root).resolve(), options.game_build)
         check_content(Path(options.build_root).resolve())
         warn_if_building()
     if options.resummarize:
@@ -1669,6 +1808,8 @@ def main():
         print(f'WARN: {washed if isinstance(washed, int) else len(washed)} race captures have a band '
               f'washed out to white (washed_out_frames); look at the captures', flush=True)
     if summary['crashed'] or summary['goal_reached'] is False:
+        print(f"FAIL: {summary.get('crashed') or summary.get('failed_step') or summary.get('failed_steps')}",
+              flush=True)
         sys.exit(1)
 
 

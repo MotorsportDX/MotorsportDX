@@ -1255,11 +1255,13 @@ directory can be deleted at any time. The run details are written to
 ```
 
 Play the game once with `run` (or the GUI launcher) before `warmcache`, up to the main menu.
-The first start of a new profile plays the game's long intro video and its first-run screens,
-which the timeline does not drive: on a new BuildRoot `warmcache` stops at "PLAY CAREER timed
-out" (seen on 25 October 2026). That first `run` also imports Disc 2 and the downloadable
-content, which `warmcache` and the e2e harness do not import; without them the main menu
-offers INSTALL DISC 2. The timeline also reads the menus with Windows OCR in English (United States), as the
+The first start of a new profile plays the game's long intro video, the gamma adjustment and
+the intro race, which the timeline does not drive: on a new BuildRoot `warmcache` stops at
+"PLAY CAREER timed out" (seen on 25 October 2026), and its log says to play once first.
+`warmcache` imports Disc 2 and the downloadable content of `local.json` before its launch when
+they are not imported yet, as `run` does, and fails when the Quick Race does not reach the
+race, for example at the INSERT DISC 2 prompt of a BuildRoot generated without `-Disc2`
+([e2e race check](e2e/README.md#race-check)). The timeline also reads the menus with Windows OCR in English (United States), as the
 e2e harness does ([e2e](e2e/README.md)); without that language and its optical character
 recognition, `warmcache` cannot find the menus. Playing fills the same cache.
 
