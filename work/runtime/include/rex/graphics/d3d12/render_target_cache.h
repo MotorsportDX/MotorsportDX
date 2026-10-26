@@ -91,9 +91,14 @@ class D3D12RenderTargetCache final : public RenderTargetCache {
     // key's EDRAM base, sample count (log2) and resource format these are.
     uint32_t miss;
     uint32_t miss_base_tiles, miss_samples_log2, miss_format;
+    // The target's sample count.
+    uint32_t samples;
   };
+  // With entry0, entry 0's private multisampled pair is taken too (the
+  // pre-race screens' final combine, docs/analysis/d3d-hle-n5.md 18.29).
   ID3D12Resource* TransitionLastColorRenderTarget(uint32_t index, D3D12_RESOURCE_STATES state,
-                                                  LastColorRenderTarget& out);
+                                                  LastColorRenderTarget& out,
+                                                  bool entry0 = false);
 
   // Performs the transfers kept for a clear split into several rectangles (see
   // PendingTransfers), if any. Called before anything else uses the render

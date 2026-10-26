@@ -578,3 +578,22 @@ The copy samples the logical frontbuffer across a 1280x720 viewport, so the phot
 | The races at 2560x1600 and 3440x1440, `freeze` parity against 18.27's build | PASS: draws +0.2% and -0.6%, 33.1% and 31.2% of the image above 4; no draw cropped in a race |
 | 20/9 (2845x1600), 1:1 at lines 569 and 1138 (the tiles' edges) | no step visible on the roof, the windscreen or the bumper's line |
 
+### 18.29 The final point on entry 0's multisampled pair (27 October 2026)
+
+The final point's passes (TAA at the final point, the windshield) skipped about 125 frames each time a race is set up ([FSR plan, 12.2](fsr-plan.md#122-the-final-points-skipped-frames)). In the front-end screens with the 3D car (the manufacturer and car select, the race's car card) the title's final combine draws into entry 0's 4x target, and the passes need a single-sampled final picture. With entry 0 in one pass (18.26) that target is entry 0's private pair, so the final point now runs there, on a resolve of the pair:
+
+- **The resolve.** `TransitionLastColorRenderTarget` takes entry 0's private pair as the final target when asked (`entry0`, only `PrivateEntry0Rows` keys, so never on RTV, whose entry 0 is tiled). The final point resolves it (`ResolveSubresource`) into a single-sampled texture of the post passes of the same size and format. That texture is the final colour the passes read and draw into (`TransitionFinal`).
+- **The write-back.** After the point's passes, a full-screen draw with the pixel passes' vertex shader and a small store shader (compiled with the passes) writes the texture into every sample of the pair. This happens before the HUD, which the title then draws in 4x as before. The title's later resolve of the pair takes the same colour from every sample.
+- **Tiled entry 0** (RTV, `-Entry0 k`) still skips those frames: its final combine sees one tile at a time.
+
+**The gate** (`I:\FM4-build-usa`, `game-build-pf` against `game-build-pc` of 18.28, `aces`, 240 Hz, one run each):
+
+| Check | Result |
+|---|---|
+| Frames the final point skips, `photo` at 3/2 and at 2, `career` at 3/2 | none (the baseline: 123 and 125, logged); the perf trace's seconds with a scene but no TAA: none against 5 |
+| The passes in the car select at 2 | TAA 0.34 to 0.43 ms, the windshield 0.21 to 0.23 ms a frame, where the baseline ran none |
+| The car select at 2, 1:1 | the same picture; the windscreen's reflections from the windshield pass |
+| The races, `freeze` parity with `aces` at 3/2 and 2 | PASS: draws -0.0% and -0.5%, 24.3% and 27.6% of the image above 4 |
+| RTV 2x (`aces`), `-Rov` 1x (`original,taa=0`) | PASS: +0.1%, 29.7%; -0.2%, 21.7% |
+| 240 Hz smoke at 3/2 | `photo` raced at 237.5 fps (p99 5.02 ms), photo mode 29.9; `photo_view` loads the photo; `career` raced at 235.8 fps (p99 5.31 ms), the replay at 119.4; no clear color capture; the baseline's error keys |
+

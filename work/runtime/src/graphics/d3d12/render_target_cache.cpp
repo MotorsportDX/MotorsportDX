@@ -5404,13 +5404,14 @@ void D3D12RenderTargetCache::FlushLazyTransfers(const draw_util::ResolveInfo* re
 }
 
 ID3D12Resource* D3D12RenderTargetCache::TransitionLastColorRenderTarget(
-    uint32_t index, D3D12_RESOURCE_STATES state, LastColorRenderTarget& out) {
+    uint32_t index, D3D12_RESOURCE_STATES state, LastColorRenderTarget& out, bool entry0) {
   if (GetPath() != Path::kHostRenderTargets || index >= xenos::kMaxColorRenderTargets) {
     return nullptr;
   }
   RenderTarget* render_target = last_update_accumulated_render_targets()[1 + index];
   out.miss = !render_target || render_target->key().is_depth ? 1 : 0;
-  if (!out.miss && render_target->key().msaa_samples != xenos::MsaaSamples::k1X) {
+  if (!out.miss && render_target->key().msaa_samples != xenos::MsaaSamples::k1X &&
+      !(entry0 && PrivateEntry0Rows(render_target->key()))) {
     out.miss = 2;
     out.miss_base_tiles = render_target->key().base_tiles;
     out.miss_samples_log2 = uint32_t(render_target->key().msaa_samples);
@@ -5433,6 +5434,7 @@ ID3D12Resource* D3D12RenderTargetCache::TransitionLastColorRenderTarget(
   out.format = GetColorDrawDXGIFormat(out.guest_format);
   out.width = uint32_t(desc.Width);
   out.height = desc.Height;
+  out.samples = uint32_t(1) << uint32_t(render_target->key().msaa_samples);
   return out.resource;
 }
 

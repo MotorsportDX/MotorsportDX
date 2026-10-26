@@ -557,6 +557,31 @@ class PostPasses {
     DXGI_FORMAT format = DXGI_FORMAT_UNKNOWN;
     D3D12_GPU_DESCRIPTOR_HANDLE srv = {};
   } final_color_;
+  // The final point on entry 0's private multisampled pair (the pre-race
+  // screens, docs/analysis/d3d-hle-n5.md 18.29): the pair's resolve is the
+  // final colour the passes read and draw into, and is written back into every
+  // sample of the pair after them, before the HUD.
+  Texture final_proxy_;
+  DXGI_FORMAT final_proxy_format_ = DXGI_FORMAT_UNKNOWN;
+  // This run's multisampled target, or null.
+  ID3D12Resource* final_multisampled_ = nullptr;
+  std::vector<uint8_t> final_store_bytecode_;
+  Microsoft::WRL::ComPtr<ID3D12PipelineState> final_store_pipeline_;
+  DXGI_FORMAT final_store_format_ = DXGI_FORMAT_UNKNOWN;
+  uint32_t final_store_samples_ = 0;
+  uint32_t final_multisampled_samples_ = 0;
+  struct FinalTarget {
+    ID3D12Resource* resource = nullptr;
+    D3D12_CPU_DESCRIPTOR_HANDLE rtv = {};
+    DXGI_FORMAT format = DXGI_FORMAT_UNKNOWN;
+    uint32_t width = 0, height = 0;
+  };
+  // The final colour in state: the guest's target, or the multisampled
+  // target's resolve.
+  bool TransitionFinal(D3D12_RESOURCE_STATES state, FinalTarget& target);
+  // Resolves the multisampled target into final_proxy_ and points target at it.
+  bool ResolveFinalMultisampled(FinalTarget& target);
+  void StoreFinalMultisampled(D3D12_GPU_VIRTUAL_ADDRESS scene_constants);
   bool skipped_ = false;
 
   // History: written at the scene color, read the next frame.

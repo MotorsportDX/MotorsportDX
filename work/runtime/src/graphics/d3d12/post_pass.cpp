@@ -97,6 +97,14 @@ constexpr uint32_t kCompileFlags = D3DCOMPILE_OPTIMIZATION_LEVEL3;
 constexpr D3D12_RESOURCE_STATES kShaderResource =
     D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE | D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE;
 
+// The final colour written back into every sample of a multisampled final
+// target (d3d-hle-n5.md 18.29): each pixel's colour, for all its samples.
+constexpr char kFinalStoreSource[] =
+    "Texture2D<float4> xe_final_store_source : register(t0, space0);\n"
+    "float4 xe_final_store_ps(float4 position : SV_Position) : SV_Target {\n"
+    "  return xe_final_store_source.Load(int3(int2(position.xy), 0));\n"
+    "}\n";
+
 std::string_view Library() {
   return std::string_view(reinterpret_cast<const char*>(kPostPassHlsli), sizeof(kPostPassHlsli));
 }
@@ -1053,12 +1061,29 @@ bool PostPasses::CompileManifest(Manifest& manifest) {
       }
     }
   }
-  if (any_pixel && compiled) {
+  // The final point writes the final colour back into a multisampled target
+  // with the pixel passes' vertex shader (d3d-hle-n5.md 18.29).
+  const bool final_store = manifest.uses_point[size_t(Point::kFinal)];
+  if ((any_pixel || final_store) && compiled) {
     std::vector<ShaderOverrides::Dependency> files;
     compiled = overrides_.CompileProgram(
         fmt::format("#include \"{}\"\n", kLibraryName), "xe_post_pass_vs", "xe_post_pass_vs",
         "vs_5_1", kCompileFlags, {{"XE_POST_PASS_VERTEX_SHADER", "1"}}, directory_, kLibraryName,
         Library(), manifest.vertex_shader, files);
+  }
+  final_store_bytecode_.clear();
+  if (final_store_pipeline_) {
+    retired_.emplace_back(command_processor_.GetCurrentSubmission(),
+                          std::move(final_store_pipeline_));
+  }
+  if (final_store && compiled) {
+    std::vector<ShaderOverrides::Dependency> files;
+    if (!overrides_.CompileProgram(kFinalStoreSource, "xe_final_store_ps", "xe_final_store_ps",
+                                   "ps_5_1", kCompileFlags, {}, directory_, kLibraryName,
+                                   Library(), final_store_bytecode_, files)) {
+      final_store_bytecode_.clear();
+      REXGPU_ERROR("Post passes: failed to compile the final colour's store");
+    }
   }
   if (!compiled) {
     return false;
@@ -2221,18 +2246,34 @@ void PostPasses::RunPoint(Point point) {
   scene_stencil_ = {};
   scene_stencil_requested_ = false;
   if (point == Point::kFinal) {
-    D3D12RenderTargetCache::LastColorRenderTarget target;
-    if (!command_processor_.render_target_cache_->TransitionLastColorRenderTarget(
-            0, kShaderResource, target)) {
-      // The final combine draws into a multisampled target in the frames of
-      // the title's tiling entry 0 (4x tiles at base 0: the pre-race screens
-      // with a scene camera, docs/analysis/fsr-plan.md 12), where the final
-      // point's passes do not run. Logged once per stretch of such frames.
+    // The final combine draws into a multisampled target in the frames of the
+    // title's tiling entry 0 (4x at base 0: the pre-race screens with a scene
+    // camera, docs/analysis/fsr-plan.md 12.2). On entry 0's private pair, in
+    // one pass, the passes run on its resolve (d3d-hle-n5.md 18.29); on its
+    // tiles they do not run.
+    final_multisampled_ = nullptr;
+    D3D12RenderTargetCache::LastColorRenderTarget guest_target;
+    FinalTarget target;
+    bool have_target = command_processor_.render_target_cache_->TransitionLastColorRenderTarget(
+        0, kShaderResource, guest_target, !final_store_bytecode_.empty());
+    if (have_target) {
+      target.resource = guest_target.resource;
+      target.rtv = guest_target.rtv;
+      target.format = guest_target.format;
+      target.width = guest_target.width;
+      target.height = guest_target.height;
+      if (guest_target.samples > 1) {
+        have_target = ResolveFinalMultisampled(target);
+      }
+    }
+    if (!have_target) {
+      // Logged once per stretch of such frames.
       if (!final_missed_frames_) {
-        if (target.miss == 2) {
+        if (guest_target.miss == 2) {
           REXGPU_INFO("Post passes: the final point skips the frames whose final combine draws "
                       "into a {}x target (EDRAM base {}, format {}), from frame {}",
-                      1u << target.miss_samples_log2, target.miss_base_tiles, target.miss_format,
+                      1u << guest_target.miss_samples_log2, guest_target.miss_base_tiles,
+                      guest_target.miss_format,
                       command_processor_.GetCurrentFrame());
         } else {
           REXGPU_INFO("Post passes: the final point skips the frames whose final combine has no "
@@ -2357,6 +2398,9 @@ void PostPasses::RunPoint(Point point) {
       Transition(mark.resource.Get(), mark.state, D3D12_RESOURCE_STATE_UNORDERED_ACCESS);
     }
   }
+  if (point == Point::kFinal && final_multisampled_) {
+    StoreFinalMultisampled(constants_address);
+  }
   command_processor_.SubmitBarriers();
   if (point == Point::kSceneDepth) {
     LogRun(variant_index);
@@ -2473,10 +2517,8 @@ bool PostPasses::RunPass(PassDesc& pass, D3D12_GPU_VIRTUAL_ADDRESS scene_constan
       }
       case Builtin::kFinalColor: {
         // Back to a shader resource after a pass drew into it.
-        D3D12RenderTargetCache::LastColorRenderTarget target;
-        if (!final_color_.resource ||
-            !command_processor_.render_target_cache_->TransitionLastColorRenderTarget(
-                0, kShaderResource, target)) {
+        FinalTarget target;
+        if (!final_color_.resource || !TransitionFinal(kShaderResource, target)) {
           return false;
         }
         srvs[i] = final_color_.srv;
@@ -2531,9 +2573,8 @@ bool PostPasses::RunPass(PassDesc& pass, D3D12_GPU_VIRTUAL_ADDRESS scene_constan
   for (size_t i = 0; i < pass.rtvs.size(); ++i) {
     const Binding& binding = pass.rtvs[i];
     if (binding.builtin == Builtin::kFinalColor) {
-      D3D12RenderTargetCache::LastColorRenderTarget target;
-      if (!command_processor_.render_target_cache_->TransitionLastColorRenderTarget(
-              0, D3D12_RESOURCE_STATE_RENDER_TARGET, target)) {
+      FinalTarget target;
+      if (!TransitionFinal(D3D12_RESOURCE_STATE_RENDER_TARGET, target)) {
         return false;
       }
       formats[i] = target.format;
@@ -2596,6 +2637,179 @@ float PostPasses::NamedParam(const char* name, float fallback) const {
     return value;
   }
   return fallback;
+}
+
+bool PostPasses::TransitionFinal(D3D12_RESOURCE_STATES state, FinalTarget& target) {
+  if (!final_multisampled_) {
+    D3D12RenderTargetCache::LastColorRenderTarget guest_target;
+    if (!command_processor_.render_target_cache_->TransitionLastColorRenderTarget(0, state,
+                                                                                   guest_target)) {
+      return false;
+    }
+    target.resource = guest_target.resource;
+    target.rtv = guest_target.rtv;
+    target.format = guest_target.format;
+    target.width = guest_target.width;
+    target.height = guest_target.height;
+    return true;
+  }
+  Transition(final_proxy_.resource.Get(), final_proxy_.state, state);
+  target.resource = final_proxy_.resource.Get();
+  target.rtv = LocalCpu(DescriptorKind::kRtv, final_proxy_.rtvs[0]);
+  target.format = final_proxy_format_;
+  target.width = final_proxy_.width;
+  target.height = final_proxy_.height;
+  return true;
+}
+
+bool PostPasses::ResolveFinalMultisampled(FinalTarget& target) {
+  // The proxy: single-sampled, the target's size and format.
+  if (!final_proxy_.resource || final_proxy_.width != target.width ||
+      final_proxy_.height != target.height || final_proxy_format_ != target.format) {
+    ReleaseTexture(final_proxy_, nullptr);
+    ID3D12Device* device = command_processor_.GetD3D12Provider().GetDevice();
+    D3D12_RESOURCE_DESC desc = {};
+    desc.Dimension = D3D12_RESOURCE_DIMENSION_TEXTURE2D;
+    desc.Width = target.width;
+    desc.Height = target.height;
+    desc.DepthOrArraySize = 1;
+    desc.MipLevels = 1;
+    desc.Format = target.format;
+    desc.SampleDesc.Count = 1;
+    desc.Flags = D3D12_RESOURCE_FLAG_ALLOW_RENDER_TARGET;
+    if (FAILED(device->CreateCommittedResource(&ui::d3d12::util::kHeapPropertiesDefault,
+                                               D3D12_HEAP_FLAG_NONE, &desc, kShaderResource,
+                                               nullptr,
+                                               IID_PPV_ARGS(&final_proxy_.resource)))) {
+      REXGPU_ERROR("Post passes: failed to create the {}x{} final colour of a multisampled "
+                   "target",
+                   target.width, target.height);
+      return false;
+    }
+    final_proxy_.state = kShaderResource;
+    final_proxy_.width = target.width;
+    final_proxy_.height = target.height;
+    final_proxy_.rtvs[0] = AllocateLocal(DescriptorKind::kRtv);
+    if (final_proxy_.rtvs[0] == UINT32_MAX) {
+      ReleaseTexture(final_proxy_, nullptr);
+      return false;
+    }
+    D3D12_RENDER_TARGET_VIEW_DESC rtv_desc = {};
+    rtv_desc.Format = target.format;
+    rtv_desc.ViewDimension = D3D12_RTV_DIMENSION_TEXTURE2D;
+    device->CreateRenderTargetView(final_proxy_.resource.Get(), &rtv_desc,
+                                   LocalCpu(DescriptorKind::kRtv, final_proxy_.rtvs[0]));
+    final_proxy_format_ = target.format;
+  }
+  // The guest's target to a resolve source, through the render target cache,
+  // which tracks its state.
+  D3D12RenderTargetCache::LastColorRenderTarget guest_target;
+  if (!command_processor_.render_target_cache_->TransitionLastColorRenderTarget(
+          0, D3D12_RESOURCE_STATE_RESOLVE_SOURCE, guest_target, true)) {
+    return false;
+  }
+  Transition(final_proxy_.resource.Get(), final_proxy_.state, D3D12_RESOURCE_STATE_RESOLVE_DEST);
+  command_processor_.SubmitBarriers();
+  struct ResolveCall {
+    ID3D12Resource* dest;
+    ID3D12Resource* source;
+    DXGI_FORMAT format;
+  } call = {final_proxy_.resource.Get(), guest_target.resource, target.format};
+  command_processor_.GetDeferredCommandList().D3DCallback(
+      [](ID3D12GraphicsCommandList* command_list, const void* arguments) {
+        ResolveCall call;
+        std::memcpy(&call, arguments, sizeof(call));
+        command_list->ResolveSubresource(call.dest, 0, call.source, 0, call.format);
+      },
+      &call, sizeof(call));
+  final_multisampled_ = guest_target.resource;
+  final_multisampled_samples_ = guest_target.samples;
+  Transition(final_proxy_.resource.Get(), final_proxy_.state, kShaderResource);
+  target.resource = final_proxy_.resource.Get();
+  target.rtv = LocalCpu(DescriptorKind::kRtv, final_proxy_.rtvs[0]);
+  return true;
+}
+
+void PostPasses::StoreFinalMultisampled(D3D12_GPU_VIRTUAL_ADDRESS scene_constants) {
+  const uint32_t samples = final_multisampled_samples_;
+  final_multisampled_ = nullptr;
+  if (final_store_bytecode_.empty() || !final_color_.resource) {
+    return;
+  }
+  ID3D12Device* device = command_processor_.GetD3D12Provider().GetDevice();
+  if (!final_store_pipeline_ || final_store_format_ != final_proxy_format_ ||
+      final_store_samples_ != samples) {
+    if (final_store_pipeline_) {
+      retired_.emplace_back(command_processor_.GetCurrentSubmission(),
+                            std::move(final_store_pipeline_));
+    }
+    D3D12_GRAPHICS_PIPELINE_STATE_DESC desc = {};
+    desc.pRootSignature = root_signature_.Get();
+    desc.VS = {manifest_->vertex_shader.data(), manifest_->vertex_shader.size()};
+    desc.PS = {final_store_bytecode_.data(), final_store_bytecode_.size()};
+    desc.BlendState.RenderTarget[0].RenderTargetWriteMask = D3D12_COLOR_WRITE_ENABLE_ALL;
+    desc.BlendState.RenderTarget[0].SrcBlend = D3D12_BLEND_ONE;
+    desc.BlendState.RenderTarget[0].DestBlend = D3D12_BLEND_ZERO;
+    desc.BlendState.RenderTarget[0].BlendOp = D3D12_BLEND_OP_ADD;
+    desc.BlendState.RenderTarget[0].SrcBlendAlpha = D3D12_BLEND_ONE;
+    desc.BlendState.RenderTarget[0].DestBlendAlpha = D3D12_BLEND_ZERO;
+    desc.BlendState.RenderTarget[0].BlendOpAlpha = D3D12_BLEND_OP_ADD;
+    desc.SampleMask = UINT_MAX;
+    desc.RasterizerState.FillMode = D3D12_FILL_MODE_SOLID;
+    desc.RasterizerState.CullMode = D3D12_CULL_MODE_NONE;
+    desc.RasterizerState.DepthClipEnable = TRUE;
+    desc.PrimitiveTopologyType = D3D12_PRIMITIVE_TOPOLOGY_TYPE_TRIANGLE;
+    desc.NumRenderTargets = 1;
+    desc.RTVFormats[0] = final_proxy_format_;
+    desc.SampleDesc.Count = samples;
+    if (FAILED(device->CreateGraphicsPipelineState(&desc,
+                                                   IID_PPV_ARGS(&final_store_pipeline_)))) {
+      REXGPU_ERROR("Post passes: failed to create the final colour's store for {}x MSAA",
+                   samples);
+      final_store_bytecode_.clear();
+      return;
+    }
+    final_store_format_ = final_proxy_format_;
+    final_store_samples_ = samples;
+  }
+  D3D12RenderTargetCache::LastColorRenderTarget guest_target;
+  if (!command_processor_.render_target_cache_->TransitionLastColorRenderTarget(
+          0, D3D12_RESOURCE_STATE_RENDER_TARGET, guest_target, true)) {
+    return;
+  }
+  Transition(final_proxy_.resource.Get(), final_proxy_.state, kShaderResource);
+  command_processor_.SubmitBarriers();
+  DeferredCommandList& list = command_processor_.GetDeferredCommandList();
+  command_processor_.SetExternalPipeline(final_store_pipeline_.Get());
+  command_processor_.SetExternalGraphicsRootSignature(root_signature_.Get());
+  list.D3DSetGraphicsRootConstantBufferView(post_pass::kRootSceneConstants, scene_constants);
+  D3D12_GPU_DESCRIPTOR_HANDLE null_srv = command_processor_.GetSystemBindlessViewHandlePair(
+      D3D12CommandProcessor::SystemBindlessView::kNullTexture2DArray).second;
+  D3D12_GPU_DESCRIPTOR_HANDLE null_uav = command_processor_.GetSystemBindlessViewHandlePair(
+      D3D12CommandProcessor::SystemBindlessView::kNullRawUAV).second;
+  for (uint32_t i = 0; i < post_pass::kMaxSrvs; ++i) {
+    list.D3DSetGraphicsRootDescriptorTable(post_pass::kRootSrvFirst + i,
+                                           i ? null_srv : final_color_.srv);
+  }
+  for (uint32_t i = 0; i < post_pass::kMaxUavs; ++i) {
+    list.D3DSetGraphicsRootDescriptorTable(post_pass::kRootUavFirst + i, null_uav);
+  }
+  list.D3DOMSetRenderTargets(1, &guest_target.rtv, FALSE, nullptr);
+  // The next guest draw binds its render targets again.
+  command_processor_.render_target_cache_->InvalidateCommandListRenderTargets();
+  D3D12_VIEWPORT viewport = {0.0f, 0.0f, float(final_width_), float(final_height_), 0.0f, 1.0f};
+  command_processor_.SetViewport(viewport);
+  D3D12_RECT scissor = {0, 0, LONG(final_width_), LONG(final_height_)};
+  command_processor_.SetScissorRect(scissor);
+  command_processor_.SetPrimitiveTopology(D3D_PRIMITIVE_TOPOLOGY_TRIANGLELIST);
+  bool query_open = command_processor_.rtv_occlusion_open_query_ != UINT32_MAX;
+  if (query_open) {
+    command_processor_.CloseRTVOcclusionQuery();
+  }
+  list.D3DDrawInstanced(3, 1, 0, 0);
+  if (query_open) {
+    command_processor_.OpenRTVOcclusionQuery();
+  }
 }
 
 float PostPasses::NamedDefine(const char* name, float fallback) const {
@@ -3307,6 +3521,8 @@ void PostPasses::ReleaseTextures() {
   textures_.clear();
   previous_textures_.clear();
   previous_texture_ready_.clear();
+  ReleaseTexture(final_proxy_, nullptr);
+  final_proxy_format_ = DXGI_FORMAT_UNKNOWN;
 }
 
 bool PostPasses::EnsureHistory(History& history, ID3D12Resource* source,
