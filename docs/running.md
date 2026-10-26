@@ -702,23 +702,26 @@ in the countdown and replays at the default rate, which run at 60 fps instead of
 30 ([-FrameRate](#-framerate)). After a change of the scene's brightness, such as a tunnel
 exit, the picture reaches its new exposure in about a quarter of the game's time at 240 fps.
 
-`adaptation=1` gives each frame the share that covers the same part of the
-difference in the time of one 60 Hz vblank, `1 - (1 - share)^(60 / rate)`, with the guest vblank
-rate that the runtime passes to the shader mods (`xe_guest_vblank_rate`). That rate follows
-the title's scenarios as the launcher sets them (60 Hz in the menus and the 30 fps screens,
-the race rate in races, twice the race rate in the countdown and replays), so the same knob is
-right in each of them. At 60 Hz it changes nothing. It is a shader mod of the auto exposure
-shader (`shader_CAF3881F7C4CDCAA.mod.hlsli`), so it works on the RTV path and the native
-path; `-Rov` keeps the title's adaptation. The GUI launcher shows it as the checkbox
+`adaptation=1` gives each frame the share that covers the same part of the difference in
+that frame's time at the game's speed: `1 - (1 - share)^(design rate x frame interval)`. The
+design rate is the frame rate the title is designed to render the scenario at (60 in races,
+30 in its 30 fps screens and in the countdown and replays, which it presents every second
+vblank), as `fm4-vblank-rate.cpp` reports it; the frame interval is the title's measured time
+between its presented frames, averaged over about eight frames, each at most 50 ms. The
+runtime passes both to the shader mods (`xe_guest_design_frame_rate`, `xe_guest_frame_interval`),
+so a race below its target rate, such as on the ROG Xbox Ally X, keeps the game's speed too.
+At a 60 Hz guest vblank (the menus, the 30 fps screens, and races without `-FrameRate`) it
+changes nothing. It is a shader mod of the auto exposure shader
+(`shader_CAF3881F7C4CDCAA.mod.hlsli`), so it works on the RTV path and the native path;
+`-Rov` keeps the title's adaptation. The GUI launcher shows it as the checkbox
 **60 fps exposure speed**. The presets `aces`, `gt` and `neutral` set it since 26 October 2026;
 `-Look "aces,adaptation=0"` keeps the title's adaptation, as `original` does.
 
 Measured on 26 October 2026 in a frozen race frame whose exposure input was stepped: the
-exposure made 90% of its change 1.38 s after the step at 60 Hz, with and without the knob;
-at 240 Hz on the native path (229 fps) 1.40 s with the knob and 0.40 s without it. The knob
-follows the guest vblank rate, not the frame rate a race reaches: below its target the
-exposure adapts slower than the game's in proportion (2.3 s at 159 of 240 fps). Details in
-the [current status](status/current.md#auto-exposure-adaptation-above-60-fps-26-october-2026).
+exposure made 90% of its change 1.47 to 1.50 s after the step at 60 Hz, with and without the
+knob; with it 1.41 s at 240 Hz on RTV held at 160 fps by its tiles, and 1.43 s on the native
+path at 229 fps, against 0.59 and 0.34 s without it. Details in the
+[current status](status/current.md#auto-exposure-adaptation-by-frame-time-26-october-2026).
 
 ### Sun glare
 
