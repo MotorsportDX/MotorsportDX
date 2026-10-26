@@ -95,6 +95,10 @@ std::string Contract(bool post_ao, bool live_knobs) {
          std::to_string(kSystemConstantVectors + kHostValueVectors));
   }
   line("#define XE_SYS_GUEST_VBLANK_RATE " + std::to_string(kSystemConstantVectors * 16) + "u");
+  line("#define XE_SYS_GUEST_FRAME_INTERVAL " + std::to_string(kSystemConstantVectors * 16 + 4) +
+       "u");
+  line("#define XE_SYS_GUEST_DESIGN_FRAME_RATE " + std::to_string(kSystemConstantVectors * 16 + 8) +
+       "u");
   line("#define XE_SYS_FLAGS 0u");
   line("#define XE_SYS_TEXTURE_SWIZZLED_SIGNS 16u");
   line("#define XE_SYS_TEXTURES_RESOLUTION_SCALED 48u");

@@ -5932,11 +5932,14 @@ void D3D12CommandProcessor::UpdateSystemConstantValues(
     dirty = true;
   }
   // The host values of the shader mods: the guest vblank rate, which a title
-  // hook may switch while running (SetVblankRate).
+  // hook may switch while running (SetVblankRate), the title's frame interval,
+  // which changes with every swap, and its design frame rate.
   if (shader_mod_host_values_used_) {
-    const float vblank_rate = float(graphics_system_->guest_vblank_rate());
-    if (vblank_rate != shader_mod_host_values_[0]) {
-      shader_mod_host_values_[0] = vblank_rate;
+    const float host_values[3] = {float(graphics_system_->guest_vblank_rate()),
+                                  float(graphics_system_->guest_frame_interval()),
+                                  float(graphics_system_->guest_design_frame_rate())};
+    if (std::memcmp(host_values, shader_mod_host_values_, sizeof(host_values))) {
+      std::memcpy(shader_mod_host_values_, host_values, sizeof(host_values));
       dirty = true;
     }
   }

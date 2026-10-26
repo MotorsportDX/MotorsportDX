@@ -70,7 +70,10 @@ class ShaderOverrides {
   // written for every draw while overrides are in use (16 bytes more than the
   // 592 of the system constants, within the same 768-byte placement). X: the
   // guest vblank rate in Hz (GraphicsSystem::guest_vblank_rate,
-  // xe_guest_vblank_rate in the overrides); Y to W: 0.
+  // xe_guest_vblank_rate in the overrides); Y: the title's frame interval in
+  // seconds (guest_frame_interval, xe_guest_frame_interval); Z: the frame rate
+  // the title is designed to render its current scenario at
+  // (guest_design_frame_rate, xe_guest_design_frame_rate); W: 0.
   static constexpr uint32_t kHostValuesOffset =
       uint32_t((sizeof(DxbcShaderTranslator::SystemConstants) + 15) & ~size_t(15));
   static constexpr uint32_t kHostValuesSize = 4 * uint32_t(sizeof(float));

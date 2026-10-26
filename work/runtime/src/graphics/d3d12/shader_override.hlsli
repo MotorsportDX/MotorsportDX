@@ -54,6 +54,16 @@ uint xe_flags() { return xe_system_uint(XE_SYS_FLAGS); }
 // title that switches the rate while running; 0 before the first vblank.
 float xe_guest_vblank_rate() { return xe_system_float(XE_SYS_GUEST_VBLANK_RATE); }
 #endif
+#ifdef XE_SYS_GUEST_FRAME_INTERVAL
+// The title's frame interval in seconds (GraphicsSystem::guest_frame_interval):
+// the time between its swaps, averaged over about eight frames, each at most
+// 50 ms; 0 before the second swap.
+float xe_guest_frame_interval() { return xe_system_float(XE_SYS_GUEST_FRAME_INTERVAL); }
+// The frame rate the title is designed to render its current scenario at, as
+// the title integration reports it (GraphicsSystem::guest_design_frame_rate);
+// 0 when unknown.
+float xe_guest_design_frame_rate() { return xe_system_float(XE_SYS_GUEST_DESIGN_FRAME_RATE); }
+#endif
 
 #ifdef XE_SYS_MOD_KNOBS
 // Live knob <index> of the shader mods (shader_mod_live_knobs): the runtime

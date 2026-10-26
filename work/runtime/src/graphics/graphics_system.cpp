@@ -13,6 +13,7 @@
 
 #include <algorithm>
 #include <cctype>
+#include <chrono>
 #include <cstdint>
 #include <functional>
 #include <memory>
@@ -452,6 +453,22 @@ void GraphicsSystem::MarkVblank() {
   if (command_processor_) {
     command_processor_->WakeWaitRegMem();
   }
+}
+
+void GraphicsSystem::OnGuestSwap() {
+  const int64_t now = std::chrono::duration_cast<std::chrono::nanoseconds>(
+                          std::chrono::steady_clock::now().time_since_epoch())
+                          .count();
+  const int64_t last = last_guest_swap_ns_.exchange(now, std::memory_order_relaxed);
+  if (!last || now <= last) {
+    return;
+  }
+  // An exponential average over about eight frames of the intervals, each
+  // limited so that a hitch or a load moves it by one step at most.
+  const double interval = std::min(double(now - last) * 1.0e-9, kMaxGuestFrameInterval);
+  const double average = guest_frame_interval_s_.load(std::memory_order_relaxed);
+  guest_frame_interval_s_.store(average > 0.0 ? average + (interval - average) * 0.125 : interval,
+                                std::memory_order_relaxed);
 }
 
 void GraphicsSystem::ClearCaches() {

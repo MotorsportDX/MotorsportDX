@@ -40,6 +40,12 @@
 // career replay at draw_resolution_scale 2) every vblank came forced or late
 // and the replay ran at 23 fps instead of 30. FM4_VRR_HALF_RATE=1 keeps
 // vblank_vrr there for comparisons.
+//
+// Each change also reports the frame rate the title is designed to render the
+// scenario at to the runtime (GraphicsSystem::SetGuestDesignFrameRate): 60, the
+// scenario's own rate below it (30), and 30 for the countdown and the replays
+// at the race rate, which the title presents every second vblank. The shader
+// mods' frame time corrections read it (the look knob adaptation).
 #include <rex/graphics/graphics_system.h>
 #include <rex/hook.h>
 #include <rex/memory.h>
@@ -107,6 +113,7 @@ void Apply(const char* event, const std::string& name) {
                                                                      : kDefaultFrameRate;
   auto* gpu = static_cast<rex::graphics::GraphicsSystem*>(runtime->graphics_system());
   if (gpu) gpu->SetVblankVrrPaused(!vrr_half_rate && frame_rate < kDefaultFrameRate);
+  if (gpu) gpu->SetGuestDesignFrameRate(full ? 30.0 : std::min(frame_rate, kDefaultFrameRate));
   if (switching && gpu && rate != current_rate) {
     gpu->SetVblankRate(rate);
     current_rate = rate;

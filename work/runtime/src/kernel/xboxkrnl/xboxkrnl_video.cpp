@@ -445,6 +445,11 @@ void VdSwap_entry(mapped_void buffer_ptr,      // ptr into primary ringbuffer
                   mapped_u32 frontbuffer_ptr,  // ptr to frontbuffer address
                   mapped_u32 texture_format_ptr, mapped_u32 color_space_ptr, mapped_u32 width,
                   mapped_u32 height) {
+  // The title's frame interval for shader mods (xe_guest_frame_interval).
+  if (auto* graphics_system = REX_KERNEL_STATE()->emulator()->graphics_system()) {
+    graphics_system->OnGuestSwap();
+  }
+
   // All of these parameters are REQUIRED.
   assert(buffer_ptr);
   assert(fetch_ptr);

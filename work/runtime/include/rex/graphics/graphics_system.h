@@ -97,6 +97,26 @@ class GraphicsSystem : public system::IGraphicsSystem {
   double guest_vblank_rate() const {
     return guest_vblank_rate_hz_.load(std::memory_order_relaxed);
   }
+  // The title's frame interval in seconds: the time between its VdSwap calls,
+  // each limited to kMaxGuestFrameInterval (hitches, loading) and averaged
+  // over about eight frames; 0 before the second swap. VdSwap calls OnGuestSwap
+  // on the title's thread; shader mods read the interval
+  // (xe_guest_frame_interval).
+  static constexpr double kMaxGuestFrameInterval = 0.05;
+  void OnGuestSwap() override;
+  double guest_frame_interval() const {
+    return guest_frame_interval_s_.load(std::memory_order_relaxed);
+  }
+  // The frame rate the title is designed to render its current scenario at
+  // (for example 60, or 30 where it presents every second vblank of its 60 Hz
+  // display), reported by the title integration; 0 when unknown. Any thread;
+  // shader mods read it (xe_guest_design_frame_rate).
+  void SetGuestDesignFrameRate(double hz) {
+    guest_design_frame_rate_hz_.store(hz > 0.0 ? hz : 0.0, std::memory_order_relaxed);
+  }
+  double guest_design_frame_rate() const {
+    return guest_design_frame_rate_hz_.load(std::memory_order_relaxed);
+  }
 
   // Holds vblank_vrr to the fixed refresh grid while set, for example while a
   // title paces its frames over several vblanks on the CPU (the vsync thread
@@ -151,6 +171,9 @@ class GraphicsSystem : public system::IGraphicsSystem {
   std::atomic<bool> vsync_worker_running_;
   std::atomic<double> vblank_rate_hz_{0.0};
   std::atomic<double> guest_vblank_rate_hz_{0.0};
+  std::atomic<double> guest_frame_interval_s_{0.0};
+  std::atomic<double> guest_design_frame_rate_hz_{0.0};
+  std::atomic<int64_t> last_guest_swap_ns_{0};
   std::atomic<bool> vblank_vrr_paused_{false};
   std::unique_ptr<rex::thread::Event> vsync_wake_event_;
   system::object_ref<system::XHostThread> vsync_worker_thread_;

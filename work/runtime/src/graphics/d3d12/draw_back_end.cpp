@@ -1587,13 +1587,16 @@ void D3D12CommandProcessor::ReplayDrawBackEndDraw(
     bindings.system_valid = false;
   }
   const bool knobs = (flags & be::kFlagKnobs) != 0;
-  // The shader overrides' host values: the guest vblank rate, read when the
-  // list is replayed (UpdateSystemConstantValues reads it for the PM4 path).
+  // The shader overrides' host values: the guest vblank rate, the title's
+  // frame interval and its design frame rate, read when the list is replayed
+  // (UpdateSystemConstantValues reads them for the PM4 path).
   const bool host_values = shader_mod_host_values_used_;
   if (host_values) {
-    const float vblank_rate = float(graphics_system_->guest_vblank_rate());
-    if (vblank_rate != replay.host_values[0]) {
-      replay.host_values[0] = vblank_rate;
+    const float values[3] = {float(graphics_system_->guest_vblank_rate()),
+                             float(graphics_system_->guest_frame_interval()),
+                             float(graphics_system_->guest_design_frame_rate())};
+    if (std::memcmp(values, replay.host_values, sizeof(values))) {
+      std::memcpy(replay.host_values, values, sizeof(values));
       bindings.system_valid = false;
     }
   }

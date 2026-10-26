@@ -635,6 +635,8 @@ std::string ShaderOverrides::BuildContract(
     line("#define XE_SYSTEM_CONSTANT_VECTORS {}", (kHostValuesOffset + kHostValuesSize + 15) / 16);
   }
   line("#define XE_SYS_GUEST_VBLANK_RATE {}u", kHostValuesOffset);
+  line("#define XE_SYS_GUEST_FRAME_INTERVAL {}u", kHostValuesOffset + 4);
+  line("#define XE_SYS_GUEST_DESIGN_FRAME_RATE {}u", kHostValuesOffset + 8);
   line("#define XE_SYS_FLAGS {}u", offsetof(SystemConstants, flags));
   line("#define XE_SYS_TEXTURE_SWIZZLED_SIGNS {}u",
        offsetof(SystemConstants, texture_swizzled_signs));

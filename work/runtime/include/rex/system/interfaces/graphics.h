@@ -70,6 +70,8 @@ class IGraphicsSystem {
     (void)ptr;
     (void)block_size_log2;
   }
+  // VdSwap, on the title's thread: one presented frame.
+  virtual void OnGuestSwap() {}
 
   // Persistent shader/pipeline storage under the cache root. Default: none.
   virtual void InitializeShaderStorage(const std::filesystem::path& cache_root, uint32_t title_id,
