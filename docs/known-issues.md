@@ -27,9 +27,9 @@ above.
 
 ## Known problems
 
-- **Wide and tall screens** (21:9, 16:10) fill the screen in races and replays, with the HUD
-  and menus in the centred 16:9; the menus and photo mode keep a 16:9 picture with bars.
-  `-Rtv` (the earlier default path) shows a 16:9 picture with bars everywhere.
+- **Wide and tall screens** (21:9, 16:10) fill the screen in the menus, photo mode, races and
+  replays, with the HUD and the menus' panels in the centred 16:9; a photo saved there is the
+  centred 16:9 of the picture. `-Rtv` (the earlier default path) shows a 16:9 picture with bars.
 - **The native path is the default render path on every computer** (before, only with
   integrated GPUs). It has run on two GPUs only (see [Tested hardware](#tested-hardware)): if
   a picture looks wrong or the game stops on your GPU, try the launcher's render path "RTV"
