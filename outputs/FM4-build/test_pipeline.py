@@ -511,13 +511,24 @@ class PipelineTests(unittest.TestCase):
                                              monitor=(1920,1080,1.0))
             self.assertNotIn('FM4_ONE_PASS_MSAA',env)
             self.assertNotIn('host_render_thread',cvars)
+            # The default is the native path (docs/analysis/native-default.md): one pass with 2x.
             cvars,env,_=pipeline.launch_plan(root,r'C:\FM4 test\Disc 1',monitor=(1920,1080,1.0))
-            self.assertNotIn('FM4_ONE_PASS_MSAA',env)
-            self.assertNotIn('native_one_pass_msaa',cvars)
+            self.assertEqual(env['FM4_ONE_PASS_MSAA'],'2')
+            self.assertEqual(cvars['native_one_pass_msaa'],'2')
+            cvars,env,_=pipeline.launch_plan(root,r'C:\FM4 test\Disc 1',msaa_samples=4,
+                                             monitor=(1920,1080,1.0))
+            self.assertEqual(env['FM4_ONE_PASS_MSAA'],'4')
+            # -Rtv and the automatic choice with -Msaa run RTV, without one pass.
+            for options in ({'native':False},{'msaa':True}):
+                cvars,env,_=pipeline.launch_plan(root,r'C:\FM4 test\Disc 1',
+                                                 monitor=(1920,1080,1.0),**options)
+                self.assertNotIn('FM4_ONE_PASS_MSAA',env)
+                self.assertNotIn('native_one_pass_msaa',cvars)
+                self.assertNotIn('host_render_thread',cvars)
             for samples in (0,2,4):
                 with self.assertRaises(ValueError):
                     pipeline.launch_plan(root,r'C:\FM4 test\Disc 1',msaa_samples=samples,
-                                         monitor=(1920,1080,1.0))
+                                         native=False,monitor=(1920,1080,1.0))
                 with self.assertRaises(ValueError):
                     pipeline.launch_plan(root,r'C:\FM4 test\Disc 1',msaa_samples=samples,native=True,
                                          rov=True,monitor=(1920,1080,1.0))
@@ -585,12 +596,17 @@ class PipelineTests(unittest.TestCase):
         self.assertEqual(scales(cvars),(None,'3/2','122'))
         cvars,_,_=plan((1920,1080,1.0),native=True,msaa_samples=4)
         self.assertEqual(scales(cvars),('2',None,'26'))
+        # The default is the native path at the screen's own scale; RTV (-Rtv) keeps the whole
+        # multiple that covers the screen.
         cvars,_,description=plan((1920,1080,1.0))
+        self.assertEqual(scales(cvars),(None,'3/2','58'))
+        self.assertNotIn('native path for',description)
+        cvars,_,description=plan((1920,1080,1.0),native=False)
         self.assertEqual(scales(cvars),('2',None,None))
         self.assertNotIn('letterboxed',description)
         cvars,_,_=plan((1920,1080,1.0),rov=True)
         self.assertEqual(scales(cvars),('2',None,None))
-        for options in ({},{'rov':True},{'native':True,'single_tile':True}):
+        for options in ({'native':False},{'rov':True},{'native':True,'single_tile':True}):
             with self.assertRaises(ValueError):
                 plan((1920,1080,1.0),resolution_scale='panel',**options)
 

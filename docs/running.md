@@ -69,7 +69,7 @@ the environment and the display description of sixteen sets of options (RTV, `-R
 | Look | The preset (`aces`, `gt`, `neutral`, `original`, `original` without TAA, or a saved look), the tone curve, TAA, the exposure speed of 60 fps (`adaptation`), and a slider for each [look knob](#look) in five groups: picture, lighting, car, sky and foliage, road. A changed knob is marked and has a Reset button. **Save as look** keeps the current value under a name. The `-Look` value is shown and can be edited. |
 | Controls | The Controller section: the options of `-Pad` (the pad driver, rumble strength, trigger rumble, the steering anti-deadzone and the input thread; stick and trigger shaping and the extra buttons folded), with the `-Pad` value shown and editable; see [Controller](#controller). Then the Keyboard section: the options of `-Keyboard` (smooth steering and pedals, their rates and the precision share; mouse steering folded), with the `-Keyboard` value; see [Keyboard](#keyboard). Below it the keyboard bindings, by their function in the game's DEFAULT LAYOUT 1 (the runtime's `keybind_*` settings). **Set** waits for a key; several keys are separated by commas, modifiers are written as `Shift+Up`. Unknown key names are marked and block Play. A connected controller needs no setup. |
 | Game data | Disc 1 and Disc 2, checked as `generate` checks them, the downloadable content folders and files, and the content packages found, with their import state. **Remove import** deletes an imported package from the user data (see [Data directories](#data-directories)). The texture pack is the `-TextureReplace` folder. |
-| Advanced | Fixed vblank, the shadow workaround, `-SingleTile`, `--ao`, `-Rov`, the native path (`-Native`, and its MSAA: one pass with 2x, the default, one pass with 4x as `-MsaaSamples 4`, or one tile without MSAA as `-MsaaSamples 0`), the performance trace, extra cvars, the texture dump folder, the user data folder, and buttons that open the logs and the user data and copy the command line. |
+| Advanced | Fixed vblank, the shadow workaround, `-SingleTile`, `--ao`, `-Rov`, the render path (automatic, which is the native path; RTV, `-Rtv`; or the native path, `-Native`) and the native path's MSAA (one pass with 2x, the default, one pass with 4x as `-MsaaSamples 4`, or one tile without MSAA as `-MsaaSamples 0`), the performance trace, extra cvars, the texture dump folder, the user data folder, and buttons that open the logs and the user data and copy the command line. |
 | About | Who made Motorsport DX possible (the ReXGlue SDK, Xenia, XenonRecomp and the other projects of [CREDITS.txt](../outputs/FM4-build/CREDITS.txt)), the non-affiliation line, and buttons that open `CREDITS.txt` and the `third-party-notices` folder beside the launcher. |
 
 A **profile** is one set of run options; the Discs, content, saved looks and key
@@ -161,20 +161,20 @@ Running with no options gives this configuration:
   [-FullRateMirror](#-fullratemirror).
 - **Shadows** use the title's shadow map for every camera. See
   [-ShadowWorkaround](#-shadowworkaround).
-- **Race quality** is `high`, rendered in one tile without MSAA because the look has TAA, or
-  in one pass with 2x MSAA on the native path. See [-Quality](#-quality),
+- **Race quality** is `high`, rendered in one pass with 2x MSAA on the native path, or in one
+  tile without MSAA on RTV because the look has TAA. See [-Quality](#-quality),
   [-SingleTile and -Msaa](#-singletile-and--msaa) and [-Native](#-native).
 - **Look** is the `aces` preset (`pc` is its earlier name), with screen-space ambient occlusion,
   temporal anti-aliasing, the cockpit interior's sky fill, the cockpit glass, the road sheen
   and the glass, chrome and rim mods. See [Look](#look).
-- **Display** is `native`: borderless fullscreen on the primary monitor, with a render
-  scale of 2x on 1080p, 1440p and 2560x1600 screens and 3x on 4K, and a 16:9 picture. On a
-  computer with integrated GPUs only the render scale is 1x. See
-  [-Display](#-display-and-render-scale).
-- **Render path** is the host render target path (RTV) with the frame pacing and
-  memory settings described in [Render path and frame pacing](#render-path-and-frame-pacing).
-  On a computer with integrated GPUs only it is the native path ([-Native](#-native)), which
-  also renders the screen's own aspect at `-ResolutionScale panel`.
+- **Display** is `native`: borderless fullscreen on the primary monitor, rendered at the
+  screen's own resolution and aspect (1080p at 3/2, 1440p at 2, 4K at 3, a 2560x1600 screen
+  at 2 with more above and below). On a computer with integrated GPUs only the render scale
+  is 1x and the picture 16:9. See [-Display](#-display-and-render-scale).
+- **Render path** is the native path ([-Native](#-native)), with the frame pacing and memory
+  settings described in [Render path and frame pacing](#render-path-and-frame-pacing).
+  `-Rtv` runs RTV, the PM4 path on host render targets, and `-Rov` the uncorrected reference;
+  `-Msaa` runs RTV too.
 
 Performance on the defaults: Quick Race holds 60 fps on the development computer.
 The GPU time per race frame with `high` quality in its three 4x MSAA tiles and the `pc` look
@@ -184,7 +184,10 @@ cost about 1 ms less GPU time at 2x (19 October 2026). At 1x and 240 Hz the one 
 0.5 to 0.6 ms less GPU time and a fifth to a quarter fewer draws per race frame than the
 tiles: races ran at 230.7 to 236.9 fps against 200.5 to 218.1 fps with `-Msaa` (20 October
 2026, [current status](status/current.md#one-tile-with-taa-the-presets-and-taas-history-20-october-2026)).
-The 2x scale is the one that `native` uses on 1080p, 1440p and 2560x1600 screens.
+On the native default at 240 Hz (26 October 2026, [native default](analysis/native-default.md#23-performance)),
+a 2560x1600 screen's race (2560x1600 with 2x MSAA) ran at 171.6 to 175.1 fps with 5.60 to
+5.70 ms of GPU time a frame, against 162.7 to 165.9 fps and 5.81 to 6.01 ms on RTV at 2x
+(2560x1440, letterboxed).
 
 ### Render path and frame pacing
 
@@ -246,8 +249,8 @@ takes a value.
 | `-TextureReplace <dir>` | off | Use `<hash>.dds` files from this directory instead of the game textures with that hash. See [Texture replacement](#texture-replacement). |
 | `-Info` | off | Show the settings overlay at start. F2 toggles it in any run. |
 | `-Rov` | off | Use the earlier pixel shader interlock render target path, for comparisons. |
-| `-Native` | off (on with integrated GPUs only) | The native path: a host render thread consumes the guest's commands from a record queue instead of the command processor thread, and races render in one pass with 2x MSAA. See [-Native](#-native). |
-| `-Rtv` | off | The PM4 path on host render targets even where `-Native` is the default. |
+| `-Native` | on, unless `-Rtv`, `-Rov` or `-Msaa` | The native path: a host render thread consumes the guest's commands from a record queue instead of the command processor thread, and races render in one pass with 2x MSAA. See [-Native](#-native). |
+| `-Rtv` | off | RTV, the PM4 path on host render targets, instead of the native path: the reference beside `-Rov`. |
 | `-SingleTile` | with TAA | Render races as one 720p tile without MSAA also with a look without TAA, then with FXAA on the swap. A look with TAA (every preset) renders one tile anyway. |
 | `-Msaa` | off | Keep the tiles and MSAA of `-Quality` with a look that has TAA. |
 | `-MsaaSamples 4` or `0` | 2 with `-Native` | With `-Native`: 4 renders races in one pass with 4x MSAA, 0 in one tile without MSAA, instead of one pass with 2x MSAA. See [-Native](#-native). |
@@ -316,8 +319,9 @@ sizes (`720p`, `1080p`, `1440p`, `4k`) are a window of that many pixels. They go
 fullscreen with `-Fullscreen`, or when they do not fit the monitor. Window sizes take
 the Windows display scale into account.
 
-The render scale is the smallest whole multiple of 1280x720 that covers the 16:9
-picture of the screen: 720p 1x, 1080p and 1440p 2x, 2560x1600 2x, and 4k 3x. `-Display
+On RTV (`-Rtv`), `-Rov` and the native path's modes other than one pass with 2x MSAA, the
+render scale is the smallest whole multiple of 1280x720 that covers the 16:9 picture of the
+screen: 720p 1x, 1080p and 1440p 2x, 2560x1600 2x, and 4k 3x. `-Display
 720p` was the earlier default (1x in a 1280x720 window). On a computer with integrated GPUs only
 (every GPU shares the system memory, as on the ROG Xbox Ally X) it is 1x on every screen: the
 Ally X's GPU takes 23.9 to 27.2 ms a race frame at 2x and races at 35 to 39 fps
@@ -330,8 +334,8 @@ the window, the presenter averages it over each screen pixel in linear light
 selects the earlier single bilinear tap). So 2x on a 1080p screen is supersampling,
 not a shrink that skips texels.
 
-On the native path in one pass with 2x MSAA (`-Native`, the default with integrated
-GPUs only), the scene renders at the screen's own resolution instead: the largest 16:9
+On the native path in one pass with 2x MSAA (the default), the scene renders at the screen's
+own resolution instead: the largest 16:9
 picture that fits the screen, at a fractional scale of 1280x720 where it needs one
 (1080p at 3/2, 1920x1080; 1440p at 2; 2160p at 3; 2560x1600 at 2, letterboxed; 2880x1800
 at 9/4, 2880x1620, letterboxed). The launcher sets `native_draw_scale` and the
@@ -388,8 +392,7 @@ The launch description names the lines ("FSR quality 960p -> 1440p", with "(clam
 Upscale choice. At a 720p output every mode renders natively. On a computer with
 integrated GPUs only, an upscale mode takes the screen's own resolution as its output, so
 the ROG Xbox Ally X renders 720p and upscales it to 1080p, where it otherwise renders 1x.
-`-Upscale` needs the native path in one pass with 2x MSAA (`-Native`, the default with
-integrated GPUs only) and an upscaler as the anti-aliasing method: FSR 3.1
+`-Upscale` needs the native path in one pass with 2x MSAA (the default) and an upscaler as the anti-aliasing method: FSR 3.1
 (`-Look "aces,aa=fsr"`, a runtime built with `-Fsr on`) or the project's TAA as the
 upscaler (`-Look "aces,aa=taau"`, the description then says "TAAU quality 720p -> 1080p");
 both launchers refuse it with `aa=taa` ("-Upscale quality needs aa=fsr or aa=taau in -Look:
@@ -471,7 +474,7 @@ the title's own. Compare the default path against `-Rov` with `-Look original`.
 
 #### -Native
 
-On a computer with integrated GPUs only (the rule of the render scale, [-Display](#-display-and-render-scale)), the native path is the default, unless `-Rov` or `-Msaa` is given, and the launcher prints "native path for an integrated GPU"; `-Rtv` (the GUI launcher's render path "RTV") runs RTV there. On the ROG Xbox Ally X it races at 110.5 fps on battery against RTV's 100.1, with p99 15.3 against 19.8 ms ([D3D-level HLE, 17.25](analysis/d3d-hle-n4.md#1725-the-second-rog-xbox-ally-x-run-24-october-2026)). Elsewhere RTV stays the default.
+The native path is the default, unless `-Rov` or `-Msaa` is given; `-Rtv` (the GUI launcher's render path "RTV") runs RTV, which stays the reference beside `-Rov`. It became the default with integrated GPUs only on 24 October 2026, where on the ROG Xbox Ally X it races at 110.5 fps on battery against RTV's 100.1, with p99 15.3 against 19.8 ms ([D3D-level HLE, 17.25](analysis/d3d-hle-n4.md#1725-the-second-rog-xbox-ally-x-run-24-october-2026)), and on every computer after the readiness report of 26 October 2026 ([native default](analysis/native-default.md)): on the development laptop's 2560x1600 panel it fills the screen and takes 4% less GPU time a race frame than RTV's letterboxed 2x. The reference comparison (RTV against `-Rov` with `-Look "original,taa=0"`) needs `-Rtv`, since a look without TAA runs the native path in one pass with 2x MSAA.
 
 Runs the first increment of stage N1 of the native port
 ([D3D-level HLE, section 14](analysis/d3d-hle.md#14-stage-n1-design-21-october-2026)):
@@ -495,8 +498,8 @@ path, and the render targets stay on RTV.
   for the ROG Xbox Ally X at 1x, where it costs about as much GPU time as 2x.
 - `-Native -MsaaSamples 0` or `-Native -SingleTile` renders races in one tile without MSAA
   instead. With `-Native -Msaa` the tiles of `-Quality` stay on the PM4 RTV path, and the
-  launcher says so. `-MsaaSamples` without `-Native` is refused; RTV and `-Rov` keep the
-  title's tiles.
+  launcher says so. `-MsaaSamples` with `-Rtv`, `-Rov` or `-Msaa` is refused; RTV and `-Rov`
+  keep the title's tiles.
 - One pass uses 2x MSAA also with a look without TAA, such as the comparison look
   `original,taa=0`, where RTV and `-Rov` render the tiles and MSAA of `-Quality` (4x at
   `high`). Compare one pass 2x against RTV and `-Rov` in the title's 2x scenario

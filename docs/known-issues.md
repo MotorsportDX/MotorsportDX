@@ -27,10 +27,13 @@ above.
 
 ## Known problems
 
-- **Wide and tall screens** (21:9, 16:10) fill the screen only on the native path (`-Native`,
-  the default with integrated GPUs only), with the HUD and menus in the centred 16:9. With a
-  discrete GPU the default path (RTV) shows a 16:9 picture with black bars; add `-Native` for
-  the full width.
+- **Wide and tall screens** (21:9, 16:10) fill the screen in races and replays, with the HUD
+  and menus in the centred 16:9; the menus and photo mode keep a 16:9 picture with bars.
+  `-Rtv` (the earlier default path) shows a 16:9 picture with bars everywhere.
+- **The native path is the default render path on every computer** (before, only with
+  integrated GPUs). It has run on two GPUs only (see [Tested hardware](#tested-hardware)): if
+  a picture looks wrong or the game stops on your GPU, try the launcher's render path "RTV"
+  (`-Rtv`) and say in your [bug report](bug-reports.md) whether it changes anything.
 - **The cockpit view in the game's own look is very dark on sunny tracks.** This is the game's own
   interior lighting. The default look fills the interior with the game's own sky light since
   26 October 2026 (`cockpit_fill`), which keeps the gauges readable; `-Look original` shows the

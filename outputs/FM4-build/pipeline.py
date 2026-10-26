@@ -1876,14 +1876,14 @@ def launch_plan(root,disc1,single_tile=False,fixed_vblank=False,frame_rate=None,
     launch. The GUI launcher (work/fm4-launcher, plan.cpp) ports this function; launcher_tests
     compares the two. monitor: the primary monitor's (width, height, DPI scale, refresh Hz, VRR
     min Hz, VRR max Hz, integrated GPUs only) instead of the real one. native: True for -Native,
-    False for -Rtv, None for the default: the native path with integrated GPUs only, unless
-    -Rov or -Msaa (the main session's decision of 24 October 2026, d3d-hle-n4.md 17.25). pad:
+    False for -Rtv, None for the default: the native path unless -Rov or -Msaa (with integrated
+    GPUs only since 24 October 2026, d3d-hle-n4.md 17.25; on every computer by the main
+    session's decision of 26 October 2026, docs/analysis/native-default.md). pad:
     the -Pad value (PAD_KNOBS). upscale: the -Upscale mode (upscale_settings). keyboard: the
     -Keyboard value (KEYBOARD_KNOBS)."""
     monitor=monitor or primary_monitor()
-    native_auto=native is None
-    if native_auto:
-        native=len(monitor)>6 and bool(monitor[6]) and not rov and not msaa
+    if native is None:
+        native=not rov and not msaa
     env={}
     env.update(launch_env())
     if full_rate_mirror:
@@ -1905,7 +1905,7 @@ def launch_plan(root,disc1,single_tile=False,fixed_vblank=False,frame_rate=None,
     if msaa_samples is not None and rov:
         raise ValueError("-MsaaSamples is the native path's one-pass MSAA; -Rov cannot run it.")
     if msaa_samples is not None and not native:
-        raise ValueError("-MsaaSamples is the native path's one-pass MSAA: use it with -Native.")
+        raise ValueError("-MsaaSamples is the native path's one-pass MSAA; -Rtv and -Msaa run RTV.")
     if native and msaa_samples is None and not single_tile and not msaa and not rov:
         msaa_samples=2
     one_pass=bool(msaa_samples)
@@ -1955,8 +1955,6 @@ def launch_plan(root,disc1,single_tile=False,fixed_vblank=False,frame_rate=None,
     present,frame_rate,present_description=present_settings(vsync,frame_rate,monitor)
     cvars.update(present)
     description+=f'; {present_description}'
-    if native_auto and native:
-        description+='; native path for an integrated GPU'
     if frame_rate:
         # The display refresh the title sees and the FrameRate of its race scenarios
         # (60). The guest vblank runs at 60 Hz, and at this rate only while a race
@@ -2337,11 +2335,11 @@ def main():
                         help='run: the slower pixel shader interlock render target path instead of RTV')
     parser.add_argument('--native',action='store_const',const=True,default=None,
                         help='run: the native path, the host render thread instead of the command '
-                             'processor thread (the default with integrated GPUs only; '
+                             'processor thread (the default unless --rov or --msaa; '
                              'docs/analysis/d3d-hle.md)')
     parser.add_argument('--rtv',action='store_const',const=False,dest='native',
-                        help='run: the PM4 path on host render targets (RTV) even with integrated GPUs '
-                             'only, where --native is the default')
+                        help='run: the PM4 path on host render targets (RTV) instead of the native '
+                             'path, the default')
     parser.add_argument('--look',
                         help='run: post-processing look, a preset ('+', '.join(LOOK_PRESETS)+
                              '; pc is aces; default '+DEFAULT_LOOK+') and/or knobs, for example '

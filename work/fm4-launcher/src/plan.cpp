@@ -983,15 +983,12 @@ Plan LaunchPlan(const LauncherData& data, const std::string& root, const std::st
   if (options.msaa_samples != -1 && options.msaa_samples != 0 && options.msaa_samples != 2 &&
       options.msaa_samples != 4)
     throw PlanError("-MsaaSamples takes 0, 2 or 4.");
-  // pipeline.py launch_plan: the native path by default with integrated GPUs only, unless -Rov
-  // or -Msaa.
-  const bool native_auto = options.native < 0;
-  const bool native = native_auto ? monitor.integrated_gpu && !options.rov && !options.msaa
-                                  : options.native == 1;
+  // pipeline.py launch_plan: the native path by default, unless -Rov or -Msaa.
+  const bool native = options.native < 0 ? !options.rov && !options.msaa : options.native == 1;
   if (options.msaa_samples >= 0 && options.rov)
     throw PlanError("-MsaaSamples is the native path's one-pass MSAA; -Rov cannot run it.");
   if (options.msaa_samples >= 0 && !native)
-    throw PlanError("-MsaaSamples is the native path's one-pass MSAA: use it with -Native.");
+    throw PlanError("-MsaaSamples is the native path's one-pass MSAA; -Rtv and -Msaa run RTV.");
   int msaa_samples = options.msaa_samples;
   std::string quality_note;
   std::tie(msaa_samples, quality_note) =
@@ -1065,7 +1062,6 @@ Plan LaunchPlan(const LauncherData& data, const std::string& root, const std::st
   const PresentSettings present = PresentSettingsOf(data, options.vsync, options.frame_rate, monitor);
   Update(cvars, present.cvars);
   plan.description = description + "; " + present.description;
-  if (native_auto && native) plan.description += "; native path for an integrated GPU";
   if (present.frame_rate) {
     cvars.Set("video_mode_refresh_rate", std::to_string(present.frame_rate));
     env.Set("FM4_FRAME_RATE", std::to_string(present.frame_rate));
