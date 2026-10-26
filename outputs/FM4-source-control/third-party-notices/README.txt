@@ -4,7 +4,7 @@ Motorsport DX is built from the project's own code, the ReXGlue SDK fork in work
 third-party code below. None of the third-party libraries is stored in this repository:
 setup fetches them into the BuildRoot from their pinned upstream revisions. Each license file
 in this folder is the upstream text as it stands at that revision. Build.ps1 -Action build and
--Action export copy this folder beside fm4_launcher.exe as third-party-notices, with
+-Action export copy this folder beside MotorsportDX.exe as third-party-notices, with
 CREDITS.txt, which thanks the projects that made Motorsport DX possible; the launcher's About
 page opens both.
 
@@ -19,7 +19,7 @@ The binaries a build produces, and what each one contains:
                     code generated from the user's own discs, the project's integration code,
                     fmt and spdlog (linked statically), and header code of toml++ and SIMDe;
                     they call the rest of the runtime in rexruntime.dll
-  fm4_launcher.exe  the GUI launcher: the project's code, SDL3, Dear ImGui and nlohmann/json
+  MotorsportDX.exe  the GUI launcher: the project's code, SDL3, Dear ImGui and nlohmann/json
 An export holds these binaries. The tools below stay in the BuildRoot and are never exported:
   rexglue.exe       the recompiler (build time only): ReXGlue code, inja, nlohmann/json, CLI11,
                     the GNU binutils PowerPC disassembler, toml++, fmt, spdlog, xxHash, SIMDe
@@ -72,7 +72,7 @@ Libraries the runtime builds (the upstream SDK's submodules at that commit)
                                https://github.com/CLIUtils/CLI11
   inja-LICENSE.txt             inja 3.5.0, MIT; rexglue.exe only. https://github.com/pantor/inja
   nlohmann-json-LICENSE.txt    JSON for Modern C++ 3.11.3, MIT, from inja's third_party folder;
-                               in fm4_launcher.exe and rexglue.exe.
+                               in MotorsportDX.exe and rexglue.exe.
                                https://github.com/nlohmann/json
   utfcpp-LICENSE.txt           UTF8-CPP (commit 63d64de), Boost Software License 1.0.
                                https://github.com/nemtrif/utfcpp

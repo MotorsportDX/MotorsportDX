@@ -1,4 +1,4 @@
-// fm4_launcher.exe --test <cases.json> <result.json>: the launcher tests of pipeline.py
+// MotorsportDX.exe --test <cases.json> <result.json>: the launcher tests of pipeline.py
 // (launcher_tests). The cases hold pipeline.py's launch plans of a set of options on a set of
 // monitors and its check of the Discs and content of local.json; the result lists every
 // difference of this port.

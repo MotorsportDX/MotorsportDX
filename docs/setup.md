@@ -310,7 +310,7 @@ runtime edits need only this stage. It then:
   it, and `tree`, a SHA-256 over the BuildRoot's `runtime-source` and the project's title
   sources, which another checkout may have left there (a `matrix.py` snapshot keeps the file,
   and each e2e run's `summary.json` copies `source` into `binary`);
-- builds the [GUI launcher](running.md#gui-launcher), `game-build\fm4_launcher.exe`,
+- builds the [GUI launcher](running.md#gui-launcher), `game-build\MotorsportDX.exe`,
   from [work/fm4-launcher](../work/fm4-launcher) with the runtime's SDL3, Dear ImGui
   and JSON header, writes its tables to `launcher.json`, copies the look mods and
   post passes into `look` and `passes`, and `CREDITS.txt` and `third-party-notices` beside them;

@@ -57,7 +57,7 @@ GAMEINPUT_FILES = {'native/include/GameInput.h':'include/gameinput.h',
 # applied by patch_thirdparty: each must apply exactly, and setup refuses a mismatch.
 THIRDPARTY_PATCHES = (('sdl3-gameinput-v3.patch','sdl3'),)
 NOTICES = REPO/'outputs/FM4-source-control/third-party-notices'
-# The acknowledgements beside fm4_launcher.exe; its About page opens them (docs/running.md).
+# The acknowledgements beside the launcher; its About page opens them (docs/running.md).
 CREDITS = HERE/'CREDITS.txt'
 RESOLVE_SHADERS = [f'resolve_full_{bits}bpp{suffix}' for bits in (8,16,32,64) for suffix in ('','_scaled')]
 # The fast copy of 32bpp 4x MSAA surfaces with a per-pixel EDRAM address, in place of upstream's
@@ -1895,10 +1895,14 @@ def launch_plan(root,disc1,single_tile=False,fixed_vblank=False,frame_rate=None,
         env['FM4_INFO_SHOW']='1'
     return cvars,env,description
 
-# The GUI launcher (work/fm4-launcher, docs/running.md#gui-launcher): fm4_launcher.exe beside
+# The GUI launcher (work/fm4-launcher, docs/running.md#gui-launcher): MotorsportDX.exe beside
 # fm4_rex.exe, and launcher.json, the launcher's tables, beside game-build. The tables come from
-# this file, so the launcher has no rules of its own beyond launch_plan's.
+# this file, so the launcher has no rules of its own beyond launch_plan's. The program was
+# fm4_launcher.exe until 26 October 2026; build and export remove that old file, so a shortcut
+# to it fails instead of starting a launcher older than its game (docs/running.md).
 LAUNCHER_DIRECTORY=REPO/'work/fm4-launcher'
+LAUNCHER_EXE='MotorsportDX.exe'
+OLD_LAUNCHER_EXE='fm4_launcher.exe'
 LAUNCHER_ROOT,LAUNCHER_DISC1='<ROOT>','<DISC1>'
 
 def launcher_data():
@@ -1946,7 +1950,7 @@ def stage_launcher_files(directory):
                 shutil.copyfile(path,directory/name/path.name)
 
 def build_launcher(root,jobs):
-    """fm4_launcher.exe (work/fm4-launcher) against the installed runtime's SDL3 and the runtime
+    """MotorsportDX.exe (work/fm4-launcher) against the installed runtime's SDL3 and the runtime
     source's Dear ImGui and JSON header, into game-build; its files into the BuildRoot."""
     build=root/'launcher-build'
     run(['cmake','-S',LAUNCHER_DIRECTORY,'-B',build,'-G','Ninja','-DCMAKE_BUILD_TYPE=Release',
@@ -1955,7 +1959,8 @@ def build_launcher(root,jobs):
          f'-DCMAKE_PREFIX_PATH={root/"runtime-install"}',
          f'-DFM4_THIRDPARTY={root/"runtime-source/thirdparty"}'],log=root/'logs/launcher-configure.log')
     run(['cmake','--build',build,'--parallel',jobs],log=root/'logs/launcher-build.log')
-    shutil.copyfile(build/'fm4_launcher.exe',root/'game-build/fm4_launcher.exe')
+    shutil.copyfile(build/LAUNCHER_EXE,root/'game-build'/LAUNCHER_EXE)
+    (root/'game-build'/OLD_LAUNCHER_EXE).unlink(missing_ok=True)
     stage_launcher_files(root)
 
 # Options of the launcher tests: each with each monitor (width, height, DPI scale, refresh Hz,
@@ -2021,7 +2026,7 @@ def launcher_test_options(root):
             {'native':True,'look':'pc,aa=taau'}]
 
 def launcher_tests(root):
-    """Compares fm4_launcher.exe's port of launch_plan, disc check and content search with this
+    """Compares MotorsportDX.exe's port of launch_plan, disc check and content search with this
     file's: the plans of launcher_test_options on each test monitor, and the discs and content
     of local.json."""
     cases=[]
@@ -2045,7 +2050,7 @@ def launcher_tests(root):
                                                'manifest':str(manifest),'plans':cases,
                                                'discs':discs},indent=1),encoding='utf-8')
     (work/'result.json').unlink(missing_ok=True)
-    run([root/'game-build/fm4_launcher.exe','--test',work/'cases.json',work/'result.json'],
+    run([root/'game-build'/LAUNCHER_EXE,'--test',work/'cases.json',work/'result.json'],
         cwd=root,log=root/'logs/launcher-tests.log')
     result=json.loads((work/'result.json').read_text(encoding='utf-8'))
     if result.get('failures'):
@@ -2053,7 +2058,7 @@ def launcher_tests(root):
     print(f'Launcher tests passed: {result["plans"]} plans, discs and {len(discs["packages"])} content packages.')
 
 def export(root,out,jobs):
-    """A folder that runs the game with fm4_launcher.exe alone (docs/running.md#export): the
+    """A folder that runs the game with MotorsportDX.exe alone (docs/running.md#export): the
     launcher, game-build's executable, modules and runtime, the look mods, the post passes, the
     shader cache, launcher.json, CREDITS.txt and the third-party notices. Not user-data: the
     profile, saves and imported content stay, and the launcher of the folder imports Disc 2 and
@@ -2064,8 +2069,8 @@ def export(root,out,jobs):
     for name,expected in report['artifacts'].items():
         if digest(game/name)!=expected:
             raise RuntimeError(f'Build artifact changed: {name}. Rebuild first.')
-    if not (game/'fm4_launcher.exe').is_file():
-        raise RuntimeError('Run build first: game-build has no fm4_launcher.exe.')
+    if not (game/LAUNCHER_EXE).is_file():
+        raise RuntimeError(f'Run build first: game-build has no {LAUNCHER_EXE}.')
     out=Path(out).resolve()
     if out==root or root in out.parents or out in root.parents or out==REPO or REPO in out.parents \
             or out in REPO.parents:
@@ -2075,7 +2080,11 @@ def export(root,out,jobs):
     (out/'game-build').mkdir(parents=True,exist_ok=True)
     for name in report['artifacts']:
         shutil.copyfile(game/name,out/'game-build'/name)
-    shutil.copyfile(game/'fm4_launcher.exe',out/'fm4_launcher.exe')
+    shutil.copyfile(game/LAUNCHER_EXE,out/LAUNCHER_EXE)
+    if (out/OLD_LAUNCHER_EXE).is_file():
+        (out/OLD_LAUNCHER_EXE).unlink()
+        print(f'Removed the old {OLD_LAUNCHER_EXE} of this export: start {LAUNCHER_EXE} instead '
+              '(its settings stay).')
     shutil.copyfile(root/'build-result.json',out/'build-result.json')
     # With CREDITS.txt and third-party-notices, the licenses of the third-party code in the binaries.
     stage_launcher_files(out)
@@ -2087,7 +2096,7 @@ def export(root,out,jobs):
         settings.write_text(json.dumps({'disc1':state['disc1'],'disc2':state['disc2'] or '',
                                         'content':state.get('content') or []},indent=1),
                             encoding='utf-8')
-    print(f'Exported to {out}. Run fm4_launcher.exe there; it imports Disc 2 and the content '
+    print(f'Exported to {out}. Run {LAUNCHER_EXE} there; it imports Disc 2 and the content '
           'packages on its first run.')
 
 def warm_cache(root):

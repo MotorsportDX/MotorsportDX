@@ -4,7 +4,7 @@ Motorsport DX runs **Forza Motorsport 4** (Xbox 360), recompiled for Windows x64
 
 The repository does not include the game, original assets, recompiled code, or a ready-to-run binary. Cloning is not enough: prepare the game data and build prerequisites first.
 
-Motorsport DX is not affiliated with or endorsed by Microsoft, Xbox Game Studios or Turn 10 Studios. Forza Motorsport and Xbox are trademarks of the Microsoft group of companies. The project was called FM4-PC until 25 October 2026; the repository, its folders and the program files (`fm4_rex.exe`, `fm4_launcher.exe`) keep that name for now.
+Motorsport DX is not affiliated with or endorsed by Microsoft, Xbox Game Studios or Turn 10 Studios. Forza Motorsport and Xbox are trademarks of the Microsoft group of companies. The project was called FM4-PC until 25 October 2026. Its GUI launcher is `MotorsportDX.exe` since 26 October 2026 (`fm4_launcher.exe` before); the game's own program files (`fm4_rex.exe` and its DLLs), the `FM4_*` variables, the folders and the repository keep their FM4 names as internal names ([why](docs/analysis/preview.md#4-internal-names)).
 
 ## Status
 
@@ -91,7 +91,7 @@ Generated source, binaries, and logs stay in `BuildRoot`. Do not commit or uploa
 
 By default the game runs in full screen on the primary monitor (`-Display native`), at `high` quality, with the `aces` look (`pc` is its earlier name). That look adds the project's post-processing, car paint clearcoat, screen-space ambient occlusion, TAA, a lighter cockpit interior and cockpit window glass; `gt` and `neutral` have the same mods with another tone curve. With a discrete GPU the default render path is RTV: a 16:9 picture at a whole multiple of 720p, with races in one tile without MSAA. `-Native` (the default with integrated GPUs only) renders races in one pass with 2x MSAA at the screen's own resolution and aspect, Hor+ on ultrawide screens. `-Look original` returns the FM4 look with TAA only, and `-Look "original,taa=0"` the unmodified picture. Quick Race holds a steady 60 fps on the development computer. Frequently used options include `-FrameRate 120` (30 to 240), `-Quality xbox|high|ultra`, `-Supersample`, and `-Info`, which shows a settings overlay that F2 toggles. The launcher reads the disc locations saved during `generate`. Discs are read from their input locations, and the game directory is not written to. Old saves are not copied automatically. Run options, look knobs, keyboard and controller controls, and data directories are described in [docs/running.md](docs/running.md).
 
-`build` also builds a GUI launcher, `BuildRoot\game-build\fm4_launcher.exe`, which offers the same options, profiles, look sliders, key bindings, and Disc and content checks, and starts the game without Python or Visual Studio. To play on another computer, export the build and copy the folder there:
+`build` also builds a GUI launcher, `BuildRoot\game-build\MotorsportDX.exe`, which offers the same options, profiles, look sliders, key bindings, and Disc and content checks, and starts the game without Python or Visual Studio. To play on another computer, export the build and copy the folder there:
 
 ```powershell
 .\outputs\FM4-build\Build.ps1 -Action export @common -Out 'E:\FM4-portable'
@@ -177,7 +177,7 @@ Motorsport DX would not exist without the people and projects below.
 - The tools that build it: LLVM and Clang, CMake and Ninja, Python, Git, Microsoft's Visual Studio build tools, the Windows SDK with its shader compiler (FXC), and the DirectX Shader Compiler.
 - Turn 10 Studios, who made Forza Motorsport 4.
 
-The same thanks are in [CREDITS.txt](outputs/FM4-build/CREDITS.txt), which `build` and `export` put beside `fm4_launcher.exe`, and on the GUI launcher's About page.
+The same thanks are in [CREDITS.txt](outputs/FM4-build/CREDITS.txt), which `build` and `export` put beside `MotorsportDX.exe`, and on the GUI launcher's About page.
 
 ### Third-party code
 

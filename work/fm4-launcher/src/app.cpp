@@ -400,7 +400,7 @@ bool App::Init(int argc, char** argv) {
     load_error_ = std::string(error.what()) + ". Run Build.ps1 -Action build or -Action export again.";
   }
   if (!fs::exists(root_ / "game-build" / "fm4_rex.exe"))
-    load_error_ = "No game-build\\fm4_rex.exe beside the launcher. Keep fm4_launcher.exe in its export folder.";
+    load_error_ = "No game-build\\fm4_rex.exe beside the launcher. Keep MotorsportDX.exe in its export folder.";
   settings_path_ = root_ / "launcher-settings.json";
   settings_ = Settings::Load(settings_path_);
   if (settings_.disc1.empty() && fs::exists(root_ / "local.json")) {

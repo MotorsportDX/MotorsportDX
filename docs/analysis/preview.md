@@ -82,3 +82,32 @@ the preview cannot start without it.
    task is the clean setup, then the coverage gaps above, reported as [bug reports](../bug-reports.md) asks.
 3. Before a public preview: the soak test, the owner's open tests, the license of the project's
    own code, the confirmation of the open license items, and a reporting place.
+
+## 4. Internal names
+
+The project is Motorsport DX since 25 October 2026. What players see carries that name: the
+README and the docs, the GUI launcher `MotorsportDX.exe` (since 26 October 2026; it was
+`fm4_launcher.exe`), its window and About page, the game window's title and the notices. The
+other FM4 names stay, as internal names that players do not need to read:
+
+- `fm4_rex.exe`, `fm4_rex_XMediaFacade_default.dll` and `fm4_rex_SpeechFacade_default.dll`.
+  The recompiler names them after the project's codegen name, which is also the runtime's app
+  name (`GetName()`): the config file beside the program, the log's name and the default user
+  folder. `pipeline.py`, the launcher, `build-result.json`, every e2e baseline and snapshot, and
+  every export name these files; renaming them breaks the comparisons with earlier gates and
+  needs a rebuild of every BuildRoot.
+- The `FM4_*` environment variables. The title code, both launchers, the e2e harness and every
+  documented A/B recipe use them; players never type them.
+- The folders (`work/fm4-rex`, `work/fm4-launcher`, `outputs/FM4-build`,
+  `outputs/FM4-source-control`), the BuildRoot and export defaults, and the repository folder.
+  `tracked-files.json`, `.gitignore`, `check-staged-content.py` and hundreds of links name
+  them, every open branch would conflict with a move, and the repository folder's path keys the
+  development tools' own project data.
+- The GitHub repository name, which only the project owner can change.
+
+The launcher's program file was renamed because players start it and make shortcuts to it. Its
+settings (`launcher-settings.json`, `launcher.json`) are found by folder and keep loading; old
+shortcuts to `fm4_launcher.exe` need pointing at `MotorsportDX.exe`
+([GUI launcher](../running.md#gui-launcher)). A forwarding `fm4_launcher.exe` was not built: the
+old name was used on two computers, and a second program would need its own build, tests and
+notices.

@@ -41,12 +41,18 @@ switch to a window (see [Keyboard](#keys)).
 
 ## GUI launcher
 
-`build` builds `fm4_launcher.exe` into `BuildRoot\game-build`, beside the game. It is
+`build` builds `MotorsportDX.exe` into `BuildRoot\game-build`, beside the game. It is
 a window with the options of `Build.ps1 -Action run` that starts the game itself: it
 needs neither Python nor Visual Studio nor the repository, so it also runs from an
 [export](#export-to-another-computer) on another computer. Start it by double-clicking
-`fm4_launcher.exe`. `fm4_launcher.exe --play` presses Play at once with the active
+`MotorsportDX.exe`. `MotorsportDX.exe --play` presses Play at once with the active
 profile, for a desktop shortcut.
+
+The launcher was `fm4_launcher.exe` until 26 October 2026. `build` and `export` now remove that
+old file from `game-build` and from an earlier export, so a shortcut to it stops working
+instead of starting a launcher older than its game: point the shortcut at `MotorsportDX.exe`
+in the same folder. The settings stay, because the launcher finds `launcher.json` and
+`launcher-settings.json` by its folder, not by its name.
 
 The launch rules stay in [pipeline.py](../outputs/FM4-build/pipeline.py): `build`
 writes their tables (the runtime settings, the look presets and knobs, the quality
@@ -117,7 +123,7 @@ repository:
 .\outputs\FM4-build\Build.ps1 -Action export -BuildRoot 'D:\FM4-build' -LLVMRoot 'C:\Program Files\LLVM' -Python 'C:\Python311\python.exe' -Out 'E:\FM4-portable'
 ```
 
-The folder holds `fm4_launcher.exe`, `game-build` (the executable, the two modules and
+The folder holds `MotorsportDX.exe`, `game-build` (the executable, the two modules and
 the runtime DLLs of `build-result.json`), `look`, `passes`, the shader cache (`cache`),
 `launcher.json`, `build-result.json`, `CREDITS.txt` (the projects that made it possible), the
 license notices of the third-party code in the binaries (`third-party-notices`), and a first
@@ -132,7 +138,7 @@ On the other computer:
 1. Install the Microsoft Visual C++ 2015-2022 Redistributable (x64), recent enough
    to have `MSVCP140_ATOMIC_WAIT.dll`. The GPU must support Direct3D 12.
 2. Copy the export folder and your extracted discs to it.
-3. Start `fm4_launcher.exe`, set Disc 1, Disc 2 and the content on the Game data page,
+3. Start `MotorsportDX.exe`, set Disc 1, Disc 2 and the content on the Game data page,
    and press Play. The first Play imports Disc 2 and the content packages into
    `user-data` in the export folder; it needs free space of about the size of the
    packages.

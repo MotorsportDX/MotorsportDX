@@ -72,9 +72,9 @@ Reviewed on 25 October 2026 against the build's CMake files, the link map of `fm
 |---|---|---|---|---|
 | ReXGlue SDK, with Xenia-derived portions | `f5337cd` (the fork in `work/runtime`) | BSD-3-Clause | every binary but the launcher | keep the notice in source and in the documentation of binaries |
 | XenonRecomp (the PPC context, function wrappers and SIMD patterns that ReXGlue bases on it) | in the fork's `include/rex/ppc` and `src/codegen/config.cpp` | MIT | the runtime, the game's code, `rexglue.exe` | the notice in all copies, in `XenonRecomp-LICENSE.txt` |
-| SDL 3, altered by `outputs/FM4-build/sdl3-gameinput-v3.patch` | `8bf3b72` (3.5.0 development) | zlib | `rexruntime.dll`, `fm4_launcher.exe` | none for binaries; keep the notice in source and mark the altered source, which the patch does |
-| Microsoft.GameInput (the API v3 header and its loader, in SDL's GameInput driver) | 3.5.283 | MIT (those two files only) | `rexruntime.dll`, `fm4_launcher.exe`, inside SDL | the notice in all copies; see [below](#third-party-code-microsoftgameinput) |
-| Dear ImGui | 1.92.5 (`6d910d5`) | MIT | `rexruntime.dll`, `fm4_launcher.exe` | the notice in all copies |
+| SDL 3, altered by `outputs/FM4-build/sdl3-gameinput-v3.patch` | `8bf3b72` (3.5.0 development) | zlib | `rexruntime.dll`, `MotorsportDX.exe` | none for binaries; keep the notice in source and mark the altered source, which the patch does |
+| Microsoft.GameInput (the API v3 header and its loader, in SDL's GameInput driver) | 3.5.283 | MIT (those two files only) | `rexruntime.dll`, `MotorsportDX.exe`, inside SDL | the notice in all copies; see [below](#third-party-code-microsoftgameinput) |
+| Dear ImGui | 1.92.5 (`6d910d5`) | MIT | `rexruntime.dll`, `MotorsportDX.exe` | the notice in all copies |
 | {fmt} | 12.1.0 | MIT with an object code exception | `rexruntime.dll`, `fm4_rex.exe` | none for object code |
 | spdlog | `79524dd` | MIT | `rexruntime.dll`, `fm4_rex.exe` | the notice in all copies |
 | FFmpeg (libavcodec, libavutil; Xenia's fork) | `0604b46` | LGPL 2.1 or later (configured without GPL parts) | `rexruntime.dll`, static | license text, source offer, relinking; see [LGPL](#lgpl-ffmpeg-and-libmspack) |
@@ -84,7 +84,7 @@ Reviewed on 25 October 2026 against the build's CMake files, the link map of `fm
 | SIMD Everywhere | 0.8.2 | MIT | `rexruntime.dll` and the game's generated code (header code) | the notice in all copies |
 | CLI11 | `bfffd37` | BSD-3-Clause style | `rexruntime.dll`, `rexglue.exe` | the notice in the documentation of binaries |
 | inja | 3.5.0 | MIT | `rexglue.exe` (build time only) | the notice in all copies |
-| JSON for Modern C++ (nlohmann/json, from inja) | 3.11.3 | MIT | `fm4_launcher.exe`, `rexglue.exe` | the notice in all copies |
+| JSON for Modern C++ (nlohmann/json, from inja) | 3.11.3 | MIT | `MotorsportDX.exe` (the launcher), `rexglue.exe` | the notice in all copies |
 | UTF8-CPP | `63d64de` | Boost Software License 1.0 | `rexruntime.dll` | none for object code |
 | o1heap | 3.0.0 | MIT | `rexruntime.dll` | the notice in all copies |
 | aes_128, DES, TinySHA1, SHA-256, Rijndael, `pe_image.h`, disruptorplus, `renderdoc_app.h`, the DXC API headers, stb_image, DXBCChecksum (vendored by the SDK, mostly from Xenia) | the SDK's commit | MIT, ISC style, zlib, public domain, NCSA, RSA MD5 notice; two without a stated license (see [open items](#open-items-before-a-public-release)) | `rexruntime.dll`, `rexgpu-xenos.dll` | the notices, quoted in `Vendored-code-NOTICES.txt` |

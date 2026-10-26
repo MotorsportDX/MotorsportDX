@@ -1,4 +1,5 @@
-# fm4_launcher - the GUI launcher (docs/running.md#gui-launcher)
+# fm4_launcher - the GUI launcher, MotorsportDX.exe (docs/running.md#gui-launcher). The target and
+# folder keep the internal name; only the program file carries the project's name.
 #
 # Built by pipeline.py build against the installed runtime's SDL3 and the runtime source's
 # Dear ImGui and JSON header (FM4_THIRDPARTY: <BuildRoot>/runtime-source/thirdparty).
@@ -39,3 +40,4 @@ target_include_directories(fm4_launcher PRIVATE
 )
 target_compile_definitions(fm4_launcher PRIVATE UNICODE _UNICODE NOMINMAX WIN32_LEAN_AND_MEAN)
 target_link_libraries(fm4_launcher PRIVATE SDL3::SDL3-static d3d11 dxgi d3dcompiler bcrypt shcore shell32 advapi32 user32)
+set_target_properties(fm4_launcher PROPERTIES OUTPUT_NAME MotorsportDX)
