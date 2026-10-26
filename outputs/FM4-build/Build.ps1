@@ -35,7 +35,7 @@ param(
     [switch]$ShaderDev,
     [string]$TextureDump,
     [string]$TextureReplace,
-    [ValidateSet('xbox','high','ultra')][string]$Quality
+    [ValidateSet('low','medium','high','extrahigh','ultra','xbox')][string]$Quality
 )
 $ErrorActionPreference = 'Stop'
 if ($env:OS -ne 'Windows_NT') { throw 'This workflow supports Windows x64.' }

@@ -1088,16 +1088,22 @@ void App::DisplayPage() {
                  "Off: at once, tearing allowed.");
   if (Segment("vsync", vsync, {"Auto", "On", "Off"})) o.vsync = vsync == 0 ? "" : vsyncs[vsync];
 
-  const char* qualities[] = {"xbox", "high", "ultra"};
-  int quality = 1;
-  for (int i = 0; i < 3; ++i)
-    if (o.quality == qualities[i]) quality = i;
-  Label("Race quality");
-  if (Segment("quality", quality, {"Xbox", "High", "Ultra"})) o.quality = quality == 1 ? "" : qualities[quality];
+  // -Quality: five tiers of race detail (pipeline.py QUALITY_PRESETS); xbox, the name of Medium
+  // until 26 October 2026, is its alias.
+  const char* qualities[] = {"low", "medium", "high", "extrahigh", "ultra"};
+  int quality = 2;
+  for (int i = 0; i < 5; ++i)
+    if (o.quality == qualities[i] || (i == 1 && o.quality == "xbox")) quality = i;
+  Label("Race quality", "Race detail only: the render scale and the upscaler change the GPU time far more.");
+  if (Segment("quality", quality, {"Low", "Medium", "High", "Extra High", "Ultra"}))
+    o.quality = quality == 2 ? "" : qualities[quality];
   ImGui::SameLine();
-  static const char* quality_help[] = {"The game's own race settings.",
-                                       "Soft particles, object shadows, full detail cars and wheels.",
-                                       "High, every car at top detail, the mirror every frame."};
+  static const char* quality_help[] = {
+      "The game's own, fewer cars in the mirror, lighter ambient occlusion.",
+      "The game's own race settings with soft particles.",
+      "Object shadows, full detail wheels, car detail twice as far.",
+      "High, every car at top detail, finer ambient occlusion.",
+      "Extra High, the mirror every frame, 4x MSAA where the scale allows."};
   ImGui::TextColored(kMuted, "%s", quality_help[quality]);
 
   bool taa = true;

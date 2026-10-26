@@ -191,16 +191,75 @@ Pairs LookCvars(const LauncherData& data, const std::string& root, const std::st
   return cvars;
 }
 
+// quality_preset of pipeline.py: the tier of a -Quality value, the default for an empty one,
+// an alias resolved.
+std::string QualityPreset(const LauncherData& data, const std::string& quality) {
+  const Json& tables = data.json.at("quality");
+  std::string preset = quality.empty() ? tables.at("default").get<std::string>() : quality;
+  if (tables.at("aliases").contains(preset)) preset = tables.at("aliases").at(preset).get<std::string>();
+  if (!tables.at("presets").contains(preset))
+    throw PlanError("Unknown quality '" + preset + "'; use " + Names(tables.at("presets")) + ", " +
+                    Names(tables.at("aliases")) + ".");
+  return preset;
+}
+
 std::string RaceSettings(const LauncherData& data, const std::string& quality, bool single_tile) {
-  const Json& presets = data.json.at("quality").at("presets");
-  if (!presets.contains(quality))
-    throw PlanError("Unknown quality '" + quality + "'; use " + Names(presets) + ".");
   std::vector<std::string> settings;
-  for (const auto& setting : presets.at(quality)) {
+  for (const auto& setting : data.json.at("quality").at("presets").at(QualityPreset(data, quality))) {
     const std::string text = setting.get<std::string>();
     if (!(single_tile && text.starts_with("TilingScenario="))) settings.push_back(text);
   }
   return Join(settings, ";");
+}
+
+// quality_cvars of pipeline.py: the tier's GTAO_QUALITY added to shader_mod_defines where the
+// post passes run and it differs from passes.toml's; a GTAO_QUALITY already there wins.
+Pairs QualityCvars(const LauncherData& data, const std::string& quality, const Pairs& cvars) {
+  Pairs result;
+  const int gtao = data.json.at("quality").at("gtao").at(QualityPreset(data, quality)).get<int>();
+  std::vector<std::string> defines;
+  for (const auto& part : Split(cvars.Get("shader_mod_defines"), ';'))
+    if (!part.empty()) defines.push_back(part);
+  if (!cvars.Has("post_pass_path") ||
+      std::any_of(defines.begin(), defines.end(),
+                  [](const std::string& d) { return d.starts_with("GTAO_QUALITY="); }) ||
+      gtao == static_cast<int>(data.json.at("gtao").at("GTAO_QUALITY").get<double>()))
+    return result;
+  defines.push_back("GTAO_QUALITY=" + std::to_string(gtao));
+  result.Set("shader_mod_defines", Join(defines, ";"));
+  return result;
+}
+
+// quality_msaa_samples of pipeline.py: the tier's one-pass MSAA on the native path (ultra's 4x
+// where the native plan is a whole scale at 16:9 without -Upscale, so that 4x renders the same
+// picture as 2x; otherwise msaa_samples as given) and a note for the description.
+std::pair<int, std::string> QualityMsaaSamples(const LauncherData& data, const Options& options,
+                                               bool native, int msaa_samples,
+                                               const std::string& display, const Monitor& monitor) {
+  const std::string preset = QualityPreset(data, options.quality);
+  const Json& tiers = data.json.at("quality").at("msaa");
+  if (!tiers.contains(preset) || !native || msaa_samples >= 0 || options.single_tile ||
+      options.msaa || options.rov)
+    return {msaa_samples, ""};
+  const int samples = tiers.at(preset).get<int>();
+  const std::string name = data.json.at("quality").at("names").at(preset).get<std::string>();
+  bool whole = false;
+  try {
+    if (UpscaleRatio(data, options.upscale) == 1.0) {
+      const auto scene = DisplaySettings(data, display, options.fullscreen, options.supersample,
+                                         options.resolution_scale, monitor, true).first.Items();
+      const auto plain = DisplaySettings(data, display, options.fullscreen, options.supersample,
+                                         options.resolution_scale, monitor, false).first.Items();
+      whole = std::map<std::string, std::string>(scene.begin(), scene.end()) ==
+              std::map<std::string, std::string>(plain.begin(), plain.end());
+    }
+  } catch (const PlanError&) {
+    whole = false;
+  }
+  const std::string count = std::to_string(samples);
+  if (whole) return {samples, "; " + name + ": " + count + "x MSAA"};
+  return {msaa_samples,
+          "; " + name + ": 2x MSAA (" + count + "x needs a whole scale at 16:9 without -Upscale)"};
 }
 
 std::string InfoOverlay(const LauncherData& data, const Pairs& cvars, const Pairs& env,
@@ -219,7 +278,19 @@ std::string InfoOverlay(const LauncherData& data, const Pairs& cvars, const Pair
   if (env.Get("FM4_TILING_SCENARIO") == "2")
     tiling = std::string(", single tile") +
              (cvars.Get("swap_post_effect") == "fxaa" ? " with FXAA" : "");
-  lines.push_back("Quality: " + quality + (quality == "xbox" ? " (the game's own)" : "") + tiling);
+  const Json& qualities = data.json.at("quality");
+  const std::string preset = QualityPreset(data, quality);
+  std::string msaa;
+  const std::string samples = env.Get("FM4_ONE_PASS_MSAA");
+  if (qualities.at("msaa").contains(preset) && !samples.empty()) {
+    const int tier_samples = qualities.at("msaa").at(preset).get<int>();
+    msaa = ", " + samples + "x MSAA" +
+           (std::stoi(samples) < tier_samples
+                ? " (" + std::to_string(tier_samples) + "x needs a whole scale at 16:9 without -Upscale)"
+                : "");
+  }
+  lines.push_back("Quality: " + qualities.at("names").at(preset).get<std::string>() +
+                  (preset == "medium" ? " (the game's own with soft particles)" : "") + tiling + msaa);
   const Json& tables = data.Look();
   std::map<std::string, std::string> knob_names, tonemaps;
   for (const auto& [name, define] : tables.at("knobs").items())
@@ -902,6 +973,11 @@ Plan LaunchPlan(const LauncherData& data, const std::string& root, const std::st
   const std::string look =
       options.look.empty() ? data.Look().at("default").get<std::string>() : options.look;
   const Pairs knobs = LookKnobs(data, look);
+  // The quality tier (an alias resolved), and ultra's 4x MSAA where it keeps the picture.
+  const std::string quality = QualityPreset(data, options.quality);
+  const std::string display = options.display.empty()
+                                  ? data.json.at("default_display").get<std::string>()
+                                  : options.display;
   // One pass with MSAA on the native path: -Native runs it with 2x unless -MsaaSamples 4 (4x),
   // -MsaaSamples 0 (one tile without MSAA), -SingleTile or -Msaa says otherwise.
   if (options.msaa_samples != -1 && options.msaa_samples != 0 && options.msaa_samples != 2 &&
@@ -917,15 +993,15 @@ Plan LaunchPlan(const LauncherData& data, const std::string& root, const std::st
   if (options.msaa_samples >= 0 && !native)
     throw PlanError("-MsaaSamples is the native path's one-pass MSAA: use it with -Native.");
   int msaa_samples = options.msaa_samples;
+  std::string quality_note;
+  std::tie(msaa_samples, quality_note) =
+      QualityMsaaSamples(data, options, native, msaa_samples, display, monitor);
   if (native && msaa_samples < 0 && !options.single_tile && !options.msaa && !options.rov)
     msaa_samples = 2;
   const bool one_pass = msaa_samples > 0;
   const bool single_tile =
       !one_pass && (options.single_tile || msaa_samples == 0 ||
                     (TaaEnabled(knobs) && !options.rov && !options.msaa));
-  const std::string quality = options.quality.empty()
-                                  ? data.json.at("quality").at("default").get<std::string>()
-                                  : options.quality;
   const std::string settings = RaceSettings(data, quality, single_tile || one_pass);
   if (!settings.empty()) env.Set("FM4_RACE_SETTINGS", settings);
   for (const auto& [name, value] : data.json.at("cvars").items()) {
@@ -968,9 +1044,6 @@ Plan LaunchPlan(const LauncherData& data, const std::string& root, const std::st
       cvars.Set("native_rt_surfaces", "26");
     }
   }
-  const std::string display = options.display.empty()
-                                  ? data.json.at("default_display").get<std::string>()
-                                  : options.display;
   auto [screen, description] = DisplaySettings(data, display, options.fullscreen,
                                                options.supersample, options.resolution_scale,
                                                monitor, native && msaa_samples == 2,
@@ -979,7 +1052,7 @@ Plan LaunchPlan(const LauncherData& data, const std::string& root, const std::st
   const auto [upscaled, upscale_description] =
       UpscaleSettings(data, options.upscale, cvars, AaMethod(knobs), native && msaa_samples == 2);
   Update(cvars, upscaled);
-  description += upscale_description;
+  description += upscale_description + quality_note;
   if (!options.entry0.empty() && options.entry0 != "s" && options.entry0 != "k")
     throw PlanError("Unknown -Entry0 '" + options.entry0 + "'; use s, k.");
   if (native && msaa_samples == 2 && options.entry0 != "k") {
@@ -1001,6 +1074,7 @@ Plan LaunchPlan(const LauncherData& data, const std::string& root, const std::st
   const std::string track = LookTrackSettings(data, knobs);
   if (!track.empty()) env.Set("FM4_TRACK_SETTINGS", track);
   Update(cvars, AoCvars(root, options.ao));
+  Update(cvars, QualityCvars(data, quality, cvars));
   if (!options.texture_dump.empty())
     cvars.Set("texture_dump_path", ResolvePath(options.texture_dump));
   if (!options.texture_replace.empty()) {

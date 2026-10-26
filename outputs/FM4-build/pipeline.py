@@ -914,27 +914,84 @@ LOOK_PRESETS={'aces':'tonemap=aces,'+_LOOK_MODS,'gt':'tonemap=gt,'+_LOOK_MODS,
 LOOK_ALIASES={'pc':'aces'}
 DEFAULT_LOOK='aces'
 
-# Render quality of races (FM4_RACE_SETTINGS, fm4-render-overrides.cpp: controls of the race
-# render scenarios). xbox keeps the title's own. high gives races what its replays and photo
-# mode have: 4x MSAA (TilingScenario 0 instead of 1, 2x), soft particles, shadows of
-# collidable objects, full detail wheels, car LOD transitions twice as far, and undoes the
-# 16 car cuts (a cheaper car shader, no damage, environment map never updated, half rate bloom,
-# no collidables in the mirror). ultra also keeps every car at its top LOD and renders the
-# mirror every frame with every car.
+# Render quality of races, five tiers of detail (-Quality; measured in
+# docs/analysis/quality-presets.md). Each sets the race render scenarios (FM4_RACE_SETTINGS,
+# fm4-render-overrides.cpp: controls of the race render scenarios), the GTAO quality of the
+# look's ambient occlusion (QUALITY_GTAO) and, for ultra, 4x MSAA on the native path where it
+# keeps the picture (QUALITY_MSAA); the render scale, -Upscale and the look stay separate.
+# Every tier has SoftParticles: without it the title resolves no scene depth in races, and the
+# look's scene passes (GTAO, TAA, the windshield) do not run there.
+# low: the title's own with fewer cars and no collidables in the mirror (its other cuts, crowd,
+# car LOD distances, half rate bloom and the particle rate, saved nothing measurable; the 16 car
+# shader turns the player's paint white). medium: the title's own (xbox, its alias, which had
+# no SoftParticles until 26 October 2026). high gives races what its replays and photo mode have:
+# 4x MSAA (TilingScenario 0 instead of 1, 2x), shadows of collidable objects, full detail
+# wheels, car LOD transitions twice as far, and undoes the 16 car cuts (a cheaper car shader,
+# no damage, environment map never updated, half rate bloom, no collidables in the mirror).
+# extrahigh also keeps every car at its top LOD; ultra also renders the mirror every frame with
+# every car. The tiling scenario applies only where races keep the title's tiles (-Msaa, -Rov,
+# a look without TAA).
 _HIGH=['TilingScenario=0','SoftParticles=1','CollidableShadows=1','CarMinWheelLOD=0',
        'CarLODTransDist=near:30.0,far:50.0,veryfar:100.0','CarShader=-','CarDamage=1',
        'CarDamageTextures=1','EnvMapFrequencyScale=1.0','HalfRateBloom=-','CollidablesInMirror=-']
-QUALITY_PRESETS={'xbox':[],'high':_HIGH,
+QUALITY_PRESETS={'low':['SoftParticles=1','MaxCarsInMirror=3','CollidablesInMirror=0'],
+                 'medium':['SoftParticles=1'],'high':_HIGH,
+                 'extrahigh':_HIGH+['CarKeepLOD0=1'],
                  'ultra':_HIGH+['CarKeepLOD0=1','HalfRateMirror=0','MaxCarsInMirror=11']}
+QUALITY_ALIASES={'xbox':'medium'}
+QUALITY_NAMES={'low':'Low','medium':'Medium','high':'High','extrahigh':'Extra High','ultra':'Ultra'}
+# GTAO_QUALITY (work/fm4-rex/passes/passes.toml: 0 2x2 slices x steps, 1 2x4, 2 3x6, 3 4x8),
+# set where it differs from passes.toml's own (2).
+QUALITY_GTAO={'low':0,'medium':1,'high':2,'extrahigh':3,'ultra':3}
+# One pass with 4x MSAA on the native path, where it renders the same picture as 2x.
+QUALITY_MSAA={'ultra':4}
 DEFAULT_QUALITY='high'
+
+def quality_preset(quality):
+    """The tier of a -Quality value: DEFAULT_QUALITY for None, an alias resolved."""
+    quality=DEFAULT_QUALITY if quality is None else QUALITY_ALIASES.get(quality,quality)
+    if quality not in QUALITY_PRESETS:
+        raise RuntimeError(f'Unknown quality {quality!r}; use '
+                           f'{", ".join([*QUALITY_PRESETS,*QUALITY_ALIASES])}.')
+    return quality
 
 def race_settings(quality,single_tile=False):
     """FM4_RACE_SETTINGS of a quality preset; one tile (-SingleTile, auto_single_tile) keeps its
     own tiling scenario."""
-    if quality not in QUALITY_PRESETS:
-        raise RuntimeError(f'Unknown quality {quality!r}; use {", ".join(QUALITY_PRESETS)}.')
-    return ';'.join(s for s in QUALITY_PRESETS[quality]
+    return ';'.join(s for s in QUALITY_PRESETS[quality_preset(quality)]
                     if not (single_tile and s.startswith('TilingScenario=')))
+
+def quality_cvars(quality,cvars):
+    """The tier's GTAO quality: GTAO_QUALITY added to shader_mod_defines where the post passes
+    run (post_pass_path) and the tier's differs from passes.toml's; a GTAO_QUALITY already
+    there wins."""
+    gtao=QUALITY_GTAO[quality_preset(quality)]
+    defines=[d for d in str(cvars.get('shader_mod_defines','')).split(';') if d]
+    if ('post_pass_path' not in cvars or any(d.startswith('GTAO_QUALITY=') for d in defines) or
+            gtao==int(passes_settings(cvars['post_pass_path'],{})['GTAO_QUALITY'])):
+        return {}
+    return {'shader_mod_defines':';'.join(defines+[f'GTAO_QUALITY={gtao}'])}
+
+def quality_msaa_samples(quality,native,msaa_samples,single_tile,msaa,rov,display,fullscreen,
+                         supersample,resolution_scale,monitor,upscale):
+    """The one-pass MSAA of the tier on the native path and a note for the description: ultra's
+    4x where the native plan is a whole scale at 16:9 without -Upscale (one pass with 4x has no
+    fractional scale or logical size), so that 4x renders the same picture as 2x; otherwise
+    msaa_samples as given (None: launch_plan's 2x). -MsaaSamples, -SingleTile, -Msaa and -Rov
+    keep theirs."""
+    samples=QUALITY_MSAA.get(quality_preset(quality))
+    if not samples or not native or msaa_samples is not None or single_tile or msaa or rov:
+        return msaa_samples,''
+    name=QUALITY_NAMES[quality_preset(quality)]
+    try:
+        whole=(upscale_ratio(upscale)==1.0 and
+               display_settings(display,fullscreen,supersample,resolution_scale,monitor,True)[0]==
+               display_settings(display,fullscreen,supersample,resolution_scale,monitor,False)[0])
+    except ValueError:
+        whole=False
+    if whole:
+        return samples,f'; {name}: {samples}x MSAA'
+    return msaa_samples,f'; {name}: 2x MSAA ({samples}x needs a whole scale at 16:9 without -Upscale)'
 
 LOOK_DIRECTORY=REPO/'work/fm4-rex/look'
 # The runtime's post passes (docs/analysis/post-pass-framework.md): passes.toml and its HLSL.
@@ -1623,7 +1680,13 @@ def info_overlay(cvars,env,look,quality,display=None):
     lines=[(display or f'Render {scale}x ({1280*scale}x{720*scale})')+f', {downscale} downscale']
     tiling=(', single tile'+(' with FXAA' if cvars.get('swap_post_effect')=='fxaa' else '')
             if env.get('FM4_TILING_SCENARIO')=='2' else '')
-    lines.append(f'Quality: {quality}'+(" (the game's own)" if quality=='xbox' else '')+tiling)
+    quality=quality_preset(quality)
+    samples=env.get('FM4_ONE_PASS_MSAA')
+    msaa=(f', {samples}x MSAA'+(f' ({QUALITY_MSAA[quality]}x needs a whole scale at 16:9 without '
+                                 '-Upscale)' if int(samples)<QUALITY_MSAA[quality] else '')
+          if quality in QUALITY_MSAA and samples else '')
+    lines.append(f'Quality: {QUALITY_NAMES[quality]}'+
+                 (" (the game's own with soft particles)" if quality=='medium' else '')+tiling+msaa)
     knobs={value:name for name,value in LOOK_KNOBS.items()}
     tonemaps={str(float(number)):name for name,number in LOOK_NAMES['tonemap'].items()}
     defines=[part.split('=',1) for part in filter(None,cvars.get('shader_mod_defines','').split(';'))]
@@ -1822,6 +1885,11 @@ def launch_plan(root,disc1,single_tile=False,fixed_vblank=False,frame_rate=None,
         # xenia-canary/game-patches#398 workaround, no longer needed on this runtime.
         env['FM4_SHADOW_WORKAROUND']='1'
     look=DEFAULT_LOOK if look is None else look
+    # The quality tier (an alias resolved), and ultra's 4x MSAA where it keeps the picture.
+    quality=quality_preset(quality)
+    msaa_samples,quality_note=quality_msaa_samples(quality,native,msaa_samples,single_tile,msaa,rov,
+                                                   display,fullscreen,supersample,resolution_scale,
+                                                   monitor,upscale)
     # One pass with 2x MSAA on the native path (d3d-hle.md 16.17): the title's 2x scenario made
     # one 1280x720 tile, and the runtime's private scene depth. -Native runs it unless
     # -MsaaSamples 4 (one pass with 4x), 0 (one tile without MSAA), -SingleTile or -Msaa says
@@ -1834,7 +1902,7 @@ def launch_plan(root,disc1,single_tile=False,fixed_vblank=False,frame_rate=None,
         msaa_samples=2
     one_pass=bool(msaa_samples)
     single_tile=not one_pass and (single_tile or msaa_samples==0 or auto_single_tile(look,rov,msaa))
-    settings=race_settings(DEFAULT_QUALITY if quality is None else quality,single_tile or one_pass)
+    settings=race_settings(quality,single_tile or one_pass)
     if settings:
         env['FM4_RACE_SETTINGS']=settings
     cvars=launch_cvars(root,disc1,root/'logs/runtime.log')
@@ -1869,7 +1937,7 @@ def launch_plan(root,disc1,single_tile=False,fixed_vblank=False,frame_rate=None,
     upscaled,upscale_description=upscale_settings(upscale,cvars,aa_method(look_knobs(look)),
                                                   bool(native and msaa_samples==2))
     cvars.update(upscaled)
-    description+=upscale_description
+    description+=upscale_description+quality_note
     if native and msaa_samples==2 and entry0_scale(entry0)=='s':
         # The title's tiling entry 0 (the boot, the menus, photo mode) at the scene's scale: one
         # pass with 4x MSAA in a private 4x pair, photo mode in its three tiles there
@@ -1896,6 +1964,7 @@ def launch_plan(root,disc1,single_tile=False,fixed_vblank=False,frame_rate=None,
     if track_settings:
         env['FM4_TRACK_SETTINGS']=track_settings
     cvars.update(ao_cvars(root,ao,shader_dev))
+    cvars.update(quality_cvars(quality,cvars))
     # Texture dumps and replacements by content hash (docs/analysis/texture-replacement.md).
     if texture_dump:
         cvars['texture_dump_path']=Path(texture_dump).resolve()
@@ -1909,8 +1978,7 @@ def launch_plan(root,disc1,single_tile=False,fixed_vblank=False,frame_rate=None,
     cvars.update(pad_cvars(pad))
     cvars.update(keyboard_cvars(keyboard))
     # The settings overlay: F2 in game, shown at start with -Info.
-    env['FM4_INFO']=info_overlay(cvars,env,look,DEFAULT_QUALITY if quality is None else quality,
-                                 description)
+    env['FM4_INFO']=info_overlay(cvars,env,look,quality,description)
     if info:
         env['FM4_INFO_SHOW']='1'
     return cvars,env,description
@@ -1939,7 +2007,8 @@ def launcher_data():
                     'names':LOOK_NAMES,'presets':LOOK_PRESETS,'aliases':LOOK_ALIASES,
                     'default':DEFAULT_LOOK,'defaults':defaults},
             'sun_limit':SUN_LIMIT,
-            'quality':{'presets':QUALITY_PRESETS,'default':DEFAULT_QUALITY},
+            'quality':{'presets':QUALITY_PRESETS,'aliases':QUALITY_ALIASES,'names':QUALITY_NAMES,
+                       'gtao':QUALITY_GTAO,'msaa':QUALITY_MSAA,'default':DEFAULT_QUALITY},
             'displays':{name:list(size) for name,size in DISPLAYS.items()},
             'default_display':DEFAULT_DISPLAY,'max_resolution_scale':MAX_RESOLUTION_SCALE,
             'vsync':{'modes':list(VSYNC_MODES),'default':DEFAULT_VSYNC},
@@ -2045,7 +2114,20 @@ def launcher_test_options(root):
             {'native':True,'look':'pc,aa=taau','upscale':'1.25','display':'1080p'},
             {'native':True,'look':'pc,aa=taau'},
             {'native':True,'entry0':'k','display':'1080p'},
-            {'native':True,'look':'pc,aa=fsr','upscale':'quality','display':'1440p','entry0':'s'}]
+            {'native':True,'look':'pc,aa=fsr','upscale':'quality','display':'1440p','entry0':'s'},
+            # The quality tiers: their race settings and GTAO quality, ultra's 4x MSAA where the
+            # native plan keeps the picture (whole scales at 16:9) and 2x elsewhere.
+            {'native':True,'quality':'low','info':True},
+            {'native':True,'quality':'medium'},
+            {'native':True,'quality':'extrahigh','display':'1440p'},
+            {'native':True,'quality':'ultra','info':True},
+            {'native':True,'quality':'ultra','display':'4k'},
+            {'native':True,'quality':'ultra','supersample':True},
+            {'native':True,'quality':'ultra','msaa_samples':2},
+            {'native':True,'quality':'ultra','look':'pc,aa=taau','upscale':'quality','display':'1440p'},
+            {'quality':'ultra','look':'original,taa=0','single_tile':True},
+            {'rov':True,'quality':'low'},
+            {'quality':'low','look':'original,taa=0'}]
 
 def launcher_tests(root):
     """Compares MotorsportDX.exe's port of launch_plan, disc check and content search with this
@@ -2237,9 +2319,10 @@ def main():
                              'picture that fits it) on the native path in one pass')
     parser.add_argument('--full-rate-mirror',action='store_true',
                         help='run: render the rear-view mirror every frame in every race')
-    parser.add_argument('--quality',choices=list(QUALITY_PRESETS),
-                        help='run: render quality of races (default '+DEFAULT_QUALITY+'; xbox: the '
-                             "title's own)")
+    parser.add_argument('--quality',choices=[*QUALITY_PRESETS,*QUALITY_ALIASES],
+                        help='run: render quality of races, '+', '.join(QUALITY_PRESETS)+
+                             ' (default '+DEFAULT_QUALITY+"; medium, also xbox: the title's own "
+                             'with soft particles)')
     parser.add_argument('--shadow-workaround',action='store_true',
                         help='run: no shadow map outside the cockpit in races (the old Xenia workaround)')
     parser.add_argument('--rov',action='store_true',

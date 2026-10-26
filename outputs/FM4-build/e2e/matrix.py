@@ -122,6 +122,10 @@ def main():
     parser.add_argument('--msaa', action='store_true',
                         help='every cell keeps the tiles and MSAA of the quality with a look that has TAA '
                              '(Build.ps1 -Msaa)')
+    parser.add_argument('--quality', help="race quality of every cell as Build.ps1 -Quality (default: the "
+                                          "launcher's, high), for example extrahigh")
+    parser.add_argument('--native', action='store_true',
+                        help='every cell on the native path (e2e.py --native)')
     parser.add_argument('--fast-route', action='store_true',
                         help='cells with a fast route reach their race through the title\'s screen events '
                              '(e2e.py --fast-route); the others keep their menus')
@@ -150,6 +154,10 @@ def main():
         extra += ['--look', options.look]
     if options.msaa:
         extra += ['--msaa']
+    if options.quality:
+        extra += ['--quality', options.quality]
+    if options.native:
+        extra += ['--native']
     log = root / 'e2e' / f'{options.name}.log'
     log.parent.mkdir(parents=True, exist_ok=True)
     started, results = time.time(), []

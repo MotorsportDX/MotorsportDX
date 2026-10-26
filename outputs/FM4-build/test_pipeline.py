@@ -266,7 +266,7 @@ class PipelineTests(unittest.TestCase):
             overlay=pipeline.info_overlay(cvars,{'FM4_TILING_SCENARIO':'2'},'pc,taa=1','high')
             self.assertIn('Anti-aliasing: TAA before the HUD, sharpen 0.4, scene jittered while the '
                           'camera moves',overlay)
-            self.assertIn('Quality: high, single tile|',overlay)
+            self.assertIn('Quality: High, single tile|',overlay)
             self.assertNotIn('Anti-aliasing',pipeline.info_overlay(
                 pipeline.look_cvars(root,'pc,taa=0'),{},'pc,taa=0','high'))
 
@@ -283,6 +283,72 @@ class PipelineTests(unittest.TestCase):
         for quality in pipeline.QUALITY_PRESETS:
             self.assertNotIn('TilingScenario',pipeline.race_settings(quality,True))
         self.assertIn('TilingScenario=0',pipeline.race_settings('ultra'))
+
+    def test_quality_presets(self):
+        """The five tiers (docs/analysis/quality-presets.md): soft particles in every tier (the
+        scene depth that the look's scene passes need), the mirror cuts of low, the GTAO quality
+        of each tier where the passes run, xbox as medium's alias, and ultra's 4x MSAA on the
+        native path only where it renders the same picture as 2x."""
+        settings={quality:pipeline.race_settings(quality).split(';') for quality in pipeline.QUALITY_PRESETS}
+        self.assertEqual(list(settings),['low','medium','high','extrahigh','ultra'])
+        for quality,items in settings.items():
+            self.assertIn('SoftParticles=1',items,quality)
+        self.assertEqual(settings['low'],['SoftParticles=1','MaxCarsInMirror=3','CollidablesInMirror=0'])
+        self.assertEqual(settings['medium'],['SoftParticles=1'])
+        self.assertEqual(settings['extrahigh'],settings['high']+['CarKeepLOD0=1'])
+        self.assertEqual(settings['ultra'],settings['extrahigh']+['HalfRateMirror=0','MaxCarsInMirror=11'])
+        self.assertEqual(pipeline.race_settings('xbox'),pipeline.race_settings('medium'))
+        self.assertEqual(pipeline.quality_preset(None),'high')
+        self.assertEqual(pipeline.quality_preset('xbox'),'medium')
+        with self.assertRaises(RuntimeError):
+            pipeline.race_settings('extra')
+        disc=r'C:\FM4 test\Disc 1'
+        with tempfile.TemporaryDirectory(prefix='fm4 quality test ') as directory:
+            root=Path(directory)
+            cvars=pipeline.look_cvars(root,'pc')
+            self.assertEqual(pipeline.quality_cvars('high',cvars),{})
+            for quality,gtao in (('low',0),('medium',1),('xbox',1),('extrahigh',3),('ultra',3)):
+                defines=pipeline.quality_cvars(quality,cvars)['shader_mod_defines'].split(';')
+                self.assertEqual(defines[:-1],cvars['shader_mod_defines'].split(';'))
+                self.assertEqual(defines[-1],f'GTAO_QUALITY={gtao}')
+            self.assertEqual(pipeline.quality_cvars('low',{**cvars,'shader_mod_defines':'GTAO_QUALITY=3'}),{})
+            self.assertEqual(pipeline.quality_cvars('low',pipeline.look_cvars(root,'original,taa=0')),{})
+            def plan(monitor,**options):
+                return pipeline.launch_plan(root,disc,monitor=monitor,**options)
+            cvars,env,description=plan((2560,1440,1.0),native=True,quality='ultra')
+            self.assertEqual((env['FM4_TILING_SCENARIO'],env['FM4_ONE_PASS_MSAA'],cvars['native_one_pass_msaa'],
+                              cvars['draw_resolution_scale_x']),('3','4','4','2'))
+            self.assertIn('; Ultra: 4x MSAA;',description)
+            self.assertIn('Quality: Ultra, 4x MSAA|',env['FM4_INFO'])
+            self.assertIn('GTAO_QUALITY=3',cvars['shader_mod_defines'])
+            # A fractional scale, a logical size, -Upscale and a different whole scale keep 2x.
+            for monitor,options in (((1920,1080,1.0),{}),((2560,1600,1.5),{}),
+                                    ((1920,1080,1.0),{'supersample':True}),
+                                    ((2560,1440,1.0),{'upscale':'quality','look':'pc,aa=fsr'}),
+                                    ((2560,1440,1.0),{'resolution_scale':'panel'})):
+                cvars,env,description=plan(monitor,native=True,quality='ultra',**options)
+                self.assertEqual(env['FM4_ONE_PASS_MSAA'],'2',(monitor,options))
+                self.assertIn('; Ultra: 2x MSAA (4x needs a whole scale at 16:9 without -Upscale)',
+                              description)
+                self.assertIn('Quality: Ultra, 2x MSAA (4x needs a whole scale at 16:9 without '
+                              '-Upscale)',env['FM4_INFO'])
+            cvars,env,_=plan((1920,1080,1.5,120,48,120,True),quality='ultra')
+            self.assertEqual(env['FM4_ONE_PASS_MSAA'],'4')
+            for options in ({'msaa_samples':2},{'msaa_samples':0},{'single_tile':True}):
+                cvars,env,description=plan((2560,1440,1.0),native=True,quality='ultra',**options)
+                self.assertNotEqual(env.get('FM4_ONE_PASS_MSAA'),'4',options)
+                self.assertNotIn('Ultra:',description)
+            for options in ({},{'rov':True},{'msaa':True}):
+                cvars,env,description=plan((2560,1440,1.0),quality='ultra',**options)
+                self.assertNotIn('FM4_ONE_PASS_MSAA',env)
+                self.assertNotIn('Ultra:',description)
+            cvars,env,_=plan((2560,1440,1.0),native=True,quality='xbox')
+            self.assertEqual(env['FM4_RACE_SETTINGS'],'SoftParticles=1')
+            self.assertEqual(env['FM4_ONE_PASS_MSAA'],'2')
+            self.assertIn('GTAO_QUALITY=1',cvars['shader_mod_defines'])
+            self.assertIn("Quality: Medium (the game's own with soft particles)|",env['FM4_INFO'])
+            cvars,env,_=plan((2560,1440,1.0),native=True)
+            self.assertNotIn('GTAO_QUALITY',cvars['shader_mod_defines'])
 
     def test_windshield(self):
         """The windshield knob: the pass param WINDSHIELD, the post passes on, off by default and

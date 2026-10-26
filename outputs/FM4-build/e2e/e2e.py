@@ -1192,6 +1192,8 @@ def run_once(options, out):
         root, look, options.shader_dev, pipeline.scene_upscale_ratio(scale_args)).items()}
     args.update(look_args)
     args.update({k: str(v) for k, v in pipeline.ao_cvars(root, options.ao, options.shader_dev).items()})
+    # The quality tier's GTAO quality (pipeline.quality_cvars), before the --arg items.
+    args.update(pipeline.quality_cvars(options.quality, args))
     if freeze:
         # Before the --arg items; a --look given for the run keeps what it sets (its sun knob
         # sets the awaited scale and limit).
@@ -1241,7 +1243,16 @@ def run_once(options, out):
                         args.get('render_target_path_d3d12') != 'rov' and
                         not any(item.startswith('FM4_ONE_PASS_MSAA=') for item in options.env))
     if one_pass_default:
-        options.env = ['FM4_TILING_SCENARIO=1', 'FM4_ONE_PASS_MSAA=2'] + options.env
+        # The quality's one-pass MSAA (ultra's 4x) where the run keeps the whole scale at 16:9,
+        # as the launchers' quality_msaa_samples: not with a fractional scale, a logical size or
+        # upscaling given through --arg.
+        samples = pipeline.QUALITY_MSAA.get(pipeline.quality_preset(options.quality), 2)
+        if any(item.lstrip('-').startswith(('native_draw_scale=', 'native_logical_width=',
+                                            'native_logical_height=', 'native_scene_input_scale='))
+               for item in options.arg):
+            samples = 2
+        options.env = ([f'FM4_TILING_SCENARIO={1 if samples == 2 else 3}', f'FM4_ONE_PASS_MSAA={samples}']
+                       + options.env)
         tiling_given = True
     single_tile = not tiling_given and pipeline.auto_single_tile(
         look, args.get('render_target_path_d3d12') == 'rov', options.msaa)
@@ -1760,8 +1771,9 @@ def main():
     parser.add_argument('--arg', action='append', default=[], help='extra/override --cvar=value')
     parser.add_argument('--look', help='look like Build.ps1 -Look (default: the launcher\'s, aces), '
                                        'e.g. "original" or "aces,sharpen=0.6"')
-    parser.add_argument('--quality', help='race render quality like Build.ps1 -Quality '
-                                          '(default: the launcher\'s), e.g. xbox')
+    parser.add_argument('--quality', help='race render quality like Build.ps1 -Quality: low, medium '
+                                          '(also xbox), high, extrahigh or ultra (default: the '
+                                          'launcher\'s, high)')
     parser.add_argument('--native', action='store_true',
                         help='stage N1 of the native path (host_render_thread) like Build.ps1 -Native')
     parser.add_argument('--entry0', choices=['s', 'k'], default='s',
