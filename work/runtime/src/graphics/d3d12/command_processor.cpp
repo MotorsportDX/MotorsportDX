@@ -4414,7 +4414,7 @@ bool D3D12CommandProcessor::IssueDraw(xenos::PrimitiveType primitive_type, uint3
                                      convert_z_to_float24, host_render_targets_used,
                                      ps_writes_depth, viewport_info);
       draw_util::Scissor unused_scissor = {};
-      draw_back_end::ApplyLogicalWidth(draw_back_end::kFlagSceneScale | logical_flags,
+      draw_back_end::ApplyLogicalWidth(regs, draw_back_end::kFlagSceneScale | logical_flags,
                                        scene_draw_scale, viewport_info, unused_scissor);
     } else {
       draw_util::GetHostViewportInfo(regs, draw_resolution_scale_x * uniform_draw_scale_x,
@@ -4452,7 +4452,7 @@ bool D3D12CommandProcessor::IssueDraw(xenos::PrimitiveType primitive_type, uint3
   if (scene_draw) {
     draw_util::ScaleScissor(scene_draw_scale, scissor);
     draw_util::ViewportInfo unused_viewport = {};
-    draw_back_end::ApplyLogicalWidth(draw_back_end::kFlagSceneScale | logical_flags,
+    draw_back_end::ApplyLogicalWidth(regs, draw_back_end::kFlagSceneScale | logical_flags,
                                      scene_draw_scale, unused_viewport, scissor);
   } else {
     scissor.offset[0] *= draw_resolution_scale_x * uniform_draw_scale_x;

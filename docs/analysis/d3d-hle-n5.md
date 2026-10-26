@@ -502,4 +502,49 @@ GPU time a frame at 3/2 on this PC (medians of the screens' windows): the menus 
 
 Render target memory at 3/2 (`rt_memory`): 439.2 MB after the menus and through the race, 454.7 MB after photo mode, against 331.2 and 346.7 MB at k: the 4x pair at 720 lines takes 108 MB, and both pairs stay resident.
 
-Open: the scene passes in photo mode at fractional scales and logical sizes (the tiles' resolves at the scene's scale).
+Open: the scene passes in photo mode at fractional scales and logical sizes (the tiles' resolves at the scene's scale), done in 18.27.
+
+### 18.27 Photo mode's tiles at the scene's scale and at a logical size (26 October 2026)
+
+18.26 left photo mode without its scene passes at fractional scales and logical sizes. At a logical height it was also broken: only the top tile's view grew to the logical height, so the bottom tile showed its part of the picture at another scale, with a seam at line 512 (the headlights cut through in the saved photo too).
+
+**The tiles' resolves.** D3D9's predicated tiling draws each of photo mode's three tiles at the top of the EDRAM through the tile's window offset (0, -256 and -512 lines). It resolves each tile from EDRAM line 0 and moves the destination's base to the tile's rows: 1280x256, 1280x256 and 1280x208 into a destination of 1280x720 (`RB_COPY_DEST_PITCH`). Such a resolve is a band of a full-screen destination (`GetSceneBand`) when:
+- its source is entry 0's private 4x pair (`PrivateEntry0Rows`);
+- it covers the full width at EDRAM offset 0;
+- the window offset, a multiple of 32 lines, gives its rows.
+
+The texture's base is the destination's base minus the tiled offset of those rows. A band is a scene destination like a full-screen one:
+- it marks its own range scene-resolved;
+- it writes its rows of the whole texture's `scene_scaled` textures from line `ScaleEdge(top)` (`xe_resolve_host_texture_offset`, a constant of the host texture resolve);
+- the bottom band runs to the texture's end, which is the logical height.
+
+The log names each band once (`Scene resolve: band of 1B811000 rows 256 to 512 ...`). The post passes then find the photo's scene depth at the scene's size and run.
+
+**The tiles at a logical size.** `ApplyLogicalWidth` takes the registers:
+- **Viewport.** A full-screen viewport cut at a tile's top (offset 0, extent `ScaleEdge(720 - t)` for window offset -t) is rebuilt uncut at the guest's exact position. It then takes the logical view from the row its band takes in the texture (`ScaleEdge(t)`) and is cut there again.
+- **Scissor.** The bottom tile's scissor runs to the logical height.
+- **Clears.** A resolve clear from line 0 in entry 0's pair covers the logical height, so the bottom tile starts from a cleared target below the guest's 208 lines.
+
+The width (Hor+) needs nothing new, since tiles split the height only.
+
+**Main's lost scene of 26 October 2026** (the quality presets' gates and the native default's run at 16:10) was a build fault, not the runtime:
+- `Build.ps1 -Action build` mirrored `work/runtime` but not `work/fm4-rex`, so main's build of `15f828c` had the launcher and runtime side of 18.26 without the title's photo mode hook.
+- Photo mode drew on entry 0 in one pass, as in 18.25.
+- `build` now copies the title's sources ([setup](../setup.md#rebuilding-after-edits)).
+- e2e's clear color check now takes the gray a look's tonemapping moves it to (101 with `aces`), and `compare.py` fails photo mode's captures or the last capture showing it.
+
+**The gate** (`I:\FM4-build-usa`, the candidate `game-build-pm` against `game-build-pm0`, both built with the title's sources of `15f828c`; `aces`, 240 Hz, one run each):
+
+| Check | Result |
+|---|---|
+| Photo mode, live view | 1x 16:9 (`--native` default, `native_rt_surfaces=90`), 3/2 16:9, 3/2 at 1920x1200 and 2 at 2560x1600: the scene whole, no seam at the tiles' edges, no clear color capture. At 2 with 1280x800 the baseline has the seam at line 512 |
+| Scene passes in photo mode | GTAO, TAA, the windshield and the motion vectors run at 3/2 (GTAO 0.41 ms, TAA 0.30 ms a frame), at 1920x1200 (0.44, 0.33) and at 2560x1600 (0.80, 0.56), where the baseline ran none; RTV 2x for reference: 0.70 and 0.50. At 1x unchanged (0.19, 0.13 against 0.19, 0.14) |
+| Photo mode GPU time a frame | 1x 3.56 against 3.57 ms; 2560x1600 8.64 against 5.70 ms (the passes and the bands) |
+| The saved photo | 1280x720 and the 416x240 thumbnail in every cell; `photo_view` loads it in a new process in every cell |
+| RTV 2x (`aces`), `-Rov` 1x (`original,taa=0`), `freeze` parity | PASS: draws -0.6%, 36.7% of the image above 4; +0.0%, 16.8% |
+| The races on the native path, `freeze` parity with `aces` at 3/2 and at 2 with 1280x800 | PASS: draws +0.0%, 29.4% above 4; -0.7%, 29.7% |
+
+Open:
+- **The saved photo at a logical height is squashed.** It holds the whole 1280x800 picture in 720 lines (the logo at line 612, (640 + 40) x 720 / 800); at 1920x1200 the same. The baseline squashes it the same way since 18.26.
+- **At 20/9, 256 lines are 568.9 host lines.** The middle and bottom tiles sit up to half a host line off their bands there; this is not checked by eye yet.
+

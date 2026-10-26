@@ -35,6 +35,7 @@
 #include <rex/graphics/flags.h>
 #include <rex/graphics/format/dxbc.h>
 #include <rex/graphics/pipeline/shader/dxbc_translator.h>
+#include <rex/graphics/pipeline/texture/util.h>
 #include <rex/graphics/util/draw.h>
 #include <rex/graphics/xenos.h>
 #include <rex/logging.h>
@@ -473,10 +474,10 @@ bool D3D12RenderTargetCache::Initialize() {
       REXGPU_ERROR("D3D12RenderTargetCache: Failed to create the host resolve root signature");
     }
     // Into host textures (bit 32): the scaled form of the constants, the
-    // texture's info, then the host resolve's two.
+    // texture's info, the host resolve's five, then the texture's offset.
     if (REXCVAR_GET(native_rt_surfaces) & 32) {
       host_parameters[0].Constants.Num32BitValues =
-          sizeof(draw_util::ResolveCopyShaderConstants::DestRelative) / sizeof(uint32_t) + 6;
+          sizeof(draw_util::ResolveCopyShaderConstants::DestRelative) / sizeof(uint32_t) + 7;
       host_texture_root_signature_ =
           ui::d3d12::util::CreateRootSignature(provider, host_root_signature_desc);
 #define XE_HOST_TEXTURE_CODE(name) {shaders::name, sizeof(shaders::name)}
@@ -1758,8 +1759,13 @@ bool D3D12RenderTargetCache::Resolve(const memory::Memory& memory, D3D12SharedMe
             // 2_10_10_10, not an array, at offset 0.
             const auto dest_format =
                 xenos::TextureFormat(resolve_info.copy_dest_info.copy_dest_format);
+            // Or a tile's band of a full-screen destination (photo mode, 18.27).
+            SceneBand band;
+            const bool banded =
+                scene_textures() && dest_height < 720 &&
+                GetSceneBand(resolve_info, host_source.render_target->key(), band);
             const bool scene =
-                scene_textures() && dest_width >= 1280 && dest_height >= 720 &&
+                scene_textures() && dest_width >= 1280 && (dest_height >= 720 || banded) &&
                 !resolve_info.copy_dest_info.copy_dest_array &&
                 !resolve_info.copy_dest_coordinate_info.offset_x_div_8 &&
                 !resolve_info.copy_dest_coordinate_info.offset_y_div_8 &&
@@ -1783,6 +1789,22 @@ bool D3D12RenderTargetCache::Resolve(const memory::Memory& memory, D3D12SharedMe
                             resolve_info.copy_dest_base, dest_width, dest_height,
                             uint32_t(dest_format), resolve_info.IsCopyingDepth(), scene);
               }
+              // The tiles' bands, once per band and kind.
+              static std::vector<uint32_t> logged_bands;
+              const uint32_t band_key = resolve_info.copy_dest_base |
+                                        uint32_t(resolve_info.IsCopyingDepth()) |
+                                        (uint32_t(scene) << 1);
+              if (banded && logged_bands.size() < 16 &&
+                  std::find(logged_bands.begin(), logged_bands.end(), band_key) ==
+                      logged_bands.end()) {
+                logged_bands.push_back(band_key);
+                REXGPU_INFO(
+                    "Scene resolve: band of {:08X} rows {} to {} at {:08X} format {} depth {} "
+                    "scene {}",
+                    band.texture_base, band.top, band.top + dest_height,
+                    resolve_info.copy_dest_base, uint32_t(dest_format),
+                    resolve_info.IsCopyingDepth(), scene);
+              }
             }
             if (scene) {
               // From the MSAA scene while upscaling: at the input scale
@@ -1793,7 +1815,7 @@ bool D3D12RenderTargetCache::Resolve(const memory::Memory& memory, D3D12SharedMe
                       IsSceneInputSamples(host_source.render_target->key().msaa_samples));
             }
             ResolveHostIntoTextures(texture_cache, resolve_info, copy_shader_constants,
-                                    host_source, scene);
+                                    host_source, scene, scene && banded ? &band : nullptr);
           }
           // native_rt_surfaces_depth_dump (16.17): the bytes of the 4x depth
           // fast copies, written to a file when the submission completes.
@@ -5153,8 +5175,11 @@ void D3D12RenderTargetCache::PerformTransfersAndResolveClears(
         }
         dest_clear_rect.right = LONG(dest_scale.ScaleEdge(right));
         uint32_t bottom = resolve_clear_rectangle->y_pixels + resolve_clear_rectangle->height_pixels;
-        // A full-height clear covers the scene's logical height (18.22).
-        if (dest_logical_height && resolve_clear_rectangle->y_pixels == 0 && bottom >= 720) {
+        // A full-height clear covers the scene's logical height (18.22), as
+        // does a tile's in entry 0's private pair: the next tile draws from
+        // the top again, its bottom one beyond the guest's rows (18.27).
+        if (dest_logical_height && resolve_clear_rectangle->y_pixels == 0 &&
+            (bottom >= 720 || PrivateEntry0Rows(dest_rt_key))) {
           bottom = std::max(bottom, scene_logical_height());
         }
         dest_clear_rect.bottom = LONG(dest_scale.ScaleEdge(bottom));
@@ -6872,10 +6897,53 @@ void D3D12RenderTargetCache::ResolveIntoHostTextures(
   }
 }
 
+bool D3D12RenderTargetCache::GetSceneBand(const draw_util::ResolveInfo& resolve_info,
+                                          RenderTargetKey source_key,
+                                          SceneBand& band_out) const {
+  if (!PrivateEntry0Rows(source_key) || resolve_info.copy_dest_info.copy_dest_array ||
+      resolve_info.coordinate_info.edram_offset_x_div_8 ||
+      resolve_info.coordinate_info.edram_offset_y_div_8 ||
+      resolve_info.copy_dest_coordinate_info.offset_x_div_8 ||
+      resolve_info.copy_dest_coordinate_info.offset_y_div_8) {
+    return false;
+  }
+  const RegisterFile& regs = register_file();
+  const auto dest_pitch = regs.Get<reg::RB_COPY_DEST_PITCH>();
+  const uint32_t height = resolve_info.height_div_8 << xenos::kResolveAlignmentPixelsLog2;
+  if (dest_pitch.copy_dest_pitch < 1280 || dest_pitch.copy_dest_height < 720 ||
+      height >= dest_pitch.copy_dest_height) {
+    return false;
+  }
+  // D3D9's predicated tiling draws each tile at the top of the EDRAM through
+  // its window offset and moves the destination's base to the tile's rows.
+  int32_t top = 0;
+  if (regs.Get<reg::PA_SU_SC_MODE_CNTL>().vtx_window_offset_enable) {
+    const auto window_offset = regs.Get<reg::PA_SC_WINDOW_OFFSET>();
+    if (window_offset.window_x_offset) {
+      return false;
+    }
+    top = -int32_t(window_offset.window_y_offset);
+  }
+  if (top < 0 || (top & int32_t(xenos::kTextureTileWidthHeight - 1)) ||
+      uint32_t(top) + height > dest_pitch.copy_dest_height) {
+    return false;
+  }
+  // 32bpp, the only bands ResolveHostIntoTextures writes.
+  const uint32_t offset =
+      uint32_t(texture_util::GetTiledOffset2D(0, top, dest_pitch.copy_dest_pitch, 2));
+  if (resolve_info.copy_dest_base < offset) {
+    return false;
+  }
+  band_out.texture_base = resolve_info.copy_dest_base - offset;
+  band_out.texture_height = dest_pitch.copy_dest_height;
+  band_out.top = uint32_t(top);
+  return true;
+}
+
 void D3D12RenderTargetCache::ResolveHostIntoTextures(
     D3D12TextureCache& texture_cache, const draw_util::ResolveInfo& resolve_info,
     const draw_util::ResolveCopyShaderConstants& constants, const HostResolveSource& source,
-    bool scene) {
+    bool scene, const SceneBand* band) {
   ID3D12PipelineState* pipeline = host_texture_pipelines_[source.kind][source.multisampled];
   auto format = xenos::TextureFormat(resolve_info.copy_dest_info.copy_dest_format);
   // A scene depth resolve to a depth format (18.16): its words are those of
@@ -6901,9 +6969,12 @@ void D3D12RenderTargetCache::ResolveHostIntoTextures(
   D3D12TextureCache::ResolveTextureTarget
       targets[D3D12TextureCache::kMaxResolveTextureTargets];
   const uint32_t dest_endian = uint32_t(resolve_info.copy_dest_info.copy_dest_endian);
+  // A band writes its rows of the whole destination's textures.
+  const uint32_t texture_base = band ? band->texture_base : resolve_info.copy_dest_base;
+  const uint32_t texture_guest_height = band ? band->texture_height : height;
   const size_t target_count = texture_cache.GetResolveTextureTargets(
-      resolve_info.copy_dest_base,
-      resolve_info.copy_dest_coordinate_info.pitch_aligned_div_32 << 5, width, height, format,
+      texture_base, resolve_info.copy_dest_coordinate_info.pitch_aligned_div_32 << 5, width,
+      texture_guest_height, format,
       targets, scene, xenos::Endian(dest_endian <= 3 ? dest_endian : 2),
       scene && resolve_info.IsCopyingDepth()
           ? (xenos::DepthRenderTargetFormat(resolve_info.depth_edram_info.format) ==
@@ -6971,7 +7042,7 @@ void D3D12RenderTargetCache::ResolveHostIntoTextures(
                                                     : render_target.descriptor_srv())
                                       .GetHandle(),
                                   D3D12_DESCRIPTOR_HEAP_TYPE_CBV_SRV_UAV);
-    uint32_t root_constants[sizeof(constants.dest_relative) / sizeof(uint32_t) + 6];
+    uint32_t root_constants[sizeof(constants.dest_relative) / sizeof(uint32_t) + 7];
     std::memcpy(root_constants, &constants.dest_relative, sizeof(constants.dest_relative));
     uint32_t constant_count = sizeof(constants.dest_relative) / sizeof(uint32_t);
     root_constants[constant_count++] =
@@ -6987,11 +7058,24 @@ void D3D12RenderTargetCache::ResolveHostIntoTextures(
     // A full-screen destination at the scene's logical width (18.21).
     const uint32_t texture_width =
         scene_texture ? dest_scale.ScaleUp(width == 1280 ? scene_logical_width() : width) : 0;
-    const uint32_t texture_height =
-        scene_texture ? dest_scale.ScaleUp(height == 720 ? scene_logical_height() : height) : 0;
+    uint32_t texture_height =
+        scene_texture ? dest_scale.ScaleUp(texture_guest_height == 720 ? scene_logical_height()
+                                                                       : texture_guest_height)
+                      : 0;
+    // A band's rows at the scene's scale, the bottom one to the texture's end
+    // (the logical height, 18.22).
+    uint32_t texture_top = 0;
+    if (scene_texture && band) {
+      texture_top = dest_scale.ScaleEdge(band->top);
+      if (band->top + height < band->texture_height) {
+        texture_height = std::min(texture_height, dest_scale.ScaleEdge(band->top + height));
+      }
+      texture_height = texture_height > texture_top ? texture_height - texture_top : 0;
+    }
     root_constants[constant_count++] = HostSourceScale(source.scale, dest_scale);
     root_constants[constant_count++] = texture_width | (texture_height << 16);
     root_constants[constant_count++] = source.host_phase;
+    root_constants[constant_count++] = texture_top << 16;
     command_list.D3DSetComputeRootSignature(host_texture_root_signature_);
     command_list.D3DSetComputeRoot32BitConstants(0, constant_count, root_constants, 0);
     command_list.D3DSetComputeRootDescriptorTable(1, descriptors[0].second);

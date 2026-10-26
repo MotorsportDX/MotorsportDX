@@ -112,9 +112,11 @@ void SetSceneLogicalHeight(uint32_t height);
 uint32_t SceneLogicalHeight();
 // A scene draw's full-width viewport and scissor widened to the logical width:
 // with kFlagLogicalCamera the clip x scaled to keep the pixels per degree,
-// with kFlagLogicalHud kept at 1280 in the centre, otherwise stretched.
-void ApplyLogicalWidth(uint32_t flags, DrawScale scene_scale, draw_util::ViewportInfo& viewport,
-                       draw_util::Scissor& scissor);
+// with kFlagLogicalHud kept at 1280 in the centre, otherwise stretched. A tile
+// of predicated tiling (its window offset in regs) widens as its part of the
+// full screen.
+void ApplyLogicalWidth(const RegisterFile& regs, uint32_t flags, DrawScale scene_scale,
+                       draw_util::ViewportInfo& viewport, draw_util::Scissor& scissor);
 
 // The kDrawBackEnd command, written by Encode and read by Decode only, so the
 // format can change without the back end. After the header: the masks of the

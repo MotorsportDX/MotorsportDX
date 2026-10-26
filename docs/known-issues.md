@@ -27,10 +27,9 @@ above.
 
 ## Known problems
 
-- **The front-end menus, the pre-race screens and photo mode are less sharp than races** at
-  a 1080p screen (and at other fractional scales) on the native path: they render at the
-  whole render scale below the screen's and are scaled up. Races, their HUD, replays and the
-  post-race screens render at the screen's resolution. A fix is in design.
+- **A photo saved on a 16:10 screen looks squashed** on the native path: the saved
+  1280x720 photo holds the whole taller picture of the screen, about 10% flatter than it
+  should be. The live view is right. A fix is in work.
 - **Wide and tall screens** (21:9, 16:10) fill the screen only on the native path (`-Native`,
   the default with integrated GPUs only), with the HUD and menus in the centred 16:9. With a
   discrete GPU the default path (RTV) shows a 16:9 picture with black bars; add `-Native` for

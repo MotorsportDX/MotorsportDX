@@ -295,7 +295,9 @@ entry_inputs_end_code_begin_compute_xe
     uint texture_info = push_const_xe(xe_resolve_texture_info);
     packed = XeEndianSwap32(XeEndianSwap32(packed, resolve_info.dest_endian_128),
                             texture_info & 7u);
-    uint2_xe texel = pixel_index + resolve_info.dest_xy_offset_scaled;
+    uint texture_offset = push_const_xe(xe_resolve_host_texture_offset);
+    uint2_xe texel = pixel_index + resolve_info.dest_xy_offset_scaled +
+                     uint2_xe(texture_offset & 0xFFFFu, texture_offset >> 16u);
     uint depth_texture = (texture_info >> 5u) & 3u;
     dont_flatten_xe
     if (depth_texture != 0u) {

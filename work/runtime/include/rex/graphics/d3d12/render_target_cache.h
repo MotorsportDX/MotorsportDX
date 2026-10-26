@@ -798,10 +798,24 @@ class D3D12RenderTargetCache final : public RenderTargetCache {
   // target, or with native_rt_resolve_check scratch copies that the
   // textures' next loads are compared with.
   // With scene, a full-screen destination at the scene's scale (18.15).
+  // A tile's band of a full-screen destination (photo mode's three tiles in
+  // entry 0's private pair, docs/analysis/d3d-hle-n5.md 18.27): the texture's
+  // base and height in guest pixels, and the band's first row in it.
+  struct SceneBand {
+    uint32_t texture_base = 0;
+    uint32_t texture_height = 0;
+    uint32_t top = 0;
+  };
+  // Whether the resolve is a tile's band: entry 0's private pair resolved
+  // across the full width into the rows of a 1280x720 or larger destination
+  // that the tile's window offset gives, its base moved to those rows.
+  bool GetSceneBand(const draw_util::ResolveInfo& resolve_info, RenderTargetKey source_key,
+                    SceneBand& band_out) const;
   void ResolveHostIntoTextures(D3D12TextureCache& texture_cache,
                                const draw_util::ResolveInfo& resolve_info,
                                const draw_util::ResolveCopyShaderConstants& constants,
-                               const HostResolveSource& source, bool scene);
+                               const HostResolveSource& source, bool scene,
+                               const SceneBand* band = nullptr);
 
   // Writes contents of host render targets within rectangles from
   // ResolveInfo::GetCopyEdramTileSpan to edram_buffer_.

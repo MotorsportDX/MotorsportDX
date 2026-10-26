@@ -76,6 +76,12 @@ push_const_begin_xe(b0, space0)
       // 16:16 (nonzero at a fractional scale, where xe_resolve_host_offset is
       // rounded; for the box filter, docs/analysis/d3d-hle-n5.md 18.17).
       uint xe_resolve_host_source_phase;
+      #ifdef XE_RESOLVE_TEXTURE
+        // With a texture at the scene's scale: the pixel of the texture the
+        // resolve's first pixel goes to, 16:16 (the row of a tile's band,
+        // docs/analysis/d3d-hle-n5.md 18.27), otherwise 0.
+        uint xe_resolve_host_texture_offset;
+      #endif
     #endif
   #endif
 push_const_end_xe

@@ -6,6 +6,7 @@
 // of the upstream code (Copyright 2022 Ben Vanik, BSD license, see LICENSE),
 // with the render target cache's and the texture cache's answers passed in.
 
+#include <algorithm>
 #include <atomic>
 #include <cstring>
 
@@ -504,7 +505,7 @@ void ComputeViewportAndScissor(const RegisterFile& regs, uint32_t flags, uint32_
                                    pixel_shader_writes_depth, viewport);
     draw_util::GetScissor(regs, scissor);
     draw_util::ScaleScissor(scene_scale, scissor);
-    ApplyLogicalWidth(flags, scene_scale, viewport, scissor);
+    ApplyLogicalWidth(regs, flags, scene_scale, viewport, scissor);
     return;
   }
   draw_util::GetHostViewportInfo(regs, scale_x, scale_y, true, D3D12_VIEWPORT_BOUNDS_MAX,
@@ -532,12 +533,20 @@ void SetSceneLogicalHeight(uint32_t height) { scene_logical_height = height; }
 
 uint32_t SceneLogicalHeight() { return scene_logical_height; }
 
-void ApplyLogicalWidth(uint32_t flags, DrawScale scene_scale, draw_util::ViewportInfo& viewport,
-                       draw_util::Scissor& scissor) {
+void ApplyLogicalWidth(const RegisterFile& regs, uint32_t flags, DrawScale scene_scale,
+                       draw_util::ViewportInfo& viewport, draw_util::Scissor& scissor) {
   if (!(flags & kFlagSceneScale) ||
       (scene_logical_width == 1280 && scene_logical_height == 720)) {
     return;
   }
+  // A tile of D3D9's predicated tiling (photo mode's three, d3d-hle-n5.md
+  // 18.27) is drawn at the top of the render target through a negative window
+  // offset: the guest pixels of the screen above it, for the viewport and for
+  // the scissor.
+  const auto window_offset = regs.Get<reg::PA_SC_WINDOW_OFFSET>();
+  const int32_t window_xy[2] = {window_offset.window_x_offset, window_offset.window_y_offset};
+  const bool viewport_offset = regs.Get<reg::PA_SU_SC_MODE_CNTL>().vtx_window_offset_enable;
+  const bool scissor_offset = !regs.Get<reg::PA_SC_WINDOW_SCISSOR_TL>().window_offset_disable;
   // Each axis: the host sizes of the guest's 1280x720 and of the logical size.
   const uint32_t guest_size[2] = {1280, 720};
   const uint32_t logical_size[2] = {scene_logical_width, scene_logical_height};
@@ -559,18 +568,53 @@ void ApplyLogicalWidth(uint32_t flags, DrawScale scene_scale, draw_util::Viewpor
       }
       continue;
     }
-    if (viewport.xy_offset[i] == 0 && viewport.xy_extent[i] == full) {
-      viewport.xy_extent[i] = logical;
+    const uint32_t viewport_tile =
+        viewport_offset && window_xy[i] < 0 ? uint32_t(-window_xy[i]) : 0;
+    const uint32_t scissor_tile = scissor_offset && window_xy[i] < 0 ? uint32_t(-window_xy[i]) : 0;
+    if (!viewport_tile) {
+      if (viewport.xy_offset[i] == 0 && viewport.xy_extent[i] == full) {
+        viewport.xy_extent[i] = logical;
+        if (flags & kFlagLogicalCamera) {
+          // Pixels at the same distance from the centre as before: more of the
+          // scene on each side.
+          const float ratio = float(full) / float(logical);
+          viewport.ndc_scale[i] *= ratio;
+          viewport.ndc_offset[i] *= ratio;
+        }
+      }
+    } else if (viewport_tile < guest_size[i] && viewport.xy_offset[i] == 0 &&
+               viewport.xy_extent[i] == scene_scale.ScaleEdge(guest_size[i] - viewport_tile)) {
+      // A full-screen viewport cut at the tile's top. Its uncut form, at the
+      // guest's exact position: offset -t s and extent 720 s.
+      const float scale = float(scene_scale.numerator) / float(scene_scale.denominator);
+      const float cut_extent = float(viewport.xy_extent[i]);
+      const float full_offset = -float(viewport_tile) * scale;
+      const float full_extent = float(guest_size[i]) * scale;
+      float ndc_scale = viewport.ndc_scale[i] * cut_extent / full_extent;
+      float ndc_offset = (viewport.ndc_offset[i] + 1.0f) * cut_extent / full_extent - 1.0f -
+                         2.0f * full_offset / full_extent;
       if (flags & kFlagLogicalCamera) {
-        // Pixels at the same distance from the centre as before: more of the
-        // scene on each side.
         const float ratio = float(full) / float(logical);
-        viewport.ndc_scale[i] *= ratio;
-        viewport.ndc_offset[i] *= ratio;
+        ndc_scale *= ratio;
+        ndc_offset *= ratio;
+      }
+      // The logical view from the tile's first row, at the row its band takes
+      // in the scene's texture, cut there again.
+      const uint32_t top = scene_scale.ScaleEdge(viewport_tile);
+      if (logical > top) {
+        const float logical_cut = float(logical - top);
+        viewport.xy_extent[i] = logical - top;
+        viewport.ndc_scale[i] = ndc_scale * float(logical) / logical_cut;
+        viewport.ndc_offset[i] = ndc_offset * float(logical) / logical_cut - float(top) / logical_cut;
       }
     }
-    if (scissor.offset[i] == 0 && scissor.extent[i] >= full) {
-      scissor.extent[i] = logical;
+    // A full-screen scissor, or the bottom tile's, to the logical size.
+    const uint32_t scissor_top = scene_scale.ScaleEdge(std::min(scissor_tile, guest_size[i]));
+    if (scissor.offset[i] == 0 &&
+        scissor.extent[i] >= scene_scale.ScaleEdge(guest_size[i] - std::min(scissor_tile,
+                                                                             guest_size[i])) &&
+        logical > scissor_top) {
+      scissor.extent[i] = logical - scissor_top;
     }
   }
 }
