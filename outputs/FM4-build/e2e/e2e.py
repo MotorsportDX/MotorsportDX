@@ -148,9 +148,15 @@ SCENARIOS.update({
         [20, 'wait', 0, 'Total'], [180, 'a', 0.12, 'EVENT COMPLETE', 6], [10, 'wait', 0],
     ],
     # A new process on the profile of career_finish (--profile <run>\user-data): WORLD TOUR shows
-    # the next event (the TopGear challenge) with the driver at level 2 and the new credits.
+    # the next event (the TopGear challenge) with the driver at level 2 and the new credits. About
+    # 2 s after the event's car screen the title opens a CHALLENGE EVENT box over it, which takes A
+    # only once its CONTINUE shows (about 12 s later); behind it the event screen shows the level
+    # again. The box is waited for and closed whether the level was read on the car screen first
+    # or not (an earlier version failed when it was: native-default.md 2.4).
     'career_progress': _TO_CAREER + [
-        [30, 'up,a', 0.12, 'WORLD TOUR|EVENT LIST', 10], [90, 'up,a', 0.12, 'LVL2|LVL 2|LVL 1', 15],
+        [30, 'up,a', 0.12, 'WORLD TOUR|EVENT LIST', 10],
+        [90, 'up,a', 0.12, 'LVL2|LVL 2|LVL 1|CHALLENGE EVENT', 15], [10, 'wait', 0, 'CHALLENGE EVENT'],
+        [40, 'a', 0.12, '!CHALLENGE EVENT', 8],
         [10, 'wait', 0, 'LVL2|LVL 2'], [5, 'wait', 0, '!8,610 CR'],
     ],
 })
