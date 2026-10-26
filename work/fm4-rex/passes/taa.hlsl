@@ -83,16 +83,37 @@
 //   7 the phases (step 9): green unchanged since a cycle ago, red changed, blue
 //     a still pixel before a whole still cycle, over the image darkened
 // Colors are never the clear gray, which e2e counts as missing geometry.
+//
+// As the upscaler (TAA_UPSCALED 1, the passes taau_resolve and taau_output at
+// the scene_color point while upscaling, docs/analysis/fsr-plan.md 14): the
+// history and the output are at the scene's output size, the input at its
+// input size. Per output pixel, step 1 weighs the 3x3 input pixels around it
+// by the distance in output pixels between each one's unjittered position and
+// the output pixel's center, and the largest of those weights is the
+// confidence: step 7 is a running average weighted by it (the history's alpha
+// holds the confidence accumulated, at most what TAA_BLEND gives), so a frame
+// whose jitter put no sample near the pixel changes it little, and after a cut
+// the near samples of the first frames fill the picture in. Without a usable
+// history the current frame comes from the same 3x3 weighed in input pixels (a
+// smooth spatial upscale). Steps 3 to 6 run in output pixels (the motion scaled
+// to them); the boxes are those of the input pixels.
 
 #ifndef TAA_SCENE
 #define TAA_SCENE 0
+#endif
+#ifndef TAA_UPSCALED
+#define TAA_UPSCALED 0
 #endif
 // FM4 draws its scene rotated 180 degrees within the tiles: the scene textures
 // are upside down and mirrored against the frame. At the scene_color point the
 // input is the scene itself.
 static const bool kSceneRotated = TAA_SCENE == 0;
-// The size of the input, the history and the output.
-#if TAA_SCENE
+// The size of the input, the history and the output; as the upscaler the size
+// of the history and the output (the pass's size), with the input at
+// xe_scene_size.
+#if TAA_UPSCALED
+#define TAA_SIZE xe_pass_size
+#elif TAA_SCENE
 #define TAA_SIZE xe_scene_size
 #else
 #define TAA_SIZE xe_final_size
@@ -193,12 +214,23 @@ void taa_resolve(uint3 id : SV_DispatchThreadID) {
   }
   int2 pixel = int2(id.xy);
   int2 last = int2(TAA_SIZE) - 1;
+#if TAA_UPSCALED
+  // Output pixels per input pixel, the output pixel's center in input pixels
+  // and the input pixel it lies in.
+  int2 last_in = int2(xe_scene_size) - 1;
+  float2 to_output = float2(TAA_SIZE) / float2(xe_scene_size);
+  float2 center_in = (float2(pixel) + 0.5) / to_output;
+  int2 base = clamp(int2(floor(center_in)), 0, last_in);
+#else
+  int2 last_in = last;
+  int2 base = pixel;
   float3 input = TaaLinear(taa_final.Load(int3(pixel, 0)).rgb);
   // Another size than the scene's (no case known): the frame as it is.
   if (any(TAA_SIZE != xe_scene_size)) {
     taa_history_out[pixel] = float4(input, 0.0);
     return;
   }
+#endif
   // The jitter in input pixels: the content at input position q is the
   // unjittered scene at q - jitter.
   float2 jitter = kSceneRotated ? -xe_scene_jitter : xe_scene_jitter;
@@ -206,18 +238,45 @@ void taa_resolve(uint3 id : SV_DispatchThreadID) {
   float3 box_low = 1.0e9, box_high = -1.0e9;
   float weight_sum = 0.0, nearest_depth = -1.0;
   int2 nearest = 0;
+#if TAA_UPSCALED
+  // The confidence, and the current frame weighed in input pixels.
+  float confidence = 0.0, smooth_sum = 0.0, box_sum = 0.0;
+  float3 smooth = 0.0;
+#endif
   [unroll] for (int y = -1; y <= 1; ++y) {
     [unroll] for (int x = -1; x <= 1; ++x) {
       int2 offset = int2(x, y);
-      int2 neighbour = clamp(pixel + offset, 0, last);
+      int2 neighbour = clamp(base + offset, 0, last_in);
       float3 color = TaaLinear(taa_final.Load(int3(neighbour, 0)).rgb);
+#if TAA_UPSCALED
+      float2 distance_in = float2(base + offset) + 0.5 - jitter - center_in;
+      float2 distance = distance_in * to_output;
+      float smooth_weight = exp(-2.29 * dot(distance_in, distance_in));
+      smooth += color * smooth_weight;
+      smooth_sum += smooth_weight;
+#else
       float2 distance = float2(offset) - jitter;
+#endif
       float weight = exp(-2.29 * dot(distance, distance));
+#if TAA_UPSCALED
+      confidence = max(confidence, weight);
+#endif
       current += color * weight;
       weight_sum += weight;
       float3 ycocg = TaaToYCoCg(color);
+#if TAA_UPSCALED
+      // The box's moments weighed by the distance in input pixels (a Gaussian
+      // of one input pixel), so the box follows the output pixel instead of
+      // being one per input pixel (which clips the output pixels of an input
+      // pixel alike, in blocks).
+      float box_weight = exp(-0.5 * dot(distance_in, distance_in));
+      moment1 += ycocg * box_weight;
+      moment2 += ycocg * ycocg * box_weight;
+      box_sum += box_weight;
+#else
       moment1 += ycocg;
       moment2 += ycocg * ycocg;
+#endif
       box_low = min(box_low, ycocg);
       box_high = max(box_high, ycocg);
       float depth = taa_depth.Load(int3(TaaScenePixel(neighbour), 0));
@@ -227,17 +286,25 @@ void taa_resolve(uint3 id : SV_DispatchThreadID) {
       }
     }
   }
-  current /= weight_sum;
-  float2 mask = taa_mask.Load(int3(TaaScenePixel(pixel), 0));
+  current /= max(weight_sum, 1.0e-6);
+  float2 mask = taa_mask.Load(int3(TaaScenePixel(base), 0));
   bool reactive = mask.y > 0.5;
   float gamma = reactive ? min(TAA_CLIP_GAMMA, 0.75) : TAA_CLIP_GAMMA;
-  float3 mean = moment1 / 9.0;
-  float3 deviation = sqrt(max(moment2 / 9.0 - mean * mean, 0.0));
+#if TAA_UPSCALED
+  float moment_count = max(box_sum, 1.0e-6);
+#else
+  float moment_count = 9.0;
+#endif
+  float3 mean = moment1 / moment_count;
+  float3 deviation = sqrt(max(moment2 / moment_count - mean * mean, 0.0));
   float3 box_min = max(mean - gamma * deviation, box_low);
   float3 box_max = min(mean + gamma * deviation, box_high);
 
   float2 motion = taa_motion.Load(int3(TaaScenePixel(nearest), 0));
   if (kSceneRotated) motion = -motion;
+#if TAA_UPSCALED
+  motion *= to_output;
+#endif
   float2 position = float2(pixel) + 0.5 + motion;
   bool on_screen = all(position >= 0.0) && all(position <= float2(TAA_SIZE));
   bool known = mask.x < 0.5;
@@ -258,8 +325,12 @@ void taa_resolve(uint3 id : SV_DispatchThreadID) {
     // pixel shows. (Pixel against pixel, the jitter moving a thin near object
     // across pixels, or out of every sample in some frames, would drop its
     // history again and again.)
+#if TAA_UPSCALED
+    int2 previous_pixel = int2(position / to_output);
+#else
     int2 previous_pixel = kSceneRotated ? int2(float2(xe_scene_size) - position)
                                         : int2(position);
+#endif
     float previous_farthest = 1.0e9;
     [unroll] for (int py = -1; py <= 1; ++py) {
       [unroll] for (int px = -1; px <= 1; ++px) {
@@ -274,6 +345,10 @@ void taa_resolve(uint3 id : SV_DispatchThreadID) {
   }
 #endif
   float4 history = usable ? TaaHistory(position) : 0.0;
+#if TAA_UPSCALED
+  // No usable history: the smooth upscale of the current frame.
+  if (!usable) current = smooth / max(smooth_sum, 1.0e-6);
+#endif
   float age = usable ? taa_previous.Load(int3(clamp(int2(position), 0, last), 0)).a : 0.0;
   // Step 9: the luma of every phase's current frame where the pixel has not
   // changed for a whole cycle (phases_known), and whether it changed within
@@ -330,7 +405,7 @@ void taa_resolve(uint3 id : SV_DispatchThreadID) {
     [unroll] for (int ry = -2; ry <= 2; ++ry) {
       [unroll] for (int rx = -2; rx <= 2; ++rx) {
         if (abs(rx) < 2 && abs(ry) < 2) continue;
-        int2 ring = clamp(pixel + int2(rx, ry), 0, last);
+        int2 ring = clamp(base + int2(rx, ry), 0, last_in);
         float3 ycocg = TaaToYCoCg(TaaLinear(taa_final.Load(int3(ring, 0)).rgb));
         box_min = min(box_min, ycocg);
         box_max = max(box_max, ycocg);
@@ -353,14 +428,30 @@ void taa_resolve(uint3 id : SV_DispatchThreadID) {
   float alpha = accumulate ? 1.0 / (min(age, TAA_STILL_FRAMES) + 1.0)
                            : max(max(TAA_BLEND, 1.0 / (age + 1.0)),
                                  lerp(TAA_BLEND, TAA_BLEND_MOTION, speed));
+#if TAA_UPSCALED
+  // A running average weighted by the confidence: the history's alpha holds
+  // the confidence it has accumulated (age), held below what the blend of a
+  // full history would give, so a frame whose samples landed far from the
+  // pixel changes it little and a young history fills in from the near ones.
+  float target = accumulate ? 1.0 / (TAA_STILL_FRAMES + 1.0)
+                            : max(TAA_BLEND, lerp(TAA_BLEND, TAA_BLEND_MOTION, speed));
+  float held = min(age, 1.0 / target - 1.0);
+  alpha = confidence / max(held + confidence, 1.0e-6);
+#endif
   if (reactive && !accumulate) alpha = max(alpha, TAA_REACTIVE);
   if (!usable) alpha = 1.0;
   float current_weight = alpha / (1.0 + TaaLuma(current));
   float history_weight = (1.0 - alpha) / (1.0 + TaaLuma(clipped));
   float3 result = (current * current_weight + clipped * history_weight) /
                   max(current_weight + history_weight, 1.0e-6);
+#if TAA_UPSCALED
+  // The confidence accumulated; the smooth upscale without a history counts as
+  // half a sample.
+  taa_history_out[pixel] = float4(result, usable && alpha < 1.0 ? held + confidence : 0.5);
+#else
   taa_history_out[pixel] =
       float4(result, usable ? min(age + 1.0, accumulate ? TAA_STILL_FRAMES : kMaxAge) : 1.0);
+#endif
 
   if (TAA_DEBUG > 0u) {
     float3 color;
@@ -415,7 +506,12 @@ float3 TaaOutputColor(int2 pixel) {
 
 float4 taa_output(XePostPassVertex input) : SV_Target {
   int2 pixel = int2(input.position.xy);
-#if TAA_SCENE
+#if TAA_UPSCALED
+  // The game's alpha of the input pixel the output pixel lies in.
+  int2 scene_pixel = min(int2((float2(pixel) + 0.5) * float2(xe_scene_size) / float2(TAA_SIZE)),
+                         int2(xe_scene_size) - 1);
+  float alpha = taa_output_scene.Load(int3(scene_pixel, 0)).a;
+#elif TAA_SCENE
   float alpha = taa_output_scene.Load(int3(pixel, 0)).a;
 #else
   float alpha = 1.0;

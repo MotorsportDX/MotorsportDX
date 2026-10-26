@@ -1047,9 +1047,9 @@ void App::DisplayPage() {
   for (int i = 1; i < 4; ++i)
     if (o.upscale == upscales[i]) upscale = i;
   Label("Upscale",
-        "FSR 3.1 renders the scene at fewer lines and upscales it to the render scale: Quality "
-        "1.5x, Balanced 1.7x, Performance 2x fewer, at least 720p. Needs the native path in one "
-        "pass and FSR 3.1 as the look's anti-aliasing method.");
+        "FSR 3.1 or TAAU renders the scene at fewer lines and upscales it to the render scale: "
+        "Quality 1.5x, Balanced 1.7x, Performance 2x fewer, at least 720p. Needs the native path "
+        "in one pass and FSR 3.1 or TAAU as the look's anti-aliasing method.");
   if (Segment("upscale", upscale, {"Native", "Quality", "Balanced", "Performance"}))
     o.upscale = upscale == 0 ? "" : upscales[upscale];
   if (upscale) {
@@ -1254,11 +1254,14 @@ void App::LookPage() {
     changed_label("taa", "Temporal AA");
     if (ImGui::Checkbox("##taa", &taa)) set_knob("taa", taa ? "1" : "0");
     reset_button("taa");
-    // TAA or FSR 3.1's native anti-aliasing (aa=fsr, TAA in a runtime without FSR).
+    // TAA, FSR 3.1's native anti-aliasing (aa=fsr, TAA in a runtime without FSR) or TAA as the
+    // upscaler (aa=taau, TAA at the scene_color point without -Upscale).
     if (taa) {
-      int method = effective("aa").value_or("taa") == "fsr" ? 1 : 0;
+      static const char* const kMethods[] = {"taa", "fsr", "taau"};
+      const std::string current = effective("aa").value_or("taa");
+      int method = current == "fsr" ? 1 : current == "taau" ? 2 : 0;
       changed_label("aa", "Method");
-      if (Segment("aa", method, {"TAA", "FSR 3.1"})) set_knob("aa", method ? "fsr" : "taa");
+      if (Segment("aa", method, {"TAA", "FSR 3.1", "TAAU"})) set_knob("aa", kMethods[method]);
       reset_button("aa");
     }
     // The auto exposure at the game's speed above 60 fps (adaptation).

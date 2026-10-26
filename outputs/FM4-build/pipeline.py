@@ -873,7 +873,10 @@ SUN_LIMIT=1200
 # place of TAA (FSR, work/fm4-rex/passes/fsr.hlsl, docs/analysis/fsr-plan.md), with the scene
 # jittered in every frame and the look's sharpening as FSR's RCAS (FSR_SHARPNESS, none in the
 # final combine); a runtime built without FSR (Build.ps1 -Fsr) runs TAA at that point instead.
-# aa=taa, the default, is TAA.
+# aa=taau (with taa above 0): TAA at the scene_color point (taa_point=1); while upscaling
+# (-Upscale) it is the upscaler (TAA_UPSCALE, docs/analysis/fsr-plan.md 14), with the scene
+# jittered in every frame and FSR's sharpening (fsr_sharpness) as its TAA_SHARPEN, none in the
+# final combine. aa=taa, the default, is TAA.
 # windshield above 0: the glass of the cockpit camera's windshield and side windows, which the
 # title does not draw there (work/fm4-rex/passes/windshield.hlsl, docs/analysis/windshield.md):
 # the strength of its tint, dashboard reflection, glare and dust (WINDSHIELD), up to 2.
@@ -980,10 +983,10 @@ def taa_scene_point(knobs):
     return value=='1'
 
 def aa_method(knobs):
-    """The aa knob: taa (the default) or fsr."""
+    """The aa knob: taa (the default), fsr or taau."""
     value=knobs.get('aa','taa')
-    if value not in ('taa','fsr'):
-        raise RuntimeError(f'aa is taa or fsr, not {value!r}.')
+    if value not in ('taa','fsr','taau'):
+        raise RuntimeError(f'aa is taa, fsr or taau, not {value!r}.')
     return value
 
 def windshield_strength(knobs):
@@ -1012,7 +1015,9 @@ def look_defines(knobs,upscale_ratio=1.0):
     with taa the pass params TAA and TAA_SHARPEN (the look's sharpening, which then is 0), or at
     the scene_color point (taa_point=1) TAA_POINT with the look's sharpening kept, or with
     aa=fsr FSR at the scene_color point with the look's sharpening as FSR_SHARPNESS
-    (fsr_sharpness: more while upscaling by upscale_ratio)."""
+    (fsr_sharpness: more while upscaling by upscale_ratio), or with aa=taau while upscaling TAA
+    as the upscaler at that point with the same sharpening as TAA_SHARPEN (at ratio 1
+    taa_point=1)."""
     defines=[]
     for name,value in knobs.items():
         if name in LOOK_RUNTIME_KNOBS or name in LOOK_TRACK_KNOBS or name in LOOK_PASS_KNOBS:
@@ -1027,15 +1032,23 @@ def look_defines(knobs,upscale_ratio=1.0):
             raise RuntimeError(f'Unknown {name} {value!r}; use {", ".join(names)}.')
         defines.append(f'{LOOK_KNOBS[name]}={float(value)!r}')
     scene_point=taa_scene_point(knobs)
-    fsr=aa_method(knobs)=='fsr'
-    if fsr and not taa_enabled(knobs):
-        raise RuntimeError('aa=fsr needs taa above 0 (the look turns temporal anti-aliasing on).')
-    if fsr:
+    aa=aa_method(knobs)
+    fsr=aa=='fsr'
+    if aa!='taa' and not taa_enabled(knobs):
+        raise RuntimeError(f'aa={aa} needs taa above 0 (the look turns temporal anti-aliasing on).')
+    if aa=='taau' and upscale_ratio!=1.0:
+        # TAA as the upscaler at the scene_color point, jittered in every frame, with FSR's
+        # sharpening for a like-for-like comparison.
+        defines=[d for d in defines if not d.startswith('FM4_LOOK_SHARPEN=')]
+        defines+=['FM4_LOOK_SHARPEN=0.0','TAA=1',
+                  f'TAA_SHARPEN={fsr_sharpness(knobs,upscale_ratio)!r}','TAA_POINT=1',
+                  'TAA_UPSCALE=1','TAA_JITTER_MOTION=0.0','TAA_JITTER_RATE=0.0']
+    elif fsr:
         # FSR at the scene_color point, the look's sharpening as its RCAS.
         defines=[d for d in defines if not d.startswith('FM4_LOOK_SHARPEN=')]
         defines+=['FM4_LOOK_SHARPEN=0.0','TAA=1','TAA_SHARPEN=0.0','TAA_POINT=1','FSR=1',
                   f'FSR_SHARPNESS={fsr_sharpness(knobs,upscale_ratio)!r}']
-    elif taa_enabled(knobs) and scene_point:
+    elif taa_enabled(knobs) and (scene_point or aa=='taau'):
         defines+=['TAA=1','TAA_SHARPEN=0.0','TAA_POINT=1']
     elif taa_enabled(knobs):
         sharpen=float(knobs.get('sharpen','0'))
@@ -1434,8 +1447,9 @@ def upscale_settings(upscale,cvars,aa,scene_scale):
     if not scene_scale:
         raise ValueError("-Upscale needs the native path in one pass with 2x MSAA (-Native without "
                          "-SingleTile, -Msaa or -MsaaSamples 0 or 4).")
-    if aa!='fsr':
-        raise ValueError(f"-Upscale {upscale} needs aa=fsr in -Look: TAA does not upscale.")
+    if aa not in ('fsr','taau'):
+        raise ValueError(f"-Upscale {upscale} needs aa=fsr or aa=taau in -Look: TAA does not "
+                         "upscale.")
     numerator,_,denominator=cvars.get('native_draw_scale',
                                       cvars.get('draw_resolution_scale_x','1')).partition('/')
     numerator,denominator=int(numerator),int(denominator or 1)
@@ -1453,7 +1467,7 @@ def upscale_settings(upscale,cvars,aa,scene_scale):
                                         if input_denominator>1 else str(input_numerator),
              'draw_resolution_scale_x':str(whole),'draw_resolution_scale_y':str(whole),
              'native_rt_surfaces':'58'},
-            f'; FSR {upscale} {lines}p -> {output_lines}p{clamped}')
+            f'; {"FSR" if aa=="fsr" else "TAAU"} {upscale} {lines}p -> {output_lines}p{clamped}')
 
 VSYNC_MODES=('auto','on','off')
 DEFAULT_VSYNC='auto'
@@ -1640,6 +1654,8 @@ def info_overlay(cvars,env,look,quality,display=None):
                      f'{quality}')
     if dict(defines).get('FSR')=='1':
         lines.append(f"Anti-aliasing: FSR 3.1 before the post chain (scene_color), sharpen {float(dict(defines)['FSR_SHARPNESS']):g}, scene jittered every frame (TAA there in a runtime without FSR)")
+    elif dict(defines).get('TAA_UPSCALE')=='1':
+        lines.append(f"Anti-aliasing: TAA as the upscaler before the post chain (scene_color), sharpen {float(dict(defines)['TAA_SHARPEN']):g}, scene jittered every frame")
     elif dict(defines).get('TAA')=='1' and dict(defines).get('TAA_POINT')=='1':
         lines.append("Anti-aliasing: TAA before the post chain (scene_color), the look's sharpening, "
                      'scene jittered while the camera moves, a still one accumulated')
@@ -1999,7 +2015,10 @@ def launcher_test_options(root):
             {'native':True,'look':'pc,aa=fsr','upscale':'balanced','display':'1440p'},
             {'native':True,'look':'pc,aa=fsr','upscale':'performance'},
             {'native':True,'look':'pc,aa=fsr','upscale':'1.25','display':'1080p'},
-            {'native':True,'look':'pc,aa=fsr,fsr_sharpen=0.5','upscale':'quality','display':'1080p'}]
+            {'native':True,'look':'pc,aa=fsr,fsr_sharpen=0.5','upscale':'quality','display':'1080p'},
+            {'native':True,'look':'pc,aa=taau','upscale':'quality','display':'1080p','info':True},
+            {'native':True,'look':'pc,aa=taau','upscale':'1.25','display':'1080p'},
+            {'native':True,'look':'pc,aa=taau'}]
 
 def launcher_tests(root):
     """Compares fm4_launcher.exe's port of launch_plan, disc check and content search with this
@@ -2167,7 +2186,7 @@ def main():
     parser.add_argument('--upscale',default=DEFAULT_UPSCALE,
                         help='run: native (default), quality, balanced, performance or a ratio from '
                              '1 to 3: FSR 3.1 renders the scene at fewer lines and upscales it to '
-                             'the output scale; needs -Native and aa=fsr in -Look')
+                             'the output scale; needs -Native and aa=fsr or aa=taau in -Look')
     parser.add_argument('--keyboard',
                         help="run: the keyboard's steering and pedal model as knobs, for example "
                              "'steer_attack=0.4,precision=0.6' (KEYBOARD_KNOBS)")

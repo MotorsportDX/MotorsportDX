@@ -234,6 +234,16 @@ class PipelineTests(unittest.TestCase):
             self.assertEqual(sharpness('pc,aa=fsr,sharpen=0.9',2.0),1.0)
             self.assertEqual(sharpness('pc,aa=fsr,fsr_sharpen=0.3',1.5),0.3)
             self.assertEqual(defines_of('pc,aa=fsr,fsr_sharpen=0.7')[1]['FSR_SHARPNESS'],'0.7')
+            # aa=taau: TAA at the scene_color point, the upscaler while upscaling (with FSR's
+            # sharpening as TAA_SHARPEN and the jitter of every frame).
+            self.assertEqual(defines_of('pc,aa=taau')[1],defines_of('pc,taa_point=1')[1])
+            taau=dict(d.split('=',1) for d in pipeline.look_defines(pipeline.look_knobs('pc,aa=taau'),1.5))
+            self.assertEqual((taau['TAA_UPSCALE'],taau['TAA_SHARPEN'],taau['TAA_POINT'],
+                              taau['FM4_LOOK_SHARPEN'],taau['TAA_JITTER_MOTION'],
+                              taau['TAA_JITTER_RATE']),('1','0.6','1','0.0','0.0','0.0'))
+            self.assertNotIn('FSR',taau)
+            with self.assertRaises(RuntimeError):
+                pipeline.look_cvars(root,'pc,taa=0,aa=taau')
             with self.assertRaises(RuntimeError):
                 pipeline.look_cvars(root,'pc,aa=fsr,fsr_sharpen=1.5')
             self.assertEqual(pipeline.scene_upscale_ratio({'native_scene_input_scale':'1',
@@ -549,6 +559,10 @@ class PipelineTests(unittest.TestCase):
         # The quality mode's RCAS: the look's 0.4 plus 0.2 at ratio 1.5.
         cvars,_,_=plan(fhd,'quality',native=True)
         self.assertIn('FSR_SHARPNESS=0.6',cvars['shader_mod_defines'])
+        cvars,_,description=plan(fhd,'quality',native=True,look='pc,aa=taau')
+        self.assertEqual(scales(cvars),('1','3/2','1'))
+        self.assertIn('TAAU quality 720p -> 1080p',description)
+        self.assertIn('TAA_UPSCALE=1',cvars['shader_mod_defines'])
         native,_,description=plan(fhd,'native',native=True)
         self.assertEqual(scales(native),(None,'3/2',None))
         self.assertNotIn('FSR',description)

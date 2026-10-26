@@ -382,9 +382,14 @@ Upscale choice. At a 720p output every mode renders natively. On a computer with
 integrated GPUs only, an upscale mode takes the screen's own resolution as its output, so
 the ROG Xbox Ally X renders 720p and upscales it to 1080p, where it otherwise renders 1x.
 `-Upscale` needs the native path in one pass with 2x MSAA (`-Native`, the default with
-integrated GPUs only) and FSR 3.1 as the anti-aliasing method (`-Look "aces,aa=fsr"`, a
-runtime built with `-Fsr on`); both launchers refuse it with `aa=taa` ("-Upscale quality
-needs aa=fsr in -Look: TAA does not upscale"). `native`, the default, renders at the render
+integrated GPUs only) and an upscaler as the anti-aliasing method: FSR 3.1
+(`-Look "aces,aa=fsr"`, a runtime built with `-Fsr on`) or the project's TAA as the
+upscaler (`-Look "aces,aa=taau"`, the description then says "TAAU quality 720p -> 1080p");
+both launchers refuse it with `aa=taa` ("-Upscale quality needs aa=fsr or aa=taau in -Look:
+TAA does not upscale"). TAAU costs about half of FSR's GPU time (0.25 against 0.43 ms a
+race frame at 1080p from 720p on this PC) and keeps the still picture as sharp; in motion
+its textures are a little softer than FSR's at `quality`, and at 1.25 (864 to 1080 lines)
+it is close to native in motion and in still pictures ([FSR plan, 14](analysis/fsr-plan.md#14-taau-the-projects-taa-as-the-upscaler-26-october-2026)). `native`, the default, renders at the render
 scale as before. Photo mode and the menus render at the whole part of the input scale and
 are scaled to the screen. FSR sharpens an upscaled picture more than a native one: the
 look's `sharpen` plus 0.4 times the ratio above 1 (0.4 becomes 0.5 at 1.25, 0.6 at
@@ -636,8 +641,8 @@ and `-Look original`.
 | `ao` | number, `0` turns it off | Strength of the screen-space ambient occlusion. |
 | `taa` | `1` on (in every preset), `0` off | Temporal anti-aliasing before the HUD, with the scene jittered while the camera moves and on a still camera, whose frames it accumulates; the look's `sharpen` moves after it, and races render one tile without MSAA. See [Temporal anti-aliasing](#temporal-anti-aliasing). |
 | `taa_point` | `0` (default) or `1` | With `taa`: `1` runs TAA at the scene_color point, before the game's post chain, instead of before the HUD; the look's `sharpen` stays in the final combine. See [Temporal anti-aliasing](#temporal-anti-aliasing). |
-| `aa` | `taa` (default) or `fsr` | With `taa`: `fsr` runs AMD FSR 3.1's native anti-aliasing at the scene_color point instead of TAA, with the look's `sharpen` as FSR's sharpening; needs a runtime built with `-Fsr on`, else TAA runs at that point. See [Temporal anti-aliasing](#temporal-anti-aliasing). |
-| `fsr_sharpen` | number, 0 to 1; no preset | With `aa=fsr`: FSR's sharpening (RCAS) in place of its default, the look's `sharpen` at ratio 1 and 0.4 times the [-Upscale](#-upscale) ratio above 1 more while upscaling (0.6 at `quality` with the presets' 0.4), at most 1. For A/B runs, for example `-Look "aces,aa=fsr,fsr_sharpen=0.4"`. |
+| `aa` | `taa` (default), `fsr` or `taau` | With `taa`: `fsr` runs AMD FSR 3.1's native anti-aliasing at the scene_color point instead of TAA, with the look's `sharpen` as FSR's sharpening; needs a runtime built with `-Fsr on`, else TAA runs at that point. `taau` runs TAA at the scene_color point (as `taa_point=1`), and with [-Upscale](#-upscale) as the upscaler, with FSR's sharpening and the jitter of every frame. See [Temporal anti-aliasing](#temporal-anti-aliasing). |
+| `fsr_sharpen` | number, 0 to 1; no preset | With `aa=fsr` (and `aa=taau` while upscaling): FSR's sharpening (RCAS; TAAU's own sharpening) in place of its default, the look's `sharpen` at ratio 1 and 0.4 times the [-Upscale](#-upscale) ratio above 1 more while upscaling (0.6 at `quality` with the presets' 0.4), at most 1. For A/B runs, for example `-Look "aces,aa=fsr,fsr_sharpen=0.4"`. |
 | `windshield` | number, 0 (off) to 2; 1 in `aces`, `gt` and `neutral` | Glass on the windshield and side windows of the race cockpit camera, which the game leaves open: a light tint, a faint reflection of the dashboard, and glare and dust toward bright light. See [Cockpit glass](#cockpit-glass). |
 | `sun` | number, `0` turns the glare off | Strength of the sun glare on the RTV path, the same at every MSAA level. Without it (`original`) the glare follows the counted samples. See [Sun glare](#sun-glare). |
 | `road_gloss` | multiplier, default 1 | Specular of the road surface. See [Track lighting](#track-lighting). |

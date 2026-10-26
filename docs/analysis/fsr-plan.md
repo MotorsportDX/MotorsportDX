@@ -420,6 +420,59 @@ The frozen frame against the baseline (`parity.py`): `-Native` 3/2 without TAA p
 
 FSR's RCAS sharpening was the look's `sharpen` at every ratio. In 1:1 crops of the frozen frame at 1080p from 720p against native 1080p, 0.6 brings the grandstand and the gauges' print close to native's crispness, 0.8 starts to over-sharpen the crowd. `FSR_SHARPNESS` is now the look's `sharpen` plus 0.4 times the ratio above 1, at most 1: with the presets' 0.4, 0.5 at 1.25, 0.6 at quality, 0.68 at balanced and 0.8 at performance, and nothing added at ratio 1 (FSR's native anti-aliasing is unchanged). The ratio is the output's lines over the input's (`scene_upscale_ratio` in `pipeline.py`, `SceneUpscaleRatio` in the launcher). The look knob `fsr_sharpen` (0 to 1) sets it instead, for the owner's A/B. The `-Info` overlay shows the strength in use.
 
+## 14. TAAU: the project's TAA as the upscaler (26 October 2026)
+
+Item (b) of the integrated GPU proposal, approved by the main session on 26 October 2026: on the 890M FSR quality's `fsr` group costs 2.95 ms a frame at 1080p from 720p (12.4) against TAA's 1.12 ms at 1080p native, so an upscaler built on the project's TAA could save most of the difference.
+
+### 14.1 The design
+
+The runtime needs nothing new: while upscaling, the scene textures are at s_in, manifest textures with `size = "output"` at s_out, an output-sized write-back switches the scene range to the output class (11), the jitter has 8 ratio² phases, and the LOD bias of 12.1 applies to every scene draw at s_in.
+
+- **The look knob `aa=taau`** (both launchers): TAA at the scene_color point. Without `-Upscale` it is `taa_point=1`; with it the look sets `TAA_UPSCALE=1`, FSR's sharpening of 13.2 as `TAA_SHARPEN` (so the A/B is like for like), and `TAA_JITTER_MOTION=0` with `TAA_JITTER_RATE=0`, the jitter of every frame, which an upscaler needs in motion too. `-Upscale` takes `aa=fsr` or `aa=taau`; the description says "TAAU quality 720p -> 1080p". The GUI launcher offers TAA, FSR 3.1 or TAAU.
+- **The manifest**: `taau_resolve` and `taau_output` at the scene_color point (taa.hlsl with `TAA_UPSCALED 1`), `taau_history`, `taau_debug` and the write-back `taau_out` at the output size; the scene point's TAA passes run with `TAA_UPSCALE == 0`; `taau_resolve` is a consumer of the jitter.
+- **The resolve per output pixel**, the steps of taa.hlsl:
+  - Step 1 weighs the 3x3 input pixels around the output pixel by the Gaussian of the distance in output pixels between each one's unjittered position and the output pixel's center. The largest weight is the confidence.
+  - Without a usable history, the current frame comes from the same 3x3 weighed in input pixels, a smooth spatial upscale.
+  - The clip box's moments are weighed by a Gaussian of one input pixel around the output pixel. Unweighted ones are the same for every output pixel of an input pixel, and in motion they clipped the history in blocks of about 1.5 pixels at quality (the first version).
+  - The motion, the history (Catmull-Rom at the output size) and the disocclusion run in output pixels.
+  - Step 7 is a running average weighted by the confidence. The history's alpha holds the confidence it has accumulated, held below what `TAA_BLEND` (and in motion `TAA_BLEND_MOTION`) gives a full history, so a frame whose jitter put no sample near the pixel changes it little.
+  - The still camera's accumulation and the reactive pixels are as in TAA.
+
+### 14.2 How fast it gets sharp after a cut
+
+The game's captures come every 2 s, too far apart to count frames, so the convergence was simulated: the resolve's weights and blend, the Halton jitter of 8 ratio² phases, a pattern of thin lines and a zone plate, the RMS error against the pattern box-filtered at the output's pixels. The first version filled a young history in at 1 / (frames + 1) whatever the confidence; it stayed at about 0.055 from frame 2 to 16 and came within 10% of its final error only after 31 frames at ratio 1.25 and 40 at 1.5. The weighted average comes within 10% after 6 frames at 1.25 and 5 at 1.5 (0.1 s at 60 fps), and its final error is lower (0.036 against 0.040 at 1.5). In the game the first capture after the race start's camera change ("GO!") already shows the cable car's wires sharp.
+
+### 14.3 The A/B on this PC
+
+`race` at 1080p (`-Native`, `native_draw_scale=3/2`, `native_rt_surfaces=58`, `aces` and the variants below), one run each, the medians of the race window:
+
+| Run | GPU a frame | The AA pass |
+|---|---|---|
+| Native 1080p, TAA | 3.44 ms | `taa` 0.21 ms |
+| FSR quality (720 to 1080) | 3.10 ms | `fsr` 0.43 ms |
+| TAAU quality (720 to 1080) | 2.96 to 2.99 ms | `taa` 0.24 to 0.25 ms |
+| FSR at 1.25 (864 to 1080) | 3.47 ms | `fsr` 0.52 ms |
+| TAAU at 1.25 (864 to 1080) | 3.23 to 3.26 ms | `taa` 0.26 ms |
+
+TAAU costs about half of FSR's pass at the same input. The estimate for the 890M scales each group by its ratio between the two GPUs in 12.4 (FSR 6.9 times, TAA 5.3 times): TAAU at 720 to 1080 about 1.3 ms against FSR's 2.95, so about 1.6 ms a frame less (about 13.5 ms against 15.15, 74 fps against 66). TAAU at 1.25 adds the scene at 864 lines (on this PC the scene, the resolves and GTAO take about 0.4 ms more than at 720; on the 890M about 1.6 ms), so it should cost about what FSR quality does from 720. These are estimates, not measurements.
+
+The picture, 1:1 crops at 1080p (in the shared notes' `taau-crops`):
+
+- **The frozen frame**: TAAU quality keeps the gauges' print, the clock and the grandstand's crowd as sharp as native and FSR quality, and the tower's lattice and the cable car's wires sharper than FSR quality. TAAU at 1.25 is close to native throughout.
+- **In motion**: TAAU at 1.25 is close to native (the canopy's glass, the boards, the car ahead). TAAU quality's first version showed blocks of about 1.5 pixels on the canopy's glass and the paving in motion, from the clip box (14.1); with the weighted box they are gone, and the textures in motion stay a little softer and noisier than FSR's. The gauges' needles leave no trail, and a car passing close to the camera leaves none behind it.
+
+TAAU at 1.25 is the candidate for integrated GPUs: about FSR quality's cost from 720 on the 890M, and a picture closer to native. The owner's run on the ROG Xbox Ally X decides.
+
+### 14.4 The checks
+
+On `I:\FM4-build-usa` with `game-build-quirky` (the runtime of 43c8c81, unchanged by TAAU), the passes of the commit against those of 43c8c81 (`post_pass_path` to a copy of them):
+
+- `aa=taa` unchanged: the frozen frame on `-Native` 3/2 with `aces` (TAA at the final point) passes parity (draws -0.1%, 30.1% of the image above 4); RTV 2x with `aces` passes (+0.1%, 28.2%).
+- `aa=fsr` unchanged: at 1080p from 720p 33.5% of the image above 4 and the draws -0.2%, inside the run-to-run range of 13.1 (36.3%); `parity.py` reports FAIL on FSR's moving frozen frame alone, as there.
+- `-Rov` 1x with `original,taa=0` (no passes) passes against the run of 13.1 (-1.2%, 33.1%).
+- The 240 Hz smoke with `aa=taau` at 1080p from 720p reached its goals with the baseline's error keys: `photo` raced at 238.6 fps (p99 4.96 ms) with photo mode at 29.9, `career` at 237.4 fps (p99 5.02 ms) with the replay at 119.4.
+- `test_pipeline` and the launcher tests (387 plans, with `aa=taau` at quality, at 1.25 and without `-Upscale`) pass.
+
 ## Related
 
 - [TAA](taa.md), [motion vectors](motion-vectors.md#6-requirements-for-taa-and-the-upscalers), [post pass framework](post-pass-framework.md)

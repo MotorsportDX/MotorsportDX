@@ -120,7 +120,8 @@ double WindshieldStrength(const Pairs& knobs) {
 
 std::string AaMethod(const Pairs& knobs) {
   const std::string value = knobs.Get("aa", "taa");
-  if (value != "taa" && value != "fsr") throw PlanError("aa is taa or fsr, not '" + value + "'.");
+  if (value != "taa" && value != "fsr" && value != "taau")
+    throw PlanError("aa is taa, fsr or taau, not '" + value + "'.");
   return value;
 }
 
@@ -319,6 +320,10 @@ std::string InfoOverlay(const LauncherData& data, const Pairs& cvars, const Pair
     lines.push_back("Anti-aliasing: FSR 3.1 before the post chain (scene_color), sharpen " +
                     PyG(PyFloat(*define("FSR_SHARPNESS"))) +
                     ", scene jittered every frame (TAA there in a runtime without FSR)");
+  } else if (define("TAA_UPSCALE") && *define("TAA_UPSCALE") == "1") {
+    lines.push_back("Anti-aliasing: TAA as the upscaler before the post chain (scene_color), "
+                    "sharpen " +
+                    PyG(PyFloat(*define("TAA_SHARPEN"))) + ", scene jittered every frame");
   } else if (define("TAA") && *define("TAA") == "1" && define("TAA_POINT") &&
              *define("TAA_POINT") == "1") {
     lines.push_back(
@@ -568,16 +573,26 @@ std::vector<std::string> LookDefines(const LauncherData& data, const Pairs& knob
     defines.push_back(look_knobs.at(name).get<std::string>() + "=" + PyRepr(number));
   }
   const bool scene_point = TaaScenePoint(knobs);
-  const bool fsr = AaMethod(knobs) == "fsr";
-  if (fsr && !TaaEnabled(knobs))
-    throw PlanError("aa=fsr needs taa above 0 (the look turns temporal anti-aliasing on).");
-  if (fsr) {
+  const std::string aa = AaMethod(knobs);
+  const bool fsr = aa == "fsr";
+  if (aa != "taa" && !TaaEnabled(knobs))
+    throw PlanError("aa=" + aa + " needs taa above 0 (the look turns temporal anti-aliasing on).");
+  if (aa == "taau" && upscale_ratio != 1.0) {
+    // TAA as the upscaler at the scene_color point, jittered in every frame, with FSR's
+    // sharpening for a like-for-like comparison.
+    const double sharpen = FsrSharpness(knobs, upscale_ratio);
+    std::erase_if(defines, [](const std::string& d) { return d.starts_with("FM4_LOOK_SHARPEN="); });
+    defines.insert(defines.end(),
+                   {"FM4_LOOK_SHARPEN=0.0", "TAA=1", "TAA_SHARPEN=" + PyRepr(sharpen),
+                    "TAA_POINT=1", "TAA_UPSCALE=1", "TAA_JITTER_MOTION=0.0",
+                    "TAA_JITTER_RATE=0.0"});
+  } else if (fsr) {
     // FSR at the scene_color point, the look's sharpening as its RCAS.
     const double sharpen = FsrSharpness(knobs, upscale_ratio);
     std::erase_if(defines, [](const std::string& d) { return d.starts_with("FM4_LOOK_SHARPEN="); });
     defines.insert(defines.end(), {"FM4_LOOK_SHARPEN=0.0", "TAA=1", "TAA_SHARPEN=0.0", "TAA_POINT=1",
                                    "FSR=1", "FSR_SHARPNESS=" + PyRepr(sharpen)});
-  } else if (TaaEnabled(knobs) && scene_point) {
+  } else if (TaaEnabled(knobs) && (scene_point || aa == "taau")) {
     defines.insert(defines.end(), {"TAA=1", "TAA_SHARPEN=0.0", "TAA_POINT=1"});
   } else if (TaaEnabled(knobs)) {
     const double sharpen = PyFloat(knobs.Get("sharpen", "0"));
@@ -765,8 +780,9 @@ std::pair<Pairs, std::string> UpscaleSettings(const LauncherData& data, const st
     throw PlanError(
         "-Upscale needs the native path in one pass with 2x MSAA (-Native without -SingleTile, "
         "-Msaa or -MsaaSamples 0 or 4).");
-  if (aa != "fsr")
-    throw PlanError("-Upscale " + upscale + " needs aa=fsr in -Look: TAA does not upscale.");
+  if (aa != "fsr" && aa != "taau")
+    throw PlanError("-Upscale " + upscale +
+                    " needs aa=fsr or aa=taau in -Look: TAA does not upscale.");
   const auto [numerator, denominator] =
       ParseScale(cvars.Get("native_draw_scale", cvars.Get("draw_resolution_scale_x", "1")));
   const int output_lines = (720 * numerator + denominator / 2) / denominator;
@@ -790,7 +806,7 @@ std::pair<Pairs, std::string> UpscaleSettings(const LauncherData& data, const st
   result.Set("draw_resolution_scale_x", whole);
   result.Set("draw_resolution_scale_y", whole);
   result.Set("native_rt_surfaces", "58");
-  return {result, "; FSR " + upscale + " " + std::to_string(lines) + "p -> " +
+  return {result, std::string(aa == "fsr" ? "; FSR " : "; TAAU ") + upscale + " " + std::to_string(lines) + "p -> " +
                       std::to_string(output_lines) + "p" + clamped};
 }
 

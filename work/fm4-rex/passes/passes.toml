@@ -97,6 +97,12 @@ TAA_DISOCCLUSION = 1
 # written back into the game's scene; the occlusion then gets its own temporal
 # filter, gtao_temporal).
 TAA_POINT = 0
+# With TAA at the scene_color point while upscaling (native_scene_input_scale
+# below native_draw_scale; the look's aa=taau): 1 runs TAA as the upscaler
+# (taau_resolve, taau_output), its history and output at the scene's output
+# size, so the scene at the input scale is reconstructed at the output scale
+# from the jittered frames (docs/analysis/fsr-plan.md 14).
+TAA_UPSCALE = 0
 # The cockpit glass (windshield.hlsl, WINDSHIELD above 0): the tint of the light
 # through it, its color, the dashboard's reflection and how far above the
 # dashboard's top edge it fades out (frame heights), how much the reflection is
@@ -315,6 +321,22 @@ format = "R8G8B8A8_UNORM"
 
 [textures.taa_scene_out]
 format = "R10G10B10A2_UNORM"
+write_back = true
+
+# The same as an upscaler (TAA_UPSCALE): at the scene's output size, the output
+# written back at the output scale as FSR's is.
+[textures.taau_history]
+format = "R16G16B16A16_FLOAT"
+size = "output"
+history = true
+
+[textures.taau_debug]
+format = "R8G8B8A8_UNORM"
+size = "output"
+
+[textures.taau_out]
+format = "R10G10B10A2_UNORM"
+size = "output"
 write_back = true
 
 # FSR's inputs at the scene_color point (fsr_prepare): the linear color, the
@@ -566,7 +588,7 @@ point = "scene_color"
 shader = "taa.hlsl"
 entry = "taa_resolve"
 defines = { TAA_SCENE = 1 }
-if = "TAA > 0 && TAA_POINT > 0 && FSR == 0 && XE_SCENE > 0"
+if = "TAA > 0 && TAA_POINT > 0 && TAA_UPSCALE == 0 && FSR == 0 && XE_SCENE > 0"
 srv = ["scene_color", "scene_depth", "motion_vectors", "motion_mask",
        "previous:taa_scene_history", "previous_depth"]
 uav = ["taa_scene_history", "taa_scene_debug"]
@@ -578,9 +600,34 @@ type = "pixel"
 shader = "taa.hlsl"
 entry = "taa_output"
 defines = { TAA_SCENE = 1 }
-if = "TAA > 0 && TAA_POINT > 0 && FSR == 0 && XE_SCENE > 0"
+if = "TAA > 0 && TAA_POINT > 0 && TAA_UPSCALE == 0 && FSR == 0 && XE_SCENE > 0"
 srv = ["taa_scene_history", "taa_scene_debug", "scene_color"]
 rtv = ["taa_scene_out"]
+
+# TAA as the upscaler at the scene_color point (TAA_UPSCALE): the resolve over
+# the output's pixels from the scene at the input scale, and its output written
+# back at the output scale.
+[[passes]]
+name = "taau_resolve"
+point = "scene_color"
+shader = "taa.hlsl"
+entry = "taa_resolve"
+defines = { TAA_SCENE = 1, TAA_UPSCALED = 1 }
+if = "TAA > 0 && TAA_POINT > 0 && TAA_UPSCALE > 0 && FSR == 0 && XE_SCENE > 0"
+srv = ["scene_color", "scene_depth", "motion_vectors", "motion_mask",
+       "previous:taau_history", "previous_depth"]
+uav = ["taau_history", "taau_debug"]
+
+[[passes]]
+name = "taau_output"
+point = "scene_color"
+type = "pixel"
+shader = "taa.hlsl"
+entry = "taa_output"
+defines = { TAA_SCENE = 1, TAA_UPSCALED = 1 }
+if = "TAA > 0 && TAA_POINT > 0 && TAA_UPSCALE > 0 && FSR == 0 && XE_SCENE > 0"
+srv = ["taau_history", "taau_debug", "scene_color"]
+rtv = ["taau_out"]
 
 # FSR's native anti-aliasing at the scene_color point instead of TAA there:
 # its inputs, FSR itself (the runtime's upscaler, a pass of type fsr), and its
@@ -641,8 +688,9 @@ srv = ["scene_color"]
 rtv = ["scene_written"]
 
 # The scene draws move by a sub-pixel Halton (2, 3) offset per frame while TAA
-# runs, in frames after one in which taa_resolve, taa_scene_resolve or
-# fsr_upscale ran; with FSR in every such frame (every_frame_if), else while
+# runs, in frames after one in which taa_resolve, taa_scene_resolve,
+# taau_resolve or fsr_upscale ran (TAA as the upscaler jitters every frame with
+# TAA_JITTER_MOTION and TAA_JITTER_RATE at 0, which the look's aa=taau sets); with FSR in every such frame (every_frame_if), else while
 # the scene camera moved by TAA_JITTER_MOTION host pixels (the static world at
 # motion_distance meters) in one of the last motion_hold frames and the median
 # frame rate is TAA_JITTER_RATE or more, and with TAA_STILL once it has not
@@ -650,7 +698,7 @@ rtv = ["scene_written"]
 [jitter]
 phases = 8
 if = "TAA > 0 && TAA_JITTER > 0"
-consumer = ["taa_resolve", "taa_scene_resolve", "fsr_upscale"]
+consumer = ["taa_resolve", "taa_scene_resolve", "taau_resolve", "fsr_upscale"]
 every_frame_if = "FSR > 0"
 min_motion = "TAA_JITTER_MOTION"
 min_frame_rate = "TAA_JITTER_RATE"
