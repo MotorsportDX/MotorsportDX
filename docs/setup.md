@@ -137,8 +137,8 @@ Set-ExecutionPolicy -Scope Process -ExecutionPolicy Bypass
 ```
 
 ```powershell
-git clone https://github.com/dfebri446/FM4-PC.git
-Set-Location FM4-PC
+git clone https://github.com/MotorsportDX/MotorsportDX.git
+Set-Location MotorsportDX
 
 $common = @{
     BuildRoot = 'D:\FM4-build'

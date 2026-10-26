@@ -45,8 +45,8 @@ Run the following in PowerShell. Replace the example paths with the locations on
 ### 1. Clone the repository
 
 ```powershell
-git clone https://github.com/dfebri446/FM4-PC.git
-Set-Location FM4-PC
+git clone https://github.com/MotorsportDX/MotorsportDX.git
+Set-Location MotorsportDX
 ```
 
 ### 2. Choose directories and check the toolchain
