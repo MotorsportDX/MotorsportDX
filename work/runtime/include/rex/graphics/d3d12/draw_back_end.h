@@ -117,6 +117,10 @@ uint32_t SceneLogicalHeight();
 // full screen.
 void ApplyLogicalWidth(const RegisterFile& regs, uint32_t flags, DrawScale scene_scale,
                        draw_util::ViewportInfo& viewport, draw_util::Scissor& scissor);
+// With kFlagLogicalCrop: a full-screen viewport at the whole scale scale_x by
+// scale_y widened to the logical size, centred and cut at the target's edge.
+void ApplyLogicalCrop(uint32_t flags, uint32_t scale_x, uint32_t scale_y,
+                      draw_util::ViewportInfo& viewport);
 
 // The kDrawBackEnd command, written by Encode and read by Decode only, so the
 // format can change without the back end. After the header: the masks of the
@@ -215,6 +219,12 @@ constexpr uint32_t kFlagLogicalHud = 1 << 15;
 // With kFlagSceneScale while upscaling (docs/analysis/fsr-plan.md 11): into the
 // MSAA private surfaces at the scene's input scale.
 constexpr uint32_t kFlagSceneInput = 1 << 16;
+// At a logical size, a draw outside the scene's scale after the post passes'
+// final point that samples a full-screen scene texture (d3d-hle-n5.md 18.28):
+// its full-screen viewport
+// covers the logical size centred on the target, so it shows the texture's
+// centred 1280x720.
+constexpr uint32_t kFlagLogicalCrop = 1 << 17;
 // The scale of a scene draw with the flags.
 inline DrawScale FlagsSceneScale(uint32_t flags, DrawScale scene_scale, DrawScale input_scale) {
   return (flags & kFlagSceneInput) ? input_scale : scene_scale;

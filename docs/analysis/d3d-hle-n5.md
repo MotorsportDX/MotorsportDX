@@ -544,7 +544,37 @@ The width (Hor+) needs nothing new, since tiles split the height only.
 | RTV 2x (`aces`), `-Rov` 1x (`original,taa=0`), `freeze` parity | PASS: draws -0.6%, 36.7% of the image above 4; +0.0%, 16.8% |
 | The races on the native path, `freeze` parity with `aces` at 3/2 and at 2 with 1280x800 | PASS: draws +0.0%, 29.4% above 4; -0.7%, 29.7% |
 
-Open:
+Open (both closed in 18.28):
 - **The saved photo at a logical height is squashed.** It holds the whole 1280x800 picture in 720 lines (the logo at line 612, (640 + 40) x 720 / 800); at 1920x1200 the same. The baseline squashes it the same way since 18.26.
 - **At 20/9, 256 lines are 568.9 host lines.** The middle and bottom tiles sit up to half a host line off their bands there; this is not checked by eye yet.
+
+### 18.28 The saved photo at a logical size (27 October 2026)
+
+**The squash.** A frame graph of every frame at 2560x1600 (`REX_FRAME_GRAPH_EVERY=1`) shows how photo mode saves:
+- After the final combine and its resolve into the frontbuffer (1280x720, a scene destination, so its texture holds the logical 1280x800 at s), one draw copies the frontbuffer into a one-sample `8_8_8_8` surface.
+- That surface is shared, so the draw runs at the whole scale k.
+- Its resolve into `1C0C1000` is the photo that the title encodes, and the 416x240 thumbnail is drawn from it.
+
+The copy samples the logical frontbuffer across a 1280x720 viewport, so the photo held the whole 1280x800 in 720 lines. Matching the photo's rows against the live view of the same run measures a vertical scale of 0.9.
+
+**The crop** (`kFlagLogicalCrop`). A draw outside the scene's scale, after the post passes' final point, whose pixel shader samples a full-screen (1280x720) scene texture at a logical size gets its full-screen viewport widened to the logical size. The widened viewport is centred on the target and cut at its edge (`ApplyLogicalCrop`, in the command processor and the draw back end's replay). The draw then shows the texture's centred 1280x720, the picture the title framed, with the HUD (the logo) where it is at 16:9.
+- **Why only after the final point.** Before the final point, photo mode's effects make the same kind of draws from its scene colour at k. Their output goes back into the logical picture, stretched as it was squeezed. The first build, which cropped them too, broke the saved photo into streaks.
+- **Which draws it hits.** The log names each pixel shader once (`Logical crop: pixel shader ...`); in photo mode only the frontbuffer copy is named.
+
+**The host NDC's y points up.** The second build cropped with the offset of a downward y: the scale was right, but the photo was the top 720 lines of the logical picture. A shared helper (`MoveViewportAxis`) now moves a viewport's rectangle with each vertex at its pixel:
+- x: offset + (1 + n) extent / 2;
+- y: offset + (1 - n) extent / 2.
+
+18.27's tile viewports use the helper as well. Its camera draws come out the same as before (the two signs cancelled there); its screen-space draws in the middle and bottom tiles no longer shift.
+
+**The gate** (`I:\FM4-build-usa`, `game-build-pc` against `game-build-pm` of 18.27, `aces`, 240 Hz):
+
+| Check | Result |
+|---|---|
+| Saved photo against the live view (rows matched, scale 0.9 and 1.0 tried) | 2560x1600: scale 1.0, the photo's line 0 at logical line 40 (the centre; 18.27: scale 0.9). 1920x1200: line 40. 3440x1440 (Hor+, 1720x720): column 220, (1720 - 1280) / 2 |
+| Saved photo, all cells | 1280x720 and the 416x240 thumbnail at 1x, 3/2, 1920x1200, 2560x1600 and 3440x1440; the car's proportions and the logo's place as at 16:9 and in RTV 2x's saved photo (RTV's race put its photo mode camera behind the car, so the scene differs). At 1x and 3/2 16:9 no draw is cropped |
+| `photo_view` | loads the photo in a new process in every cell |
+| Live view at 2560x1600 | whole, no seam at the tiles' edges |
+| The races at 2560x1600 and 3440x1440, `freeze` parity against 18.27's build | PASS: draws +0.2% and -0.6%, 33.1% and 31.2% of the image above 4; no draw cropped in a race |
+| 20/9 (2845x1600), 1:1 at lines 569 and 1138 (the tiles' edges) | no step visible on the roof, the windscreen or the bumper's line |
 

@@ -513,6 +513,7 @@ void ComputeViewportAndScissor(const RegisterFile& regs, uint32_t flags, uint32_
                                  (flags & kFlagConvertZToFloat24) != 0,
                                  (flags & kFlagHostRenderTargets) != 0, pixel_shader_writes_depth,
                                  viewport);
+  ApplyLogicalCrop(flags, scale_x, scale_y, viewport);
   draw_util::GetScissor(regs, scissor);
   scissor.offset[0] *= scale_x;
   scissor.offset[1] *= scale_y;
@@ -532,6 +533,22 @@ uint32_t SceneLogicalWidth() { return scene_logical_width; }
 void SetSceneLogicalHeight(uint32_t height) { scene_logical_height = height; }
 
 uint32_t SceneLogicalHeight() { return scene_logical_height; }
+
+namespace {
+// Moves the rectangle of a viewport's axis from (from_offset, from_extent) to
+// (to_offset, to_extent) in host pixels with every vertex at the same pixel:
+// the NDC transform of the new rectangle. The host NDC's y points up, so the
+// pixel of NDC n is offset + (1 + n) extent / 2 in x and
+// offset + (1 - n) extent / 2 in y.
+void MoveViewportAxis(draw_util::ViewportInfo& viewport, uint32_t axis, float from_offset,
+                      float from_extent, float to_offset, float to_extent) {
+  const float sign = axis ? -1.0f : 1.0f;
+  viewport.ndc_scale[axis] *= from_extent / to_extent;
+  viewport.ndc_offset[axis] =
+      viewport.ndc_offset[axis] * from_extent / to_extent +
+      sign * (2.0f * (from_offset - to_offset) + from_extent - to_extent) / to_extent;
+}
+}  // namespace
 
 void ApplyLogicalWidth(const RegisterFile& regs, uint32_t flags, DrawScale scene_scale,
                        draw_util::ViewportInfo& viewport, draw_util::Scissor& scissor) {
@@ -585,27 +602,21 @@ void ApplyLogicalWidth(const RegisterFile& regs, uint32_t flags, DrawScale scene
     } else if (viewport_tile < guest_size[i] && viewport.xy_offset[i] == 0 &&
                viewport.xy_extent[i] == scene_scale.ScaleEdge(guest_size[i] - viewport_tile)) {
       // A full-screen viewport cut at the tile's top. Its uncut form, at the
-      // guest's exact position: offset -t s and extent 720 s.
-      const float scale = float(scene_scale.numerator) / float(scene_scale.denominator);
-      const float cut_extent = float(viewport.xy_extent[i]);
-      const float full_offset = -float(viewport_tile) * scale;
-      const float full_extent = float(guest_size[i]) * scale;
-      float ndc_scale = viewport.ndc_scale[i] * cut_extent / full_extent;
-      float ndc_offset = (viewport.ndc_offset[i] + 1.0f) * cut_extent / full_extent - 1.0f -
-                         2.0f * full_offset / full_extent;
-      if (flags & kFlagLogicalCamera) {
-        const float ratio = float(full) / float(logical);
-        ndc_scale *= ratio;
-        ndc_offset *= ratio;
-      }
-      // The logical view from the tile's first row, at the row its band takes
-      // in the scene's texture, cut there again.
+      // guest's exact position: offset -t s and extent 720 s, then the
+      // logical view of the full screen from the row the tile's band takes in
+      // the scene's texture, cut there again.
       const uint32_t top = scene_scale.ScaleEdge(viewport_tile);
       if (logical > top) {
-        const float logical_cut = float(logical - top);
+        const float scale = float(scene_scale.numerator) / float(scene_scale.denominator);
+        MoveViewportAxis(viewport, i, 0.0f, float(viewport.xy_extent[i]),
+                         -float(viewport_tile) * scale, float(guest_size[i]) * scale);
+        if (flags & kFlagLogicalCamera) {
+          const float ratio = float(full) / float(logical);
+          viewport.ndc_scale[i] *= ratio;
+          viewport.ndc_offset[i] *= ratio;
+        }
+        MoveViewportAxis(viewport, i, -float(top), float(logical), 0.0f, float(logical - top));
         viewport.xy_extent[i] = logical - top;
-        viewport.ndc_scale[i] = ndc_scale * float(logical) / logical_cut;
-        viewport.ndc_offset[i] = ndc_offset * float(logical) / logical_cut - float(top) / logical_cut;
       }
     }
     // A full-screen scissor, or the bottom tile's, to the logical size.
@@ -616,6 +627,29 @@ void ApplyLogicalWidth(const RegisterFile& regs, uint32_t flags, DrawScale scene
         logical > scissor_top) {
       scissor.extent[i] = logical - scissor_top;
     }
+  }
+}
+
+void ApplyLogicalCrop(uint32_t flags, uint32_t scale_x, uint32_t scale_y,
+                      draw_util::ViewportInfo& viewport) {
+  if (!(flags & kFlagLogicalCrop)) {
+    return;
+  }
+  const uint32_t guest_size[2] = {1280, 720};
+  const uint32_t logical_size[2] = {scene_logical_width, scene_logical_height};
+  const uint32_t scale[2] = {scale_x, scale_y};
+  for (uint32_t i = 0; i < 2; ++i) {
+    const uint32_t full = guest_size[i] * scale[i];
+    if (logical_size[i] <= guest_size[i] || viewport.xy_offset[i] != 0 ||
+        viewport.xy_extent[i] != full) {
+      continue;
+    }
+    // The draw stretched to the logical size from -centre, then that
+    // rectangle cut at 0: its extent runs to the logical size's end.
+    const uint32_t logical = logical_size[i] * scale[i];
+    const uint32_t centre = (logical - full) / 2;
+    MoveViewportAxis(viewport, i, -float(centre), float(logical), 0.0f, float(logical - centre));
+    viewport.xy_extent[i] = logical - centre;
   }
 }
 

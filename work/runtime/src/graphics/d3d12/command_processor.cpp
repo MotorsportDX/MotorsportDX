@@ -4382,6 +4382,29 @@ bool D3D12CommandProcessor::IssueDraw(xenos::PrimitiveType primitive_type, uint3
       }
     }
   }
+  // A draw outside the scene's scale after the final point that samples a
+  // full-screen scene texture at a logical size sees the texture's centred
+  // 1280x720, the picture the title framed: photo mode's save copies the
+  // frontbuffer at the whole scale (d3d-hle-n5.md 18.28). Before the final
+  // point, such a draw's output goes back into the logical picture, stretched
+  // as it was squeezed (photo mode's effects).
+  if (!scene_draw && pixel_shader && post_passes_ && post_passes_->IsAfterFinal() &&
+      (draw_back_end::SceneLogicalWidth() != 1280 || draw_back_end::SceneLogicalHeight() != 720)) {
+    for (const Shader::TextureBinding& binding : pixel_shader->texture_bindings()) {
+      TextureCache::SceneTextureInfo info;
+      if (texture_cache_->GetActiveSceneTexture(binding.fetch_constant, info) &&
+          info.width == 1280 && info.height == 720) {
+        logical_flags = draw_back_end::kFlagLogicalCrop;
+        static std::set<uint64_t> logged;
+        if (logged.size() < 16 && logged.insert(pixel_shader->ucode_data_hash()).second) {
+          REXGPU_INFO("Logical crop: pixel shader {:016X} samples the scene texture {:08X} "
+                      "outside the scene's scale",
+                      pixel_shader->ucode_data_hash(), info.base);
+        }
+        break;
+      }
+    }
+  }
 
   // Build a cache key from all viewport-affecting state to skip redundant
   // recalculation when the viewport registers haven't changed between draws.
@@ -4400,7 +4423,8 @@ bool D3D12CommandProcessor::IssueDraw(xenos::PrimitiveType primitive_type, uint3
                        (uniform_draw_scale_x << 3) | (uniform_draw_scale_y << 5) |
                        (uint32_t(regs.Get<reg::RB_DEPTH_INFO>().depth_format) << 8) |
                        (uint32_t(scene_draw) << 16) | (logical_flags >> 14 << 17) |
-                       (uint32_t(scene_input_draw) << 19);
+                       (uint32_t(scene_input_draw) << 19) |
+                       (uint32_t((logical_flags & draw_back_end::kFlagLogicalCrop) != 0) << 20);
 
   draw_util::ViewportInfo viewport_info;
   if (draw_back_end_ == 2) {
@@ -4422,6 +4446,9 @@ bool D3D12CommandProcessor::IssueDraw(xenos::PrimitiveType primitive_type, uint3
                                      D3D12_VIEWPORT_BOUNDS_MAX, D3D12_VIEWPORT_BOUNDS_MAX, false,
                                      normalized_depth_control, convert_z_to_float24,
                                      host_render_targets_used, ps_writes_depth, viewport_info);
+      draw_back_end::ApplyLogicalCrop(logical_flags, draw_resolution_scale_x * uniform_draw_scale_x,
+                                      draw_resolution_scale_y * uniform_draw_scale_y,
+                                      viewport_info);
     }
     previous_viewport_key_ = viewport_key;
     previous_viewport_info_ = viewport_info;
@@ -4515,7 +4542,8 @@ bool D3D12CommandProcessor::IssueDraw(xenos::PrimitiveType primitive_type, uint3
                     (jitter_applied ? be::kFlagJitter : 0) |
                     (uniform_draw_scale_x << be::kFlagUniformScaleShift) |
                     (uniform_draw_scale_y << (be::kFlagUniformScaleShift + 2)) |
-                    (scene_draw ? be::kFlagSceneScale | logical_flags : 0) |
+                    (scene_draw ? be::kFlagSceneScale | logical_flags
+                                : logical_flags & be::kFlagLogicalCrop) |
                     (scene_input_draw ? be::kFlagSceneInput : 0);
     capture.jitter[0] = jitter_applied ? jitter[0] : 0.0f;
     capture.jitter[1] = jitter_applied ? jitter[1] : 0.0f;
