@@ -65,6 +65,14 @@ float xe_guest_frame_interval() { return xe_system_float(XE_SYS_GUEST_FRAME_INTE
 float xe_guest_design_frame_rate() { return xe_system_float(XE_SYS_GUEST_DESIGN_FRAME_RATE); }
 #endif
 
+#ifdef XE_SYS_NATIVE_PASS
+// The native shader contract (native_shader_contract, docs/analysis/shader-contract.md),
+// defined for the pixel shaders of the manifest's entries: the pass class of the draw, one of
+// the contract's XE_NATIVE_PASS_<NAME> values (the built-in OTHER, POST and HUD, then the
+// manifest's [[pass]] classes), from the host values' W.
+uint xe_native_pass() { return uint(xe_system_float(XE_SYS_NATIVE_PASS)); }
+#endif
+
 #ifdef XE_SYS_MOD_KNOBS
 // Live knob <index> of the shader mods (shader_mod_live_knobs): the runtime
 // writes the numeric shader_mod_defines after the system constants and defines
@@ -840,6 +848,20 @@ XePsOutput xe_ps_epilogue(XePixel p, XePsInput input) {
   return output;
 }
 
+#ifdef XE_NATIVE_PASS_DEBUG
+// native_shader_pass_debug: colour target 0 in the colour of the draw's pass class, at the
+// brightness of its brightest channel (at least 0.5), its alpha kept: other gray, post blue,
+// hud yellow, then the manifest's classes green, red, magenta, cyan, orange, and white.
+void xe_native_pass_debug(inout XePixel p) {
+  static const float3 kColors[9] = {
+      float3(0.5, 0.5, 0.5), float3(0.0, 0.3, 1.0), float3(1.0, 0.9, 0.0),
+      float3(0.0, 1.0, 0.0), float3(1.0, 0.0, 0.0), float3(1.0, 0.0, 1.0),
+      float3(0.0, 1.0, 1.0), float3(1.0, 0.5, 0.0), float3(1.0, 1.0, 1.0)};
+  float level = max(max(p.color[0].r, p.color[0].g), p.color[0].b);
+  p.color[0].rgb = kColors[min(xe_native_pass(), 8u)] * max(level, 0.5);
+}
+#endif
+
 #endif  // XE_PIXEL_SHADER
 
 // Hooks of shader mods (shader_mod_path), included after this part: they #undef
@@ -866,6 +888,9 @@ XePsOutput main(XePsInput xe_input) {
   XePixel xe_input_pixel = p;
   xe_pixel_shader(p);
   XE_HOOK_OUTPUT(p, xe_input_pixel);
+#ifdef XE_NATIVE_PASS_DEBUG
+  xe_native_pass_debug(p);
+#endif
   return xe_ps_epilogue(p, xe_input);
 }
 #endif

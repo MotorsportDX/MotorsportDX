@@ -106,6 +106,22 @@ class PipelineTests(unittest.TestCase):
             manifest=pipeline.write_content_manifest(root,[dlc])
             self.assertEqual(manifest.read_text(encoding='utf-8'),f'{dlc}\n')
 
+    def test_stage_launcher_files(self):
+        """The GUI launcher's and the export's folder: the look directory with its manifest
+        (shaders.toml, docs/analysis/shader-contract.md) and the post passes."""
+        with tempfile.TemporaryDirectory(prefix='fm4 stage test ') as directory:
+            root=Path(directory)
+            (root/'look').mkdir()
+            (root/'look'/'stale.hlsli').write_text('// removed by the staging',encoding='utf-8')
+            pipeline.stage_launcher_files(root)
+            look={path.name for path in (root/'look').iterdir()}
+            expected={path.name for path in pipeline.LOOK_DIRECTORY.iterdir()
+                      if path.suffix in ('.hlsli','.toml')}
+            self.assertEqual(look,expected)
+            self.assertIn('shaders.toml',look)
+            self.assertTrue((root/'passes'/'passes.toml').is_file())
+            self.assertTrue((root/'launcher.json').is_file())
+
     def test_look_cvars(self):
         with tempfile.TemporaryDirectory(prefix='fm4 look test ') as directory:
             root=Path(directory)
@@ -134,6 +150,9 @@ class PipelineTests(unittest.TestCase):
                 pipeline.look_knobs('filmic')
             cvars=pipeline.look_cvars(root,'pc,sharpen=0.6,taa=0')
             self.assertEqual(Path(cvars['shader_mod_path']),root/'look')
+            # The run's look directory has the mods and the native shader contract's manifest.
+            for name in ('fm4-car.hlsli','shader_E62CFDF09D758B6C.mod.hlsli','shaders.toml'):
+                self.assertTrue((root/'look'/name).is_file(),name)
             defines=dict(define.split('=',1) for define in cvars['shader_mod_defines'].split(';'))
             self.assertEqual(defines['FM4_LOOK_SHARPEN'],'0.6')
             self.assertEqual(defines['FM4_LOOK_TONEMAP'],'2.0')

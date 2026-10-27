@@ -79,10 +79,15 @@ constexpr uint32_t kSystemConstantVectors = 16;
 constexpr uint32_t kHostValueVectors = 1;
 constexpr uint32_t kKnobCount = 64;
 
+// The native shader contract's part of a contract (ShaderOverrides::BuildContract
+// for an entry of shaders.toml, docs/analysis/shader-contract.md): none, the pass
+// class, or the pass class with native_shader_pass_debug.
+enum class Native { kNone, kPass, kPassDebug };
+
 // What ShaderOverrides::BuildContract writes for a pixel shader with color
 // target 0, all interpolators, every fetch constant bound as 2D, 3D and cube
 // (unsigned and signed) with its default sampler, and every float constant.
-std::string Contract(bool post_ao, bool live_knobs) {
+std::string Contract(bool post_ao, bool live_knobs, Native native = Native::kNone) {
   std::string out = "// Synthetic contract (fm4_shader_mod_tests).\n#define XE_PIXEL_SHADER 1\n";
   auto line = [&out](const std::string& text) { out += text + "\n"; };
   if (live_knobs) {
@@ -99,6 +104,18 @@ std::string Contract(bool post_ao, bool live_knobs) {
        "u");
   line("#define XE_SYS_GUEST_DESIGN_FRAME_RATE " + std::to_string(kSystemConstantVectors * 16 + 8) +
        "u");
+  if (native != Native::kNone) {
+    line("#define XE_NATIVE_CONTRACT 1");
+    line("#define XE_SYS_NATIVE_PASS " + std::to_string(kSystemConstantVectors * 16 + 12) + "u");
+    const char* const kPasses[] = {"OTHER", "POST", "HUD", "SCENE", "MIRROR"};
+    for (uint32_t pass = 0; pass < std::size(kPasses); ++pass) {
+      line(std::string("#define XE_NATIVE_PASS_") + kPasses[pass] + " " + std::to_string(pass) +
+           "u");
+    }
+    if (native == Native::kPassDebug) {
+      line("#define XE_NATIVE_PASS_DEBUG 1");
+    }
+  }
   line("#define XE_SYS_FLAGS 0u");
   line("#define XE_SYS_TEXTURE_SWIZZLED_SIGNS 16u");
   line("#define XE_SYS_TEXTURES_RESOLUTION_SCALED 48u");
@@ -291,8 +308,9 @@ std::vector<std::string> Knobs(const std::filesystem::path& look) {
 Result Compile(const std::string& library, const std::filesystem::path& mods,
                const std::string& mod, bool post_ao, const char* override_text,
                const std::vector<std::pair<std::string, std::string>>& defines,
-               bool live_knobs = false) {
-  std::string source = Contract(post_ao, live_knobs) + "#include \"xenos_override.hlsli\"\n";
+               bool live_knobs = false, Native native = Native::kNone) {
+  std::string source =
+      Contract(post_ao, live_knobs, native) + "#include \"xenos_override.hlsli\"\n";
   if (!mod.empty()) {
     source += "#include \"" + mod + "\"\n";
   }
@@ -498,6 +516,24 @@ int main(int argc, char** argv) {
                     result.instructions);
       }
     }
+  }
+
+  // The native shader contract: the library's pass class and its debug view
+  // change nothing until a shader reads them, and every mod compiles as an entry
+  // of shaders.toml, its knobs as params and its draws tinted by pass.
+  Result library_native = Compile(library, {}, {}, true, kOverride, {}, false, Native::kPass);
+  Report(library_native, "library with the native contract, override with hooks");
+  Result library_plain = Compile(library, {}, {}, true, kOverride, {});
+  Check(library_native.compiled && library_native.fingerprint == library_plain.fingerprint,
+        "library with the native contract: the same DXBC without a pass read");
+  Result library_debug = Compile(library, {}, {}, true, kOverride, {}, false, Native::kPassDebug);
+  Report(library_debug, "library with the native contract's pass debug view");
+  Check(library_debug.compiled && library_debug.fingerprint != library_plain.fingerprint,
+        "library with the native contract's pass debug view: the DXBC changes");
+  for (const auto& path : mods) {
+    std::string name = path.filename().string();
+    Result result = Compile(library, look, name, true, kOverride, live, true, Native::kPassDebug);
+    Report(result, name + ", native contract entry, live knobs, pass debug view");
   }
 
   std::printf("%s (%d failures)\n", failures ? "FAILED" : "PASSED", failures);

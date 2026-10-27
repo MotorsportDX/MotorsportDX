@@ -4800,6 +4800,26 @@
     {
       "path": "work/runtime/src/graphics/d3d12/draw_back_end.cpp",
       "provenance": "runtime-fork"
+    },
+    {
+      "path": "docs/analysis/shader-contract.md",
+      "provenance": "Project documentation; the native shader contract of the native port (stage N5, d3d-hle.md 8.2: design, increments and results; no decompiled code, no third-party code and no game content)"
+    },
+    {
+      "path": "work/fm4-rex/look/shaders.toml",
+      "provenance": "Original native shader contract manifest of this project; names game shader hashes and EDRAM bases as observations only, no game code"
+    },
+    {
+      "path": "work/fm4-rex/tests/native-shader-contract-tests.cpp",
+      "provenance": "Synthetic tests/oracle; no game input data"
+    },
+    {
+      "path": "work/runtime/include/rex/graphics/d3d12/native_shader_contract.h",
+      "provenance": "runtime-fork"
+    },
+    {
+      "path": "work/runtime/src/graphics/d3d12/native_shader_contract.cpp",
+      "provenance": "runtime-fork"
     }
   ]
 }

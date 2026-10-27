@@ -84,6 +84,27 @@ REXCVAR_DEFINE_BOOL(shader_mod_live_knobs, false, "GPU/D3D12",
                     "run time (xe_mod_knob), so shader_mod_set changes them without a recompile")
     .lifecycle(rex::cvar::Lifecycle::kRequiresRestart);
 
+REXCVAR_DEFINE_BOOL(native_shader_contract, false, "GPU/D3D12",
+                    "Native path: the pixel shaders listed in <shader_mod_path>/shaders.toml take "
+                    "the mod of their entry in the passes it lists, with its params as constants "
+                    "(docs/analysis/shader-contract.md)")
+    .lifecycle(rex::cvar::Lifecycle::kRequiresRestart);
+
+REXCVAR_DEFINE_INT32(native_shader_contract_ab_ms, 0, "GPU/D3D12",
+                     "With native_shader_contract: the classic mods instead of the entries of "
+                     "shaders.toml in every other period of this many milliseconds of the steady "
+                     "clock (0: always the entries), to compare both in one scene")
+    .range(0, 3600000);
+
+REXCVAR_DEFINE_BOOL(native_shader_pass_debug, false, "GPU/D3D12",
+                    "With native_shader_contract: the draws of the entries of shaders.toml tinted "
+                    "by their pass class (other gray, post blue, hud yellow, then the manifest's "
+                    "passes green, red, magenta, cyan, orange)")
+    .lifecycle(rex::cvar::Lifecycle::kRequiresRestart);
+
+// host_render_records.cpp: the native path.
+REXCVAR_DECLARE(bool, host_render_native);
+
 namespace rex::graphics::d3d12 {
 void ShaderModSetCommand(std::string_view args);
 }  // namespace rex::graphics::d3d12
@@ -102,6 +123,8 @@ using SystemConstants = DxbcShaderTranslator::SystemConstants;
 using Modification = DxbcShaderTranslator::Modification;
 
 constexpr char kHlsliName[] = "xenos_override.hlsli";
+// native_shader_contract's manifest in shader_mod_path.
+constexpr char kNativeManifestName[] = "shaders.toml";
 constexpr char kTarget[] = "ps_5_1";
 constexpr UINT kCompileFlags = D3DCOMPILE_ENABLE_UNBOUNDED_DESCRIPTOR_TABLES |
                                D3DCOMPILE_IEEE_STRICTNESS | D3DCOMPILE_OPTIMIZATION_LEVEL3;
@@ -249,6 +272,43 @@ bool ScanReactiveMark(std::initializer_list<const std::filesystem::path*> direct
     }
   }
   return false;
+}
+
+// The knob defaults of the .hlsli files of a directory: each #ifndef NAME followed by
+// #define NAME value (the first file, in name order, that has one wins), as the launcher
+// reads them (pipeline.py, look_knob_defaults).
+std::unordered_map<std::string, std::string> ScanKnobDefaults(
+    const std::filesystem::path& directory) {
+  std::unordered_map<std::string, std::string> defaults;
+  std::error_code error;
+  if (directory.empty()) {
+    return defaults;
+  }
+  std::vector<std::filesystem::path> paths;
+  for (const auto& entry : std::filesystem::directory_iterator(directory, error)) {
+    if (entry.path().extension() == ".hlsli") {
+      paths.push_back(entry.path());
+    }
+  }
+  std::sort(paths.begin(), paths.end());
+  for (const std::filesystem::path& path : paths) {
+    std::ifstream file(path, std::ios::binary);
+    std::string ifndef;
+    for (std::string line; std::getline(file, line);) {
+      std::istringstream words(line);
+      std::string directive, name, value;
+      words >> directive >> name >> value;
+      if (directive == "#ifndef") {
+        ifndef = name;
+        continue;
+      }
+      if (directive == "#define" && name == ifndef && !value.empty()) {
+        defaults.try_emplace(name, value);
+      }
+      ifndef.clear();
+    }
+  }
+  return defaults;
 }
 
 void ScanShaderFiles(const std::filesystem::path& directory, const char* suffix,
@@ -408,6 +468,35 @@ std::unique_ptr<ShaderOverrides> ShaderOverrides::Create(const HostConfig& confi
   overrides->use_generated_ = use_generated;
   overrides->mod_directory_ = mod_path;
   ScanShaderFiles(overrides->mod_directory_, ".mod.hlsli", overrides->mod_shaders_);
+  if (REXCVAR_GET(native_shader_contract)) {
+    std::filesystem::path manifest_path = overrides->mod_directory_ / kNativeManifestName;
+    std::string text, error;
+    auto manifest = std::make_unique<native_shader_contract::Manifest>();
+    if (!REXCVAR_GET(host_render_native)) {
+      REXGPU_ERROR("native_shader_contract needs the native path (host_render_native); off");
+    } else if (mod_path.empty()) {
+      // A look without mods (the post passes alone): nothing to take.
+      REXGPU_INFO("Native shader contract: no shader_mod_path, no entries");
+    } else if (!ReadFile(manifest_path, text)) {
+      REXGPU_ERROR("native_shader_contract: cannot read {}; off", manifest_path.generic_string());
+    } else if (!native_shader_contract::ParseManifest(text, manifest_path.generic_string(),
+                                                      *manifest, error)) {
+      REXGPU_ERROR("native_shader_contract: {}: {}; off", manifest_path.generic_string(), error);
+    } else {
+      std::string passes;
+      for (uint32_t pass = 0; pass < manifest->PassCount(); ++pass) {
+        passes += fmt::format("{}{} {}", pass ? ", " : "", manifest->PassName(pass), pass);
+      }
+      for (const native_shader_contract::PixelEntry& entry : manifest->pixel) {
+        overrides->entry_knobs_ |= !entry.params.empty();
+      }
+      REXGPU_INFO("Native shader contract: {} pixel shader entries; passes {}",
+                  manifest->pixel.size(), passes);
+      overrides->native_ = std::move(manifest);
+      overrides->native_pass_debug_ = REXCVAR_GET(native_shader_pass_debug);
+      overrides->knob_defaults_ = ScanKnobDefaults(overrides->mod_directory_);
+    }
+  }
   overrides->uses_reactive_mark_ =
       ScanReactiveMark({&overrides->directory_, &overrides->mod_directory_});
   // NAME=VALUE;NAME=VALUE
@@ -499,6 +588,17 @@ bool ShaderOverrides::IsAbOffPhase() {
   return ((milliseconds / period) & 1) != 0;
 }
 
+bool ShaderOverrides::IsNativeAbClassicPhase() {
+  int32_t period = REXCVAR_GET(native_shader_contract_ab_ms);
+  if (period <= 0) {
+    return false;
+  }
+  auto milliseconds = std::chrono::duration_cast<std::chrono::milliseconds>(
+                          std::chrono::steady_clock::now().time_since_epoch())
+                          .count();
+  return ((milliseconds / period) & 1) != 0;
+}
+
 void ShaderOverrides::RebuildCompileDefines() {
   compile_defines_.clear();
   for (const auto& define : mod_defines_) {
@@ -521,6 +621,45 @@ void ShaderOverrides::RebuildCompileDefines() {
                   define.first);
     }
     compile_defines_.push_back(define);
+  }
+  // The params of the manifest's entries: a knob slot each, with the value of
+  // shader_mod_defines or the look files' default.
+  if (native_) {
+    for (const native_shader_contract::PixelEntry& entry : native_->pixel) {
+      for (const std::string& name : entry.params) {
+        if (knob_slots_.count(name)) {
+          continue;
+        }
+        if (pass_names_.count(name)) {
+          REXGPU_WARN("Native shader contract: param {} is a post pass name; stays a define",
+                      name);
+          continue;
+        }
+        std::string text;
+        auto define = std::find_if(mod_defines_.begin(), mod_defines_.end(),
+                                   [&name](const auto& define) { return define.first == name; });
+        if (define != mod_defines_.end()) {
+          text = define->second;
+        } else if (auto fallback = knob_defaults_.find(name); fallback != knob_defaults_.end()) {
+          text = fallback->second;
+        }
+        float value;
+        if (!ParseFloat(text, value)) {
+          REXGPU_WARN(
+              "Native shader contract: param {} has no numeric value ('{}'); stays a define",
+              name, text);
+          continue;
+        }
+        if (knob_slots_.size() >= kKnobCount) {
+          REXGPU_WARN("Native shader contract: more than {} knobs, {} stays a define",
+                      kKnobCount, name);
+          continue;
+        }
+        uint32_t slot = uint32_t(knob_slots_.size());
+        knob_slots_.emplace(name, slot);
+        knob_values_[slot] = value;
+      }
+    }
   }
   knob_generation_.fetch_add(1, std::memory_order_release);
   defines_generation_.fetch_add(1, std::memory_order_release);
@@ -612,8 +751,18 @@ void ShaderOverrides::SetDefines(std::string_view text) {
   }
 }
 
-std::string ShaderOverrides::BuildContract(
+const native_shader_contract::PixelEntry* ShaderOverrides::NativeEntry(
     const D3D12Shader::D3D12Translation& translation) const {
+  Modification modification(translation.modification());
+  if (!native_ || modification.pixel.native_classic || modification.pixel.native_plain) {
+    return nullptr;
+  }
+  return native_->FindPixel(translation.shader().ucode_data_hash());
+}
+
+std::string ShaderOverrides::BuildContract(
+    const D3D12Shader::D3D12Translation& translation,
+    const native_shader_contract::PixelEntry* entry) const {
   const auto& shader = static_cast<const D3D12Shader&>(translation.shader());
   Modification modification(translation.modification());
   std::string out;
@@ -627,8 +776,8 @@ std::string ShaderOverrides::BuildContract(
   line("#define XE_PIXEL_SHADER 1");
 
   // System constants (DxbcShaderTranslator::SystemConstants), the host values
-  // and the live knobs after them.
-  if (live_knobs_) {
+  // and the live knobs after them (also for the params of a manifest entry).
+  if (live_knobs_ || (entry && !entry->params.empty())) {
     line("#define XE_SYSTEM_CONSTANT_VECTORS {}", (kKnobsOffset + kKnobsSize + 15) / 16);
     line("#define XE_SYS_MOD_KNOBS {}u", kKnobsOffset);
   } else {
@@ -637,6 +786,21 @@ std::string ShaderOverrides::BuildContract(
   line("#define XE_SYS_GUEST_VBLANK_RATE {}u", kHostValuesOffset);
   line("#define XE_SYS_GUEST_FRAME_INTERVAL {}u", kHostValuesOffset + 4);
   line("#define XE_SYS_GUEST_DESIGN_FRAME_RATE {}u", kHostValuesOffset + 8);
+  if (entry) {
+    // The native shader contract (docs/analysis/shader-contract.md): the draw's
+    // pass class in the host values' W, and the classes by name.
+    line("#define XE_NATIVE_CONTRACT 1");
+    line("#define XE_SYS_NATIVE_PASS {}u", kHostValuesOffset + 12);
+    for (uint32_t pass = 0; pass < native_->PassCount(); ++pass) {
+      std::string name(native_->PassName(pass));
+      std::transform(name.begin(), name.end(), name.begin(),
+                     [](char c) { return char(std::toupper(uint8_t(c))); });
+      line("#define XE_NATIVE_PASS_{} {}u", name, pass);
+    }
+    if (native_pass_debug_) {
+      line("#define XE_NATIVE_PASS_DEBUG 1");
+    }
+  }
   line("#define XE_SYS_FLAGS {}u", offsetof(SystemConstants, flags));
   line("#define XE_SYS_TEXTURE_SWIZZLED_SIGNS {}u",
        offsetof(SystemConstants, texture_swizzled_signs));
@@ -943,7 +1107,9 @@ void ShaderOverrides::StoreCached(const std::filesystem::path& path, uint64_t ke
 bool ShaderOverrides::Compile(const D3D12Shader::D3D12Translation& translation,
                               const std::vector<uint8_t>& dxbc, const std::string& contract,
                               const std::string& text, const std::string& name,
-                              const std::string& mod, std::vector<uint8_t>& binary_out,
+                              const std::string& mod,
+                              const native_shader_contract::PixelEntry* entry,
+                              std::vector<uint8_t>& binary_out,
                               std::vector<Dependency>& files_out) const {
   // Contract, library (with the default hooks), mod (redefining hooks), the
   // shader, main.
@@ -960,6 +1126,15 @@ bool ShaderOverrides::Compile(const D3D12Shader::D3D12Translation& translation,
   {
     std::lock_guard<std::mutex> lock(knob_mutex_);
     define_values = compile_defines_;
+    // A manifest entry reads its params from their knob slots.
+    if (entry) {
+      for (const std::string& param : entry->params) {
+        auto slot = knob_slots_.find(param);
+        if (slot != knob_slots_.end()) {
+          SetDefine(define_values, param, fmt::format("xe_mod_knob({}u)", slot->second));
+        }
+      }
+    }
   }
 
   uint64_t key = 0;
@@ -1121,7 +1296,9 @@ ShaderOverrides::Outcome ShaderOverrides::Build(const D3D12Shader::D3D12Translat
   Shader& shader = translation.shader();
   uint64_t hash = shader.ucode_data_hash();
   Modification modification(translation.modification());
-  bool disabled = modification.pixel.hlsl_override_disabled;
+  // native_plain: outside the passes of the shader's manifest entry.
+  bool disabled = modification.pixel.hlsl_override_disabled || modification.pixel.native_plain;
+  const native_shader_contract::PixelEntry* entry = NativeEntry(translation);
   const std::string& dump_path = REXCVAR_GET(dump_shaders);
 
   // A hand-written override, for this modification or for all.
@@ -1136,9 +1313,12 @@ ShaderOverrides::Outcome ShaderOverrides::Build(const D3D12Shader::D3D12Translat
       }
     }
   }
-  // A mod hooks into the generated HLSL (or into the override file).
+  // A mod hooks into the generated HLSL (or into the override file): the
+  // manifest entry's, or the classic one of the hash.
   std::string mod;
-  if (mod_shaders_.find(hash) != mod_shaders_.end()) {
+  if (entry) {
+    mod = entry->hooks;
+  } else if (mod_shaders_.find(hash) != mod_shaders_.end()) {
     mod = fmt::format("shader_{:016X}.mod.hlsli", hash);
   }
   bool use_generated = use_generated_ || !mod.empty();
@@ -1147,7 +1327,7 @@ ShaderOverrides::Outcome ShaderOverrides::Build(const D3D12Shader::D3D12Translat
     return Outcome::kNone;
   }
 
-  std::string contract = BuildContract(translation);
+  std::string contract = BuildContract(translation, entry);
   if (!dump_path.empty()) {
     std::filesystem::path dump_directory(dump_path);
     std::error_code error;
@@ -1207,7 +1387,8 @@ ShaderOverrides::Outcome ShaderOverrides::Build(const D3D12Shader::D3D12Translat
     }
   }
   files_out.clear();
-  bool compiled = Compile(translation, dxbc, contract, text, name, mod, binary_out, files_out);
+  bool compiled =
+      Compile(translation, dxbc, contract, text, name, mod, entry, binary_out, files_out);
   if (!path.empty()) {
     files_out.push_back({path.filename().string(), path, HashBytes(text.data(), text.size())});
   }
@@ -1354,7 +1535,8 @@ bool ShaderOverrides::PollChanges() {
 }
 
 bool ShaderOverrides::NeedsReload(const D3D12Shader::D3D12Translation& translation) const {
-  if (Modification(translation.modification()).pixel.hlsl_override_disabled) {
+  Modification modification(translation.modification());
+  if (modification.pixel.hlsl_override_disabled || modification.pixel.native_plain) {
     return false;
   }
   uint64_t hash = translation.shader().ucode_data_hash();

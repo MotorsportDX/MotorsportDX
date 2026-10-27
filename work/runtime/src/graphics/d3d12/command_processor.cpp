@@ -18,6 +18,7 @@
 #include <fstream>
 #include <filesystem>
 #include <map>
+#include <cmath>
 #include <set>
 #include <tuple>
 #include <vector>
@@ -2538,6 +2539,9 @@ bool D3D12CommandProcessor::SetupContext() {
   shader_mod_knobs_generation_ = 0;
   shader_mod_host_values_used_ = shader_overrides != nullptr;
   std::memset(shader_mod_host_values_, 0, sizeof(shader_mod_host_values_));
+  native_shader_contract_ = shader_overrides ? shader_overrides->native_contract() : nullptr;
+  native_shader_pass_debug_ = native_shader_contract_ && shader_overrides->native_pass_debug();
+  native_shader_pass_ = 0;
 
   D3D12_HEAP_FLAGS heap_flag_create_not_zeroed = provider.GetHeapFlagCreateNotZeroed();
 
@@ -3106,6 +3110,7 @@ void D3D12CommandProcessor::ShutdownContext() {
 
   shader_mod_knobs_source_ = nullptr;
   shader_mod_host_values_used_ = false;
+  native_shader_contract_ = nullptr;
   pipeline_cache_.reset();
 
   primitive_processor_.reset();
@@ -4262,6 +4267,47 @@ bool D3D12CommandProcessor::IssueDraw(xenos::PrimitiveType primitive_type, uint3
     pixel_shader_modification.pixel.scene_scale = 1;
     pixel_shader_modification.pixel.scene_input_scale = uint32_t(scene_input_draw);
   }
+  // The native shader contract (docs/analysis/shader-contract.md): a pixel
+  // shader with a manifest entry takes it in the passes the entry lists and the
+  // plain translation elsewhere, or its classic mod in the A/B's classic
+  // periods; its draws carry their pass class in the host values.
+  if (native_shader_contract_ && pixel_shader) {
+    if (const native_shader_contract::PixelEntry* entry =
+            native_shader_contract_->FindPixel(pixel_shader->ucode_data_hash())) {
+      const auto depth_info = regs.Get<reg::RB_DEPTH_INFO>();
+      const uint32_t depth_base = depth_info.depth_base | depth_info.depth_base_bit_11 << 11;
+      // The viewport's width in guest pixels, 0 without viewport scaling.
+      const auto vte = regs.Get<reg::PA_CL_VTE_CNTL>();
+      const uint32_t viewport_width =
+          vte.vport_x_scale_ena
+              ? uint32_t(std::fabs(regs.Get<float>(XE_GPU_REG_PA_CL_VPORT_XSCALE)) * 2.0f + 0.5f)
+              : 0;
+      const bool depth_tested =
+          normalized_depth_control.z_enable || normalized_depth_control.stencil_enable;
+      const bool after_final = post_passes_ && post_passes_->IsAfterFinal();
+      native_shader_pass_ = native_shader_contract_->Classify(depth_tested, depth_base,
+                                                              viewport_width, after_final);
+      if (native_shader_pass_debug_) {
+        // Each kind of draw an entry's pixel shader gets, once (the first 64).
+        static std::set<std::tuple<uint64_t, uint32_t, uint32_t, uint32_t, bool, bool>> logged;
+        auto kind = std::make_tuple(pixel_shader->ucode_data_hash(), native_shader_pass_,
+                                    depth_base, viewport_width, depth_tested, after_final);
+        if (logged.size() < 64 && logged.insert(kind).second) {
+          REXGPU_INFO(
+              "Native shader contract: pixel shader {:016X} in pass {} (depth base {}, viewport "
+              "{} wide, depth or stencil test {}, after the final point {})",
+              pixel_shader->ucode_data_hash(),
+              native_shader_contract_->PassName(native_shader_pass_), depth_base, viewport_width,
+              depth_tested, after_final);
+        }
+      }
+      if (!(entry->pass_mask & (uint32_t(1) << native_shader_pass_))) {
+        pixel_shader_modification.pixel.native_plain = 1;
+      } else if (ShaderOverrides::IsNativeAbClassicPhase()) {
+        pixel_shader_modification.pixel.native_classic = 1;
+      }
+    }
+  }
   current_draw_scene_ = scene_draw;
   current_draw_scene_input_ = scene_input_draw;
   FrameGraphRenderTargets(*render_target_cache_);
@@ -4544,7 +4590,8 @@ bool D3D12CommandProcessor::IssueDraw(xenos::PrimitiveType primitive_type, uint3
                     (uniform_draw_scale_y << (be::kFlagUniformScaleShift + 2)) |
                     (scene_draw ? be::kFlagSceneScale | logical_flags
                                 : logical_flags & be::kFlagLogicalCrop) |
-                    (scene_input_draw ? be::kFlagSceneInput : 0);
+                    (scene_input_draw ? be::kFlagSceneInput : 0) |
+                    (native_shader_pass_ << be::kFlagNativePassShift);
     capture.jitter[0] = jitter_applied ? jitter[0] : 0.0f;
     capture.jitter[1] = jitter_applied ? jitter[1] : 0.0f;
     capture.pipeline_handle = pipeline_handle;
@@ -5961,11 +6008,13 @@ void D3D12CommandProcessor::UpdateSystemConstantValues(
   }
   // The host values of the shader mods: the guest vblank rate, which a title
   // hook may switch while running (SetVblankRate), the title's frame interval,
-  // which changes with every swap, and its design frame rate.
+  // which changes with every swap, its design frame rate, and the native shader
+  // contract's pass class.
   if (shader_mod_host_values_used_) {
-    const float host_values[3] = {float(graphics_system_->guest_vblank_rate()),
+    const float host_values[4] = {float(graphics_system_->guest_vblank_rate()),
                                   float(graphics_system_->guest_frame_interval()),
-                                  float(graphics_system_->guest_design_frame_rate())};
+                                  float(graphics_system_->guest_design_frame_rate()),
+                                  float(native_shader_pass_)};
     if (std::memcmp(host_values, shader_mod_host_values_, sizeof(host_values))) {
       std::memcpy(shader_mod_host_values_, host_values, sizeof(host_values));
       dirty = true;

@@ -251,6 +251,7 @@
 !/work/fm4-rex/look/shader_F8CDBAFAD23FD784.mod.hlsli
 !/work/fm4-rex/look/shader_FDB6220AC64BFAA7.mod.hlsli
 !/work/fm4-rex/look/shader_FF6CFFF501187440.mod.hlsli
+!/work/fm4-rex/look/shaders.toml
 !/work/fm4-rex/passes/gtao.hlsl
 !/work/fm4-rex/passes/motion.hlsl
 !/work/fm4-rex/passes/taa.hlsl
@@ -297,6 +298,7 @@
 !/work/fm4-rex/tests/make-vector-vectors.py
 !/work/fm4-rex/tests/pad-shaping-tests.cpp
 !/work/fm4-rex/tests/keyboard-model-tests.cpp
+!/work/fm4-rex/tests/native-shader-contract-tests.cpp
 !/work/fm4-rex/tests/post-pass-camera-tests.cpp
 !/work/fm4-rex/tests/post-pass-shader-tests.cpp
 !/work/fm4-rex/tests/shader-mod-tests.cpp

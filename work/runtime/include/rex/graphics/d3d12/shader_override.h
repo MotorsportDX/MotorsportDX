@@ -18,6 +18,7 @@
 #include <utility>
 #include <vector>
 
+#include <rex/graphics/d3d12/native_shader_contract.h>
 #include <rex/graphics/d3d12/shader.h>
 #include <rex/graphics/pipeline/shader/dxbc_translator.h>
 #include <rex/graphics/util/draw_scale.h>
@@ -48,6 +49,12 @@ namespace rex::graphics::d3d12 {
 //   while running without a recompile.
 // The post passes (post_pass.h) compile with the same compiler and cache, and
 // take their defines and params from shader_mod_defines by name.
+//
+// On the native path, native_shader_contract reads <shader_mod_path>/shaders.toml
+// (native_shader_contract.h, docs/analysis/shader-contract.md): a pixel shader
+// with an entry there takes the entry's mod instead of its classic one, in the
+// passes the entry lists, with the entry's knobs as constants and its draws'
+// pass class in the host values.
 class ShaderOverrides {
  public:
   struct HostConfig {
@@ -73,7 +80,9 @@ class ShaderOverrides {
   // xe_guest_vblank_rate in the overrides); Y: the title's frame interval in
   // seconds (guest_frame_interval, xe_guest_frame_interval); Z: the frame rate
   // the title is designed to render its current scenario at
-  // (guest_design_frame_rate, xe_guest_design_frame_rate); W: 0.
+  // (guest_design_frame_rate, xe_guest_design_frame_rate); W: with
+  // native_shader_contract, the pass class of the last draw of a pixel shader
+  // with a manifest entry (xe_native_pass), else 0.
   static constexpr uint32_t kHostValuesOffset =
       uint32_t((sizeof(DxbcShaderTranslator::SystemConstants) + 15) & ~size_t(15));
   static constexpr uint32_t kHostValuesSize = 4 * uint32_t(sizeof(float));
@@ -92,10 +101,20 @@ class ShaderOverrides {
   // (shader_override_generated), or by generated HLSL with a mod.
   bool HasPixelShader(uint64_t ucode_hash) const {
     return use_generated_ || pixel_shaders_.find(ucode_hash) != pixel_shaders_.end() ||
-           mod_shaders_.find(ucode_hash) != mod_shaders_.end();
+           mod_shaders_.find(ucode_hash) != mod_shaders_.end() ||
+           (native_ && native_->FindPixel(ucode_hash));
   }
   // Whether shader_override_ab_ms currently selects the DXBC translations.
   static bool IsAbOffPhase();
+  // Whether native_shader_contract_ab_ms currently selects the classic mods
+  // over the manifest's entries.
+  static bool IsNativeAbClassicPhase();
+
+  // native_shader_contract: its manifest, nullptr when off.
+  const native_shader_contract::Manifest* native_contract() const { return native_.get(); }
+  // native_shader_pass_debug: entries tint their draws by pass class, and the
+  // command processor logs the classes it gives.
+  bool native_pass_debug() const { return native_pass_debug_; }
 
   // After a successful DXBC translation: if there is an override for it,
   // compiles it and replaces the translated binary. Pixel shaders without an
@@ -104,8 +123,9 @@ class ShaderOverrides {
   // dump_shaders, writes the contract of every translated pixel shader there.
   void Apply(D3D12Shader::D3D12Translation& translation);
 
-  // shader_mod_live_knobs: whether the system constant buffer carries the knobs.
-  bool live_knobs() const { return live_knobs_; }
+  // Whether the system constant buffer carries the knobs: with
+  // shader_mod_live_knobs, or for the params of the manifest's entries.
+  bool live_knobs() const { return live_knobs_ || entry_knobs_; }
   // Copies the kKnobCount knob values to values_out if they changed since
   // generation (which is updated); returns whether they did.
   bool UpdateKnobs(float* values_out, uint64_t& generation) const;
@@ -202,7 +222,9 @@ class ShaderOverrides {
 
   ShaderOverrides(const HostConfig& config, std::filesystem::path directory);
 
-  std::string BuildContract(const D3D12Shader::D3D12Translation& translation) const;
+  // entry: the manifest's entry the translation takes, or nullptr.
+  std::string BuildContract(const D3D12Shader::D3D12Translation& translation,
+                            const native_shader_contract::PixelEntry* entry) const;
   // The override of the translation (dxbc: its DXBC translation) from the
   // current files, and the files read for it.
   Outcome Build(const D3D12Shader::D3D12Translation& translation,
@@ -211,7 +233,12 @@ class ShaderOverrides {
   bool Compile(const D3D12Shader::D3D12Translation& translation,
                const std::vector<uint8_t>& dxbc, const std::string& contract,
                const std::string& text, const std::string& name, const std::string& mod,
+               const native_shader_contract::PixelEntry* entry,
                std::vector<uint8_t>& binary_out, std::vector<Dependency>& files_out) const;
+  // The manifest's entry a translation takes (not in the A/B's classic periods
+  // or outside the entry's passes), or nullptr.
+  const native_shader_contract::PixelEntry* NativeEntry(
+      const D3D12Shader::D3D12Translation& translation) const;
 
   // shader_override_cache_path.
   uint64_t CacheKey(const std::string& source,
@@ -229,7 +256,8 @@ class ShaderOverrides {
       const std::string& name, const std::vector<std::filesystem::path>& directories);
 
   // The defines FXC gets: shader_mod_defines, with the live knobs as
-  // xe_mod_knob(slot). Needs knob_mutex_.
+  // xe_mod_knob(slot), and the knob slots of the entries' params. Needs
+  // knob_mutex_.
   void RebuildCompileDefines();
   // Hot reload bookkeeping after Apply or Reload. Needs entries_mutex_.
   void Record(const D3D12Shader::D3D12Translation& translation, std::vector<uint8_t> dxbc,
@@ -251,6 +279,15 @@ class ShaderOverrides {
   std::filesystem::path cache_directory_;
   uint64_t library_hash_ = 0;
   uint64_t compiler_id_ = 0;
+
+  // native_shader_contract: the manifest, and whether its entries have params.
+  std::unique_ptr<native_shader_contract::Manifest> native_;
+  bool entry_knobs_ = false;
+  // native_shader_pass_debug: entries tint their colour by pass class.
+  bool native_pass_debug_ = false;
+  // The look files' knob defaults (#ifndef NAME / #define NAME value), for the
+  // params that shader_mod_defines leaves out.
+  std::unordered_map<std::string, std::string> knob_defaults_;
 
   // Defines and live knobs.
   bool live_knobs_ = false;

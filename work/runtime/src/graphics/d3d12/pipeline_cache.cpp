@@ -1282,11 +1282,13 @@ bool PipelineCache::ConfigurePipelineDescribed(
     }
   }
 
-  // Pipelines of the shader override A/B (DXBC instead of the override) are
-  // for this process only.
-  if (pipeline_storage_file_ &&
-      !DxbcShaderTranslator::Modification(description.pixel_shader_modification)
-           .pixel.hlsl_override_disabled) {
+  // Pipelines of the shader override A/B (DXBC instead of the override) and of
+  // the native shader contract's A/B (the classic mod instead of the entry)
+  // are for this process only.
+  const DxbcShaderTranslator::Modification stored_modification(
+      description.pixel_shader_modification);
+  if (pipeline_storage_file_ && !stored_modification.pixel.hlsl_override_disabled &&
+      !stored_modification.pixel.native_classic) {
     assert_not_null(storage_write_thread_);
     pipeline_storage_file_flush_needed_ = true;
     {
