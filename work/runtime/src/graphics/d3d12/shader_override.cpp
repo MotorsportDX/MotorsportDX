@@ -1119,7 +1119,9 @@ std::string ShaderOverrides::BuildContract(
     // A replacement's game inputs by name (docs/analysis/shader-contract.md 8),
     // as CheckInputs found them: XeInputs, which the library fills after the
     // prologue (XE_LOAD_INPUTS), and per texture xe_tex_<name>(coord), the
-    // fetch at the dimension and with the sampler of the shader's binding.
+    // fetch at the dimension and with the sampler of the shader's binding, and
+    // XE_TEX_<NAME>, its fetch constant (FXC takes no macro with an empty
+    // parameter list).
     line("#define XE_REPLACEMENT 1");
     std::string load = "#define XE_LOAD_INPUTS(xe_in, p, input)";
     // The defines after the struct.
@@ -1200,8 +1202,9 @@ std::string ShaderOverrides::BuildContract(
                  "XE_LOD_COMPUTED, 0.0, 0.0)",
                  input.name, input.index, slot(dimension, false), slot(dimension, true),
                  sampler_slot);
-            define("#define xe_tex_{}_size() xe_texture_size_2d({}u)", input.name, input.index);
           }
+          // The fetch constant, for the library's helpers (xe_texture_size_2d).
+          define("#define XE_TEX_{} {}u", upper, input.index);
         } break;
       }
       members |= input.kind != Kind::kTexture;
