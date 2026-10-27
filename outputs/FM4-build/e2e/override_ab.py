@@ -4,13 +4,17 @@ in a static scene (photo mode, a paused race) consecutive captures from the two 
 whether an override renders the same image.
 
   e2e.py ... --keep-ppm --arg shader_override_path=<dir> --arg shader_override_ab_ms=3000
-  override_ab.py <run out> --period-ms 3000 [--diff <png>]
+  override_ab.py <run out> --period-ms 3000 [--phase freeze] [--diff <png>]
 
 Each capture's phase comes from its time in capture/captures.txt (steady clock, like the
 runtime's phase); captures within --margin-ms of a phase change are skipped, since the frame
 was rendered before the capture was written. Consecutive pairs are listed: in a static scene
-same-phase pairs are identical, and on/off pairs are identical if the overrides are."""
+same-phase pairs are identical, and on/off pairs are identical if the overrides are. --phase
+keeps the captures of one phase of the scenario (summary.json phase_frames), such as the
+frozen frame of the freeze scenario. Other switches with a period of the steady clock compare
+the same way (native_format_ab_ms, native_rt_resolve_skip_ab_ms)."""
 import argparse
+import json
 import pathlib
 import sys
 
@@ -29,6 +33,8 @@ def difference(a, b):
     """Differing bytes and the mean absolute difference of a sample of them."""
     if a == b:
         return 0, 0.0
+    if len(a) != len(b):
+        return max(len(a), len(b)), 0.0
     xor = (int.from_bytes(a, 'little') ^ int.from_bytes(b, 'little')).to_bytes(len(a), 'little')
     differing = len(xor) - xor.count(0)
     sample = [abs(x - y) for x, y in zip(a[::97], b[::97]) if x != y]
@@ -41,6 +47,7 @@ def main():
     parser.add_argument('run', help='e2e.py --out directory of a --keep-ppm run')
     parser.add_argument('--period-ms', type=int, required=True)
     parser.add_argument('--margin-ms', type=int, default=700)
+    parser.add_argument('--phase', help='only the captures of this phase (summary.json phase_frames)')
     parser.add_argument('--diff', help='write |on - off| x16 of the first differing on/off pair')
     options = parser.parse_args()
     capture = pathlib.Path(options.run) / 'capture'
@@ -49,11 +56,16 @@ def main():
         if line.strip():
             index, milliseconds = map(int, line.split())
             times[index] = milliseconds
+    kept = None
+    if options.phase:
+        summary = json.loads((pathlib.Path(options.run) / 'summary.json').read_text())
+        kept = {int(name.split('-')[1].split('.')[0])
+                for name in summary.get('phase_frames', {}).get(options.phase, [])}
     frames = []
     for index in sorted(times):
         path = capture / f'frame-{index:03d}.ppm'
         state = phase(times[index], options.period_ms, options.margin_ms)
-        if path.is_file() and state:
+        if path.is_file() and state and (kept is None or index in kept):
             frames.append((index, state, path))
 
     counts = {}

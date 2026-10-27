@@ -1813,13 +1813,17 @@ D3D12TextureCache::ResolveTextureSkip D3D12TextureCache::GetResolveTextureSkip(
   if (!(skip & 2) || partial || texture.resolve_written_unsampled == perturbed) {
     return ResolveTextureSkip::kWrite;
   }
-  // A sibling that is written.
+  // A sibling that holds this resolve's data: one before it that this resolve
+  // wrote, or one after it that is not skipped.
   TextureKey sibling_key = texture.key();
   sibling_key.packed_mips ^= 1;
   for (size_t i = 0; i < count; ++i) {
     const auto& other = *static_cast<const D3D12Texture*>(targets[i].texture);
-    if (i != index && targets[i].scene_scaled && other.resolve_written_unsampled == perturbed &&
-        other.key() == sibling_key) {
+    if (i == index || !targets[i].scene_scaled || other.key() != sibling_key) {
+      continue;
+    }
+    if (i < index ? other.resolve_write_index == resolve_texture_write_index_
+                  : other.resolve_written_unsampled == perturbed) {
       return ResolveTextureSkip::kSibling;
     }
   }
@@ -1872,7 +1876,9 @@ void D3D12TextureCache::LogUnsampledResolveTexture(const ResolveTextureTarget* t
   for (size_t i = 0; i < count; ++i) {
     const auto& other = *static_cast<const D3D12Texture*>(targets[i].texture);
     if (i != index && other.key() == sibling_key) {
-      sibling = other.resolve_written_unsampled ? "unsampled" : "sampled";
+      sibling = other.resolve_write_index == resolve_texture_write_index_ ? "written"
+                : other.resolve_written_unsampled                         ? "unsampled"
+                                                                          : "sampled";
     }
   }
   const TextureKey& key = texture.key();
