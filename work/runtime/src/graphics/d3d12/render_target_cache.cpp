@@ -7111,6 +7111,11 @@ void D3D12RenderTargetCache::ResolveHostIntoTextures(
     root_constants[constant_count++] = texture_width | (texture_height << 16);
     root_constants[constant_count++] = source.host_phase;
     root_constants[constant_count++] = texture_top << 16;
+    // The write's GPU time by class (perf trace gpu resolve_host_writes).
+    const uint32_t write_timestamp =
+        check ? UINT32_MAX
+              : command_processor_.BeginResolveHostWriteTimestamp(
+                    target.scene_scaled, texture_cache.IsResolveTextureTargetUnsampled(target));
     command_list.D3DSetComputeRootSignature(host_texture_root_signature_);
     command_list.D3DSetComputeRoot32BitConstants(0, constant_count, root_constants, 0);
     command_list.D3DSetComputeRootDescriptorTable(1, descriptors[0].second);
@@ -7124,6 +7129,9 @@ void D3D12RenderTargetCache::ResolveHostIntoTextures(
     const uint32_t dispatch_height =
         scene_texture ? texture_height : height * draw_resolution_scale_y();
     command_list.D3DDispatch(((dispatch_width + 3) / 4 + 7) >> 3, (dispatch_height + 7) >> 3, 1);
+    if (write_timestamp != UINT32_MAX) {
+      command_processor_.EndResolveHostWriteTimestamp(write_timestamp);
+    }
     if (check) {
       command_processor_.PushUAVBarrier(dest);
       texture_cache.QueueResolveTextureCheck(target, dest);

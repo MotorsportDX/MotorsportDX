@@ -132,6 +132,10 @@ struct State {
   uint64_t gpu_resolve_bucket_count[4] = {};
   // The parts of the full-screen resolves (kResolveParts).
   double gpu_resolve_part_ms[5] = {};
+  // The host texture writes of resolves by class (kResolveHostWrites): GPU
+  // time and count.
+  double gpu_host_write_ms[4] = {};
+  uint64_t gpu_host_write_count[4] = {};
   // The post pass groups (kGpuPasses) and the swap's passes (d3d-hle-n4.md 17.24).
   double gpu_pass_ms[6 + 1] = {};
   // Samples passing depth/stencil per occlusion snapshot interval, as reported
@@ -824,6 +828,21 @@ inline void AddGpuResolveParts(const double* ms) {
   for (size_t i = 0; i < 5; ++i) state->gpu_resolve_part_ms[i] += ms[i];
 }
 
+// The host textures resolves write from the render target, by class
+// (D3D12CommandProcessor::BeginResolveHostWriteTimestamp, d3d-hle-n6.md
+// 19.7.3), the perf trace's gpu resolve_host_writes: at the scene's scale or
+// the whole scale, sampled or not since the texture's last write.
+inline constexpr const char* kResolveHostWrites[] = {"scene_sampled", "scene_unsampled",
+                                                     "whole_sampled", "whole_unsampled"};
+inline void AddGpuResolveHostWrites(const double* ms, const uint32_t* counts) {
+  State* state = Get();
+  if (!state) return;
+  for (size_t i = 0; i < 4; ++i) {
+    state->gpu_host_write_ms[i] += ms[i];
+    state->gpu_host_write_count[i] += counts[i];
+  }
+}
+
 inline ResolveInventory* GetResolveInventory() {
   static ResolveInventory* inventory = []() -> ResolveInventory* {
     if (!Get()) return nullptr;
@@ -1176,6 +1195,12 @@ inline void OnSwap() {
   for (size_t i = 0; i < 5; ++i) {
     state->output << (i ? "," : "") << '"' << kResolveParts[i]
                   << "\":" << state->gpu_resolve_part_ms[i] / gpu_frames;
+  }
+  state->output << "},\"resolve_host_writes\":{";
+  for (size_t i = 0; i < 4; ++i) {
+    state->output << (i ? "," : "") << '"' << kResolveHostWrites[i] << "\":["
+                  << state->gpu_host_write_ms[i] / gpu_frames << ','
+                  << double(state->gpu_host_write_count[i]) / gpu_frames << ']';
   }
   state->output << "},\"passes_ms\":{";
   {

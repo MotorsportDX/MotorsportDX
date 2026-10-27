@@ -236,6 +236,10 @@ class D3D12TextureCache final : public TextureCache {
   // textures bound to guest draws, loaded and watched.
   void BeginResolveTextureWrite(const ResolveTextureTarget& target);
   void EndResolveTextureWrite(const ResolveTextureTarget& target);
+  // Whether nothing sampled the target's texture since a resolve last wrote
+  // it: a guest draw's binding, the swap or a post pass (the perf trace's gpu
+  // resolve_host_writes, d3d-hle-n6.md 19.7.3).
+  bool IsResolveTextureTargetUnsampled(const ResolveTextureTarget& target) const;
   // native_rt_resolve_check: the texture's next load is compared with a copy
   // the resolve shader wrote (scratch, in UNORDERED_ACCESS state; the cache
   // keeps a reference). Polled at each frame's start; returns the textures
@@ -379,6 +383,9 @@ class D3D12TextureCache final : public TextureCache {
     // all the time.
     uint64_t content_hash_time_ms = 0;
     uint32_t content_hash_streak = 0;
+    // A resolve wrote the texture from the render target and nothing sampled
+    // it since (IsResolveTextureTargetUnsampled).
+    bool resolve_written_unsampled = false;
 
    private:
     Microsoft::WRL::ComPtr<ID3D12Resource> resource_;

@@ -797,6 +797,7 @@ void D3D12TextureCache::RequestTextures(uint32_t used_texture_mask) {
     if (binding_texture != nullptr) {
       // Will be referenced by the command list, so mark as used.
       binding_texture->MarkAsUsed();
+      binding_texture->resolve_written_unsampled = false;
       command_processor_.PushTransitionBarrier(
           binding_texture->resource(),
           binding_texture->SetResourceState(D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE |
@@ -807,6 +808,7 @@ void D3D12TextureCache::RequestTextures(uint32_t used_texture_mask) {
     D3D12Texture* binding_texture_signed = static_cast<D3D12Texture*>(binding->texture_signed);
     if (binding_texture_signed != nullptr) {
       binding_texture_signed->MarkAsUsed();
+      binding_texture_signed->resolve_written_unsampled = false;
       command_processor_.PushTransitionBarrier(
           binding_texture_signed->resource(),
           binding_texture_signed->SetResourceState(D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE |
@@ -1434,6 +1436,7 @@ ID3D12Resource* D3D12TextureCache::RequestSwapTexture(D3D12_SHADER_RESOURCE_VIEW
     return nullptr;
   }
   texture->MarkAsUsed();
+  texture->resolve_written_unsampled = false;
   // The swap texture is likely to be used only for the presentation compute
   // shader, and not during emulation, where it'd be NON_PIXEL_SHADER_RESOURCE |
   // PIXEL_SHADER_RESOURCE.
@@ -1503,6 +1506,7 @@ ID3D12Resource* D3D12TextureCache::RequestResolvedTexture(
     return nullptr;
   }
   texture->MarkAsUsed();
+  texture->resolve_written_unsampled = false;
   // The state of textures bound to guest draws, so a guest shader sampling the
   // same texture needs no transition.
   constexpr D3D12_RESOURCE_STATES kState =
@@ -1758,6 +1762,11 @@ void D3D12TextureCache::EndResolveTextureWrite(const ResolveTextureTarget& targe
     texture.SetSceneWritten();
   }
   texture.MarkAsUsed();
+  texture.resolve_written_unsampled = true;
+}
+
+bool D3D12TextureCache::IsResolveTextureTargetUnsampled(const ResolveTextureTarget& target) const {
+  return static_cast<const D3D12Texture*>(target.texture)->resolve_written_unsampled;
 }
 
 void D3D12TextureCache::QueueResolveTextureCheck(const ResolveTextureTarget& target,

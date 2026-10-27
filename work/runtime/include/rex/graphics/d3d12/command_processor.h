@@ -86,6 +86,11 @@ class D3D12CommandProcessor : public CommandProcessor {
   static constexpr size_t kResolvePartCount = 5;
   uint32_t BeginResolvePartTimestamp(ResolvePart part);
   void EndResolvePartTimestamp(uint32_t pair) { EndGpuTimestamp(pair); }
+  // A host texture that a resolve writes from the render target (perf trace
+  // gpu resolve_host_writes, d3d-hle-n6.md 19.7.3): at the scene's scale or the
+  // whole scale, and whether nothing sampled it since its last write.
+  uint32_t BeginResolveHostWriteTimestamp(bool scene, bool unsampled);
+  void EndResolveHostWriteTimestamp(uint32_t pair) { EndGpuTimestamp(pair); }
   // A post pass (perf trace gpu passes_ms, d3d-hle-n4.md 17.24), grouped by
   // its name: gtao_*, taa_*, motion_*, windshield_*, and the others.
   uint32_t BeginPostPassTimestamp(std::string_view pass_name);
@@ -606,7 +611,13 @@ class D3D12CommandProcessor : public CommandProcessor {
     kResolvePartDump,
     kResolvePartGuestLayout,
     kResolvePartHostTextures,
-    kResolvePartClear
+    kResolvePartClear,
+    // The host texture writes of resolves (BeginResolveHostWriteTimestamp), in
+    // the order of perf_trace::kResolveHostWrites.
+    kHostWriteSceneSampled,
+    kHostWriteSceneUnsampled,
+    kHostWriteWholeSampled,
+    kHostWriteWholeUnsampled
   };
   // The resolve's kind by the bytes it wrote.
   static GpuTimestampKind GetResolveTimestampKind(uint32_t written_length);

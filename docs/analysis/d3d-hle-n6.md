@@ -382,6 +382,14 @@ The runs used the build of `f99cf19` on `I:\FM4-build-usa`. Each was one `race` 
 - **On the ROG Xbox Ally X** the same parts weigh about 9 to 12 times more (19.2.3: 0.75 ms of full-screen resolves and 0.86 ms of loads at 1x, 4.53 ms of resolves at 3/2). By this PC's shares, step 3 would remove about 1.2 ms of the 15.9 ms frame at 3/2 (about 8%) and about 0.7 ms at 1x before its loads. The host texture writes, about 3.1 ms at 3/2, are the larger lever: step 4 (copies or views in place of compute encodes) or writing fewer textures (only the keys a pass samples).
 - **The frame graph** gives a resolve the GPU time until the next mark, so the post passes injected right after it count as its own. The scene depth's resolve shows 0.237 ms at 1x and 0.876 ms at 2x, mostly GTAO. The parts above are measured inside the resolve, without them.
 
+**The scope, decided on 27 October 2026** from these numbers. Item 5 goes in this order instead of 19.7.1's, because bit 32 makes 1x slower and at 3/2, the Ally X's case, the host texture writes are the larger cost:
+
+1. **(a) Cheaper host texture writes**: only the textures a frame samples are written, and the smaller private surfaces' textures are left to their loads where a load costs less than the write. It is sized before it is built: at 3/2, how many of the host texture writes a frame are sampled before they are overwritten, and how many are textures whose load would be cheaper. Below a bound of about 0.1 ms a frame at 3/2 it is skipped.
+2. **(b) Step 3, the guest layout on demand**, where bit 32 is on. It covers every reader of the guest layout: texture fetches through guest memory, CPU readbacks, memexport and photo mode's save. A check mode counts the layouts produced on demand and any read that found none, with a perturbation proof (one producer dropped and the check catching it), on `career`, `photo` and `photo_view`, since mirrors, photo mode's tiles and the pre-race final point all go through resolves.
+3. **(c) Step 2, bit 32 at every scale**, is decided after (a) and (b) land, from new numbers at 1x and 2x.
+
+A skipped or deferred write must not change the image. The gate of (a) and of (b) is freeze parity at 3/2, 1x and 2x against the previous local main with byte-identical captures, and 1:1 crops at 3/2, beside the step gate. The full `-Rov` smoke is needed only if the shared resolve code changes for every path rather than behind the native path's switches.
+
 ### 19.8 The proposed order
 
 The owner's order is stutter first, then CPU headroom on the ROG Xbox Ally X. The Ally X waits for its GPU in every mode (17.21, 17.25), so CPU time it saves reaches the frame only through the shared power budget (1 to 3%), while the resolves of 19.7.1 hold 19 to 28% of its GPU frame. The proposal therefore puts the resolves second, as the Ally X's headroom, and the CPU items after them:

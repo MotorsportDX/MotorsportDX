@@ -8040,6 +8040,9 @@ void D3D12CommandProcessor::ReadGpuTimestampFrame() {
     uint32_t bucket_count[4] = {};
     // The parts of the full-screen resolves (ResolvePart).
     double part_ms[kResolvePartCount] = {};
+    // The host texture writes of all resolves by class, and their count.
+    double host_write_ms[4] = {};
+    uint32_t host_write_count[4] = {};
     const double tick_ms = 1000.0 / double(gpu_timestamp_frequency_);
     uint64_t first = UINT64_MAX, last = 0;
     for (uint32_t pair = 0; pair < frame.pairs; ++pair) {
@@ -8099,6 +8102,15 @@ void D3D12CommandProcessor::ReadGpuTimestampFrame() {
           part_ms[size_t(frame.kinds[pair]) - size_t(GpuTimestampKind::kResolvePartTransfers)] +=
               double(duration) * tick_ms;
           break;
+        case GpuTimestampKind::kHostWriteSceneSampled:
+        case GpuTimestampKind::kHostWriteSceneUnsampled:
+        case GpuTimestampKind::kHostWriteWholeSampled:
+        case GpuTimestampKind::kHostWriteWholeUnsampled: {
+          const size_t host_write_class =
+              size_t(frame.kinds[pair]) - size_t(GpuTimestampKind::kHostWriteSceneSampled);
+          host_write_ms[host_write_class] += double(duration) * tick_ms;
+          ++host_write_count[host_write_class];
+        } break;
       }
       first = std::min(first, begin);
       last = std::max(last, end);
@@ -8111,6 +8123,7 @@ void D3D12CommandProcessor::ReadGpuTimestampFrame() {
                             double(transfer_depth) * ms);
     perf_trace::AddGpuResolveBuckets(bucket_ms, bucket_count);
     perf_trace::AddGpuResolveParts(part_ms);
+    perf_trace::AddGpuResolveHostWrites(host_write_ms, host_write_count);
     double passes_ms[perf_trace::kGpuPassCount + 1];
     for (size_t i = 0; i < perf_trace::kGpuPassCount + 1; ++i) passes_ms[i] = double(passes[i]) * ms;
     perf_trace::AddGpuPasses(passes_ms);
@@ -8154,6 +8167,11 @@ uint32_t D3D12CommandProcessor::BeginTransferTimestamp(bool depth) {
 uint32_t D3D12CommandProcessor::BeginResolvePartTimestamp(ResolvePart part) {
   return BeginGpuTimestamp(GpuTimestampKind(size_t(GpuTimestampKind::kResolvePartTransfers) +
                                             size_t(part)));
+}
+
+uint32_t D3D12CommandProcessor::BeginResolveHostWriteTimestamp(bool scene, bool unsampled) {
+  return BeginGpuTimestamp(GpuTimestampKind(size_t(GpuTimestampKind::kHostWriteSceneSampled) +
+                                            (scene ? 0 : 2) + (unsampled ? 1 : 0)));
 }
 
 void D3D12CommandProcessor::SetGpuTimestampKind(uint32_t pair, GpuTimestampKind kind) {

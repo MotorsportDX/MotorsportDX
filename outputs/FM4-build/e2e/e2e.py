@@ -1081,6 +1081,11 @@ def summarize(perf, measure):
             result['gpu_resolve_full_parts_ms_median'] = {
                 k: median([g['resolve_full_parts_ms'][k] for g in gpu])
                 for k in gpu[0]['resolve_full_parts_ms']}
+        # The host texture writes of resolves by class (19.7.3): [GPU ms, writes] a frame.
+        if 'resolve_host_writes' in gpu[0]:
+            result['gpu_resolve_host_writes_median'] = {
+                k: [median([g['resolve_host_writes'][k][i] for g in gpu]) for i in range(2)]
+                for k in gpu[0]['resolve_host_writes']}
     frames_in = lambda p: max(1, len(p.get('frame_ms', [])))
     # Over all measured frames: per-window values alternate with the frame count of a window
     # when frames alternate (the half-rate mirror), by about 0.5% in a frozen frame.
