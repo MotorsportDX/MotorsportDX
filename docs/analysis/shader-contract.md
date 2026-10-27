@@ -54,7 +54,7 @@ srv = ["post:gtao_occlusion"]  # optional: resources by name (section 7)
 ```
 
 - **Key.** The pixel shader's ucode hash. An entry takes the place of the classic mod of its hash; hashes without an entry keep their classic mod.
-- **Body.** `hooks`: a mod of the look directory, in the classic `.mod.hlsli` syntax, hooked into the game shader's generated HLSL. Replacement shaders (`shader`) and vertex shader entries are later increments; the parser refuses them.
+- **Body.** `hooks`: a mod of the look directory, in the classic `.mod.hlsli` syntax, hooked into the game shader's generated HLSL; or `shader`: a replacement of the look directory that takes the place of the game shader's HLSL and reads its inputs by name (`[pixel.inputs]`, section 8). Vertex shader entries are a later increment; the parser refuses them.
 - **Resources.** `srv`: the post passes' textures and the look directory's PNG files the entry reads by name (section 7).
 - The parser refuses unknown keys, bad names, a hash with two entries, a hooks file outside the look directory, and more than 13 title passes.
 
@@ -235,3 +235,155 @@ BuildRoot `I:\FM4-build-usa`, the native path with `native_shader_contract=true`
 | `-Rov`: smoke at 1x with `original,taa=0` (`n5sc5-rov` against `n6o11`) and freeze parity at 1x (`n5sc5-fzrov` against `n5sc4c-fzrov`) | smoke 3 of 3 cells, no look file or contract line in the logs; `photo` FAIL on its race's fps in one run (104.4 against 134.6, while `career`'s race had 106.3 against 93.3), `photo_view` WARN on capture statistics. The parity PASS: draws +0.0%, the frozen frame's GPU time 12.09 against 12.06 ms |
 
 Not covered: RTV (out of the gates; the contract is native only), 60 and 120 Hz, `xe_srv_<name>_linear` on the GPU (it compiles with every contract, but no gate look reads it), and a look that declares more than one post texture.
+
+## 8. Increment 5: replacement shaders
+
+The design, read from the code of `b445ace`. The main session took decisions 1 to 5 and 7 as recommended below, and step 5a of decision 6, on 27 October 2026; step 5b waits for the project owner's answer to the question in 8.2.6. Step 5a is implemented behind `native_shader_contract` (8.4).
+
+### 8.1 What the design starts from
+
+- **The classic override.** `shader_<hash>[_<modification>].ps.hlsl` in `shader_override_path` ([B4 research](b4-shader-research.md#b4-step-1-per-hash-hlsl-override-16-october-2026)) replaces a pixel shader's whole translation, but under the Xenos-shaped contract of section 1: registers, `XE_C(n)` by packed index, fetch slots by number. It is not in the manifest, and the faithful rewrite of the final combine made with it stayed in BuildRoot, since it is a transcription. The manifest's parser refuses `shader` today.
+- **The root signature does not follow the bindings.** With bindless resources, the only mode the mods run in, `D3D12CommandProcessor::GetRootSignature` gives every pipeline the same root signature. What follows a shader's bindings is the table of descriptor indices (`b4`) that the command processor writes for its draws, from the bindings stored in the shader (`GetTextureBindingsAfterTranslation`, `GetTextureBindingLayoutUserUID`). All translations of the shader share them: the entry's, the `native_plain` one outside the entry's passes, the DXBC translation that draws until a worker's compile is swapped in, and the A/B's classic one.
+- **Constants.** The float constants (`b1`) are uploaded packed by the pixel shader's float constant map (`constant_register_map`, from the ucode analysis, one per shader); the bool and loop constants (`b2`) and the fetch constants (`b3`) are uploaded whole. The knobs of `params` and the host values follow the system constants in `b0`.
+- **Interpolators** reach a translation by its modification's mask (what the vertex shader writes and the pixel shader reads), and the signature check of increment 2 holds every override to them.
+
+### 8.2 The decisions
+
+| # | Decision | Taken (27 October 2026) | Cost (person-days) |
+|---|---|---|---|
+| 1 | Manifest syntax | `shader = "<file>.hlsli"` instead of `hooks`; `passes`, `params` and `srv` as for hooks; the inputs in a `[pixel.inputs]` table | 1 |
+| 2 | How inputs get names | in the manifest, by register (`i<n>`, `c<n>`, `b<n>`, `tf<n>`, with a swizzle), not from the title's shader containers | 2 to 3 |
+| 3 | Bindings and root signature | the shader's own bindings; no change to bindings or the root signature | 0 in the runtime |
+| 4 | Constants | the float constants the game shader reads, by name; any bool constant; knobs through `params`; the entry's own buffer at `b0, space10` deferred again | 0.5 |
+| 5 | Signatures and output rules | keep the expected signatures and the epilogue | 0.5 |
+| 6 | First replacement and its gate | 5a: the mechanism, proven by a probe byte for byte against a classic probe mod; 5b, pending the owner's answer (8.2.6): the race's final combine `E97AA211B556A9B3` as the project's own tone mapping | 5a 1 to 2, 5b 3 to 5, the gates 3 to 4 |
+| 7 | Fallback | the DXBC translation with an error, per modification, as for entries | 0.5 |
+
+With the CPU tests (1.5) and the library's entry point for replacements, the increment takes about 15 person-days, the upper end of section 3's 2 to 3 person-weeks.
+
+#### 8.2.1 Manifest syntax
+
+```toml
+[[pixel]]
+hash = "E97AA211B556A9B3"
+shader = "fm4-final-combine.ps.hlsli"  # instead of hooks
+srv = ["post:gtao_occlusion"]
+
+[pixel.inputs]          # the game shader's inputs the replacement reads, by name
+scene = "tf0"           # the registers below are those the classic mod reads
+bloom = "tf2"
+lut = "tf7"
+white = "i1.z"          # F at white
+exposure = "i1.w"
+filmic_ab = "c5"
+filmic_cdef = "c6"
+lut_scale = "c0.x"
+lut_offset = "c1.x"
+# the scene coordinate and the colour transform: read off the shader's contract
+# (dump_shaders) when the entry is written
+```
+
+- `shader` and `hooks` exclude each other, and an entry has one of them. `shader` names a file of the look directory with the `.hlsli` suffix: the launcher and the export already copy those (`LOOK_SUFFIXES` in `pipeline.py`), and the compile includes it as it includes a mod, so the override cache and hot reload track it through the include handler as they track mods.
+- `passes` works as for hooks: outside them the plain translation (`native_plain`). One body per hash: a replacement in one pass and hooks in another would take two entries of one hash with disjoint `passes`, which the parser refuses today and no look needs while the mirrors draw as the scene (section 6.2).
+- `inputs` only with `shader`: no hook mod needs names, so the contracts of today's entries stay as they are.
+- One file can serve several entries: the four final combines share their structure at other registers ([B4 research, step 4](b4-shader-research.md#b4-step-4-tone-curves-16-october-2026)), so each entry maps its own registers to the same names, and `#ifdef XE_IN_<NAME>` lets the file take an optional input such as the vignette's colour.
+- The parser refuses both `shader` and `hooks` or neither, `inputs` without `shader`, a bad name or register, and a name twice.
+
+Why: the smallest change to the manifest of increments 1 to 4, and the launcher copies the files without a change. Cost: 1 day with its tests.
+
+#### 8.2.2 How inputs get names
+
+Recommendation: names declared in the manifest, by register:
+
+- `i<n>`, interpolator n (0 to 15), as the translation loads it into register n (the param gen register too), with a swizzle (`.x` to `.xyzw`: a float to a float4);
+- `c<n>`, float constant n (0 to 255), with a swizzle;
+- `b<n>`, bool constant n (0 to 255);
+- `tf<n>`, texture fetch constant n (0 to 31), a texture the game shader fetches;
+- `position` (`SV_Position`, in host pixels) and `front_face`.
+
+Names are lower case (`[a-z][a-z0-9_]*`). The contract of a replacement defines `struct XeInputs` with a member per input that is not a texture, filled after the prologue (`XE_LOAD_INPUTS`), `XE_IN_<NAME>` for each input, and per texture `xe_tex_<name>(coord)`: the fetch at the dimension, signedness and filters of the game shader's binding for it, finished as any generated fetch (`xe_texture_finish`: signs, exponent bias, integer scale), and `xe_tex_<name>_size()` for a 2D texture. The packed `XE_FLOAT_CONSTANT_<n>` macros are not defined for a replacement, so the manifest lists every constant and interpolator it reads from the game.
+
+The names are checked when the entry is translated, since the interpolators depend on the modification: an `i` outside the interpolator mask, a `c` outside the shader's float constant map or a `tf` without a texture binding is an error naming the entry, the input and the modification, and that modification falls back (8.2.7).
+
+Why: the ucode has registers only. The manifest's names are the project's, the register numbers are observations such as the look's comments already carry ("c43 the direction to the sun" in `fm4-car.hlsli`), and one replacement serves shaders with the same inputs at other registers. No game data is read at run time beyond today's.
+
+Not recommended: names from the constant tables of the title's shader containers. They cover 166 of 276 pixel shaders, name no interpolators, are the game's own names, and need `Media\Shaders` and the track archives read at run time on the user's machine (the LZX reader of stage N6's increment 1.3, [d3d-hle-n6.md 19.3.2](d3d-hle-n6.md#1932-design)).
+
+Cost: 2 to 3 days (the parser, the contract, the check, their tests).
+
+#### 8.2.3 Bindings and root signature
+
+Recommendation: a replacement keeps the shader's bindings. `TranslateEntry` still runs the HLSL generator for them and drops its HLSL, so a replacement reads only the fetches the game shader makes, at their dimension and signedness. New textures come through `srv` (the post passes' textures and the look files), which are system views, not bindings. A fetch the replacement leaves unread costs one descriptor index.
+
+Why: it changes nothing in the command processor, the draw back end or the native draw records, and the swap off the draw path stays as safe as for entries (section 5.1).
+
+Limit: a shader the generator cannot translate (getWeights, getCompTexLOD, getBCF; none in the manifest) cannot take a replacement. A run of the generator that only assigns bindings would lift that later (about a day).
+
+Not recommended: bindings per replacement. The binding layout is per shader and shared by all its translations (8.1); bindings per translation would change the draw path's binding cache, the draw back end's binding check and the native draw records.
+
+Cost: none in the runtime.
+
+#### 8.2.4 Constants
+
+Recommendation: a replacement reads
+
+- the float constants its game shader reads, by name, at their packed index;
+- any bool constant (the whole of `b2` is uploaded); loop constants are not exposed, since no replacement needs them;
+- the look's knobs through `params` (the live knob slots) and the host values (`xe_guest_*`, `xe_native_pass()`).
+
+A constant the game shader does not read is an error at translation (8.2.2). The entry's own constant buffer at `b0, space10`, deferred to this increment by increment 3, is deferred again until a replacement needs a game constant its shader does not read, or data beyond the 64 knob slots. Two routes then: widen the shader's float constant map from the manifest when its ucode is analysed, so that all its translations, the DXBC ones too, take the wider packed layout (about 1 to 2 days, no root signature change), or the `b0, space10` buffer, a root parameter in the bindless root signature that `-Rov` shares and a copy per draw (about 3 to 5 days, with a `-Rov` smoke).
+
+Why: the first replacement needs nothing more, and the deferral keeps the root signature and `-Rov` untouched. Cost: half a day, within the contract code of 8.2.2.
+
+#### 8.2.5 Signatures and output rules
+
+Recommendation: keep both. The replacement's signatures are checked against the expected ones of increment 2 (its inputs the translation's interpolators, its outputs the colour targets the game shader writes, with coverage and depth as the DXBC translation writes them), and its outputs pass the epilogue (`xe_ps_epilogue`: the alpha test, alpha to coverage, the exponent bias and the gamma of the bound target). The replacement writes guest units into `XePixel.color` for the targets of `XE_COLOR_TARGETS_WRITTEN`, and `XePixel.depth` when `XE_WRITES_DEPTH` is 1. It may `discard`, except where `XE_FORCE_EARLY_DEPTH_STENCIL` is 1: the early depth hint writes the depth of a discarded pixel (a documented rule, not checked).
+
+The library's entry point for a replacement: the prologue, the inputs (`XeInputs`), `void xe_replacement(XeInputs inputs, inout XePixel p)` from the file, the pass debug view, the epilogue.
+
+Why: the pipeline around the shader is the game's (the vertex shader's outputs, the target formats, blending, the write masks), and the swap off the draw path keeps the pipelines. The alpha test and the exponent bias are the draw's render state, not the shader's. N5's float targets change the epilogue's factor, not the replacements (section 2.5).
+
+Not recommended: a replacement that owns its output. Each would carry the alpha test, the exponent bias and the gamma per target format, and would break at every change of the target formats.
+
+Cost: half a day.
+
+#### 8.2.6 The first replacement and its gate
+
+Recommendation: two steps.
+
+- **5a, the mechanism, proven by a probe.** A gate look outside the repository, as increment 3's look file gate (section 7.2): `E97AA211B556A9B3` as a replacement that writes its named inputs (the three fetches, the constants, the two interpolator values) into test blocks at the top of the screen, where they leave the rewind's text readable, and the scene fetch as it is everywhere else; beside it a classic mod of the same hash that writes the same values read by register (`p.r`, `XE_C`, the generated fetches through `XE_HOOK_TFETCH`). Neither holds game code. The in-run A/B (`native_shader_contract_ab_ms`) on a frozen frame at 2x must be byte-identical in every race frame: the names, the packed indices, the bindings and the signatures proven at once.
+- **5b, the race's final combine** as `fm4-final-combine.ps.hlsli`, the project's own tone mapping over the functions of `fm4-look.hlsli`: x from the scene and bloom fetches and the exposure, the look's tone curve applied to x directly (where the hooks invert F from the LUT coordinate), the track's grading LUT and colour transform, gamma 2, then saturation, contrast, the occlusion, the sharpening and the HDR probe as today. The variants with the vignette and with depth of field keep their classic mods; the same file can take them later with their own inputs.
+
+Why the final combine: one draw a frame (no measurable cost either way), the most modded shader, its formula in the [B4 research](b4-shader-research.md#finalcombine-formula) and its inputs already named in `fm4-look.hlsli`, and the place where [HDR output](hdr-output.md) needs the project's own code.
+
+The gate of 5b, beside the usual cells (the check, empty caches, smoke, perf, freeze parity with the contract off against on, `-Rov` freeze parity):
+
+- the in-run A/B of the replacement against the classic `aces` mod on a frozen frame at 2x: not byte-identical; the difference expected within 2 levels (the float error of the hooks' inversion of F), anything larger examined at 1:1;
+- a look with every knob at the game's value and the mods loaded: the replacement against the DXBC translation, the game's own picture, within a few levels;
+- 1:1 crops at 2x of a race with `aces`, the replacement beside the classic mod, and the native capture beside the `-Rov` reference.
+
+A question for the project owner (section 2.6): at the game's knob values, 5b computes what the game shader computes, written from the documented formula in the project's own code, not from the ucode or the generated HLSL. The rule forbids a transcription; whether a re-implementation of a game shader's function may be committed is the owner's reading. If it may not, the increment ends at 5a, or 5b takes a shader that the project's effect replaces outright, for example the motion blur `4746CAD32EF168CF` as the project's own blur from the post passes' motion vectors (`post:motion_vectors`), which changes the picture and so is a look decision too.
+
+Cost: 5a 1 to 2 days, 5b 3 to 5 days, the step and close gates 3 to 4 days.
+
+#### 8.2.7 Fallback
+
+Recommendation: the DXBC translation, as for entries. A replacement that does not compile, fails its signature check or names an input the translation lacks logs an error naming the entry, the modification and the reason, the check run counts it, and the shader draws the game's own look until the files are fixed (hot reload recompiles). It is per modification: a modification whose interpolator mask lacks an input falls back alone. While a worker compiles a replacement, its DXBC translation draws, as for entries.
+
+Not recommended: the classic mod of the hash. It would hide a broken replacement behind a picture close to the intended one, compile a second body per modification, and tie the replacement to the mod it is meant to retire.
+
+Cost: half a day.
+
+### 8.3 What stays the same
+
+- RTV, `-Rov`, the classic mods and the hook entries: an entry without `shader` gets the contract it gets today, so the 414 DXBC fingerprints of `fm4_shader_mod_tests` stay main's.
+- The classic `.ps.hlsl` overrides of `shader_override_path`, a development tool.
+- Replacements are cached per ucode hash and modification as entries are, so stage N6's offline pass ([d3d-hle-n6.md 19.3.2](d3d-hle-n6.md#1932-design), part 2) takes them as it takes entries.
+- Left out: vertex shaders (increment 6), shaders the generator cannot translate, a replacement and hooks in different passes of one shader, and the entry's own constant buffer.
+
+### 8.4 Step 5a: implementation
+
+- [native_shader_contract.h](../../work/runtime/include/rex/graphics/d3d12/native_shader_contract.h) and [its parser](../../work/runtime/src/graphics/d3d12/native_shader_contract.cpp): `shader`, `[pixel.inputs]` and `ParseInput`, with the refusals of 8.2.1 and 8.2.2.
+- [shader_override.cpp](../../work/runtime/src/graphics/d3d12/shader_override.cpp): for a replacement, `BuildContract` leaves out the packed `XE_FLOAT_CONSTANT_<n>` macros and adds `XE_REPLACEMENT`, `XeInputs`, `XE_LOAD_INPUTS`, `XE_IN_<NAME>`, and `xe_tex_<name>(coord)` with the instruction defaults of a fetch (computed LOD, no offsets) at the dimension of the shader's binding (3D with its stacked 2D array, else cube, else 2D) and with its first sampler binding of that fetch constant, and `xe_tex_<name>_size()` for 2D; `CheckInputs` checks the inputs against the translation; `Build` compiles the contract, the library, the replacement file as an include and the library's main, without the generated HLSL and without a hand-written override of the hash.
+- [shader_override.hlsli](../../work/runtime/src/graphics/d3d12/shader_override.hlsli): with `XE_REPLACEMENT` the main runs the prologue, `XE_LOAD_INPUTS`, `xe_replacement`, the pass debug view and the epilogue, no hooks.
+- Tests: `fm4_native_shader_contract_tests` parses a replacement with every kind of input and one without inputs, and refuses hooks with `shader`, inputs with hooks, a file without the `.hlsli` suffix or outside the look directory, inputs that are not a table, 14 bad registers, an upper-case name and a value that is not a string; `fm4_shader_mod_tests` compiles a replacement that reads every kind of input by name, with live knobs, with and without the pass debug view.

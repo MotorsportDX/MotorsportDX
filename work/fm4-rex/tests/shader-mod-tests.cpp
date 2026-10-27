@@ -243,6 +243,50 @@ const char kPostAoOverride[] = R"(void xe_pixel_shader(inout XePixel p) {
 }
 )";
 
+// What ShaderOverrides::BuildContract adds for a replacement entry of shaders.toml
+// (shader = "<file>.hlsli", docs/analysis/shader-contract.md 8) with these inputs:
+// scene = "tf0", lut = "tf7", env = "tf5", uv = "i0.xy", white = "i1.z", filmic = "c5",
+// vignette = "b133", pixel = "position", face = "front_face".
+const char kReplacementContract[] = R"(#define XE_REPLACEMENT 1
+struct XeInputs {
+  float4 filmic;
+  float2 uv;
+  float white;
+  bool vignette;
+  float4 pixel;
+  bool face;
+};
+#define xe_tex_env(coord) xe_tfetch_cube(5u, XE_TEXTURE5_CUBE_U, XE_TEXTURE5_CUBE_S, XE_SAMPLER5_FFF, (coord), 0.0, false, XE_LOD_COMPUTED, 0.0, 0.0)
+#define XE_IN_ENV 1
+#define XE_IN_FACE 1
+#define XE_IN_FILMIC 1
+#define xe_tex_lut(coord) xe_tfetch_3d(7u, XE_TEXTURE7_3D_U, XE_TEXTURE7_3D_S, XE_TEXTURE7_2D_U, XE_TEXTURE7_2D_S, XE_SAMPLER7_FFF, (coord), 0.0, false, XE_LOD_COMPUTED, 0.0, 0.0, XE_FILTER_FETCH_CONSTANT, XE_FILTER_FETCH_CONSTANT)
+#define XE_IN_LUT 1
+#define XE_IN_PIXEL 1
+#define xe_tex_scene(coord) xe_tfetch_2d(0u, XE_TEXTURE0_2D_U, XE_TEXTURE0_2D_S, XE_SAMPLER0_FFF, (coord), 0.0, false, XE_LOD_COMPUTED, 0.0, 0.0)
+#define xe_tex_scene_size() xe_texture_size_2d(0u)
+#define XE_IN_SCENE 1
+#define XE_IN_UV 1
+#define XE_IN_VIGNETTE 1
+#define XE_IN_WHITE 1
+#define XE_LOAD_INPUTS(xe_in, p, input) xe_in.face = input.xe_is_front_face; xe_in.filmic = xe_float_constants[5]; xe_in.pixel = input.xe_position; xe_in.uv = p.r[0].xy; xe_in.vignette = xe_bool_constant(133u); xe_in.white = p.r[1].z;
+)";
+
+// A replacement that reads every kind of input by name.
+const char kReplacement[] = R"(void xe_replacement(XeInputs inputs, inout XePixel p) {
+  float4 scene = xe_tex_scene(inputs.uv);
+  float4 lut = xe_tex_lut(float3(saturate(scene.rg), inputs.white));
+  float4 env = xe_tex_env(float3(inputs.uv, 0.0));
+  float2 size = xe_tex_scene_size();
+  float4 color = scene + lut + env + inputs.filmic * inputs.white;
+  color.rgb += inputs.pixel.xyx / size.xyx;
+  if (inputs.vignette) {
+    color.rgb *= 0.5;
+  }
+  p.color[0] = inputs.face ? color : -color;
+}
+)";
+
 // Serves "xenos_override.hlsli" (the library, as the runtime embeds it) and the
 // files of the look directory (shader_mod_path).
 class Include final : public ID3DInclude {
@@ -308,9 +352,10 @@ std::vector<std::string> Knobs(const std::filesystem::path& look) {
 Result Compile(const std::string& library, const std::filesystem::path& mods,
                const std::string& mod, bool post_ao, const char* override_text,
                const std::vector<std::pair<std::string, std::string>>& defines,
-               bool live_knobs = false, Native native = Native::kNone) {
-  std::string source =
-      Contract(post_ao, live_knobs, native) + "#include \"xenos_override.hlsli\"\n";
+               bool live_knobs = false, Native native = Native::kNone,
+               const char* replacement_contract = "") {
+  std::string source = Contract(post_ao, live_knobs, native) + replacement_contract +
+                       "#include \"xenos_override.hlsli\"\n";
   if (!mod.empty()) {
     source += "#include \"" + mod + "\"\n";
   }
@@ -534,6 +579,18 @@ int main(int argc, char** argv) {
     std::string name = path.filename().string();
     Result result = Compile(library, look, name, true, kOverride, live, true, Native::kPassDebug);
     Report(result, name + ", native contract entry, live knobs, pass debug view");
+  }
+
+  // A replacement entry: its inputs by name, the library's main without hooks, with and
+  // without the pass debug view, with live knobs.
+  for (Native native : {Native::kPass, Native::kPassDebug}) {
+    std::string what = std::string("a replacement with inputs by name") +
+                       (native == Native::kPassDebug ? ", pass debug view" : "");
+    Result result =
+        Compile(library, {}, {}, true, kReplacement, {}, true, native, kReplacementContract);
+    Report(result, what);
+    Check(result.compiled && result.fingerprint != library_native.fingerprint,
+          what + ": not the hooks' shader");
   }
 
   std::printf("%s (%d failures)\n", failures ? "FAILED" : "PASSED", failures);

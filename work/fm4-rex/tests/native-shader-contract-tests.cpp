@@ -194,6 +194,71 @@ srv = ["post:gtao_occlusion", "post:motion_vectors", "file:grade_lut"]
   Check(Refused((with_entry + "srv = [\"post:a\", \"file:a\"]\n").c_str()),
         "a post texture and a look file of one name");
   Check(Refused((with_entry + "srv = [\"file:a.png\"]\n").c_str()), "a file name with its suffix");
+
+  // Replacements (shader) with their inputs by name.
+  nsc::Manifest replaced;
+  Check(Parses(R"(
+[[pixel]]
+hash = "00000000000000AA"
+shader = "probe.ps.hlsli"
+passes = "post"
+srv = ["post:gtao_occlusion"]
+
+[pixel.inputs]
+scene = "tf0"
+uv = "i0.xy"
+white = "i1.z"
+filmic = "c5"
+lut_scale = "c255.x"
+vignette = "b133"
+pixel = "position"
+face = "front_face"
+)",
+               replaced),
+        "a replacement with inputs");
+  const nsc::PixelEntry* probe = replaced.FindPixel(0xAA);
+  Check(probe && probe->hooks.empty() && probe->shader == "probe.ps.hlsli" &&
+            probe->inputs.size() == 8 && probe->srv.size() == 1,
+        "the replacement's file, inputs and srv");
+  auto input = [probe](const char* name) -> const nsc::Input* {
+    for (const nsc::Input& in : probe ? probe->inputs : std::vector<nsc::Input>()) {
+      if (in.name == name) {
+        return &in;
+      }
+    }
+    return nullptr;
+  };
+  // The inputs as the parser keeps them (toml++ keeps a table's keys sorted, not in order).
+  const nsc::Input* scene = input("scene");
+  const nsc::Input* uv = input("uv");
+  const nsc::Input* scale = input("lut_scale");
+  Check(probe && scene && scene->kind == nsc::Input::Kind::kTexture && scene->index == 0 &&
+            uv && uv->kind == nsc::Input::Kind::kInterpolator && uv->index == 0 &&
+            uv->swizzle == "xy" && scale && scale->kind == nsc::Input::Kind::kFloatConstant &&
+            scale->index == 255 && scale->swizzle == "x" && input("vignette") &&
+            input("vignette")->kind == nsc::Input::Kind::kBoolConstant &&
+            input("vignette")->index == 133 && input("pixel") &&
+            input("pixel")->kind == nsc::Input::Kind::kPosition && input("face") &&
+            input("face")->kind == nsc::Input::Kind::kFrontFace,
+        "the inputs' kinds, registers and swizzles");
+  Check(Parses("[[pixel]]\nhash = \"00000000000000AB\"\nshader = \"r.hlsli\"\n", replaced) &&
+            replaced.pixel[0].inputs.empty(),
+        "a replacement without inputs");
+  const std::string replacement = "[[pixel]]\nhash = \"0123456789ABCDEF\"\nshader = \"r.hlsli\"\n";
+  Check(Refused((with_entry + "shader = \"r.hlsli\"\n").c_str()), "hooks and shader");
+  Check(Refused((with_entry + "[pixel.inputs]\nuv = \"i0\"\n").c_str()), "inputs with hooks");
+  Check(Refused("[[pixel]]\nhash = \"0123456789ABCDEF\"\nshader = \"r.hlsl\"\n"),
+        "a replacement without the .hlsli suffix");
+  Check(Refused("[[pixel]]\nhash = \"0123456789ABCDEF\"\nshader = \"x/r.hlsli\"\n"),
+        "a replacement outside the look directory");
+  Check(Refused((replacement + "inputs = \"i0\"\n").c_str()), "inputs not a table");
+  for (const char* bad : {"i16", "c256", "b256", "tf32", "i01", "r0", "i", "c5.q", "c5.xyzwx",
+                          "b1.x", "tf0.xy", "i0.", "position.x", "5"}) {
+    Check(Refused((replacement + "[pixel.inputs]\nv = \"" + bad + "\"\n").c_str()),
+          (std::string("a bad input register ") + bad).c_str());
+  }
+  Check(Refused((replacement + "[pixel.inputs]\nUv = \"i0\"\n").c_str()), "an upper-case input");
+  Check(Refused((replacement + "[pixel.inputs]\nuv = 0\n").c_str()), "an input not a string");
   // At most kMaxLookFiles look files over all entries, each name counted once.
   std::string files = "[[pixel]]\nhash = \"0000000000000001\"\nhooks = \"a.hlsli\"\nsrv = [";
   for (uint32_t i = 0; i < nsc::kMaxLookFiles; ++i) {

@@ -93,7 +93,74 @@ bool StringList(const toml::node* node, std::vector<std::string>& out) {
   return true;
 }
 
+// A file of the look directory (no directory part) with the suffix.
+bool IsLookFile(std::string_view name, std::string_view suffix) {
+  return name.size() > suffix.size() && name.substr(name.size() - suffix.size()) == suffix &&
+         name.find_first_of("/\\:") == std::string_view::npos;
+}
+
 }  // namespace
+
+bool ParseInput(std::string_view text, Input& input_out) {
+  Input input;
+  if (text == "position" || text == "front_face") {
+    input.kind = text == "position" ? Input::Kind::kPosition : Input::Kind::kFrontFace;
+    input_out = std::move(input);
+    return true;
+  }
+  uint32_t limit;
+  size_t prefix;
+  if (text.substr(0, 2) == "tf") {
+    input.kind = Input::Kind::kTexture;
+    limit = 32;
+    prefix = 2;
+  } else if (!text.empty() && text[0] == 'i') {
+    input.kind = Input::Kind::kInterpolator;
+    limit = 16;
+    prefix = 1;
+  } else if (!text.empty() && text[0] == 'c') {
+    input.kind = Input::Kind::kFloatConstant;
+    limit = 256;
+    prefix = 1;
+  } else if (!text.empty() && text[0] == 'b') {
+    input.kind = Input::Kind::kBoolConstant;
+    limit = 256;
+    prefix = 1;
+  } else {
+    return false;
+  }
+  size_t dot = text.find('.');
+  std::string_view number = text.substr(prefix, dot == std::string_view::npos ? text.npos
+                                                                              : dot - prefix);
+  // Decimal, without leading zeros.
+  if (number.empty() || number.size() > 3 || (number.size() > 1 && number[0] == '0')) {
+    return false;
+  }
+  uint32_t index = 0;
+  for (char c : number) {
+    if (c < '0' || c > '9') {
+      return false;
+    }
+    index = index * 10 + uint32_t(c - '0');
+  }
+  if (index >= limit) {
+    return false;
+  }
+  input.index = index;
+  if (dot != std::string_view::npos) {
+    if (input.kind != Input::Kind::kInterpolator && input.kind != Input::Kind::kFloatConstant) {
+      return false;
+    }
+    std::string_view swizzle = text.substr(dot + 1);
+    if (swizzle.empty() || swizzle.size() > 4 ||
+        swizzle.find_first_not_of("xyzw") != std::string_view::npos) {
+      return false;
+    }
+    input.swizzle = std::string(swizzle);
+  }
+  input_out = std::move(input);
+  return true;
+}
 
 bool ParseManifest(std::string_view text, const std::string& file_name, Manifest& manifest_out,
                    std::string& error_out) {
@@ -192,12 +259,8 @@ bool ParseManifest(std::string_view text, const std::string& file_name, Manifest
         return fail("'pixel' must be an array of tables ([[pixel]])");
       }
       std::string hash_text = (*fields)["hash"].value_or(std::string());
-      if (fields->contains("shader")) {
-        return fail(Text({"[[pixel]] ", hash_text,
-                          ": replacement shaders (shader) are not supported yet, only hooks"}));
-      }
-      if (std::string_view key =
-              UnknownKey(*fields, {"hash", "hooks", "passes", "params", "srv"});
+      if (std::string_view key = UnknownKey(
+              *fields, {"hash", "hooks", "shader", "inputs", "passes", "params", "srv"});
           !key.empty()) {
         return fail(Text({"[[pixel]] ", hash_text, ": unknown key '", key, "'"}));
       }
@@ -210,10 +273,47 @@ bool ParseManifest(std::string_view text, const std::string& file_name, Manifest
       if (manifest.FindPixel(entry.hash)) {
         return fail(Text({"[[pixel]] ", hash_text, ": the hash has two entries"}));
       }
-      entry.hooks = (*fields)["hooks"].value_or(std::string());
-      if (entry.hooks.empty() || entry.hooks.find_first_of("/\\:") != std::string::npos) {
-        return fail(
-            Text({"[[pixel]] ", hash_text, ": hooks must name a file of the look directory"}));
+      // The body: hooks into the game shader's HLSL, or a replacement of it.
+      if (fields->contains("hooks") == fields->contains("shader")) {
+        return fail(Text({"[[pixel]] ", hash_text, ": an entry has hooks or shader, not both"}));
+      }
+      if (fields->contains("hooks")) {
+        entry.hooks = (*fields)["hooks"].value_or(std::string());
+        if (entry.hooks.empty() || entry.hooks.find_first_of("/\\:") != std::string::npos) {
+          return fail(
+              Text({"[[pixel]] ", hash_text, ": hooks must name a file of the look directory"}));
+        }
+        if (fields->contains("inputs")) {
+          return fail(Text({"[[pixel]] ", hash_text, ": inputs need a replacement (shader)"}));
+        }
+      } else {
+        entry.shader = (*fields)["shader"].value_or(std::string());
+        if (!IsLookFile(entry.shader, ".hlsli")) {
+          return fail(Text({"[[pixel]] ", hash_text,
+                            ": shader must name a .hlsli file of the look directory"}));
+        }
+      }
+      if (const toml::node* node = fields->get("inputs")) {
+        const toml::table* inputs = node->as_table();
+        if (!inputs) {
+          return fail(Text({"[[pixel]] ", hash_text, ": inputs must be a table ([pixel.inputs])"}));
+        }
+        for (auto&& [key, value] : *inputs) {
+          std::string_view name = key.str();
+          if (!IsPassName(name)) {
+            return fail(Text({"[[pixel]] ", hash_text, ": input '", name,
+                              "': the name must be lower-case letters, digits and '_'"}));
+          }
+          auto text = value.value<std::string>();
+          Input input;
+          if (!text || !ParseInput(*text, input)) {
+            return fail(Text({"[[pixel]] ", hash_text, ": input '", name,
+                              "' must be i<0-15>, c<0-255> (with a swizzle), b<0-255>, "
+                              "tf<0-31>, position or front_face"}));
+          }
+          input.name = std::string(name);
+          entry.inputs.push_back(std::move(input));
+        }
       }
       std::vector<std::string> names;
       if (!StringList(fields->get("passes"), names)) {

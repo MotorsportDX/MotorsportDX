@@ -1078,10 +1078,12 @@ std::string ShaderOverrides::BuildContract(
   line("#define XE_FORCE_EARLY_DEPTH_STENCIL {}", int(force_early_depth_stencil));
   line("#define XE_PS_ATTRIBUTES {}", force_early_depth_stencil ? "[earlydepthstencil]" : "");
 
-  // Float constants, tightly packed like the translator's constant buffer.
+  // Float constants, tightly packed like the translator's constant buffer. A
+  // replacement reads them by name only (its inputs below).
+  const bool replacement = entry && !entry->shader.empty();
   const Shader::ConstantRegisterMap& constants = shader.constant_register_map();
   line("#define XE_FLOAT_CONSTANT_COUNT {}", constants.float_count);
-  for (uint32_t i = 0; i < 256; ++i) {
+  for (uint32_t i = 0; i < 256 && !replacement; ++i) {
     uint32_t packed = constants.GetPackedFloatConstantIndex(i);
     if (packed != UINT32_MAX) {
       line("#define XE_FLOAT_CONSTANT_{} xe_float_constants[{}]", i, packed);
@@ -1111,6 +1113,107 @@ std::string ShaderOverrides::BuildContract(
   for (const auto& sampler : samplers) {
     line("#define {} {}u", HlslShaderTranslator::SamplerSlotName(sampler),
          sampler.bindless_descriptor_index);
+  }
+
+  if (replacement) {
+    // A replacement's game inputs by name (docs/analysis/shader-contract.md 8),
+    // as CheckInputs found them: XeInputs, which the library fills after the
+    // prologue (XE_LOAD_INPUTS), and per texture xe_tex_<name>(coord), the
+    // fetch at the dimension and with the sampler of the shader's binding.
+    line("#define XE_REPLACEMENT 1");
+    std::string load = "#define XE_LOAD_INPUTS(xe_in, p, input)";
+    // The defines after the struct.
+    std::string defines;
+    auto define = [&defines]<typename... Args>(fmt::format_string<Args...> format, Args&&... args) {
+      fmt::format_to(std::back_inserter(defines), format, std::forward<Args>(args)...);
+      defines.push_back('
+');
+    };
+    line("struct XeInputs {{");
+    bool members = false;
+    for (const native_shader_contract::Input& input : entry->inputs) {
+      using Kind = native_shader_contract::Input::Kind;
+      std::string upper(input.name);
+      std::transform(upper.begin(), upper.end(), upper.begin(),
+                     [](char c) { return char(std::toupper(uint8_t(c))); });
+      std::string swizzle = input.swizzle.empty() ? std::string() : "." + input.swizzle;
+      std::string vector_type =
+          input.swizzle.size() == 1
+              ? std::string("float")
+              : fmt::format("float{}", input.swizzle.empty() ? 4 : input.swizzle.size());
+      switch (input.kind) {
+        case Kind::kInterpolator:
+          line("  {} {};", vector_type, input.name);
+          load += fmt::format(" xe_in.{} = p.r[{}]{};", input.name, input.index, swizzle);
+          break;
+        case Kind::kFloatConstant:
+          line("  {} {};", vector_type, input.name);
+          load += fmt::format(" xe_in.{} = xe_float_constants[{}]{};", input.name,
+                              constants.GetPackedFloatConstantIndex(input.index), swizzle);
+          break;
+        case Kind::kBoolConstant:
+          line("  bool {};", input.name);
+          load += fmt::format(" xe_in.{} = xe_bool_constant({}u);", input.name, input.index);
+          break;
+        case Kind::kPosition:
+          line("  float4 {};", input.name);
+          load += fmt::format(" xe_in.{} = input.xe_position;", input.name);
+          break;
+        case Kind::kFrontFace:
+          line("  bool {};", input.name);
+          load += fmt::format(" xe_in.{} = input.xe_is_front_face;", input.name);
+          break;
+        case Kind::kTexture: {
+          // 3D (with the stacked 2D array) over cube over 2D (1D as 2D).
+          xenos::FetchOpDimension dimension = xenos::FetchOpDimension::k2D;
+          for (const auto& texture : textures) {
+            if (texture.fetch_constant != input.index) {
+              continue;
+            }
+            if (texture.dimension == xenos::FetchOpDimension::k3DOrStacked ||
+                (texture.dimension == xenos::FetchOpDimension::kCube &&
+                 dimension == xenos::FetchOpDimension::k2D)) {
+              dimension = texture.dimension;
+            }
+          }
+          auto sampler = std::find_if(samplers.begin(), samplers.end(), [&input](const auto& s) {
+            return s.fetch_constant == input.index;
+          });
+          std::string sampler_slot =
+              sampler != samplers.end() ? HlslShaderTranslator::SamplerSlotName(*sampler) : "0u";
+          auto slot = [&input](xenos::FetchOpDimension slot_dimension, bool is_signed) {
+            return HlslShaderTranslator::TextureSlotName(input.index, slot_dimension, is_signed);
+          };
+          if (dimension == xenos::FetchOpDimension::k3DOrStacked) {
+            define("#define xe_tex_{}(coord) xe_tfetch_3d({}u, {}, {}, {}, {}, {}, (coord), 0.0, "
+                 "false, XE_LOD_COMPUTED, 0.0, 0.0, XE_FILTER_FETCH_CONSTANT, "
+                 "XE_FILTER_FETCH_CONSTANT)",
+                 input.name, input.index, slot(dimension, false), slot(dimension, true),
+                 slot(xenos::FetchOpDimension::k2D, false),
+                 slot(xenos::FetchOpDimension::k2D, true), sampler_slot);
+          } else if (dimension == xenos::FetchOpDimension::kCube) {
+            define("#define xe_tex_{}(coord) xe_tfetch_cube({}u, {}, {}, {}, (coord), 0.0, false, "
+                 "XE_LOD_COMPUTED, 0.0, 0.0)",
+                 input.name, input.index, slot(dimension, false), slot(dimension, true),
+                 sampler_slot);
+          } else {
+            define("#define xe_tex_{}(coord) xe_tfetch_2d({}u, {}, {}, {}, (coord), 0.0, false, "
+                 "XE_LOD_COMPUTED, 0.0, 0.0)",
+                 input.name, input.index, slot(dimension, false), slot(dimension, true),
+                 sampler_slot);
+            define("#define xe_tex_{}_size() xe_texture_size_2d({}u)", input.name, input.index);
+          }
+        } break;
+      }
+      members |= input.kind != Kind::kTexture;
+      define("#define XE_IN_{} 1", upper);
+    }
+    if (!members) {
+      line("  uint xe_none;");
+    }
+    line("}};");
+    out += defines;
+    line("{}", load);
   }
 
   // Input signature (WriteInputSignature): all interpolators of the mask, then
@@ -1154,6 +1257,55 @@ std::string ShaderOverrides::BuildContract(
   }
   out.push_back('\n');
   return out;
+}
+
+std::string ShaderOverrides::CheckInputs(const D3D12Shader::D3D12Translation& translation,
+                                         const native_shader_contract::PixelEntry& entry) const {
+  using Kind = native_shader_contract::Input::Kind;
+  const auto& shader = static_cast<const D3D12Shader&>(translation.shader());
+  Modification modification(translation.modification());
+  uint32_t register_count = shader.register_static_address_bound();
+  if (shader.uses_register_dynamic_addressing()) {
+    register_count =
+        std::max(register_count, uint32_t(modification.pixel.dynamic_addressable_register_count));
+  }
+  bool param_gen = modification.pixel.param_gen_enable &&
+                   modification.pixel.param_gen_interpolator < register_count;
+  for (const native_shader_contract::Input& input : entry.inputs) {
+    switch (input.kind) {
+      case Kind::kInterpolator:
+        // Loaded from the mask, or the param gen register.
+        if (input.index >= register_count ||
+            (!(modification.pixel.interpolator_mask & (UINT32_C(1) << input.index)) &&
+             !(param_gen && input.index == modification.pixel.param_gen_interpolator))) {
+          return fmt::format("input '{}': interpolator {} is not one of this translation's",
+                             input.name, input.index);
+        }
+        break;
+      case Kind::kFloatConstant:
+        if (shader.constant_register_map().GetPackedFloatConstantIndex(input.index) ==
+            UINT32_MAX) {
+          return fmt::format("input '{}': the shader does not read float constant {}", input.name,
+                             input.index);
+        }
+        break;
+      case Kind::kTexture: {
+        const auto& textures = shader.GetTextureBindingsAfterTranslation();
+        const auto& samplers = shader.GetSamplerBindingsAfterTranslation();
+        auto fetches = [&input](const auto& binding) {
+          return binding.fetch_constant == input.index;
+        };
+        if (std::none_of(textures.begin(), textures.end(), fetches) ||
+            std::none_of(samplers.begin(), samplers.end(), fetches)) {
+          return fmt::format("input '{}': the shader does not fetch texture {}", input.name,
+                             input.index);
+        }
+      } break;
+      default:
+        break;
+    }
+  }
+  return std::string();
 }
 
 uint64_t ShaderOverrides::CacheKey(
@@ -1523,11 +1675,13 @@ ShaderOverrides::Outcome ShaderOverrides::Build(const D3D12Shader::D3D12Translat
   // native_plain: outside the passes of the shader's manifest entry.
   bool disabled = modification.pixel.hlsl_override_disabled || modification.pixel.native_plain;
   const native_shader_contract::PixelEntry* entry = NativeEntry(translation);
+  // A replacement entry takes the place of the game shader's HLSL.
+  const bool replacement = entry && !entry->shader.empty();
   const std::string& dump_path = REXCVAR_GET(dump_shaders);
 
   // A hand-written override, for this modification or for all.
   std::filesystem::path path;
-  if (pixel_shaders_.find(hash) != pixel_shaders_.end()) {
+  if (!replacement && pixel_shaders_.find(hash) != pixel_shaders_.end()) {
     std::error_code error;
     path = directory_ / fmt::format("shader_{:016X}_{:016X}.ps.hlsl", hash, modification.value);
     if (!std::filesystem::exists(path, error)) {
@@ -1541,7 +1695,7 @@ ShaderOverrides::Outcome ShaderOverrides::Build(const D3D12Shader::D3D12Translat
   // manifest entry's, or the classic one of the hash.
   std::string mod;
   if (entry) {
-    mod = entry->hooks;
+    mod = replacement ? entry->shader : entry->hooks;
   } else if (mod_shaders_.find(hash) != mod_shaders_.end()) {
     mod = fmt::format("shader_{:016X}.mod.hlsli", hash);
   }
@@ -1580,7 +1734,16 @@ ShaderOverrides::Outcome ShaderOverrides::Build(const D3D12Shader::D3D12Translat
   }
 
   std::string text, name;
-  if (!path.empty()) {
+  if (replacement) {
+    // The replacement file alone, included as a mod is: no game HLSL.
+    std::string missing = CheckInputs(translation, *entry);
+    if (!missing.empty()) {
+      REXGPU_ERROR("Native shader contract: replacement {} of {:016X} modification {:016X}: {}",
+                   entry->shader, hash, modification.value, missing);
+      return Outcome::kFailed;
+    }
+    name = (mod_directory_ / entry->shader).generic_string();
+  } else if (!path.empty()) {
     if (!ReadFile(path, text)) {
       REXGPU_ERROR("Shader override {}: cannot read the file", path.string());
       return Outcome::kNone;

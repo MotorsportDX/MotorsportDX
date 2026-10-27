@@ -60,12 +60,40 @@ struct Resource {
   std::string name;
 };
 
+// A game input a replacement shader reads by name ([pixel.inputs]): "i<n>" an interpolator,
+// "c<n>" a float constant, both with an optional swizzle, "b<n>" a bool constant, "tf<n>" a
+// texture fetch constant, "position" (SV_Position) or "front_face".
+struct Input {
+  enum class Kind {
+    kInterpolator,
+    kFloatConstant,
+    kBoolConstant,
+    kTexture,
+    kPosition,
+    kFrontFace,
+  };
+  std::string name;
+  Kind kind = Kind::kInterpolator;
+  uint32_t index = 0;
+  // 1 to 4 of x, y, z and w, or empty for all four (interpolators and float constants).
+  std::string swizzle;
+};
+
+// Parses an input's register ("i1.z", "c5", "b133", "tf7", "position"); false if it is none.
+bool ParseInput(std::string_view text, Input& input_out);
+
 // A [[pixel]] entry.
 struct PixelEntry {
   // The runtime's key of the guest pixel shader (XXH3 of its ucode).
   uint64_t hash = 0;
-  // The mod in shader_mod_path that hooks into the shader's generated HLSL.
+  // The mod in shader_mod_path that hooks into the shader's generated HLSL, or empty for a
+  // replacement.
   std::string hooks;
+  // A replacement shader in shader_mod_path (a .hlsli file defining xe_replacement), which
+  // takes the place of the game shader's HLSL; empty for hooks. One of the two is set.
+  std::string shader;
+  // The game inputs the replacement reads, by name (only with shader).
+  std::vector<Input> inputs;
   // Bit per pass class the entry applies in; the others take the plain translation.
   uint32_t pass_mask = kAllPasses;
   // Defines of the mod read as constants after the host values (xe_mod_knob), so that

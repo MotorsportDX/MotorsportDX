@@ -7,6 +7,9 @@
 //   #define XE_OVERRIDE_MAIN
 //   #include "xenos_override.hlsli"
 // with FXC ps_5_1, IEEE strictness and unbounded descriptor tables.
+// A replacement of the native shader contract (shaders.toml, shader = "<file>.hlsli") takes the
+// place of the override: the contract adds XE_REPLACEMENT, XeInputs and xe_tex_<name>, and the
+// file defines void xe_replacement(XeInputs inputs, inout XePixel p).
 //
 // Everything here mirrors DxbcShaderTranslator (dxbc_translator*.cpp) for the
 // bindless, host render target path - keep both in sync. Helpers return all
@@ -921,10 +924,19 @@ void xe_native_pass_debug(inout XePixel p) {
 XE_PS_ATTRIBUTES
 XePsOutput main(XePsInput xe_input) {
   XePixel p = xe_ps_prologue(xe_input);
+#ifdef XE_REPLACEMENT
+  // A replacement of the native shader contract (docs/analysis/shader-contract.md 8): the
+  // game shader's inputs by name, and the outputs it writes in guest units, through the
+  // epilogue below. No hooks.
+  XeInputs xe_inputs = (XeInputs)0;
+  XE_LOAD_INPUTS(xe_inputs, p, xe_input)
+  xe_replacement(xe_inputs, p);
+#else
   XE_HOOK_INPUT(p);
   XePixel xe_input_pixel = p;
   xe_pixel_shader(p);
   XE_HOOK_OUTPUT(p, xe_input_pixel);
+#endif
 #ifdef XE_NATIVE_PASS_DEBUG
   xe_native_pass_debug(p);
 #endif

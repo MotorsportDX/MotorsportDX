@@ -310,6 +310,11 @@ class ShaderOverrides {
   // entry: the manifest's entry the translation takes, or nullptr.
   std::string BuildContract(const D3D12Shader::D3D12Translation& translation,
                             const native_shader_contract::PixelEntry* entry) const;
+  // Whether the translation has every input a replacement entry names (an
+  // interpolator of its mask, a float constant its shader reads, a texture it
+  // fetches): empty if so, else the first that it lacks.
+  std::string CheckInputs(const D3D12Shader::D3D12Translation& translation,
+                          const native_shader_contract::PixelEntry& entry) const;
   // The override of the translation (dxbc: its DXBC translation, empty for
   // an entry translated without it) from the current files, and the files read
   // for it.
