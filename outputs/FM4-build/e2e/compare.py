@@ -30,8 +30,7 @@ PHASE_KEYS = ["fps_mean", "frame_ms_p99", "cp_busy_ms_per_s_median", "gpu_frame_
 SHADER_WORK_KINDS = ["mod_compiles", "mod_compiles_worker", "mod_cache_loads", "mod_swaps",
                      "translations_ps", "translations_vs", "pipelines", "pass_compiles"]
 # Draw path work whose pieces over 4 ms warn when they rise (the plan's threshold).
-SHADER_WORK_LONG_KINDS = ["translations_ps", "translations_vs", "pipelines", "mod_swaps",
-                          "mod_cache_loads"]
+SHADER_WORK_LONG_KINDS = ["translations_ps", "translations_vs", "pipelines", "mod_cache_loads"]
 
 
 def load(path):

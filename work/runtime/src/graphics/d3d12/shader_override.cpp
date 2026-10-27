@@ -1112,10 +1112,16 @@ bool ShaderOverrides::Compile(const D3D12Shader::D3D12Translation& translation,
                               const std::string& mod,
                               const native_shader_contract::PixelEntry* entry,
                               std::vector<uint8_t>& binary_out,
-                              std::vector<Dependency>& files_out) const {
+                              std::vector<Dependency>& files_out,
+                              std::unique_ptr<CompileJob>* job_out) const {
+  auto job = std::make_unique<CompileJob>();
+  job->modification = translation.modification();
+  job->name = name;
+  job->mod = mod;
   // Contract, library (with the default hooks), mod (redefining hooks), the
   // shader, main.
-  std::string source = contract;
+  std::string& source = job->source;
+  source = contract;
   source += fmt::format("#include \"{}\"\n", kHlsliName);
   if (!mod.empty()) {
     source += fmt::format("#include \"{}\"\n", mod);
@@ -1124,7 +1130,7 @@ bool ShaderOverrides::Compile(const D3D12Shader::D3D12Translation& translation,
   source += text;
   source += fmt::format("\n#define XE_OVERRIDE_MAIN\n#include \"{}\"\n", kHlsliName);
 
-  std::vector<std::pair<std::string, std::string>> define_values;
+  std::vector<std::pair<std::string, std::string>>& define_values = job->defines;
   {
     std::lock_guard<std::mutex> lock(knob_mutex_);
     define_values = compile_defines_;
@@ -1139,14 +1145,13 @@ bool ShaderOverrides::Compile(const D3D12Shader::D3D12Translation& translation,
     }
   }
 
-  uint64_t key = 0;
-  std::filesystem::path cache_path;
   if (!cache_directory_.empty()) {
     const uint64_t load_start =
         perf_trace::shader_work_for_draw ? perf_trace::ZoneStart() : 0;
-    key = CacheKey(source, define_values);
-    cache_path = CachePath(translation, key);
-    if (LoadCached(cache_path, key, {mod_directory_, directory_}, binary_out, files_out)) {
+    job->key = CacheKey(source, define_values);
+    job->cache_path = CachePath(translation, job->key);
+    if (LoadCached(job->cache_path, job->key, {mod_directory_, directory_}, binary_out,
+                   files_out)) {
       std::string mismatch = CompareSignatures(dxbc, binary_out);
       if (mismatch.empty()) {
         if (load_start) {
@@ -1161,8 +1166,22 @@ bool ShaderOverrides::Compile(const D3D12Shader::D3D12Translation& translation,
     files_out.clear();
   }
 
+  if (job_out) {
+    // For a worker (shader_override_async).
+    job->dxbc = dxbc;
+    *job_out = std::move(job);
+    return false;
+  }
+  return RunCompile(*job, dxbc, binary_out, files_out, false);
+}
+
+bool ShaderOverrides::RunCompile(const CompileJob& job, const std::vector<uint8_t>& dxbc,
+                                 std::vector<uint8_t>& binary_out,
+                                 std::vector<Dependency>& files_out, bool on_worker) const {
+  const std::string& name = job.name;
+  const std::string& mod = job.mod;
   std::vector<D3D_SHADER_MACRO> defines;
-  for (const auto& define : define_values) {
+  for (const auto& define : job.defines) {
     defines.push_back({define.first.c_str(), define.second.c_str()});
   }
   defines.push_back({nullptr, nullptr});
@@ -1171,15 +1190,16 @@ bool ShaderOverrides::Compile(const D3D12Shader::D3D12Translation& translation,
   ID3DBlob* code = nullptr;
   ID3DBlob* messages = nullptr;
   auto start = std::chrono::steady_clock::now();
-  HRESULT result = pD3DCompile(d3d_compile_)(source.data(), source.size(), name.c_str(),
+  HRESULT result = pD3DCompile(d3d_compile_)(job.source.data(), job.source.size(), name.c_str(),
                                              defines.data(), &include, "main", kTarget,
                                              kCompileFlags, 0, &code, &messages);
   auto elapsed = std::chrono::steady_clock::now() - start;
   double milliseconds = std::chrono::duration<double, std::milli>(elapsed).count();
-  if (perf_trace::shader_work_for_draw) {
-    perf_trace::AddShaderWork(
-        perf_trace::ShaderWork::kModCompile,
-        uint64_t(std::chrono::duration_cast<std::chrono::nanoseconds>(elapsed).count()));
+  if (on_worker || perf_trace::shader_work_for_draw) {
+    perf_trace::AddShaderWork(on_worker ? perf_trace::ShaderWork::kModCompileWorker
+                                        : perf_trace::ShaderWork::kModCompile,
+                              uint64_t(std::chrono::duration_cast<std::chrono::nanoseconds>(elapsed)
+                                           .count()));
   }
   // Every file read once, also of a failed compile (hot reload watches them).
   for (const auto& read : include.read()) {
@@ -1213,10 +1233,11 @@ bool ShaderOverrides::Compile(const D3D12Shader::D3D12Translation& translation,
     REXGPU_ERROR("Shader override {}: {}", name, mismatch);
     return false;
   }
-  REXGPU_INFO("Shader override {}{}{} compiled for modification {:016X} in {:.1f} ms", name,
-              mod.empty() ? "" : " with ", mod, translation.modification(), milliseconds);
-  if (!cache_path.empty()) {
-    StoreCached(cache_path, key, files_out, binary_out);
+  REXGPU_INFO("Shader override {}{}{} compiled for modification {:016X} in {:.1f} ms{}", name,
+              mod.empty() ? "" : " with ", mod, job.modification, milliseconds,
+              on_worker ? " on a worker" : "");
+  if (!job.cache_path.empty()) {
+    StoreCached(job.cache_path, job.key, files_out, binary_out);
   }
   return true;
 }
@@ -1308,7 +1329,8 @@ bool ShaderOverrides::CompileProgram(
 ShaderOverrides::Outcome ShaderOverrides::Build(const D3D12Shader::D3D12Translation& translation,
                                                 const std::vector<uint8_t>& dxbc,
                                                 std::vector<uint8_t>& binary_out,
-                                                std::vector<Dependency>& files_out) {
+                                                std::vector<Dependency>& files_out,
+                                                std::unique_ptr<CompileJob>* job_out) {
   Shader& shader = translation.shader();
   uint64_t hash = shader.ucode_data_hash();
   Modification modification(translation.modification());
@@ -1403,8 +1425,13 @@ ShaderOverrides::Outcome ShaderOverrides::Build(const D3D12Shader::D3D12Translat
     }
   }
   files_out.clear();
-  bool compiled =
-      Compile(translation, dxbc, contract, text, name, mod, entry, binary_out, files_out);
+  std::unique_ptr<CompileJob> job;
+  bool compiled = Compile(translation, dxbc, contract, text, name, mod, entry, binary_out,
+                          files_out, job_out ? &job : nullptr);
+  if (job) {
+    *job_out = std::move(job);
+    return Outcome::kQueued;
+  }
   if (!path.empty()) {
     files_out.push_back({path.filename().string(), path, HashBytes(text.data(), text.size())});
   }
@@ -1432,13 +1459,30 @@ void ShaderOverrides::Record(const D3D12Shader::D3D12Translation& translation,
   }
 }
 
-void ShaderOverrides::Apply(D3D12Shader::D3D12Translation& translation) {
+void ShaderOverrides::Apply(D3D12Shader::D3D12Translation& translation,
+                            ShaderCompileQueue* queue) {
   if (translation.shader().type() != xenos::ShaderType::kPixel || !translation.is_valid()) {
     return;
   }
   std::vector<uint8_t> binary;
   std::vector<Dependency> files;
-  Outcome outcome = Build(translation, translation.translated_binary(), binary, files);
+  std::unique_ptr<CompileJob> job;
+  Outcome outcome = Build(translation, translation.translated_binary(), binary, files,
+                          queue ? &job : nullptr);
+  if (outcome == Outcome::kQueued) {
+    // The translation keeps its DXBC until the pipeline cache swaps the
+    // compiled binary in (PipelineCache::SwapCompiledMods).
+    std::shared_ptr<CompileJob> shared_job(std::move(job));
+    queue->Push(&translation, [this, shared_job]() {
+      std::vector<uint8_t> compiled;
+      std::vector<Dependency> compiled_files;
+      if (!RunCompile(*shared_job, shared_job->dxbc, compiled, compiled_files, true)) {
+        compiled.clear();
+      }
+      return compiled;
+    });
+    return;
+  }
   if (hot_reload_ && outcome != Outcome::kNone) {
     std::lock_guard<std::mutex> lock(entries_mutex_);
     Record(translation, translation.translated_binary(), files, outcome == Outcome::kCompiled);

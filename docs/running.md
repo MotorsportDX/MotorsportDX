@@ -1264,7 +1264,12 @@ Nothing needs to be sent from the logs for this test; the notes are the result.
 
 `-Action warmcache` runs the e2e Quick Race timeline once, without a network connection,
 so that the shader and pipeline cache under `BuildRoot\cache` is filled before you play.
-Later runs then skip those compilations. The compiled look mods are kept in
+Later runs then skip those compilations. Without them the game does not wait for the look:
+a shader whose look mod is not in the cache draws with the game's own look while the mod
+compiles in the background, and takes the look a moment later, usually within a second or
+two ([D3D-level HLE, 19.3.7](analysis/d3d-hle-n6.md#1937-increments-10-and-11-27-october-2026);
+`--shader_override_async=false` compiles in place instead and pauses the game for it, as
+before 27 October 2026). The compiled look mods are kept in
 `BuildRoot\cache\shader-overrides`, one entry per shader, look and render scale; the
 directory can be deleted at any time. The run details are written to
 `BuildRoot\e2e\warmcache`, and the log to `BuildRoot\logs\warmcache.log`.

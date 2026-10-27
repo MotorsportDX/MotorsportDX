@@ -28,6 +28,7 @@
 #include <rex/assert.h>
 #include <rex/graphics/d3d12/render_target_cache.h>
 #include <rex/graphics/d3d12/shader.h>
+#include <rex/graphics/d3d12/shader_compile_queue.h>
 #include <rex/graphics/d3d12/shader_override.h>
 #include <rex/graphics/flags.h>
 #include <rex/graphics/pipeline/shader/dxbc_translator.h>
@@ -66,6 +67,15 @@ class PipelineCache {
 
   void EndSubmission();
   bool IsCreatingPipelines();
+
+  // shader_override_async (shader_compile_queue.h): swaps the binaries compiled
+  // on the workers into their translations, has the workers recreate those
+  // translations' pipelines with them, and swaps the states the workers created
+  // into their pipelines. On the thread that creates pipelines, while it
+  // creates none: with d3d12_draw_back_end=2 the replay's, before it replays a
+  // submission (the command processor calls it), otherwise EndSubmission. The
+  // states replaced are released once retire_submission is complete.
+  void SwapCompiledMods(uint64_t retire_submission);
 
   D3D12Shader* LoadShader(xenos::ShaderType shader_type, const uint32_t* host_address,
                           uint32_t dword_count);
@@ -310,12 +320,13 @@ class PipelineCache {
   D3D12Shader* LoadShader(xenos::ShaderType shader_type, const uint32_t* host_address,
                           uint32_t dword_count, uint64_t data_hash);
 
-  // Can be called from multiple threads.
+  // Can be called from multiple threads. for_draw: a draw meets the shader, so
+  // with shader_override_async its mod compiles on mod_compile_queue_.
   bool TranslateAnalyzedShader(DxbcShaderTranslator& translator,
                                D3D12Shader::D3D12Translation& translation,
                                IDxbcConverter* dxbc_converter = nullptr,
                                IDxcUtils* dxc_utils = nullptr,
-                               IDxcCompiler* dxc_compiler = nullptr);
+                               IDxcCompiler* dxc_compiler = nullptr, bool for_draw = false);
 
   // If draw_util::IsRasterizationPotentiallyDone is false, the pixel shader
   // MUST be made nullptr BEFORE calling this! The shaders must be translated
@@ -362,8 +373,13 @@ class PipelineCache {
   std::mutex translation_request_lock_;
   // HLSL replacing translations (shader_override_path), or nullptr.
   std::unique_ptr<ShaderOverrides> shader_overrides_;
-  // Pipeline states replaced by hot reload, and the submission after which the
-  // GPU no longer uses them.
+  // shader_override_async: the compile workers (after shader_overrides_, whose
+  // compiles they run, so that they stop first).
+  ShaderCompileQueue mod_compile_queue_;
+  bool mod_compile_async_ = false;
+  // Pipeline states replaced by hot reload or SwapCompiledMods, and the
+  // submission after which the GPU no longer uses them.
+  std::mutex retired_pipeline_states_mutex_;
   std::deque<std::pair<uint64_t, ID3D12PipelineState*>> retired_pipeline_states_;
 
   // Command processor thread DXIL conversion/disassembly interfaces, if DXIL

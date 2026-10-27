@@ -10,11 +10,12 @@ This note describes how the shader override and shader mod path ([B4 research](b
 
 ## What is added
 
-All of it is off by default in the runtime.
+All of it is off by default in the runtime, except the compile workers (`shader_override_async`).
 
 | Switch | Default | Effect |
 | --- | --- | --- |
 | `shader_override_cache_path=<dir>` | empty (off) | Keeps the compiled DXBC of every override and mod in `<dir>`. The launcher and `e2e.py` set `<BuildRoot>\cache\shader-overrides`. |
+| `shader_override_async=false` | `true` | Compiles an override or mod that a draw meets and the cache does not hold where the draw meets it, as before 27 October 2026. With `true` it compiles on one to four worker threads (a quarter of the logical processors, below normal priority); the shader draws with its DXBC translation, the game's own look, until the pipeline cache swaps the compiled binary into the translation and the same workers have recreated its pipelines with it ([D3D-level HLE, 19.3.7](d3d-hle-n6.md#1937-increments-10-and-11-27-october-2026)). Hot reload and `async_shader_compilation` keep the compile in place; the start-up's translations of the shader storage compile before the title runs either way. |
 | `shader_mod_hot_reload=true` | `false` | Watches the files the overrides were compiled from, recompiles what changed and recreates only the pipelines of those shaders. |
 | `shader_mod_live_knobs=true` | `false` | Compiles the numeric `shader_mod_defines` as constants that the runtime writes every frame, so they change without a recompile. |
 | `shader_mod_set NAME=VALUE ...` | (console command) | Changes defines while running: live knobs at once, other defines through a hot reload recompile. Without arguments it lists them. |

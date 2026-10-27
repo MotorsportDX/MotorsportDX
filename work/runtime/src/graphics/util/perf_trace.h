@@ -622,10 +622,10 @@ inline void CountHostRecord(uint64_t depth, uint64_t pushed) {
 // On the draw path, where a draw meets it: the DXBC translations of vertex and
 // pixel shaders and the look mods' FXC compiles and override cache loads where
 // the draw is issued (the host render thread or the command processor), the
-// pipelines created for a draw (there, or on the draw back end's replay), the
-// pipelines recreated when a mod compiled on a worker replaces the plain
-// translation (shader_override_async), and the post passes' FXC compiles. Off
-// it: the mods compiled on the compile workers. Not counted: the start-up's
+// pipelines created for a draw (there, or on the draw back end's replay), and
+// the post passes' FXC compiles. Off it, on the compile workers
+// (shader_override_async): the mods compiled, and the pipelines recreated when
+// a compiled mod replaces the plain translation. Not counted: the start-up's
 // translations and pipelines (InitializeShaderStorage) and hot reload.
 enum class ShaderWork : uint32_t {
   kVertexTranslation,
@@ -673,7 +673,7 @@ inline void AddShaderWork(ShaderWork kind, uint64_t ns) {
   uint64_t max = counts.max_ns.load(std::memory_order_relaxed);
   while (ns > max && !counts.max_ns.compare_exchange_weak(max, ns, std::memory_order_relaxed)) {
   }
-  if (kind == ShaderWork::kModCompileWorker) return;
+  if (kind == ShaderWork::kModCompileWorker || kind == ShaderWork::kModSwap) return;
   if (ns > kShaderWorkLongNs) counts.long_count.fetch_add(1, std::memory_order_relaxed);
   frame_shader_ns.fetch_add(ns, std::memory_order_relaxed);
   if (kind == ShaderWork::kModCompile) {

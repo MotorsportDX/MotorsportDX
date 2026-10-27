@@ -4824,6 +4824,14 @@
     {
       "path": "work/runtime/src/graphics/d3d12/native_shader_contract.cpp",
       "provenance": "runtime-fork"
+    },
+    {
+      "path": "work/runtime/include/rex/graphics/d3d12/shader_compile_queue.h",
+      "provenance": "runtime-fork"
+    },
+    {
+      "path": "work/runtime/src/graphics/d3d12/shader_compile_queue.cpp",
+      "provenance": "runtime-fork"
     }
   ]
 }

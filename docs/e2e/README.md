@@ -266,7 +266,7 @@ python outputs\FM4-build\e2e\compare.py <BuildRoot>\e2e\baseline-v2 <BuildRoot>\
 - more photo mode captures showing the clear color (`clear_gray_photo_frames`), or a last capture (`final.png`, `clear_gray_final`) showing it where the baseline's does not: photo mode lost its scene (26 October 2026);
 - a candidate on cold caches (`--cold-cache`, `--cache-from`) with a look mod compiled on the draw path (`shader_work` `mod_compiles`), or with a frame over 50 ms that has one ([d3d-hle-n6.md 19.3.4](../analysis/d3d-hle-n6.md#1934-increments-and-gates)).
 
-A wait cause up more than 20% and more than 5 ms/s, or different capture statistics (luma, black and saturated share, luma histogram), only WARN. So does a rise in `clear_gray_frames` (the other phases) or `washed_out_frames`, and with both sides on cold caches more translations, pipelines, swaps or mod cache loads over 4 ms on the draw path, or more frames over 100 ms. Races are not deterministic, so check captures by eye.
+A wait cause up more than 20% and more than 5 ms/s, or different capture statistics (luma, black and saturated share, luma histogram), only WARN. So does a rise in `clear_gray_frames` (the other phases) or `washed_out_frames`, and with both sides on cold caches more translations, pipelines or mod cache loads over 4 ms on the draw path, or more frames over 100 ms. Races are not deterministic, so check captures by eye.
 
 For image, draw and predication parity of one scene, use the `freeze` scenario and `parity.py` ([frozen-frames.md](frozen-frames.md)); a stage of the native port runs both gates.
 

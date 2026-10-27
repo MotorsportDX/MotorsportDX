@@ -20,6 +20,7 @@
 
 #include <rex/graphics/d3d12/native_shader_contract.h>
 #include <rex/graphics/d3d12/shader.h>
+#include <rex/graphics/d3d12/shader_compile_queue.h>
 #include <rex/graphics/pipeline/shader/dxbc_translator.h>
 #include <rex/graphics/util/draw_scale.h>
 #include <rex/hash.h>
@@ -55,6 +56,14 @@ namespace rex::graphics::d3d12 {
 // with an entry there takes the entry's mod instead of its classic one, in the
 // passes the entry lists, with the entry's knobs as constants and its draws'
 // pass class in the host values.
+//
+// shader_override_async (on by default; docs/analysis/d3d-hle-n6.md 19.3.2,
+// part 1): an override or mod that a draw meets and the cache does not hold is
+// compiled on a worker of the pipeline cache's ShaderCompileQueue, not on the
+// thread that issues the draw. The translation keeps its DXBC (the game's own
+// look) until the pipeline cache swaps the compiled binary into it and its
+// pipelines. The start-up's translations (InitializeShaderStorage) still
+// compile before the title runs, and hot reload keeps compiling in place.
 class ShaderOverrides {
  public:
   struct HostConfig {
@@ -121,7 +130,10 @@ class ShaderOverrides {
   // override file get HLSL from HlslShaderTranslator, written to
   // shader_override_generate_path and, with shader_override_generated, used. With
   // dump_shaders, writes the contract of every translated pixel shader there.
-  void Apply(D3D12Shader::D3D12Translation& translation);
+  // With queue (shader_override_async, a draw meets the translation), a compile
+  // the cache does not hold goes to the queue's workers, and the translation
+  // keeps its DXBC until the pipeline cache swaps the compiled binary in.
+  void Apply(D3D12Shader::D3D12Translation& translation, ShaderCompileQueue* queue = nullptr);
 
   // Whether the system constant buffer carries the knobs: with
   // shader_mod_live_knobs, or for the params of the manifest's entries.
@@ -204,6 +216,20 @@ class ShaderOverrides {
     kCompiled,
     // An override, which didn't compile or match the translation.
     kFailed,
+    // Queued for a compile worker (shader_override_async).
+    kQueued,
+  };
+  // An FXC compile of an override or mod: its source and defines, the DXBC
+  // translation whose signatures it must match, and its cache file.
+  struct CompileJob {
+    uint64_t modification = 0;
+    std::vector<uint8_t> dxbc;
+    std::string source;
+    std::string name;
+    std::string mod;
+    std::vector<std::pair<std::string, std::string>> defines;
+    uint64_t key = 0;
+    std::filesystem::path cache_path;
   };
   // What hot reload knows about a translation that has, or had, an override.
   struct Entry {
@@ -227,18 +253,29 @@ class ShaderOverrides {
                             const native_shader_contract::PixelEntry* entry) const;
   // The override of the translation (dxbc: its DXBC translation) from the
   // current files, and the files read for it.
+  // With job_out, a compile the cache does not hold is returned there for a
+  // worker (kQueued).
   Outcome Build(const D3D12Shader::D3D12Translation& translation,
                 const std::vector<uint8_t>& dxbc, std::vector<uint8_t>& binary_out,
-                std::vector<Dependency>& files_out);
+                std::vector<Dependency>& files_out,
+                std::unique_ptr<CompileJob>* job_out = nullptr);
+  // With job_out, a compile the cache does not hold is not run: its job is
+  // returned there (false is returned, job_out set).
   bool Compile(const D3D12Shader::D3D12Translation& translation,
                const std::vector<uint8_t>& dxbc, const std::string& contract,
                const std::string& text, const std::string& name, const std::string& mod,
                const native_shader_contract::PixelEntry* entry,
-               std::vector<uint8_t>& binary_out, std::vector<Dependency>& files_out) const;
+               std::vector<uint8_t>& binary_out, std::vector<Dependency>& files_out,
+               std::unique_ptr<CompileJob>* job_out = nullptr) const;
   // The manifest's entry a translation takes (not in the A/B's classic periods
   // or outside the entry's passes), or nullptr.
   const native_shader_contract::PixelEntry* NativeEntry(
       const D3D12Shader::D3D12Translation& translation) const;
+  // FXC, the check against the signatures of dxbc and the cache store of a job
+  // (on_worker: a compile worker runs it).
+  bool RunCompile(const CompileJob& job, const std::vector<uint8_t>& dxbc,
+                  std::vector<uint8_t>& binary_out, std::vector<Dependency>& files_out,
+                  bool on_worker) const;
 
   // shader_override_cache_path.
   uint64_t CacheKey(const std::string& source,

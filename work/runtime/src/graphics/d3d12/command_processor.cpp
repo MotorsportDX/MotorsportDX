@@ -5827,6 +5827,9 @@ bool D3D12CommandProcessor::EndSubmission(bool is_swap) {
       submit_request_cond_.notify_one();
     } else {
       FlushSubmitThread();
+      if (draw_back_end_ == 2) {
+        pipeline_cache_->SwapCompiledMods(submission_current_);
+      }
       command_allocator->Reset();
       command_list_->Reset(command_allocator, nullptr);
       uint64_t perf_start = perf_trace::ZoneStart();
@@ -7467,6 +7470,10 @@ void D3D12CommandProcessor::SubmitThreadMain() {
     // The allocator is only reused after this submission's fence value, which
     // is signaled below, so it is free to reset here.
     const uint64_t perf_start = perf_trace::ZoneStart();
+    if (draw_back_end_ == 2) {
+      // The replay creates the pipelines: compiled look mods swap in here.
+      pipeline_cache_->SwapCompiledMods(job.submission);
+    }
     job.allocator->Reset();
     command_list_->Reset(job.allocator, nullptr);
     job.list->Execute(command_list_, command_list_1_);

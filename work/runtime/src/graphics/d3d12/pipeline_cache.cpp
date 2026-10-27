@@ -65,6 +65,9 @@ REXCVAR_DEFINE_INT32(d3d12_pipeline_creation_threads, -1, "GPU/D3D12",
 REXCVAR_DEFINE_BOOL(d3d12_tessellation_wireframe, false, "GPU/D3D12",
                     "Render tessellation as wireframe");
 
+// shader_compile_queue.cpp.
+REXCVAR_DECLARE(bool, shader_override_async);
+
 namespace rex::graphics::d3d12 {
 
 namespace {
@@ -127,6 +130,14 @@ PipelineCache::PipelineCache(D3D12CommandProcessor& command_processor,
        render_target_cache_.msaa_2x_supported(), render_target_cache_.draw_resolution_scale_x(),
        render_target_cache_.draw_resolution_scale_y(), render_target_cache_.scene_draw_scale(),
        render_target_cache_.scene_input_scale()});
+  // Not with hot reload, which recompiles translations in place, nor with
+  // async_shader_compilation, whose creation threads read the translations that
+  // a swap replaces.
+  mod_compile_async_ = shader_overrides_ && REXCVAR_GET(shader_override_async) &&
+                       !shader_overrides_->hot_reload() && !REXCVAR_GET(async_shader_compilation);
+  if (mod_compile_async_) {
+    REXGPU_INFO("Shader overrides: compiles in play on workers (shader_override_async)");
+  }
 }
 
 PipelineCache::~PipelineCache() {
@@ -209,6 +220,9 @@ void PipelineCache::Shutdown() {
 
   // Shut down the persistent shader / pipeline storage.
   ShutdownShaderStorage();
+
+  // No compile worker holds a translation or a pipeline any more.
+  mod_compile_queue_.Stop();
 
   // Destroy all pipelines.
   ReleaseRetiredPipelineStates(true);
@@ -818,9 +832,86 @@ void PipelineCache::EndSubmission() {
   if (shader_overrides_ && shader_overrides_->hot_reload()) {
     ReloadShaderOverrides();
   }
+  // Here the draws create the pipelines; with the draw back end the replay does,
+  // and swaps before it replays.
+  if (!command_processor_.draw_back_end_replays()) {
+    SwapCompiledMods(command_processor_.GetCurrentSubmission());
+  }
+}
+
+void PipelineCache::SwapCompiledMods(uint64_t retire_submission) {
+  if (!mod_compile_queue_.HasResults() && !mod_compile_queue_.HasPipelineResults()) {
+    return;
+  }
+  // The pipelines the workers recreated with a compiled binary: their states
+  // from now on. Draws already recorded in this submission take the new state
+  // too; earlier submissions may still use the old one.
+  if (mod_compile_queue_.HasPipelineResults()) {
+    std::vector<ShaderCompileQueue::PipelineResult> created;
+    mod_compile_queue_.TakePipelineResults(created);
+    for (const ShaderCompileQueue::PipelineResult& entry : created) {
+      if (!entry.state) {
+        // The previous state stays.
+        continue;
+      }
+      ID3D12PipelineState* previous = static_cast<Pipeline*>(entry.pipeline)
+                                          ->state.exchange(entry.state, std::memory_order_acq_rel);
+      if (previous) {
+        std::lock_guard<std::mutex> lock(retired_pipeline_states_mutex_);
+        retired_pipeline_states_.emplace_back(retire_submission, previous);
+      }
+    }
+  }
+  if (!mod_compile_queue_.HasResults()) {
+    return;
+  }
+  std::vector<ShaderCompileQueue::Result> compiled;
+  mod_compile_queue_.TakeResults(compiled);
+  perf_trace::mods_pending.fetch_sub(int64_t(compiled.size()), std::memory_order_relaxed);
+  std::unordered_set<const D3D12Shader::D3D12Translation*> swapped;
+  for (ShaderCompileQueue::Result& entry : compiled) {
+    if (entry.binary.empty()) {
+      // The compile failed: the DXBC translation stays.
+      continue;
+    }
+    // The pipelines created from now on take the compiled binary.
+    entry.translation->ReplaceTranslatedBinary(std::move(entry.binary));
+    swapped.insert(entry.translation);
+  }
+  // The pipelines that existed before are recreated with it on the workers,
+  // since the driver's compile of one can take hundreds of milliseconds.
+  size_t recreated = 0;
+  if (!swapped.empty()) {
+    for (const auto& pipeline_entry : pipelines_) {
+      Pipeline* pipeline = pipeline_entry.second;
+      if (!pipeline->description.pixel_shader ||
+          swapped.find(pipeline->description.pixel_shader) == swapped.end()) {
+        continue;
+      }
+      PipelineRuntimeDescription runtime_description;
+      std::memcpy(&runtime_description, &pipeline->description, sizeof(runtime_description));
+      runtime_description.root_signature = pipeline->root_signature.load(std::memory_order_acquire);
+      mod_compile_queue_.PushPipeline(pipeline, [this, runtime_description]() {
+        const uint64_t start = perf_trace::ZoneStart();
+        ID3D12PipelineState* state = CreateD3D12Pipeline(runtime_description);
+        if (start) {
+          perf_trace::AddShaderWork(perf_trace::ShaderWork::kModSwap, perf_trace::Now() - start);
+        }
+        return state;
+      });
+      ++recreated;
+    }
+  }
+  REXGPU_INFO("Shader overrides: {} compiled on workers swapped in{}, {} pipelines to recreate",
+              swapped.size(),
+              swapped.size() != compiled.size()
+                  ? fmt::format(" ({} failed)", compiled.size() - swapped.size())
+                  : std::string(),
+              recreated);
 }
 
 void PipelineCache::ReleaseRetiredPipelineStates(bool force) {
+  std::lock_guard<std::mutex> lock(retired_pipeline_states_mutex_);
   uint64_t completed = command_processor_.GetCompletedSubmission();
   while (!retired_pipeline_states_.empty() &&
          (force || retired_pipeline_states_.front().first <= completed)) {
@@ -903,6 +994,7 @@ void PipelineCache::ReloadShaderOverrides() {
   });
   size_t failed = 0;
   uint64_t submission = command_processor_.GetCurrentSubmission();
+  std::lock_guard<std::mutex> retired_lock(retired_pipeline_states_mutex_);
   for (size_t i = 0; i < pipelines.size(); ++i) {
     if (!states[i]) {
       // The previous state stays.
@@ -1073,7 +1165,7 @@ bool PipelineCache::ConfigurePipeline(
     perf_trace::ShaderWorkForDrawScope shader_work_scope;
     if (!vertex_shader->is_translated()) {
       if (!TranslateAnalyzedShader(*shader_translator_, *vertex_shader, dxbc_converter_, dxc_utils_,
-                                   dxc_compiler_)) {
+                                   dxc_compiler_, true)) {
         REXGPU_ERROR("Failed to translate the vertex shader!");
         return false;
       }
@@ -1101,7 +1193,7 @@ bool PipelineCache::ConfigurePipeline(
       if (!pixel_shader->is_translated()) {
         pixel_shader->shader().AnalyzeUcode(ucode_disasm_buffer_);
         if (!TranslateAnalyzedShader(*shader_translator_, *pixel_shader, dxbc_converter_,
-                                     dxc_utils_, dxc_compiler_)) {
+                                     dxc_utils_, dxc_compiler_, true)) {
           REXGPU_ERROR("Failed to translate the pixel shader!");
           return false;
         }
@@ -1154,7 +1246,7 @@ bool PipelineCache::TranslateShadersForDraw(D3D12Shader::D3D12Translation* verte
     perf_trace::ShaderWorkForDrawScope shader_work_scope;
     if (!vertex_shader->is_translated()) {
       if (!TranslateAnalyzedShader(*shader_translator_, *vertex_shader, dxbc_converter_, dxc_utils_,
-                                   dxc_compiler_)) {
+                                   dxc_compiler_, true)) {
         REXGPU_ERROR("Failed to translate the vertex shader!");
         return false;
       }
@@ -1182,7 +1274,7 @@ bool PipelineCache::TranslateShadersForDraw(D3D12Shader::D3D12Translation* verte
       if (!pixel_shader->is_translated()) {
         pixel_shader->shader().AnalyzeUcode(ucode_disasm_buffer_);
         if (!TranslateAnalyzedShader(*shader_translator_, *pixel_shader, dxbc_converter_,
-                                     dxc_utils_, dxc_compiler_)) {
+                                     dxc_utils_, dxc_compiler_, true)) {
           REXGPU_ERROR("Failed to translate the pixel shader!");
           return false;
         }
@@ -1319,7 +1411,7 @@ bool PipelineCache::ConfigurePipelineDescribed(
 bool PipelineCache::TranslateAnalyzedShader(DxbcShaderTranslator& translator,
                                             D3D12Shader::D3D12Translation& translation,
                                             IDxbcConverter* dxbc_converter, IDxcUtils* dxc_utils,
-                                            IDxcCompiler* dxc_compiler) {
+                                            IDxcCompiler* dxc_compiler, bool for_draw) {
   D3D12Shader& shader = static_cast<D3D12Shader&>(translation.shader());
 
   // Perform translation.
@@ -1337,7 +1429,8 @@ bool PipelineCache::TranslateAnalyzedShader(DxbcShaderTranslator& translator,
                               perf_trace::Now() - translate_start);
   }
   if (shader_overrides_) {
-    shader_overrides_->Apply(translation);
+    shader_overrides_->Apply(translation,
+                             for_draw && mod_compile_async_ ? &mod_compile_queue_ : nullptr);
   }
 
   const char* host_shader_type;
