@@ -108,7 +108,7 @@ class PipelineTests(unittest.TestCase):
 
     def test_stage_launcher_files(self):
         """The GUI launcher's and the export's folder: the look directory with its manifest
-        (shaders.toml, docs/analysis/shader-contract.md) and the post passes."""
+        (shaders.toml, docs/analysis/shader-contract.md), and the post passes."""
         with tempfile.TemporaryDirectory(prefix='fm4 stage test ') as directory:
             root=Path(directory)
             (root/'look').mkdir()
@@ -117,10 +117,27 @@ class PipelineTests(unittest.TestCase):
             look={path.name for path in (root/'look').iterdir()}
             expected={path.name for path in pipeline.LOOK_DIRECTORY.iterdir()
                       if path.suffix in ('.hlsli','.toml')}
+            expected|={path.name for path in pipeline.look_files(pipeline.LOOK_DIRECTORY)}
             self.assertEqual(look,expected)
             self.assertIn('shaders.toml',look)
             self.assertTrue((root/'passes'/'passes.toml').is_file())
             self.assertTrue((root/'launcher.json').is_file())
+
+    def test_look_files(self):
+        """A look directory's PNG textures go with it only where shaders.toml reads them
+        (srv = ["file:<name>"])."""
+        with tempfile.TemporaryDirectory(prefix='fm4 look test ') as directory:
+            look=Path(directory)
+            for name in ('a.png','b.png','c.png','mod.hlsli','notes.txt'):
+                (look/name).write_bytes(b'')
+            (look/'shaders.toml').write_text(
+                '[[pixel]]\nhash = "0123456789ABCDEF"\nhooks = "mod.hlsli"\n'
+                'srv = ["post:gtao_occlusion", "file:a"]\n'
+                '[[pixel]]\nhash = "0123456789ABCDEE"\nhooks = "mod.hlsli"\nsrv = "file:c"\n'
+                '[[pixel]]\nhash = "0123456789ABCDED"\nhooks = "mod.hlsli"\nsrv = ["file:d"]\n',
+                encoding='utf-8')
+            self.assertEqual({path.name for path in pipeline.look_files(look)},
+                             {'a.png','c.png','mod.hlsli','shaders.toml'})
 
     def test_look_cvars(self):
         with tempfile.TemporaryDirectory(prefix='fm4 look test ') as directory:

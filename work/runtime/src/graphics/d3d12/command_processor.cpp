@@ -2901,6 +2901,16 @@ bool D3D12CommandProcessor::SetupContext() {
           provider.OffsetViewDescriptor(view_bindless_heap_cpu_start_,
                                         uint32_t(SystemBindlessView::kPostPassViewsStart) + i));
     }
+    // kLookFileViewsStart...: zero unless a look file is loaded into it.
+    for (uint32_t i = 0; i < kLookFileViewCount; ++i) {
+      device->CreateShaderResourceView(
+          nullptr, &null_srv_desc,
+          provider.OffsetViewDescriptor(view_bindless_heap_cpu_start_,
+                                        uint32_t(SystemBindlessView::kLookFileViewsStart) + i));
+    }
+    if (!CreateLookFileTextures()) {
+      return false;
+    }
     // kSharedMemoryRawSRV.
     shared_memory_->WriteRawSRVDescriptor(provider.OffsetViewDescriptor(
         view_bindless_heap_cpu_start_, uint32_t(SystemBindlessView::kSharedMemoryRawSRV)));
@@ -3105,6 +3115,9 @@ void D3D12CommandProcessor::ShutdownContext() {
   gamma_ramp_upload_buffer_mapping_ = nullptr;
   gamma_ramp_upload_buffer_.Reset();
   gamma_ramp_buffer_.Reset();
+  look_file_uploads_.clear();
+  look_file_textures_.clear();
+  look_file_footprints_.clear();
 
   texture_cache_.reset();
 
@@ -5568,6 +5581,104 @@ void D3D12CommandProcessor::LogDeviceRemovalDiagnostics(ID3D12Device* device, HR
   }
 }
 
+bool D3D12CommandProcessor::CreateLookFileTextures() {
+  const ShaderOverrides* shader_overrides = pipeline_cache_->shader_overrides();
+  if (!shader_overrides) {
+    return true;
+  }
+  const auto& files = shader_overrides->look_files();
+  const ui::d3d12::D3D12Provider& provider = GetD3D12Provider();
+  ID3D12Device* device = provider.GetDevice();
+  static_assert(native_shader_contract::kMaxLookFiles <= kLookFileViewCount);
+  for (uint32_t i = 0; i < uint32_t(files.size()); ++i) {
+    // A file that could not be loaded is one neutral texel (LoadLookFiles).
+    const ShaderOverrides::LookFile& file = files[i];
+    D3D12_RESOURCE_DESC desc = {};
+    desc.Dimension = D3D12_RESOURCE_DIMENSION_TEXTURE2D;
+    desc.Width = file.width;
+    desc.Height = file.height;
+    desc.DepthOrArraySize = 1;
+    desc.MipLevels = 1;
+    desc.Format = DXGI_FORMAT_R8G8B8A8_UNORM;
+    desc.SampleDesc.Count = 1;
+    desc.Layout = D3D12_TEXTURE_LAYOUT_UNKNOWN;
+    Microsoft::WRL::ComPtr<ID3D12Resource> texture;
+    if (FAILED(device->CreateCommittedResource(&ui::d3d12::util::kHeapPropertiesDefault,
+                                               provider.GetHeapFlagCreateNotZeroed(), &desc,
+                                               D3D12_RESOURCE_STATE_COPY_DEST, nullptr,
+                                               IID_PPV_ARGS(&texture)))) {
+      REXGPU_ERROR("Native shader contract: cannot create the texture of look file {}", file.name);
+      return false;
+    }
+    D3D12_PLACED_SUBRESOURCE_FOOTPRINT footprint;
+    UINT rows;
+    UINT64 row_size, total_size;
+    device->GetCopyableFootprints(&desc, 0, 1, 0, &footprint, &rows, &row_size, &total_size);
+    D3D12_RESOURCE_DESC upload_desc;
+    ui::d3d12::util::FillBufferResourceDesc(upload_desc, total_size, D3D12_RESOURCE_FLAG_NONE);
+    Microsoft::WRL::ComPtr<ID3D12Resource> upload;
+    uint8_t* mapping = nullptr;
+    if (FAILED(device->CreateCommittedResource(&ui::d3d12::util::kHeapPropertiesUpload,
+                                               provider.GetHeapFlagCreateNotZeroed(), &upload_desc,
+                                               D3D12_RESOURCE_STATE_GENERIC_READ, nullptr,
+                                               IID_PPV_ARGS(&upload))) ||
+        FAILED(upload->Map(0, nullptr, reinterpret_cast<void**>(&mapping)))) {
+      REXGPU_ERROR("Native shader contract: cannot upload look file {}", file.name);
+      return false;
+    }
+    for (UINT row = 0; row < rows; ++row) {
+      std::memcpy(mapping + footprint.Offset + size_t(footprint.Footprint.RowPitch) * row,
+                  file.rgba.data() + size_t(file.width) * 4 * row, size_t(file.width) * 4);
+    }
+    upload->Unmap(0, nullptr);
+    D3D12_SHADER_RESOURCE_VIEW_DESC srv_desc = {};
+    srv_desc.Format = desc.Format;
+    srv_desc.ViewDimension = D3D12_SRV_DIMENSION_TEXTURE2DARRAY;
+    srv_desc.Shader4ComponentMapping = D3D12_DEFAULT_SHADER_4_COMPONENT_MAPPING;
+    srv_desc.Texture2DArray.MipLevels = 1;
+    srv_desc.Texture2DArray.ArraySize = 1;
+    device->CreateShaderResourceView(
+        texture.Get(), &srv_desc,
+        provider.OffsetViewDescriptor(view_bindless_heap_cpu_start_,
+                                      uint32_t(SystemBindlessView::kLookFileViewsStart) + i));
+    look_file_textures_.push_back(std::move(texture));
+    look_file_uploads_.push_back(std::move(upload));
+    look_file_footprints_.push_back(footprint);
+  }
+  return true;
+}
+
+void D3D12CommandProcessor::RecordLookFileUploads() {
+  if (look_file_uploads_.empty()) {
+    return;
+  }
+  if (look_file_upload_submission_) {
+    // The upload buffers are free once the submission that copied them is.
+    if (GetCompletedSubmission() >= look_file_upload_submission_) {
+      look_file_uploads_.clear();
+      look_file_footprints_.clear();
+    }
+    return;
+  }
+  // Before the submission's first draw: every texture from its upload buffer.
+  for (size_t i = 0; i < look_file_textures_.size(); ++i) {
+    D3D12_TEXTURE_COPY_LOCATION destination = {};
+    destination.pResource = look_file_textures_[i].Get();
+    destination.Type = D3D12_TEXTURE_COPY_TYPE_SUBRESOURCE_INDEX;
+    destination.SubresourceIndex = 0;
+    D3D12_TEXTURE_COPY_LOCATION source = {};
+    source.pResource = look_file_uploads_[i].Get();
+    source.Type = D3D12_TEXTURE_COPY_TYPE_PLACED_FOOTPRINT;
+    source.PlacedFootprint = look_file_footprints_[i];
+    deferred_command_list_.CopyTexture(destination, source);
+    PushTransitionBarrier(look_file_textures_[i].Get(), D3D12_RESOURCE_STATE_COPY_DEST,
+                          D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE |
+                              D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE);
+  }
+  SubmitBarriers();
+  look_file_upload_submission_ = submission_current_;
+}
+
 bool D3D12CommandProcessor::BeginSubmission(bool is_guest_command) {
 #if XE_GPU_FINE_GRAINED_DRAW_SCOPES
   SCOPE_profile_cpu_f("gpu");
@@ -5660,6 +5771,8 @@ bool D3D12CommandProcessor::BeginSubmission(bool is_guest_command) {
     primitive_processor_->BeginSubmission();
 
     texture_cache_->BeginSubmission(submission_current_);
+
+    RecordLookFileUploads();
   }
 
   if (is_opening_frame) {

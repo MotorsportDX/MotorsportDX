@@ -5,6 +5,7 @@
 
 #pragma once
 
+#include <cstddef>
 #include <cstdint>
 #include <string>
 #include <string_view>
@@ -39,11 +40,21 @@ struct PassRule {
   uint32_t max_viewport_width = UINT32_MAX;
 };
 
+// The look files (srv = ["file:<name>"]) of a manifest: at most kMaxLookFiles names, each a
+// PNG of at most kMaxLookFileBytes, kMaxLookFileSize pixels a side, 8 bits per channel, RGB
+// or RGBA.
+constexpr uint32_t kMaxLookFiles = 8;
+constexpr size_t kMaxLookFileBytes = size_t(16) << 20;
+constexpr uint32_t kMaxLookFileSize = 4096;
+
 // A resource an entry reads by name (srv), as xe_srv_<name>(uv) in its mod.
 struct Resource {
   enum class Kind {
     // A texture the post passes expose to mods (a slot in passes.toml), by its name there.
     kPost,
+    // A texture of the look directory, <name>.png (8-bit RGBA, the project's own data such
+    // as a LUT or noise), also read bilinear as xe_srv_<name>_linear(uv).
+    kFile,
   };
   Kind kind = Kind::kPost;
   std::string name;
@@ -60,7 +71,7 @@ struct PixelEntry {
   // Defines of the mod read as constants after the host values (xe_mod_knob), so that
   // shader_mod_set changes them at once and every look shares one binary.
   std::vector<std::string> params;
-  // The resources the mod reads by name ("post:<texture>"), each name once.
+  // The resources the mod reads by name ("post:<texture>", "file:<name>"), each name once.
   std::vector<Resource> srv;
 };
 
@@ -131,6 +142,11 @@ struct Manifest {
 
 // Parses shaders.toml (native_shader_contract.cpp): false with the reason in error_out on a
 // syntax error, an unknown key, a bad value or a name used twice.
+// Whether data is a look file the runtime takes (kMaxLookFileBytes, kMaxLookFileSize, an 8-bit
+// RGB or RGBA PNG), from the PNG's signature and header chunk; its size, or why not.
+bool CheckLookPng(std::string_view data, uint32_t& width_out, uint32_t& height_out,
+                  std::string& error_out);
+
 bool ParseManifest(std::string_view text, const std::string& file_name, Manifest& manifest_out,
                    std::string& error_out);
 

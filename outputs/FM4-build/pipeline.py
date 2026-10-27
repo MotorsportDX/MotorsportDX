@@ -1007,8 +1007,9 @@ def quality_msaa_samples(quality,native,msaa_samples,single_tile,msaa,rov,displa
     return msaa_samples,f'; {name}: 2x MSAA ({samples}x needs a whole scale at 16:9 without -Upscale)'
 
 LOOK_DIRECTORY=REPO/'work/fm4-rex/look'
-# The files of a look directory that a run reads: the mods and their libraries, and the native
-# shader contract's manifest shaders.toml (docs/analysis/shader-contract.md).
+# The files of a look directory that a run reads: the mods and their libraries, the native
+# shader contract's manifest shaders.toml (docs/analysis/shader-contract.md), and the
+# textures its entries read (look_files).
 LOOK_SUFFIXES=('.hlsli','.toml')
 # The runtime's post passes (docs/analysis/post-pass-framework.md): passes.toml and its HLSL.
 PASSES_DIRECTORY=REPO/'work/fm4-rex/passes'
@@ -1175,9 +1176,8 @@ def look_cvars(root,look,shader_dev=False,upscale_ratio=1.0):
         if directory.is_dir():
             shutil.rmtree(directory)
         directory.mkdir()
-        for path in LOOK_DIRECTORY.iterdir():
-            if path.suffix in LOOK_SUFFIXES:
-                shutil.copyfile(path,directory/path.name)
+        for path in look_files(LOOK_DIRECTORY):
+            shutil.copyfile(path,directory/path.name)
     cvars.update({'shader_mod_path':directory,'shader_mod_defines':';'.join(defines)})
     if shader_dev:
         cvars.update(shader_mod_hot_reload='true',shader_mod_live_knobs='true')
@@ -2036,6 +2036,25 @@ def launcher_data():
                        'magics':[magic.decode() for magic in STFS_MAGICS],
                        'content_type_offset':CONTENT_TYPE_OFFSET,'title_id_offset':TITLE_ID_OFFSET}}
 
+def look_files(directory):
+    """The files of a look directory that a run reads: those of LOOK_SUFFIXES, and the PNG
+    textures that the entries of its shaders.toml read (srv = ["file:<name>"], <name>.png), so
+    other images in the folder stay out of runs and exports."""
+    import tomllib
+    directory=Path(directory)
+    files=[path for path in sorted(directory.iterdir()) if path.suffix in LOOK_SUFFIXES]
+    manifest=directory/'shaders.toml'
+    if manifest.is_file():
+        names=set()
+        for entry in tomllib.loads(manifest.read_text(encoding='utf-8')).get('pixel',[]):
+            resources=entry.get('srv',[])
+            for resource in [resources] if isinstance(resources,str) else resources:
+                if isinstance(resource,str) and resource.startswith('file:'):
+                    names.add(resource[len('file:'):])
+        files+=[directory/f'{name}.png' for name in sorted(names)
+                if (directory/f'{name}.png').is_file()]
+    return files
+
 def stage_launcher_files(directory):
     """launcher.json, and the look mods and post passes that launch copies before each run, into
     directory (the BuildRoot or an export folder): the launcher runs them from there. Also the
@@ -2046,13 +2065,13 @@ def stage_launcher_files(directory):
     shutil.copyfile(CREDITS,directory/'CREDITS.txt')
     shutil.copyfile(LICENSE,directory/'LICENSE.txt')
     shutil.copytree(NOTICES,directory/'third-party-notices',dirs_exist_ok=True)
-    for name,source,suffixes in (('look',LOOK_DIRECTORY,LOOK_SUFFIXES),
-                                 ('passes',PASSES_DIRECTORY,('.toml','.hlsl','.hlsli'))):
+    for name,files in (('look',look_files(LOOK_DIRECTORY)),
+                       ('passes',[path for path in PASSES_DIRECTORY.iterdir()
+                                  if path.suffix in ('.toml','.hlsl','.hlsli')])):
         shutil.rmtree(directory/name,ignore_errors=True)
         (directory/name).mkdir()
-        for path in source.iterdir():
-            if path.suffix in suffixes:
-                shutil.copyfile(path,directory/name/path.name)
+        for path in files:
+            shutil.copyfile(path,directory/name/path.name)
 
 def build_launcher(root,jobs):
     """MotorsportDX.exe (work/fm4-launcher) against the installed runtime's SDL3 and the runtime

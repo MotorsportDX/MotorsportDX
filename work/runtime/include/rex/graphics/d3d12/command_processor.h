@@ -195,12 +195,20 @@ class D3D12CommandProcessor : public CommandProcessor {
     // xe_post_texture), kPostPassViewCount of them; read 0 without them.
     kPostPassViewsStart,
     kPostPassViewsEnd = kPostPassViewsStart + 8,
+    // Textures of the look directory that the native shader contract's
+    // entries read (srv = ["file:<name>"], xe_look_file), in the order of
+    // ShaderOverrides::look_files; read 0 where no file is loaded.
+    kLookFileViewsStart = kPostPassViewsEnd,
+    kLookFileViewsEnd = kLookFileViewsStart + 8,
 
-    kCount = kPostPassViewsEnd,
+    kCount = kLookFileViewsEnd,
   };
   static constexpr uint32_t kPostPassViewCount =
       uint32_t(SystemBindlessView::kPostPassViewsEnd) -
       uint32_t(SystemBindlessView::kPostPassViewsStart);
+  static constexpr uint32_t kLookFileViewCount =
+      uint32_t(SystemBindlessView::kLookFileViewsEnd) -
+      uint32_t(SystemBindlessView::kLookFileViewsStart);
   ui::d3d12::util::DescriptorCpuGpuHandlePair GetSystemBindlessViewHandlePair(
       SystemBindlessView view) const;
   ui::d3d12::util::DescriptorCpuGpuHandlePair GetSharedMemoryUintPow2BindlessSRVHandlePair(
@@ -902,6 +910,16 @@ class D3D12CommandProcessor : public CommandProcessor {
   // as R10G10B10X2 with swizzle).
   // Bytes 0x400...0x9FF - 128-entry PWL R16G16 gamma ramp (R - base, G - delta,
   // low 6 bits of each are zero, 3 elements per entry).
+  // The look files' textures (kLookFileViewsStart), their upload buffers
+  // until the copy into them completes, and the submission that copies them
+  // (0: not recorded yet).
+  bool CreateLookFileTextures();
+  void RecordLookFileUploads();
+  std::vector<Microsoft::WRL::ComPtr<ID3D12Resource>> look_file_textures_;
+  std::vector<Microsoft::WRL::ComPtr<ID3D12Resource>> look_file_uploads_;
+  std::vector<D3D12_PLACED_SUBRESOURCE_FOOTPRINT> look_file_footprints_;
+  uint64_t look_file_upload_submission_ = 0;
+
   Microsoft::WRL::ComPtr<ID3D12Resource> gamma_ramp_buffer_;
   D3D12_RESOURCE_STATES gamma_ramp_buffer_state_;
   // Upload buffer for an image that is the same as gamma_ramp_, but with

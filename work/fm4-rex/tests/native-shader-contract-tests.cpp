@@ -34,6 +34,33 @@ bool Parses(const char* text, nsc::Manifest& manifest) {
   return parsed;
 }
 
+// The start of a PNG: the signature and the header chunk (its CRC is not checked).
+std::string PngHeader(uint32_t width, uint32_t height, uint8_t bit_depth, uint8_t color_type) {
+  std::string data("\x89PNG\r\n\x1A\n", 8);
+  auto put = [&data](uint32_t value) {
+    for (int shift = 24; shift >= 0; shift -= 8) data.push_back(char(uint8_t(value >> shift)));
+  };
+  put(13);
+  data += "IHDR";
+  put(width);
+  put(height);
+  data.push_back(char(bit_depth));
+  data.push_back(char(color_type));
+  data.append(3, '\0');
+  put(0);
+  return data;
+}
+
+bool PngTaken(const std::string& data, uint32_t width, uint32_t height) {
+  uint32_t width_out, height_out;
+  std::string error;
+  bool taken = nsc::CheckLookPng(data, width_out, height_out, error);
+  if (!taken) {
+    std::printf("  look file refused: %s\n", error.c_str());
+  }
+  return taken && width_out == width && height_out == height;
+}
+
 bool Refused(const char* text) {
   nsc::Manifest manifest;
   std::string error;
@@ -109,7 +136,7 @@ hash = "0123456789abcdef"
 hooks = "shader_0123456789ABCDEF.mod.hlsli"
 passes = ["scene", "hud"]
 params = "FM4_LOOK_X"
-srv = ["post:gtao_occlusion", "post:motion_vectors"]
+srv = ["post:gtao_occlusion", "post:motion_vectors", "file:grade_lut"]
 )",
                manifest),
         "a manifest with two passes and an entry");
@@ -126,10 +153,11 @@ srv = ["post:gtao_occlusion", "post:motion_vectors"]
         "the entry's passes");
   Check(entry && entry->params.size() == 1 && entry->params[0] == "FM4_LOOK_X",
         "one param as a string");
-  Check(entry && entry->srv.size() == 2 &&
+  Check(entry && entry->srv.size() == 3 &&
             entry->srv[0].kind == nsc::Resource::Kind::kPost &&
-            entry->srv[0].name == "gtao_occlusion" && entry->srv[1].name == "motion_vectors",
-        "two post textures by name");
+            entry->srv[0].name == "gtao_occlusion" && entry->srv[1].name == "motion_vectors" &&
+            entry->srv[2].kind == nsc::Resource::Kind::kFile && entry->srv[2].name == "grade_lut",
+        "two post textures and a look file by name");
   Check(!manifest.FindPixel(0x0123456789ABCDEEull), "no entry for another hash");
   nsc::Manifest empty;
   Check(Parses("", empty) && empty.pixel.empty() && empty.PassCount() == nsc::kFirstTitlePass,
@@ -163,6 +191,41 @@ srv = ["post:gtao_occlusion", "post:motion_vectors"]
   Check(Refused((with_entry + "srv = [\"post:\"]\n").c_str()), "srv without a name");
   Check(Refused((with_entry + "srv = [\"post:Motion\"]\n").c_str()), "upper case srv name");
   Check(Refused((with_entry + "srv = [\"post:a\", \"post:a\"]\n").c_str()), "srv twice");
+  Check(Refused((with_entry + "srv = [\"post:a\", \"file:a\"]\n").c_str()),
+        "a post texture and a look file of one name");
+  Check(Refused((with_entry + "srv = [\"file:a.png\"]\n").c_str()), "a file name with its suffix");
+  // At most kMaxLookFiles look files over all entries, each name counted once.
+  std::string files = "[[pixel]]\nhash = \"0000000000000001\"\nhooks = \"a.hlsli\"\nsrv = [";
+  for (uint32_t i = 0; i < nsc::kMaxLookFiles; ++i) {
+    files += (i ? ", \"file:f" : "\"file:f") + std::to_string(i) + "\"";
+  }
+  files += "]\n[[pixel]]\nhash = \"0000000000000002\"\nhooks = \"a.hlsli\"\nsrv = \"file:f0\"\n";
+  nsc::Manifest eight;
+  Check(Parses(files.c_str(), eight), "eight look files, one of them read by two entries");
+  Check(Refused((files + "[[pixel]]\nhash = \"0000000000000003\"\nhooks = \"a.hlsli\"\n"
+                         "srv = \"file:f8\"\n")
+                    .c_str()),
+        "nine look files");
+
+  // The look files the runtime takes.
+  Check(PngTaken(PngHeader(256, 16, 8, 6), 256, 16), "an 8-bit RGBA PNG");
+  Check(PngTaken(PngHeader(1, 1, 8, 2), 1, 1), "an 8-bit RGB PNG");
+  Check(PngTaken(PngHeader(nsc::kMaxLookFileSize, nsc::kMaxLookFileSize, 8, 6),
+                 nsc::kMaxLookFileSize, nsc::kMaxLookFileSize),
+        "the largest size");
+  Check(!PngTaken(PngHeader(256, 16, 16, 6), 256, 16), "a 16-bit PNG refused");
+  Check(!PngTaken(PngHeader(256, 16, 8, 0), 256, 16), "a grayscale PNG refused");
+  Check(!PngTaken(PngHeader(256, 16, 8, 3), 256, 16), "a palette PNG refused");
+  Check(!PngTaken(PngHeader(nsc::kMaxLookFileSize + 1, 16, 8, 6), nsc::kMaxLookFileSize + 1, 16),
+        "too wide refused");
+  Check(!PngTaken(PngHeader(256, 0, 8, 6), 256, 0), "no rows refused");
+  std::string not_png = PngHeader(256, 16, 8, 6);
+  not_png[1] = 'J';
+  Check(!PngTaken(not_png, 256, 16), "another signature refused");
+  Check(!PngTaken(PngHeader(256, 16, 8, 6).substr(0, 30), 256, 16), "a truncated header refused");
+  std::string large = PngHeader(256, 16, 8, 6);
+  large.resize(nsc::kMaxLookFileBytes + 1);
+  Check(!PngTaken(large, 256, 16), "a file over the size limit refused");
   Check(Refused((with_entry + "srv = [1]\n").c_str()), "srv not a name");
   Check(Refused("[[pixel]]\nhash = \"0123456789ABCDEF\"\nshader = \"a.hlsl\"\n"),
         "replacement shaders are not supported yet");

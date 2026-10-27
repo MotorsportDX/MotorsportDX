@@ -5,7 +5,9 @@
 
 #include <rex/graphics/d3d12/native_shader_contract.h>
 
+#include <algorithm>
 #include <cstdlib>
+#include <cstring>
 #include <initializer_list>
 #include <string>
 #include <utility>
@@ -246,9 +248,9 @@ bool ParseManifest(std::string_view text, const std::string& file_name, Manifest
                                     ? std::string_view()
                                     : std::string_view(resource).substr(0, colon);
         std::string name = colon == std::string::npos ? std::string() : resource.substr(colon + 1);
-        if (kind != "post") {
+        if (kind != "post" && kind != "file") {
           return fail(Text({"[[pixel]] ", hash_text, ": srv '", resource,
-                            "' is not post:<texture> (the only kind so far)"}));
+                            "' is not post:<texture> or file:<name>"}));
         }
         if (!IsPassName(name)) {
           return fail(Text({"[[pixel]] ", hash_text, ": srv '", resource,
@@ -259,12 +261,63 @@ bool ParseManifest(std::string_view text, const std::string& file_name, Manifest
             return fail(Text({"[[pixel]] ", hash_text, ": srv '", name, "' twice"}));
           }
         }
-        entry.srv.push_back({Resource::Kind::kPost, std::move(name)});
+        entry.srv.push_back(
+            {kind == "post" ? Resource::Kind::kPost : Resource::Kind::kFile, std::move(name)});
       }
       manifest.pixel.push_back(std::move(entry));
     }
   }
+  // The look files of all entries, each name once.
+  std::vector<std::string_view> files;
+  for (const PixelEntry& entry : manifest.pixel) {
+    for (const Resource& resource : entry.srv) {
+      if (resource.kind == Resource::Kind::kFile &&
+          std::find(files.begin(), files.end(), resource.name) == files.end()) {
+        files.push_back(resource.name);
+      }
+    }
+  }
+  if (files.size() > kMaxLookFiles) {
+    return fail(Text({"more than ", std::to_string(kMaxLookFiles), " look files (file:<name>)"}));
+  }
   manifest_out = std::move(manifest);
+  return true;
+}
+
+bool CheckLookPng(std::string_view data, uint32_t& width_out, uint32_t& height_out,
+                  std::string& error_out) {
+  width_out = 0;
+  height_out = 0;
+  if (data.size() > kMaxLookFileBytes) {
+    error_out = Text({"larger than ", std::to_string(kMaxLookFileBytes >> 20), " MiB"});
+    return false;
+  }
+  // The signature, then the header chunk (length 13): width, height, bit depth, color type.
+  static constexpr unsigned char kSignature[] = {0x89, 'P', 'N', 'G', '\r', '\n', 0x1A, '\n'};
+  if (data.size() < 33 || std::memcmp(data.data(), kSignature, sizeof(kSignature)) ||
+      data.substr(12, 4) != "IHDR") {
+    error_out = "not a PNG";
+    return false;
+  }
+  auto big_endian = [&data](size_t offset) {
+    return uint32_t(uint8_t(data[offset])) << 24 | uint32_t(uint8_t(data[offset + 1])) << 16 |
+           uint32_t(uint8_t(data[offset + 2])) << 8 | uint32_t(uint8_t(data[offset + 3]));
+  };
+  uint32_t width = big_endian(16), height = big_endian(20);
+  uint8_t bit_depth = uint8_t(data[24]), color_type = uint8_t(data[25]);
+  if (!width || !height || width > kMaxLookFileSize || height > kMaxLookFileSize) {
+    error_out = Text({std::to_string(width), "x", std::to_string(height), " is not 1 to ",
+                      std::to_string(kMaxLookFileSize), " pixels a side"});
+    return false;
+  }
+  // Color type 2: RGB, 6: RGBA.
+  if (bit_depth != 8 || (color_type != 2 && color_type != 6)) {
+    error_out = Text({"bit depth ", std::to_string(bit_depth), ", color type ",
+                      std::to_string(color_type), ": not an 8-bit RGB or RGBA PNG"});
+    return false;
+  }
+  width_out = width;
+  height_out = height;
   return true;
 }
 

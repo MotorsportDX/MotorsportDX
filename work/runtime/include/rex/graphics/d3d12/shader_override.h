@@ -223,6 +223,19 @@ class ShaderOverrides {
   // (srv = ["post:<name>"], xe_srv_<name>).
   void SetPostTextures(std::vector<std::pair<std::string, uint32_t>> slots);
 
+  // The look directory's textures that the native shader contract's entries
+  // read (srv = ["file:<name>"]): <name>.png decoded to 8-bit RGBA at start-up,
+  // in the order of D3D12CommandProcessor's look file views (xe_look_file).
+  // A file that is missing, too large or not an 8-bit RGB or RGBA PNG is one
+  // texel of 0.5 gray, alpha 1, with an error in the log.
+  struct LookFile {
+    std::string name;
+    uint32_t width = 0;
+    uint32_t height = 0;
+    std::vector<uint8_t> rgba;
+  };
+  const std::vector<LookFile>& look_files() const { return look_files_; }
+
   // Hot reload (shader_mod_hot_reload), on the thread that creates pipelines
   // while no pipeline is being created and no shader translated: if PollChanges
   // (which checks at most every kPollInterval) is true, NeedsReload and Reload
@@ -400,6 +413,9 @@ class ShaderOverrides {
   // The post passes' textures with a slot (SetPostTextures); empty without
   // post passes.
   std::unordered_map<std::string, uint32_t> post_texture_slots_;
+  // The entries' look files (look_files), loaded with the manifest.
+  std::vector<LookFile> look_files_;
+  void LoadLookFiles();
   std::atomic<uint64_t> defines_generation_{1};
 
   // Hot reload.

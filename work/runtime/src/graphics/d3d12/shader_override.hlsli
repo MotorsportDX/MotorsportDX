@@ -646,6 +646,43 @@ float4 xe_post_texture(uint slot, float2 uv) {
 #endif
 }
 
+// A texture of the look directory that a native shader contract entry reads
+// (srv = ["file:<name>"] in shaders.toml, as xe_srv_<name>), by its view: the
+// texel at a coordinate 0...1, or between the four nearest (bilinear, clamped
+// at the edges). 0 where no file is loaded.
+float4 xe_look_file(uint index, float2 uv) {
+#ifdef XE_LOOK_FILE_VIEWS
+  uint3 size;
+  xe_textures_2d[XE_LOOK_FILE_VIEWS + index].GetDimensions(size.x, size.y, size.z);
+  int2 texel = clamp(int2(uv * float2(size.xy)), int2(0, 0), int2(size.xy) - 1);
+  return xe_textures_2d[XE_LOOK_FILE_VIEWS + index].Load(int4(texel, 0, 0));
+#else
+  return 0.0;
+#endif
+}
+
+float4 xe_look_file_linear(uint index, float2 uv) {
+#ifdef XE_LOOK_FILE_VIEWS
+  uint3 size;
+  xe_textures_2d[XE_LOOK_FILE_VIEWS + index].GetDimensions(size.x, size.y, size.z);
+  float2 position = uv * float2(size.xy) - 0.5;
+  int2 base = int2(floor(position));
+  float2 weight = position - float2(base);
+  int2 last = int2(size.xy) - 1;
+  float4 t00 = xe_textures_2d[XE_LOOK_FILE_VIEWS + index].Load(
+      int4(clamp(base, int2(0, 0), last), 0, 0));
+  float4 t10 = xe_textures_2d[XE_LOOK_FILE_VIEWS + index].Load(
+      int4(clamp(base + int2(1, 0), int2(0, 0), last), 0, 0));
+  float4 t01 = xe_textures_2d[XE_LOOK_FILE_VIEWS + index].Load(
+      int4(clamp(base + int2(0, 1), int2(0, 0), last), 0, 0));
+  float4 t11 = xe_textures_2d[XE_LOOK_FILE_VIEWS + index].Load(
+      int4(clamp(base + int2(1, 1), int2(0, 0), last), 0, 0));
+  return lerp(lerp(t00, t10, weight.x), lerp(t01, t11, weight.x), weight.y);
+#else
+  return 0.0;
+#endif
+}
+
 // Ambient occlusion of the frame's scene, 0 (none) to 1: the GTAO pass exposes
 // it in slot 0.
 float xe_post_ao(float2 uv) { return xe_post_texture(0u, uv).x; }
