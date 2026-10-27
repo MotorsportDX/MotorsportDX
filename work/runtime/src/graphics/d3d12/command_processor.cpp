@@ -7525,6 +7525,12 @@ void D3D12CommandProcessor::ServiceDemandReadbacks() {
     const bool is_scaled = texture_cache_->IsDrawResolutionScaled();
     for (size_t i = 0; i < demands.size(); ++i) {
       const read_trace::Demand& demand = demands[i];
+      // The deferred guest layouts it reads (native_rt_resolve_layout,
+      // d3d-hle-n6.md 19.7.5), written first.
+      if (render_target_cache_->HasDeferredGuestLayouts()) {
+        render_target_cache_->BeforeGuestLayoutRead(demand.address, demand.length,
+                                                    SharedMemory::GuestLayoutReader::kReadback);
+      }
       // The scaled resolve range that the resolve made current, read as the
       // readback at the resolve reads it.
       if (is_scaled && !texture_cache_->MakeScaledResolveRangeCurrent(demand.scaled_start,

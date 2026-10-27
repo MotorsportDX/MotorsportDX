@@ -18,6 +18,7 @@
 #include <cstdlib>
 #include <fstream>
 #include <array>
+#include <chrono>
 #include <cstdint>
 #include <cstring>
 #include <iterator>
@@ -73,6 +74,29 @@ REXCVAR_DEFINE_STRING(native_rt_surfaces_depth_dump, "", "GPU/D3D12",
                       "16.17). Empty: off")
     .lifecycle(rex::cvar::Lifecycle::kRequiresRestart);
 REXCVAR_DECLARE(int32_t, native_rt_resolve_check);
+REXCVAR_DEFINE_INT32(native_rt_resolve_layout, 3, "GPU/D3D12",
+                     "The guest's layout of a full-screen destination of a private surface at "
+                     "the scene's scale (native_rt_surfaces bit 32, docs/analysis/d3d-hle-n6.md "
+                     "19.7.5): bit 1, written from the host texture the resolve wrote instead of "
+                     "the render target; bit 2, deferred until something reads it (with the "
+                     "readback on demand); bit 4, the destinations that a fractional scale "
+                     "box-filters from a float color source keep the write from the render "
+                     "target (and are not deferred); bit 8, the check: deferred layouts get wrong "
+                     "bytes, which the write for their reader replaces; bit 16, its "
+                     "perturbation: the deferred layouts are dropped instead of written for their "
+                     "readers")
+    .range(0, 31);
+REXCVAR_DEFINE_INT32(native_rt_resolve_layout_check, 0, "GPU/D3D12",
+                     "With native_rt_resolve_layout bit 1: every N-th frame (0: never), the "
+                     "guest's layout written from the host texture is not deferred, and the "
+                     "write from the render target goes into scratch beside it; both are read "
+                     "back and compared (perf trace guest_layout checks)")
+    .range(0, 100000);
+REXCVAR_DEFINE_INT32(native_rt_resolve_layout_ab_ms, 0, "GPU/D3D12",
+                     "native_rt_resolve_layout 0 in every other period of this many "
+                     "milliseconds of the steady clock (0: always as set), to compare both in "
+                     "one scene")
+    .range(0, 3600000);
 REXCVAR_DEFINE_BOOL(native_rt_surfaces_transfer_inventory, false, "GPU/D3D12",
                     "Log the ownership transfers every 600 frames: transfers and tiles by "
                     "destination and source format and sample count, with a separate host "
@@ -120,6 +144,8 @@ namespace shaders {
 #include "../shaders/bytecode/d3d12_5_1/resolve_host_32bpp_depth_scaled_cs.h"
 #include "../shaders/bytecode/d3d12_5_1/resolve_host_32bpp_depth_ms_cs.h"
 #include "../shaders/bytecode/d3d12_5_1/resolve_host_32bpp_depth_ms_scaled_cs.h"
+#include "../shaders/bytecode/d3d12_5_1/resolve_host_32bpp_words_cs.h"
+#include "../shaders/bytecode/d3d12_5_1/resolve_host_32bpp_words_scaled_cs.h"
 #include "../shaders/bytecode/d3d12_5_1/resolve_host_texture_32bpp_color_cs.h"
 #include "../shaders/bytecode/d3d12_5_1/resolve_host_texture_32bpp_color_ms_cs.h"
 #include "../shaders/bytecode/d3d12_5_1/resolve_host_texture_32bpp_uint_cs.h"
@@ -498,6 +524,19 @@ bool D3D12RenderTargetCache::Initialize() {
       }
       if (!host_texture_pipelines_[2][1]) {
         REXGPU_ERROR("D3D12RenderTargetCache: Failed to create the host texture resolve pipelines");
+      }
+      // The guest's layout from those textures (native_rt_resolve_layout).
+      if (host_resolve_root_signature_) {
+        host_layout_pipeline_ = ui::d3d12::util::CreateComputePipeline(
+            device,
+            draw_resolution_scaled ? shaders::resolve_host_32bpp_words_scaled_cs
+                                   : shaders::resolve_host_32bpp_words_cs,
+            draw_resolution_scaled ? sizeof(shaders::resolve_host_32bpp_words_scaled_cs)
+                                   : sizeof(shaders::resolve_host_32bpp_words_cs),
+            host_resolve_root_signature_);
+        if (!host_layout_pipeline_) {
+          REXGPU_ERROR("D3D12RenderTargetCache: Failed to create the guest layout pipeline");
+        }
       }
     }
   }
@@ -1193,6 +1232,17 @@ void D3D12RenderTargetCache::Shutdown(bool from_destructor) {
     }
   }
   ui::d3d12::util::ReleaseAndNull(host_texture_root_signature_);
+  if (layout_watch_ && layout_shared_memory_) {
+    layout_shared_memory_->UnregisterGlobalWatch(layout_watch_);
+    layout_shared_memory_->SetGuestLayoutWriter(nullptr);
+  }
+  layout_watch_ = nullptr;
+  {
+    std::lock_guard<std::mutex> lock(deferred_layouts_mutex_);
+    deferred_layouts_.clear();
+    deferred_guest_layouts_.store(false, std::memory_order_release);
+  }
+  ui::d3d12::util::ReleaseAndNull(host_layout_pipeline_);
   for (auto& kind_pipelines : host_resolve_pipelines_) {
     for (auto& pipeline : kind_pipelines) {
       ui::d3d12::util::ReleaseAndNull(pipeline);
@@ -1650,6 +1700,12 @@ bool D3D12RenderTargetCache::Resolve(const memory::Memory& memory, D3D12SharedMe
         }
       }
 
+      // The deferred guest layouts that this resolve covers or overlaps
+      // (native_rt_resolve_layout), before it writes anything there.
+      if (HasDeferredGuestLayouts()) {
+        BeforeResolveWrite(resolve_info);
+      }
+
       // Make sure there is memory to write to.
       bool copy_dest_committed;
       if (draw_resolution_scaled) {
@@ -1676,8 +1732,41 @@ bool D3D12RenderTargetCache::Resolve(const memory::Memory& memory, D3D12SharedMe
         ui::d3d12::util::DescriptorCpuGpuHandlePair descriptor_dest;
         ui::d3d12::util::DescriptorCpuGpuHandlePair descriptor_source;
         ui::d3d12::util::DescriptorCpuGpuHandlePair descriptors[2];
-        bool dispatched_from_host = false;
-        if (host_resolve && !host_check) {
+        // A destination of a private surface whose textures the resolve
+        // writes below (native_rt_surfaces bit 32): a full-screen one at the
+        // scene's scale (18.15), or a tile's band of one (photo mode, 18.27).
+        const bool host_textures = host_resolve && private_surface && host_texture_root_signature_;
+        const uint32_t dest_width = resolve_info.coordinate_info.width_div_8
+                                    << xenos::kResolveAlignmentPixelsLog2;
+        const uint32_t dest_height = resolve_info.height_div_8
+                                     << xenos::kResolveAlignmentPixelsLog2;
+        // Only what ResolveHostIntoTextures writes: 32bpp 8_8_8_8 or
+        // 2_10_10_10, not an array, at offset 0.
+        const auto dest_format = xenos::TextureFormat(resolve_info.copy_dest_info.copy_dest_format);
+        SceneBand band;
+        const bool banded = host_textures && scene_textures() && dest_height < 720 &&
+                            GetSceneBand(resolve_info, host_source.render_target->key(), band);
+        const bool scene =
+            host_textures && scene_textures() && dest_width >= 1280 &&
+            (dest_height >= 720 || banded) && !resolve_info.copy_dest_info.copy_dest_array &&
+            !resolve_info.copy_dest_coordinate_info.offset_x_div_8 &&
+            !resolve_info.copy_dest_coordinate_info.offset_y_div_8 &&
+            (dest_format == xenos::TextureFormat::k_8_8_8_8 ||
+             dest_format == xenos::TextureFormat::k_2_10_10_10 ||
+             (resolve_info.IsCopyingDepth() && (dest_format == xenos::TextureFormat::k_24_8 ||
+                                                dest_format == xenos::TextureFormat::k_24_8_FLOAT))) &&
+            host_texture_pipelines_[host_source.kind][host_source.multisampled];
+        // native_rt_resolve_layout (d3d-hle-n6.md 19.7.5): the guest's layout
+        // of a whole full-screen destination at the scene's scale from the
+        // texture the resolve writes, after it.
+        GuestLayoutWrite layout_write;
+        const int32_t layout_mode = GetGuestLayoutMode();
+        const bool layout_from_texture =
+            (layout_mode & 1) && scene && !banded && !host_check && host_layout_pipeline_ &&
+            PrepareGuestLayoutWrite(resolve_info, copy_shader_constants, host_source,
+                                    draw_resolution_scaled, layout_mode, layout_write);
+        bool dispatched_from_host = layout_from_texture;
+        if (host_resolve && !host_check && !layout_from_texture) {
           PartTimestamp part_timestamp(command_processor_, full_screen_resolve,
                                        ResolvePart::kGuestLayout);
           dispatched_from_host =
@@ -1777,34 +1866,10 @@ bool D3D12RenderTargetCache::Resolve(const memory::Memory& memory, D3D12SharedMe
             ResolveIntoHostTextures(texture_cache, resolve_info, copy_shader,
                                     copy_shader_constants);
           }
-          if (host_resolve && private_surface && host_texture_root_signature_) {
+          if (host_textures) {
             // A full-screen destination of a private surface at a fractional
             // scene scale (or any with native_draw_scale_variant) has textures
             // at the scene's scale (18.15).
-            const uint32_t dest_width = resolve_info.coordinate_info.width_div_8
-                                        << xenos::kResolveAlignmentPixelsLog2;
-            const uint32_t dest_height = resolve_info.height_div_8
-                                         << xenos::kResolveAlignmentPixelsLog2;
-            // Only what ResolveHostIntoTextures writes: 32bpp 8_8_8_8 or
-            // 2_10_10_10, not an array, at offset 0.
-            const auto dest_format =
-                xenos::TextureFormat(resolve_info.copy_dest_info.copy_dest_format);
-            // Or a tile's band of a full-screen destination (photo mode, 18.27).
-            SceneBand band;
-            const bool banded =
-                scene_textures() && dest_height < 720 &&
-                GetSceneBand(resolve_info, host_source.render_target->key(), band);
-            const bool scene =
-                scene_textures() && dest_width >= 1280 && (dest_height >= 720 || banded) &&
-                !resolve_info.copy_dest_info.copy_dest_array &&
-                !resolve_info.copy_dest_coordinate_info.offset_x_div_8 &&
-                !resolve_info.copy_dest_coordinate_info.offset_y_div_8 &&
-                (dest_format == xenos::TextureFormat::k_8_8_8_8 ||
-                 dest_format == xenos::TextureFormat::k_2_10_10_10 ||
-                 (resolve_info.IsCopyingDepth() &&
-                  (dest_format == xenos::TextureFormat::k_24_8 ||
-                   dest_format == xenos::TextureFormat::k_24_8_FLOAT))) &&
-                host_texture_pipelines_[host_source.kind][host_source.multisampled];
             {
               // Full-screen destinations and whether they are at the scene's
               // scale, once per destination and kind (18.16).
@@ -1844,10 +1909,20 @@ bool D3D12RenderTargetCache::Resolve(const memory::Memory& memory, D3D12SharedMe
                   IsSceneUpscaled() &&
                       IsSceneInputSamples(host_source.render_target->key().msaa_samples));
             }
-            PartTimestamp part_timestamp(command_processor_, full_screen_resolve,
-                                         ResolvePart::kHostTextures);
-            ResolveHostIntoTextures(texture_cache, resolve_info, copy_shader_constants,
-                                    host_source, scene, scene && banded ? &band : nullptr);
+            {
+              PartTimestamp part_timestamp(command_processor_, full_screen_resolve,
+                                           ResolvePart::kHostTextures);
+              ResolveHostIntoTextures(texture_cache, resolve_info, copy_shader_constants,
+                                      host_source, scene, scene && banded ? &band : nullptr,
+                                      layout_from_texture ? &layout_write : nullptr);
+            }
+            if (layout_from_texture) {
+              PartTimestamp part_timestamp(command_processor_, full_screen_resolve,
+                                           ResolvePart::kGuestLayout);
+              WriteResolvedGuestLayout(texture_cache, shared_memory, resolve_info,
+                                       copy_shader_constants, host_source,
+                                       draw_resolution_scaled, layout_mode, layout_write);
+            }
           }
           // native_rt_surfaces_depth_dump (16.17): the bytes of the 4x depth
           // fast copies, written to a file when the submission completes.
@@ -6494,7 +6569,7 @@ bool D3D12RenderTargetCache::DispatchHostResolve(
     D3D12TextureCache& texture_cache, D3D12SharedMemory& shared_memory,
     const draw_util::ResolveInfo& resolve_info,
     const draw_util::ResolveCopyShaderConstants& constants, const HostResolveSource& source,
-    bool scaled, bool check) {
+    bool scaled, bool check, int32_t layout_check_class) {
   ID3D12PipelineState* pipeline = host_resolve_pipelines_[source.kind][source.multisampled];
   if (!pipeline) {
     return false;
@@ -6635,6 +6710,9 @@ bool D3D12RenderTargetCache::DispatchHostResolve(
   host_check.host_offset = source.host_offset;
   host_check.width = width;
   host_check.height = height;
+  host_check.layout_class = layout_check_class;
+  host_check.dest_endian = uint32_t(resolve_info.copy_dest_info.copy_dest_endian);
+  host_check.pixels = uint64_t(width) * height;
   {
     const draw_util::ResolveEdramInfo& edram_info = host_check.is_depth
                                                         ? resolve_info.depth_edram_info
@@ -6740,7 +6818,9 @@ void D3D12RenderTargetCache::PollHostResolveChecks(uint64_t completed_submission
       }
       data[i] = static_cast<const uint32_t*>(mapping);
     }
-    if (mapped) {
+    if (mapped && it->layout_class >= 0) {
+      PollGuestLayoutCheck(*it, data[0], data[1]);
+    } else if (mapped) {
       uint64_t differing = 0, first = 0;
       uint32_t copied = 0, from_host = 0;
       std::string examples;
@@ -6817,6 +6897,57 @@ void D3D12RenderTargetCache::PollHostResolveChecks(uint64_t completed_submission
       }
     }
     it = host_resolve_checks_.erase(it);
+  }
+}
+
+void D3D12RenderTargetCache::PollGuestLayoutCheck(const HostResolveCheck& check,
+                                                  const uint32_t* from_texture,
+                                                  const uint32_t* from_target) {
+  // The words in the order the resolve packed their channels.
+  auto unswap = [&check](uint32_t word) {
+    if (check.dest_endian == uint32_t(xenos::Endian128::k8in16) ||
+        check.dest_endian == uint32_t(xenos::Endian128::k8in32)) {
+      word = ((word & 0x00FF00FF) << 8) | ((word & 0xFF00FF00) >> 8);
+    }
+    if (check.dest_endian == uint32_t(xenos::Endian128::k8in32) ||
+        check.dest_endian == uint32_t(xenos::Endian128::k16in32)) {
+      word = (word << 16) | (word >> 16);
+    }
+    return word;
+  };
+  const bool ten_bits = (check.layout_class & 1) != 0;
+  uint64_t changed = 0, bytes = 0;
+  uint32_t max_step = 0;
+  std::string examples;
+  for (uint64_t i = 0; i < (check.length >> 2); ++i) {
+    if (from_texture[i] == from_target[i]) {
+      continue;
+    }
+    ++changed;
+    const uint32_t texture_word = unswap(from_texture[i]), target_word = unswap(from_target[i]);
+    for (uint32_t byte = 0; byte < 4; ++byte) {
+      bytes += ((from_texture[i] ^ from_target[i]) >> (byte * 8)) & 0xFF ? 1 : 0;
+    }
+    for (uint32_t channel = 0; channel < 4; ++channel) {
+      const uint32_t shift = ten_bits ? channel * 10 : channel * 8;
+      const uint32_t mask = ten_bits ? (channel == 3 ? 3u : 1023u) : 255u;
+      const int32_t a = int32_t((texture_word >> shift) & mask);
+      const int32_t b = int32_t((target_word >> shift) & mask);
+      max_step = std::max(max_step, uint32_t(std::abs(a - b)));
+    }
+    if (changed <= 4) {
+      examples += fmt::format(" +{:X}:{:08X}/{:08X}", i << 2, from_texture[i], from_target[i]);
+    }
+  }
+  perf_trace::CountGuestLayoutCheck(uint32_t(check.layout_class), check.pixels, changed, bytes,
+                                    max_step);
+  // The nearest pixel's words are the render target's own: any difference is
+  // a fault. The box's are measured.
+  if (changed && check.layout_class < 2) {
+    REXGPU_ERROR(
+        "Guest layout from the texture differs from the render target's: {:08X} class {}, {} "
+        "words, largest step {} (from the texture/from the render target:{})",
+        check.dest, check.layout_class, changed, max_step, examples);
   }
 }
 
@@ -6978,7 +7109,7 @@ bool D3D12RenderTargetCache::GetSceneBand(const draw_util::ResolveInfo& resolve_
 void D3D12RenderTargetCache::ResolveHostIntoTextures(
     D3D12TextureCache& texture_cache, const draw_util::ResolveInfo& resolve_info,
     const draw_util::ResolveCopyShaderConstants& constants, const HostResolveSource& source,
-    bool scene, const SceneBand* band) {
+    bool scene, const SceneBand* band, GuestLayoutWrite* layout_write) {
   ID3D12PipelineState* pipeline = host_texture_pipelines_[source.kind][source.multisampled];
   auto format = xenos::TextureFormat(resolve_info.copy_dest_info.copy_dest_format);
   // A scene depth resolve to a depth format (18.16): its words are those of
@@ -7164,8 +7295,357 @@ void D3D12RenderTargetCache::ResolveHostIntoTextures(
       texture_cache.EndPoisonedResolveTextureWrite(target, skip);
     } else {
       texture_cache.EndResolveTextureWrite(target);
+      // The first written colour texture at the scene's scale holds the
+      // words the guest's layout is written from (native_rt_resolve_layout).
+      if (layout_write && !layout_write->texture && target.scene_scaled && !target.depth) {
+        layout_write->texture = target.resource;
+        layout_write->texture_format = target.uav_format;
+        texture_cache.GetResolveTextureSource(target, layout_write->texture_key,
+                                              layout_write->texture_write_index);
+        layout_write->host_info |=
+            (uint32_t(target.endianness) << 12) |
+            (uint32_t(target.uav_format == DXGI_FORMAT_R10G10B10A2_UINT) << 15);
+      }
     }
   }
+}
+
+int32_t D3D12RenderTargetCache::GetGuestLayoutMode() {
+  const int32_t ab_period = REXCVAR_GET(native_rt_resolve_layout_ab_ms);
+  if (ab_period > 0) {
+    const int64_t milliseconds = std::chrono::duration_cast<std::chrono::milliseconds>(
+                                     std::chrono::steady_clock::now().time_since_epoch())
+                                     .count();
+    if (((milliseconds / ab_period) & 1) != 0) {
+      return 0;
+    }
+  }
+  return REXCVAR_GET(native_rt_resolve_layout);
+}
+
+bool D3D12RenderTargetCache::PrepareGuestLayoutWrite(
+    const draw_util::ResolveInfo& resolve_info,
+    const draw_util::ResolveCopyShaderConstants& constants, const HostResolveSource& source,
+    bool scaled, int32_t mode, GuestLayoutWrite& write_out) const {
+  // As resolve_host_32bpp takes the render target's pixels: the nearest, or
+  // from a float color source at a fractional downscale the mean of a box,
+  // which kind 3 takes over the texture's words decoded in a layout.
+  const uint32_t source_scale =
+      HostSourceScale(source.scale, DrawScale::Whole(draw_resolution_scale_x()));
+  const uint32_t scale_n = source_scale & 0xFFFF, scale_d = source_scale >> 16;
+  const bool box = source.kind == 0 && scale_n > scale_d && scale_n % scale_d != 0;
+  if (box && (mode & 4)) {
+    return false;
+  }
+  const bool bitwise = (source.host_info >> 7) & 1;
+  const auto dest_format = xenos::TextureFormat(resolve_info.copy_dest_info.copy_dest_format);
+  uint32_t layout = 0;
+  if (bitwise) {
+    switch (xenos::ColorRenderTargetFormat(source.host_info & 15)) {
+      case xenos::ColorRenderTargetFormat::k_8_8_8_8:
+      case xenos::ColorRenderTargetFormat::k_8_8_8_8_GAMMA:
+        layout = 0;
+        break;
+      case xenos::ColorRenderTargetFormat::k_2_10_10_10:
+      case xenos::ColorRenderTargetFormat::k_2_10_10_10_AS_10_10_10_10:
+        layout = 1;
+        break;
+      case xenos::ColorRenderTargetFormat::k_2_10_10_10_FLOAT:
+      case xenos::ColorRenderTargetFormat::k_2_10_10_10_FLOAT_AS_16_16_16_16:
+        layout = 2;
+        break;
+      default:
+        if (box) {
+          return false;
+        }
+    }
+  } else if (dest_format == xenos::TextureFormat::k_2_10_10_10) {
+    layout = 1;
+  } else if (box && (dest_format != xenos::TextureFormat::k_8_8_8_8 ||
+                     resolve_info.copy_dest_info.copy_dest_number !=
+                         xenos::SurfaceNumberFormat::kUnsignedRepeatingFraction)) {
+    return false;
+  }
+  write_out = GuestLayoutWrite();
+  write_out.start = resolve_info.copy_dest_extent_start;
+  write_out.length = resolve_info.copy_dest_extent_length;
+  write_out.dest_base = resolve_info.copy_dest_base;
+  write_out.dest_info = resolve_info.copy_dest_info.value;
+  write_out.dest_coordinate_info = resolve_info.copy_dest_coordinate_info.packed;
+  write_out.width_div_8 = resolve_info.coordinate_info.width_div_8;
+  write_out.height_div_8 = resolve_info.height_div_8;
+  write_out.constants = constants;
+  write_out.scaled = scaled;
+  write_out.scaled_base = resolve_info.copy_dest_base;
+  write_out.scaled_length = resolve_info.copy_dest_extent_start - resolve_info.copy_dest_base +
+                            resolve_info.copy_dest_extent_length;
+  write_out.host_info = layout | (uint32_t(bitwise) << 7) | (uint32_t(box) << 16);
+  write_out.source_scale = source_scale;
+  write_out.host_phase = source.host_phase;
+  write_out.width = (resolve_info.coordinate_info.width_div_8 << xenos::kResolveAlignmentPixelsLog2) *
+                    draw_resolution_scale_x();
+  write_out.height =
+      (resolve_info.height_div_8 << xenos::kResolveAlignmentPixelsLog2) * draw_resolution_scale_y();
+  write_out.check_class =
+      (box ? 2u : 0u) + uint32_t(dest_format == xenos::TextureFormat::k_2_10_10_10);
+  return true;
+}
+
+void D3D12RenderTargetCache::WriteResolvedGuestLayout(
+    D3D12TextureCache& texture_cache, D3D12SharedMemory& shared_memory,
+    const draw_util::ResolveInfo& resolve_info,
+    const draw_util::ResolveCopyShaderConstants& constants, const HostResolveSource& source,
+    bool scaled, int32_t mode, GuestLayoutWrite& write) {
+  if (!write.texture) {
+    // No texture took the resolve's data: from the render target, which still
+    // holds it.
+    perf_trace::CountGuestLayout(perf_trace::GuestLayout::kFromTarget);
+    if (!DispatchHostResolve(texture_cache, shared_memory, resolve_info, constants, source, scaled,
+                             false)) {
+      REXGPU_ERROR("D3D12RenderTargetCache: Failed to write a guest layout from the render target");
+    }
+    return;
+  }
+  const int32_t check_every = REXCVAR_GET(native_rt_resolve_layout_check);
+  const bool check = check_every > 0 &&
+                     command_processor_.GetCurrentFrame() % uint64_t(check_every) == 0;
+  if ((mode & 2) && !check && command_processor_.IsReadbackOnDemand()) {
+    if (!layout_watch_) {
+      // The readers' hooks, from the first deferred write.
+      layout_texture_cache_ = &texture_cache;
+      layout_shared_memory_ = &shared_memory;
+      layout_thread_ = std::this_thread::get_id();
+      shared_memory.SetGuestLayoutWriter(this);
+      layout_watch_ = shared_memory.RegisterGlobalWatch(GuestLayoutWatchCallback, this);
+    }
+    if (mode & 8) {
+      DispatchGuestLayout(texture_cache, shared_memory, write, true);
+    }
+    GuestLayoutWrite overflow;
+    {
+      std::lock_guard<std::mutex> lock(deferred_layouts_mutex_);
+      // Few destinations are pending at once; past that, the oldest is
+      // written.
+      constexpr size_t kMaxDeferredLayouts = 32;
+      if (deferred_layouts_.size() >= kMaxDeferredLayouts) {
+        overflow = std::move(deferred_layouts_.front());
+        deferred_layouts_.erase(deferred_layouts_.begin());
+      }
+      deferred_layouts_.push_back(std::move(write));
+      deferred_guest_layouts_.store(true, std::memory_order_release);
+    }
+    perf_trace::CountGuestLayout(perf_trace::GuestLayout::kDeferred);
+    if (overflow.texture) {
+      perf_trace::CountGuestLayout(perf_trace::GuestLayout::kWrittenOverflow);
+      DispatchGuestLayout(texture_cache, shared_memory, overflow, false);
+    }
+    return;
+  }
+  perf_trace::CountGuestLayout(perf_trace::GuestLayout::kFromTexture);
+  DispatchGuestLayout(texture_cache, shared_memory, write, false);
+  if (check) {
+    // The render target's layout into scratch, both compared when the
+    // submission completes.
+    DispatchHostResolve(texture_cache, shared_memory, resolve_info, constants, source, scaled, true,
+                        int32_t(write.check_class));
+  }
+}
+
+bool D3D12RenderTargetCache::DispatchGuestLayout(D3D12TextureCache& texture_cache,
+                                                 D3D12SharedMemory& shared_memory,
+                                                 const GuestLayoutWrite& write, bool poison) {
+  if (!host_layout_pipeline_ || !write.texture) {
+    return false;
+  }
+  if (!texture_cache.PrepareGuestLayoutSource(write.texture_key, write.texture.Get(),
+                                              write.texture_write_index)) {
+    // Something other than a resolve to its range changed the texture.
+    perf_trace::CountGuestLayout(perf_trace::GuestLayout::kInvariant);
+    static bool logged = false;
+    if (!logged) {
+      logged = true;
+      REXGPU_ERROR("Guest layout written from a texture that no longer holds its resolve: {:08X}",
+                   write.dest_base);
+    }
+  }
+  const ui::d3d12::D3D12Provider& provider = command_processor_.GetD3D12Provider();
+  ID3D12Device* device = provider.GetDevice();
+  DeferredCommandList& command_list = command_processor_.GetDeferredCommandList();
+  ui::d3d12::util::DescriptorCpuGpuHandlePair descriptors[3];
+  if (!command_processor_.RequestOneUseSingleViewDescriptors(3, descriptors)) {
+    return false;
+  }
+  const uint32_t dest_bpe_log2 =
+      draw_util::resolve_copy_shader_info[size_t(draw_util::ResolveCopyShaderIndex::kFull32bpp)]
+          .dest_bpe_log2;
+  if (write.scaled) {
+    if (!texture_cache.MakeScaledResolveRangeCurrent(write.scaled_base, write.scaled_length)) {
+      return false;
+    }
+    texture_cache.CreateCurrentScaledResolveRangeUintPow2UAV(descriptors[0].first, dest_bpe_log2);
+    texture_cache.TransitionCurrentScaledResolveRange(D3D12_RESOURCE_STATE_UNORDERED_ACCESS);
+  } else {
+    shared_memory.WriteUintPow2UAVDescriptor(descriptors[0].first, dest_bpe_log2);
+    shared_memory.UseForWriting();
+  }
+  D3D12_SHADER_RESOURCE_VIEW_DESC srv_desc = {};
+  srv_desc.Format = write.texture_format;
+  srv_desc.ViewDimension = D3D12_SRV_DIMENSION_TEXTURE2D;
+  srv_desc.Shader4ComponentMapping = D3D12_DEFAULT_SHADER_4_COMPONENT_MAPPING;
+  srv_desc.Texture2D.MipLevels = 1;
+  device->CreateShaderResourceView(write.texture.Get(), &srv_desc, descriptors[1].first);
+  // t1 is not read.
+  device->CreateShaderResourceView(write.texture.Get(), &srv_desc, descriptors[2].first);
+  uint32_t root_constants[sizeof(draw_util::ResolveCopyShaderConstants) / sizeof(uint32_t) + 5];
+  uint32_t constant_count;
+  if (write.scaled) {
+    std::memcpy(root_constants, &write.constants.dest_relative,
+                sizeof(write.constants.dest_relative));
+    constant_count = sizeof(write.constants.dest_relative) / sizeof(uint32_t);
+  } else {
+    std::memcpy(root_constants, &write.constants, sizeof(write.constants));
+    constant_count = sizeof(write.constants) / sizeof(uint32_t);
+  }
+  root_constants[constant_count++] = write.host_info | (uint32_t(poison) << 17);
+  root_constants[constant_count++] = 0;
+  root_constants[constant_count++] = write.source_scale;
+  root_constants[constant_count++] = 0;
+  root_constants[constant_count++] = write.host_phase;
+  command_list.D3DSetComputeRootSignature(host_resolve_root_signature_);
+  command_list.D3DSetComputeRoot32BitConstants(0, constant_count, root_constants, 0);
+  command_list.D3DSetComputeRootDescriptorTable(1, descriptors[0].second);
+  command_list.D3DSetComputeRootDescriptorTable(2, descriptors[1].second);
+  command_list.D3DSetComputeRootDescriptorTable(3, descriptors[2].second);
+  command_processor_.SetExternalPipeline(host_layout_pipeline_);
+  command_processor_.SubmitBarriers();
+  // 8x8 groups of threads of 4 pixels.
+  command_list.D3DDispatch(((write.width >> 2) + 7) >> 3, (write.height + 7) >> 3, 1);
+  if (write.scaled) {
+    texture_cache.MarkCurrentScaledResolveRangeUAVWritesCommitNeeded();
+  } else {
+    shared_memory.MarkUAVWritesCommitNeeded();
+  }
+  return true;
+}
+
+void D3D12RenderTargetCache::BeforeResolveWrite(const draw_util::ResolveInfo& resolve_info) {
+  const uint32_t start = resolve_info.copy_dest_extent_start;
+  const uint32_t end = start + resolve_info.copy_dest_extent_length;
+  std::vector<GuestLayoutWrite> overlapping;
+  {
+    std::lock_guard<std::mutex> lock(deferred_layouts_mutex_);
+    for (auto it = deferred_layouts_.begin(); it != deferred_layouts_.end();) {
+      if (it->start >= end || start >= it->start + it->length) {
+        ++it;
+        continue;
+      }
+      // The same resolve again writes every byte the deferred one would.
+      if (it->start == start && it->length == resolve_info.copy_dest_extent_length &&
+          it->dest_base == resolve_info.copy_dest_base &&
+          it->dest_info == resolve_info.copy_dest_info.value &&
+          it->dest_coordinate_info == resolve_info.copy_dest_coordinate_info.packed &&
+          it->width_div_8 == resolve_info.coordinate_info.width_div_8 &&
+          it->height_div_8 == resolve_info.height_div_8) {
+        perf_trace::CountGuestLayout(perf_trace::GuestLayout::kSuperseded);
+      } else {
+        overlapping.push_back(std::move(*it));
+      }
+      it = deferred_layouts_.erase(it);
+    }
+    deferred_guest_layouts_.store(!deferred_layouts_.empty(), std::memory_order_release);
+  }
+  for (const GuestLayoutWrite& write : overlapping) {
+    if (REXCVAR_GET(native_rt_resolve_layout) & 16) {
+      perf_trace::CountGuestLayout(perf_trace::GuestLayout::kPerturbed);
+      continue;
+    }
+    perf_trace::CountGuestLayout(perf_trace::GuestLayout::kWrittenResolve);
+    DispatchGuestLayout(*layout_texture_cache_, *layout_shared_memory_, write, false);
+  }
+}
+
+void D3D12RenderTargetCache::BeforeGuestLayoutRead(uint32_t start, uint32_t length,
+                                                   SharedMemory::GuestLayoutReader reader) {
+  using Reader = SharedMemory::GuestLayoutReader;
+  if (!length) {
+    return;
+  }
+  const uint64_t end = uint64_t(start) + length;
+  if (reader == Reader::kSceneTextureLoad) {
+    // A texture at the scene's scale reads no guest memory; one over a
+    // deferred layout was made outdated by something no hook saw.
+    std::lock_guard<std::mutex> lock(deferred_layouts_mutex_);
+    for (const GuestLayoutWrite& write : deferred_layouts_) {
+      if (write.start < end && start < write.start + write.length) {
+        perf_trace::CountGuestLayout(perf_trace::GuestLayout::kInvariant);
+        break;
+      }
+    }
+    return;
+  }
+  // The command list is recorded on the command processor's thread.
+  const bool own_thread = std::this_thread::get_id() == layout_thread_;
+  std::vector<GuestLayoutWrite> overlapping;
+  {
+    std::lock_guard<std::mutex> lock(deferred_layouts_mutex_);
+    for (auto it = deferred_layouts_.begin(); it != deferred_layouts_.end();) {
+      if (it->start >= end || start >= it->start + it->length) {
+        ++it;
+        continue;
+      }
+      if (!own_thread) {
+        perf_trace::CountGuestLayout(perf_trace::GuestLayout::kForeignThread);
+        ++it;
+        continue;
+      }
+      overlapping.push_back(std::move(*it));
+      it = deferred_layouts_.erase(it);
+    }
+    deferred_guest_layouts_.store(!deferred_layouts_.empty(), std::memory_order_release);
+  }
+  perf_trace::GuestLayout written;
+  switch (reader) {
+    case Reader::kTextureLoad:
+      written = perf_trace::GuestLayout::kWrittenLoad;
+      break;
+    case Reader::kReadback:
+      written = perf_trace::GuestLayout::kWrittenReadback;
+      break;
+    case Reader::kResolve:
+      written = perf_trace::GuestLayout::kWrittenResolve;
+      break;
+    default:
+      written = perf_trace::GuestLayout::kWrittenRequest;
+  }
+  for (const GuestLayoutWrite& write : overlapping) {
+    if (REXCVAR_GET(native_rt_resolve_layout) & 16) {
+      perf_trace::CountGuestLayout(perf_trace::GuestLayout::kPerturbed);
+      continue;
+    }
+    perf_trace::CountGuestLayout(written);
+    DispatchGuestLayout(*layout_texture_cache_, *layout_shared_memory_, write, false);
+  }
+}
+
+void D3D12RenderTargetCache::GuestLayoutWatchCallback(
+    const std::unique_lock<std::recursive_mutex>& global_lock, void* context,
+    uint32_t address_first, uint32_t address_last, bool invalidated_by_gpu) {
+  if (invalidated_by_gpu) {
+    return;
+  }
+  // A CPU write: the guest memory's data replaces the deferred layout there
+  // (the readback on demand served it first, d3d-hle.md 16.5).
+  auto& cache = *static_cast<D3D12RenderTargetCache*>(context);
+  std::lock_guard<std::mutex> lock(cache.deferred_layouts_mutex_);
+  for (auto it = cache.deferred_layouts_.begin(); it != cache.deferred_layouts_.end();) {
+    if (it->start > address_last || address_first >= it->start + it->length) {
+      ++it;
+      continue;
+    }
+    perf_trace::CountGuestLayout(perf_trace::GuestLayout::kDropped);
+    it = cache.deferred_layouts_.erase(it);
+  }
+  cache.deferred_guest_layouts_.store(!cache.deferred_layouts_.empty(), std::memory_order_release);
 }
 
 RenderTargetCache::RenderTarget* D3D12RenderTargetCache::GetResolvePrivateSurface(

@@ -79,6 +79,10 @@ RESOLVE_HOST_SHADERS.update({
     f'resolve_host_texture_32bpp_{kind}{ms}': [f'XE_HOST_SOURCE_KIND={index}'] +
     (['XE_HOST_SOURCE_MS'] if ms else []) + ['XE_RESOLVE_RESOLUTION_SCALED', 'XE_HOST_TEXTURE']
     for index, kind in enumerate(('color', 'uint', 'depth')) for ms in ('', '_ms')})
+# The destination from the words of its host texture at the scene's scale (d3d-hle-n6.md 19.7.5).
+RESOLVE_HOST_SHADERS.update({
+    f'resolve_host_32bpp_words{scaled}': ['XE_HOST_SOURCE_KIND=3'] +
+    (['XE_RESOLVE_RESOLUTION_SCALED'] if scaled else []) for scaled in ('', '_scaled')})
 EXECUTABLES = ('default.xex','SpeechFacade_default.xex','XMediaFacade_default.xex')
 # The supported releases and the SHA-256 of their three executables. The releases differ only
 # in the XEX headers (media ID, disc version, game region, ratings, LAN key). The decrypted

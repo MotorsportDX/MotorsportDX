@@ -467,6 +467,16 @@ bool SharedMemory::RequestRanges(const std::pair<uint32_t, uint32_t>* ranges, si
     return true;
   }
 
+  // The deferred guest layouts that the requested ranges read.
+  if (guest_layout_writer_ && guest_layout_writer_->HasDeferredGuestLayouts()) {
+    for (size_t i = 0; i < count; ++i) {
+      if (ranges[i].second) {
+        guest_layout_writer_->BeforeGuestLayoutRead(ranges[i].first, ranges[i].second,
+                                                    GuestLayoutReader::kRequest);
+      }
+    }
+  }
+
   // Some texture or buffer is empty, for example - safe to draw in this case.
   std::vector<std::pair<uint32_t, uint32_t>>& merged_ranges = merged_ranges_;
   merged_ranges.clear();

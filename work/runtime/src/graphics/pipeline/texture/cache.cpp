@@ -1099,6 +1099,22 @@ TextureCache::WriteBackCounts TextureCache::StartWriteBackCount(Texture* texture
 }
 
 bool TextureCache::LoadTextureData(Texture& texture) {
+  // The deferred guest layouts in the texture's memory (native_rt_resolve_layout,
+  // d3d-hle-n6.md 19.7.5), before it loads from them.
+  if (SharedMemory::GuestLayoutWriter* writer = shared_memory().guest_layout_writer();
+      writer && writer->HasDeferredGuestLayouts()) {
+    const SharedMemory::GuestLayoutReader reader =
+        texture.key().scene_scaled ? SharedMemory::GuestLayoutReader::kSceneTextureLoad
+                                   : SharedMemory::GuestLayoutReader::kTextureLoad;
+    if (texture.GetGuestBaseSize()) {
+      writer->BeforeGuestLayoutRead(texture.key().base_page << 12, texture.GetGuestBaseSize(),
+                                    reader);
+    }
+    if (texture.GetGuestMipsSize()) {
+      writer->BeforeGuestLayoutRead(texture.key().mip_page << 12, texture.GetGuestMipsSize(),
+                                    reader);
+    }
+  }
   // A texture at the scene's scale has no data in memory at that scale: the
   // resolves write it (18.15). One created before its resolve is counted.
   if (texture.key().scene_scaled) {

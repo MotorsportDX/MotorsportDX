@@ -124,6 +124,9 @@ class D3D12CommandProcessor : public CommandProcessor {
   }
 
   uint64_t GetCurrentFrame() const { return frame_current_; }
+  // Whether resolves leave their readback to the CPU's first access
+  // (readback_resolve_on_demand, d3d-hle.md 16.5).
+  bool IsReadbackOnDemand() const { return demand_servicer_ != nullptr; }
   uint64_t GetCompletedFrame() const { return frame_completed_; }
 
   // Returns true if the barrier has been inserted (the new state is different).

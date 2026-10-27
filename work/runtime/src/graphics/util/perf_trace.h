@@ -350,6 +350,54 @@ inline void CountResolveTextureFallback(bool copied) {
   (copied ? native_resolve_fallbacks : native_resolve_fallbacks_missing)
       .fetch_add(1, std::memory_order_relaxed);
 }
+// native_rt_resolve_layout (d3d-hle-n6.md 19.7.5): the guest's layout of a
+// full-screen destination at the scene's scale, written from its host texture
+// or from the render target (no texture took the resolve's data, the opt-out
+// or A/B off), deferred, and what became of the deferred ones: replaced by the
+// same resolve again, dropped by a CPU write, written for a reader (a texture
+// load, another GPU request, a CPU readback, an overlapping resolve) or when
+// too many were pending, dropped by the perturbation; and the faults:
+// overlaps found by a scene texture's load or a source texture's data changed
+// (the invariant), and readers off the command processor's thread.
+enum class GuestLayout : uint32_t {
+  kFromTexture,
+  kFromTarget,
+  kDeferred,
+  kSuperseded,
+  kDropped,
+  kWrittenLoad,
+  kWrittenRequest,
+  kWrittenReadback,
+  kWrittenResolve,
+  kWrittenOverflow,
+  kPerturbed,
+  kInvariant,
+  kForeignThread,
+  kCount
+};
+inline std::atomic<uint64_t> guest_layout[size_t(GuestLayout::kCount)];
+inline void CountGuestLayout(GuestLayout what) {
+  guest_layout[size_t(what)].fetch_add(1, std::memory_order_relaxed);
+}
+// native_rt_resolve_layout_check: the layouts compared by class (0 nearest
+// 8_8_8_8, 1 nearest 2_10_10_10, 2 box 8_8_8_8, 3 box 2_10_10_10), their
+// pixels, the pixels and bytes that differ, and the largest difference of one
+// channel in encoded steps.
+inline std::atomic<uint64_t> guest_layout_checks[4], guest_layout_check_pixels[4],
+    guest_layout_check_changed[4], guest_layout_check_bytes[4];
+inline std::atomic<uint32_t> guest_layout_check_max_step[4];
+inline void CountGuestLayoutCheck(uint32_t check_class, uint64_t pixels, uint64_t changed,
+                                  uint64_t bytes, uint32_t max_step) {
+  guest_layout_checks[check_class].fetch_add(1, std::memory_order_relaxed);
+  guest_layout_check_pixels[check_class].fetch_add(pixels, std::memory_order_relaxed);
+  guest_layout_check_changed[check_class].fetch_add(changed, std::memory_order_relaxed);
+  guest_layout_check_bytes[check_class].fetch_add(bytes, std::memory_order_relaxed);
+  uint32_t previous = guest_layout_check_max_step[check_class].load(std::memory_order_relaxed);
+  while (max_step > previous &&
+         !guest_layout_check_max_step[check_class].compare_exchange_weak(
+             previous, max_step, std::memory_order_relaxed)) {
+  }
+}
 // Scene draws at a fractional scale (d3d-hle-n5.md 18.16): pixel shader
 // translations and pipelines with the scene_scale modification made while the
 // title runs, not loaded from the storage.
@@ -953,7 +1001,31 @@ inline void OnSwap() {
                 << ",\"fallbacks\":"
                 << native_resolve_fallbacks.exchange(0, std::memory_order_relaxed)
                 << ",\"fallbacks_missing\":"
-                << native_resolve_fallbacks_missing.exchange(0, std::memory_order_relaxed) << '}'
+                << native_resolve_fallbacks_missing.exchange(0, std::memory_order_relaxed) << '}';
+  {
+    static const char* const kGuestLayoutNames[] = {
+        "from_texture", "from_target",     "deferred",        "superseded", "dropped",
+        "written_load", "written_request", "written_readback", "written_resolve",
+        "written_overflow", "perturbed",   "invariant",       "foreign_thread"};
+    static_assert(std::size(kGuestLayoutNames) == size_t(GuestLayout::kCount));
+    state->output << ",\"guest_layout\":{";
+    for (size_t i = 0; i < size_t(GuestLayout::kCount); ++i) {
+      state->output << (i ? ",\"" : "\"") << kGuestLayoutNames[i]
+                    << "\":" << guest_layout[i].exchange(0, std::memory_order_relaxed);
+    }
+    state->output << ",\"checks\":[";
+    for (size_t i = 0; i < 4; ++i) {
+      state->output << (i ? ",[" : "[")
+                    << guest_layout_checks[i].exchange(0, std::memory_order_relaxed) << ','
+                    << guest_layout_check_pixels[i].exchange(0, std::memory_order_relaxed) << ','
+                    << guest_layout_check_changed[i].exchange(0, std::memory_order_relaxed) << ','
+                    << guest_layout_check_bytes[i].exchange(0, std::memory_order_relaxed) << ','
+                    << guest_layout_check_max_step[i].exchange(0, std::memory_order_relaxed)
+                    << ']';
+    }
+    state->output << "]}";
+  }
+  state->output
                 << ",\"scene_variants\":{\"translations\":"
                 << scene_variant_translations.exchange(0, std::memory_order_relaxed)
                 << ",\"pipelines\":"

@@ -9,7 +9,9 @@
 // XE_RESOLVE_RESOLUTION_SCALED for the scaled resolve buffer. With
 // XE_HOST_TEXTURE (and XE_RESOLVE_RESOLUTION_SCALED) the words go into the host
 // texture that samples the destination instead, as resolve_texture_32bpp
-// stores them (docs/analysis/d3d-hle-n5.md 18.12).
+// stores them (docs/analysis/d3d-hle-n5.md 18.12). XE_HOST_SOURCE_KIND 3 writes
+// the destination from the words of such a texture at the scene's scale
+// instead of the render target (docs/analysis/d3d-hle-n6.md 19.7.5).
 
 #define XE_RESOLVE_HOST
 #ifdef XE_HOST_TEXTURE
@@ -32,7 +34,7 @@
   #if XE_HOST_SOURCE_KIND == 2
     Texture2D<float> xe_resolve_host_source : register(t0, space0);
     Texture2D<uint2> xe_resolve_host_stencil : register(t1, space0);
-  #elif XE_HOST_SOURCE_KIND == 1
+  #elif XE_HOST_SOURCE_KIND == 1 || XE_HOST_SOURCE_KIND == 3
     Texture2D<uint4> xe_resolve_host_source : register(t0, space0);
   #else
     Texture2D<float4> xe_resolve_host_source : register(t0, space0);
@@ -78,6 +80,117 @@ uint2_xe XeHostSourcePixel(uint2_xe pixel_index, uint source_scale) {
   return (pixel_index * 2u + 1u) * n / (2u * d);
 }
 
+#if XE_HOST_SOURCE_KIND == 3
+// Kind 3, the words of the host texture at the scene's scale that the resolve
+// wrote, whose pixels are the render target's (d3d-hle-n6.md 19.7.5).
+// xe_resolve_host_info: bits 0:1 the layout of the words that the box filter
+// averages (0 unorm 8:8:8:8, 1 unorm 10:10:10:2, 2 7e3 10:10:10 with unorm 2),
+// 7 a bitwise copy (the words are the EDRAM's, encoded again after the box)
+// rather than a format conversion (packed again in the destination's format),
+// 12:14 the texture's endianness, 15 the texture's format (0 R8G8B8A8, 1
+// R10G10B10A2), 16 the box filter of a fractional downscale from a float
+// color source (as XeHostEdramWord averages), 17 wrong bytes (the check of
+// native_rt_resolve_layout bit 8).
+uint XeHostTextureWord(int2 texel, uint host_info) {
+  uint4 value = xe_resolve_host_source.Load(int3(texel, 0));
+  uint word;
+  if ((host_info & (1u << 15u)) != 0u) {
+    word = (value.r & 1023u) | ((value.g & 1023u) << 10u) | ((value.b & 1023u) << 20u) |
+           ((value.a & 3u) << 30u);
+  } else {
+    word = (value.r & 255u) | ((value.g & 255u) << 8u) | ((value.b & 255u) << 16u) |
+           ((value.a & 255u) << 24u);
+  }
+  // The texture's endianness off: the words in the destination's endianness,
+  // as the store would write them.
+  return XeEndianSwap32(word, (host_info >> 12u) & 7u);
+}
+
+float4_xe XeHostLayoutUnpack(uint word, uint layout) {
+  if (layout == 2u) {
+    return XeUnpackR10G10B10A2Float(word);
+  }
+  if (layout == 1u) {
+    return XeUnpackR10G10B10A2UNorm(word);
+  }
+  return XeUnpackR8G8B8A8UNorm(word);
+}
+
+// As XeHostEdramWord encodes the samples.
+uint XeHostLayoutEncode(float4_xe value, uint layout) {
+  if (layout == 2u) {
+    uint alpha = uint(mad(saturate(value.a), 3.0f, 0.5f));
+    return XeHostFloat32To7e3(value.r) | (XeHostFloat32To7e3(value.g) << 10u) |
+           (XeHostFloat32To7e3(value.b) << 20u) | ((alpha & 3u) << 30u);
+  }
+  if (layout == 1u) {
+    uint4 fixed = uint4(mad(value, float4(1023.0f, 1023.0f, 1023.0f, 3.0f), 0.5f));
+    return (fixed.r & 1023u) | ((fixed.g & 1023u) << 10u) | ((fixed.b & 1023u) << 20u) |
+           ((fixed.a & 3u) << 30u);
+  }
+  uint4 fixed = uint4(mad(value, 255.0f, 0.5f));
+  return (fixed.r & 255u) | ((fixed.g & 255u) << 8u) | ((fixed.b & 255u) << 16u) |
+         ((fixed.a & 255u) << 24u);
+}
+
+// The mean of the texture's pixels in the box of a destination pixel, between
+// the edges XeHostEdramWord takes the render target's pixels between.
+float4_xe XeHostLayoutBox(uint2_xe pixel_index, uint host_info, uint dest_endian) {
+  uint source_scale = push_const_xe(xe_resolve_host_source_scale);
+  uint scale_n = source_scale & 0xFFFFu, scale_d = source_scale >> 16u;
+  float ratio = float(scale_n) / float(scale_d);
+  uint phase_packed = push_const_xe(xe_resolve_host_source_phase);
+  float2 phase =
+      float2(int2(int(phase_packed << 16u) >> 16, int(phase_packed) >> 16)) * (1.0f / 256.0f);
+  int2 first = int2(floor(float2(pixel_index) * ratio + phase + 0.5f));
+  int2 end = int2(floor(float2(pixel_index + 1u) * ratio + phase + 0.5f));
+  float4_xe value = float4_xe(0.0f, 0.0f, 0.0f, 0.0f);
+  uint layout = host_info & 3u;
+  [loop] for (int y = first.y; y < end.y; ++y) {
+    [loop] for (int x = first.x; x < end.x; ++x) {
+      // In the destination's endianness; the words as packed, without it.
+      value += XeHostLayoutUnpack(
+          XeEndianSwap32(XeHostTextureWord(int2(x, y), host_info), dest_endian), layout);
+    }
+  }
+  return value / float(max((end.x - first.x) * (end.y - first.y), 1));
+}
+
+// The words of four destination pixels as packed, before the store's
+// endianness.
+uint4_xe XeHostLayoutWords4(uint2_xe pixel_index, uint host_info, uint fill_y,
+                            XeResolveInfo resolve_info) {
+  pixel_index.y = max(pixel_index.y, fill_y);
+  uint dest_endian = resolve_info.dest_endian_128;
+  dont_flatten_xe
+  if ((host_info & (1u << 16u)) == 0u) {
+    // The nearest pixel, as the render target's is taken: the same word.
+    uint source_scale = push_const_xe(xe_resolve_host_source_scale);
+    return XeEndianSwap32(
+        uint4_xe(
+            XeHostTextureWord(int2(XeHostSourcePixel(pixel_index, source_scale)), host_info),
+            XeHostTextureWord(
+                int2(XeHostSourcePixel(pixel_index + uint2_xe(1u, 0u), source_scale)), host_info),
+            XeHostTextureWord(
+                int2(XeHostSourcePixel(pixel_index + uint2_xe(2u, 0u), source_scale)), host_info),
+            XeHostTextureWord(
+                int2(XeHostSourcePixel(pixel_index + uint2_xe(3u, 0u), source_scale)), host_info)),
+        dest_endian);
+  }
+  float4_xe pixel_0 = XeHostLayoutBox(pixel_index, host_info, dest_endian);
+  float4_xe pixel_1 = XeHostLayoutBox(pixel_index + uint2_xe(1u, 0u), host_info, dest_endian);
+  float4_xe pixel_2 = XeHostLayoutBox(pixel_index + uint2_xe(2u, 0u), host_info, dest_endian);
+  float4_xe pixel_3 = XeHostLayoutBox(pixel_index + uint2_xe(3u, 0u), host_info, dest_endian);
+  dont_flatten_xe
+  if ((host_info & (1u << 7u)) != 0u) {
+    uint layout = host_info & 3u;
+    return uint4_xe(XeHostLayoutEncode(pixel_0, layout), XeHostLayoutEncode(pixel_1, layout),
+                    XeHostLayoutEncode(pixel_2, layout), XeHostLayoutEncode(pixel_3, layout));
+  }
+  return XePack32bpp4Pixels(pixel_0, pixel_1, pixel_2, pixel_3, resolve_info.dest_format,
+                            resolve_info.dest_num_format);
+}
+#else
 // The EDRAM word of a sample of the resolve's pixel, as the dump stores it.
 uint XeHostEdramWord(uint2_xe pixel_index, uint guest_sample, uint host_info,
                      uint2_xe host_offset) {
@@ -183,6 +296,7 @@ uint4_xe XeHostEdramWords4(uint2_xe pixel_index, uint guest_sample, uint host_in
       XeHostEdramWord(pixel_index + uint2_xe(2u, 0u), guest_sample, host_info, host_offset),
       XeHostEdramWord(pixel_index + uint2_xe(3u, 0u), guest_sample, host_info, host_offset));
 }
+#endif
 
 #define LOCAL_SIZE_X_XE 8
 #define LOCAL_SIZE_Y_XE 8
@@ -218,8 +332,11 @@ entry_inputs_end_code_begin_compute_xe
     }
   }
   uint fill_y = resolve_info.half_pixel_offset_fill_source.y;
-  uint first_sample = XeResolveFirstSampleIndex(resolve_info.sample_select);
   uint4_xe packed;
+  #if XE_HOST_SOURCE_KIND == 3
+  packed = XeHostLayoutWords4(pixel_index, host_info, fill_y, resolve_info);
+  #else
+  uint first_sample = XeResolveFirstSampleIndex(resolve_info.sample_select);
   dont_flatten_xe
   if ((host_info & (1u << 7u)) != 0u) {
     // Bitwise, the first sample of each pixel, with the fast copy's red and
@@ -279,6 +396,7 @@ entry_inputs_end_code_begin_compute_xe
     packed = XePack32bpp4Pixels(pixel_0, pixel_1, pixel_2, pixel_3, resolve_info.dest_format,
                                 resolve_info.dest_num_format);
   }
+  #endif
   dont_flatten_xe
   if (pixel_index.x == 0u &&
       resolve_info.half_pixel_offset_fill_source.x != 0u) {
@@ -344,6 +462,12 @@ entry_inputs_end_code_begin_compute_xe
           (uint_x4_xe(packed.w) >> uint4_xe(0u, 8u, 16u, 24u)) & 255u);
     }
   #else
+    #if XE_HOST_SOURCE_KIND == 3
+      dont_flatten_xe
+      if ((host_info & (1u << 17u)) != 0u) {
+        packed = ~packed;
+      }
+    #endif
     byte_buffer_align16_store16_xe(
         xe_resolve_dest, XeResolveDestPixelAddress(resolve_info, pixel_index, 2u),
         XeEndianSwap32(packed, resolve_info.dest_endian_128));

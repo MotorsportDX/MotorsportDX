@@ -18,9 +18,11 @@
 #include <deque>
 #include <functional>
 #include <map>
+#include <mutex>
 #include <memory>
 #include <numeric>
 #include <string>
+#include <thread>
 #include <unordered_map>
 #include <utility>
 #include <vector>
@@ -41,7 +43,8 @@ namespace rex::graphics::d3d12 {
 
 class D3D12CommandProcessor;
 
-class D3D12RenderTargetCache final : public RenderTargetCache {
+class D3D12RenderTargetCache final : public RenderTargetCache,
+                                     public SharedMemory::GuestLayoutWriter {
  public:
   D3D12RenderTargetCache(const RegisterFile& register_file, const memory::Memory& memory,
                          uint32_t draw_resolution_scale_x, uint32_t draw_resolution_scale_y,
@@ -75,6 +78,12 @@ class D3D12RenderTargetCache final : public RenderTargetCache {
   }
 
   bool msaa_2x_supported() const { return msaa_2x_supported_; }
+
+  // native_rt_resolve_layout (docs/analysis/d3d-hle-n6.md 19.7.5): writes the
+  // deferred guest layouts that overlap the range before the reader uses it
+  // (on the command processor's thread; counted and left otherwise).
+  void BeforeGuestLayoutRead(uint32_t start, uint32_t length,
+                             SharedMemory::GuestLayoutReader reader) override;
 
   // Post passes (post_pass.cpp): the single-sampled host color render target
   // that the last draw bound as color target `index`, after the pending
@@ -261,8 +270,17 @@ class D3D12RenderTargetCache final : public RenderTargetCache {
     // native_rt_surfaces_depth_dump: the file readback[0] is written to,
     // instead of a comparison.
     std::string dump_file;
+    // native_rt_resolve_layout_check: the class of a guest layout written
+    // from the host texture (readback[0]) against the render target's
+    // (readback[1]), the destination's endianness and its pixels.
+    int32_t layout_class = -1;
+    uint32_t dest_endian = 0;
+    uint64_t pixels = 0;
   };
   std::vector<HostResolveCheck> host_resolve_checks_;
+  // native_rt_resolve_layout_check: the words and channel steps that differ.
+  void PollGuestLayoutCheck(const HostResolveCheck& check, const uint32_t* from_texture,
+                            const uint32_t* from_target);
   ID3D12RootSignature* resolve_texture_root_signature_ = nullptr;
   ID3D12PipelineState* resolve_texture_pipeline_ = nullptr;
   std::unordered_map<uint64_t, Microsoft::WRL::ComPtr<ID3D12Resource>> resolve_texture_scratch_;
@@ -272,6 +290,52 @@ class D3D12RenderTargetCache final : public RenderTargetCache {
   // resolve's root signature with one more constant.
   ID3D12RootSignature* host_texture_root_signature_ = nullptr;
   ID3D12PipelineState* host_texture_pipelines_[3][2] = {};
+  // native_rt_resolve_layout (docs/analysis/d3d-hle-n6.md 19.7.5): the guest's
+  // layout of a full-screen destination at the scene's scale written from the
+  // host texture the resolve wrote (resolve_host_32bpp kind 3, with the host
+  // resolve's root signature), and the layouts deferred until something reads
+  // them: everything their write needs, and the texture's resource kept.
+  ID3D12PipelineState* host_layout_pipeline_ = nullptr;
+  struct GuestLayoutWrite {
+    // The resolve's destination, and what makes another resolve write the
+    // same bytes.
+    uint32_t start = 0, length = 0;
+    uint32_t dest_base = 0, dest_info = 0, dest_coordinate_info = 0;
+    uint32_t width_div_8 = 0, height_div_8 = 0;
+    draw_util::ResolveCopyShaderConstants constants;
+    bool scaled = false;
+    // MakeScaledResolveRangeCurrent's range.
+    uint32_t scaled_base = 0, scaled_length = 0;
+    // resolve_host_32bpp kind 3's xe_resolve_host_info, source scale and
+    // phase, and the size in pixels at the whole scale.
+    uint32_t host_info = 0, source_scale = 0, host_phase = 0;
+    uint32_t width = 0, height = 0;
+    Microsoft::WRL::ComPtr<ID3D12Resource> texture;
+    DXGI_FORMAT texture_format = DXGI_FORMAT_UNKNOWN;
+    D3D12TextureCache::ResolveTextureKey texture_key;
+    uint64_t texture_write_index = 0;
+    // native_rt_resolve_layout_check's class (perf_trace::CountGuestLayoutCheck).
+    uint32_t check_class = 0;
+  };
+  // Deferred writes, oldest first; CPU writes drop them from other threads.
+  std::mutex deferred_layouts_mutex_;
+  std::vector<GuestLayoutWrite> deferred_layouts_;
+  D3D12TextureCache* layout_texture_cache_ = nullptr;
+  D3D12SharedMemory* layout_shared_memory_ = nullptr;
+  SharedMemory::GlobalWatchHandle layout_watch_ = nullptr;
+  std::thread::id layout_thread_;
+  static void GuestLayoutWatchCallback(const std::unique_lock<std::recursive_mutex>& global_lock,
+                                       void* context, uint32_t address_first,
+                                       uint32_t address_last, bool invalidated_by_gpu);
+  // The write, with check wrong bytes (native_rt_resolve_layout bit 8).
+  bool DispatchGuestLayout(D3D12TextureCache& texture_cache, D3D12SharedMemory& shared_memory,
+                           const GuestLayoutWrite& write, bool poison);
+  // Before a resolve writes its destination: the deferred layouts it covers
+  // byte for byte are dropped, the others it overlaps written.
+  void BeforeResolveWrite(const draw_util::ResolveInfo& resolve_info);
+  // Writes (or with the perturbation drops) the deferred layouts that overlap
+  // the range, or all with length 0.
+  void WriteDeferredGuestLayouts(uint32_t start, uint32_t length, uint32_t written_reason);
 
   // For host render targets.
 
@@ -780,7 +844,8 @@ class D3D12RenderTargetCache final : public RenderTargetCache {
   bool DispatchHostResolve(D3D12TextureCache& texture_cache, D3D12SharedMemory& shared_memory,
                            const draw_util::ResolveInfo& resolve_info,
                            const draw_util::ResolveCopyShaderConstants& constants,
-                           const HostResolveSource& source, bool scaled, bool check);
+                           const HostResolveSource& source, bool scaled, bool check,
+                           int32_t layout_check_class = -1);
 
  public:
   // At each frame's start: the byte checks whose submission completed;
@@ -820,7 +885,25 @@ class D3D12RenderTargetCache final : public RenderTargetCache {
                                const draw_util::ResolveInfo& resolve_info,
                                const draw_util::ResolveCopyShaderConstants& constants,
                                const HostResolveSource& source, bool scene,
-                               const SceneBand* band = nullptr);
+                               const SceneBand* band = nullptr,
+                               GuestLayoutWrite* layout_write = nullptr);
+  // native_rt_resolve_layout with its A/B period (native_rt_resolve_layout_ab_ms).
+  static int32_t GetGuestLayoutMode();
+  // The guest layout's write of a full-screen destination at the scene's
+  // scale, except its texture, which ResolveHostIntoTextures gives; false if
+  // the layout is written from the render target (the opt-out, bit 4).
+  bool PrepareGuestLayoutWrite(const draw_util::ResolveInfo& resolve_info,
+                               const draw_util::ResolveCopyShaderConstants& constants,
+                               const HostResolveSource& source, bool scaled, int32_t mode,
+                               GuestLayoutWrite& write_out) const;
+  // After the texture writes: the layout from the texture now or deferred,
+  // or from the render target if no texture took the resolve's data.
+  void WriteResolvedGuestLayout(D3D12TextureCache& texture_cache,
+                                D3D12SharedMemory& shared_memory,
+                                const draw_util::ResolveInfo& resolve_info,
+                                const draw_util::ResolveCopyShaderConstants& constants,
+                                const HostResolveSource& source, bool scaled, int32_t mode,
+                                GuestLayoutWrite& write);
 
   // Writes contents of host render targets within rectangles from
   // ResolveInfo::GetCopyEdramTileSpan to edram_buffer_.

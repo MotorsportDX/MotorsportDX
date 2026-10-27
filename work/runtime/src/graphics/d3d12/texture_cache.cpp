@@ -1908,6 +1908,26 @@ void D3D12TextureCache::EndPoisonedResolveTextureWrite(const ResolveTextureTarge
   SkipResolveTextureWrite(target, skip);
 }
 
+void D3D12TextureCache::GetResolveTextureSource(const ResolveTextureTarget& target,
+                                                TextureKey& key_out,
+                                                uint64_t& write_index_out) const {
+  const auto& texture = *static_cast<const D3D12Texture*>(target.texture);
+  key_out = texture.key();
+  write_index_out = texture.resolve_write_index;
+}
+
+bool D3D12TextureCache::PrepareGuestLayoutSource(const TextureKey& key, ID3D12Resource* resource,
+                                                 uint64_t write_index) {
+  auto* texture = static_cast<D3D12Texture*>(FindTexture(key));
+  if (!texture || texture->resource() != resource) {
+    return true;
+  }
+  constexpr D3D12_RESOURCE_STATES kState =
+      D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE | D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE;
+  command_processor_.PushTransitionBarrier(resource, texture->SetResourceState(kState), kState);
+  return texture->resolve_write_index == write_index;
+}
+
 void D3D12TextureCache::OnResolveTextureSampled(D3D12Texture& texture) {
   texture.resolve_written_unsampled = false;
   ApplySkippedResolveWrite(texture);

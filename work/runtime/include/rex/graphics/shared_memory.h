@@ -124,6 +124,36 @@ class SharedMemory {
   // data. May be called from any thread. Returns the number of skipped pages.
   uint32_t CopyReadbackToGuest(uint32_t start, uint32_t length, const uint8_t* data);
 
+  // native_rt_resolve_layout (docs/analysis/d3d-hle-n6.md 19.7.5): the guest's
+  // layout of a resolve destination whose write is deferred until something
+  // reads it. The writer is told before a reader uses a range on the GPU or
+  // the CPU, and writes the deferred layouts in it first. RequestRanges tells
+  // it of its ranges (vertex and index buffers, memexport, texture loads).
+  enum class GuestLayoutReader : uint32_t {
+    kTextureLoad,
+    // A texture at the scene's scale, which never loads: one that overlaps a
+    // deferred layout breaks the invariant that its source texture changes
+    // only with a resolve to its own range.
+    kSceneTextureLoad,
+    kRequest,
+    kReadback,
+    kResolve,
+  };
+  class GuestLayoutWriter {
+   public:
+    bool HasDeferredGuestLayouts() const {
+      return deferred_guest_layouts_.load(std::memory_order_acquire);
+    }
+    virtual void BeforeGuestLayoutRead(uint32_t start, uint32_t length,
+                                       GuestLayoutReader reader) = 0;
+
+   protected:
+    ~GuestLayoutWriter() = default;
+    std::atomic<bool> deferred_guest_layouts_{false};
+  };
+  void SetGuestLayoutWriter(GuestLayoutWriter* writer) { guest_layout_writer_ = writer; }
+  GuestLayoutWriter* guest_layout_writer() const { return guest_layout_writer_; }
+
  protected:
   SharedMemory(memory::Memory& memory);
   // Call in implementation-specific initialization.
@@ -194,6 +224,8 @@ class SharedMemory {
   std::vector<std::pair<uint32_t, uint32_t>> merged_ranges_;
 
   std::atomic<uint64_t> invalidation_epoch_{0};
+
+  GuestLayoutWriter* guest_layout_writer_ = nullptr;
 
   // Optional stale page trace (REX_STALE_PAGE_TRACE=<file>): a shadow copy of
   // the uploaded data, and every 4th frame the bytes that requests cover in

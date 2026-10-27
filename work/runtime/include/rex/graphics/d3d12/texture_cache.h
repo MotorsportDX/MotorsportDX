@@ -268,6 +268,18 @@ class D3D12TextureCache final : public TextureCache {
   void PrepareResolveTextureWrite(const ResolveTextureTarget& target) {
     ApplySkippedResolveWrite(*static_cast<D3D12Texture*>(target.texture));
   }
+  // native_rt_resolve_layout (docs/analysis/d3d-hle-n6.md 19.7.5): the key of
+  // a written target's texture and the resolve whose data it holds, so the
+  // guest's layout can be written from it later.
+  using ResolveTextureKey = TextureKey;
+  void GetResolveTextureSource(const ResolveTextureTarget& target, TextureKey& key_out,
+                               uint64_t& write_index_out) const;
+  // Before the guest's layout is written from such a texture: the texture in
+  // the state of textures bound to guest draws. False if it no longer holds
+  // that resolve's data; true as well if it was evicted (the caller's
+  // reference keeps the resource, which nothing writes then).
+  bool PrepareGuestLayoutSource(const TextureKey& key, ID3D12Resource* resource,
+                                uint64_t write_index);
   // native_rt_resolve_check: the texture's next load is compared with a copy
   // the resolve shader wrote (scratch, in UNORDERED_ACCESS state; the cache
   // keeps a reference). Polled at each frame's start; returns the textures
