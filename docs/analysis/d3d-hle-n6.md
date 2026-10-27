@@ -301,9 +301,10 @@ N6 by this order is about 17 to 30 person-weeks without item 2 and 27 to 46 with
 4. Whether DXC (`dxcompiler.dll`, `dxil.dll`) may ship to players for item 1's offline pass, after the same review.
 5. Where the offline pass runs: in the GUI launcher with its own progress page, or in the runtime's start-up behind a splash screen.
 
-The owner's answers of 27 October 2026 (questions 1, 2, 3 and 5; question 4 came later and is open):
+The owner's answers of 27 October 2026:
 
 1. The order of 19.8 as proposed: item 1's increments 1.0 and 1.1 first, then the resolves of 19.7.1, then the rest of item 1 and item 4. Item 2 moves to a later stage unless the Ally X's battery runs still show CPU-bound frames after them.
 2. The game's own look for a shader's first frames, until its mod is compiled, is acceptable (still judged on increment 1.1's 1:1 crops).
 3. The manifests of item 1 may be committed: hashes, modification bits and fixed function state of game shaders, with no microcode and no translation of a game shader, reviewed like the other metadata in [sources and licensing](../sources-and-licensing.md).
+4. DXC may ship to players: setup fetches `dxcompiler.dll` and `dxil.dll` from Microsoft's official DirectX Shader Compiler release on GitHub, pinned like the FidelityFX SDK and the GameInput package, and the build puts them beside the game (chosen over FXC, which needs nothing shipped but stops at Shader Model 5.1). Before increment 1.2 lands: the owner's approval of the exact release (version, size, license files), the license review in [sources and licensing](../sources-and-licensing.md), and the notices (`LICENSE-LLVM`, `LICENSE-MS` or whatever that release carries) in the third-party notices and the exports.
 5. The offline pass runs in the GUI launcher, on a page of its own with progress, once after an install or an update; it can be skipped, and what is left continues in the background.
