@@ -449,6 +449,9 @@ The first version of the look knob `adaptation`, by the guest vblank rate; repla
 
 - Shader compiles measured with an empty `cache_root` and override cache on local main's build `595fd04` ([current status](current.md#shader-compiles-with-an-empty-cache-and-the-n6-plan-27-october-2026), [D3D-level HLE, 19.2](../analysis/d3d-hle-n6.md#192-measurements-27-october-2026)). Superseded statement of the current status page:
   - Current performance, shader cache: "with an empty cache, synchronous shaders add a little hitch on load (about 9 frames over 100 ms per run, worst 400-640 ms). Race fps is not reduced." It dates from 13 to 15 October 2026 ([performance history](history-performance.md#shader-cache-13-15-october)), before the look mods compiled with FXC in the game.
+- Superseded the same day by N6's increment 1.1, which compiles the look mods on worker threads ([current status](current.md#no-look-mod-compiles-in-play-n6-increments-10-and-11-27-october-2026)). The current status said, of `595fd04` with empty caches:
+  - "**A fresh install stalls for seconds.** The look mods' FXC compiles run on the host render thread where a draw first meets a modded pixel shader: 53 compiles and 20.3 s in the first career's menus and load (median 132 ms, longest 2.4 s), frames of up to 8.5 s, nine frames over 250 ms. A new track in the next session: 26 compiles, a 4.8 s frame in its load and one of 716 ms in the race. Pipelines (0.8 ms each with the driver's cache warm) and the translations without a mod do not show as stalls."
+  - Current performance, shader cache: "with an empty cache (a fresh install) the look mods' FXC compiles stall the first sessions: 53 compiles and 20.3 s in the first career's menus and load, frames of up to 8.5 s, and on a new track one race frame of 716 ms; with a warm cache no race frame is over 25 ms."
 
 ## 5. Superseded settings and decisions
 

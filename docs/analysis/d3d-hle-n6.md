@@ -4,7 +4,7 @@ Section 19 of the [D3D-level HLE design](d3d-hle.md). Sections 1 to 15 are in [d
 
 ## 19. Stage N6 design, 27 October 2026
 
-Status: a plan for the project owner's approval. Nothing in it is built; the measurements of 19.2 ran on local main's build of 27 October 2026 without code changes.
+Status: the project owner approved the plan on 27 October 2026 (19.10). Increments 1.0 and 1.1 of item 1 are built (19.3.7); the rest is a plan. The measurements of 19.2 ran on local main's build of 27 October 2026 without code changes.
 
 ### 19.1 The goal and the order of priorities
 
@@ -153,6 +153,85 @@ A new gate cell for stutter: a run on an empty `cache_root` and override cache (
 
 - A pipeline creation with a cold driver cache, on this PC and the Ally X. Clearing the driver's cache is the user's system state; a build whose translator emits one changed instruction per shader (a different bytecode, so a driver miss) measures it without touching the cache.
 - The vertex shaders' translations in play, once the counters of increment 1.0 time them.
+
+#### 19.3.7 Increments 1.0 and 1.1, 27 October 2026
+
+Built on N5's shader contract, increment 1 (`99e3be6`). The step gates ran on `I:\FM4-build-usa` with `matrix.py --tier cold --native --fast-route` at 240 Hz and 1x, the launcher's look `aces`, one run a cell.
+
+**1.0, the counters and the cold-cache cell.**
+
+- The perf trace has `shader_work`: per kind its count, time, longest piece and pieces over 4 ms. The kinds on the draw path are the vertex and pixel shaders' DXBC translations, the look mods' FXC compiles and cache loads where a draw is issued, the pipelines created for a draw and the post passes' compiles. The compile workers' compiles and pipelines are counted off it. `long_frames` lists every frame over 50 ms with the draw path's shader work inside it, and of that the FXC time of look mods and of post passes ([traces](../e2e/traces.md#performance-trace-rex_perf_trace_file)). The start-up's storage (`InitializeShaderStorage`) and hot reload are not counted.
+- `e2e.py --cold-cache` runs on empty caches (`cache_root` and the override cache in `<out>\cache`), `--cache-from` on a copy of an earlier run's, and `summary.json` splits the shader work by segment: `start` (the menus and loads), each phase, and `after_<phase>`. The `matrix.py` tier `cold` runs `career` on empty caches, then `photo` on the caches `career` left: the first two sessions of a fresh install, as in 19.2.1.
+- `compare.py` fails a cold candidate that compiled a look mod on the draw path or has a frame over 50 ms with one. With both sides cold, more translations, pipelines or cache loads over 4 ms, or more frames over 100 ms, only warn. The plan's FAIL on any piece over 4 ms became this WARN. Pipelines over 4 ms are part 5's subject (1.5), and in these cells their time follows the driver's own cache (below).
+
+**1.1, compiles off the render thread** (part 1 of 19.3.2).
+
+- `ShaderCompileQueue` ([shader_compile_queue.cpp](../../work/runtime/src/graphics/d3d12/shader_compile_queue.cpp)), behind `shader_override_async` (on by default). A mod that a draw meets and the cache does not hold compiles on one to four workers: a quarter of the logical processors, at below normal priority. `ShaderOverrides::Compile` hands over a job (the source, the defines with a contract entry's params in their knob slots, the DXBC for the signature check, the cache file) instead of running FXC, so classic mods and the contract's entries take the same path.
+- No variant is added. The plain look is the modded translation itself, which keeps the DXBC it was translated to until the swap. The plan drew with a plain modification. With the same translation there is no second translation or pipeline to create. The contract's `native_plain` and the A/B's `hlsl_override_disabled` stay what they were, and the pipeline storage keeps the mod's own description.
+- `PipelineCache::SwapCompiledMods` runs on the thread that creates pipelines: the replay before each submission with the draw back end, `EndSubmission` otherwise. It puts a compiled binary into its translation, so pipelines created from then on take the mod. The workers then recreate the pipelines that existed, ahead of the other compiles. Their states are exchanged at the next call, and the old ones are retired after their submission, as hot reload does.
+- The start-up's translations still compile before the title runs. Hot reload and `async_shader_compilation` keep the compile in place.
+
+The cold cells by segment: 1.0 (`n6c10`, the build of `1b34af0` on `6c2dfa0`), 1.1 (`n6c11`, `6a31bfa`) and the final 1.1 (`n6c12`, `9b13d63`, the code of `c5b7511`), and RTV's career on 1.0 (`n6cr10`, `3125cfa`, previous main's code) and 1.1 (`n6cr11`, `6a31bfa`), run before RTV left the gates on 27 October 2026 (`d2efb01`). Each cell has a row for the whole run, the menus and loads before its first phase, and the race; `photo` also has the way into photo mode after the race.
+
+| Cell | Segment | Mod compiles on the draw path | On the workers | Frames over 50, 100, 250 ms | Over 50 ms with a mod compile | Time in frames over 50 ms | Longest frame | Pipelines created in play (count, time, over 4 ms) |
+|---|---|---|---|---|---|---|---|---|
+| `n6c10-240-career` | run | 63, 23.7 s | 0, 0.0 s | 0, 0 ms | 23, 19, 13 | 15 | 27.0 s | 9,706 ms | 533, 2,030 ms, 177 |
+| `n6c10-240-career` | menus and the load | 62, 23.6 s | 0, 0.0 s | 0, 0 ms | 20, 17, 13 | 14 | 26.7 s | 9,706 ms | 488, 1,983 ms, 173 |
+| `n6c10-240-career` | race | 0, 0.0 s | 0, 0.0 s | 0, 0 ms | 0, 0, 0 | 0 | 0.0 s | 35 ms | 30, 22 ms, 2 |
+| `n6c11-240-career` | run | 0, 0.0 s | 62, 27.7 s | 81, 658 ms | 18, 9, 3 | 0 | 2.9 s | 710 ms | 531, 1,872 ms, 177 |
+| `n6c11-240-career` | menus and the load | 0, 0.0 s | 60, 26.9 s | 79, 644 ms | 17, 8, 3 | 0 | 2.8 s | 710 ms | 473, 1,805 ms, 171 |
+| `n6c11-240-career` | race | 0, 0.0 s | 1, 0.7 s | 1, 8 ms | 0, 0, 0 | 0 | 0.0 s | 19 ms | 38, 48 ms, 5 |
+| `n6c12-240-career` | run | 0, 0.0 s | 63, 26.7 s | 73, 798 ms | 17, 10, 3 | 0 | 3.2 s | 744 ms | 538, 1,960 ms, 184 |
+| `n6c12-240-career` | menus and the load | 0, 0.0 s | 60, 25.9 s | 70, 780 ms | 15, 9, 3 | 0 | 3.0 s | 744 ms | 473, 1,885 ms, 178 |
+| `n6c12-240-career` | race | 0, 0.0 s | 1, 0.7 s | 1, 9 ms | 0, 0, 0 | 0 | 0.0 s | 19 ms | 42, 47 ms, 4 |
+| `n6c10-240-photo` | run | 15, 4.8 s | 0, 0.0 s | 0, 0 ms | 20, 9, 8 | 6 | 7.3 s | 1,457 ms | 332, 567 ms, 44 |
+| `n6c10-240-photo` | menus and the load | 12, 3.8 s | 0, 0.0 s | 0, 0 ms | 11, 6, 5 | 4 | 5.6 s | 1,457 ms | 156, 483 ms, 38 |
+| `n6c10-240-photo` | race | 1, 0.7 s | 0, 0.0 s | 0, 0 ms | 1, 1, 1 | 1 | 0.7 s | 707 ms | 29, 47 ms, 3 |
+| `n6c10-240-photo` | after the race | 2, 0.3 s | 0, 0.0 s | 0, 0 ms | 6, 2, 2 | 1 | 0.9 s | 350 ms | 144, 34 ms, 3 |
+| `n6c11-240-photo` | run | 0, 0.0 s | 15, 6.2 s | 27, 142 ms | 17, 5, 2 | 0 | 2.3 s | 724 ms | 318, 507 ms, 46 |
+| `n6c11-240-photo` | menus and the load | 0, 0.0 s | 12, 4.8 s | 24, 117 ms | 11, 4, 1 | 0 | 1.7 s | 724 ms | 150, 429 ms, 38 |
+| `n6c11-240-photo` | race | 0, 0.0 s | 1, 0.9 s | 1, 16 ms | 0, 0, 0 | 0 | 0.0 s | 12 ms | 27, 39 ms, 5 |
+| `n6c11-240-photo` | after the race | 0, 0.0 s | 2, 0.4 s | 2, 9 ms | 4, 1, 1 | 0 | 0.5 s | 266 ms | 138, 37 ms, 3 |
+| `n6c12-240-photo` | run | 0, 0.0 s | 16, 9.2 s | 28, 267 ms | 16, 5, 2 | 0 | 2.2 s | 689 ms | 335, 607 ms, 51 |
+| `n6c12-240-photo` | menus and the load | 0, 0.0 s | 13, 7.3 s | 25, 207 ms | 12, 4, 1 | 0 | 1.7 s | 689 ms | 160, 525 ms, 44 |
+| `n6c12-240-photo` | race | 0, 0.0 s | 1, 1.6 s | 1, 19 ms | 0, 0, 0 | 0 | 0.0 s | 25 ms | 27, 46 ms, 4 |
+| `n6c12-240-photo` | after the race | 0, 0.0 s | 2, 0.3 s | 2, 41 ms | 2, 1, 1 | 0 | 0.4 s | 283 ms | 145, 35 ms, 3 |
+| `n6cr10-240-career` | run | 77, 28.3 s | 0, 0.0 s | 0, 0 ms | 23, 17, 12 | 16 | 31.4 s | 8,700 ms | 536, 785 ms, 30 |
+| `n6cr10-240-career` | menus and the load | 74, 27.8 s | 0, 0.0 s | 0, 0 ms | 19, 15, 11 | 13 | 30.6 s | 8,700 ms | 474, 722 ms, 27 |
+| `n6cr10-240-career` | race | 1, 0.4 s | 0, 0.0 s | 0, 0 ms | 1, 1, 1 | 1 | 0.5 s | 469 ms | 40, 40 ms, 2 |
+| `n6cr11-240-career` | run | 0, 0.0 s | 77, 38.6 s | 101, 142 ms | 12, 7, 1 | 0 | 2.0 s | 703 ms | 539, 391 ms, 8 |
+| `n6cr11-240-career` | menus and the load | 0, 0.0 s | 74, 37.9 s | 98, 139 ms | 11, 6, 1 | 0 | 1.8 s | 703 ms | 472, 328 ms, 5 |
+| `n6cr11-240-career` | race | 0, 0.0 s | 1, 0.6 s | 1, 1 ms | 0, 0, 0 | 0 | 0.0 s | 28 ms | 47, 42 ms, 2 |
+
+- **No compile is left on the draw path.** The first career compiled 63 mods there (23.7 s, the longest 2,475 ms), and 15 of its frames over 50 ms had one, the longest 9.7 s. With the final 1.1 the workers compile them and no frame has a compile. The frames over 50, 100 and 250 ms went from 23, 19 and 13 to 17, 10 and 3, and the time inside them from 27.0 to 3.2 s. The longest frame is the boot's first frame of 744 ms, which every run has, warm or cold. The new track's race frame of 707 ms (19.2.1's 716 ms) is gone: that race's longest frame is 25 ms, and the way into photo mode went from 350 to 283 ms.
+- **What is left** is the title's own frames (the boot's first frame of 710 to 745 ms in every run, warm or cold, and loading screens of about 100 ms) and the pipelines created in play. In `n6c12`'s career 538 pipelines took 2.0 s, 184 of them over 4 ms, and a second with 62 of them (577 ms) holds a frame of 432 ms. Their time follows the driver's cache. `n6k11` ran right after `n6c11`, on the same shaders with `native_shader_contract=true`, and created 536 pipelines in 226 ms, 2 of them over 4 ms (`n6k12` after `n6c12`: 530 in 427 ms). That is 19.3.6's cold-driver measurement, and part 5 (1.5) moves those creations ahead of the replay.
+- **The swap.** In `6a31bfa` the replay recreated the existing pipelines itself, about 1 ms of creation a call: 81 in 658 ms in `n6c11`'s career, up to 59 ms each. In `n6k11` one took 619 ms and held a frame of 588 ms in the load. `9b13d63` moved the recreation to the workers, so the replay only exchanges states: in `n6c12`'s career the workers recreated 73 pipelines in 798 ms, up to 63 ms each, off the draw path.
+- **The game's look, and for how long.** The mods queued in a load wait in bursts: 3 to 4 s with up to 17 pending at 1x, and 6 s with up to 25 at 2x in the race's load. The workers' compiles take a median of 167 ms and at most 3.3 s at below normal priority (FXC on the render thread: at most 2.5 s). The contract's entry `E62CFDF09D758B6C` (the glass, with its params) compiled on a worker in 553 ms in `n6k11`.
+- **Translations** (19.3.6): the vertex shaders' DXBC translations in play are not stalls, 138 in 8 to 9 ms in the first career with the longest 0.5 ms. The pixel shaders' are 230 in 19 ms with the longest 0.4 ms. The post passes' 25 compiles (0.87 s) run before the title's first frame.
+
+**The game's look in 1:1 crops at 2x** (the owner's decision 2 of 19.10). The race scenario at 2x with the AI driver ran on empty caches and on the BuildRoot's, on `6a31bfa`, with captures every 2.1 s (`D:\FM4-n6
+uns
+6x11-race-cold2x` and `-warm2x`, crops in `D:\FM4-n6\crops`).
+
+- Capture 36 is the intro's shot behind the Abarth in both runs. In the cold run, five mods were still compiling at that moment (the two cockpit interiors, the scene's motion blur, the chrome rims and one more), and the pipelines of those finished in the second before were still being recreated. The car paint and the chrome trim had been swapped in 0.5 and 1.1 s before. Beside the warm run, the cold crop of the car's rear shows the badges and the exhaust tips lighter; the paint, the lights and the rest of the frame match.
+- Capture 38, two seconds later, is the countdown in the cockpit. Every mod had been swapped in, and the dashboard, its gauges and the car ahead match the warm run.
+
+**Close gate** (`I:\FM4-build-usa`, 240 Hz and 1x unless noted, the look `aces`; the owner's gate policy of 27 October 2026, `d2efb01`: native baselines on the previous main, `-Rov`'s proof the 1x freeze parity, RTV out of the gates). The baseline `n6b10` is `3125cfa`, the code of the previous main `b09759f` (1.0 on the shader contract's increment 1). The candidates are `n6c11` (`6a31bfa`) and the final `n6c12` (`9b13d63`). The final commit changes only where the swap recreates pipelines, which a warm cache never reaches.
+
+| Check | Result |
+|---|---|
+| Cold tier, final (`n6c12` against `n6c10`) | `career`: no compile on the draw path, no frame over 50 ms with one, the race's p99 5.16 against 6.02 ms; `compare.py`'s FAIL is the whole run's p99 (33.24 against 16.99 ms), which one 30 fps menu window among about 100 decides (`n6c11` on the same code read 17.15 ms), so the cell passes by the per-phase rule. `photo`: WARN on capture statistics and on pipelines over 4 ms (44 to 51) |
+| Contract cell, final (`n6k12` against `n6k11`) | the entry `E62CFDF09D758B6C` compiled on a worker, 88 pipelines recreated there in 71 ms, the longest frame the boot's 695 ms; WARN on pipelines over 4 ms (2 to 12) |
+| Smoke, native (`n6s12` and `n6s11` against `n6s10`) | 3 of 3 each. `career` and `photo_view` PASS; `photo` WARN on the whole run's waits and on capture statistics. Races 235.7 to 237.4 fps against 236.5 to 238.8, p99 5.0 to 5.5 ms on both sides |
+| Perf, native, three runs (`n6p11` against `n6p10`) | the race 239.0 against 238.5 fps, p99 4.88 against 4.86 ms, GPU 2.19 against 2.21 ms a frame; photo mode 29.95 fps on both; no shader work in play on either side and the same frames over 50, 100 and 250 ms (10, 4 and 2); WARN on capture statistics |
+| Freeze parity, native, 2x (`n6z12` against `n6z10`) | PASS, draws −0.0% and +0.7%. `n6z11`'s second run timed out reading the rewind menu that its capture shows (an OCR miss); its first run passes against both baseline runs |
+| Freeze parity, native, 1x (`n6y11` against `n6y10`) | PASS, draws −0.6% and 0.0% |
+| `-Rov`, freeze parity at 1x (`n6v12` against `n6v10`) | PASS, draws −0.0% and +0.1%; `-Rov` creates no shader overrides (no such line in its log) |
+| `-Rov` and RTV smokes with `original,taa=0` (`n6o11` against `n6o10`, `n6r11` against `n6r10`, run before `d2efb01`) | 3 of 3 each; `career` PASS on both; `photo` WARN, its race fps following the AI race's draws (RTV 2,053 against 3,248 draws a frame) |
+| Error keys | the same three as main in every cell |
+| Tests | `test_e2e_tools.py` (44) and `test_pipeline.py` (28) pass; the builds' shader mod, post pass and shader contract tests pass. `launcher_tests` is not touched |
+
+Not covered: the ROG Xbox Ally X (an export ships the build computer's cache, so its first sessions need an export without one), 60 and 120 Hz, and a cold driver cache on purpose (19.3.6).
 
 ### 19.4 Item 2: direct D3D12 draws
 

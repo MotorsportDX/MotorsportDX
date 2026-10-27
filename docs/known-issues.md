@@ -52,8 +52,11 @@ above.
   the game's D-PAD STEERING and mouse steering are untested.
 - **The first press in some menus is ignored** by the game after several screens open; press
   again.
-- **Short pauses on the first visit to a track or screen** while shaders compile. They go
-  away on later visits (the shader cache).
+- **The game's own look for a moment on the first visit to a track or screen**: the look's
+  shaders compile in the background, and until each is ready (usually within a few seconds of a
+  load) some surfaces, or the whole picture, show the game's original colours. Short pauses
+  can still come in the loads while new graphics states are created. Both go away on later
+  visits (the shader cache).
 - **Sun glare** looks different from the Xbox and between quality settings; this is a known
   limit of the emulated GPU, and the default look evens it out.
 - **16-car races at the Low and Medium race quality** (and `xbox`, Medium's earlier name) use
