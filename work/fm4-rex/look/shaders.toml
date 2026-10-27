@@ -18,9 +18,111 @@ min_viewport_width = 1024
 name = "mirror"  # the rear-view mirror
 depth_base = 80
 
-# The car windows of shaders_v16 (fm4_glass in fm4-car.hlsli): about half of their draws are
-# in the rear-view mirror. Their knobs are constants, so shader_mod_set changes them at once.
+# The car materials of shaders_v16 that races draw into the rear-view mirror as well as the
+# scene (fm4-car.hlsli, fm4-paint.hlsli): on the native path most of their draws are in the
+# mirror (the draw list of 27 October 2026, docs/analysis/shader-contract.md 6). Their knobs
+# are constants, so shader_mod_set changes them at once, and the mirror knobs
+# (FM4_LOOK_MIRROR_ROUGHNESS, FM4_LOOK_MIRROR_FLAKES) apply to their draws in the mirror.
+
+# The car windows (fm4_glass).
 [[pixel]]
 hash = "E62CFDF09D758B6C"
 hooks = "shader_E62CFDF09D758B6C.mod.hlsli"
-params = ["FM4_LOOK_GLASS", "FM4_LOOK_GLASS_ROUGHNESS", "FM4_LOOK_CLEARCOAT_GLINT"]
+params = [
+  "FM4_LOOK_GLASS",
+  "FM4_LOOK_GLASS_ROUGHNESS",
+  "FM4_LOOK_CLEARCOAT_GLINT",
+  "FM4_LOOK_MIRROR_ROUGHNESS",
+]
+
+# The lamp covers with CubeScale (fm4_glass).
+[[pixel]]
+hash = "00AF2783DCAB9C75"
+hooks = "shader_00AF2783DCAB9C75.mod.hlsli"
+params = [
+  "FM4_LOOK_GLASS",
+  "FM4_LOOK_GLASS_ROUGHNESS",
+  "FM4_LOOK_CLEARCOAT_GLINT",
+  "FM4_LOOK_MIRROR_ROUGHNESS",
+]
+
+# The lamp covers without it (fm4_glass).
+[[pixel]]
+hash = "AD10B610621DEFE5"
+hooks = "shader_AD10B610621DEFE5.mod.hlsli"
+params = [
+  "FM4_LOOK_GLASS",
+  "FM4_LOOK_GLASS_ROUGHNESS",
+  "FM4_LOOK_CLEARCOAT_GLINT",
+  "FM4_LOOK_MIRROR_ROUGHNESS",
+]
+
+# The body paint (fm4_body_paint_env_cube in fm4-paint.hlsli: the clear coat and the
+# flakes).
+[[pixel]]
+hash = "B85EF04779ABD438"
+hooks = "shader_B85EF04779ABD438.mod.hlsli"
+params = [
+  "FM4_LOOK_CLEARCOAT",
+  "FM4_LOOK_CLEARCOAT_ROUGHNESS",
+  "FM4_LOOK_CLEARCOAT_GLINT",
+  "FM4_LOOK_FLAKES",
+  "FM4_LOOK_FLAKE_SCALE",
+  "FM4_LOOK_MIRROR_ROUGHNESS",
+  "FM4_LOOK_MIRROR_FLAKES",
+]
+
+# The chrome trim (fm4_chrome).
+[[pixel]]
+hash = "AF6AA26032BC613D"
+hooks = "shader_AF6AA26032BC613D.mod.hlsli"
+params = [
+  "FM4_LOOK_CHROME",
+  "FM4_LOOK_CHROME_ROUGHNESS",
+  "FM4_LOOK_CLEARCOAT_GLINT",
+  "FM4_LOOK_MIRROR_ROUGHNESS",
+]
+
+# The chrome rims (fm4_chrome).
+[[pixel]]
+hash = "F8CDBAFAD23FD784"
+hooks = "shader_F8CDBAFAD23FD784.mod.hlsli"
+params = [
+  "FM4_LOOK_CHROME",
+  "FM4_LOOK_CHROME_ROUGHNESS",
+  "FM4_LOOK_CLEARCOAT_GLINT",
+  "FM4_LOOK_MIRROR_ROUGHNESS",
+]
+
+# The rims with CubeScale and PaintScale (fm4_rims).
+[[pixel]]
+hash = "36DFBBD4669AF5E9"
+hooks = "shader_36DFBBD4669AF5E9.mod.hlsli"
+params = [
+  "FM4_LOOK_RIMS",
+  "FM4_LOOK_RIMS_ROUGHNESS",
+  "FM4_LOOK_CLEARCOAT_GLINT",
+  "FM4_LOOK_MIRROR_ROUGHNESS",
+]
+
+# The rims with PaintScale (fm4_rims).
+[[pixel]]
+hash = "75B334519A1568F6"
+hooks = "shader_75B334519A1568F6.mod.hlsli"
+params = [
+  "FM4_LOOK_RIMS",
+  "FM4_LOOK_RIMS_ROUGHNESS",
+  "FM4_LOOK_CLEARCOAT_GLINT",
+  "FM4_LOOK_MIRROR_ROUGHNESS",
+]
+
+# The rims without them (fm4_rims).
+[[pixel]]
+hash = "0412EE51F7B00389"
+hooks = "shader_0412EE51F7B00389.mod.hlsli"
+params = [
+  "FM4_LOOK_RIMS",
+  "FM4_LOOK_RIMS_ROUGHNESS",
+  "FM4_LOOK_CLEARCOAT_GLINT",
+  "FM4_LOOK_MIRROR_ROUGHNESS",
+]

@@ -290,7 +290,7 @@ float3 fm4_road_sheen(FM4RoadView view, float3 to_sun, float3 sun) {
   float n_dot_v = max(dot(view.n, view.v), 1.0e-4);
   float n_dot_l = saturate(dot(view.n, l));
   float n_dot_h = saturate(dot(view.n, h));
-  float r = max(FM4_LOOK_ROAD_ROUGHNESS, 0.02);
+  float r = max(fm4_pass_roughness(FM4_LOOK_ROAD_ROUGHNESS), 0.02);
   float a2 = r * r * r * r;
   float denominator = n_dot_h * n_dot_h * (a2 - 1.0) + 1.0;
   float distribution = a2 / (FM4_PI * denominator * denominator);

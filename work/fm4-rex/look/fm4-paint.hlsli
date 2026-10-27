@@ -10,6 +10,14 @@
 //                                        highlights of fm4-car.hlsli)
 //   FM4_LOOK_FLAKES               0...1  metallic flakes under the clear coat (0: none)
 //   FM4_LOOK_FLAKE_SCALE          > 0    flake cells per unit of the paint's texture UV
+//   FM4_LOOK_MIRROR_ROUGHNESS     >= 0   in the rear-view mirror, the least roughness of the
+//                                        sun highlights of the clear coat, glass, chrome,
+//                                        rims and the road's sheen (0: as in the scene)
+//   FM4_LOOK_MIRROR_FLAKES        0...1  the flakes in the rear-view mirror (1: as in the
+//                                        scene, 0: none)
+// The mirror knobs apply on the native path with the shader contract
+// (shaders.toml, docs/analysis/shader-contract.md), whose entries know the pass
+// of their draw; the classic mods and RTV draw the mirror as the scene.
 //
 // The game lights car paint with a Phong highlight, pow(R.L), and a Fresnel
 // weighted environment reflection. The clear coat adds what a lacquer layer
@@ -32,8 +40,37 @@
 #ifndef FM4_LOOK_FLAKE_SCALE
 #define FM4_LOOK_FLAKE_SCALE 1200.0
 #endif
+#ifndef FM4_LOOK_MIRROR_ROUGHNESS
+#define FM4_LOOK_MIRROR_ROUGHNESS 0.0
+#endif
+#ifndef FM4_LOOK_MIRROR_FLAKES
+#define FM4_LOOK_MIRROR_FLAKES 1.0
+#endif
 
 static const float FM4_PI = 3.14159265;
+
+// Whether the draw is in the rear-view mirror: the pass class of a shader
+// contract entry's draw (the manifest's mirror pass). Without the contract
+// false, so the mirror knobs fold away.
+bool fm4_mirror_pass() {
+#if defined(XE_NATIVE_CONTRACT) && defined(XE_NATIVE_PASS_MIRROR)
+  return xe_native_pass() == XE_NATIVE_PASS_MIRROR;
+#else
+  return false;
+#endif
+}
+
+// A sun highlight's roughness in the draw's pass. The mirror's pixels each
+// cover about three times the scene's (384 guest pixels wide against 1280), so
+// a sharp highlight there can fall between pixels from frame to frame.
+float fm4_pass_roughness(float roughness) {
+  return fm4_mirror_pass() ? max(roughness, FM4_LOOK_MIRROR_ROUGHNESS) : roughness;
+}
+
+// The flakes' share in the draw's pass.
+float fm4_pass_flakes() {
+  return fm4_mirror_pass() ? saturate(FM4_LOOK_MIRROR_FLAKES) : 1.0;
+}
 
 // Height correlated Smith visibility for GGX (divided by 4 N.L N.V).
 float fm4_ggx_visibility(float n_dot_v, float n_dot_l, float a2) {
@@ -175,7 +212,7 @@ void fm4_clearcoat(inout XePixel p, float3 normal, float3 position, float3 eye,
   float n_dot_v = max(dot(n, v), 1.0e-4);
   float n_dot_l = saturate(dot(n, l));
   float n_dot_h = saturate(dot(n, h));
-  float roughness = max(FM4_LOOK_CLEARCOAT_ROUGHNESS, 0.02);
+  float roughness = max(fm4_pass_roughness(FM4_LOOK_CLEARCOAT_ROUGHNESS), 0.02);
   float a2 = roughness * roughness * roughness * roughness;
   float denominator = n_dot_h * n_dot_h * (a2 - 1.0) + 1.0;
   float distribution = a2 / (FM4_PI * denominator * denominator);
@@ -186,7 +223,9 @@ void fm4_clearcoat(inout XePixel p, float3 normal, float3 position, float3 eye,
                 n_dot_l;
   glint *= saturate(FM4_LOOK_CLEARCOAT);
   // Flakes under the coat, tinted towards the paint color (the light the coat lets through).
-  float flakes = FM4_LOOK_FLAKES > 0.0 ? fm4_flakes(n, v, l, uv) * saturate(FM4_LOOK_FLAKES) : 0.0;
+  float flakes = FM4_LOOK_FLAKES > 0.0
+                     ? fm4_flakes(n, v, l, uv) * saturate(FM4_LOOK_FLAKES) * fm4_pass_flakes()
+                     : 0.0;
   float3 tint = paint / max(max(paint.r, max(paint.g, paint.b)), 1.0e-3);
   float3 flake_color = lerp(float3(1.0, 1.0, 1.0), saturate(tint), 0.6) * (1.0 - fresnel_sun);
   // Soft limit: the core stays sharp, the energy that bloom spreads does not run away.
