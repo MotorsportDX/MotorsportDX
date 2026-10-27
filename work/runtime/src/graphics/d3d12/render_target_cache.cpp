@@ -6919,6 +6919,8 @@ void D3D12RenderTargetCache::PollGuestLayoutCheck(const HostResolveCheck& check,
   };
   const bool ten_bits = (check.layout_class & 1) != 0;
   uint64_t changed = 0, bytes = 0;
+  // Color channels more than one step below and above the render target's.
+  uint64_t below = 0, above = 0;
   uint32_t max_step = 0;
   std::string examples;
   for (uint64_t i = 0; i < (check.length >> 2); ++i) {
@@ -6936,6 +6938,10 @@ void D3D12RenderTargetCache::PollGuestLayoutCheck(const HostResolveCheck& check,
       const int32_t a = int32_t((texture_word >> shift) & mask);
       const int32_t b = int32_t((target_word >> shift) & mask);
       max_step = std::max(max_step, uint32_t(std::abs(a - b)));
+      if (channel < 3) {
+        below += a < b - 1 ? 1 : 0;
+        above += a > b + 1 ? 1 : 0;
+      }
     }
     if (changed <= 4) {
       examples += fmt::format(" +{:X}:{:08X}/{:08X}", i << 2, from_texture[i], from_target[i]);
@@ -6950,6 +6956,17 @@ void D3D12RenderTargetCache::PollGuestLayoutCheck(const HostResolveCheck& check,
         "Guest layout from the texture differs from the render target's: {:08X} class {}, {} "
         "words, largest step {} (from the texture/from the render target:{})",
         check.dest, check.layout_class, changed, max_step, examples);
+  } else if (changed) {
+    // The box's differences by sign: a texture clamped to the destination's
+    // range before the mean is below the render target's clamped after it.
+    static uint32_t logged = 0;
+    if (logged < 8) {
+      ++logged;
+      REXGPU_INFO(
+          "Guest layout box from the texture: {:08X} class {}, {} words changed, {} color "
+          "channels more than one step below the render target's and {} above, largest step {}",
+          check.dest, check.layout_class, changed, below, above, max_step);
+    }
   }
 }
 
