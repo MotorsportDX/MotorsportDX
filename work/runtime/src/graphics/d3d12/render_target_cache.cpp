@@ -6956,8 +6956,8 @@ void D3D12RenderTargetCache::PollGuestLayoutCheck(const HostResolveCheck& check,
         "Guest layout from the texture differs from the render target's: {:08X} class {}, {} "
         "words, largest step {} (from the texture/from the render target:{})",
         check.dest, check.layout_class, changed, max_step, examples);
-  } else if (max_step > 1) {
-    // The box's differences beyond rounding, by sign: a texture clamped to the destination's
+  } else if (max_step > 64) {
+    // The box's large differences, by sign: a texture clamped to the destination's
     // range before the mean is below the render target's clamped after it.
     static uint32_t logged = 0;
     if (logged < 8) {
