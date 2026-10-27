@@ -262,8 +262,9 @@ class D3D12TextureCache final : public TextureCache {
                                   size_t index);
   void EndPoisonedResolveTextureWrite(const ResolveTextureTarget& target,
                                       ResolveTextureSkip skip);
-  // Before a partial write: a write skipped earlier is copied from the
-  // sibling, so the rows the write leaves hold the earlier resolve's data.
+  // Before a partial resolve writes any of its textures: a write skipped
+  // earlier is copied from the sibling, so the rows the write leaves hold the
+  // earlier resolve's data.
   void PrepareResolveTextureWrite(const ResolveTextureTarget& target) {
     ApplySkippedResolveWrite(*static_cast<D3D12Texture*>(target.texture));
   }

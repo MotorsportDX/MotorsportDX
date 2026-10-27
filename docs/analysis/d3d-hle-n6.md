@@ -390,6 +390,65 @@ The runs used the build of `f99cf19` on `I:\FM4-build-usa`. Each was one `race` 
 
 A skipped or deferred write must not change the image. The gate of (a) and of (b) is freeze parity at 3/2, 1x and 2x against the previous local main with byte-identical captures, and 1:1 crops at 3/2, beside the step gate. The full `-Rov` smoke is needed only if the shared resolve code changes for every path rather than behind the native path's switches.
 
+#### 19.7.4 Step (a): cheaper host texture writes, 27 October 2026
+
+**Sizing.** The perf trace's `gpu.resolve_host_writes` ([traces](../e2e/traces.md#performance-trace-rex_perf_trace_file)) times every host texture write of a resolve by class: at the scene's scale or at the whole scale, and whether anything sampled the texture since its last write (a guest draw's binding, the swap or a post pass). A race frame at 3/2 (the build of `e568a04`, the runs of 19.7.3) writes:
+
+| Host texture writes a frame at 3/2 | Count | GPU ms |
+|---|---|---|
+| At the scene's scale, sampled since their last write | 5 | 0.259 |
+| At the scene's scale, nothing sampled them since their last write | 3 | 0.081 |
+| At the whole scale (the post chain's private surfaces), sampled | 13 | 0.094 |
+| At the whole scale, nothing sampled them | 0 | 0 |
+
+The bound was about 0.13 ms a frame: the three unsampled writes at the scene's scale, and about 0.05 ms for the 13 at the whole scale net of the loads that replace them. That is above 19.7.3's bar of 0.1 ms, so (a) was built.
+
+**The small resolves.** Of the about 20 smaller resolves of a race frame at 3/2 (19.7.3's "other resolves"):
+
+- 13 come from private surfaces at the whole scale: the post chain's bloom and glare targets in `2_10_10_10`, from 320x192 down to 32x32, and a 32x32 `32_FLOAT` target. With bit 32 each had a host texture write, 0.094 ms for the 13 (a dispatch with its barriers and descriptors for a few kilobytes), more than the loads that replace them. (a) applies to them: bit 1 below leaves them to their loads.
+- The others are resolves without host texture writes, about 0.09 ms in all: the shadow maps (512x512), a 256x256 blur, an `8_8` mip chain and 64x64 faces. (a) does not apply to them. They write the guest's layout and are loaded back from it, so they are (b)'s and (c)'s question.
+
+**Design.** `native_rt_resolve_skip` (default 3, [experiments](../e2e/experiments.md)) leaves out host texture writes of the resolves from private surfaces:
+
+- **Bit 1**, the textures at the whole scale. The resolve leaves them outdated, as without bit 32, and their next use loads them from the guest's layout, which the resolve still writes.
+- **Bit 2**, the textures at the scene's scale that nothing sampled since their last write, when their `packed_mips` sibling holds the resolve's data: a sibling that the same resolve wrote before them, or one it writes after them. Some resolves have textures under both keys of the same range, with and without packed mips, and in the race only one key of each pair is sampled. The skipped texture is marked loaded with the skip recorded. When something samples it, it is copied from the sibling (one `CopyResource`, the same size and format) if the sibling still holds that resolve's data. The keys skipped in the race, three a frame, are the packed-mips keys of 1280x720 resolves in the guest's terms: the `2_10_10_10` scene targets at `1B479000`, `1B0E1000` and `1B811000`, and the scene depth's resolve at `1C0C1000` as `8_8_8_8` and as `24_8_FLOAT`. A partial resolve writes all its textures at the scene's scale, and first copies the writes skipped earlier from their siblings, before it writes any of them, so the rows it leaves hold the earlier resolve's data.
+- **Bit 4**, the check. A skipped texture gets wrong bytes (its write with the endianness flipped) instead of keeping its old content, so its load or copy must replace them, and a use the skip misses shows in the image.
+- **Bit 8**, the perturbation. The skipped textures at the whole scale are marked loaded, so they keep what they held; at the scene's scale the sampled textures are skipped instead and the copy is dropped.
+- `native_rt_resolve_skip_ab_ms` turns the skips off in every other period of the steady clock, so one frozen scene compares both on one binary (`override_ab.py --phase freeze`, [experiments](../e2e/experiments.md)).
+
+Only the native path writes host textures from resolves (bit 32), so `-Rov` and the PM4 RTV path do not change. The first build (`693afc8`) skipped no texture for a sibling: it took a sibling that the same resolve had just written for a skipped one, since a write marks its texture unsampled. `8caf655` asks whether the resolve wrote the sibling.
+
+**The image.** The in-run A/B on the build of `8caf655`: the `freeze` scenario (the rewind freeze at the start of a Quick Race, the occlusion pinned) with `-Look "original,taa=0"`, `native_rt_surfaces=122`, `native_rt_resolve_skip=7` (the skips with the check) and `native_rt_resolve_skip_ab_ms=2000`. Every pair of frozen captures at least 100 ms from a phase change, byte compared (`override_ab.py --phase freeze` compares the consecutive ones):
+
+| Run | Scale | On/off pairs byte-identical | Same-phase pairs byte-identical |
+|---|---|---|---|
+| `n6a4-ab32o` | 3/2 | 12 of 12 | 9 of 9 |
+| `n6a4-ab1x` | 1x (`native_draw_scale_variant`, as the launchers' logical sizes) | 25 of 25 | 20 of 20 |
+| `n6a4-ab2x` | 2x (the same) | 15 of 15 | 13 of 13 |
+| `n6a4-pt32o`, the perturbation (`native_rt_resolve_skip=15`) | 3/2 | 0 of 9: 6.21 million of 6.22 million bytes differ | |
+
+The counters (`native_rt_resolve`) agree: in the race at 3/2 (`n6a4-32`), a median window of 240 frames has 3,120 `skips_load` and 720 `skips_sibling` (13 and 3 a frame), no copy back (`fallbacks` 0), no `fallbacks_missing` and no `mismatches`. Over whole runs the copies back happen outside the race (241 in `n6a4-ab32o`, 1,036 in the race run `n6a4-32`), `fallbacks_missing` stays 0 and the perturbation counts 10,751. `misses` is 11 a run, as on the previous main (`n6m-32`).
+
+The look `pc` is not byte-stable in the freeze without any skip, so it cannot prove identity. With `adaptation=0`, the control without skips (`native_rt_resolve_skip=0`) differs by 59,320 to 84,089 bytes (one step of 255) between captures. With the skips and a period of 6 s, which separates the phases from the captures' 2.06 s rhythm, same-phase pairs differ by 39,448 to 64,821 bytes and on/off pairs by 78 to 64,110: the look's own noise, not the skip.
+
+**Against the previous main** (snapshot `n6m`, the build of `f99cf19`). Two runs never freeze the same moment, so the byte identity is shown in-run above, and the cross-build gates catch a broken frame:
+
+- The `parity` tier at 3/2 (`n6a4p32` against `n6mp32`): PASS in both runs, 2,233 against 2,236 draws a frame, the frozen frames differing in 23.9 and 31.6% of the pixels above 4 of 255, within the freeze's run-to-run variance ([frozen frames](../e2e/frozen-frames.md)). `-Rov` at 1x (`n6a4rov` against `n6mrov`): PASS, 30.1 and 31.8%.
+- The `smoke` tier at 3/2 (`n6a4s32` against `n6ms32`), and again with the check (`native_rt_resolve_skip=7`, `n6a4c32`): every scenario reached its goal. `photo` failed on a new error, twice in each run as photo mode started: `Resolve texture write skipped, but its sibling no longer holds the data` for the scene depth's two packed-mips keys. A partial resolve wrote the sibling before the skipped texture's copy, so the copy found the sibling holding the new resolve's data and the skipped texture kept older rows outside the band. The fix: a partial resolve copies all the skipped writes before it writes any texture. The `career` cell failed on its replay's rate in one run (119.35 to 100.39 fps, with the replay's GPU frame unchanged at 4.60 and 4.58 ms); the check run on the same binary passed it (116.58 fps). `photo_view` warned on the capture's luma, which races do not keep.
+
+**The saving.** Three race runs at 3/2 and 240 Hz with the skips off (`native_rt_resolve_skip=0`, `n6a4-off32`) and three with the default (`n6a4-on32`), on the same binary, medians over the race phase's windows:
+
+| ms of GPU a frame | Skips off (3 runs) | Skips on (3 runs) | Change (median) |
+|---|---|---|---|
+| GPU frame | 3.601, 3.629, 3.660 | 3.278, 3.294, 3.304 | -0.335 (-9.2%) |
+| Resolves | 0.849, 0.853, 0.877 | 0.605, 0.606, 0.606 | -0.247 |
+| of which the host texture writes | 0.440 (21 a frame) | 0.259 (5 a frame) | -0.181 |
+| of which the smaller resolves | 0.296 to 0.314 | 0.147 to 0.148 | -0.149 |
+| Texture loads | 0.075 to 0.077 | 0.110 to 0.111 | +0.035 |
+| Race rate (fps, cap 240) | 231.0, 232.7, 234.0 | 236.5, 236.8, 236.7 | +4.1 |
+
+Against the bound of about 0.13 ms, the resolves and loads together save 0.21 ms a frame and the GPU frame 0.34 ms. The timed parts counted only the writes' dispatches; each write also took its barriers (the render target to a shader resource and the texture to unordered access), which the smaller resolves' times and the frame hold. The scene's three full-screen resolves are unchanged: the guest's layout (0.13 ms) and the five sampled writes (0.26 ms) stay for (b).
+
 ### 19.8 The proposed order
 
 The owner's order is stutter first, then CPU headroom on the ROG Xbox Ally X. The Ally X waits for its GPU in every mode (17.21, 17.25), so CPU time it saves reaches the frame only through the shared power budget (1 to 3%), while the resolves of 19.7.1 hold 19 to 28% of its GPU frame. The proposal therefore puts the resolves second, as the Ally X's headroom, and the CPU items after them:

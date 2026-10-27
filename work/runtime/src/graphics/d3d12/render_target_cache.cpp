@@ -7032,6 +7032,14 @@ void D3D12RenderTargetCache::ResolveHostIntoTextures(
   ID3D12Device* device = provider.GetDevice();
   DeferredCommandList& command_list = command_processor_.GetDeferredCommandList();
   auto& render_target = *static_cast<D3D12RenderTarget*>(source.render_target);
+  // A partial write keeps the rows it leaves, so the writes skipped earlier are
+  // copied from their siblings before this resolve writes any of them (it may
+  // write the sibling first).
+  if (band && !check) {
+    for (size_t i = 0; i < target_count; ++i) {
+      texture_cache.PrepareResolveTextureWrite(targets[i]);
+    }
+  }
   for (size_t i = 0; i < target_count; ++i) {
     const D3D12TextureCache::ResolveTextureTarget& target = targets[i];
     // native_rt_resolve_skip (d3d-hle-n6.md 19.7.4): a write that the
@@ -7044,9 +7052,6 @@ void D3D12RenderTargetCache::ResolveHostIntoTextures(
           !D3D12TextureCache::IsResolveTextureSkipPoisoned()) {
         texture_cache.SkipResolveTextureWrite(target, skip);
         continue;
-      }
-      if (band) {
-        texture_cache.PrepareResolveTextureWrite(target);
       }
     }
     const bool poisoned = skip != D3D12TextureCache::ResolveTextureSkip::kWrite;
