@@ -7050,6 +7050,10 @@ void D3D12RenderTargetCache::ResolveHostIntoTextures(
       }
     }
     const bool poisoned = skip != D3D12TextureCache::ResolveTextureSkip::kWrite;
+    if (!poisoned && !check && target.scene_scaled &&
+        texture_cache.IsResolveTextureTargetUnsampled(target)) {
+      texture_cache.LogUnsampledResolveTexture(targets, target_count, i);
+    }
     ID3D12Resource* dest = target.resource;
     if (check) {
       const uint64_t scratch_key = (uint64_t(resolve_info.copy_dest_base) << 32) |

@@ -67,8 +67,9 @@ REXCVAR_DEFINE_INT32(native_rt_resolve_skip, 3, "GPU/D3D12",
                      "scene's scale that nothing sampled since their last write and whose "
                      "packed_mips sibling is written, copied from it when something samples them; "
                      "bit 4, the check: skipped textures get wrong bytes instead, which their "
-                     "load or the sibling's copy replaces; bit 8, its perturbation: the textures "
-                     "that something samples are skipped instead, and the copy is dropped")
+                     "load or the sibling's copy replaces; bit 8, its perturbation: the skipped "
+                     "textures at the whole scale are marked loaded, and at the scene's scale the "
+                     "textures that something samples are skipped instead and the copy dropped")
     .range(0, 15);
 REXCVAR_DEFINE_INT32(native_rt_resolve_skip_ab_ms, 0, "GPU/D3D12",
                      "No native_rt_resolve_skip in every other period of this many milliseconds "
@@ -1830,7 +1831,11 @@ void D3D12TextureCache::SkipResolveTextureWrite(const ResolveTextureTarget& targ
   auto& texture = *static_cast<D3D12Texture*>(target.texture);
   if (skip == ResolveTextureSkip::kLoad) {
     // The resolve left it outdated (MarkRangeAsResolved): its next use loads
-    // it.
+    // it. The perturbation (bit 8) marks it loaded, so it keeps what it held.
+    if (REXCVAR_GET(native_rt_resolve_skip) & 8) {
+      MarkTextureLoaded(texture);
+      texture.MarkAsUsed();
+    }
     perf_trace::CountResolveTextureSkip(false);
     return;
   }
@@ -1850,6 +1855,33 @@ void D3D12TextureCache::SkipResolveTextureWrite(const ResolveTextureTarget& targ
         key.base_page << 12, key.GetWidth(), key.GetHeight(), uint32_t(key.format),
         uint32_t(key.endianness), uint32_t(key.packed_mips), target.depth);
   }
+}
+
+void D3D12TextureCache::LogUnsampledResolveTexture(const ResolveTextureTarget* targets,
+                                                   size_t count, size_t index) {
+  const auto& texture = *static_cast<const D3D12Texture*>(targets[index].texture);
+  static std::vector<TextureKey> logged;
+  if (logged.size() >= 16 ||
+      std::find(logged.begin(), logged.end(), texture.key()) != logged.end()) {
+    return;
+  }
+  logged.push_back(texture.key());
+  TextureKey sibling_key = texture.key();
+  sibling_key.packed_mips ^= 1;
+  const char* sibling = "none";
+  for (size_t i = 0; i < count; ++i) {
+    const auto& other = *static_cast<const D3D12Texture*>(targets[i].texture);
+    if (i != index && other.key() == sibling_key) {
+      sibling = other.resolve_written_unsampled ? "unsampled" : "sampled";
+    }
+  }
+  const TextureKey& key = texture.key();
+  REXGPU_INFO(
+      "Resolve texture written unsampled: {:08X} {}x{} format {} endian {} packed_mips {} depth {} "
+      "scene_input {} of {} targets, sibling {}",
+      key.base_page << 12, key.GetWidth(), key.GetHeight(), uint32_t(key.format),
+      uint32_t(key.endianness), uint32_t(key.packed_mips), targets[index].depth,
+      uint32_t(key.scene_input), count, sibling);
 }
 
 bool D3D12TextureCache::IsResolveTextureSkipPoisoned() {

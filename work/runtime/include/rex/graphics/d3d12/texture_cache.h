@@ -256,6 +256,10 @@ class D3D12TextureCache final : public TextureCache {
   // wrong bytes (another endianness) instead, so a use that its load or its
   // sibling's copy does not cover shows in the image. The write is ended here.
   static bool IsResolveTextureSkipPoisoned();
+  // A texture at the scene's scale written while nothing sampled it since its
+  // last write: logged once per key with its sibling's state.
+  void LogUnsampledResolveTexture(const ResolveTextureTarget* targets, size_t count,
+                                  size_t index);
   void EndPoisonedResolveTextureWrite(const ResolveTextureTarget& target,
                                       ResolveTextureSkip skip);
   // Before a partial write: a write skipped earlier is copied from the
