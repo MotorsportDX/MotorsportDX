@@ -1578,8 +1578,16 @@ bool ShaderOverrides::TranslateEntry(D3D12Shader::D3D12Translation& translation)
                 shader.ucode_data_hash(), modification.value, count, reason);
     return false;
   };
+  // The generation counts as the pixel shader's translation in the shader
+  // work on the draw path (the compile or cache load counts in Compile).
+  const uint64_t translate_start = perf_trace::shader_work_for_draw ? perf_trace::ZoneStart() : 0;
   HlslShaderTranslator translator;
-  if (!translator.TranslateAnalyzedShader(translation)) {
+  bool generated = translator.TranslateAnalyzedShader(translation);
+  if (translate_start) {
+    perf_trace::AddShaderWork(perf_trace::ShaderWork::kPixelTranslation,
+                              perf_trace::Now() - translate_start);
+  }
+  if (!generated) {
     return fallback("no HLSL: an unsupported fetch");
   }
   auto& dxbc_shader = static_cast<D3D12Shader&>(shader);
