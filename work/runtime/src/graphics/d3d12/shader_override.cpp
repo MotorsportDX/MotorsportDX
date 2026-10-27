@@ -1635,19 +1635,20 @@ void ShaderOverrides::CheckBindings(const D3D12Shader::D3D12Translation& transla
   }
   ++checked_bindings_;
   if (!matches) {
+    ++checked_mismatches_;
     REXGPU_ERROR("Native shader contract check: {:016X} modification {:016X}: the bindings of the "
-                 "HLSL ({} textures, {} samplers) differ from the DXBC translation's ({}, {})",
+                 "HLSL differ from the DXBC translation's ({}; {} mismatches)",
                  shader.ucode_data_hash(), translation.modification(),
-                 translator.texture_bindings().size(), translator.sampler_bindings().size(),
-                 shader.GetTextureBindingsAfterTranslation().size(),
-                 shader.GetSamplerBindingsAfterTranslation().size());
+                 shader.DescribeBindingDifference(translator.texture_bindings(),
+                                                  translator.sampler_bindings()),
+                 checked_mismatches_);
   } else if (first) {
     REXGPU_INFO("Native shader contract check: pixel shader {:016X}: the bindings of its DXBC "
                 "translation ({} textures, {} samplers; {} shaders, {} translations compared, {} "
-                "without HLSL)",
+                "mismatches, {} without HLSL)",
                 shader.ucode_data_hash(), translator.texture_bindings().size(),
                 translator.sampler_bindings().size(), checked_shaders_.size(), checked_bindings_,
-                checked_without_hlsl_);
+                checked_mismatches_, checked_without_hlsl_);
   }
 }
 
@@ -1658,12 +1659,20 @@ void ShaderOverrides::CheckEntry(const D3D12Shader::D3D12Translation& translatio
   std::vector<SignatureElement> inputs, outputs;
   ExpectedPixelSignatures(shader, Modification(translation.modification()), inputs, outputs);
   std::string expected = CompareExpectedSignatures(inputs, outputs, dxbc);
+  if (!expected.empty()) {
+    expected = "the DXBC translation against the expected: " + expected;
+  }
+  // The DXBC translation's PostTranslation compared its bindings with those
+  // the entry stored, and counts a mismatch.
+  if (uint32_t binding_mismatches = shader.binding_mismatches()) {
+    expected += fmt::format("{}{} DXBC translations of the shader with other bindings",
+                            expected.empty() ? "" : "; ", binding_mismatches);
+  }
   uint32_t count = checked_entries_.fetch_add(1, std::memory_order_relaxed) + 1;
   if (!mismatch.empty() || !expected.empty()) {
     REXGPU_ERROR("Native shader contract check: entry {:016X} modification {:016X}: {}{}{}",
                  shader.ucode_data_hash(), translation.modification(), mismatch,
-                 mismatch.empty() || expected.empty() ? "" : "; ",
-                 expected.empty() ? "" : "the DXBC translation against the expected: " + expected);
+                 mismatch.empty() || expected.empty() ? "" : "; ", expected);
     return;
   }
   REXGPU_INFO("Native shader contract check: entry {:016X} modification {:016X} (check {}): the "

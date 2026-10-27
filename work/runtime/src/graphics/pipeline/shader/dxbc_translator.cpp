@@ -1304,10 +1304,12 @@ void DxbcShaderTranslator::PostTranslation() {
       binding.aniso_filter = translator_binding.aniso_filter;
     }
     if (!dxbc_shader->HasBindings(texture_bindings, sampler_bindings)) {
+      dxbc_shader->binding_mismatches_.fetch_add(1, std::memory_order_relaxed);
       REXGPU_ERROR(
           "Shader {:016X}: the bindings of modification {:016X} differ from those stored by an "
-          "earlier translation",
-          dxbc_shader->ucode_data_hash(), translation.modification());
+          "earlier translation ({})",
+          dxbc_shader->ucode_data_hash(), translation.modification(),
+          dxbc_shader->DescribeBindingDifference(texture_bindings, sampler_bindings));
     }
   }
   if (dxbc_shader &&

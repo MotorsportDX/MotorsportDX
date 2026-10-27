@@ -12,6 +12,7 @@
 #pragma once
 
 #include <atomic>
+#include <string>
 #include <vector>
 
 #include <rex/graphics/pipeline/shader/dxbc_translator.h>
@@ -77,6 +78,15 @@ class DxbcShader : public Shader {
   // Whether the stored bindings are these.
   bool HasBindings(const std::vector<TextureBinding>& texture_bindings,
                    const std::vector<SamplerBinding>& sampler_bindings) const;
+  // The first difference between these bindings and the stored ones, for a
+  // log line (empty if none).
+  std::string DescribeBindingDifference(const std::vector<TextureBinding>& texture_bindings,
+                                        const std::vector<SamplerBinding>& sampler_bindings) const;
+  // How many translations by DxbcShaderTranslator had other bindings than
+  // those stored by an earlier translation (its PostTranslation logs each).
+  uint32_t binding_mismatches() const {
+    return binding_mismatches_.load(std::memory_order_relaxed);
+  }
 
  protected:
   Translation* CreateTranslationInstance(uint64_t modification) override;
@@ -85,6 +95,7 @@ class DxbcShader : public Shader {
   friend class DxbcShaderTranslator;
 
   std::atomic_flag bindings_setup_entered_ = ATOMIC_FLAG_INIT;
+  std::atomic<uint32_t> binding_mismatches_{0};
   std::vector<TextureBinding> texture_bindings_;
   std::vector<SamplerBinding> sampler_bindings_;
   uint32_t used_texture_mask_ = 0;

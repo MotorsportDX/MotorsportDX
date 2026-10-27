@@ -160,8 +160,10 @@ DxbcShader::TextureBinding HlslShaderTranslator::FindOrAddTextureBinding(
   DxbcShader::TextureBinding binding;
   // As DxbcShader stores it: zeroed for a stable hash.
   std::memset(&binding, 0, sizeof(binding));
+  // As the DXBC translator assigns it: the count of the bindings with this one
+  // (it adds the binding before it counts), so the first binding has 1.
   binding.bindless_descriptor_index =
-      uint32_t(texture_bindings_.size() + sampler_bindings_.size());
+      uint32_t(texture_bindings_.size() + sampler_bindings_.size()) + 1;
   binding.fetch_constant = fetch_constant;
   binding.dimension = dimension;
   binding.is_signed = is_signed;
@@ -192,8 +194,9 @@ DxbcShader::SamplerBinding HlslShaderTranslator::FindOrAddSamplerBinding(
     return sampler_bindings_.back();
   }
   DxbcShader::SamplerBinding binding;
+  // The count with this one, as for the textures.
   binding.bindless_descriptor_index =
-      uint32_t(texture_bindings_.size() + sampler_bindings_.size());
+      uint32_t(texture_bindings_.size() + sampler_bindings_.size()) + 1;
   binding.fetch_constant = fetch_constant;
   binding.mag_filter = mag_filter;
   binding.min_filter = min_filter;

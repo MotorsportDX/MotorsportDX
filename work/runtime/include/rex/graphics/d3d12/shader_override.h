@@ -353,12 +353,14 @@ class ShaderOverrides {
   // native_shader_pass_debug: entries tint their colour by pass class.
   bool native_pass_debug_ = false;
   // native_shader_contract_check, and its counts: translations whose
-  // bindings were compared, the shaders among them (logged once each), those
-  // without HLSL (an unsupported fetch or memexport), the entries checked.
+  // bindings were compared, the shaders among them (logged once each), the
+  // translations whose bindings differ, those without HLSL (an unsupported
+  // fetch or memexport), the entries checked.
   bool check_ = false;
   std::mutex check_mutex_;
   std::unordered_set<uint64_t, rex::IdentityHasher<uint64_t>> checked_shaders_;
   uint32_t checked_bindings_ = 0;
+  uint32_t checked_mismatches_ = 0;
   uint32_t checked_without_hlsl_ = 0;
   std::atomic<uint32_t> checked_entries_{0};
   // Entries translated with the DXBC translator after all (TranslateEntry

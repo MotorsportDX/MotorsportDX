@@ -11,6 +11,8 @@
 
 #include <cstring>
 
+#include <fmt/format.h>
+
 #include <rex/graphics/pipeline/shader/dxbc.h>
 
 namespace rex::graphics {
@@ -64,6 +66,44 @@ bool DxbcShader::HasBindings(const std::vector<TextureBinding>& texture_bindings
     }
   }
   return true;
+}
+
+std::string DxbcShader::DescribeBindingDifference(
+    const std::vector<TextureBinding>& texture_bindings,
+    const std::vector<SamplerBinding>& sampler_bindings) const {
+  if (texture_bindings.size() != texture_bindings_.size() ||
+      sampler_bindings.size() != sampler_bindings_.size()) {
+    return fmt::format("{} textures and {} samplers, stored {} and {}", texture_bindings.size(),
+                       sampler_bindings.size(), texture_bindings_.size(), sampler_bindings_.size());
+  }
+  for (size_t i = 0; i < texture_bindings.size(); ++i) {
+    const TextureBinding& a = texture_bindings[i];
+    const TextureBinding& b = texture_bindings_[i];
+    if (a.bindless_descriptor_index != b.bindless_descriptor_index ||
+        a.fetch_constant != b.fetch_constant || a.dimension != b.dimension ||
+        a.is_signed != b.is_signed) {
+      return fmt::format(
+          "texture {}: descriptor {} fetch {} dimension {} signed {}, stored {} {} {} {}", i,
+          a.bindless_descriptor_index, a.fetch_constant, uint32_t(a.dimension), a.is_signed,
+          b.bindless_descriptor_index, b.fetch_constant, uint32_t(b.dimension), b.is_signed);
+    }
+  }
+  for (size_t i = 0; i < sampler_bindings.size(); ++i) {
+    const SamplerBinding& a = sampler_bindings[i];
+    const SamplerBinding& b = sampler_bindings_[i];
+    if (a.bindless_descriptor_index != b.bindless_descriptor_index ||
+        a.fetch_constant != b.fetch_constant || a.mag_filter != b.mag_filter ||
+        a.min_filter != b.min_filter || a.mip_filter != b.mip_filter ||
+        a.aniso_filter != b.aniso_filter) {
+      return fmt::format(
+          "sampler {}: descriptor {} fetch {} filters {} {} {} aniso {}, stored {} {} {} {} {} {}",
+          i, a.bindless_descriptor_index, a.fetch_constant, uint32_t(a.mag_filter),
+          uint32_t(a.min_filter), uint32_t(a.mip_filter), uint32_t(a.aniso_filter),
+          b.bindless_descriptor_index, b.fetch_constant, uint32_t(b.mag_filter),
+          uint32_t(b.min_filter), uint32_t(b.mip_filter), uint32_t(b.aniso_filter));
+    }
+  }
+  return std::string();
 }
 
 }  // namespace rex::graphics
