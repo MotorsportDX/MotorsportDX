@@ -235,6 +235,11 @@ class ShaderOverrides {
     std::vector<uint8_t> rgba;
   };
   const std::vector<LookFile>& look_files() const { return look_files_; }
+  // Frees a look file's texels once the command processor has copied them into
+  // its upload buffer; the name and the size stay for the contract.
+  void ReleaseLookFileTexels(size_t index) {
+    std::vector<uint8_t>().swap(look_files_[index].rgba);
+  }
 
   // Hot reload (shader_mod_hot_reload), on the thread that creates pipelines
   // while no pipeline is being created and no shader translated: if PollChanges

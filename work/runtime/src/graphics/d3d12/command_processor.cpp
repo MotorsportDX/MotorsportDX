@@ -5582,7 +5582,7 @@ void D3D12CommandProcessor::LogDeviceRemovalDiagnostics(ID3D12Device* device, HR
 }
 
 bool D3D12CommandProcessor::CreateLookFileTextures() {
-  const ShaderOverrides* shader_overrides = pipeline_cache_->shader_overrides();
+  ShaderOverrides* shader_overrides = pipeline_cache_->shader_overrides();
   if (!shader_overrides) {
     return true;
   }
@@ -5631,6 +5631,10 @@ bool D3D12CommandProcessor::CreateLookFileTextures() {
                   file.rgba.data() + size_t(file.width) * 4 * row, size_t(file.width) * 4);
     }
     upload->Unmap(0, nullptr);
+    // The texels are in the upload buffer. SetupContext runs once a process; a
+    // context set up again would create the pipeline cache, and with it the
+    // look files, again.
+    shader_overrides->ReleaseLookFileTexels(i);
     D3D12_SHADER_RESOURCE_VIEW_DESC srv_desc = {};
     srv_desc.Format = desc.Format;
     srv_desc.ViewDimension = D3D12_SRV_DIMENSION_TEXTURE2DARRAY;
