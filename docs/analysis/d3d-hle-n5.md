@@ -597,3 +597,75 @@ The final point's passes (TAA at the final point, the windshield) skipped about 
 | RTV 2x (`aces`), `-Rov` 1x (`original,taa=0`) | PASS: +0.1%, 29.7%; -0.2%, 21.7% |
 | 240 Hz smoke at 3/2 | `photo` raced at 237.5 fps (p99 5.02 ms), photo mode 29.9; `photo_view` loads the photo; `career` raced at 235.8 fps (p99 5.31 ms), the replay at 119.4; no clear color capture; the baseline's error keys |
 
+
+## 20. Float targets and linear blending, 27 October 2026
+
+Two items of stage N5 ([d3d-hle.md, sections 8 and 9](d3d-hle.md#9-stages)), each an A/B with a decision: a float format for the title's `k_16_16` targets in place of the divide by 32, and linear blending. The main session reviewed the design note and set the scope of each A/B on 27 October 2026; the project owner decided linear blending the same day (20.3). The A/B switches are on the reference branch `claude/n5-linear-blend-ab` (commit `8a49845`, with `fce3f32` for `override_ab.py` and the experiment switches, on main `c770585`), and none of them is in main.
+
+### 20.1 Inventory
+
+From traces that already existed on `I:\FM4-build-usa\e2e`: the surface probes `n3q-race-2x-surfaces.txt` (a race) and `n4p-tiled-2x.surfaces.txt` (a race and photo mode), the GPU inventories `road-fc-{alps,sebring,topgear,tsukuba}-inventory.json` (18 October 2026, menus and races) and the frame graph `n3s3-fg-career-2x.jsonl` (22 October 2026, `career`: the boot, the menus, a race and the replay; 370 sampled frames, 286 race frames). The title chooses its render target formats itself, so the inventory holds for every path.
+
+**16-bit fixed-point targets.**
+
+| Surface | Format, exponent bias | When | Writers | Blend | Resolved to | Readers |
+|---|---|---|---|---|---|---|
+| The cars' variance shadow map (the moments d and d²) | `16_16`, +5, 4x MSAA, pitch 520, base 832, 512x512, depth `D24S8` at base 0 | every race, replay and photo mode frame (303 of 370 sampled career frames; none in the menus) | PS `7BB501A907440DBA` (6 vertex shaders), about 140 draws a frame | off | a signed `k_16_16` texture, 512x512 | 81 pixel shaders: the car shaders (paint, chrome, rims, glass, the driver, the cockpit; fetch 13), the blur below, and the combine `5BA292E50D7842C9` into an 8_8_8_8 shadow mask with its mips. Look mods: `fm4_variance_shadow` (fm4-paint.hlsli, 9 taps, minimum variance 0.001) and `fm4_cockpit_driver_fetch` (fm4-cockpit.hlsli) |
+| Its blur | `16_16`, +5, 1x, pitch 560, base 0, 512x512 | 3 of 370 frames, two passes | PS `C23E686D7A951CE1` | off | the same texture | as above |
+| An environment bake | `16_16_16_16`, 0, 1x, pitch 320 (256x128) and 800 (768x384 in latitude and longitude, mips down to 32x3) | once, at the race load | PS `F202524AC3A233B1` (the cube to latitude and longitude), `805C1FEAC31575B3` (the downsample, also the bloom's) | off | `k_16_16_16_16_FLOAT` textures (float16), sampled as `k_16_16_16_16_EXPAND` | the downsample and `9EA5FBD1AD0F47F8`, which bake the race's prefiltered environment cube into 8_8_8_8 (6 faces, 256 down to 1, in gamma 2); nothing else |
+
+No other 16-bit fixed target appears in the menus, the race, the replay or photo mode. Photo mode's accumulation ([photo mode and replays](photo-autovista-replay.md)) resolves into a `k_16_16_16_16_FLOAT` texture from a 7e3 target, which the host already keeps as `R16G16B16A16_FLOAT`, and draws without blending.
+
+What the divide by 32 does: with `snorm16_render_target_full_range` (on) the host target is `R16G16_SNORM` or `R16G16B16A16_SNORM`, and the draw's exponent bias is lowered by 5, so the shader writes the value divided by 32. The SNORM bits are then the Xenos fixed-point bits (0x7FFF is 32), and the transfers, the EDRAM dump and the resolves copy bits. The cost the code names, blending that is no longer right, never applies to FM4: every writer of these formats blends off. The shadow map's bias of +5 cancels the divide, so its moments in [-1, 1] are stored with a step of 1/32767 as on the 360; the bake's bias of 0 keeps a step of 1/1024 in [-32, 32], as on the 360. The emulation is bit-exact to the 360 for every 16-bit fixed target of the title.
+
+**Gamma targets.** One surface: `k_8_8_8_8_GAMMA` at 1280x720, 1x, pitch 1280, base 0, written by PS `31511D87CC0C94B9` (it fetches a `k_8` texture: the intro and attract videos' YUV to RGB conversion), one draw a frame, blending off, resolved to an 8_8_8_8 texture that a full-screen pass draws into the final 2_10_10_10 (12 of 370 career frames, the boot). The host keeps `k_8_8_8_8_GAMMA` as linear light in `R16G16B16A16_UNORM` (`gamma_render_target_as_unorm16`, on), converts to the piecewise linear gamma in the transfers, the dump and the resolves, and so already blends such targets in linear light, as the 360 does; the shader converts to gamma before the blend only with 8-bit storage. The Formats row of [d3d-hle.md, section 8](d3d-hle.md#8-the-native-port) described gamma targets as kept in gamma space; they are not.
+
+**Where the title blends in a gamma space.** FM4's gamma is in its shaders, not in a target format. The scene's colour (7e3 at base 0) holds the square root of linear light: FinalCombine squares it (`x = (scene^2 + bloom^2) * 2^exposure`, [B4 shader research](b4-shader-research.md#finalcombine-formula)). Its blended draws, from the road inventories (attributed per shader pair, so an upper bound): source alpha with one minus source alpha in 432 pairs and about 83M draws (glass, smoke, dust, particles, crowd sprites, track decals), destination colour times the source in 24 pairs and 18.6M draws, additive (one, one) in 22 pairs and 3.7M draws (glows, sparks, flares), and premultiplied (one, one minus source alpha) in 3. The mirror (8_8_8_8, 2x MSAA, pitch 400) and the environment cube's faces get the same blends in 8 bits, and the final 2_10_10_10 gets the HUD and the menus over FinalCombine's gamma 2 output. All of this is the 360's own look.
+
+### 20.2 A float format for `k_16_16`: the sensitivity A/B
+
+A float target alone changes nothing: every resolve writes the 16-bit guest texture, and the receivers sample `R16G16_SNORM`. A visible difference needs the float to reach the readers as well, through a float host texture for the shadow map's resolve destination, and is bounded by the title's own shader: the Chebyshev bound p = var / (var + d²) with a minimum variance of 0.001. The 16-bit steps move var by at most about 4.5e-5 (the rounding of E[d²] plus 2d times the rounding of E[d]), so p moves by at most about 1.1% in the penumbra before the 4x average and the receivers' taps smooth it. `R16G16_FLOAT` would be coarser than today near a depth of 1 (11 bits of mantissa against 15), and the bake's output is an 8-bit cube. The main session therefore decided on 27 October 2026 to run only a sensitivity A/B instead of the float chain: store the shadow map with fewer bits, and if 12 bits change nothing visible at 2x, more bits cannot either.
+
+`native_16_16_drop_bits=N` (native path only, off by default, on the reference branch) lowers the draw's exponent bias of `k_16_16` and `k_16_16_16_16` targets by N more than the divide by 32, so the shader writes the value divided by 2^N into the SNORM target, and raises the exponent bias of the resolves from these formats by N (`D3D12RenderTargetCache::Resolve`), so the copy multiplies it back: the texture holds the same values with N bits fewer. `native_format_ab_ms=P` runs the frames of every other period of P ms of the steady clock without it (chosen once a frame, the periods as `shader_override_ab_ms` counts them), so one frozen frame shows both and `override_ab.py --period-ms P` tells the phase of each capture. Ownership transfers out of these targets carry the scaled values; the inventory shows no reader of such a transfer that is not overwritten first.
+
+**The A/B** (`I:\FM4-build-usa`, a build of the reference branch, snapshot `fl1`; the run folders are in `D:\FM4-archive\fl-*`; `freeze` at 2x with the native path's defaults, one pass with 2x MSAA, and the scenario's `original,taa=0`, so the title's own shaders read the shadow map; `native_16_16_drop_bits=3` and `native_format_ab_ms=4000`; run `fl-a-freeze`). The frozen frame is the cockpit view of the Quick Race start: the dashboard under the cockpit's variance shadow, the car ahead with its own shadows. Storing the shadow map with 12 bits instead of 15 changes 0.59% of the pixels of the frozen frame (53,483 bytes of 11.1M), by 2 levels on average; 0.04% of the channels change by more than 4, the most by 14, all on the dashboard's shaded part. The car ahead changes by at most 2 levels. At 1:1, and at 3 times enlarged, the dashboard of the two phases cannot be told apart. Consecutive captures of the same phase are byte-identical, so the change is the probe's.
+
+**Decision** (the main session's rule of 27 October 2026): `k_16_16` keeps `R16G16_SNORM` with the divide by 32. It is bit-exact to the 360 for every fixed-point target of the title, and 8 times less precision already gives no visible change, so a float target would add memory and bandwidth for nothing.
+
+### 20.3 Linear blending
+
+As the plan named it (gamma targets blended in linear light), there is nothing to change: the only gamma target draws without blending, and the host already blends gamma targets in linear light (20.1). The main session recorded that on 27 October 2026 and asked for the variant that changes pixels as an A/B, whose decision is the project owner's because it changes the picture against the 360's art: blending the scene's colour in linear light.
+
+`native_scene_linear_blend` (native path only, off by default; on the reference branch) keeps the 7e3 render targets (both views, every pitch and sample count) as linear light, the square of the guest's value, and every reader of the host target takes the square root back, so every guest-visible value and every texture stays as today:
+
+- **Writers.** The pixel shader's epilogue squares RGB of a 7e3 colour target after the exponent bias (and after max with 0), on a system constant flag per target (`kSysFlag_SquareColor0` to `3`, set by the draw back end), in the DXBC translation and in the shader overrides' `xe_ps_epilogue`; a runtime branch, no new shader variants. Host clears of 7e3 are squared.
+- **Readers.** The ownership transfers out of a 7e3 target take the square root before packing, the transfers into one square after unpacking (a bit of the transfer shader key; 7e3 to 7e3 copies the floats), the EDRAM dump takes the square root before packing (a bit of the dump pipeline key), and `resolve_host_32bpp` (also into host textures) takes it before encoding (bit 12 of its host info). Opaque draws therefore come back to the guest's value up to float16 rounding (a relative error below 2^-12, the last bit at most).
+- **Bit 2** (`native_scene_linear_blend=3`): the resolves from the host render target average the samples of a multisampled 7e3 target and the box of a fractional downscale in linear light, then take the square root (bit 13 of the host info), instead of averaging the guest's values. Resolves through the dump keep the guest's average.
+- **The glass mod** (`fm4_glass`, fm4-car.hlsli) divides its added light by the opacity squared to make up for gamma 2 blending; under the flag it divides by the opacity once, reading the same system constant flag, so its light reaches the screen at the same strength.
+
+What changes on screen: alpha-blended glass, smoke, dust, particles and decals blend in linear light (a 50% black smoke over a sky at 1.0 gives 0.25 today and 0.5 linear; bright over dark gets brighter), additive glows lose the 2·sqrt(ab) term of gamma-space addition and get dimmer, and multiply blending does not change (squaring is multiplicative). The mirror and the environment cube are 8-bit targets and keep gamma 2 blending; the HUD and the menus stay as authored.
+
+**The A/B** (the same binary, `freeze` at 2x with the native path's defaults, `native_format_ab_ms=4000`):
+
+| Run | Look | Switch | Pixels changed | Channels by more than 4 |
+|---|---|---|---|---|
+| `fl-b1o-freeze` | `original,taa=0` | 1 | 7.52% | 2.25% |
+| `fl-b3o-freeze` | `original,taa=0` | 3 | 10.99% | 3.88% |
+| `fl-b1-freeze` | `aces` (the glass mod on) | 1 | 5.76% | 2.38% |
+| `fl-b3-freeze` | `aces` | 3 | 11.36% | 3.57% |
+
+With `original,taa=0` the pairs are exact (same-phase captures are byte-identical); with `aces` the frozen frame itself drifts between captures (same-phase pairs differ in about 1M bytes by 1.5 levels), so its pairs carry that noise. What changes, at 1:1 (frozen frame of the Quick Race start, cockpit view):
+
+- The grandstand's glass roof and canopy over the sky change the most (up to 73 levels): in linear light the game's tinted glass gets lighter and more transparent, and its panels fade toward the sky.
+- Car windows over dark cabins get hazier, and the driver and the cabin show less through them.
+- The road seen through the player's windscreen gets a brighter band where the windscreen's blended reflection lies over the dark asphalt.
+- The racing line's decal gets a little brighter over the asphalt; the multiply decals do not change visibly.
+- The HUD and the rewind bar do not change (they draw into the final 2_10_10_10).
+- With bit 2, thin dark edges against the sky (the lattice of a tower) get slightly lighter and thinner, the linear-light average of the 2x MSAA samples; with bit 1 alone the edges do not change.
+- The frozen frame has no smoke and no sun glare, and the tail lights change little. In a moving race (`fl-b1-race`, 2x, on and off every 2 s) dust and tyre smoke show in both phases, but captures 2 s apart are different moments, so they can be judged only qualitatively.
+
+**No-change proofs.** With every switch set and toggled every 4 s, the on/off pairs of the freeze phase are byte-identical on RTV (`fl-rtv-ab-freeze`, 4 of 4) and on `-Rov` (`fl-rov-ab-freeze`, 3 of 3 once the rewind settled): the switches are not read off the native path. The native path with the switches off (`fl-off-freeze`) freezes stably. The shader mod tests compile the library and every look mod with the new epilogue (0 failures).
+
+The 1:1 crops of these pairs (game captures, so not in the repository) went to the main session and the project owner. The GPU time, the parity against the binary before the branch and the smoke tier were not run: the decision came first.
+
+**Decision** (the project owner, 27 October 2026): the scene keeps the game's own gamma-space blending. Linear blending changes the picture away from the 360's art (transparent materials lose contrast, and the game's tinted glass reads as clearer glass), and it corrects no error of the emulation, since the 360 blends the scene in its gamma 2 values too. The code stays on the reference branch and does not go into main.
