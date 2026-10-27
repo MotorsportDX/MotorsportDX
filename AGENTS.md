@@ -29,7 +29,8 @@ These rules apply to every AI agent working in this repository.
 
 - Shader mods (`work/fm4-rex/look`, the shader override path) and the GTAO ambient occlusion target the host render target paths with bindless resources only: RTV, and the native path (the D3D-level HLE with host render targets planned in [docs/analysis/d3d-hle.md](docs/analysis/d3d-hle.md); the project owner's decision of 21 October 2026). Do not port them to the ROV path (`-Rov`, `render_target_path_d3d12=rov`), and do not add title-specific corrections to it (such as the removed occlusion sample divisor).
 - ROV is the uncorrected reference for the EDRAM emulation: it renders the title's own output. That `-Rov` runs without mods and AO is by design, not an implementation gap. Compare RTV against `-Rov` with `-Look "original,taa=0"` (no mods, no TAA, and the tiles and MSAA of `-Quality`; `-Look original` has TAA and one tile). In the launchers RTV needs `-Rtv`, since the native path is the default; `e2e.py` and `matrix.py` pick the path themselves (RTV unless `--native`).
-- The native path is compared the same way, against `-Rov` and against RTV with `-Look "original,taa=0"`. It never replaces `-Rov` as the reference, and the PM4 RTV path stays selectable beside it.
+- The native path is compared against `-Rov` with `-Look "original,taa=0"`, and against its own runs on the previous local main. It never replaces `-Rov` as the reference.
+- The PM4 RTV path stays selectable beside it as the players' fallback, frozen since 27 October 2026 (the project owner's decision): it gets no new features, it is not part of the step and close gates, and the main session runs its smoke tier before each export. A change aimed at RTV itself gates it as before.
 
 ## Repository rules
 
