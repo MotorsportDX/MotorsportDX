@@ -109,6 +109,7 @@
 !/work/fm4-launcher/src/tests.cpp
 !/work/fm4-rex/look/fm4-car.hlsli
 !/work/fm4-rex/look/fm4-cockpit.hlsli
+!/work/fm4-rex/look/fm4-final-combine.ps.hlsli
 !/work/fm4-rex/look/fm4-look.hlsli
 !/work/fm4-rex/look/fm4-nature.hlsli
 !/work/fm4-rex/look/fm4-paint.hlsli

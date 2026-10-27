@@ -200,18 +200,25 @@ float3 fm4_curve_neutral(float3 color) {
   return lerp(color, new_peak.xxx, g);
 }
 
-// The LUT coordinate with the selected curve instead of the game's. ab and cdef
-// are the shader's filmic constants, scale and offset those of the LUT.
-float3 fm4_tonemap_lut_coord(float3 coord, float4 ab, float4 cdef, float scale, float offset) {
-  float to_filmic = fm4_white_filmic / (abs(scale) > 1.0e-20 ? scale : 1.0e-20);
-  float3 x = fm4_filmic_inverse((coord - offset) * to_filmic, ab, cdef);
+// The selected curve at the exposed scene color x, scaled so that middle gray
+// stays where the game's curve puts it. ab and cdef are the shader's filmic
+// constants.
+float3 fm4_tonemap_curve(float3 x, float4 ab, float4 cdef) {
   // Each curve's input for 0.18, solved offline.
   float curve_gray = FM4_LOOK_TONEMAP == 1.0 ? 0.180942 : FM4_LOOK_TONEMAP == 2.0 ? 0.130171 : 0.22;
   float gray = fm4_filmic_inverse((0.18 * fm4_white_filmic).xxx, ab, cdef).x;
   x *= curve_gray / max(gray, 1.0e-6);
   float3 t = FM4_LOOK_TONEMAP == 1.0 ? fm4_curve_gt(x) :
              FM4_LOOK_TONEMAP == 2.0 ? fm4_curve_aces(x) : fm4_curve_neutral(x);
-  return saturate(t) * scale + offset;
+  return saturate(t);
+}
+
+// The LUT coordinate with the selected curve instead of the game's: x from the
+// game's coordinate. scale and offset are those of the LUT.
+float3 fm4_tonemap_lut_coord(float3 coord, float4 ab, float4 cdef, float scale, float offset) {
+  float to_filmic = fm4_white_filmic / (abs(scale) > 1.0e-20 ? scale : 1.0e-20);
+  float3 x = fm4_filmic_inverse((coord - offset) * to_filmic, ab, cdef);
+  return fm4_tonemap_curve(x, ab, cdef) * scale + offset;
 }
 
 // The final combine without post effects writes F(x) / F(white) linear, with

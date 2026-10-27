@@ -533,6 +533,10 @@
       "provenance": "Development build glue or diagnostic tooling"
     },
     {
+      "path": "work/fm4-rex/look/fm4-final-combine.ps.hlsli",
+      "provenance": "Original replacement shader of this project (native shader contract), written from the documented formula of the final combine (docs/analysis/b4-shader-research.md); no transcription of game ucode or generated HLSL"
+    },
+    {
       "path": "work/fm4-rex/look/fm4-look.hlsli",
       "provenance": "Original shader mods of this project (HLSL hooks on generated overrides); no game shader code or original game function bodies"
     },

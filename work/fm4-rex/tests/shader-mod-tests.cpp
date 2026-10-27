@@ -274,6 +274,45 @@ struct XeInputs {
 #define XE_LOAD_INPUTS(xe_in, p, input) xe_in.face = input.xe_is_front_face; xe_in.filmic = xe_float_constants[5]; xe_in.pixel = input.xe_position; xe_in.uv = p.r[0].xy; xe_in.vignette = xe_bool_constant(133u); xe_in.white = p.r[1].z;
 )";
 
+// The replacement part of the contract of the look's final combine entry (shaders.toml,
+// fm4-final-combine.ps.hlsli), in the order the parser keeps its inputs.
+const char kFinalCombineContract[] = R"(#define XE_REPLACEMENT 1
+struct XeInputs {
+  float exposure;
+  float4 filmic_ab;
+  float4 filmic_cdef;
+  float lut_offset;
+  float lut_scale;
+  float4 transform_b;
+  float4 transform_g;
+  float4 transform_r;
+  float2 uv;
+  float white;
+};
+#define xe_tex_bloom(coord) xe_tfetch_2d(2u, XE_TEXTURE2_2D_U, XE_TEXTURE2_2D_S, XE_SAMPLER2_FFF, (coord), 0.0, false, XE_LOD_COMPUTED, 0.0, 0.0)
+#define XE_TEX_BLOOM 2u
+#define XE_IN_BLOOM 1
+#define XE_IN_EXPOSURE 1
+#define XE_IN_FILMIC_AB 1
+#define XE_IN_FILMIC_CDEF 1
+#define xe_tex_lut(coord) xe_tfetch_3d(7u, XE_TEXTURE7_3D_U, XE_TEXTURE7_3D_S, XE_TEXTURE7_2D_U, XE_TEXTURE7_2D_S, XE_SAMPLER7_FFF, (coord), 0.0, false, XE_LOD_COMPUTED, 0.0, 0.0, XE_FILTER_FETCH_CONSTANT, XE_FILTER_FETCH_CONSTANT)
+#define XE_TEX_LUT 7u
+#define XE_IN_LUT 1
+#define XE_IN_LUT_OFFSET 1
+#define XE_IN_LUT_SCALE 1
+#define xe_tex_scene(coord) xe_tfetch_2d(0u, XE_TEXTURE0_2D_U, XE_TEXTURE0_2D_S, XE_SAMPLER0_FFF, (coord), 0.0, false, XE_LOD_COMPUTED, 0.0, 0.0)
+#define XE_TEX_SCENE 0u
+#define XE_IN_SCENE 1
+#define XE_IN_TRANSFORM_B 1
+#define XE_IN_TRANSFORM_G 1
+#define XE_IN_TRANSFORM_R 1
+#define XE_IN_UV 1
+#define XE_IN_WHITE 1
+#define XE_SRV_GTAO_OCCLUSION 1
+#define xe_srv_gtao_occlusion(uv) xe_post_texture(0u, uv)
+#define XE_LOAD_INPUTS(xe_in, p, input) xe_in.exposure = p.r[1].w; xe_in.filmic_ab = xe_float_constants[5]; xe_in.filmic_cdef = xe_float_constants[6]; xe_in.lut_offset = xe_float_constants[1].x; xe_in.lut_scale = xe_float_constants[0].x; xe_in.transform_b = xe_float_constants[4]; xe_in.transform_g = xe_float_constants[3]; xe_in.transform_r = xe_float_constants[2]; xe_in.uv = p.r[0].xy; xe_in.white = p.r[1].z;
+)";
+
 // A replacement that reads every kind of input by name.
 const char kReplacement[] = R"(void xe_replacement(XeInputs inputs, inout XePixel p) {
   float4 scene = xe_tex_scene(inputs.uv);
@@ -594,6 +633,30 @@ int main(int argc, char** argv) {
     Check(result.compiled && result.fingerprint != library_native.fingerprint,
           what + ": not the hooks' shader");
   }
+
+  // The look's final combine as a replacement (fm4-final-combine.ps.hlsli), included as the
+  // runtime includes it: at its default knobs, with the look knobs away from the original look,
+  // with the occlusion, and with live knobs.
+  const char kFinalCombine[] = "fm4-final-combine.ps.hlsli";
+  Result combine_plain =
+      Compile(library, look, kFinalCombine, true, "", {}, false, Native::kPass, kFinalCombineContract);
+  Report(combine_plain, std::string(kFinalCombine) + ", default knobs");
+  Result combine_knobs = Compile(library, look, kFinalCombine, true, "", kLookKnobs, false,
+                                 Native::kPass, kFinalCombineContract);
+  Report(combine_knobs, std::string(kFinalCombine) + ", look knobs set");
+  Check(combine_plain.compiled && combine_knobs.compiled &&
+            combine_plain.fingerprint != combine_knobs.fingerprint && !combine_plain.reads_post_ao,
+        std::string(kFinalCombine) + ": the knobs change it, no occlusion read at its defaults");
+  Result combine_ao = Compile(library, look, kFinalCombine, true, "", {{"FM4_LOOK_AO", "1.0"}},
+                              false, Native::kPass, kFinalCombineContract);
+  Report(combine_ao, std::string(kFinalCombine) + ", FM4_LOOK_AO=1");
+  Check(combine_ao.compiled && combine_ao.reads_post_ao,
+        std::string(kFinalCombine) + ", FM4_LOOK_AO=1: reads the occlusion");
+  Result combine_live = Compile(library, look, kFinalCombine, true, "", live, true,
+                                Native::kPassDebug, kFinalCombineContract);
+  Report(combine_live, std::string(kFinalCombine) + ", live knobs, pass debug view");
+  Check(combine_live.compiled && combine_live.reads_knobs,
+        std::string(kFinalCombine) + ", live knobs: reads the knobs at run time");
 
   std::printf("%s (%d failures)\n", failures ? "FAILED" : "PASSED", failures);
   return failures ? 1 : 0;

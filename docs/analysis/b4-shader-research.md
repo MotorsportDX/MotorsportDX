@@ -85,6 +85,14 @@ The formula, taken from the ucode, for writing mods:
 
 Because the white point is normalized in the vertex shader, changing the filmic parameters only in the pixel shader shifts brightness. The curve itself is changed in output space.
 
+The race's `E97AA211B556A9B3` in detail (28 October 2026: the contract of its translation, `dump_shaders`, and an observation run, `n5sc9-observe`, in which a hook of the look compared the game's own output with the formula on a frozen race frame at 2x; observations, no code):
+
+- Inputs: interpolators 0 and 1, float constants c0 to c6, fetches 0 (the scene, 2D), 2 (the bloom, 2D) and 7 (the LUT, 3D), each with the fetch constant's filters; colour target 0, no depth.
+- Both the scene and the bloom are fetched at interpolator 0 XY.
+- A and B in c5 Y and Z, CB, DF, DE and E/F in c6 X to W (the order of [Step 4](#b4-step-4-tone-curves-16-october-2026)); the LUT coordinate is `f(x) * c0.x / (interpolator 1 Z) + c1.x` per channel.
+- The colour transform: R, G and B are `dot(float4(lut.rgb, 1), c2)`, `c3` and `c4`, saturated, then the square root. Against the game's output this differs by less than 1/64 of a level in every pixel of the frame; the LUT coordinate likewise.
+- The alpha written is 1 or more (it saturates to 1 in the observation).
+
 ## B4 Step 3: Display Mods (16 October 2026)
 
 - The generator leaves neutral hooks: `XE_HOOK_TFETCH` on each fetch result, `XE_CONSTANT` -> `XE_HOOK_CONSTANT` on each constant, `XE_HOOK_INPUT` after the prolog, and `XE_HOOK_OUTPUT` before the epilog. `shader_mod_path=<dir>` with `shader_<hash>.mod.hlsli`: the generator's HLSL for that hash is compiled with the mod after the library (the mod `#undef`s and redefines the hooks). `shader_mod_defines` provides the knobs. There is no game code in the mod files.

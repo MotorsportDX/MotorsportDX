@@ -117,10 +117,27 @@ params = [
   "FM4_LOOK_CLEARCOAT_GLINT",
 ]
 
-# The races' final combine (fm4_grade in fm4-look.hlsli): it reads the post passes' ambient
-# occlusion by its name in passes.toml (srv, xe_srv_gtao_occlusion) instead of its slot. Its
-# knobs stay defines.
+# The races' final combine as the project's own tone mapping (fm4-final-combine.ps.hlsli): a
+# replacement that reads the game shader's inputs by name (docs/analysis/b4-shader-research.md,
+# "FinalCombine Formula") and the post passes' ambient occlusion by its name in passes.toml
+# (srv, xe_srv_gtao_occlusion). Its knobs stay defines. Without the switch, and on RTV, its
+# classic mod shader_E97AA211B556A9B3.mod.hlsli applies.
 [[pixel]]
 hash = "E97AA211B556A9B3"
-hooks = "shader_E97AA211B556A9B3.mod.hlsli"
+shader = "fm4-final-combine.ps.hlsli"
 srv = ["post:gtao_occlusion"]
+
+[pixel.inputs]
+scene = "tf0"
+bloom = "tf2"
+lut = "tf7"
+uv = "i0.xy"
+white = "i1.z"         # f at white
+exposure = "i1.w"
+filmic_ab = "c5"
+filmic_cdef = "c6"
+lut_scale = "c0.x"
+lut_offset = "c1.x"
+transform_r = "c2"     # the colour transform's rows
+transform_g = "c3"
+transform_b = "c4"

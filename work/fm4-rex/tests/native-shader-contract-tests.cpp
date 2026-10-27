@@ -108,6 +108,9 @@ int main(int argc, char** argv) {
             combine->srv[0].kind == nsc::Resource::Kind::kPost &&
             combine->srv[0].name == "gtao_occlusion",
         "the final combine reads the ambient occlusion by name");
+  Check(combine && combine->hooks.empty() && combine->shader == "fm4-final-combine.ps.hlsli" &&
+            combine->inputs.size() == 13,
+        "the final combine is a replacement with its 13 inputs");
   // The look's classes by the depth surface and the viewport: the scene at 1024 as wide as the
   // screen, the mirror at 80.
   Check(look.Classify(true, 1024, 1280, false) == look.FindPass("scene"), "scene draw");
