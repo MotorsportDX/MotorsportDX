@@ -349,6 +349,39 @@ The largest item the profile shows is not on the CPU. Every resolve still writes
 - **Memory.** The native path's render targets take about 200 to 245 MB at 1x, 443 MB at 3/2 and 580.5 MB at 2x on this PC (`rt_memory`, 17.15 and the runs of 19.2; 338 MB at 3/2 on the Ally X), the texture cache is capped at 384 MB soft and 768 MB hard (`texture_cache_memory_limit_*`, cache.cpp:30 to 47) and the shared memory buffer is 512 MB, on every GPU alike. A budget from the adapter's `QueryVideoMemoryInfo` that sets the texture cache's limits and warns before a 4K render target set would not fit is a small item (about 1 person-week), worth doing with N5's 4K work, not a player-facing gain on the two test devices (12 GB of video memory on this PC, 24 GB shared on the Ally X).
 - **The GPU.** Not N6's subject, but the Ally X's lever (17.25): GTAO and the windshield take 1.3 to 1.6 ms of its 7.5 to 8.3 ms a race frame. An "Ally X performance" look preset is already a candidate (current status, open issues).
 
+#### 19.7.3 Step 1: the resolves' GPU time, 27 October 2026
+
+The perf trace now times the parts of each full-screen resolve (`resolve_full_parts_ms`, [traces](../e2e/traces.md#performance-trace-rex_perf_trace_file)):
+
+- the deferred transfers of the tiles it copies;
+- the EDRAM dump;
+- the write in the guest's layout;
+- the host texture writes;
+- the clears.
+
+The runs used the build of `f99cf19` on `I:\FM4-build-usa`. Each was one `race` run on the native path with the fast route, the AI driver and `FM4_FIXED_SEED=1`, at 240 Hz, with `REX_FRAME_GRAPH`. The values are medians over the race phase's windows, in ms of GPU a frame.
+
+| Part | 1x (`native_rt_surfaces=90`, the launchers' 720p) | 1x with bit 32 (122) | 3/2 (122, the ROG Xbox Ally X's 1080p panel) | 2x (90, a 1440p 16:9 screen) |
+|---|---|---|---|---|
+| GPU frame | 2.18 | 2.26 | 3.43 | 4.98 |
+| Full-screen resolves (3 a frame) | 0.082 (3.8%) | 0.182 (8.0%) | 0.495 (14.4%) | 0.258 (5.2%) |
+| of which the write in the guest's layout | 0.074 | 0.074 | 0.132 | 0.235 |
+| of which the host texture writes | 0 | 0.099 | 0.340 | 0 |
+| of which the clears | 0.008 | 0.008 | 0.022 | 0.023 |
+| of which the transfers and the EDRAM dump | 0 | 0 | 0 | 0 |
+| Full-screen texture loads (from the guest's layout) | 0.068 (3.1%) | 0.033 | 0 | 0.318 (6.4%) |
+| The round trip (full-screen resolves and loads) | 0.150 (6.9%) | 0.215 (9.5%) | 0.495 (14.4%) | 0.576 (11.6%) |
+| Other resolves (mid, small) | 0.166 | 0.243 | 0.294 | 0.335 |
+| All texture loads | 0.179 | 0.102 | 0.069 | 0.539 |
+| Transfers (color, depth) | 0.058, 0.046 | 0.056, 0.044 | 0.098, 0.079 | 0.114, 0.094 |
+| Post passes (GTAO, TAA, motion, windshield) | 0.177, 0.097, 0.029, 0.088 | 0.178, 0.097, 0.029, 0.088 | 0.394, 0.208, 0.031, 0.174 | 0.702, 0.372, 0.117, 0.324 |
+
+- **The guest's layout** costs 0.074 ms a frame at 1x, 0.132 ms at 3/2 and 0.235 ms at 2x for the three full-screen resolves: 3.4 to 4.7% of the frame. Step 3 would remove it.
+- **The loads back** cost 0.068 ms at 1x and 0.318 ms at 2x. With bit 32 they go to 0.033 ms at 1x and to none at 3/2.
+- **The host texture writes are dearer than the loads they replace.** At 1x, bit 32 writes 16 textures a frame for 16 resolves, the smaller private surfaces' too. Its full-screen writes take 0.099 ms against loads of 0.068 ms. The smaller resolves rise from 0.124 to 0.200 ms, and the frame from 2.18 to 2.26 ms. At 3/2 the full-screen host writes are 0.340 ms (21 textures a frame), 69% of the full-screen resolves' time, against 27% for the guest's layout. This is N3's finding (16.8) again: writing the textures from the render target moves the work rather than removing it.
+- **On the ROG Xbox Ally X** the same parts weigh about 9 to 12 times more (19.2.3: 0.75 ms of full-screen resolves and 0.86 ms of loads at 1x, 4.53 ms of resolves at 3/2). By this PC's shares, step 3 would remove about 1.2 ms of the 15.9 ms frame at 3/2 (about 8%) and about 0.7 ms at 1x before its loads. The host texture writes, about 3.1 ms at 3/2, are the larger lever: step 4 (copies or views in place of compute encodes) or writing fewer textures (only the keys a pass samples).
+- **The frame graph** gives a resolve the GPU time until the next mark, so the post passes injected right after it count as its own. The scene depth's resolve shows 0.237 ms at 1x and 0.876 ms at 2x, mostly GTAO. The parts above are measured inside the resolve, without them.
+
 ### 19.8 The proposed order
 
 The owner's order is stutter first, then CPU headroom on the ROG Xbox Ally X. The Ally X waits for its GPU in every mode (17.21, 17.25), so CPU time it saves reaches the frame only through the shared power budget (1 to 3%), while the resolves of 19.7.1 hold 19 to 28% of its GPU frame. The proposal therefore puts the resolves second, as the Ally X's headroom, and the CPU items after them:
