@@ -7604,13 +7604,13 @@ void D3D12RenderTargetCache::BeforeGuestLayoutRead(uint32_t start, uint32_t leng
   }
   const uint64_t end = uint64_t(start) + length;
   if (reader == Reader::kSceneTextureLoad) {
-    // A texture at the scene's scale reads no guest memory; a deferred
-    // layout's source that loads was made outdated by something no hook saw.
+    // A texture at the scene's scale reads no guest memory: its load keeps
+    // its data. Counted when it is a deferred layout's source.
     std::lock_guard<std::mutex> lock(deferred_layouts_mutex_);
     for (const GuestLayoutWrite& write : deferred_layouts_) {
       if (write.texture_object == texture && write.start < end &&
           start < write.start + write.length) {
-        perf_trace::CountGuestLayout(perf_trace::GuestLayout::kInvariant);
+        perf_trace::CountGuestLayout(perf_trace::GuestLayout::kSourceLoads);
         break;
       }
     }
@@ -7667,6 +7667,22 @@ void D3D12RenderTargetCache::GuestLayoutWatchCallback(
     const std::unique_lock<std::recursive_mutex>& global_lock, void* context,
     uint32_t address_first, uint32_t address_last, bool invalidated_by_gpu) {
   if (invalidated_by_gpu) {
+    // A resolve writes the layouts it overlaps first, and other GPU writers
+    // request their ranges first: a GPU write over a deferred layout is one
+    // no hook ordered.
+    auto& cache = *static_cast<D3D12RenderTargetCache*>(context);
+    std::lock_guard<std::mutex> lock(cache.deferred_layouts_mutex_);
+    for (const GuestLayoutWrite& write : cache.deferred_layouts_) {
+      if (write.start <= address_last && address_first < write.start + write.length) {
+        perf_trace::CountGuestLayout(perf_trace::GuestLayout::kGpuWrites);
+        static uint32_t logged = 0;
+        if (logged < 8) {
+          ++logged;
+          REXGPU_WARN("GPU write {:08X}-{:08X} over the deferred guest layout {:08X}+{:X}",
+                      address_first, address_last, write.start, write.length);
+        }
+      }
+    }
     return;
   }
   // A CPU write over a deferred layout (the readback on demand serves the

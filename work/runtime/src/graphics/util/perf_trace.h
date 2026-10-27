@@ -357,9 +357,10 @@ inline void CountResolveTextureFallback(bool copied) {
 // written for a reader (a texture
 // load, another GPU request, a CPU readback, an overlapping resolve, the
 // check's probe) or when too many were pending, dropped by the perturbation; CPU writes over them;
-// and the faults:
-// overlaps found by a scene texture's load or a source texture's data changed
-// (the invariant), and readers off the command processor's thread.
+// the source textures' loads while their layouts are deferred (a scene
+// texture's load reads no memory); and the faults: a source texture's data
+// changed (the invariant), GPU writes over a deferred layout that no hook
+// ordered, and readers off the command processor's thread.
 enum class GuestLayout : uint32_t {
   kFromTexture,
   kFromTarget,
@@ -375,6 +376,8 @@ enum class GuestLayout : uint32_t {
   kCpuWrites,
   kInvariant,
   kForeignThread,
+  kSourceLoads,
+  kGpuWrites,
   kCount
 };
 inline std::atomic<uint64_t> guest_layout[size_t(GuestLayout::kCount)];
@@ -1009,7 +1012,7 @@ inline void OnSwap() {
         "from_texture",     "from_target",     "deferred",         "superseded",
         "written_load",     "written_request", "written_readback", "written_resolve",
         "written_overflow", "written_probe",   "perturbed",        "cpu_writes",
-        "invariant",        "foreign_thread"};
+        "invariant",        "foreign_thread",  "source_loads",     "gpu_writes"};
     static_assert(std::size(kGuestLayoutNames) == size_t(GuestLayout::kCount));
     state->output << ",\"guest_layout\":{";
     for (size_t i = 0; i < size_t(GuestLayout::kCount); ++i) {
