@@ -341,6 +341,15 @@ bool PostPasses::Initialize() {
     for (const auto& define : manifest->defines) names.push_back(define.first);
     for (const ParamDesc& param : manifest->params) names.push_back(param.name);
     overrides_.SetPassNames(std::move(names));
+    // The textures with a slot, by name for the native shader contract's
+    // entries (srv = ["post:<name>"]).
+    std::vector<std::pair<std::string, uint32_t>> slots;
+    for (const TextureDesc& texture : manifest->textures) {
+      if (texture.slot >= 0) {
+        slots.emplace_back(texture.name, uint32_t(texture.slot));
+      }
+    }
+    overrides_.SetPostTextures(std::move(slots));
   }
   defines_generation_ = overrides_.defines_generation();
   ShaderOverrides::RefreshFileState(directory_ / kManifestName, manifest_file_);

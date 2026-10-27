@@ -760,6 +760,12 @@ bool ShaderOverrides::GetDefine(const std::string& name, std::string& value_out)
   return false;
 }
 
+void ShaderOverrides::SetPostTextures(std::vector<std::pair<std::string, uint32_t>> slots) {
+  std::lock_guard<std::mutex> lock(knob_mutex_);
+  post_texture_slots_.clear();
+  post_texture_slots_.insert(slots.begin(), slots.end());
+}
+
 void ShaderOverrides::SetPassNames(std::vector<std::string> names) {
   std::lock_guard<std::mutex> lock(knob_mutex_);
   std::unordered_set<std::string> pass_names(names.begin(), names.end());
@@ -883,6 +889,35 @@ std::string ShaderOverrides::BuildContract(
     }
     if (native_pass_debug_) {
       line("#define XE_NATIVE_PASS_DEBUG 1");
+    }
+    // The resources the entry reads by name: a post pass texture through its
+    // slot (xe_post_texture), 0 without post passes, or if they expose no
+    // texture by that name.
+    for (const native_shader_contract::Resource& resource : entry->srv) {
+      std::string upper(resource.name);
+      std::transform(upper.begin(), upper.end(), upper.begin(),
+                     [](char c) { return char(std::toupper(uint8_t(c))); });
+      line("#define XE_SRV_{} 1", upper);
+      uint32_t slot = UINT32_MAX;
+      bool post_passes = false;
+      {
+        std::lock_guard<std::mutex> lock(knob_mutex_);
+        post_passes = !post_texture_slots_.empty();
+        auto found = post_texture_slots_.find(resource.name);
+        if (found != post_texture_slots_.end()) {
+          slot = found->second;
+        }
+      }
+      if (slot != UINT32_MAX) {
+        line("#define xe_srv_{}(uv) xe_post_texture({}u, uv)", resource.name, slot);
+      } else {
+        if (post_passes) {
+          REXGPU_WARN("Native shader contract: {:016X}: the post passes expose no texture '{}' "
+                      "to mods (a slot in passes.toml); xe_srv_{} reads 0",
+                      shader.ucode_data_hash(), resource.name, resource.name);
+        }
+        line("#define xe_srv_{}(uv) float4(0.0, 0.0, 0.0, 0.0)", resource.name);
+      }
     }
   }
   line("#define XE_SYS_FLAGS {}u", offsetof(SystemConstants, flags));

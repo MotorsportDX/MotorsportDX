@@ -116,3 +116,11 @@ params = [
   "FM4_LOOK_RIMS_ROUGHNESS",
   "FM4_LOOK_CLEARCOAT_GLINT",
 ]
+
+# The races' final combine (fm4_grade in fm4-look.hlsli): it reads the post passes' ambient
+# occlusion by its name in passes.toml (srv, xe_srv_gtao_occlusion) instead of its slot. Its
+# knobs stay defines.
+[[pixel]]
+hash = "E97AA211B556A9B3"
+hooks = "shader_E97AA211B556A9B3.mod.hlsli"
+srv = ["post:gtao_occlusion"]

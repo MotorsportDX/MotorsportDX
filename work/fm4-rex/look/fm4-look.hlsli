@@ -126,6 +126,17 @@ static float3 fm4_probe_bloom = 0.0;
 static float fm4_probe_gray = 1.0;
 static float fm4_probe_white = 1.0;
 
+// The post passes' ambient occlusion at a scene coordinate, 0 (none) to 1: by
+// its name for a native shader contract entry that declares it (srv =
+// ["post:gtao_occlusion"] in shaders.toml), else by its slot (xe_post_ao).
+float fm4_post_ao(float2 uv) {
+#ifdef XE_SRV_GTAO_OCCLUSION
+  return xe_srv_gtao_occlusion(uv).x;
+#else
+  return xe_post_ao(uv);
+#endif
+}
+
 // Ambient occlusion of the runtime's post_ao pass on the scene (gamma 2) at the
 // pixel. The scene does not separate ambient light from sunlight, so it fades
 // out on bright pixels: from an exposed luminance of 0.2 to 0.8 (middle gray is
@@ -137,7 +148,7 @@ float4 fm4_ambient_occlusion(float4 scene, float2 uv) {
   float3 linear_scene = scene.rgb * scene.rgb;
   float luminance = dot(linear_scene, float3(0.2126, 0.7152, 0.0722)) * fm4_exposure_scale;
   float weight = saturate(FM4_LOOK_AO) * (1.0 - smoothstep(0.2, 0.8, luminance));
-  return float4(scene.rgb * sqrt(saturate(1.0 - weight * xe_post_ao(uv))), scene.a);
+  return float4(scene.rgb * sqrt(saturate(1.0 - weight * fm4_post_ao(uv))), scene.a);
 }
 
 // x for which the game's filmic curve gives y (the positive root of the
@@ -303,7 +314,7 @@ void fm4_grade(inout XePixel p) {
     color = lerp(color, s_curve, saturate(FM4_LOOK_CONTRAST));
   }
   if (FM4_LOOK_AO_DEBUG != 0.0) {
-    color = xe_post_ao(fm4_scene_uv).xxx;
+    color = fm4_post_ao(fm4_scene_uv).xxx;
   }
   if (FM4_LOOK_HDR_PROBE != 0.0) {
     color = fm4_hdr_probe();

@@ -76,6 +76,11 @@ int main(int argc, char** argv) {
                    entry->params[0].rfind("FM4_LOOK_", 0) == 0;
   }
   Check(car_entries == 8, "the car materials have entries with their knobs");
+  const nsc::PixelEntry* combine = look.FindPixel(0xE97AA211B556A9B3ull);
+  Check(combine && combine->params.empty() && combine->srv.size() == 1 &&
+            combine->srv[0].kind == nsc::Resource::Kind::kPost &&
+            combine->srv[0].name == "gtao_occlusion",
+        "the final combine reads the ambient occlusion by name");
   // The look's classes by the depth surface and the viewport: the scene at 1024 as wide as the
   // screen, the mirror at 80.
   Check(look.Classify(true, 1024, 1280, false) == look.FindPass("scene"), "scene draw");
@@ -104,6 +109,7 @@ hash = "0123456789abcdef"
 hooks = "shader_0123456789ABCDEF.mod.hlsli"
 passes = ["scene", "hud"]
 params = "FM4_LOOK_X"
+srv = ["post:gtao_occlusion", "post:motion_vectors"]
 )",
                manifest),
         "a manifest with two passes and an entry");
@@ -120,6 +126,10 @@ params = "FM4_LOOK_X"
         "the entry's passes");
   Check(entry && entry->params.size() == 1 && entry->params[0] == "FM4_LOOK_X",
         "one param as a string");
+  Check(entry && entry->srv.size() == 2 &&
+            entry->srv[0].kind == nsc::Resource::Kind::kPost &&
+            entry->srv[0].name == "gtao_occlusion" && entry->srv[1].name == "motion_vectors",
+        "two post textures by name");
   Check(!manifest.FindPixel(0x0123456789ABCDEEull), "no entry for another hash");
   nsc::Manifest empty;
   Check(Parses("", empty) && empty.pixel.empty() && empty.PassCount() == nsc::kFirstTitlePass,
@@ -147,6 +157,13 @@ params = "FM4_LOOK_X"
         "unknown pass in an entry");
   Check(Refused("[[pixel]]\nhash = \"0123456789ABCDEF\"\nhooks = \"a.hlsli\"\nparams = [\"1X\"]\n"),
         "bad param name");
+  const std::string with_entry = "[[pixel]]\nhash = \"0123456789ABCDEF\"\nhooks = \"a.hlsli\"\n";
+  Check(Refused((with_entry + "srv = [\"gtao_occlusion\"]\n").c_str()), "srv without a kind");
+  Check(Refused((with_entry + "srv = [\"scene:depth\"]\n").c_str()), "unknown srv kind");
+  Check(Refused((with_entry + "srv = [\"post:\"]\n").c_str()), "srv without a name");
+  Check(Refused((with_entry + "srv = [\"post:Motion\"]\n").c_str()), "upper case srv name");
+  Check(Refused((with_entry + "srv = [\"post:a\", \"post:a\"]\n").c_str()), "srv twice");
+  Check(Refused((with_entry + "srv = [1]\n").c_str()), "srv not a name");
   Check(Refused("[[pixel]]\nhash = \"0123456789ABCDEF\"\nshader = \"a.hlsl\"\n"),
         "replacement shaders are not supported yet");
   Check(Refused("[[pixel]]\nhash = \"0123456789ABCDEF\"\nhooks = \"a.hlsli\"\n[[pixel]]\nhash = "

@@ -26,7 +26,7 @@ std::string Text(std::initializer_list<std::string_view> pieces) {
 }
 
 // A lower-case name of letters, digits and '_' that does not start with a digit: it becomes
-// part of a define (XE_NATIVE_PASS_<NAME>).
+// part of a define (XE_NATIVE_PASS_<NAME>) or of a function (xe_srv_<name>).
 bool IsPassName(std::string_view name) {
   if (name.empty() || (name[0] >= '0' && name[0] <= '9')) {
     return false;
@@ -194,7 +194,8 @@ bool ParseManifest(std::string_view text, const std::string& file_name, Manifest
         return fail(Text({"[[pixel]] ", hash_text,
                           ": replacement shaders (shader) are not supported yet, only hooks"}));
       }
-      if (std::string_view key = UnknownKey(*fields, {"hash", "hooks", "passes", "params"});
+      if (std::string_view key =
+              UnknownKey(*fields, {"hash", "hooks", "passes", "params", "srv"});
           !key.empty()) {
         return fail(Text({"[[pixel]] ", hash_text, ": unknown key '", key, "'"}));
       }
@@ -233,6 +234,32 @@ bool ParseManifest(std::string_view text, const std::string& file_name, Manifest
         if (!IsDefineName(name)) {
           return fail(Text({"[[pixel]] ", hash_text, ": param '", name, "' is not a define name"}));
         }
+      }
+      std::vector<std::string> resources;
+      if (!StringList(fields->get("srv"), resources)) {
+        return fail(Text({"[[pixel]] ", hash_text, ": srv must be resource names"}));
+      }
+      for (const std::string& resource : resources) {
+        // A kind and a lower-case name (part of xe_srv_<name>).
+        size_t colon = resource.find(':');
+        std::string_view kind = colon == std::string::npos
+                                    ? std::string_view()
+                                    : std::string_view(resource).substr(0, colon);
+        std::string name = colon == std::string::npos ? std::string() : resource.substr(colon + 1);
+        if (kind != "post") {
+          return fail(Text({"[[pixel]] ", hash_text, ": srv '", resource,
+                            "' is not post:<texture> (the only kind so far)"}));
+        }
+        if (!IsPassName(name)) {
+          return fail(Text({"[[pixel]] ", hash_text, ": srv '", resource,
+                            "': the name must be lower-case letters, digits and '_'"}));
+        }
+        for (const Resource& other : entry.srv) {
+          if (other.name == name) {
+            return fail(Text({"[[pixel]] ", hash_text, ": srv '", name, "' twice"}));
+          }
+        }
+        entry.srv.push_back({Resource::Kind::kPost, std::move(name)});
       }
       manifest.pixel.push_back(std::move(entry));
     }

@@ -218,6 +218,10 @@ class ShaderOverrides {
   // Names of post pass defines and params: shader_mod_set applies them at
   // once, and they are neither defines nor live knobs of the mods.
   void SetPassNames(std::vector<std::string> names);
+  // The textures the post passes expose to mods, by name with their slot
+  // (xe_post_texture): a native shader contract entry reads them by name
+  // (srv = ["post:<name>"], xe_srv_<name>).
+  void SetPostTextures(std::vector<std::pair<std::string, uint32_t>> slots);
 
   // Hot reload (shader_mod_hot_reload), on the thread that creates pipelines
   // while no pipeline is being created and no shader translated: if PollChanges
@@ -393,6 +397,9 @@ class ShaderOverrides {
   std::vector<std::pair<std::string, std::string>> pending_defines_;
   // Post pass names (SetPassNames).
   std::unordered_set<std::string> pass_names_;
+  // The post passes' textures with a slot (SetPostTextures); empty without
+  // post passes.
+  std::unordered_map<std::string, uint32_t> post_texture_slots_;
   std::atomic<uint64_t> defines_generation_{1};
 
   // Hot reload.

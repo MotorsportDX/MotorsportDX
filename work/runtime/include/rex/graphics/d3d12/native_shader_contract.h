@@ -39,6 +39,16 @@ struct PassRule {
   uint32_t max_viewport_width = UINT32_MAX;
 };
 
+// A resource an entry reads by name (srv), as xe_srv_<name>(uv) in its mod.
+struct Resource {
+  enum class Kind {
+    // A texture the post passes expose to mods (a slot in passes.toml), by its name there.
+    kPost,
+  };
+  Kind kind = Kind::kPost;
+  std::string name;
+};
+
 // A [[pixel]] entry.
 struct PixelEntry {
   // The runtime's key of the guest pixel shader (XXH3 of its ucode).
@@ -50,6 +60,8 @@ struct PixelEntry {
   // Defines of the mod read as constants after the host values (xe_mod_knob), so that
   // shader_mod_set changes them at once and every look shares one binary.
   std::vector<std::string> params;
+  // The resources the mod reads by name ("post:<texture>"), each name once.
+  std::vector<Resource> srv;
 };
 
 struct Manifest {
