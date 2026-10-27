@@ -29,7 +29,7 @@ Kept on the development computer and never staged for this checkpoint:
 
 ## Licensing and attribution
 
-No blanket license is assigned to the project by this checkpoint. Upstream SDK-derived portions remain subject to the upstream license notices included in the repository. No rights to FM4 game content are provided.
+The project's own code is licensed under the BSD 3-Clause License ([LICENSE](../LICENSE), the project owner's decision of 27 October 2026), the same license as the ReXGlue SDK and Xenia that the runtime forks. It covers the files this project wrote: `work/fm4-rex`, `work/fm4-launcher`, `outputs/FM4-build`, `outputs/FM4-source-control`, the docs and this project's changes in `work/runtime`. Upstream SDK-derived portions remain subject to the upstream license notices included in the repository, and third-party code keeps its own license. No rights to FM4 game content are provided. Exports carry the license as `LICENSE.txt` beside `CREDITS.txt`.
 
 The SDK and the shipped shader sources keep their upstream attribution and license terms:
 

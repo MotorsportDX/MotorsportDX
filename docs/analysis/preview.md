@@ -49,7 +49,7 @@ the preview cannot start without it.
 | The export carries the notices (`export` copies `third-party-notices`) | Done | Done |
 | No game file, executable, capture or log in any commit of any ref (scan of 25 October 2026) | Done | Done |
 | `.gitignore`, `tracked-files.json` and `check-staged-content.py` keep the game out | Done | Done |
-| A license for the project's own code | Not done (testers build for themselves) | **Owner's decision**: without one the public may read the source but not reuse it |
+| A license for the project's own code | Done: BSD-3-Clause ([LICENSE](../../LICENSE), the owner's decision of 27 October 2026) | Done |
 | `pe_image.h` and disruptorplus without a stated license in the SDK's copy; the AMD CAS and FSR 1 years and the DirectX Shader Compiler's `LICENSE.TXT` not re-read from upstream ([open items](../sources-and-licensing.md#open-items-before-a-public-release)) | Not done (low risk: fetched from upstream, not stored) | Not done (confirm before a public release) |
 | A disclaimer that the project is not affiliated with Microsoft or Turn 10 (README) | Done | Done |
 | GameInput (the `gameinput` pad driver): only the package's two MIT files are used, reviewed with the change ([Microsoft.GameInput](../sources-and-licensing.md#third-party-code-microsoftgameinput)), and the SDL patch is marked | Done | Done |
@@ -81,8 +81,9 @@ the preview cannot start without it.
    clone it, and names the commit.
 2. A closed preview with a few testers who own the game, on their own hardware: their first
    task is the clean setup, then the coverage gaps above, reported as [bug reports](../bug-reports.md) asks.
-3. Before a public preview: the soak test, the owner's open tests, the license of the project's
-   own code, the confirmation of the open license items, and a reporting place.
+3. Before a public preview: the soak test, the owner's open tests, the confirmation of the open
+   license items, and a reporting place (the project's own license is BSD-3-Clause since
+   27 October 2026).
 
 ## 4. Internal names
 

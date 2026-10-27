@@ -17,6 +17,10 @@
       "provenance": "Project documentation; setup instructions and verified status summary"
     },
     {
+      "path": "LICENSE",
+      "provenance": "The project's own license, BSD-3-Clause (the project owner's decision of 27 October 2026); standard license text, no third-party code"
+    },
+    {
       "path": "AGENTS.md",
       "provenance": "Project documentation; agent instructions (language rules, documentation layout, repository rules)"
     },

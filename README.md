@@ -161,7 +161,7 @@ The next validation priorities are a clean setup on a second computer, then audi
 
 ## Licensing and attribution
 
-The repository contains reviewed integration code and a ReXGlue SDK fork (BSD-3-Clause, with Xenia-derived portions), and it keeps the upstream notices. The project does not assign a blanket license of its own, and it provides no rights to FM4 game content. Only the source is distributed: the game's executables and DLLs that `build` makes, an export, and any game data stay with the player who built them ([distribution](docs/sources-and-licensing.md#distribution)). See [docs/sources-and-licensing.md](docs/sources-and-licensing.md).
+Motorsport DX's own code is licensed under the [BSD 3-Clause License](LICENSE). The ReXGlue SDK fork in `work/runtime` (BSD-3-Clause, with Xenia-derived portions) keeps its upstream notices, and the third-party code keeps its own licenses (below). The license gives no rights to FM4 game content. Only the source is distributed: the game's executables and DLLs that `build` makes, an export, and any game data stay with the player who built them ([distribution](docs/sources-and-licensing.md#distribution)). See [docs/sources-and-licensing.md](docs/sources-and-licensing.md).
 
 ## Credits
 

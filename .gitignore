@@ -20,6 +20,7 @@
 !/.gitattributes
 !/.gitignore
 !/README.md
+!/LICENSE
 !/AGENTS.md
 !/CLAUDE.md
 !/docs/

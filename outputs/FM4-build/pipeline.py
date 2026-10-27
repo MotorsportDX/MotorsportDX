@@ -59,6 +59,8 @@ THIRDPARTY_PATCHES = (('sdl3-gameinput-v3.patch','sdl3'),)
 NOTICES = REPO/'outputs/FM4-source-control/third-party-notices'
 # The acknowledgements beside the launcher; its About page opens them (docs/running.md).
 CREDITS = HERE/'CREDITS.txt'
+# The project's own license (BSD-3-Clause), beside them as LICENSE.txt.
+LICENSE = REPO/'LICENSE'
 RESOLVE_SHADERS = [f'resolve_full_{bits}bpp{suffix}' for bits in (8,16,32,64) for suffix in ('','_scaled')]
 # The fast copy of 32bpp 4x MSAA surfaces with a per-pixel EDRAM address, in place of upstream's
 # precompiled one, which read the vertical sample at the depth tile's half swap (d3d-hle-n3.md 16.17).
@@ -2031,10 +2033,11 @@ def stage_launcher_files(directory):
     """launcher.json, and the look mods and post passes that launch copies before each run, into
     directory (the BuildRoot or an export folder): the launcher runs them from there. Also the
     credits and the licenses of the third-party code in the binaries, which the launcher's About
-    page opens."""
+    page opens, and the project's own license."""
     directory=Path(directory)
     (directory/'launcher.json').write_text(json.dumps(launcher_data(),indent=1),encoding='utf-8')
     shutil.copyfile(CREDITS,directory/'CREDITS.txt')
+    shutil.copyfile(LICENSE,directory/'LICENSE.txt')
     shutil.copytree(NOTICES,directory/'third-party-notices',dirs_exist_ok=True)
     for name,source,suffixes in (('look',LOOK_DIRECTORY,('.hlsli',)),
                                  ('passes',PASSES_DIRECTORY,('.toml','.hlsl','.hlsli'))):
