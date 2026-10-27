@@ -1,0 +1,26 @@
+# The native shader contract of the FM4 look (native_shader_contract on the native path,
+# docs/analysis/shader-contract.md). Original data of this project: the pass rules name FM4's
+# depth surfaces by their EDRAM base and its viewports by their width, and each [[pixel]] entry
+# names a mod of this directory for a guest pixel shader by its ucode hash. Without the switch,
+# and on RTV, the classic shader_<hash>.mod.hlsli files apply as they are.
+
+# Pass classes after the built-in other, post and hud, for draws that test depth or stencil.
+# In one pass (the native path's races) the scene is drawn on the depth surface at EDRAM base
+# 1024 in a viewport as wide as the screen (the post passes' scene camera takes 1024 guest
+# pixels or more), the rear-view mirror on its own depth surface at base 80, 384 wide (the log
+# of native_shader_pass_debug, docs/analysis/shader-contract.md).
+[[pass]]
+name = "scene"
+depth_base = 1024
+min_viewport_width = 1024
+
+[[pass]]
+name = "mirror"  # the rear-view mirror
+depth_base = 80
+
+# The car windows of shaders_v16 (fm4_glass in fm4-car.hlsli): about half of their draws are
+# in the rear-view mirror. Their knobs are constants, so shader_mod_set changes them at once.
+[[pixel]]
+hash = "E62CFDF09D758B6C"
+hooks = "shader_E62CFDF09D758B6C.mod.hlsli"
+params = ["FM4_LOOK_GLASS", "FM4_LOOK_GLASS_ROUGHNESS", "FM4_LOOK_CLEARCOAT_GLINT"]

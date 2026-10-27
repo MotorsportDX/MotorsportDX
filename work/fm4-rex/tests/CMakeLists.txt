@@ -44,6 +44,12 @@ if(NOT EXISTS "${REX_RUNTIME_SOURCE}/src/graphics/d3d12/fsr.cpp")
 endif()
 target_sources(fm4_post_pass_shader_tests PRIVATE
                "${REX_RUNTIME_SOURCE}/src/graphics/d3d12/fsr.cpp")
+# The native shader contract's manifest and pass classes (docs/analysis/shader-contract.md):
+# the header and the runtime's parser, with the installed toml++; argument: the look's
+# shaders.toml.
+add_executable(fm4_native_shader_contract_tests native-shader-contract-tests.cpp
+               "${REX_RUNTIME_SOURCE}/src/graphics/d3d12/native_shader_contract.cpp")
+target_include_directories(fm4_native_shader_contract_tests SYSTEM PRIVATE "${REX_HEADER_ROOT}")
 option(REX_FSR "Run the fsr passes with AMD FSR 3.1 (REX_FSR_SDK_DIR)" OFF)
 if(REX_FSR)
   set(REX_FSR_SDK_DIR "" CACHE PATH "The FidelityFX SDK v1.1.4 checkout")

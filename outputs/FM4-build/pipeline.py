@@ -733,8 +733,9 @@ def post_pass_tests(root,jobs):
     with it), the track lighting file edits of the look's track knobs (fm4-track-settings.h), and
     the texture replacement content hash and DDS files (docs/analysis/texture-replacement.md),
     the draw resolution scale as a fraction (docs/analysis/d3d-hle-n5.md), the physical pads'
-    stick and trigger shaping (docs/analysis/modern-gamepads.md), and the keyboard's steering and
-    pedal model (docs/analysis/keyboard-controls.md).
+    stick and trigger shaping (docs/analysis/modern-gamepads.md), the keyboard's steering and
+    pedal model (docs/analysis/keyboard-controls.md), and the native shader contract's manifest
+    and pass classes (docs/analysis/shader-contract.md).
     work/fm4-rex/tests, synced here like the runtime, built against the installed runtime headers. The WARP scene's checks were set with a GTAO radius of 1 m."""
     source,build=root/'project/tests',root/'tests-build'
     inventory=json.loads((REPO/'outputs/FM4-source-control/tracked-files.json').read_text())
@@ -754,7 +755,7 @@ def post_pass_tests(root,jobs):
     run(['cmake','--build',build,'--parallel',jobs,'--target','fm4_post_pass_camera_tests',
          'fm4_post_pass_shader_tests','fm4_shader_mod_tests','fm4_track_settings_tests',
          'fm4_texture_replacement_tests','fm4_draw_scale_tests','fm4_pad_shaping_tests',
-         'fm4_keyboard_model_tests'],
+         'fm4_keyboard_model_tests','fm4_native_shader_contract_tests'],
         log=root/'logs/tests-build.log')
     run([build/'fm4_track_settings_tests.exe'],cwd=build,log=root/'logs/track-settings-tests.log')
     run([build/'fm4_texture_replacement_tests.exe'],cwd=build,
@@ -763,6 +764,8 @@ def post_pass_tests(root,jobs):
     run([build/'fm4_draw_scale_tests.exe'],cwd=build,log=root/'logs/draw-scale-tests.log')
     run([build/'fm4_pad_shaping_tests.exe'],cwd=build,log=root/'logs/pad-shaping-tests.log')
     run([build/'fm4_keyboard_model_tests.exe'],cwd=build,log=root/'logs/keyboard-model-tests.log')
+    run([build/'fm4_native_shader_contract_tests.exe',LOOK_DIRECTORY/'shaders.toml'],cwd=build,
+        log=root/'logs/native-shader-contract-tests.log')
     run([build/'fm4_post_pass_shader_tests.exe',root/'runtime-source/src/graphics/d3d12/post_pass.hlsli',
          PASSES_DIRECTORY,'GTAO_RADIUS=1'],cwd=build,log=root/'logs/post-pass-shader-tests.log')
     # FSR's checks run on the first hardware adapter (WARP crashes in FSR's shading change
@@ -1004,6 +1007,9 @@ def quality_msaa_samples(quality,native,msaa_samples,single_tile,msaa,rov,displa
     return msaa_samples,f'; {name}: 2x MSAA ({samples}x needs a whole scale at 16:9 without -Upscale)'
 
 LOOK_DIRECTORY=REPO/'work/fm4-rex/look'
+# The files of a look directory that a run reads: the mods and their libraries, and the native
+# shader contract's manifest shaders.toml (docs/analysis/shader-contract.md).
+LOOK_SUFFIXES=('.hlsli','.toml')
 # The runtime's post passes (docs/analysis/post-pass-framework.md): passes.toml and its HLSL.
 PASSES_DIRECTORY=REPO/'work/fm4-rex/passes'
 
@@ -1169,8 +1175,9 @@ def look_cvars(root,look,shader_dev=False,upscale_ratio=1.0):
         if directory.is_dir():
             shutil.rmtree(directory)
         directory.mkdir()
-        for path in LOOK_DIRECTORY.glob('*.hlsli'):
-            shutil.copyfile(path,directory/path.name)
+        for path in LOOK_DIRECTORY.iterdir():
+            if path.suffix in LOOK_SUFFIXES:
+                shutil.copyfile(path,directory/path.name)
     cvars.update({'shader_mod_path':directory,'shader_mod_defines':';'.join(defines)})
     if shader_dev:
         cvars.update(shader_mod_hot_reload='true',shader_mod_live_knobs='true')
@@ -2039,7 +2046,7 @@ def stage_launcher_files(directory):
     shutil.copyfile(CREDITS,directory/'CREDITS.txt')
     shutil.copyfile(LICENSE,directory/'LICENSE.txt')
     shutil.copytree(NOTICES,directory/'third-party-notices',dirs_exist_ok=True)
-    for name,source,suffixes in (('look',LOOK_DIRECTORY,('.hlsli',)),
+    for name,source,suffixes in (('look',LOOK_DIRECTORY,LOOK_SUFFIXES),
                                  ('passes',PASSES_DIRECTORY,('.toml','.hlsl','.hlsli'))):
         shutil.rmtree(directory/name,ignore_errors=True)
         (directory/name).mkdir()

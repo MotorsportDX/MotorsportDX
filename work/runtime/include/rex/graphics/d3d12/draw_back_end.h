@@ -225,6 +225,11 @@ constexpr uint32_t kFlagSceneInput = 1 << 16;
 // covers the logical size centred on the target, so it shows the texture's
 // centred 1280x720.
 constexpr uint32_t kFlagLogicalCrop = 1 << 17;
+// The native shader contract's pass class of the last draw of a pixel shader with
+// a manifest entry (docs/analysis/shader-contract.md), 4 bits: the shader
+// overrides' host value W.
+constexpr uint32_t kFlagNativePassShift = 24;
+constexpr uint32_t kFlagNativePassMask = 0xFu << kFlagNativePassShift;
 // The scale of a scene draw with the flags.
 inline DrawScale FlagsSceneScale(uint32_t flags, DrawScale scene_scale, DrawScale input_scale) {
   return (flags & kFlagSceneInput) ? input_scale : scene_scale;

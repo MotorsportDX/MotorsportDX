@@ -34,6 +34,7 @@
 #include <rex/graphics/d3d12/deferred_constants.h>
 #include <rex/graphics/d3d12/draw_back_end.h>
 #include <rex/graphics/d3d12/graphics_system.h>
+#include <rex/graphics/d3d12/native_shader_contract.h>
 #include <rex/graphics/d3d12/pipeline_cache.h>
 #include <rex/graphics/d3d12/primitive_processor.h>
 #include <rex/graphics/d3d12/render_target_cache.h>
@@ -1111,9 +1112,16 @@ class D3D12CommandProcessor : public CommandProcessor {
   draw_back_end::SystemConstantInputs system_constant_inputs_ = {};
   // With shader overrides: the host values written after the system constants
   // (ShaderOverrides::kHostValuesOffset): the guest vblank rate, the title's
-  // frame interval and its design frame rate.
+  // frame interval, its design frame rate, and the native shader contract's
+  // pass class.
   bool shader_mod_host_values_used_ = false;
   float shader_mod_host_values_[4] = {};
+  // native_shader_contract: the manifest (nullptr when off), and the pass class
+  // of the last draw of a pixel shader with an entry (docs/analysis/
+  // shader-contract.md).
+  const native_shader_contract::Manifest* native_shader_contract_ = nullptr;
+  bool native_shader_pass_debug_ = false;
+  uint32_t native_shader_pass_ = 0;
   // shader_mod_live_knobs: the knob values written after the system constants
   // (ShaderOverrides::kKnobsOffset), and where they come from (nullptr without
   // live knobs).

@@ -93,6 +93,7 @@ if(REXGLUE_USE_D3D12)
         d3d12/draw_back_end.cpp
         d3d12/pipeline_cache.cpp
         d3d12/shader_override.cpp
+        d3d12/native_shader_contract.cpp
         d3d12/post_pass.cpp
         d3d12/fsr.cpp
     )

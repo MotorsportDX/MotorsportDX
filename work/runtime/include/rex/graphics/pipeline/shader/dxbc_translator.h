@@ -199,6 +199,13 @@ class DxbcShaderTranslator : public ShaderTranslator {
       // scale (SetSceneInputScale) while upscaling (docs/analysis/fsr-plan.md
       // 11).
       uint32_t scene_input_scale : 1;
+      // Not used by the translator: with native_shader_contract, a draw of a
+      // pixel shader that has a manifest entry takes the classic mod of its
+      // hash instead (the A/B, native_shader_contract_ab_ms), or the plain
+      // translation (outside the entry's passes); see
+      // docs/analysis/shader-contract.md.
+      uint32_t native_classic : 1;
+      uint32_t native_plain : 1;
     } pixel;
 
     explicit Modification(uint64_t modification_value = 0) : value(modification_value) {

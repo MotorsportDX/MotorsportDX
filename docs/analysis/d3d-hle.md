@@ -240,6 +240,8 @@ The native path creates the pipelines and binds the resources itself, so a nativ
 - new passes at D3D-level points (after the opaque geometry, before the transparent geometry, before the HUD), with Shader Model 6 and compute shaders (DXC is needed, as in the [FSR plan](fsr-plan.md));
 - an offline translation of every game shader to HLSL and DXIL on the user's machine, as XenosRecomp does for Unleashed Recompiled, so that no shader compiles during play and any shader can be edited.
 
+The contract's design, increments and results are in [shader contract](shader-contract.md) (27 October 2026).
+
 What stays tied to the game is its data, not the Xenos GPU: the meaning of the constants the game writes ([material atlas](material-atlas.md)), the vertex and texture formats in guest memory (the native path converts them before a shader sees them), and the identity of each game shader by its microcode hash. Shaders written for the project may go into the repository like the look mods; translations of the game's own shaders are derived from game data, so they are generated on the user's machine like the recompiled code and are not committed.
 
 ## 9. Stages
