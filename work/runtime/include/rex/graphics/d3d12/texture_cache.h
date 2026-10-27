@@ -240,6 +240,29 @@ class D3D12TextureCache final : public TextureCache {
   // it: a guest draw's binding, the swap or a post pass (the perf trace's gpu
   // resolve_host_writes, d3d-hle-n6.md 19.7.3).
   bool IsResolveTextureTargetUnsampled(const ResolveTextureTarget& target) const;
+  // native_rt_resolve_skip (d3d-hle-n6.md 19.7.4): a target's write that the
+  // resolve leaves out. kLoad: a texture at the whole scale, which its load
+  // from the guest's layout gives byte for byte (the texture byte check of
+  // d3d-hle-n5.md 18.12) for less than the write. kSibling: a texture at the
+  // scene's scale that nothing sampled since its last write, whose packed_mips
+  // sibling among the targets is written (one level, so the same data): it is
+  // copied from the sibling when something samples it. A partial write (a
+  // band of photo mode's tiles) skips none at the scene's scale.
+  enum class ResolveTextureSkip : uint8_t { kWrite, kLoad, kSibling };
+  ResolveTextureSkip GetResolveTextureSkip(const ResolveTextureTarget* targets, size_t count,
+                                           size_t index, bool partial) const;
+  void SkipResolveTextureWrite(const ResolveTextureTarget& target, ResolveTextureSkip skip);
+  // native_rt_resolve_skip bit 4, the check: a skipped texture is written with
+  // wrong bytes (another endianness) instead, so a use that its load or its
+  // sibling's copy does not cover shows in the image. The write is ended here.
+  static bool IsResolveTextureSkipPoisoned();
+  void EndPoisonedResolveTextureWrite(const ResolveTextureTarget& target,
+                                      ResolveTextureSkip skip);
+  // Before a partial write: a write skipped earlier is copied from the
+  // sibling, so the rows the write leaves hold the earlier resolve's data.
+  void PrepareResolveTextureWrite(const ResolveTextureTarget& target) {
+    ApplySkippedResolveWrite(*static_cast<D3D12Texture*>(target.texture));
+  }
   // native_rt_resolve_check: the texture's next load is compared with a copy
   // the resolve shader wrote (scratch, in UNORDERED_ACCESS state; the cache
   // keeps a reference). Polled at each frame's start; returns the textures
@@ -386,6 +409,11 @@ class D3D12TextureCache final : public TextureCache {
     // A resolve wrote the texture from the render target and nothing sampled
     // it since (IsResolveTextureTargetUnsampled).
     bool resolve_written_unsampled = false;
+    // The resolve (by resolve_texture_write_index_) whose data the texture
+    // holds from the render target, and one that skipped its write while its
+    // packed_mips sibling took it (0: none pending, ResolveTextureSkip).
+    uint64_t resolve_write_index = 0;
+    uint64_t resolve_skip_index = 0;
 
    private:
     Microsoft::WRL::ComPtr<ID3D12Resource> resource_;
@@ -400,6 +428,11 @@ class D3D12TextureCache final : public TextureCache {
 
     const ReplacementResource* replacement_ = nullptr;
   };
+
+  // Something samples the texture: a write that a resolve skipped
+  // (ResolveTextureSkip::kSibling) is copied from its sibling first.
+  void OnResolveTextureSampled(D3D12Texture& texture);
+  void ApplySkippedResolveWrite(D3D12Texture& texture);
 
   static constexpr uint32_t kSRVDescriptorCachePageSize = 65536;
 
@@ -692,6 +725,8 @@ class D3D12TextureCache final : public TextureCache {
     uint32_t width = 0, height = 0, row_pitch = 0;
   };
   std::vector<ResolveTextureCheck> resolve_texture_checks_;
+  // Counts the resolves that look for host textures (GetResolveTextureTargets).
+  uint64_t resolve_texture_write_index_ = 0;
   void RecordResolveTextureCheckCopies(D3D12Texture& texture);
 };
 

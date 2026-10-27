@@ -11,6 +11,7 @@
 
 #include <algorithm>
 #include <array>
+#include <chrono>
 #include <cfloat>
 #include <cstddef>
 #include <cstring>
@@ -59,6 +60,20 @@ REXCVAR_DEFINE_INT32(native_rt_resolve_check, 0, "GPU/D3D12",
                      "loaded texels with the scratch bytes")
     .range(0, 100000)
     .lifecycle(rex::cvar::Lifecycle::kRequiresRestart);
+REXCVAR_DEFINE_INT32(native_rt_resolve_skip, 3, "GPU/D3D12",
+                     "Host texture writes of resolves from private surfaces left out "
+                     "(docs/analysis/d3d-hle-n6.md 19.7.4): bit 1, the textures at the whole "
+                     "scale, which load from the guest's layout instead; bit 2, those at the "
+                     "scene's scale that nothing sampled since their last write and whose "
+                     "packed_mips sibling is written, copied from it when something samples them; "
+                     "bit 4, the check: skipped textures get wrong bytes instead, which their "
+                     "load or the sibling's copy replaces; bit 8, its perturbation: the textures "
+                     "that something samples are skipped instead, and the copy is dropped")
+    .range(0, 15);
+REXCVAR_DEFINE_INT32(native_rt_resolve_skip_ab_ms, 0, "GPU/D3D12",
+                     "No native_rt_resolve_skip in every other period of this many milliseconds "
+                     "of the steady clock (0: always as set), to compare both in one scene")
+    .range(0, 3600000);
 
 namespace rex::graphics::d3d12 {
 
@@ -797,7 +812,7 @@ void D3D12TextureCache::RequestTextures(uint32_t used_texture_mask) {
     if (binding_texture != nullptr) {
       // Will be referenced by the command list, so mark as used.
       binding_texture->MarkAsUsed();
-      binding_texture->resolve_written_unsampled = false;
+      OnResolveTextureSampled(*binding_texture);
       command_processor_.PushTransitionBarrier(
           binding_texture->resource(),
           binding_texture->SetResourceState(D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE |
@@ -808,7 +823,7 @@ void D3D12TextureCache::RequestTextures(uint32_t used_texture_mask) {
     D3D12Texture* binding_texture_signed = static_cast<D3D12Texture*>(binding->texture_signed);
     if (binding_texture_signed != nullptr) {
       binding_texture_signed->MarkAsUsed();
-      binding_texture_signed->resolve_written_unsampled = false;
+      OnResolveTextureSampled(*binding_texture_signed);
       command_processor_.PushTransitionBarrier(
           binding_texture_signed->resource(),
           binding_texture_signed->SetResourceState(D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE |
@@ -1436,7 +1451,7 @@ ID3D12Resource* D3D12TextureCache::RequestSwapTexture(D3D12_SHADER_RESOURCE_VIEW
     return nullptr;
   }
   texture->MarkAsUsed();
-  texture->resolve_written_unsampled = false;
+  OnResolveTextureSampled(*texture);
   // The swap texture is likely to be used only for the presentation compute
   // shader, and not during emulation, where it'd be NON_PIXEL_SHADER_RESOURCE |
   // PIXEL_SHADER_RESOURCE.
@@ -1506,7 +1521,7 @@ ID3D12Resource* D3D12TextureCache::RequestResolvedTexture(
     return nullptr;
   }
   texture->MarkAsUsed();
-  texture->resolve_written_unsampled = false;
+  OnResolveTextureSampled(*texture);
   // The state of textures bound to guest draws, so a guest shader sampling the
   // same texture needs no transition.
   constexpr D3D12_RESOURCE_STATES kState =
@@ -1552,6 +1567,8 @@ bool D3D12TextureCache::WriteResolvedTexture(uint32_t base_address, uint32_t pit
       return false;
     }
     texture.MarkAsUsed();
+    // And a skipped resolve write: the copy may cover a part of it.
+    OnResolveTextureSampled(texture);
     ID3D12Resource* texture_resource = texture.resource();
     D3D12_RESOURCE_DESC texture_desc = texture_resource->GetDesc();
     D3D12_BOX box = {0, 0, 0, std::min(source_width, uint32_t(texture_desc.Width)),
@@ -1614,6 +1631,7 @@ size_t D3D12TextureCache::GetResolveTextureTargets(uint32_t base_address, uint32
                                                    xenos::Endian scene_endianness,
                                                    uint32_t scene_depth, bool scene_input) {
   size_t count = 0;
+  ++resolve_texture_write_index_;
   if (scene) {
     // Created from the key the fetches use, so the first frame is written.
     bool any = false;
@@ -1763,10 +1781,147 @@ void D3D12TextureCache::EndResolveTextureWrite(const ResolveTextureTarget& targe
   }
   texture.MarkAsUsed();
   texture.resolve_written_unsampled = true;
+  texture.resolve_write_index = resolve_texture_write_index_;
+  texture.resolve_skip_index = 0;
 }
 
 bool D3D12TextureCache::IsResolveTextureTargetUnsampled(const ResolveTextureTarget& target) const {
   return static_cast<const D3D12Texture*>(target.texture)->resolve_written_unsampled;
+}
+
+D3D12TextureCache::ResolveTextureSkip D3D12TextureCache::GetResolveTextureSkip(
+    const ResolveTextureTarget* targets, size_t count, size_t index, bool partial) const {
+  const int32_t skip = REXCVAR_GET(native_rt_resolve_skip);
+  const int32_t ab_period = REXCVAR_GET(native_rt_resolve_skip_ab_ms);
+  if (ab_period > 0) {
+    const int64_t milliseconds = std::chrono::duration_cast<std::chrono::milliseconds>(
+                                     std::chrono::steady_clock::now().time_since_epoch())
+                                     .count();
+    if (((milliseconds / ab_period) & 1) != 0) {
+      return ResolveTextureSkip::kWrite;
+    }
+  }
+  const ResolveTextureTarget& target = targets[index];
+  if (!target.scene_scaled) {
+    return (skip & 1) ? ResolveTextureSkip::kLoad : ResolveTextureSkip::kWrite;
+  }
+  // Skipped if nothing sampled it since its last write; with the perturbation
+  // (bit 8), if something did.
+  const bool perturbed = (skip & 8) != 0;
+  const auto& texture = *static_cast<const D3D12Texture*>(target.texture);
+  if (!(skip & 2) || partial || texture.resolve_written_unsampled == perturbed) {
+    return ResolveTextureSkip::kWrite;
+  }
+  // A sibling that is written.
+  TextureKey sibling_key = texture.key();
+  sibling_key.packed_mips ^= 1;
+  for (size_t i = 0; i < count; ++i) {
+    const auto& other = *static_cast<const D3D12Texture*>(targets[i].texture);
+    if (i != index && targets[i].scene_scaled && other.resolve_written_unsampled == perturbed &&
+        other.key() == sibling_key) {
+      return ResolveTextureSkip::kSibling;
+    }
+  }
+  return ResolveTextureSkip::kWrite;
+}
+
+void D3D12TextureCache::SkipResolveTextureWrite(const ResolveTextureTarget& target,
+                                                ResolveTextureSkip skip) {
+  auto& texture = *static_cast<D3D12Texture*>(target.texture);
+  if (skip == ResolveTextureSkip::kLoad) {
+    // The resolve left it outdated (MarkRangeAsResolved): its next use loads
+    // it.
+    perf_trace::CountResolveTextureSkip(false);
+    return;
+  }
+  // As a written texture: loaded and watched, and as recently used, so it is
+  // not evicted sooner than its sibling.
+  MarkTextureLoaded(texture);
+  texture.MarkAsUsed();
+  texture.resolve_skip_index = resolve_texture_write_index_;
+  perf_trace::CountResolveTextureSkip(true);
+  // The textures it skips, once per key.
+  static std::vector<TextureKey> logged;
+  if (logged.size() < 16 && std::find(logged.begin(), logged.end(), texture.key()) == logged.end()) {
+    logged.push_back(texture.key());
+    const TextureKey& key = texture.key();
+    REXGPU_INFO(
+        "Resolve texture write skipped: {:08X} {}x{} format {} endian {} packed_mips {} depth {}",
+        key.base_page << 12, key.GetWidth(), key.GetHeight(), uint32_t(key.format),
+        uint32_t(key.endianness), uint32_t(key.packed_mips), target.depth);
+  }
+}
+
+bool D3D12TextureCache::IsResolveTextureSkipPoisoned() {
+  return (REXCVAR_GET(native_rt_resolve_skip) & 4) != 0;
+}
+
+void D3D12TextureCache::EndPoisonedResolveTextureWrite(const ResolveTextureTarget& target,
+                                                       ResolveTextureSkip skip) {
+  auto& texture = *static_cast<D3D12Texture*>(target.texture);
+  // As guest draws bind it; not marked loaded here, so one at the whole scale
+  // still loads.
+  constexpr D3D12_RESOURCE_STATES kState =
+      D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE | D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE;
+  command_processor_.PushTransitionBarrier(target.resource, texture.SetResourceState(kState),
+                                           kState);
+  // The write references it.
+  texture.MarkAsUsed();
+  SkipResolveTextureWrite(target, skip);
+}
+
+void D3D12TextureCache::OnResolveTextureSampled(D3D12Texture& texture) {
+  texture.resolve_written_unsampled = false;
+  ApplySkippedResolveWrite(texture);
+}
+
+void D3D12TextureCache::ApplySkippedResolveWrite(D3D12Texture& texture) {
+  if (!texture.resolve_skip_index) {
+    return;
+  }
+  const uint64_t index = texture.resolve_skip_index;
+  texture.resolve_skip_index = 0;
+  TextureKey sibling_key = texture.key();
+  sibling_key.packed_mips ^= 1;
+  auto* sibling = static_cast<D3D12Texture*>(FindTexture(sibling_key));
+  ID3D12Resource* resource = texture.resource();
+  ID3D12Resource* sibling_resource = sibling ? sibling->resource() : nullptr;
+  // The sibling still holds the data of the resolve that skipped this one;
+  // the perturbation (native_rt_resolve_skip bit 8) drops the copy.
+  if (!sibling || sibling->resolve_write_index != index || sibling->replacement() ||
+      texture.replacement() || (REXCVAR_GET(native_rt_resolve_skip) & 8)) {
+    perf_trace::CountResolveTextureFallback(false);
+    static bool logged = false;
+    if (!logged) {
+      logged = true;
+      REXGPU_ERROR("Resolve texture write skipped, but its sibling no longer holds the data: {:08X}",
+                   texture.key().base_page << 12);
+    }
+    return;
+  }
+  const D3D12_RESOURCE_DESC desc = resource->GetDesc(),
+                            sibling_desc = sibling_resource->GetDesc();
+  if (desc.Width != sibling_desc.Width || desc.Height != sibling_desc.Height ||
+      desc.Format != sibling_desc.Format || desc.MipLevels != sibling_desc.MipLevels) {
+    perf_trace::CountResolveTextureFallback(false);
+    return;
+  }
+  command_processor_.PushTransitionBarrier(
+      sibling_resource, sibling->SetResourceState(D3D12_RESOURCE_STATE_COPY_SOURCE),
+      D3D12_RESOURCE_STATE_COPY_SOURCE);
+  command_processor_.PushTransitionBarrier(
+      resource, texture.SetResourceState(D3D12_RESOURCE_STATE_COPY_DEST),
+      D3D12_RESOURCE_STATE_COPY_DEST);
+  command_processor_.SubmitBarriers();
+  command_processor_.GetDeferredCommandList().D3DCopyResource(resource, sibling_resource);
+  // As guest draws bind them.
+  constexpr D3D12_RESOURCE_STATES kState =
+      D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE | D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE;
+  command_processor_.PushTransitionBarrier(sibling_resource, sibling->SetResourceState(kState),
+                                           kState);
+  command_processor_.PushTransitionBarrier(resource, texture.SetResourceState(kState), kState);
+  texture.resolve_write_index = index;
+  perf_trace::CountResolveTextureFallback(true);
 }
 
 void D3D12TextureCache::QueueResolveTextureCheck(const ResolveTextureTarget& target,

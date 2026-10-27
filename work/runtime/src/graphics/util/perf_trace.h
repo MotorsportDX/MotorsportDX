@@ -336,6 +336,20 @@ inline void CountSceneTextureCreated() {
 inline void CountSceneTextureUnwritten() {
   native_resolve_scene_unwritten.fetch_add(1, std::memory_order_relaxed);
 }
+// native_rt_resolve_skip (d3d-hle-n6.md 19.7.4): host texture writes left to
+// the texture's load and to its packed_mips sibling, the sibling copies made
+// when such a texture was sampled, and those that found no sibling with the
+// resolve's data.
+inline std::atomic<uint64_t> native_resolve_skips_load{0}, native_resolve_skips_sibling{0},
+    native_resolve_fallbacks{0}, native_resolve_fallbacks_missing{0};
+inline void CountResolveTextureSkip(bool sibling) {
+  (sibling ? native_resolve_skips_sibling : native_resolve_skips_load)
+      .fetch_add(1, std::memory_order_relaxed);
+}
+inline void CountResolveTextureFallback(bool copied) {
+  (copied ? native_resolve_fallbacks : native_resolve_fallbacks_missing)
+      .fetch_add(1, std::memory_order_relaxed);
+}
 // Scene draws at a fractional scale (d3d-hle-n5.md 18.16): pixel shader
 // translations and pipelines with the scene_scale modification made while the
 // title runs, not loaded from the storage.
@@ -931,7 +945,15 @@ inline void OnSwap() {
                 << ",\"scene_created\":"
                 << native_resolve_scene_created.exchange(0, std::memory_order_relaxed)
                 << ",\"scene_unwritten\":"
-                << native_resolve_scene_unwritten.exchange(0, std::memory_order_relaxed) << '}'
+                << native_resolve_scene_unwritten.exchange(0, std::memory_order_relaxed)
+                << ",\"skips_load\":"
+                << native_resolve_skips_load.exchange(0, std::memory_order_relaxed)
+                << ",\"skips_sibling\":"
+                << native_resolve_skips_sibling.exchange(0, std::memory_order_relaxed)
+                << ",\"fallbacks\":"
+                << native_resolve_fallbacks.exchange(0, std::memory_order_relaxed)
+                << ",\"fallbacks_missing\":"
+                << native_resolve_fallbacks_missing.exchange(0, std::memory_order_relaxed) << '}'
                 << ",\"scene_variants\":{\"translations\":"
                 << scene_variant_translations.exchange(0, std::memory_order_relaxed)
                 << ",\"pipelines\":"

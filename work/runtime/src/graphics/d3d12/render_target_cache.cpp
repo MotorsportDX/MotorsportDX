@@ -7034,6 +7034,22 @@ void D3D12RenderTargetCache::ResolveHostIntoTextures(
   auto& render_target = *static_cast<D3D12RenderTarget*>(source.render_target);
   for (size_t i = 0; i < target_count; ++i) {
     const D3D12TextureCache::ResolveTextureTarget& target = targets[i];
+    // native_rt_resolve_skip (d3d-hle-n6.md 19.7.4): a write that the
+    // texture's load or its sibling gives. With the check (bit 4) it is
+    // written with wrong bytes instead.
+    D3D12TextureCache::ResolveTextureSkip skip = D3D12TextureCache::ResolveTextureSkip::kWrite;
+    if (!check) {
+      skip = texture_cache.GetResolveTextureSkip(targets, target_count, i, band != nullptr);
+      if (skip != D3D12TextureCache::ResolveTextureSkip::kWrite &&
+          !D3D12TextureCache::IsResolveTextureSkipPoisoned()) {
+        texture_cache.SkipResolveTextureWrite(target, skip);
+        continue;
+      }
+      if (band) {
+        texture_cache.PrepareResolveTextureWrite(target);
+      }
+    }
+    const bool poisoned = skip != D3D12TextureCache::ResolveTextureSkip::kWrite;
     ID3D12Resource* dest = target.resource;
     if (check) {
       const uint64_t scratch_key = (uint64_t(resolve_info.copy_dest_base) << 32) |
@@ -7081,7 +7097,7 @@ void D3D12RenderTargetCache::ResolveHostIntoTextures(
     std::memcpy(root_constants, &constants.dest_relative, sizeof(constants.dest_relative));
     uint32_t constant_count = sizeof(constants.dest_relative) / sizeof(uint32_t);
     root_constants[constant_count++] =
-        uint32_t(target.endianness) |
+        (uint32_t(target.endianness) ^ uint32_t(poisoned)) |
         (uint32_t(target.uav_format == DXGI_FORMAT_R10G10B10A2_UINT) << 3) | (target.depth << 5);
     root_constants[constant_count++] = source.host_info;
     root_constants[constant_count++] = source.host_offset;
@@ -7135,6 +7151,8 @@ void D3D12RenderTargetCache::ResolveHostIntoTextures(
     if (check) {
       command_processor_.PushUAVBarrier(dest);
       texture_cache.QueueResolveTextureCheck(target, dest);
+    } else if (poisoned) {
+      texture_cache.EndPoisonedResolveTextureWrite(target, skip);
     } else {
       texture_cache.EndResolveTextureWrite(target);
     }
