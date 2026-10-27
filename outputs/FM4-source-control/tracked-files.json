@@ -117,6 +117,10 @@
       "provenance": "Project documentation; section 18 of the D3D-level HLE design, stage N5 of the native port (native resolution and aspect: design notes, source locations and estimates; no decompiled code, no third-party code and no game content)"
     },
     {
+      "path": "docs/analysis/d3d-hle-n6.md",
+      "provenance": "Project documentation; section 19 of the D3D-level HLE design, stage N6 of the native port (a plan for the owner's approval: measurements of shader compiles, textures and threads, source locations, increments and estimates; no decompiled code, no third-party code and no game content)"
+    },
+    {
       "path": "docs/analysis/quality-presets.md",
       "provenance": "Project documentation; measurements and design of the launchers' five race quality presets (render scenario settings by name, GPU times, draw counts and picture checks; no decompiled code, no third-party code and no game content)"
     },

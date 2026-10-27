@@ -445,6 +445,11 @@ The first version of the look knob `adaptation`, by the guest vblank rate; repla
 - In the presets (snapshot `ae2` from `2faa20e`, against main `3f94833` as `mdx-main`, 240 Hz, 1x): `fm4_shader_mod_tests` passes with the presets' new defines and `launcher_tests` with 351 plans. Smoke gate `aes2` against `mdxs`: 3 of 3 cells reached their goal with the same error keys; the career race 212.4 against 217.6 fps and its replay 114.7 against 114.2 fps (PASS); `photo_view` warns on capture statistics (another photo). The first `photo` cell compiled the mods afresh (253 compiles for the new defines and contracts, against 105 on main) and raced at 200.4 against 217.3 fps; warm (`aes2w` against `mdxsw`) it raced at 225.3 against 218.9 fps (p99 6.04 against 5.81 ms, GPU 2.90 against 2.94 ms a frame).
 - Not covered: races below their target frame rate (a correction from the frame rate reached needs the title's intended rate per scenario); the countdown and replays measured with the knob (only run in the smoke); 120 Hz in a frozen frame; the ROG Xbox Ally X; 2x.
 
+### 27 October 2026: shader compiles with an empty cache
+
+- Shader compiles measured with an empty `cache_root` and override cache on local main's build `595fd04` ([current status](current.md#shader-compiles-with-an-empty-cache-and-the-n6-plan-27-october-2026), [D3D-level HLE, 19.2](../analysis/d3d-hle-n6.md#192-measurements-27-october-2026)). Superseded statement of the current status page:
+  - Current performance, shader cache: "with an empty cache, synchronous shaders add a little hitch on load (about 9 frames over 100 ms per run, worst 400-640 ms). Race fps is not reduced." It dates from 13 to 15 October 2026 ([performance history](history-performance.md#shader-cache-13-15-october)), before the look mods compiled with FXC in the game.
+
 ## 5. Superseded settings and decisions
 
 Each row gives the date of the change, the setting that was replaced, and what happened later. The current values are in [running](../running.md) and [current status](current.md).
