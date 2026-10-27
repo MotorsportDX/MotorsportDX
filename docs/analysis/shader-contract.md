@@ -238,7 +238,7 @@ Not covered: RTV (out of the gates; the contract is native only), 60 and 120 Hz,
 
 ## 8. Increment 5: replacement shaders
 
-The design, read from the code of `b445ace`. The main session took decisions 1 to 5 and 7 as recommended below, and step 5a of decision 6, on 27 October 2026; step 5b waits for the project owner's answer to the question in 8.2.6. Step 5a is implemented behind `native_shader_contract` (8.4).
+The design, read from the code of `b445ace`. The main session took decisions 1 to 5 and 7 as recommended below, and step 5a of decision 6, on 27 October 2026; the project owner approved step 5b the same day (8.2.6). Step 5a is implemented behind `native_shader_contract` (8.4); 5b follows it.
 
 ### 8.1 What the design starts from
 
@@ -256,7 +256,7 @@ The design, read from the code of `b445ace`. The main session took decisions 1 t
 | 3 | Bindings and root signature | the shader's own bindings; no change to bindings or the root signature | 0 in the runtime |
 | 4 | Constants | the float constants the game shader reads, by name; any bool constant; knobs through `params`; the entry's own buffer at `b0, space10` deferred again | 0.5 |
 | 5 | Signatures and output rules | keep the expected signatures and the epilogue | 0.5 |
-| 6 | First replacement and its gate | 5a: the mechanism, proven by a probe byte for byte against a classic probe mod; 5b, pending the owner's answer (8.2.6): the race's final combine `E97AA211B556A9B3` as the project's own tone mapping | 5a 1 to 2, 5b 3 to 5, the gates 3 to 4 |
+| 6 | First replacement and its gate | 5a: the mechanism, proven by a probe byte for byte against a classic probe mod; 5b, approved by the owner (8.2.6): the race's final combine `E97AA211B556A9B3` as the project's own tone mapping | 5a 1 to 2, 5b 3 to 5, the gates 3 to 4 |
 | 7 | Fallback | the DXBC translation with an error, per modification, as for entries | 0.5 |
 
 With the CPU tests (1.5) and the library's entry point for replacements, the increment takes about 15 person-days, the upper end of section 3's 2 to 3 person-weeks.
@@ -363,6 +363,8 @@ The gate of 5b, beside the usual cells (the check, empty caches, smoke, perf, fr
 - 1:1 crops at 2x of a race with `aces`, the replacement beside the classic mod, and the native capture beside the `-Rov` reference.
 
 A question for the project owner (section 2.6): at the game's knob values, 5b computes what the game shader computes, written from the documented formula in the project's own code, not from the ucode or the generated HLSL. The rule forbids a transcription; whether a re-implementation of a game shader's function may be committed is the owner's reading. If it may not, the increment ends at 5a, or 5b takes a shader that the project's effect replaces outright, for example the motion blur `4746CAD32EF168CF` as the project's own blur from the post passes' motion vectors (`post:motion_vectors`), which changes the picture and so is a look decision too.
+
+**The project owner's decision (27 October 2026):** 5b is approved: the final combine `E97AA211B556A9B3` becomes the project's own tone mapping. Section 2.6 is read as allowing the reimplementation of a game shader's function written from documented formulas (the [B4 research](b4-shader-research.md)), never a transcription of its ucode or generated HLSL. The replacement states its provenance: the formulas it implements and the sections of the documentation they come from. Its gate: a match against the game at the default knobs at 1:1 (crops at 2x), and the look's intended change at 1:1.
 
 Cost: 5a 1 to 2 days, 5b 3 to 5 days, the step and close gates 3 to 4 days.
 

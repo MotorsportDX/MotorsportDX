@@ -221,9 +221,11 @@ face = "front_face"
             probe->inputs.size() == 8 && probe->srv.size() == 1,
         "the replacement's file, inputs and srv");
   auto input = [probe](const char* name) -> const nsc::Input* {
-    for (const nsc::Input& in : probe ? probe->inputs : std::vector<nsc::Input>()) {
-      if (in.name == name) {
-        return &in;
+    if (probe) {
+      for (const nsc::Input& in : probe->inputs) {
+        if (in.name == name) {
+          return &in;
+        }
       }
     }
     return nullptr;

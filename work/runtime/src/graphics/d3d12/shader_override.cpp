@@ -1126,8 +1126,7 @@ std::string ShaderOverrides::BuildContract(
     std::string defines;
     auto define = [&defines]<typename... Args>(fmt::format_string<Args...> format, Args&&... args) {
       fmt::format_to(std::back_inserter(defines), format, std::forward<Args>(args)...);
-      defines.push_back('
-');
+      defines.push_back('\n');
     };
     line("struct XeInputs {{");
     bool members = false;
@@ -1140,7 +1139,7 @@ std::string ShaderOverrides::BuildContract(
       std::string vector_type =
           input.swizzle.size() == 1
               ? std::string("float")
-              : fmt::format("float{}", input.swizzle.empty() ? 4 : input.swizzle.size());
+              : fmt::format("float{}", input.swizzle.empty() ? size_t(4) : input.swizzle.size());
       switch (input.kind) {
         case Kind::kInterpolator:
           line("  {} {};", vector_type, input.name);
