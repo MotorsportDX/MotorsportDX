@@ -7,7 +7,8 @@ Status: stage N5 item of the [native port](d3d-hle.md#82-shaders-on-the-native-p
 - **Goal**: look mods stop depending on the DXBC translation of the title's own pixel shaders. Today a mod hooks into HLSL generated from the game shader's ucode, compiled against a contract read off the DXBC translation (section 1). The native path knows what the PM4 path does not (the surfaces a draw renders into, the post passes' final point, the vertex shader keys), and the contract uses that.
 - **The contract**: `shaders.toml` in the look directory declares, per guest pixel shader (by its ucode hash), the mod it takes on the native path, the pass classes it applies in, and the knobs it reads as constants. Draws carry their pass class (`xe_native_pass()`). RTV and `-Rov` do not change.
 - **Increment 1**: the manifest, the pass classes, the pass debug view, and the car windows (`E62CFDF09D758B6C`) moved onto the contract with the same picture (section 4).
-- **Increment 2**: an entry's translation is made without the DXBC translator: the HLSL generator assigns the bindings as the DXBC translator does, and the signatures are checked against those derived from the modification and the ucode analysis. With an empty override cache the DXBC translation draws until a worker compiles the entry. The bindings of all 568 pixel shaders of a career and a photo run match their DXBC translations, and the entry draws byte for byte as before (section 5). The increments that follow are in section 3.
+- **Increment 2**: an entry's translation is made without the DXBC translator: the HLSL generator assigns the bindings as the DXBC translator does, and the signatures are checked against those derived from the modification and the ucode analysis. With an empty override cache the DXBC translation draws until a worker compiles the entry. The bindings of all 568 pixel shaders of a career and a photo run match their DXBC translations, and the entry draws byte for byte as before (section 5).
+- **Increment 4**: the per-pass decisions. The car materials draw most of their race draws into the mirrors, which the manifest classes; the project owner kept the mirrors as the scene (section 6). The increments that follow are in section 3.
 
 ## 1. What ties a look mod to the DXBC translation
 
@@ -162,3 +163,23 @@ BuildRoot `I:\FM4-build-usa`, the native path, the look `aces` unless noted, at 
 
 Not covered: an entry with a fetch the generator does not support (none in the manifest), hot reload of an entry, RTV (out of the gates since `d2efb01`; the contract is native only), 60 and 120 Hz.
 
+## 6. Increment 4: per-pass decisions
+
+### 6.1 Where the car materials draw, 27 October 2026
+
+A race at 1x on the native path with the draw list (`REX_DRAW_LIST_TRACE`, every 7th frame, 2,201 frames; `n5sc4-survey` on main `55ee1cb`'s runtime) split the modded pixel shaders by depth surface. The car materials of `shaders_v16` draw most of their race draws into the mirror pass (depth base 80) besides the scene (1024): the car windows `E62CFDF09D758B6C` 74,194 against 19,305, the lamp covers `00AF2783DCAB9C75` and `AD10B610621DEFE5` 12,107 against 1,616, the body paint `B85EF04779ABD438` 41,883 against 10,999, the chrome trim `AF6AA26032BC613D` and chrome rims `F8CDBAFAD23FD784` 43,347 against 6,461, the rims `36DFBBD4669AF5E9`, `75B334519A1568F6` and `0412EE51F7B00389` 45,928 against 8,156. The lit road `5E33CD06E3AF5B04` (6,300 against 19,156), its edges and shoulders draw there too. The other depth surfaces are the front-end's 3D car (2880, in the menus only) and the intro's unlit road `29A611FD8CFB545D` (224, in the intro and the 3-2-1 only): a race has no "mirror panel" pass. The cockpit's side mirror draws in the mirror pass with the rear-view mirror.
+
+The manifest has entries for the nine car materials (`a066fdf`, their knobs as params). The pass log of `native_shader_pass_debug` (`n5sc4-dbg`, a frozen race at 2x) shows two kinds of draws for each of them: the scene (depth base 1024, 1280 wide) and the mirror (depth base 80, 384 wide).
+
+### 6.2 The A/B and the project owner's decisions, 27 October 2026
+
+The rule under test: in the mirror pass, the sun highlights no sharper than roughness 0.3 (GGX), and the flakes off. Today's roughness: glass 0.08, chrome 0.1, rims 0.25, the clear coat 0.3, the road's sheen 0.5, so the floor could change only glass, chrome and rims. One frozen race frame at 2x with `aces` (cockpit camera, the Bernese Alps grid; `n5sc4-crops`) took the knob states live while it stayed frozen, so each state shows the same moment: the game's own car materials and road, the preset, the preset with the rule, the flakes on, and the flakes on but off in the mirror. Captures of one state differ by at most 3 levels.
+
+| Decision | What the 1:1 crops at 2x show | The owner's decision |
+|---|---|---|
+| Glass, chrome and rims rougher in the mirrors | the rule softens a few glints on the window frames, windscreen edges and chrome trim of the cars behind: 673 of the rear-view mirror's 84,600 pixels change by more than 4 levels (up to 74), 1,114 of the side mirror's 63,000 (up to 103); nothing changes outside the mirrors beyond the run's exposure drift (13 levels). Whether the sharp glints shimmer in motion, which the rule is for, a still frame cannot show, and TAA steadies them on the native path | no rule: the mirrors keep the scene's roughness |
+| The paint's flakes off in the mirrors | no preset turns flakes on; with `flakes=1`, turning them off in the mirrors changes no more than the capture noise (14 pixels above 4 levels, at most 7): the flakes already fade where a flake cell is smaller than a pixel | no rule |
+| The road's sheen in the mirrors | its roughness is above the floor, so the rule changes nothing on the road; against the game, the mirror shows the sheen in place of the game's highlight, as the scene does | unchanged |
+| The clear coat in the mirrors | its roughness equals the floor: unchanged | unchanged |
+
+So the mirrors draw as the scene, as on RTV, and the two knobs of the test (`FM4_LOOK_MIRROR_ROUGHNESS`, `FM4_LOOK_MIRROR_FLAKES`) are gone (`592b825`); the mirror pass class and the nine entries stay for later increments.
