@@ -64,18 +64,18 @@ int main(int argc, char** argv) {
   if (glass) {
     Check(glass->hooks == "shader_E62CFDF09D758B6C.mod.hlsli", "the windows' hooks");
     Check(glass->pass_mask == nsc::kAllPasses, "the windows apply in every pass");
-    Check(glass->params.size() == 4 && glass->params[0] == "FM4_LOOK_GLASS", "the windows' params");
+    Check(glass->params.size() == 3 && glass->params[0] == "FM4_LOOK_GLASS", "the windows' params");
   }
-  // The other car materials in the mirror: lamp covers, paint, chrome and rims.
+  // The other car materials in the mirror pass: lamp covers, paint, chrome and rims.
   int car_entries = 0;
   for (uint64_t hash : {0x00AF2783DCAB9C75ull, 0xAD10B610621DEFE5ull, 0xB85EF04779ABD438ull,
                         0xAF6AA26032BC613Dull, 0xF8CDBAFAD23FD784ull, 0x36DFBBD4669AF5E9ull,
                         0x75B334519A1568F6ull, 0x0412EE51F7B00389ull}) {
     const nsc::PixelEntry* entry = look.FindPixel(hash);
     car_entries += entry && entry->pass_mask == nsc::kAllPasses && !entry->params.empty() &&
-                   entry->params.back().rfind("FM4_LOOK_MIRROR_", 0) == 0;
+                   entry->params[0].rfind("FM4_LOOK_", 0) == 0;
   }
-  Check(car_entries == 8, "the car materials have entries with the mirror knobs");
+  Check(car_entries == 8, "the car materials have entries with their knobs");
   // The look's classes by the depth surface and the viewport: the scene at 1024 as wide as the
   // screen, the mirror at 80.
   Check(look.Classify(true, 1024, 1280, false) == look.FindPass("scene"), "scene draw");

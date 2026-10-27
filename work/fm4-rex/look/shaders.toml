@@ -7,22 +7,22 @@
 # Pass classes after the built-in other, post and hud, for draws that test depth or stencil.
 # In one pass (the native path's races) the scene is drawn on the depth surface at EDRAM base
 # 1024 in a viewport as wide as the screen (the post passes' scene camera takes 1024 guest
-# pixels or more), the rear-view mirror on its own depth surface at base 80, 384 wide (the log
-# of native_shader_pass_debug, docs/analysis/shader-contract.md).
+# pixels or more), the rear-view mirror and the cockpit's side mirror on their own depth surface
+# at base 80, 384 wide (the log of native_shader_pass_debug, docs/analysis/shader-contract.md).
 [[pass]]
 name = "scene"
 depth_base = 1024
 min_viewport_width = 1024
 
 [[pass]]
-name = "mirror"  # the rear-view mirror
+name = "mirror"  # the rear-view and side mirrors
 depth_base = 80
 
-# The car materials of shaders_v16 that races draw into the rear-view mirror as well as the
-# scene (fm4-car.hlsli, fm4-paint.hlsli): on the native path most of their draws are in the
-# mirror (the draw list of 27 October 2026, docs/analysis/shader-contract.md 6). Their knobs
-# are constants, so shader_mod_set changes them at once, and the mirror knobs
-# (FM4_LOOK_MIRROR_ROUGHNESS, FM4_LOOK_MIRROR_FLAKES) apply to their draws in the mirror.
+# The car materials of shaders_v16 that races draw into the rear-view and side mirrors as well
+# as the scene (fm4-car.hlsli, fm4-paint.hlsli): on the native path most of their draws are in
+# the mirror pass (the draw list of 27 October 2026, docs/analysis/shader-contract.md 6). They
+# draw there as in the scene (the project owner's decision of 27 October 2026). Their knobs are
+# constants, so shader_mod_set changes them at once.
 
 # The car windows (fm4_glass).
 [[pixel]]
@@ -32,7 +32,6 @@ params = [
   "FM4_LOOK_GLASS",
   "FM4_LOOK_GLASS_ROUGHNESS",
   "FM4_LOOK_CLEARCOAT_GLINT",
-  "FM4_LOOK_MIRROR_ROUGHNESS",
 ]
 
 # The lamp covers with CubeScale (fm4_glass).
@@ -43,7 +42,6 @@ params = [
   "FM4_LOOK_GLASS",
   "FM4_LOOK_GLASS_ROUGHNESS",
   "FM4_LOOK_CLEARCOAT_GLINT",
-  "FM4_LOOK_MIRROR_ROUGHNESS",
 ]
 
 # The lamp covers without it (fm4_glass).
@@ -54,7 +52,6 @@ params = [
   "FM4_LOOK_GLASS",
   "FM4_LOOK_GLASS_ROUGHNESS",
   "FM4_LOOK_CLEARCOAT_GLINT",
-  "FM4_LOOK_MIRROR_ROUGHNESS",
 ]
 
 # The body paint (fm4_body_paint_env_cube in fm4-paint.hlsli: the clear coat and the
@@ -68,8 +65,6 @@ params = [
   "FM4_LOOK_CLEARCOAT_GLINT",
   "FM4_LOOK_FLAKES",
   "FM4_LOOK_FLAKE_SCALE",
-  "FM4_LOOK_MIRROR_ROUGHNESS",
-  "FM4_LOOK_MIRROR_FLAKES",
 ]
 
 # The chrome trim (fm4_chrome).
@@ -80,7 +75,6 @@ params = [
   "FM4_LOOK_CHROME",
   "FM4_LOOK_CHROME_ROUGHNESS",
   "FM4_LOOK_CLEARCOAT_GLINT",
-  "FM4_LOOK_MIRROR_ROUGHNESS",
 ]
 
 # The chrome rims (fm4_chrome).
@@ -91,7 +85,6 @@ params = [
   "FM4_LOOK_CHROME",
   "FM4_LOOK_CHROME_ROUGHNESS",
   "FM4_LOOK_CLEARCOAT_GLINT",
-  "FM4_LOOK_MIRROR_ROUGHNESS",
 ]
 
 # The rims with CubeScale and PaintScale (fm4_rims).
@@ -102,7 +95,6 @@ params = [
   "FM4_LOOK_RIMS",
   "FM4_LOOK_RIMS_ROUGHNESS",
   "FM4_LOOK_CLEARCOAT_GLINT",
-  "FM4_LOOK_MIRROR_ROUGHNESS",
 ]
 
 # The rims with PaintScale (fm4_rims).
@@ -113,7 +105,6 @@ params = [
   "FM4_LOOK_RIMS",
   "FM4_LOOK_RIMS_ROUGHNESS",
   "FM4_LOOK_CLEARCOAT_GLINT",
-  "FM4_LOOK_MIRROR_ROUGHNESS",
 ]
 
 # The rims without them (fm4_rims).
@@ -124,5 +115,4 @@ params = [
   "FM4_LOOK_RIMS",
   "FM4_LOOK_RIMS_ROUGHNESS",
   "FM4_LOOK_CLEARCOAT_GLINT",
-  "FM4_LOOK_MIRROR_ROUGHNESS",
 ]
