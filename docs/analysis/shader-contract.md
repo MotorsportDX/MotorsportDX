@@ -183,3 +183,21 @@ The rule under test: in the mirror pass, the sun highlights no sharper than roug
 | The clear coat in the mirrors | its roughness equals the floor: unchanged | unchanged |
 
 So the mirrors draw as the scene, as on RTV, and the two knobs of the test (`FM4_LOOK_MIRROR_ROUGHNESS`, `FM4_LOOK_MIRROR_FLAKES`) are gone (`592b825`); the mirror pass class and the nine entries stay for later increments.
+
+### 6.3 Close gate, 27 October 2026
+
+BuildRoot `I:\FM4-build-usa`, the build of `47ea6ba` (the nine entries without the mirror knobs; every cell's snapshot names it), the native path, the look `aces` unless noted; against main `55ee1cb`'s cells of increment 2 (`n5sc3-*`, one entry). A Windows restart cut the gate after the smoke; the perf and freeze cells ran again on the same head, rebuilt under the GPU queue's lock after another session's build.
+
+| Check | Result |
+|---|---|
+| CPU tests | `fm4_shader_mod_tests` passes, its 414 DXBC fingerprints those of main; `fm4_native_shader_contract_tests` passes with the nine entries |
+| The pass log (`n5sc4-dbg`, a frozen race at 2x with `native_shader_pass_debug`, the look of `a066fdf` on main's runtime) | every entry draws in the scene (depth base 1024, 1280 wide) and in the mirror pass (80, 384 wide) and nowhere else |
+| The checks, `career` at 2x with `native_shader_contract_check` (`n5sc4c-check`) | the nine entries checked in their 4 modifications each, 36 checks: the signatures and bindings of their DXBC translations match; the other 560 pixel shaders (1,212 translations) have the generator's bindings; 0 mismatches, 0 DXBC fallbacks |
+| In-run A/B at 2x, byte for byte (`n5sc4c-ab`: `aces,taa=0,ao=0,windshield=0`, `FM4_TILING_SCENARIO=2`) | 10 captures, 6 in the entries' periods and 4 in the classic mods': 0 pixels differ (18 comparisons). An earlier run (`n5sc4-ab2`) does not count: it ran on another session's build |
+| Empty caches, `career` at 1x (`n5sc4c-cold` against `n5sc3-cold`) | no mod compiled on the draw path; 62 on the workers, 81 swaps; 7 entry translations met a draw before the cache held them and drew their DXBC translation until the swap. WARN: pipelines over 4 ms 182 against 181, frames over 100 ms 11 against 10 (the driver's cache) |
+| Smoke on the native path with the contract (`n5sc4c-nat` against `n5sc3-nat`) | 3 of 3 cells; races 235.2 and 237.7 fps (p99 5.26 and 5.07 ms) against 238.1 and 237.1; `photo` and `photo_view` PASS, `career` FAIL on the whole run's p99 (33.16 against 27.14 ms, the menus) with its phases within the limits |
+| Perf at 2x, three runs each (`n5sc4c-p2x-off`, `n5sc4c-p2x-on`, the `photo` race) | the race's GPU time 5.14 against 4.97 ms a frame and the render thread's 3.33 against 2.73 ms, at 1,851 to 2,137 against 1,502 to 1,720 draws a frame (the AI's race). A fit with the draws, GPU = 4.34 ms + 0.397 ms per 1,000 draws, gives the switch −0.007 ms; the render thread 0.000 ms. The nine entries' knobs as constants cost nothing measurable |
+| Freeze parity at 2x, the contract off against on (`n5sc4c-off`, `n5sc4c-on`) | PASS: draws −0.5% |
+| `-Rov`, freeze parity at 1x (`n5sc4c-fzrov` against `n5sc3-fzrov`) | PASS: draws −0.1% and +0.1% |
+
+Not covered: RTV (out of the gates; the contract is native only), 60 and 120 Hz, the mirrors in motion.
