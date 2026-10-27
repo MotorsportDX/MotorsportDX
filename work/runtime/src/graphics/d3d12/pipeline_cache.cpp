@@ -1414,10 +1414,14 @@ bool PipelineCache::TranslateAnalyzedShader(DxbcShaderTranslator& translator,
                                             IDxcCompiler* dxc_compiler, bool for_draw) {
   D3D12Shader& shader = static_cast<D3D12Shader&>(translation.shader());
 
+  // shader_override_async: a draw meets the translation, so a mod or entry
+  // that the cache does not hold compiles on a worker.
+  ShaderCompileQueue* mod_queue = for_draw && mod_compile_async_ ? &mod_compile_queue_ : nullptr;
   // A native shader contract entry is translated without the DXBC translator
-  // (docs/analysis/shader-contract.md, increment 2); otherwise, or if that
-  // fails, the DXBC translation and the shader overrides.
-  if (shader_overrides_ && shader_overrides_->TranslateEntry(translation)) {
+  // (docs/analysis/shader-contract.md, increment 2); otherwise, if that fails,
+  // or until a worker compiles an entry that the cache does not hold, the DXBC
+  // translation and the shader overrides (Apply queues the entry's compile).
+  if (shader_overrides_ && shader_overrides_->TranslateEntry(translation, mod_queue)) {
     if (shader_overrides_->check()) {
       // The same modification through the DXBC translator, into a scratch
       // translation: its PostTranslation checks the bindings the entry
@@ -1447,8 +1451,7 @@ bool PipelineCache::TranslateAnalyzedShader(DxbcShaderTranslator& translator,
       if (shader_overrides_->check()) {
         shader_overrides_->CheckBindings(translation);
       }
-      shader_overrides_->Apply(translation,
-                               for_draw && mod_compile_async_ ? &mod_compile_queue_ : nullptr);
+      shader_overrides_->Apply(translation, mod_queue);
     }
   }
 

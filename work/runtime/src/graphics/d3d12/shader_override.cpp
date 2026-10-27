@@ -1554,7 +1554,8 @@ std::string ShaderOverrides::CheckSignatures(const Shader& shader, uint64_t modi
   return CompareExpectedSignatures(inputs, outputs, binary);
 }
 
-bool ShaderOverrides::TranslateEntry(D3D12Shader::D3D12Translation& translation) {
+bool ShaderOverrides::TranslateEntry(D3D12Shader::D3D12Translation& translation,
+                                     ShaderCompileQueue* queue) {
   Shader& shader = translation.shader();
   if (!native_ || shader.type() != xenos::ShaderType::kPixel || !NativeEntry(translation)) {
     return false;
@@ -1599,7 +1600,22 @@ bool ShaderOverrides::TranslateEntry(D3D12Shader::D3D12Translation& translation)
   }
   std::vector<uint8_t> binary;
   std::vector<Dependency> files;
-  if (Build(translation, std::vector<uint8_t>(), binary, files) != Outcome::kCompiled) {
+  std::unique_ptr<CompileJob> job;
+  Outcome outcome =
+      Build(translation, std::vector<uint8_t>(), binary, files, queue ? &job : nullptr);
+  if (outcome == Outcome::kQueued) {
+    // Not in the cache: no FXC on the thread that issues the draw. The caller's
+    // DXBC translation draws until a worker's compile is swapped in, and Apply
+    // queues that compile with the DXBC for its signature check. Its source,
+    // so its cache file, is this one's: the contract and the HLSL come from
+    // the shader's analysis and bindings, not from the DXBC translation.
+    uint32_t count = entry_placeholders_.fetch_add(1, std::memory_order_relaxed) + 1;
+    REXGPU_INFO("Native shader contract: entry {:016X} modification {:016X} is not in the cache: "
+                "its DXBC translation until a worker compiles it ({} so far)",
+                shader.ucode_data_hash(), modification.value, count);
+    return false;
+  }
+  if (outcome != Outcome::kCompiled) {
     return fallback("the compile or its signature check failed");
   }
   translation.ReplaceTranslatedBinary(std::move(binary));

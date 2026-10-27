@@ -133,7 +133,15 @@ class ShaderOverrides {
   // against those the DXBC translation would have. False if the translation is
   // not an entry's or any step failed: the caller translates with the DXBC
   // translator then.
-  bool TranslateEntry(D3D12Shader::D3D12Translation& translation);
+  // With queue (shader_override_async, a draw meets the translation), an entry
+  // that the cache does not hold is not compiled here: false is returned, the
+  // caller's DXBC translation draws (the game's own look) and Apply queues the
+  // entry's compile, which the pipeline cache swaps in as a mod's. The swap
+  // keeps the pipelines' root signatures, which depend only on the shader's
+  // bindings: the same for the entry's HLSL and the DXBC translation
+  // (native_shader_contract_check compares them).
+  bool TranslateEntry(D3D12Shader::D3D12Translation& translation,
+                      ShaderCompileQueue* queue = nullptr);
   // native_shader_contract_check: whether to check the entries and the
   // bindings against DXBC translations.
   bool check() const { return check_; }
@@ -366,6 +374,9 @@ class ShaderOverrides {
   // Entries translated with the DXBC translator after all (TranslateEntry
   // failed), each logged with its reason.
   std::atomic<uint32_t> entry_fallbacks_{0};
+  // Entries that a draw met before the cache held them (shader_override_async):
+  // the DXBC translation until a worker's compile is swapped in.
+  std::atomic<uint32_t> entry_placeholders_{0};
   // The look files' knob defaults (#ifndef NAME / #define NAME value), for the
   // params that shader_mod_defines leaves out.
   std::unordered_map<std::string, std::string> knob_defaults_;
