@@ -1108,11 +1108,11 @@ bool TextureCache::LoadTextureData(Texture& texture) {
                                    : SharedMemory::GuestLayoutReader::kTextureLoad;
     if (texture.GetGuestBaseSize()) {
       writer->BeforeGuestLayoutRead(texture.key().base_page << 12, texture.GetGuestBaseSize(),
-                                    reader);
+                                    reader, &texture);
     }
     if (texture.GetGuestMipsSize()) {
       writer->BeforeGuestLayoutRead(texture.key().mip_page << 12, texture.GetGuestMipsSize(),
-                                    reader);
+                                    reader, &texture);
     }
   }
   // A texture at the scene's scale has no data in memory at that scale: the

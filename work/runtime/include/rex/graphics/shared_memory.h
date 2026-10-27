@@ -131,21 +131,24 @@ class SharedMemory {
   // it of its ranges (vertex and index buffers, memexport, texture loads).
   enum class GuestLayoutReader : uint32_t {
     kTextureLoad,
-    // A texture at the scene's scale, which never loads: one that overlaps a
-    // deferred layout breaks the invariant that its source texture changes
-    // only with a resolve to its own range.
+    // A texture at the scene's scale, which never loads: a deferred layout's
+    // source texture loading breaks the invariant that it changes only with a
+    // resolve to its own range.
     kSceneTextureLoad,
     kRequest,
     kReadback,
     kResolve,
+    // native_rt_resolve_layout_check's reader, right after the resolve.
+    kProbe,
   };
   class GuestLayoutWriter {
    public:
     bool HasDeferredGuestLayouts() const {
       return deferred_guest_layouts_.load(std::memory_order_acquire);
     }
-    virtual void BeforeGuestLayoutRead(uint32_t start, uint32_t length,
-                                       GuestLayoutReader reader) = 0;
+    // texture: the texture cache's object of a texture load, or nullptr.
+    virtual void BeforeGuestLayoutRead(uint32_t start, uint32_t length, GuestLayoutReader reader,
+                                       const void* texture = nullptr) = 0;
 
    protected:
     ~GuestLayoutWriter() = default;

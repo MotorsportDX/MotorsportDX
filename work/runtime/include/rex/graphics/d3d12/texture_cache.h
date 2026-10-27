@@ -270,7 +270,8 @@ class D3D12TextureCache final : public TextureCache {
   }
   // native_rt_resolve_layout (docs/analysis/d3d-hle-n6.md 19.7.5): the key of
   // a written target's texture and the resolve whose data it holds, so the
-  // guest's layout can be written from it later.
+  // guest's layout can be written from it later (target.texture is the
+  // object a texture load names).
   using ResolveTextureKey = TextureKey;
   void GetResolveTextureSource(const ResolveTextureTarget& target, TextureKey& key_out,
                                uint64_t& write_index_out) const;

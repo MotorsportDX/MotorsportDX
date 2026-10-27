@@ -83,7 +83,8 @@ class D3D12RenderTargetCache final : public RenderTargetCache,
   // deferred guest layouts that overlap the range before the reader uses it
   // (on the command processor's thread; counted and left otherwise).
   void BeforeGuestLayoutRead(uint32_t start, uint32_t length,
-                             SharedMemory::GuestLayoutReader reader) override;
+                             SharedMemory::GuestLayoutReader reader,
+                             const void* texture = nullptr) override;
 
   // Post passes (post_pass.cpp): the single-sampled host color render target
   // that the last draw bound as color target `index`, after the pending
@@ -313,6 +314,8 @@ class D3D12RenderTargetCache final : public RenderTargetCache,
     Microsoft::WRL::ComPtr<ID3D12Resource> texture;
     DXGI_FORMAT texture_format = DXGI_FORMAT_UNKNOWN;
     D3D12TextureCache::ResolveTextureKey texture_key;
+    // The texture cache's object, compared only (it may be evicted).
+    const void* texture_object = nullptr;
     uint64_t texture_write_index = 0;
     // native_rt_resolve_layout_check's class (perf_trace::CountGuestLayoutCheck).
     uint32_t check_class = 0;
@@ -335,7 +338,6 @@ class D3D12RenderTargetCache final : public RenderTargetCache,
   void BeforeResolveWrite(const draw_util::ResolveInfo& resolve_info);
   // Writes (or with the perturbation drops) the deferred layouts that overlap
   // the range, or all with length 0.
-  void WriteDeferredGuestLayouts(uint32_t start, uint32_t length, uint32_t written_reason);
 
   // For host render targets.
 

@@ -352,11 +352,12 @@ inline void CountResolveTextureFallback(bool copied) {
 }
 // native_rt_resolve_layout (d3d-hle-n6.md 19.7.5): the guest's layout of a
 // full-screen destination at the scene's scale, written from its host texture
-// or from the render target (no texture took the resolve's data, the opt-out
-// or A/B off), deferred, and what became of the deferred ones: replaced by the
-// same resolve again, dropped by a CPU write, written for a reader (a texture
-// load, another GPU request, a CPU readback, an overlapping resolve) or when
-// too many were pending, dropped by the perturbation; and the faults:
+// or from the render target (no texture took the resolve's data), deferred,
+// what became of the deferred ones: replaced by the same resolve again,
+// written for a reader (a texture
+// load, another GPU request, a CPU readback, an overlapping resolve, the
+// check's probe) or when too many were pending, dropped by the perturbation; CPU writes over them;
+// and the faults:
 // overlaps found by a scene texture's load or a source texture's data changed
 // (the invariant), and readers off the command processor's thread.
 enum class GuestLayout : uint32_t {
@@ -364,13 +365,14 @@ enum class GuestLayout : uint32_t {
   kFromTarget,
   kDeferred,
   kSuperseded,
-  kDropped,
   kWrittenLoad,
   kWrittenRequest,
   kWrittenReadback,
   kWrittenResolve,
   kWrittenOverflow,
+  kWrittenProbe,
   kPerturbed,
+  kCpuWrites,
   kInvariant,
   kForeignThread,
   kCount
@@ -1004,9 +1006,10 @@ inline void OnSwap() {
                 << native_resolve_fallbacks_missing.exchange(0, std::memory_order_relaxed) << '}';
   {
     static const char* const kGuestLayoutNames[] = {
-        "from_texture", "from_target",     "deferred",        "superseded", "dropped",
-        "written_load", "written_request", "written_readback", "written_resolve",
-        "written_overflow", "perturbed",   "invariant",       "foreign_thread"};
+        "from_texture",     "from_target",     "deferred",         "superseded",
+        "written_load",     "written_request", "written_readback", "written_resolve",
+        "written_overflow", "written_probe",   "perturbed",        "cpu_writes",
+        "invariant",        "foreign_thread"};
     static_assert(std::size(kGuestLayoutNames) == size_t(GuestLayout::kCount));
     state->output << ",\"guest_layout\":{";
     for (size_t i = 0; i < size_t(GuestLayout::kCount); ++i) {

@@ -35,6 +35,7 @@
 #include <rex/graphics/d3d12/texture_cache.h>
 #include <rex/graphics/flags.h>
 #include <rex/graphics/format/dxbc.h>
+#include <rex/graphics/pipeline/texture/info.h>
 #include <rex/graphics/pipeline/shader/dxbc_translator.h>
 #include <rex/graphics/pipeline/texture/util.h>
 #include <rex/graphics/util/draw.h>
@@ -74,23 +75,24 @@ REXCVAR_DEFINE_STRING(native_rt_surfaces_depth_dump, "", "GPU/D3D12",
                       "16.17). Empty: off")
     .lifecycle(rex::cvar::Lifecycle::kRequiresRestart);
 REXCVAR_DECLARE(int32_t, native_rt_resolve_check);
-REXCVAR_DEFINE_INT32(native_rt_resolve_layout, 3, "GPU/D3D12",
+REXCVAR_DEFINE_INT32(native_rt_resolve_layout, 7, "GPU/D3D12",
                      "The guest's layout of a full-screen destination of a private surface at "
                      "the scene's scale (native_rt_surfaces bit 32, docs/analysis/d3d-hle-n6.md "
                      "19.7.5): bit 1, written from the host texture the resolve wrote instead of "
                      "the render target; bit 2, deferred until something reads it (with the "
                      "readback on demand); bit 4, the destinations that a fractional scale "
                      "box-filters from a float color source keep the write from the render "
-                     "target (and are not deferred); bit 8, the check: deferred layouts get wrong "
-                     "bytes, which the write for their reader replaces; bit 16, its "
+                     "target (and are not deferred: the box over the texture's clamped values "
+                     "differs by far more than one step); bit 8, the check: deferred layouts get "
+                     "wrong bytes, which the write for their reader replaces; bit 16, its "
                      "perturbation: the deferred layouts are dropped instead of written for their "
                      "readers")
     .range(0, 31);
 REXCVAR_DEFINE_INT32(native_rt_resolve_layout_check, 0, "GPU/D3D12",
                      "With native_rt_resolve_layout bit 1: every N-th frame (0: never), the "
-                     "guest's layout written from the host texture is not deferred, and the "
-                     "write from the render target goes into scratch beside it; both are read "
-                     "back and compared (perf trace guest_layout checks)")
+                     "guest's layout written from the host texture (a deferred one written at "
+                     "once for a reader, the probe) is compared with the render target's, "
+                     "written into scratch beside it (perf trace guest_layout checks)")
     .range(0, 100000);
 REXCVAR_DEFINE_INT32(native_rt_resolve_layout_ab_ms, 0, "GPU/D3D12",
                      "native_rt_resolve_layout 0 in every other period of this many "
@@ -7302,6 +7304,7 @@ void D3D12RenderTargetCache::ResolveHostIntoTextures(
         layout_write->texture_format = target.uav_format;
         texture_cache.GetResolveTextureSource(target, layout_write->texture_key,
                                               layout_write->texture_write_index);
+        layout_write->texture_object = target.texture;
         layout_write->host_info |=
             (uint32_t(target.endianness) << 12) |
             (uint32_t(target.uav_format == DXGI_FORMAT_R10G10B10A2_UINT) << 15);
@@ -7409,7 +7412,7 @@ void D3D12RenderTargetCache::WriteResolvedGuestLayout(
   const int32_t check_every = REXCVAR_GET(native_rt_resolve_layout_check);
   const bool check = check_every > 0 &&
                      command_processor_.GetCurrentFrame() % uint64_t(check_every) == 0;
-  if ((mode & 2) && !check && command_processor_.IsReadbackOnDemand()) {
+  if ((mode & 2) && command_processor_.IsReadbackOnDemand()) {
     if (!layout_watch_) {
       // The readers' hooks, from the first deferred write.
       layout_texture_cache_ = &texture_cache;
@@ -7438,6 +7441,17 @@ void D3D12RenderTargetCache::WriteResolvedGuestLayout(
     if (overflow.texture) {
       perf_trace::CountGuestLayout(perf_trace::GuestLayout::kWrittenOverflow);
       DispatchGuestLayout(texture_cache, shared_memory, overflow, false);
+    }
+    if (check) {
+      // The probe: a reader through the readers' path (which the
+      // perturbation drops, leaving the check's wrong bytes), then the render
+      // target's layout into scratch, both compared when the submission
+      // completes.
+      BeforeGuestLayoutRead(resolve_info.copy_dest_extent_start,
+                            resolve_info.copy_dest_extent_length,
+                            SharedMemory::GuestLayoutReader::kProbe);
+      DispatchHostResolve(texture_cache, shared_memory, resolve_info, constants, source, scaled,
+                          true, int32_t(write.check_class));
     }
     return;
   }
@@ -7539,15 +7553,32 @@ void D3D12RenderTargetCache::BeforeResolveWrite(const draw_util::ResolveInfo& re
         ++it;
         continue;
       }
-      // The same resolve again writes every byte the deferred one would.
+      // A resolve of the same 32bpp footprint (another format or endianness
+      // of the same pixels) writes every byte the deferred one would.
+      constexpr uint32_t kFootprintInfo = 0x78;  // copy_dest_array and copy_dest_slice.
       if (it->start == start && it->length == resolve_info.copy_dest_extent_length &&
           it->dest_base == resolve_info.copy_dest_base &&
-          it->dest_info == resolve_info.copy_dest_info.value &&
+          ((it->dest_info ^ resolve_info.copy_dest_info.value) & kFootprintInfo) == 0 &&
+          FormatInfo::Get(uint32_t(resolve_info.copy_dest_info.copy_dest_format))
+                  ->bits_per_pixel == 32 &&
           it->dest_coordinate_info == resolve_info.copy_dest_coordinate_info.packed &&
           it->width_div_8 == resolve_info.coordinate_info.width_div_8 &&
           it->height_div_8 == resolve_info.height_div_8) {
         perf_trace::CountGuestLayout(perf_trace::GuestLayout::kSuperseded);
       } else {
+        // The pairs that make a deferred layout be written, once each.
+        static std::vector<uint64_t> logged;
+        const uint64_t pair = (uint64_t(it->dest_base) << 32) | resolve_info.copy_dest_base;
+        if (logged.size() < 16 && std::find(logged.begin(), logged.end(), pair) == logged.end()) {
+          logged.push_back(pair);
+          REXGPU_INFO(
+              "Deferred guest layout {:08X}+{:X} ({}x{} info {:08X}) written for a resolve to "
+              "{:08X}+{:X} ({}x{} info {:08X})",
+              it->dest_base, it->length, it->width_div_8 << 3, it->height_div_8 << 3,
+              it->dest_info, resolve_info.copy_dest_base, resolve_info.copy_dest_extent_length,
+              resolve_info.coordinate_info.width_div_8 << 3, resolve_info.height_div_8 << 3,
+              resolve_info.copy_dest_info.value);
+        }
         overlapping.push_back(std::move(*it));
       }
       it = deferred_layouts_.erase(it);
@@ -7565,18 +7596,20 @@ void D3D12RenderTargetCache::BeforeResolveWrite(const draw_util::ResolveInfo& re
 }
 
 void D3D12RenderTargetCache::BeforeGuestLayoutRead(uint32_t start, uint32_t length,
-                                                   SharedMemory::GuestLayoutReader reader) {
+                                                   SharedMemory::GuestLayoutReader reader,
+                                                   const void* texture) {
   using Reader = SharedMemory::GuestLayoutReader;
   if (!length) {
     return;
   }
   const uint64_t end = uint64_t(start) + length;
   if (reader == Reader::kSceneTextureLoad) {
-    // A texture at the scene's scale reads no guest memory; one over a
-    // deferred layout was made outdated by something no hook saw.
+    // A texture at the scene's scale reads no guest memory; a deferred
+    // layout's source that loads was made outdated by something no hook saw.
     std::lock_guard<std::mutex> lock(deferred_layouts_mutex_);
     for (const GuestLayoutWrite& write : deferred_layouts_) {
-      if (write.start < end && start < write.start + write.length) {
+      if (write.texture_object == texture && write.start < end &&
+          start < write.start + write.length) {
         perf_trace::CountGuestLayout(perf_trace::GuestLayout::kInvariant);
         break;
       }
@@ -7614,6 +7647,9 @@ void D3D12RenderTargetCache::BeforeGuestLayoutRead(uint32_t start, uint32_t leng
     case Reader::kResolve:
       written = perf_trace::GuestLayout::kWrittenResolve;
       break;
+    case Reader::kProbe:
+      written = perf_trace::GuestLayout::kWrittenProbe;
+      break;
     default:
       written = perf_trace::GuestLayout::kWrittenRequest;
   }
@@ -7633,19 +7669,18 @@ void D3D12RenderTargetCache::GuestLayoutWatchCallback(
   if (invalidated_by_gpu) {
     return;
   }
-  // A CPU write: the guest memory's data replaces the deferred layout there
-  // (the readback on demand served it first, d3d-hle.md 16.5).
+  // A CPU write over a deferred layout (the readback on demand serves the
+  // CPU's first access to a resolved range first, d3d-hle.md 16.5, so none is
+  // expected). The layout stays: its other pages hold the resolve's data, and
+  // the pages the CPU wrote, now invalid, upload over its write when a reader
+  // requests them, as they would over the resolve's.
   auto& cache = *static_cast<D3D12RenderTargetCache*>(context);
   std::lock_guard<std::mutex> lock(cache.deferred_layouts_mutex_);
-  for (auto it = cache.deferred_layouts_.begin(); it != cache.deferred_layouts_.end();) {
-    if (it->start > address_last || address_first >= it->start + it->length) {
-      ++it;
-      continue;
+  for (const GuestLayoutWrite& write : cache.deferred_layouts_) {
+    if (write.start <= address_last && address_first < write.start + write.length) {
+      perf_trace::CountGuestLayout(perf_trace::GuestLayout::kCpuWrites);
     }
-    perf_trace::CountGuestLayout(perf_trace::GuestLayout::kDropped);
-    it = cache.deferred_layouts_.erase(it);
   }
-  cache.deferred_guest_layouts_.store(!cache.deferred_layouts_.empty(), std::memory_order_release);
 }
 
 RenderTargetCache::RenderTarget* D3D12RenderTargetCache::GetResolvePrivateSurface(
