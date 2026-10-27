@@ -292,3 +292,10 @@ N6 by this order is about 15 to 27 person-weeks without item 2 and 25 to 43 with
 2. Whether part 1 of item 1 (the game's own look for a shader's first frames, until its mod is compiled) is acceptable, judged on the 1:1 crops of increment 1.1's gate.
 3. Whether the manifests of item 1 (hashes, modification bits and fixed function state of game shaders, no microcode) may be committed, after the review of [sources and licensing](../sources-and-licensing.md).
 4. Where the precompile step runs: in the GUI launcher with its own progress page, or in the runtime's start-up behind a splash screen.
+
+The owner's answers of 27 October 2026:
+
+1. The order of 19.8 as proposed: item 1's increments 1.0 to 1.2 first, then the resolves of 19.7.1, then the rest of item 1 and item 4. Item 2 moves to a later stage unless the Ally X's battery runs still show CPU-bound frames after them.
+2. The game's own look for a shader's first frames, until its mod is compiled, is acceptable (still judged on increment 1.1's 1:1 crops).
+3. The manifests of item 1 may be committed: hashes, modification bits and fixed function state of game shaders, with no microcode and no translation of a game shader, reviewed like the other metadata in [sources and licensing](../sources-and-licensing.md).
+4. The precompile step runs in the GUI launcher, on a page of its own with progress, once after an install or an update; it can be skipped, and what is left continues in the background.
