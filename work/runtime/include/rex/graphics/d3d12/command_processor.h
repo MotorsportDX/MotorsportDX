@@ -77,6 +77,15 @@ class D3D12CommandProcessor : public CommandProcessor {
   // (transfer_depth_ms).
   uint32_t BeginTransferTimestamp(bool depth = false);
   void EndTransferTimestamp(uint32_t pair) { EndGpuTimestamp(pair); }
+  // The parts of a full-screen resolve (perf trace gpu resolve_full_parts_ms,
+  // d3d-hle-n6.md 19.7.1): the deferred transfers of the tiles it copies, the
+  // dump of the render targets into the EDRAM buffer, the destination's write
+  // in the guest's memory layout (the scaled resolve buffer or shared memory),
+  // the host textures written from the render target, and the clears.
+  enum class ResolvePart : uint8_t { kTransfers, kDump, kGuestLayout, kHostTextures, kClear };
+  static constexpr size_t kResolvePartCount = 5;
+  uint32_t BeginResolvePartTimestamp(ResolvePart part);
+  void EndResolvePartTimestamp(uint32_t pair) { EndGpuTimestamp(pair); }
   // A post pass (perf trace gpu passes_ms, d3d-hle-n4.md 17.24), grouped by
   // its name: gtao_*, taa_*, motion_*, windshield_*, and the others.
   uint32_t BeginPostPassTimestamp(std::string_view pass_name);
@@ -591,7 +600,13 @@ class D3D12CommandProcessor : public CommandProcessor {
     kPassWindshield,
     kPassFsr,
     kPassOther,
-    kSwap
+    kSwap,
+    // The parts of full-screen resolves, in the order of ResolvePart.
+    kResolvePartTransfers,
+    kResolvePartDump,
+    kResolvePartGuestLayout,
+    kResolvePartHostTextures,
+    kResolvePartClear
   };
   // The resolve's kind by the bytes it wrote.
   static GpuTimestampKind GetResolveTimestampKind(uint32_t written_length);

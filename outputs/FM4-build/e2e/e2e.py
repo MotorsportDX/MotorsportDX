@@ -1071,6 +1071,16 @@ def summarize(perf, measure):
                                               for k in gpu[0]['passes_ms']}
             result['gpu_passes_ms_median'].update(
                 swap=median([g['swap_ms'] for g in gpu]), scene=median([g['scene_ms'] for g in gpu]))
+        # The resolves' and texture loads' share (docs/analysis/d3d-hle-n6.md 19.7.1): the
+        # full-screen resolves and loads, the transfers and the readback copies a frame, and the
+        # parts of the full-screen resolves.
+        detail = ('resolve_full_ms', 'load_ms', 'load_full_ms', 'transfer_ms', 'transfer_depth_ms',
+                  'readback_ms')
+        result['gpu_detail_ms_median'] = {k: median([g[k] for g in gpu]) for k in detail if k in gpu[0]}
+        if 'resolve_full_parts_ms' in gpu[0]:
+            result['gpu_resolve_full_parts_ms_median'] = {
+                k: median([g['resolve_full_parts_ms'][k] for g in gpu])
+                for k in gpu[0]['resolve_full_parts_ms']}
     frames_in = lambda p: max(1, len(p.get('frame_ms', [])))
     # Over all measured frames: per-window values alternate with the frame count of a window
     # when frames alternate (the half-rate mirror), by about 0.5% in a frozen frame.

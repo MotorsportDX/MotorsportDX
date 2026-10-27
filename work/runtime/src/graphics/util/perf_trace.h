@@ -130,6 +130,8 @@ struct State {
   // only): GPU time and count.
   double gpu_resolve_bucket_ms[4] = {};
   uint64_t gpu_resolve_bucket_count[4] = {};
+  // The parts of the full-screen resolves (kResolveParts).
+  double gpu_resolve_part_ms[5] = {};
   // The post pass groups (kGpuPasses) and the swap's passes (d3d-hle-n4.md 17.24).
   double gpu_pass_ms[6 + 1] = {};
   // Samples passing depth/stencil per occlusion snapshot interval, as reported
@@ -812,6 +814,16 @@ inline void AddGpuResolveBuckets(const double* ms, const uint32_t* counts) {
   }
 }
 
+// The parts of the full-screen resolves (D3D12CommandProcessor::ResolvePart,
+// d3d-hle-n6.md 19.7.1), the perf trace's gpu resolve_full_parts_ms.
+inline constexpr const char* kResolveParts[] = {"transfers", "dump", "guest_layout",
+                                                "host_textures", "clear"};
+inline void AddGpuResolveParts(const double* ms) {
+  State* state = Get();
+  if (!state) return;
+  for (size_t i = 0; i < 5; ++i) state->gpu_resolve_part_ms[i] += ms[i];
+}
+
 inline ResolveInventory* GetResolveInventory() {
   static ResolveInventory* inventory = []() -> ResolveInventory* {
     if (!Get()) return nullptr;
@@ -1159,6 +1171,11 @@ inline void OnSwap() {
                     << state->gpu_resolve_bucket_ms[i] / gpu_frames << ','
                     << double(state->gpu_resolve_bucket_count[i]) / gpu_frames << ']';
     }
+  }
+  state->output << "},\"resolve_full_parts_ms\":{";
+  for (size_t i = 0; i < 5; ++i) {
+    state->output << (i ? "," : "") << '"' << kResolveParts[i]
+                  << "\":" << state->gpu_resolve_part_ms[i] / gpu_frames;
   }
   state->output << "},\"passes_ms\":{";
   {

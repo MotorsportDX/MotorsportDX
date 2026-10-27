@@ -8038,6 +8038,8 @@ void D3D12CommandProcessor::ReadGpuTimestampFrame() {
     // Resolves by kind: full screen, mid, small, clears only.
     double bucket_ms[4] = {};
     uint32_t bucket_count[4] = {};
+    // The parts of the full-screen resolves (ResolvePart).
+    double part_ms[kResolvePartCount] = {};
     const double tick_ms = 1000.0 / double(gpu_timestamp_frequency_);
     uint64_t first = UINT64_MAX, last = 0;
     for (uint32_t pair = 0; pair < frame.pairs; ++pair) {
@@ -8089,6 +8091,14 @@ void D3D12CommandProcessor::ReadGpuTimestampFrame() {
         case GpuTimestampKind::kSwap:
           passes[size_t(frame.kinds[pair]) - size_t(GpuTimestampKind::kPassGtao)] += duration;
           break;
+        case GpuTimestampKind::kResolvePartTransfers:
+        case GpuTimestampKind::kResolvePartDump:
+        case GpuTimestampKind::kResolvePartGuestLayout:
+        case GpuTimestampKind::kResolvePartHostTextures:
+        case GpuTimestampKind::kResolvePartClear:
+          part_ms[size_t(frame.kinds[pair]) - size_t(GpuTimestampKind::kResolvePartTransfers)] +=
+              double(duration) * tick_ms;
+          break;
       }
       first = std::min(first, begin);
       last = std::max(last, end);
@@ -8100,6 +8110,7 @@ void D3D12CommandProcessor::ReadGpuTimestampFrame() {
                             double(load_full) * ms, double(transfer) * ms,
                             double(transfer_depth) * ms);
     perf_trace::AddGpuResolveBuckets(bucket_ms, bucket_count);
+    perf_trace::AddGpuResolveParts(part_ms);
     double passes_ms[perf_trace::kGpuPassCount + 1];
     for (size_t i = 0; i < perf_trace::kGpuPassCount + 1; ++i) passes_ms[i] = double(passes[i]) * ms;
     perf_trace::AddGpuPasses(passes_ms);
@@ -8138,6 +8149,11 @@ uint32_t D3D12CommandProcessor::BeginPostPassTimestamp(std::string_view pass_nam
 uint32_t D3D12CommandProcessor::BeginTransferTimestamp(bool depth) {
   return BeginGpuTimestamp(depth ? GpuTimestampKind::kTransferDepth
                                  : GpuTimestampKind::kTransfer);
+}
+
+uint32_t D3D12CommandProcessor::BeginResolvePartTimestamp(ResolvePart part) {
+  return BeginGpuTimestamp(GpuTimestampKind(size_t(GpuTimestampKind::kResolvePartTransfers) +
+                                            size_t(part)));
 }
 
 void D3D12CommandProcessor::SetGpuTimestampKind(uint32_t pair, GpuTimestampKind kind) {

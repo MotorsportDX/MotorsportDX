@@ -1500,9 +1500,29 @@ bool D3D12RenderTargetCache::Resolve(const memory::Memory& memory, D3D12SharedMe
     return true;
   }
 
+  // The GPU time of a full-screen resolve's parts (perf trace gpu
+  // resolve_full_parts_ms, d3d-hle-n6.md 19.7.1).
+  using ResolvePart = D3D12CommandProcessor::ResolvePart;
+  const bool full_screen_resolve = resolve_info.copy_dest_extent_length >= 1280 * 720 * 4;
+  struct PartTimestamp {
+    D3D12CommandProcessor& command_processor;
+    uint32_t pair;
+    PartTimestamp(D3D12CommandProcessor& processor, bool timed, ResolvePart part)
+        : command_processor(processor),
+          pair(timed ? processor.BeginResolvePartTimestamp(part) : UINT32_MAX) {}
+    ~PartTimestamp() {
+      if (pair != UINT32_MAX) {
+        command_processor.EndResolvePartTimestamp(pair);
+      }
+    }
+  };
+
   // native_rt_surfaces bit 4: the deferred transfers of the tiles the resolve
   // copies, before it reads them (d3d-hle.md 16.12).
-  FlushLazyTransfers(&resolve_info, nullptr);
+  {
+    PartTimestamp part_timestamp(command_processor_, full_screen_resolve, ResolvePart::kTransfers);
+    FlushLazyTransfers(&resolve_info, nullptr);
+  }
 
   // native_rt_surfaces=1: the copy reads the tiles of its source, the clears
   // overwrite theirs (d3d-hle.md 16.9).
@@ -1592,6 +1612,7 @@ bool D3D12RenderTargetCache::Resolve(const memory::Memory& memory, D3D12SharedMe
           uint32_t dump_rows;
           uint32_t dump_pitch;
           resolve_info.GetCopyEdramTileSpan(dump_base, dump_row_length_used, dump_rows, dump_pitch);
+          PartTimestamp part_timestamp(command_processor_, full_screen_resolve, ResolvePart::kDump);
           if (!DumpRenderTargets(dump_base, dump_row_length_used, dump_rows, dump_pitch,
                                  private_surface)) {
             REXGPU_ERROR("D3D12RenderTargetCache: Failed to dump host render targets for resolve");
@@ -1655,17 +1676,22 @@ bool D3D12RenderTargetCache::Resolve(const memory::Memory& memory, D3D12SharedMe
         ui::d3d12::util::DescriptorCpuGpuHandlePair descriptor_dest;
         ui::d3d12::util::DescriptorCpuGpuHandlePair descriptor_source;
         ui::d3d12::util::DescriptorCpuGpuHandlePair descriptors[2];
-        const bool dispatched_from_host =
-            host_resolve && !host_check &&
-            DispatchHostResolve(texture_cache, shared_memory, resolve_info,
-                                copy_shader_constants, host_source, draw_resolution_scaled,
-                                false);
+        bool dispatched_from_host = false;
+        if (host_resolve && !host_check) {
+          PartTimestamp part_timestamp(command_processor_, full_screen_resolve,
+                                       ResolvePart::kGuestLayout);
+          dispatched_from_host =
+              DispatchHostResolve(texture_cache, shared_memory, resolve_info,
+                                  copy_shader_constants, host_source, draw_resolution_scaled,
+                                  false);
+        }
         perf_trace::CountHostResolve(host_resolve, dispatched_from_host);
         if (host_resolve && !host_check && !dispatched_from_host) {
           // The dump was left out for the resolve from the host render target.
           uint32_t dump_base, dump_row_length_used, dump_rows, dump_pitch;
           resolve_info.GetCopyEdramTileSpan(dump_base, dump_row_length_used, dump_rows,
                                             dump_pitch);
+          PartTimestamp part_timestamp(command_processor_, full_screen_resolve, ResolvePart::kDump);
           DumpRenderTargets(dump_base, dump_row_length_used, dump_rows, dump_pitch, private_surface);
         }
         if (dispatched_from_host ||
@@ -1711,6 +1737,8 @@ bool D3D12RenderTargetCache::Resolve(const memory::Memory& memory, D3D12SharedMe
           TransitionEdramBuffer(D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE);
 
           // Submit the resolve.
+          PartTimestamp part_timestamp(command_processor_, full_screen_resolve,
+                                       ResolvePart::kGuestLayout);
           command_list.D3DSetComputeRootSignature(resolve_copy_root_signature_);
           command_list.D3DSetComputeRootDescriptorTable(2, descriptor_source.second);
           command_list.D3DSetComputeRootDescriptorTable(1, descriptor_dest.second);
@@ -1744,6 +1772,8 @@ bool D3D12RenderTargetCache::Resolve(const memory::Memory& memory, D3D12SharedMe
           // It reads the EDRAM buffer, which a resolve from the host render
           // target leaves stale.
           if (resolve_texture_pipeline_ && !dispatched_from_host) {
+            PartTimestamp part_timestamp(command_processor_, full_screen_resolve,
+                                         ResolvePart::kHostTextures);
             ResolveIntoHostTextures(texture_cache, resolve_info, copy_shader,
                                     copy_shader_constants);
           }
@@ -1814,6 +1844,8 @@ bool D3D12RenderTargetCache::Resolve(const memory::Memory& memory, D3D12SharedMe
                   IsSceneUpscaled() &&
                       IsSceneInputSamples(host_source.render_target->key().msaa_samples));
             }
+            PartTimestamp part_timestamp(command_processor_, full_screen_resolve,
+                                         ResolvePart::kHostTextures);
             ResolveHostIntoTextures(texture_cache, resolve_info, copy_shader_constants,
                                     host_source, scene, scene && banded ? &band : nullptr);
           }
@@ -1843,6 +1875,7 @@ bool D3D12RenderTargetCache::Resolve(const memory::Memory& memory, D3D12SharedMe
   bool clear_depth = resolve_info.IsClearingDepth();
   bool clear_color = resolve_info.IsClearingColor();
   if (clear_depth || clear_color) {
+    PartTimestamp part_timestamp(command_processor_, full_screen_resolve, ResolvePart::kClear);
     switch (GetPath()) {
       case Path::kHostRenderTargets: {
         Transfer::Rectangle clear_rectangle;

@@ -331,6 +331,12 @@ class SummaryTests(unittest.TestCase):
         self.assertEqual(result['gpu_passes_ms_median'],
                          {'gtao': 1.0, 'taa': 0.5, 'motion': 0.2, 'windshield': 0.1, 'other': 0.0,
                           'swap': 0.2, 'scene': 6.0})
+        self.assertEqual(result['gpu_detail_ms_median'], {})
+        parts = {'transfers': 0.01, 'dump': 0.0, 'guest_layout': 0.2, 'host_textures': 0.1, 'clear': 0.02}
+        result = e2e.summarize([self.window(gpu=dict(gpu, resolve_full_ms=0.4, load_full_ms=0.3,
+                                                     resolve_full_parts_ms=parts))] * 3, 0)
+        self.assertEqual(result['gpu_detail_ms_median'], {'resolve_full_ms': 0.4, 'load_full_ms': 0.3})
+        self.assertEqual(result['gpu_resolve_full_parts_ms_median'], parts)
 
     def test_host_presents(self):
         result = e2e.summarize([self.window(host_presents={'new_frames': 50, 'repeats': 150, 'ui_thread': 200,
