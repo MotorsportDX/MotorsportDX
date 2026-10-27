@@ -26,6 +26,12 @@ CAPTURE_KEYS = ["luma_mean", "black_pct", "saturated_pct"]
 # Measured phases of a scenario (summary.json "phases", e.g. race, photo, replay). They last
 # 20-40 s, so their frame p99 only warns.
 PHASE_KEYS = ["fps_mean", "frame_ms_p99", "cp_busy_ms_per_s_median", "gpu_frame_ms_median"]
+# The shader work of a run (summary.json "shader_work", docs/analysis/d3d-hle-n6.md 19.3.4).
+SHADER_WORK_KINDS = ["mod_compiles", "mod_compiles_worker", "mod_cache_loads", "mod_swaps",
+                     "translations_ps", "translations_vs", "pipelines", "pass_compiles"]
+# Draw path work whose pieces over 4 ms warn when they rise (the plan's threshold).
+SHADER_WORK_LONG_KINDS = ["translations_ps", "translations_vs", "pipelines", "mod_swaps",
+                          "mod_cache_loads"]
 
 
 def load(path):
@@ -87,8 +93,45 @@ def hist_l1(bh, ch):
     return None
 
 
+def shader_work_runs(s):
+    """The run-wide shader work of each run of a summary (single or aggregate), or []."""
+    runs = s.get("shader_work_runs")
+    if runs is None:
+        runs = [(s.get("shader_work") or {}).get("run")]
+    return [r for r in runs if r]
+
+
+def cold_cache(s):
+    """Whether the run started with an empty or copied shader cache (e2e.py --cold-cache,
+    --cache-from)."""
+    return bool((s.get("cache") or {}).get("cold"))
+
+
+def shader_work_value(s, path):
+    """The median over the runs of a shader work value: a key of shader_work_stats, or
+    (kind, key) of its work."""
+    values = []
+    for run in shader_work_runs(s):
+        value = run.get(path) if isinstance(path, str) else (run.get("work") or {}).get(path[0], {}).get(path[1])
+        if isinstance(path, str) and isinstance(value, dict):
+            value = None
+        if num(value):
+            values.append(value)
+    return statistics.median(values) if values else None
+
+
 def build_rows(b, c):
     rows = [row(k, b.get(k), c.get(k)) for k in SCALARS]
+    if shader_work_runs(b) or shader_work_runs(c):
+        for kind in SHADER_WORK_KINDS:
+            rows += [row(f"shader_work.{kind}.{key}", shader_work_value(b, (kind, key)),
+                         shader_work_value(c, (kind, key))) for key in ("count", "ms", "max_ms")]
+        for key in ("frames_over_50ms_mod_compile", "longest_frame_ms", "ms_in_frames_over_50ms"):
+            rows.append(row(f"shader_work.{key}", shader_work_value(b, key), shader_work_value(c, key)))
+        for limit in ("50", "100", "250"):
+            frames = lambda s: statistics.median([r["frames_over_ms"][limit] for r in shader_work_runs(s)]) \
+                if shader_work_runs(s) else None
+            rows.append(row(f"shader_work.frames_over_{limit}ms", frames(b), frames(c)))
     for key in ("wait_ms_per_s_median", "cpu_ms_per_s_median", "counts_per_frame_median"):
         bd, cd = b.get(key) or {}, c.get(key) or {}
         rows += [row(f"{key}.{k}", bd.get(k), cd.get(k)) for k in sorted(set(bd) | set(cd))]
@@ -142,6 +185,17 @@ def check_fail(b, c):
     p = int(count(b, "clear_gray_final")), int(count(c, "clear_gray_final"))
     if p[1] > p[0]:
         fail.append(f"final captures showing the clear color (missing geometry) {p[0]} -> {p[1]}")
+    # A cold cache cell (docs/analysis/d3d-hle-n6.md 19.3.4): no look mod compiled where a draw
+    # meets it, and no frame over 50 ms with such a compile.
+    if cold_cache(c):
+        for index, run in enumerate(shader_work_runs(c), 1):
+            mods = (run.get("work") or {}).get("mod_compiles") or {}
+            if mods.get("count"):
+                fail.append(f"cold cache run {index}: {mods['count']} look mod compiles on the draw "
+                            f"path ({mods['ms'] / 1000:.1f} s, longest {mods['max_ms']:.0f} ms)")
+            if run.get("frames_over_50ms_mod_compile"):
+                fail.append(f"cold cache run {index}: {run['frames_over_50ms_mod_compile']} frames over "
+                            "50 ms with a look mod compile")
     bp, cp = b.get("phases") or {}, c.get("phases") or {}
     for name in sorted(set(bp) - set(cp)):
         fail.append(f"phase {name} missing in candidate")
@@ -184,6 +238,14 @@ def check_warn(b, c):
         p = pair(bp[name], cp[name], "frame_ms_p99")
         if p and p[1] > p[0] * (1 + P99_RISE_FAIL):
             warn.append(f"phase {name} frame_ms_p99 rose {p[0]:.2f} -> {p[1]:.2f} ms")
+    if cold_cache(b) and cold_cache(c):
+        for kind in SHADER_WORK_LONG_KINDS:
+            p = shader_work_value(b, (kind, "over_4ms")), shader_work_value(c, (kind, "over_4ms"))
+            if num(p[0]) and num(p[1]) and p[1] > p[0]:
+                warn.append(f"cold cache: {kind} over 4 ms on the draw path {p[0]:g} -> {p[1]:g}")
+        frames = lambda s: statistics.median([r["frames_over_ms"]["100"] for r in shader_work_runs(s)])
+        if shader_work_runs(b) and shader_work_runs(c) and frames(c) > frames(b):
+            warn.append(f"cold cache: frames over 100 ms {frames(b):g} -> {frames(c):g}")
     l1 = hist_l1(bc.get("luma_hist16"), cc.get("luma_hist16"))
     if l1 is not None and l1 > HIST_L1_WARN:
         warn.append(f"capture luma_hist16 L1 distance {l1:.1f} pp (> {HIST_L1_WARN:g}); "

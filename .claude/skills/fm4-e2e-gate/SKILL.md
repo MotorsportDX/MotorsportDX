@@ -16,6 +16,7 @@ Use this skill to pick, run and interpret an e2e gate. The harness reference is 
 | Before committing a stage | `full` (3 scenarios at 60 and 240 Hz, 3 runs); `--hz 60,120,240` adds 120 Hz | about 1 h |
 | Career, saves, rewards, progress | `career` (`career_finish` and `career_progress` at 240 Hz) | about 8 min |
 | DLC import or mounting | `--scenarios dlc` (needs the packs imported with `Build.ps1 -Content`) | about 4 min |
+| Shader compiles, pipelines, the shader caches (stutter on a fresh install) | `cold` (`career` on empty caches, then `photo` on its caches, at 240 Hz; the cell line shows the shader work) | about 9 min |
 | How it looks | a single `e2e.py` run at 2x with `--keep-ppm` (section 5), not a gate | a few min |
 
 Run `smoke` before measuring anything. Do not start with `full`.

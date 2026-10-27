@@ -1186,6 +1186,12 @@ def run_once(options, out):
     args = {k: str(v) for k, v in pipeline.launch_cvars(root, state['disc1'], out / 'runtime.log').items()}
     # Nobody can type into the host keyboard dialog: XAM prompts answer with their defaults.
     args['headless'] = 'true'
+    cache = prepare_cache(options, out)
+    if cache:
+        # A fresh install's caches (docs/analysis/d3d-hle-n6.md 19.3.4): the run's own cache_root
+        # (the shader and pipeline storage, the title's cache partition) and override cache.
+        args['cache_root'] = str(cache)
+        args['shader_override_cache_path'] = str(cache / 'shader-overrides')
     if options.profile:
         source = root / 'user-data' if options.profile == 'copy' else Path(options.profile)
         args['user_data_root'] = str(prepare_profile(source, root, out))
@@ -1492,6 +1498,11 @@ def run_once(options, out):
         **summarize(perf, options.measure),
         'phases': phase_stats,
         'phase_windows': phase_windows,
+        # The shader cache the run started with: the BuildRoot's, empty (--cold-cache) or a copy
+        # of an earlier run's (--cache-from).
+        'cache': {'cold': bool(options.cold_cache or options.cache_from),
+                  'from': str(Path(options.cache_from).resolve()) if options.cache_from else None},
+        'shader_work': shader_work_summary(perf, phases),
         'phase_frames': phase_frames,
         'phase_steady_ms': phase_steady_ms,
         'n0_trace': n0_trace, 'n0_trace_offset': n0_offset,
@@ -1543,6 +1554,9 @@ def aggregate(runs):
         'look': runs[0].get('look'), 'draw_scale': runs[0].get('draw_scale'),
         'binary': runs[0].get('binary'),
         'failed_steps': [r.get('failed_step') for r in runs],
+        'cache': runs[0].get('cache'),
+        # Each run's shader work (shader_work_summary's 'run'), for compare.py's cold cache rules.
+        'shader_work_runs': [(r.get('shader_work') or {}).get('run') for r in runs],
         'goal_reached': None if runs[0]['goal_reached'] is None else all(r['goal_reached'] for r in runs),
         'fps_median': median(pick('fps_median')),
         'fps_min': min(pick('fps_min'), default=None),
@@ -1587,6 +1601,98 @@ def aggregate(runs):
             if values:
                 phase[key] = {k: median([v[k] for v in values]) for k in values[0]}
     return summary
+
+
+def prepare_cache(options, out):
+    """<out>/cache for --cold-cache (empty) or --cache-from (a copy of that run's cache), or None.
+    Each run of a --repeat starts from the same state."""
+    if not (options.cold_cache or options.cache_from):
+        return None
+    cache = out / 'cache'
+    if cache.exists():
+        shutil.rmtree(cache)
+    if options.cache_from:
+        source = Path(options.cache_from) / 'cache'
+        if not source.is_dir():
+            raise SystemExit(f'--cache-from: {source} is not a directory (a --cold-cache run keeps '
+                             'its cache in <out>/cache)')
+        shutil.copytree(source, cache)
+    cache.mkdir(parents=True, exist_ok=True)
+    return cache
+
+
+# Frames over these many milliseconds per segment (the trace lists those over 50 ms with their
+# shader work, perf_trace.h long_frames).
+LONG_FRAME_MS = (50, 100, 250)
+
+
+def shader_work_stats(windows):
+    """The shader work of perf windows (docs/analysis/d3d-hle-n6.md 19.3.4): per kind its count,
+    time, longest piece and pieces over 4 ms; frames over 50, 100 and 250 ms, and of those over
+    50 ms the ones whose draw path compiled a look mod (frames_over_50ms_mod_compile) or a post
+    pass, or did 4 ms of shader work or more."""
+    work = {}
+    pending = 0
+    for window in windows:
+        for kind, value in (window.get('shader_work') or {}).items():
+            if not isinstance(value, list):
+                pending = max(pending, value)
+                continue
+            total = work.setdefault(kind, {'count': 0, 'ms': 0.0, 'max_ms': 0.0, 'over_4ms': 0})
+            total['count'] += value[0]
+            total['ms'] += value[1]
+            total['max_ms'] = max(total['max_ms'], value[2])
+            total['over_4ms'] += value[3]
+    for total in work.values():
+        total['ms'], total['max_ms'] = round(total['ms'], 1), round(total['max_ms'], 1)
+    frames = [f for w in windows for f in w.get('frame_ms', [])]
+    long = [f for w in windows for f in w.get('long_frames', [])]
+    return {
+        'seconds': round(sum(w['window_ms'] for w in windows) / 1000, 1),
+        'frames': len(frames),
+        'longest_frame_ms': round(max(frames, default=0), 1),
+        'frames_over_ms': {str(limit): sum(f > limit for f in frames) for limit in LONG_FRAME_MS},
+        'ms_in_frames_over_50ms': round(sum(f for f in frames if f > 50)),
+        'frames_over_50ms_mod_compile': sum(1 for f in long if f[2] > 0),
+        'frames_over_50ms_pass_compile': sum(1 for f in long if len(f) > 3 and f[3] > 0),
+        'frames_over_50ms_shader_work_4ms': sum(1 for f in long if f[1] >= 4),
+        'mods_pending_max': pending,
+        'work': work,
+    }
+
+
+def shader_work_summary(perf, marks):
+    """shader_work_stats of the whole run and of its segments: each phase, 'start' before the first
+    phase (the menus and loads), and 'after_<phase>' from a phase's end to the next phase or the
+    run's end (the way into photo mode is 'after_race' of the photo scenario)."""
+    if not perf or 'shader_work' not in perf[-1]:
+        return None
+    bounds, previous = [('start', 0)], None
+    for name, start in marks:
+        if name == 'end':
+            bounds.append((f'after_{previous}' if previous else 'start', start))
+        else:
+            bounds.append((name, start))
+            previous = name
+    bounds.append((None, len(perf)))
+    segments = {}
+    for (name, start), (_, end) in zip(bounds, bounds[1:]):
+        if end > start:
+            segments.setdefault(name, []).extend(perf[start:end])
+    return {'run': shader_work_stats(perf),
+            'segments': {name: shader_work_stats(windows) for name, windows in segments.items()}}
+
+
+def shader_work_line(stats):
+    """One line of the shader work of a run or segment, for the console and the gate log."""
+    work = stats.get('work') or {}
+    get = lambda kind, key: (work.get(kind) or {}).get(key, 0)
+    return (f"shader work: {get('mod_compiles', 'count')} mod compiles on the draw path "
+            f"({get('mod_compiles', 'ms') / 1000:.1f} s, longest {get('mod_compiles', 'max_ms'):.0f} ms), "
+            f"{get('mod_compiles_worker', 'count')} on workers, {get('mod_swaps', 'count')} swaps; "
+            f"frames over 50/100/250 ms {'/'.join(str(v) for v in stats['frames_over_ms'].values())}, "
+            f"{stats['frames_over_50ms_mod_compile']} over 50 ms with a mod compile, "
+            f"longest {stats['longest_frame_ms']:.0f} ms")
 
 
 def windows_by_phase(marks, total):
@@ -1650,6 +1756,9 @@ def resummarize(out, measure):
         if windows is not None:
             summary['phases'] = {name: summarize(perf[start:end], end - start)
                                  for name, (start, end) in windows.items()}
+            marks = [mark for name, (start, end) in sorted(windows.items(), key=lambda kv: kv[1][0])
+                     for mark in ((name, start), ('end', end))]
+            summary['shader_work'] = shader_work_summary(perf, marks)
         guest_render_from_n0(summary, measure)
         (directory / 'summary.json').write_text(json.dumps(summary, indent=2))
         return summary
@@ -1817,6 +1926,11 @@ def main():
                         help='recompute summary.json of existing runs in --out from their perf.jsonl')
     parser.add_argument('--affinity', help='confine the game to these logical processors, a mask such as '
                         '0xC3, as a proxy for a smaller CPU (cpu_power.py)')
+    parser.add_argument('--cold-cache', action='store_true',
+                        help="start with empty shader caches, as a fresh install: cache_root and "
+                             "shader_override_cache_path in <out>/cache (docs/analysis/d3d-hle-n6.md 19.3.4)")
+    parser.add_argument('--cache-from', help='start with a copy of the <run>/cache of an earlier '
+                                             '--cold-cache or --cache-from run (a later session)')
     parser.add_argument('--min-free-gb', type=float, default=MIN_FREE_GB,
                         help='refuse to run with less free space on the drive of --out')
     options = parser.parse_args()
@@ -1845,6 +1959,9 @@ def main():
         summary = aggregate(runs)
         (out / 'summary.json').write_text(json.dumps(summary, indent=2))
     print(json.dumps({k: v for k, v in summary.items() if k != 'errors'}, indent=2))
+    work = summary.get('shader_work') or {}
+    if work.get('run') and (summary.get('cache') or {}).get('cold'):
+        print(shader_work_line(work['run']), flush=True)
     washed = summary.get('washed_out_frames')
     if washed:
         print(f'WARN: {washed if isinstance(washed, int) else len(washed)} race captures have a band '

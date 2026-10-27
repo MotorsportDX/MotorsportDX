@@ -432,6 +432,90 @@ class SummaryTests(unittest.TestCase):
             compare.normalize(dict(base, clear_gray_photo_frames=3, clear_gray_final=1)))), 2)
 
 
+class ShaderWorkTests(unittest.TestCase):
+    """The shader work of the perf trace by segment and the cold cache rules (d3d-hle-n6.md 19.3.4)."""
+
+    @staticmethod
+    def window(mods=(0, 0.0, 0.0, 0), worker=(0, 0.0, 0.0, 0), frames=(20.0,) * 50, long=()):
+        work = {kind: [0, 0.0, 0.0, 0] for kind in compare.SHADER_WORK_KINDS}
+        work.update(mod_compiles=list(mods), mod_compiles_worker=list(worker), mods_pending=0)
+        return {'window_ms': 1000, 'frame_ms': list(frames), 'shader_work': work,
+                'long_frames': [list(f) for f in long]}
+
+    def test_segments(self):
+        stall = self.window(mods=(2, 900.0, 600.0, 2), frames=[20.0] * 10 + [700.0],
+                            long=[(700.0, 650.0, 600.0, 0.0)])
+        quiet = self.window()
+        # start: windows 0-1, race 2-3, after_race 4, photo 5, after_photo 6.
+        perf = [stall, quiet, quiet, stall, quiet, quiet, quiet]
+        marks = [('race', 2), ('end', 4), ('photo', 5), ('end', 6)]
+        summary = e2e.shader_work_summary(perf, marks)
+        self.assertEqual(list(summary['segments']), ['start', 'race', 'after_race', 'photo', 'after_photo'])
+        run = summary['run']
+        self.assertEqual(run['work']['mod_compiles'], {'count': 4, 'ms': 1800.0, 'max_ms': 600.0, 'over_4ms': 4})
+        self.assertEqual(run['frames_over_ms'], {'50': 2, '100': 2, '250': 2})
+        self.assertEqual((run['frames_over_50ms_mod_compile'], run['longest_frame_ms']), (2, 700.0))
+        self.assertEqual(summary['segments']['race']['frames_over_50ms_mod_compile'], 1)
+        self.assertEqual(summary['segments']['after_race']['frames_over_ms']['50'], 0)
+        self.assertIn('4 mod compiles on the draw path (1.8 s, longest 600 ms)', e2e.shader_work_line(run))
+        # Phases back to back leave no gap; a trace without the counters has no summary.
+        summary = e2e.shader_work_summary([quiet] * 4, [('race', 1), ('replay', 2), ('end', 3)])
+        self.assertEqual(list(summary['segments']), ['start', 'race', 'replay', 'after_replay'])
+        self.assertIsNone(e2e.shader_work_summary([{'window_ms': 1000}], []))
+
+    def test_compare_cold_cache_rules(self):
+        stall = self.window(mods=(3, 900.0, 600.0, 3), frames=[700.0], long=[(700.0, 650.0, 600.0, 0.0)])
+        moved = self.window(worker=(3, 900.0, 600.0, 0), frames=[20.0])
+        run = lambda w, cold=True: compare.normalize({
+            'fps_mean': 60, 'errors': {}, 'cache': {'cold': cold},
+            'shader_work': e2e.shader_work_summary([w], [])})
+        fail = compare.check_fail(run(moved), run(stall))
+        self.assertEqual(len(fail), 2)
+        self.assertIn('3 look mod compiles on the draw path', fail[0])
+        self.assertEqual(compare.check_fail(run(stall), run(moved)), [])
+        # Only cold cache cells: a warm cell compiling a new look's mods does not fail.
+        self.assertEqual(compare.check_fail(run(moved, False), run(stall, False)), [])
+        rows = {r['metric']: r for r in compare.build_rows(run(stall), run(moved))}
+        self.assertEqual((rows['shader_work.mod_compiles.count']['baseline'],
+                          rows['shader_work.mod_compiles.count']['candidate']), (3, 0))
+        self.assertEqual(rows['shader_work.frames_over_250ms']['delta'], -1)
+        # The repeat summaries list each run's work.
+        repeat = compare.normalize({'fps_mean': 60, 'errors': {}, 'cache': {'cold': True},
+                                    'shader_work_runs': [run(moved)['shader_work']['run'],
+                                                         run(stall)['shader_work']['run']]})
+        self.assertEqual(len(compare.check_fail(run(moved), repeat)), 2)
+
+    def test_matrix_cold_cells(self):
+        import matrix
+        root = Path('B:/root')
+        cold = ['career', 'photo']
+        career = matrix.cell_args(root, 'n6', 240, 'career', 1, 'snap', [], True, cold)
+        photo = matrix.cell_args(root, 'n6', 240, 'photo', 1, 'snap', [], True, cold)
+        self.assertIn('--cold-cache', career)
+        self.assertEqual(photo[photo.index('--cache-from') + 1], root / 'e2e' / 'n6-240-career' / '')
+        self.assertNotIn('--cold-cache', photo)
+        # A photo cell without the career cell starts empty; warm gates pass neither.
+        alone = matrix.cell_args(root, 'n6', 240, 'photo', 1, 'snap', [], True, ['photo'])
+        self.assertIn('--cold-cache', alone)
+        warm = matrix.cell_args(root, 'n6', 240, 'photo', 1, 'snap', [], True)
+        self.assertFalse({'--cold-cache', '--cache-from'} & set(map(str, warm)))
+
+    def test_prepare_cache(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            first, second = Path(tmp) / 'first', Path(tmp) / 'second'
+            options = lambda **kw: type('Options', (), {'cold_cache': False, 'cache_from': None, **kw})
+            self.assertIsNone(e2e.prepare_cache(options(), first))
+            cache = e2e.prepare_cache(options(cold_cache=True), first)
+            (cache / 'shader-overrides').mkdir()
+            (cache / 'shader-overrides' / 'a.dxbc').write_bytes(b'1')
+            copied = e2e.prepare_cache(options(cache_from=str(first)), second)
+            self.assertTrue((copied / 'shader-overrides' / 'a.dxbc').is_file())
+            # A repeated run starts empty again.
+            self.assertEqual(list(e2e.prepare_cache(options(cold_cache=True), first).iterdir()), [])
+            with self.assertRaises(SystemExit):
+                e2e.prepare_cache(options(cache_from=str(Path(tmp) / 'none')), second)
+
+
 class CoverageTests(unittest.TestCase):
     """coverage.py: the writers of each phase from the n0 trace's alloc table and the checks."""
 

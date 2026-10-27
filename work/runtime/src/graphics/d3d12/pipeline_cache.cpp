@@ -1070,6 +1070,7 @@ bool PipelineCache::ConfigurePipeline(
   }
   if (!vertex_shader->is_translated() && !use_async) {
     std::lock_guard<std::mutex> lock(translation_request_lock_);
+    perf_trace::ShaderWorkForDrawScope shader_work_scope;
     if (!vertex_shader->is_translated()) {
       if (!TranslateAnalyzedShader(*shader_translator_, *vertex_shader, dxbc_converter_, dxc_utils_,
                                    dxc_compiler_)) {
@@ -1096,6 +1097,7 @@ bool PipelineCache::ConfigurePipeline(
   if (pixel_shader != nullptr) {
     if (!pixel_shader->is_translated() && !use_async) {
       std::lock_guard<std::mutex> lock(translation_request_lock_);
+      perf_trace::ShaderWorkForDrawScope shader_work_scope;
       if (!pixel_shader->is_translated()) {
         pixel_shader->shader().AnalyzeUcode(ucode_disasm_buffer_);
         if (!TranslateAnalyzedShader(*shader_translator_, *pixel_shader, dxbc_converter_,
@@ -1149,6 +1151,7 @@ bool PipelineCache::TranslateShadersForDraw(D3D12Shader::D3D12Translation* verte
   }
   if (!vertex_shader->is_translated() && !use_async) {
     std::lock_guard<std::mutex> lock(translation_request_lock_);
+    perf_trace::ShaderWorkForDrawScope shader_work_scope;
     if (!vertex_shader->is_translated()) {
       if (!TranslateAnalyzedShader(*shader_translator_, *vertex_shader, dxbc_converter_, dxc_utils_,
                                    dxc_compiler_)) {
@@ -1175,6 +1178,7 @@ bool PipelineCache::TranslateShadersForDraw(D3D12Shader::D3D12Translation* verte
   if (pixel_shader != nullptr) {
     if (!pixel_shader->is_translated() && !use_async) {
       std::lock_guard<std::mutex> lock(translation_request_lock_);
+      perf_trace::ShaderWorkForDrawScope shader_work_scope;
       if (!pixel_shader->is_translated()) {
         pixel_shader->shader().AnalyzeUcode(ucode_disasm_buffer_);
         if (!TranslateAnalyzedShader(*shader_translator_, *pixel_shader, dxbc_converter_,
@@ -1276,7 +1280,12 @@ bool PipelineCache::ConfigurePipelineDescribed(
     }
     creation_request_cond_.notify_one();
   } else {
+    const uint64_t create_start = perf_trace::ZoneStart();
     new_pipeline->state.store(CreateD3D12Pipeline(runtime_description), std::memory_order_release);
+    if (create_start) {
+      perf_trace::AddShaderWork(perf_trace::ShaderWork::kPipeline,
+                                perf_trace::Now() - create_start);
+    }
     if (created_out) {
       *created_out = true;
     }
@@ -1315,9 +1324,17 @@ bool PipelineCache::TranslateAnalyzedShader(DxbcShaderTranslator& translator,
 
   // Perform translation.
   // If this fails the shader will be marked as invalid and ignored later.
+  const uint64_t translate_start =
+      perf_trace::shader_work_for_draw ? perf_trace::ZoneStart() : 0;
   if (!translator.TranslateAnalyzedShader(translation)) {
     REXGPU_ERROR("Shader {:016X} translation failed; marking as ignored", shader.ucode_data_hash());
     return false;
+  }
+  if (translate_start) {
+    perf_trace::AddShaderWork(shader.type() == xenos::ShaderType::kVertex
+                                  ? perf_trace::ShaderWork::kVertexTranslation
+                                  : perf_trace::ShaderWork::kPixelTranslation,
+                              perf_trace::Now() - translate_start);
   }
   if (shader_overrides_) {
     shader_overrides_->Apply(translation);

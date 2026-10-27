@@ -13,6 +13,9 @@ Tiers (docs/e2e/README.md, "Gates"):
   parity two runs of freeze (a rewind freeze at the start of a Quick Race, 2x, the title's own
          picture, pinned occlusion) at 60 Hz: image, draw and predication parity with parity.py
          against a baseline (docs/e2e/frozen-frames.md, about 8 minutes)
+  cold   a fresh install's shader caches at 240 Hz, one run: career on empty caches, then photo
+         on the caches career left (a new track in the second session); the stalls of shader
+         compiles in play (docs/analysis/d3d-hle-n6.md 19.3.4, about 9 minutes)
 An AI driver drives the player's car in every race (FM4_GAME_CMDLINE=engageaionstart; --human
 for the harness throttle).
 
@@ -24,7 +27,8 @@ from pathlib import Path
 HERE = Path(__file__).resolve().parent
 sys.path.insert(0, str(HERE.parent))
 import pipeline  # noqa: E402
-from e2e import FAST_SCENARIOS, MIN_FREE_GB, check_content, check_free_space, import_content  # noqa: E402
+from e2e import (FAST_SCENARIOS, MIN_FREE_GB, check_content, check_free_space, import_content,  # noqa: E402
+                 shader_work_line)
 
 TIERS = {
     'smoke': (('photo', 'photo_view', 'career'), (240,), 1),
@@ -32,9 +36,13 @@ TIERS = {
     'full': (('photo', 'photo_view', 'career'), (60, 240), 3),
     'career': (('career_finish', 'career_progress'), (240,), 1),
     'parity': (('freeze',), (60,), 2),
+    'cold': (('career', 'photo'), (240,), 1),
 }
 # Cells that run on the profile a previous cell of the gate saved.
 PROFILE_FROM = {'photo_view': 'photo', 'career_progress': 'career_finish'}
+# With cold caches (the cold tier, --cold-cache): cells that start with the caches a previous cell
+# of the gate left; the others start empty.
+CACHE_FROM = {'photo': 'career'}
 
 
 def snapshot(root, source, name):
@@ -55,7 +63,8 @@ def snapshot(root, source, name):
     return target.relative_to(root)
 
 
-def cell_args(root, name, hz, scenario, repeat, build, extra, fast_route=False):
+def cell_args(root, name, hz, scenario, repeat, build, extra, fast_route=False, cold=None):
+    """The e2e.py command of a cell; cold: the gate's scenarios when it runs on cold caches."""
     args = [sys.executable, HERE / 'e2e.py', '--build-root', root, '--game-build', build,
             '--out', root / 'e2e' / f'{name}-{hz}-{scenario}', '--scenario', scenario,
             '--repeat', str(repeat)]
@@ -78,6 +87,12 @@ def cell_args(root, name, hz, scenario, repeat, build, extra, fast_route=False):
         # The profile saved by the earlier cell of the same gate (its photo, its race result).
         source = f'{name}-{hz}-{PROFILE_FROM[scenario]}'
         args += ['--profile', root / 'e2e' / source / ('run1' if repeat > 1 else '') / 'user-data']
+    if cold is not None:
+        if CACHE_FROM.get(scenario) in cold:
+            source = f'{name}-{hz}-{CACHE_FROM[scenario]}'
+            args += ['--cache-from', root / 'e2e' / source / ('run1' if repeat > 1 else '')]
+        else:
+            args += ['--cold-cache']
     return args + extra
 
 
@@ -99,6 +114,9 @@ def describe(out):
             parts.append(f"{phase} {stats.get('fps_mean')} fps p99 {stats.get('frame_ms_p99')}")
         if s.get('failed_steps'):
             parts.append(f"failed: {s['failed_steps']}")
+        work = [w for w in s.get('shader_work_runs') or [(s.get('shader_work') or {}).get('run')] if w]
+        if work and (s.get('cache') or {}).get('cold'):
+            parts.append(shader_work_line(work[0]))
     return f'{passed}/{len(runs)} ' + ', '.join(parts)
 
 
@@ -126,6 +144,9 @@ def main():
                                           "launcher's, high), for example extrahigh")
     parser.add_argument('--native', action='store_true',
                         help='every cell on the native path (e2e.py --native)')
+    parser.add_argument('--cold-cache', action='store_true',
+                        help='every cell on cold shader caches as the cold tier: empty, or those its '
+                             'CACHE_FROM cell left (e2e.py --cold-cache, --cache-from)')
     parser.add_argument('--fast-route', action='store_true',
                         help='cells with a fast route reach their race through the title\'s screen events '
                              '(e2e.py --fast-route); the others keep their menus')
@@ -138,7 +159,9 @@ def main():
     for later, earlier in PROFILE_FROM.items():
         if later in scenarios and earlier not in scenarios:
             parser.error(f'{later} runs on the profile of the {earlier} cell; run {earlier} too')
-    scenarios = sorted(scenarios, key=lambda s: s not in PROFILE_FROM.values())
+    scenarios = sorted(scenarios, key=lambda s: s not in PROFILE_FROM.values() and
+                       s not in CACHE_FROM.values())
+    cold = scenarios if options.cold_cache or options.tier == 'cold' else None
     # A full drive or missing content packages fail here once instead of in every cell; Disc 2 and
     # the content packages of local.json are imported before the first cell when they are not yet.
     check_free_space(root / 'e2e', MIN_FREE_GB)
@@ -168,7 +191,7 @@ def main():
             t = time.time()
             with open(root / 'e2e' / f'{cell}.log', 'w', encoding='utf-8', errors='replace') as output:
                 code = subprocess.call([str(a) for a in cell_args(root, options.name, hz, scenario, repeat, build,
-                                                                  extra, options.fast_route)],
+                                                                  extra, options.fast_route, cold)],
                                        stdout=output, stderr=subprocess.STDOUT)
             verdict = ''
             if options.baseline:

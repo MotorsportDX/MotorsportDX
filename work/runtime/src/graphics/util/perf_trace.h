@@ -159,7 +159,14 @@ struct State {
   static constexpr uint32_t kHostWaitBins = 65;
   uint64_t host_waited = 0, host_wait_sum = 0, host_wait_max = 0;
   uint32_t host_wait_bins[kHostWaitBins]{};
+  // Frames over kLongFrameMs: their time, the shader work on the draw path
+  // inside them, and of that the FXC compiles of look mods and of post passes
+  // (ShaderWork, d3d-hle-n6.md 19.3.4).
+  std::vector<std::array<float, 4>> long_frames;
 };
+
+// The frames the trace lists with their shader work (long_frames).
+constexpr double kLongFrameMs = 50.0;
 
 // Every resolve destination seen in the run, rewritten as JSON next to the
 // trace (<REX_PERF_TRACE_FILE>.resolves.json) every 10 windows. Used to find
@@ -611,6 +618,71 @@ inline void CountHostRecord(uint64_t depth, uint64_t pushed) {
   }
 }
 
+// Shader work in play (docs/analysis/d3d-hle-n6.md 19.3.4), with the trace.
+// On the draw path, where a draw meets it: the DXBC translations of vertex and
+// pixel shaders and the look mods' FXC compiles and override cache loads where
+// the draw is issued (the host render thread or the command processor), the
+// pipelines created for a draw (there, or on the draw back end's replay), the
+// pipelines recreated when a mod compiled on a worker replaces the plain
+// translation (shader_override_async), and the post passes' FXC compiles. Off
+// it: the mods compiled on the compile workers. Not counted: the start-up's
+// translations and pipelines (InitializeShaderStorage) and hot reload.
+enum class ShaderWork : uint32_t {
+  kVertexTranslation,
+  kPixelTranslation,
+  kModCompile,
+  kModCacheLoad,
+  kPipeline,
+  kModSwap,
+  kPassCompile,
+  kModCompileWorker,
+  kCount
+};
+inline constexpr const char* kShaderWorkNames[] = {
+    "translations_vs", "translations_ps", "mod_compiles", "mod_cache_loads",
+    "pipelines",       "mod_swaps",       "pass_compiles", "mod_compiles_worker"};
+static_assert(sizeof(kShaderWorkNames) / sizeof(kShaderWorkNames[0]) == size_t(ShaderWork::kCount));
+// The plan's threshold for one piece of work on the draw path (19.3.4).
+constexpr uint64_t kShaderWorkLongNs = 4000000;
+struct alignas(64) ShaderWorkCounts {
+  std::atomic<uint64_t> count{0}, ns{0}, max_ns{0}, long_count{0};
+};
+inline ShaderWorkCounts shader_work[size_t(ShaderWork::kCount)];
+// The draw path's shader work since the last swap, and of it the FXC compiles
+// of look mods and of post passes.
+inline std::atomic<uint64_t> frame_shader_ns{0}, frame_mod_compile_ns{0},
+    frame_pass_compile_ns{0};
+// Set on a thread while it translates shaders for a draw: only then do the
+// translations and the mods' compiles and cache loads count.
+inline thread_local bool shader_work_for_draw = false;
+class ShaderWorkForDrawScope {
+ public:
+  ShaderWorkForDrawScope() : previous_(shader_work_for_draw) { shader_work_for_draw = true; }
+  ~ShaderWorkForDrawScope() { shader_work_for_draw = previous_; }
+
+ private:
+  bool previous_;
+};
+// Mods queued for a compile worker or for their swap (shader_override_async).
+inline std::atomic<int64_t> mods_pending{0};
+inline void AddShaderWork(ShaderWork kind, uint64_t ns) {
+  if (!Get()) return;
+  ShaderWorkCounts& counts = shader_work[size_t(kind)];
+  counts.count.fetch_add(1, std::memory_order_relaxed);
+  counts.ns.fetch_add(ns, std::memory_order_relaxed);
+  uint64_t max = counts.max_ns.load(std::memory_order_relaxed);
+  while (ns > max && !counts.max_ns.compare_exchange_weak(max, ns, std::memory_order_relaxed)) {
+  }
+  if (kind == ShaderWork::kModCompileWorker) return;
+  if (ns > kShaderWorkLongNs) counts.long_count.fetch_add(1, std::memory_order_relaxed);
+  frame_shader_ns.fetch_add(ns, std::memory_order_relaxed);
+  if (kind == ShaderWork::kModCompile) {
+    frame_mod_compile_ns.fetch_add(ns, std::memory_order_relaxed);
+  } else if (kind == ShaderWork::kPassCompile) {
+    frame_pass_compile_ns.fetch_add(ns, std::memory_order_relaxed);
+  }
+}
+
 // Submit thread (its own thread): jobs finished, and wall time per job in
 // total (busy), replaying the deferred command list (record) and Close +
 // ExecuteCommandLists + Signal (execute). Callbacks (with
@@ -780,10 +852,19 @@ inline void OnSwap() {
   State* state = Get();
   if (!state) return;
   const uint64_t now = Now();
+  // The draw path's shader work in this frame.
+  const uint64_t frame_shader = frame_shader_ns.exchange(0, std::memory_order_relaxed);
+  const uint64_t frame_mod_compile = frame_mod_compile_ns.exchange(0, std::memory_order_relaxed);
+  const uint64_t frame_pass_compile = frame_pass_compile_ns.exchange(0, std::memory_order_relaxed);
   if (state->last_swap) {
     const uint64_t frame = now - state->last_swap;
     state->max_frame = frame > state->max_frame ? frame : state->max_frame;
     state->frame_ms.push_back(float(double(frame) / 1e6));
+    if (double(frame) / 1e6 > kLongFrameMs) {
+      state->long_frames.push_back(
+          {float(double(frame) / 1e6), float(double(frame_shader) / 1e6),
+           float(double(frame_mod_compile) / 1e6), float(double(frame_pass_compile) / 1e6)});
+    }
   }
   state->last_swap = now;
   ++state->swaps;
@@ -882,6 +963,17 @@ inline void OnSwap() {
                 << one_pass_resolves.exchange(0, std::memory_order_relaxed) << ",\"clears\":"
                 << one_pass_clears.exchange(0, std::memory_order_relaxed) << ",\"violations\":"
                 << one_pass_violations.exchange(0, std::memory_order_relaxed) << '}';
+  // Shader work by kind: [count, ms, longest ms, count over 4 ms] (ShaderWork).
+  state->output << ",\"shader_work\":{";
+  for (size_t i = 0; i < size_t(ShaderWork::kCount); ++i) {
+    ShaderWorkCounts& counts = shader_work[i];
+    state->output << (i ? "," : "") << '"' << kShaderWorkNames[i] << "\":["
+                  << counts.count.exchange(0, std::memory_order_relaxed) << ','
+                  << double(counts.ns.exchange(0, std::memory_order_relaxed)) / 1e6 << ','
+                  << double(counts.max_ns.exchange(0, std::memory_order_relaxed)) / 1e6 << ','
+                  << counts.long_count.exchange(0, std::memory_order_relaxed) << ']';
+  }
+  state->output << ",\"mods_pending\":" << mods_pending.load(std::memory_order_relaxed) << '}';
   {
     const double tsc_per_ms = double(__rdtsc() - state->window_tsc) / ms(elapsed);
     const uint64_t replay_tsc = constant_replay.tsc.exchange(0, std::memory_order_relaxed);
@@ -1206,8 +1298,16 @@ inline void OnSwap() {
     }
   }
   read_trace::WriteWindow(state->output, ms(now - state->origin) / 1000.0);
+  // The frames over kLongFrameMs: [ms, shader work ms, of it the look mods' and
+  // the post passes' FXC ms].
+  state->output << "},\"long_frames\":[";
+  for (size_t i = 0; i < state->long_frames.size(); ++i) {
+    const auto& frame = state->long_frames[i];
+    state->output << (i ? "," : "") << '[' << frame[0] << ',' << frame[1] << ',' << frame[2]
+                  << ',' << frame[3] << ']';
+  }
   // Every frame duration in the window, for run-wide percentiles and hitches.
-  state->output << "},\"frame_ms\":[";
+  state->output << "],\"frame_ms\":[";
   for (size_t i = 0; i < state->frame_ms.size(); ++i) {
     state->output << (i ? "," : "") << state->frame_ms[i];
   }
