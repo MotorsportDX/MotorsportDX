@@ -468,6 +468,12 @@ void DxbcShaderTranslator::ProcessVertexFetchInstruction(
   StoreResult(instr.result, dxbc::Src::R(system_temp_result_));
 }
 
+// HlslShaderTranslator::FindOrAddTextureBinding, FindOrAddSamplerBinding and
+// its kTextureFetch assign the same bindings in the same order for the native
+// shader contract's entries, which are translated without this translator
+// (docs/analysis/shader-contract.md, 5.1): keep both in sync.
+// native_shader_contract_check compares them for every pixel shader translated,
+// and PostTranslation logs an error when a shader's stored bindings differ.
 uint32_t DxbcShaderTranslator::FindOrAddTextureBinding(uint32_t fetch_constant,
                                                        xenos::FetchOpDimension dimension,
                                                        bool is_signed) {
@@ -1553,6 +1559,9 @@ void DxbcShaderTranslator::ProcessTextureFetchInstruction(
 
       // - Data.
 
+      // The bindings of a fetch: this sampler, then the textures below, the
+      // order HlslShaderTranslator::ProcessTextureFetchInstruction follows
+      // (see FindOrAddTextureBinding).
       // 4D5307F2 uses vertex displacement map textures for tessellated models
       // like the beehive tree with explicit LOD with point sampling (they store
       // values packed in two components), however, the fetch constant has

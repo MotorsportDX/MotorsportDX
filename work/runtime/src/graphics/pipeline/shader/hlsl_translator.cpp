@@ -133,6 +133,14 @@ uint32_t HlslShaderTranslator::GetModificationRegisterCount() const {
                             : modification.pixel.dynamic_addressable_register_count;
 }
 
+// DxbcShaderTranslator::FindOrAddTextureBinding and FindOrAddSamplerBinding
+// with bindless resources, and the order of their calls in its
+// ProcessTextureFetchInstruction (the sampler before the textures of a fetch):
+// keep both in sync. native_shader_contract_check compares the bindings of
+// both translators for every pixel shader translated
+// (ShaderOverrides::CheckBindings, docs/analysis/shader-contract.md 5.1), and
+// the DXBC translator's PostTranslation logs an error when a shader's stored
+// bindings differ from its own.
 DxbcShader::TextureBinding HlslShaderTranslator::FindOrAddTextureBinding(
     uint32_t fetch_constant, xenos::FetchOpDimension dimension, bool is_signed) {
   // 1D and 2D textures (including stacked ones) are 2D arrays.

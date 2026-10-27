@@ -1571,27 +1571,28 @@ bool ShaderOverrides::TranslateEntry(D3D12Shader::D3D12Translation& translation)
   // (translated and valid; its binary the HLSL text until the compile replaces
   // it). On any failure the caller translates it with the DXBC translator,
   // which sets every field again.
+  auto fallback = [&](const char* reason) {
+    uint32_t count = entry_fallbacks_.fetch_add(1, std::memory_order_relaxed) + 1;
+    REXGPU_WARN("Native shader contract: entry {:016X} modification {:016X}: DXBC fallback {} "
+                "({})",
+                shader.ucode_data_hash(), modification.value, count, reason);
+    return false;
+  };
   HlslShaderTranslator translator;
   if (!translator.TranslateAnalyzedShader(translation)) {
-    REXGPU_WARN("Native shader contract: no HLSL for {:016X} modification {:016X}; translating "
-                "it with the DXBC translator",
-                shader.ucode_data_hash(), modification.value);
-    return false;
+    return fallback("no HLSL: an unsupported fetch");
   }
   auto& dxbc_shader = static_cast<D3D12Shader&>(shader);
   if (!dxbc_shader.SetBindingsOnce(translator.texture_bindings(), translator.sampler_bindings())) {
     REXGPU_ERROR("Native shader contract: {:016X}: the bindings of the HLSL differ from those an "
-                 "earlier translation stored; translating it with the DXBC translator",
+                 "earlier translation stored",
                  shader.ucode_data_hash());
-    return false;
+    return fallback("the bindings differ");
   }
   std::vector<uint8_t> binary;
   std::vector<Dependency> files;
   if (Build(translation, std::vector<uint8_t>(), binary, files) != Outcome::kCompiled) {
-    REXGPU_WARN("Native shader contract: {:016X} modification {:016X} did not compile; "
-                "translating it with the DXBC translator",
-                shader.ucode_data_hash(), modification.value);
-    return false;
+    return fallback("the compile or its signature check failed");
   }
   translation.ReplaceTranslatedBinary(std::move(binary));
   if (hot_reload_) {
@@ -1608,22 +1609,37 @@ void ShaderOverrides::CheckBindings(const D3D12Shader::D3D12Translation& transla
   }
   HlslShaderTranslator translator;
   HlslShaderTranslator::Translation generated(translation.shader(), translation.modification());
-  if (!translator.TranslateAnalyzedShader(generated)) {
-    // getWeights, getCompTexLOD, getBCF or memexport: no HLSL to compare.
+  bool generated_valid = translator.TranslateAnalyzedShader(generated);
+  bool matches = generated_valid &&
+                 shader.HasBindings(translator.texture_bindings(), translator.sampler_bindings());
+  std::lock_guard<std::mutex> lock(check_mutex_);
+  bool first = checked_shaders_.insert(shader.ucode_data_hash()).second;
+  if (!generated_valid) {
+    // getWeights, getCompTexLOD, getBCF or memexport (the generator logged
+    // which): no HLSL to compare, and an entry of this shader would take the
+    // DXBC translation.
+    ++checked_without_hlsl_;
+    if (first) {
+      REXGPU_INFO("Native shader contract check: pixel shader {:016X}: no HLSL",
+                  shader.ucode_data_hash());
+    }
     return;
   }
-  uint32_t count = checked_bindings_.fetch_add(1, std::memory_order_relaxed) + 1;
-  if (!shader.HasBindings(translator.texture_bindings(), translator.sampler_bindings())) {
+  ++checked_bindings_;
+  if (!matches) {
     REXGPU_ERROR("Native shader contract check: {:016X} modification {:016X}: the bindings of the "
                  "HLSL ({} textures, {} samplers) differ from the DXBC translation's ({}, {})",
                  shader.ucode_data_hash(), translation.modification(),
                  translator.texture_bindings().size(), translator.sampler_bindings().size(),
                  shader.GetTextureBindingsAfterTranslation().size(),
                  shader.GetSamplerBindingsAfterTranslation().size());
-  } else if (!(count & 63)) {
-    REXGPU_INFO("Native shader contract check: {} pixel shader translations with the bindings "
-                "of their DXBC translation",
-                count);
+  } else if (first) {
+    REXGPU_INFO("Native shader contract check: pixel shader {:016X}: the bindings of its DXBC "
+                "translation ({} textures, {} samplers; {} shaders, {} translations compared, {} "
+                "without HLSL)",
+                shader.ucode_data_hash(), translator.texture_bindings().size(),
+                translator.sampler_bindings().size(), checked_shaders_.size(), checked_bindings_,
+                checked_without_hlsl_);
   }
 }
 
