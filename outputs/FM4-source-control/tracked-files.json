@@ -137,6 +137,10 @@
       "provenance": "Project documentation; design note for modern gamepads (SDL driver matrix from the SDL source, the title's deadzones and rumble from the recompiled code, the profile schema and e2e logs, input latency measurements, proposed options; no third-party code and no game content beyond setting names and values)"
     },
     {
+      "path": "docs/analysis/racing-wheels.md",
+      "provenance": "Project documentation; design note for native racing wheel support (the title's wheel detection, layouts, steering tunables and force feedback flow from static analysis of the recompiled code and the game data, the runtime's hook mechanism, host device API comparison with links to public MOZA and Microsoft pages, a safety governor and a staged plan; no third-party code and no game content beyond setting names, values, function names and addresses)"
+    },
+    {
       "path": "docs/analysis/keyboard-controls.md",
       "provenance": "Project documentation; design note for keyboard controls (the runtime's keyboard driver and the launchers' bindings, the title's controller layout and options from e2e captures and the profile schema, its deadzone handling from the recompiled code, a proposed steering and pedal model, layout, tests and options; no third-party code and no game content beyond setting names, values and on-screen labels)"
     },
