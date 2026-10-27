@@ -889,7 +889,10 @@ void ShaderOverrides::SetDefines(std::string_view text) {
 const native_shader_contract::PixelEntry* ShaderOverrides::NativeEntry(
     const D3D12Shader::D3D12Translation& translation) const {
   Modification modification(translation.modification());
-  if (!native_ || modification.pixel.native_classic || modification.pixel.native_plain) {
+  // hlsl_override_disabled: also a pipeline of that phase that a build before
+  // the contract stored, which the storage loads at startup.
+  if (!native_ || modification.pixel.native_classic || modification.pixel.native_plain ||
+      modification.pixel.hlsl_override_disabled) {
     return nullptr;
   }
   return native_->FindPixel(translation.shader().ucode_data_hash());

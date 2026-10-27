@@ -322,8 +322,9 @@ class ShaderOverrides {
                const native_shader_contract::PixelEntry* entry,
                std::vector<uint8_t>& binary_out, std::vector<Dependency>& files_out,
                std::unique_ptr<CompileJob>* job_out = nullptr) const;
-  // The manifest's entry a translation takes (not in the A/B's classic periods
-  // or outside the entry's passes), or nullptr.
+  // The manifest's entry a translation takes (not in the A/B's classic periods,
+  // outside the entry's passes, or in the shader override A/B's off phase), or
+  // nullptr.
   const native_shader_contract::PixelEntry* NativeEntry(
       const D3D12Shader::D3D12Translation& translation) const;
   // FXC, the check against the signatures of dxbc and the cache store of a job
