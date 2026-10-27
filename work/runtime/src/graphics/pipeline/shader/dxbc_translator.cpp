@@ -21,6 +21,7 @@
 #include <rex/graphics/pipeline/shader/dxbc.h>
 #include <rex/graphics/pipeline/shader/dxbc_translator.h>
 #include <rex/graphics/xenos.h>
+#include <rex/logging.h>
 #include <rex/math.h>
 #include <rex/ui/graphics_provider.h>
 
@@ -1278,6 +1279,37 @@ void DxbcShaderTranslator::PostTranslation() {
     return;
   }
   DxbcShader* dxbc_shader = dynamic_cast<DxbcShader*>(&translation.shader());
+  if (dxbc_shader && bindless_resources_used_ &&
+      dxbc_shader->bindings_setup_entered_.test(std::memory_order_relaxed)) {
+    // Stored by an earlier translation, possibly one without this translator
+    // (HlslShaderTranslator for the native shader contract's entries, which
+    // assigns the bindings as this translator does): they must be these.
+    std::vector<DxbcShader::TextureBinding> texture_bindings;
+    for (const TextureBinding& translator_binding : texture_bindings_) {
+      DxbcShader::TextureBinding& binding = texture_bindings.emplace_back();
+      std::memset(&binding, 0, sizeof(binding));
+      binding.bindless_descriptor_index = translator_binding.bindless_descriptor_index;
+      binding.fetch_constant = translator_binding.fetch_constant;
+      binding.dimension = translator_binding.dimension;
+      binding.is_signed = translator_binding.is_signed;
+    }
+    std::vector<DxbcShader::SamplerBinding> sampler_bindings;
+    for (const SamplerBinding& translator_binding : sampler_bindings_) {
+      DxbcShader::SamplerBinding& binding = sampler_bindings.emplace_back();
+      binding.bindless_descriptor_index = translator_binding.bindless_descriptor_index;
+      binding.fetch_constant = translator_binding.fetch_constant;
+      binding.mag_filter = translator_binding.mag_filter;
+      binding.min_filter = translator_binding.min_filter;
+      binding.mip_filter = translator_binding.mip_filter;
+      binding.aniso_filter = translator_binding.aniso_filter;
+    }
+    if (!dxbc_shader->HasBindings(texture_bindings, sampler_bindings)) {
+      REXGPU_ERROR(
+          "Shader {:016X}: the bindings of modification {:016X} differ from those stored by an "
+          "earlier translation",
+          dxbc_shader->ucode_data_hash(), translation.modification());
+    }
+  }
   if (dxbc_shader &&
       !dxbc_shader->bindings_setup_entered_.test_and_set(std::memory_order_relaxed)) {
     dxbc_shader->texture_bindings_.clear();

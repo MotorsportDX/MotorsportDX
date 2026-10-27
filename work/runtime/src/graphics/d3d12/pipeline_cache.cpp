@@ -1414,23 +1414,42 @@ bool PipelineCache::TranslateAnalyzedShader(DxbcShaderTranslator& translator,
                                             IDxcCompiler* dxc_compiler, bool for_draw) {
   D3D12Shader& shader = static_cast<D3D12Shader&>(translation.shader());
 
-  // Perform translation.
-  // If this fails the shader will be marked as invalid and ignored later.
-  const uint64_t translate_start =
-      perf_trace::shader_work_for_draw ? perf_trace::ZoneStart() : 0;
-  if (!translator.TranslateAnalyzedShader(translation)) {
-    REXGPU_ERROR("Shader {:016X} translation failed; marking as ignored", shader.ucode_data_hash());
-    return false;
-  }
-  if (translate_start) {
-    perf_trace::AddShaderWork(shader.type() == xenos::ShaderType::kVertex
-                                  ? perf_trace::ShaderWork::kVertexTranslation
-                                  : perf_trace::ShaderWork::kPixelTranslation,
-                              perf_trace::Now() - translate_start);
-  }
-  if (shader_overrides_) {
-    shader_overrides_->Apply(translation,
-                             for_draw && mod_compile_async_ ? &mod_compile_queue_ : nullptr);
+  // A native shader contract entry is translated without the DXBC translator
+  // (docs/analysis/shader-contract.md, increment 2); otherwise, or if that
+  // fails, the DXBC translation and the shader overrides.
+  if (shader_overrides_ && shader_overrides_->TranslateEntry(translation)) {
+    if (shader_overrides_->check()) {
+      // The same modification through the DXBC translator, into a scratch
+      // translation: its PostTranslation checks the bindings the entry
+      // stored, and the signatures are compared.
+      D3D12Shader::D3D12Translation scratch(shader, translation.modification());
+      if (translator.TranslateAnalyzedShader(scratch)) {
+        shader_overrides_->CheckEntry(translation, scratch.translated_binary());
+      }
+    }
+  } else {
+    // Perform translation.
+    // If this fails the shader will be marked as invalid and ignored later.
+    const uint64_t translate_start =
+        perf_trace::shader_work_for_draw ? perf_trace::ZoneStart() : 0;
+    if (!translator.TranslateAnalyzedShader(translation)) {
+      REXGPU_ERROR("Shader {:016X} translation failed; marking as ignored",
+                   shader.ucode_data_hash());
+      return false;
+    }
+    if (translate_start) {
+      perf_trace::AddShaderWork(shader.type() == xenos::ShaderType::kVertex
+                                    ? perf_trace::ShaderWork::kVertexTranslation
+                                    : perf_trace::ShaderWork::kPixelTranslation,
+                                perf_trace::Now() - translate_start);
+    }
+    if (shader_overrides_) {
+      if (shader_overrides_->check()) {
+        shader_overrides_->CheckBindings(translation);
+      }
+      shader_overrides_->Apply(translation,
+                               for_draw && mod_compile_async_ ? &mod_compile_queue_ : nullptr);
+    }
   }
 
   const char* host_shader_type;

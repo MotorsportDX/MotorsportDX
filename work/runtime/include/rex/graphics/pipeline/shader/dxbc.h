@@ -67,6 +67,17 @@ class DxbcShader : public Shader {
     return sampler_bindings_;
   }
 
+  // The bindings of a translation made without DxbcShaderTranslator (the
+  // native shader contract's entries: HlslShaderTranslator assigns them as the
+  // DXBC translator does): stored if no translation stored any yet, as
+  // DxbcShaderTranslator::PostTranslation stores its own. False if a
+  // translation stored others.
+  bool SetBindingsOnce(const std::vector<TextureBinding>& texture_bindings,
+                       const std::vector<SamplerBinding>& sampler_bindings);
+  // Whether the stored bindings are these.
+  bool HasBindings(const std::vector<TextureBinding>& texture_bindings,
+                   const std::vector<SamplerBinding>& sampler_bindings) const;
+
  protected:
   Translation* CreateTranslationInstance(uint64_t modification) override;
 

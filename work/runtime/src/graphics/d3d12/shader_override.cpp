@@ -104,6 +104,13 @@ REXCVAR_DEFINE_BOOL(native_shader_pass_debug, false, "GPU/D3D12",
                     "passes green, red, magenta, cyan, orange)")
     .lifecycle(rex::cvar::Lifecycle::kRequiresRestart);
 
+REXCVAR_DEFINE_BOOL(native_shader_contract_check, false, "GPU/D3D12",
+                    "With native_shader_contract: check the bindings that the HLSL generator "
+                    "assigns against those of the DXBC translation of every pixel shader, and "
+                    "each entry translated without the DXBC translator against one made for the "
+                    "check; mismatches are errors")
+    .lifecycle(rex::cvar::Lifecycle::kRequiresRestart);
+
 // host_render_records.cpp: the native path.
 REXCVAR_DECLARE(bool, host_render_native);
 
@@ -437,6 +444,80 @@ std::string CompareSignatures(const std::vector<uint8_t>& translated,
   return std::string();
 }
 
+// The input and output signatures of the DXBC translation of a pixel shader
+// for host render targets (DxbcShaderTranslator: StartTranslation's input
+// registers, WriteInputSignature, WriteOutputSignature) from its modification
+// and the ucode analysis, for an override compiled without the DXBC
+// translation. Register UINT32_MAX: not a register (oMask, oDepth).
+constexpr uint32_t kComponentUInt32 = 1;
+constexpr uint32_t kComponentFloat32 = 3;
+
+void ExpectedPixelSignatures(const Shader& shader, const DxbcShaderTranslator::Modification& modification,
+                             std::vector<SignatureElement>& inputs_out,
+                             std::vector<SignatureElement>& outputs_out) {
+  inputs_out.clear();
+  outputs_out.clear();
+  uint32_t register_index = 0;
+  uint32_t interpolators = modification.pixel.interpolator_mask;
+  for (uint32_t i = 0; i < xenos::kMaxInterpolators; ++i) {
+    if (interpolators & (UINT32_C(1) << i)) {
+      inputs_out.push_back({"TEXCOORD", register_index, kComponentFloat32, register_index});
+      ++register_index;
+    }
+  }
+  if (modification.pixel.param_gen_point) {
+    inputs_out.push_back({"XESPRITETEXCOORD", 0, kComponentFloat32, register_index++});
+  }
+  inputs_out.push_back({"SV_POSITION", 0, kComponentFloat32, register_index++});
+  inputs_out.push_back({"SV_ISFRONTFACE", 0, kComponentUInt32, register_index++});
+  uint32_t color_targets = shader.writes_color_targets();
+  for (uint32_t i = 0; i < xenos::kMaxColorRenderTargets; ++i) {
+    if (color_targets & (1u << i)) {
+      outputs_out.push_back({"SV_TARGET", i, kComponentFloat32, i});
+    }
+  }
+  bool force_early_depth_stencil =
+      modification.pixel.depth_stencil_mode ==
+          DxbcShaderTranslator::Modification::DepthStencilMode::kEarlyHint &&
+      shader.implicit_early_z_write_allowed();
+  if ((color_targets & 1) && !force_early_depth_stencil) {
+    outputs_out.push_back({"SV_COVERAGE", 0, kComponentUInt32, UINT32_MAX});
+  }
+  if (shader.writes_depth()) {
+    outputs_out.push_back({"SV_DEPTH", 0, kComponentFloat32, UINT32_MAX});
+  }
+}
+
+// CompareSignatures against expected signatures instead of a DXBC translation.
+std::string CompareExpectedSignatures(const std::vector<SignatureElement>& expected_inputs,
+                                      const std::vector<SignatureElement>& expected_outputs,
+                                      const std::vector<uint8_t>& override_binary) {
+  for (bool output : {false, true}) {
+    const std::vector<SignatureElement>& expected = output ? expected_outputs : expected_inputs;
+    std::vector<SignatureElement> actual;
+    if (!ParseSignature(override_binary, output, actual)) {
+      return output ? "no output signature" : "no input signature";
+    }
+    for (const SignatureElement& element : actual) {
+      const SignatureElement* match = FindElement(expected, element);
+      if (!match || match->register_index != element.register_index ||
+          match->component_type != element.component_type) {
+        return fmt::format("{} {}{} in register {} is not in the expected signature",
+                           output ? "output" : "input", element.name, element.semantic_index,
+                           int32_t(element.register_index));
+      }
+    }
+    if (output) {
+      for (const SignatureElement& element : expected) {
+        if (!FindElement(actual, element)) {
+          return fmt::format("output {}{} is missing", element.name, element.semantic_index);
+        }
+      }
+    }
+  }
+  return std::string();
+}
+
 }  // namespace
 
 void ShaderModSetCommand(std::string_view args) {
@@ -496,6 +577,7 @@ std::unique_ptr<ShaderOverrides> ShaderOverrides::Create(const HostConfig& confi
                   manifest->pixel.size(), passes);
       overrides->native_ = std::move(manifest);
       overrides->native_pass_debug_ = REXCVAR_GET(native_shader_pass_debug);
+      overrides->check_ = REXCVAR_GET(native_shader_contract_check);
       overrides->knob_defaults_ = ScanKnobDefaults(overrides->mod_directory_);
     }
   }
@@ -1115,6 +1197,7 @@ bool ShaderOverrides::Compile(const D3D12Shader::D3D12Translation& translation,
                               std::vector<Dependency>& files_out,
                               std::unique_ptr<CompileJob>* job_out) const {
   auto job = std::make_unique<CompileJob>();
+  job->shader = &translation.shader();
   job->modification = translation.modification();
   job->name = name;
   job->mod = mod;
@@ -1152,7 +1235,8 @@ bool ShaderOverrides::Compile(const D3D12Shader::D3D12Translation& translation,
     job->cache_path = CachePath(translation, job->key);
     if (LoadCached(job->cache_path, job->key, {mod_directory_, directory_}, binary_out,
                    files_out)) {
-      std::string mismatch = CompareSignatures(dxbc, binary_out);
+      std::string mismatch =
+          CheckSignatures(translation.shader(), translation.modification(), dxbc, binary_out);
       if (mismatch.empty()) {
         if (load_start) {
           perf_trace::AddShaderWork(perf_trace::ShaderWork::kModCacheLoad,
@@ -1228,7 +1312,7 @@ bool ShaderOverrides::RunCompile(const CompileJob& job, const std::vector<uint8_
   if (!message_text.empty()) {
     REXGPU_WARN("Shader override {}: FXC warnings:\n{}", name, message_text);
   }
-  std::string mismatch = CompareSignatures(dxbc, binary_out);
+  std::string mismatch = CheckSignatures(*job.shader, job.modification, dxbc, binary_out);
   if (!mismatch.empty()) {
     REXGPU_ERROR("Shader override {}: {}", name, mismatch);
     return false;
@@ -1459,6 +1543,110 @@ void ShaderOverrides::Record(const D3D12Shader::D3D12Translation& translation,
   }
 }
 
+std::string ShaderOverrides::CheckSignatures(const Shader& shader, uint64_t modification,
+                                             const std::vector<uint8_t>& dxbc,
+                                             const std::vector<uint8_t>& binary) const {
+  if (!dxbc.empty()) {
+    return CompareSignatures(dxbc, binary);
+  }
+  std::vector<SignatureElement> inputs, outputs;
+  ExpectedPixelSignatures(shader, Modification(modification), inputs, outputs);
+  return CompareExpectedSignatures(inputs, outputs, binary);
+}
+
+bool ShaderOverrides::TranslateEntry(D3D12Shader::D3D12Translation& translation) {
+  Shader& shader = translation.shader();
+  if (!native_ || shader.type() != xenos::ShaderType::kPixel || !NativeEntry(translation)) {
+    return false;
+  }
+  Modification modification(translation.modification());
+  if (modification.pixel.depth_stencil_mode ==
+          Modification::DepthStencilMode::kFloat24Truncating ||
+      modification.pixel.depth_stencil_mode == Modification::DepthStencilMode::kFloat24Rounding ||
+      shader.memexport_eM_written()) {
+    // Not supported by overrides: the DXBC translation (Build keeps it too).
+    return false;
+  }
+  // The game shader's HLSL, with the bindings, into the translation itself
+  // (translated and valid; its binary the HLSL text until the compile replaces
+  // it). On any failure the caller translates it with the DXBC translator,
+  // which sets every field again.
+  HlslShaderTranslator translator;
+  if (!translator.TranslateAnalyzedShader(translation)) {
+    REXGPU_WARN("Native shader contract: no HLSL for {:016X} modification {:016X}; translating "
+                "it with the DXBC translator",
+                shader.ucode_data_hash(), modification.value);
+    return false;
+  }
+  auto& dxbc_shader = static_cast<D3D12Shader&>(shader);
+  if (!dxbc_shader.SetBindingsOnce(translator.texture_bindings(), translator.sampler_bindings())) {
+    REXGPU_ERROR("Native shader contract: {:016X}: the bindings of the HLSL differ from those an "
+                 "earlier translation stored; translating it with the DXBC translator",
+                 shader.ucode_data_hash());
+    return false;
+  }
+  std::vector<uint8_t> binary;
+  std::vector<Dependency> files;
+  if (Build(translation, std::vector<uint8_t>(), binary, files) != Outcome::kCompiled) {
+    REXGPU_WARN("Native shader contract: {:016X} modification {:016X} did not compile; "
+                "translating it with the DXBC translator",
+                shader.ucode_data_hash(), modification.value);
+    return false;
+  }
+  translation.ReplaceTranslatedBinary(std::move(binary));
+  if (hot_reload_) {
+    std::lock_guard<std::mutex> lock(entries_mutex_);
+    Record(translation, std::vector<uint8_t>(), files, true);
+  }
+  return true;
+}
+
+void ShaderOverrides::CheckBindings(const D3D12Shader::D3D12Translation& translation) {
+  const auto& shader = static_cast<const D3D12Shader&>(translation.shader());
+  if (shader.type() != xenos::ShaderType::kPixel || !translation.is_valid()) {
+    return;
+  }
+  HlslShaderTranslator translator;
+  HlslShaderTranslator::Translation generated(translation.shader(), translation.modification());
+  if (!translator.TranslateAnalyzedShader(generated)) {
+    // getWeights, getCompTexLOD, getBCF or memexport: no HLSL to compare.
+    return;
+  }
+  uint32_t count = checked_bindings_.fetch_add(1, std::memory_order_relaxed) + 1;
+  if (!shader.HasBindings(translator.texture_bindings(), translator.sampler_bindings())) {
+    REXGPU_ERROR("Native shader contract check: {:016X} modification {:016X}: the bindings of the "
+                 "HLSL ({} textures, {} samplers) differ from the DXBC translation's ({}, {})",
+                 shader.ucode_data_hash(), translation.modification(),
+                 translator.texture_bindings().size(), translator.sampler_bindings().size(),
+                 shader.GetTextureBindingsAfterTranslation().size(),
+                 shader.GetSamplerBindingsAfterTranslation().size());
+  } else if (!(count & 63)) {
+    REXGPU_INFO("Native shader contract check: {} pixel shader translations with the bindings "
+                "of their DXBC translation",
+                count);
+  }
+}
+
+void ShaderOverrides::CheckEntry(const D3D12Shader::D3D12Translation& translation,
+                                 const std::vector<uint8_t>& dxbc) {
+  const auto& shader = static_cast<const D3D12Shader&>(translation.shader());
+  std::string mismatch = CompareSignatures(dxbc, translation.translated_binary());
+  std::vector<SignatureElement> inputs, outputs;
+  ExpectedPixelSignatures(shader, Modification(translation.modification()), inputs, outputs);
+  std::string expected = CompareExpectedSignatures(inputs, outputs, dxbc);
+  uint32_t count = checked_entries_.fetch_add(1, std::memory_order_relaxed) + 1;
+  if (!mismatch.empty() || !expected.empty()) {
+    REXGPU_ERROR("Native shader contract check: entry {:016X} modification {:016X}: {}{}{}",
+                 shader.ucode_data_hash(), translation.modification(), mismatch,
+                 mismatch.empty() || expected.empty() ? "" : "; ",
+                 expected.empty() ? "" : "the DXBC translation against the expected: " + expected);
+    return;
+  }
+  REXGPU_INFO("Native shader contract check: entry {:016X} modification {:016X} (check {}): the "
+              "signatures and bindings of its DXBC translation",
+              shader.ucode_data_hash(), translation.modification(), count);
+}
+
 void ShaderOverrides::Apply(D3D12Shader::D3D12Translation& translation,
                             ShaderCompileQueue* queue) {
   if (translation.shader().type() != xenos::ShaderType::kPixel || !translation.is_valid()) {
@@ -1652,6 +1840,14 @@ bool ShaderOverrides::Reload(D3D12Shader::D3D12Translation& translation) {
       return false;
     case Outcome::kNone:
     default:
+      if (overridden && dxbc.empty()) {
+        // An entry translated without the DXBC translator: its override stays
+        // until a restart translates the shader again.
+        REXGPU_WARN("Shader hot reload: {:016X} lost its entry or mod; its override stays until "
+                    "a restart",
+                    translation.shader().ucode_data_hash());
+        return false;
+      }
       entries_.erase(&translation);
       if (overridden) {
         translation.ReplaceTranslatedBinary(std::move(dxbc));

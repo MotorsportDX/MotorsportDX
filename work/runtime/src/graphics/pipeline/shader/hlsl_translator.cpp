@@ -119,6 +119,8 @@ std::string HlslShaderTranslator::Operand::Underlying(char component) const {
 void HlslShaderTranslator::Reset() {
   ShaderTranslator::Reset();
   out_.clear();
+  texture_bindings_.clear();
+  sampler_bindings_.clear();
   indent_ = 0;
   use_pc_loop_ = false;
   exec_open_ = false;
@@ -129,6 +131,68 @@ uint32_t HlslShaderTranslator::GetModificationRegisterCount() const {
   DxbcShaderTranslator::Modification modification(current_translation().modification());
   return is_vertex_shader() ? modification.vertex.dynamic_addressable_register_count
                             : modification.pixel.dynamic_addressable_register_count;
+}
+
+DxbcShader::TextureBinding HlslShaderTranslator::FindOrAddTextureBinding(
+    uint32_t fetch_constant, xenos::FetchOpDimension dimension, bool is_signed) {
+  // 1D and 2D textures (including stacked ones) are 2D arrays.
+  if (dimension == xenos::FetchOpDimension::k1D) {
+    dimension = xenos::FetchOpDimension::k2D;
+  }
+  for (const DxbcShader::TextureBinding& binding : texture_bindings_) {
+    if (binding.fetch_constant == fetch_constant && binding.dimension == dimension &&
+        binding.is_signed == is_signed) {
+      return binding;
+    }
+  }
+  if (texture_bindings_.size() >= DxbcShader::kMaxTextureBindings) {
+    EmitTranslationError("too many texture bindings");
+    return texture_bindings_.back();
+  }
+  DxbcShader::TextureBinding binding;
+  // As DxbcShader stores it: zeroed for a stable hash.
+  std::memset(&binding, 0, sizeof(binding));
+  binding.bindless_descriptor_index =
+      uint32_t(texture_bindings_.size() + sampler_bindings_.size());
+  binding.fetch_constant = fetch_constant;
+  binding.dimension = dimension;
+  binding.is_signed = is_signed;
+  texture_bindings_.push_back(binding);
+  return binding;
+}
+
+DxbcShader::SamplerBinding HlslShaderTranslator::FindOrAddSamplerBinding(
+    uint32_t fetch_constant, xenos::TextureFilter mag_filter, xenos::TextureFilter min_filter,
+    xenos::TextureFilter mip_filter, xenos::AnisoFilter aniso_filter) {
+  // In Direct3D 12, anisotropic filtering implies linear filtering.
+  if (aniso_filter != xenos::AnisoFilter::kDisabled &&
+      aniso_filter != xenos::AnisoFilter::kUseFetchConst) {
+    mag_filter = xenos::TextureFilter::kLinear;
+    min_filter = xenos::TextureFilter::kLinear;
+    mip_filter = xenos::TextureFilter::kLinear;
+    aniso_filter = std::min(aniso_filter, xenos::AnisoFilter::kMax_16_1);
+  }
+  for (const DxbcShader::SamplerBinding& binding : sampler_bindings_) {
+    if (binding.fetch_constant == fetch_constant && binding.mag_filter == mag_filter &&
+        binding.min_filter == min_filter && binding.mip_filter == mip_filter &&
+        binding.aniso_filter == aniso_filter) {
+      return binding;
+    }
+  }
+  if (sampler_bindings_.size() >= DxbcShader::kMaxSamplerBindings) {
+    EmitTranslationError("too many sampler bindings");
+    return sampler_bindings_.back();
+  }
+  DxbcShader::SamplerBinding binding;
+  binding.bindless_descriptor_index =
+      uint32_t(texture_bindings_.size() + sampler_bindings_.size());
+  binding.fetch_constant = fetch_constant;
+  binding.mag_filter = mag_filter;
+  binding.min_filter = min_filter;
+  binding.mip_filter = mip_filter;
+  binding.aniso_filter = aniso_filter;
+  sampler_bindings_.push_back(binding);
+  return binding;
 }
 
 void HlslShaderTranslator::Line(const std::string& text) {
@@ -841,44 +905,24 @@ void HlslShaderTranslator::ProcessTextureFetchInstruction(
         StoreResult(instr.result, "float4(0.0, 0.0, 0.0, 0.0)");
         break;
       }
-      const auto& shader = static_cast<const DxbcShader&>(current_shader());
       uint32_t fetch = instr.operands[1].storage_index;
       bool computed_lod = attributes.use_computed_lod &&
                           (is_pixel_shader() || attributes.use_register_gradients);
-      // The sampler binding chosen by FindOrAddSamplerBinding.
-      xenos::TextureFilter mag = attributes.mag_filter, min = attributes.min_filter,
-                           mip = attributes.mip_filter;
-      xenos::AnisoFilter aniso =
-          computed_lod ? attributes.aniso_filter : xenos::AnisoFilter::kDisabled;
-      if (aniso != xenos::AnisoFilter::kDisabled && aniso != xenos::AnisoFilter::kUseFetchConst) {
-        mag = min = mip = xenos::TextureFilter::kLinear;
-        aniso = std::min(aniso, xenos::AnisoFilter::kMax_16_1);
-      }
-      const DxbcShader::SamplerBinding* sampler = nullptr;
-      for (const auto& binding : shader.GetSamplerBindingsAfterTranslation()) {
-        if (binding.fetch_constant == fetch && binding.mag_filter == mag &&
-            binding.min_filter == min && binding.mip_filter == mip &&
-            binding.aniso_filter == aniso) {
-          sampler = &binding;
-          break;
-        }
-      }
-      auto has_texture = [&](xenos::FetchOpDimension dimension) {
-        for (const auto& binding : shader.GetTextureBindingsAfterTranslation()) {
-          if (binding.fetch_constant == fetch && binding.dimension == dimension) {
-            return true;
-          }
-        }
-        return false;
-      };
+      // The bindings in the DXBC translator's order: the sampler, then the
+      // unsigned and signed textures, and for 3D those of the stacked 2D array.
+      DxbcShader::SamplerBinding sampler = FindOrAddSamplerBinding(
+          fetch, attributes.mag_filter, attributes.min_filter, attributes.mip_filter,
+          computed_lod ? attributes.aniso_filter : xenos::AnisoFilter::kDisabled);
       xenos::FetchOpDimension dimension = instr.dimension == xenos::FetchOpDimension::k1D
                                                ? xenos::FetchOpDimension::k2D
                                                : instr.dimension;
-      if (!sampler || !has_texture(dimension) ||
-          (instr.dimension == xenos::FetchOpDimension::k3DOrStacked &&
-           !has_texture(xenos::FetchOpDimension::k2D))) {
-        EmitTranslationError("no binding of the DXBC translation for a texture fetch");
-        break;
+      for (uint32_t is_stacked = 0;
+           is_stacked < (instr.dimension == xenos::FetchOpDimension::k3DOrStacked ? 2u : 1u);
+           ++is_stacked) {
+        xenos::FetchOpDimension srv_dimension =
+            is_stacked ? xenos::FetchOpDimension::k2D : instr.dimension;
+        FindOrAddTextureBinding(fetch, srv_dimension, false);
+        FindOrAddTextureBinding(fetch, srv_dimension, true);
       }
       std::string lod_flags;
       auto add_flag = [&lod_flags](const char* flag) {
@@ -907,7 +951,7 @@ void HlslShaderTranslator::ProcessTextureFetchInstruction(
           (computed_lod && attributes.use_register_gradients) ? ", grad_h_lod.xyz, grad_v.xyz" : "";
       uint32_t coordinate_count = uint32_t(xenos::GetFetchOpDimensionComponentCount(instr.dimension));
       Operand coord = LoadOperand(instr.operands[0], (1u << coordinate_count) - 1);
-      std::string sampler_slot = SamplerSlotName(*sampler);
+      std::string sampler_slot = SamplerSlotName(sampler);
       std::string call;
       switch (instr.dimension) {
         case xenos::FetchOpDimension::k1D:

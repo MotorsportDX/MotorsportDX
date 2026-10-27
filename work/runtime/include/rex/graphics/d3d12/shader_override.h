@@ -125,6 +125,27 @@ class ShaderOverrides {
   // command processor logs the classes it gives.
   bool native_pass_debug() const { return native_pass_debug_; }
 
+  // The translation of a native shader contract entry without the DXBC
+  // translator (increment 2, docs/analysis/shader-contract.md): the game
+  // shader's HLSL from HlslShaderTranslator, which also assigns the bindings
+  // (stored in the shader if no translation stored any), with the entry's mod,
+  // compiled with FXC through the override cache, its signatures checked
+  // against those the DXBC translation would have. False if the translation is
+  // not an entry's or any step failed: the caller translates with the DXBC
+  // translator then.
+  bool TranslateEntry(D3D12Shader::D3D12Translation& translation);
+  // native_shader_contract_check: whether to check the entries and the
+  // bindings against DXBC translations.
+  bool check() const { return check_; }
+  // With check(): the bindings HlslShaderTranslator assigns to a pixel shader
+  // against those its DXBC translation stored (every pixel shader translated
+  // with the DXBC translator), and an entry's override against a DXBC
+  // translation of the same modification (its signatures). Mismatches are
+  // errors.
+  void CheckBindings(const D3D12Shader::D3D12Translation& translation);
+  void CheckEntry(const D3D12Shader::D3D12Translation& translation,
+                  const std::vector<uint8_t>& dxbc);
+
   // After a successful DXBC translation: if there is an override for it,
   // compiles it and replaces the translated binary. Pixel shaders without an
   // override file get HLSL from HlslShaderTranslator, written to
@@ -220,8 +241,10 @@ class ShaderOverrides {
     kQueued,
   };
   // An FXC compile of an override or mod: its source and defines, the DXBC
-  // translation whose signatures it must match, and its cache file.
+  // translation whose signatures it must match (empty for an entry translated
+  // without it: the shader's expected signatures), and its cache file.
   struct CompileJob {
+    const Shader* shader = nullptr;
     uint64_t modification = 0;
     std::vector<uint8_t> dxbc;
     std::string source;
@@ -248,11 +271,18 @@ class ShaderOverrides {
 
   ShaderOverrides(const HostConfig& config, std::filesystem::path directory);
 
+  // The signature check of an override of the shader's modification: against
+  // the DXBC translation, or with dxbc empty against the signatures it would
+  // have. Empty if they match.
+  std::string CheckSignatures(const Shader& shader, uint64_t modification,
+                              const std::vector<uint8_t>& dxbc,
+                              const std::vector<uint8_t>& binary) const;
   // entry: the manifest's entry the translation takes, or nullptr.
   std::string BuildContract(const D3D12Shader::D3D12Translation& translation,
                             const native_shader_contract::PixelEntry* entry) const;
-  // The override of the translation (dxbc: its DXBC translation) from the
-  // current files, and the files read for it.
+  // The override of the translation (dxbc: its DXBC translation, empty for
+  // an entry translated without it) from the current files, and the files read
+  // for it.
   // With job_out, a compile the cache does not hold is returned there for a
   // worker (kQueued).
   Outcome Build(const D3D12Shader::D3D12Translation& translation,
@@ -322,6 +352,10 @@ class ShaderOverrides {
   bool entry_knobs_ = false;
   // native_shader_pass_debug: entries tint their colour by pass class.
   bool native_pass_debug_ = false;
+  // native_shader_contract_check, and its counts.
+  bool check_ = false;
+  std::atomic<uint32_t> checked_bindings_{0};
+  std::atomic<uint32_t> checked_entries_{0};
   // The look files' knob defaults (#ifndef NAME / #define NAME value), for the
   // params that shader_mod_defines leaves out.
   std::unordered_map<std::string, std::string> knob_defaults_;

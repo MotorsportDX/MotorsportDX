@@ -18,10 +18,14 @@ namespace rex::graphics {
 // p), see d3d12/shader_override.hlsli) doing the same operations as the
 // DxbcShaderTranslator translation of the same pixel shader and modification
 // for the bindless host render target path, as a starting point for editing.
-// Translate after the DXBC translation of the shader: the descriptor slots are
-// named after that translation's bindings. The translated binary is the HLSL
-// text. Vertex fetch, getWeights, getCompTexLOD, getBCF and memexport are
-// fatal errors (the DXBC translation then stays).
+// The translated binary is the HLSL text. The descriptor slots are named after
+// the texture and sampler bindings, which the translator assigns as the DXBC
+// translator does (FindOrAddTextureBinding, FindOrAddSamplerBinding: the same
+// bindings in the same order, so the same bindless descriptor indices), so a
+// shader can be translated without its DXBC translation (the native shader
+// contract's entries, docs/analysis/shader-contract.md). Vertex fetch,
+// getWeights, getCompTexLOD, getBCF and memexport are fatal errors (the DXBC
+// translation then stays).
 class HlslShaderTranslator : public ShaderTranslator {
  public:
   HlslShaderTranslator() = default;
@@ -37,6 +41,15 @@ class HlslShaderTranslator : public ShaderTranslator {
   static std::string TextureSlotName(uint32_t fetch_constant, xenos::FetchOpDimension dimension,
                                      bool is_signed);
   static std::string SamplerSlotName(const DxbcShader::SamplerBinding& binding);
+
+  // The bindings of the last translation, as DxbcShader holds them after the
+  // DXBC translation of the shader.
+  const std::vector<DxbcShader::TextureBinding>& texture_bindings() const {
+    return texture_bindings_;
+  }
+  const std::vector<DxbcShader::SamplerBinding>& sampler_bindings() const {
+    return sampler_bindings_;
+  }
 
  protected:
   void Reset() override;
@@ -79,12 +92,26 @@ class HlslShaderTranslator : public ShaderTranslator {
   void EmitScalarOperation(const ParsedAluInstruction& instr);
   void EmitDisassembly(const std::string& disassembly);
 
+  // DxbcShaderTranslator::FindOrAddTextureBinding and FindOrAddSamplerBinding
+  // with bindless resources: the binding, added if new, its bindless
+  // descriptor index the count of both kinds before it.
+  DxbcShader::TextureBinding FindOrAddTextureBinding(uint32_t fetch_constant,
+                                                     xenos::FetchOpDimension dimension,
+                                                     bool is_signed);
+  DxbcShader::SamplerBinding FindOrAddSamplerBinding(uint32_t fetch_constant,
+                                                     xenos::TextureFilter mag_filter,
+                                                     xenos::TextureFilter min_filter,
+                                                     xenos::TextureFilter mip_filter,
+                                                     xenos::AnisoFilter aniso_filter);
+
   void Line(const std::string& text);
   void Open(const std::string& text);
   void Close();
   void CloseExec();
 
   std::string out_;
+  std::vector<DxbcShader::TextureBinding> texture_bindings_;
+  std::vector<DxbcShader::SamplerBinding> sampler_bindings_;
   uint32_t indent_ = 0;
   bool use_pc_loop_ = false;
   bool exec_open_ = false;
