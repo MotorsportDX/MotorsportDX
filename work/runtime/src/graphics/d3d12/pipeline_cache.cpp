@@ -71,8 +71,16 @@ REXCVAR_DEFINE_BOOL(d3d12_pipeline_early_creation, true, "GPU/D3D12",
                     "threads where the draw is issued, so that the replay of the list finds it "
                     "created or waits only for the rest (docs/analysis/d3d-hle-n6.md 19.3.2 part 5)");
 
+REXCVAR_DEFINE_BOOL(shader_storage_predicted_translations, true, "GPU/D3D12",
+                    "At the start, translate a stored pixel shader that no stored pipeline names "
+                    "(the disc inventory's) with its predicted modifications, its look mod "
+                    "compiling on the workers, so its first draw finds it translated "
+                    "(docs/analysis/d3d-hle-n6.md 19.3.10)");
+
 // shader_compile_queue.cpp.
 REXCVAR_DECLARE(bool, shader_override_async);
+// command_processor.cpp.
+REXCVAR_DECLARE(bool, native_draw_scale_variant);
 
 namespace rex::graphics::d3d12 {
 
@@ -432,6 +440,8 @@ void PipelineCache::InitializeShaderStorage(const std::filesystem::path& cache_r
     bool shader_translation_threads_shutdown = false;
     std::mutex shaders_failed_to_translate_mutex;
     std::vector<D3D12Shader::D3D12Translation*> shaders_failed_to_translate;
+    const bool predicted_translations = REXCVAR_GET(shader_storage_predicted_translations);
+    std::atomic<size_t> predicted_shaders{0}, predicted_translated{0};
     auto shader_translation_thread_function = [&]() {
       const ui::d3d12::D3D12Provider& provider = command_processor_.GetD3D12Provider();
       string::StringBuffer ucode_disasm_buffer;
@@ -474,11 +484,13 @@ void PipelineCache::InitializeShaderStorage(const std::filesystem::path& cache_r
         // Translate each needed modification on this thread after performing
         // modification-independent analysis of the whole shader.
         uint64_t ucode_data_hash = shader_to_translate->ucode_data_hash();
+        bool translation_needed = false;
         for (auto modification_it = shader_translations_needed.lower_bound(
                  std::make_pair(ucode_data_hash, uint64_t(0)));
              modification_it != shader_translations_needed.end() &&
              modification_it->first == ucode_data_hash;
              ++modification_it) {
+          translation_needed = true;
           D3D12Shader::D3D12Translation* translation = static_cast<D3D12Shader::D3D12Translation*>(
               shader_to_translate->GetOrCreateTranslation(modification_it->second));
           // Only try (and delete in case of failure) if it's a new translation.
@@ -491,6 +503,30 @@ void PipelineCache::InitializeShaderStorage(const std::filesystem::path& cache_r
             std::lock_guard<std::mutex> lock(shaders_failed_to_translate_mutex);
             shaders_failed_to_translate.push_back(translation);
           }
+        }
+        // A pixel shader that no stored pipeline names (the disc inventory's):
+        // its predicted modifications, with the look mod queued on the workers
+        // as for a draw, so the start does not wait for FXC.
+        if (!translation_needed && predicted_translations &&
+            shader_to_translate->type() == xenos::ShaderType::kPixel) {
+          std::vector<uint64_t> predicted;
+          PredictPixelShaderModifications(*shader_to_translate, translator, predicted);
+          for (uint64_t modification : predicted) {
+            D3D12Shader::D3D12Translation* translation =
+                static_cast<D3D12Shader::D3D12Translation*>(
+                    shader_to_translate->GetOrCreateTranslation(modification));
+            if (translation->is_translated()) {
+              continue;
+            }
+            if (TranslateAnalyzedShader(translator, *translation, dxbc_converter, dxc_utils,
+                                        dxc_compiler, true)) {
+              predicted_translated.fetch_add(1, std::memory_order_relaxed);
+            } else {
+              std::lock_guard<std::mutex> lock(shaders_failed_to_translate_mutex);
+              shaders_failed_to_translate.push_back(translation);
+            }
+          }
+          predicted_shaders.fetch_add(1, std::memory_order_relaxed);
         }
         {
           std::lock_guard<std::mutex> lock(shaders_translation_thread_mutex);
@@ -581,6 +617,42 @@ void PipelineCache::InitializeShaderStorage(const std::filesystem::path& cache_r
     REXGPU_INFO("Translated {} shaders from the storage in {} milliseconds", shaders_translated,
                 (rex::chrono::Clock::QueryHostTickCount() - shader_storage_initialization_start) *
                     1000 / rex::chrono::Clock::QueryHostTickFrequency());
+    if (predicted_translations) {
+      // How well the prediction matches: the modifications the stored
+      // pipelines name for their pixel shaders, against what the prediction
+      // gives those shaders. The fields left out step by step show what it
+      // misses: centroid sampling (the target's MSAA), then the depth mode
+      // (alpha test), then the scene variants (another scale's runs).
+      size_t pairs = 0, exact = 0, without_centroid = 0, without_depth = 0, without_scene = 0;
+      std::vector<uint64_t> predicted;
+      constexpr uint64_t kCentroid = UINT64_C(0xFFFF0000);
+      constexpr uint64_t kDepth = UINT64_C(3) << 46;
+      constexpr uint64_t kScene = UINT64_C(3) << 49;
+      for (const auto& [hash, modification] : shader_translations_needed) {
+        auto it = shaders_.find(hash);
+        if (it == shaders_.end() || it->second->type() != xenos::ShaderType::kPixel ||
+            !it->second->is_ucode_analyzed()) {
+          continue;
+        }
+        PredictPixelShaderModifications(*it->second, *shader_translator_, predicted);
+        ++pairs;
+        auto hit = [&](uint64_t ignored) {
+          return std::any_of(predicted.begin(), predicted.end(), [&](uint64_t p) {
+            return (p & ~ignored) == (modification & ~ignored);
+          });
+        };
+        exact += hit(0);
+        without_centroid += hit(kCentroid);
+        without_depth += hit(kCentroid | kDepth);
+        without_scene += hit(kCentroid | kDepth | kScene);
+      }
+      REXGPU_INFO(
+          "Predicted translations: {} pixel shaders without a stored pipeline, {} translations; "
+          "the prediction against the {} stored pixel shader modifications: {} exact, {} without "
+          "centroid, {} also without the depth mode, {} also without the scene variants",
+          predicted_shaders.load(), predicted_translated.load(), pairs, exact, without_centroid,
+          without_depth, without_scene);
+    }
     rex::filesystem::TruncateStdioFile(shader_storage_file_, shader_storage_valid_bytes);
   } else {
     rex::filesystem::TruncateStdioFile(shader_storage_file_, 0);
@@ -1182,6 +1254,68 @@ DxbcShaderTranslator::Modification PipelineCache::GetCurrentPixelShaderModificat
   }
 
   return modification;
+}
+
+void PipelineCache::PredictPixelShaderModifications(const Shader& shader,
+                                                    const DxbcShaderTranslator& translator,
+                                                    std::vector<uint64_t>& modifications) const {
+  assert_true(shader.type() == xenos::ShaderType::kPixel);
+  assert_true(shader.is_ucode_analyzed());
+  modifications.clear();
+  // The title sets SQ_PROGRAM_CNTL's register count from the shader's own, so
+  // the dynamically indexable count and the interpolators follow from the
+  // registers the shader addresses; the vertex shaders are assumed to write
+  // every interpolator the pixel shader reads.
+  uint32_t register_bound = shader.register_static_address_bound();
+  uint32_t dynamic_count =
+      shader.GetDynamicAddressableRegisterCount(register_bound ? register_bound - 1 : 0);
+  DxbcShaderTranslator::Modification base(
+      translator.GetDefaultPixelShaderModification(dynamic_count));
+  uint32_t interpolator_count =
+      std::min(xenos::kMaxInterpolators, std::max(register_bound, dynamic_count));
+  base.pixel.interpolator_mask = (UINT32_C(1) << interpolator_count) - 1;
+  base.pixel.interpolators_centroid = 0;
+
+  using DepthStencilMode = DxbcShaderTranslator::Modification::DepthStencilMode;
+  DepthStencilMode depth_modes[3];
+  size_t depth_mode_count = 0;
+  if (render_target_cache_.GetPath() == RenderTargetCache::Path::kHostRenderTargets) {
+    if (render_target_cache_.depth_float24_convert_in_pixel_shader()) {
+      depth_modes[depth_mode_count++] = render_target_cache_.depth_float24_round()
+                                            ? DepthStencilMode::kFloat24Rounding
+                                            : DepthStencilMode::kFloat24Truncating;
+    }
+    // The early hint unless the draw's coverage depends on alpha (alpha test
+    // or alpha to coverage), which the shader does not tell.
+    if (shader.implicit_early_z_write_allowed()) {
+      depth_modes[depth_mode_count++] = DepthStencilMode::kEarlyHint;
+    }
+    if (!shader.implicit_early_z_write_allowed() || shader.writes_color_target(0)) {
+      depth_modes[depth_mode_count++] = DepthStencilMode::kNoModifiers;
+    }
+  } else {
+    depth_modes[depth_mode_count++] = base.pixel.depth_stencil_mode;
+  }
+
+  // The scene variants (GetCurrentPixelShaderModification's caller sets them):
+  // a scene draw at a fractional scale or while upscaling, and its input-scale
+  // draws while upscaling.
+  const bool upscaled = render_target_cache_.IsSceneUpscaled();
+  const bool scene = !render_target_cache_.scene_draw_scale().IsWhole() || upscaled ||
+                     REXCVAR_GET(native_draw_scale_variant);
+  for (size_t i = 0; i < depth_mode_count; ++i) {
+    DxbcShaderTranslator::Modification modification(base);
+    modification.pixel.depth_stencil_mode = depth_modes[i];
+    modifications.push_back(modification.value);
+    if (scene) {
+      modification.pixel.scene_scale = 1;
+      modifications.push_back(modification.value);
+      if (upscaled) {
+        modification.pixel.scene_input_scale = 1;
+        modifications.push_back(modification.value);
+      }
+    }
+  }
 }
 
 bool PipelineCache::ConfigurePipeline(

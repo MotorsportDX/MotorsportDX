@@ -336,6 +336,14 @@ class PipelineCache {
   D3D12Shader* LoadShader(xenos::ShaderType shader_type, const uint32_t* host_address,
                           uint32_t dword_count, uint64_t data_hash);
 
+  // The modifications a pixel shader without a stored pipeline (the disc
+  // inventory's, docs/analysis/d3d-hle-n6.md 19.3.10) is predicted to draw with,
+  // from its analysis and this start's configuration: interpolators up to its
+  // register count, no centroid sampling, no parameter generation, its depth
+  // modes, and the scene variants of the scale. The shader must be analyzed.
+  void PredictPixelShaderModifications(const Shader& shader, const DxbcShaderTranslator& translator,
+                                       std::vector<uint64_t>& modifications) const;
+
   // Can be called from multiple threads. for_draw: a draw meets the shader, so
   // with shader_override_async its mod compiles on mod_compile_queue_.
   bool TranslateAnalyzedShader(DxbcShaderTranslator& translator,
