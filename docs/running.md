@@ -94,6 +94,28 @@ uses are the copies in `BuildRoot\look` and `BuildRoot\passes` that `build` make
 after editing `work/fm4-rex/look` or `work/fm4-rex/passes`, run `build` or use
 `Build.ps1 -Action run`.
 
+### Shaders page
+
+The launcher's Shaders page runs the offline shader pass
+([D3D-level HLE, 19.3.9](analysis/d3d-hle-n6.md#1939-increment-12-design-28-october-2026) and
+[19.3.10](analysis/d3d-hle-n6.md#19310-increment-13-the-games-pixel-shaders-from-the-disc-28-october-2026)).
+The game's executable starts with the active profile's settings and `shader_offline_pass=true`.
+It reads the game's pixel shaders from the discs and the installed content, translates and
+compiles the shader storage, and exits before the title runs, so the shaders are not compiled
+during a race.
+
+- **When it runs:** the launcher starts the pass by itself once for each build: when the game's
+  executable, or whether the DirectX Shader Compiler is beside it, differs from the last pass that
+  finished (`logs\shader-pass.done`).
+- **Skip** ends it. What is left compiles on worker threads while the game plays, with the game's
+  own look until each shader's mod is ready.
+- **Progress:** in `logs\shader-pass.jsonl`; the pass's log is in `logs\shader-pass.log`.
+- **The DirectX Shader Compiler:** when `dxcompiler.dll` and `dxil.dll` are not beside the game,
+  the page fetches Microsoft's release v1.9.2609 from GitHub (`FM4_DXC_MIRROR`: a local copy of
+  the zip, or another URL) and checks its pinned SHA-256. It keeps the zip in `downloads\dxc` and
+  puts the two DLLs and the release's license files beside the game. Without them the shaders
+  compile with FXC.
+
 ### Ally X run set
 
 The runs of stage N4 on the ROG Xbox Ally X ([D3D-level HLE, 17.19](analysis/d3d-hle-n4.md)), from an export, with the GUI launcher. Make one profile per run, all with **Performance trace** on, the default look, the race frame rate the screen allows (120 on the Ally X's panel), and otherwise the defaults.
