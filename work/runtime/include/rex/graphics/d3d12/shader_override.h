@@ -448,6 +448,8 @@ class ShaderOverrides {
   // native_shader_dxil (docs/analysis/d3d-hle-n6.md 19.3.9): DXC, and its
   // cache beside the override cache.
   std::unique_ptr<DxilCompiler> dxil_compiler_;
+  // native_shader_dxil_relaxed.
+  bool dxil_relaxed_ = false;
   std::filesystem::path dxil_cache_directory_;
 
   // native_shader_contract: the manifest, and whether its entries have params.

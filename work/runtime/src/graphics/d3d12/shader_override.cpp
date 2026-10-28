@@ -136,6 +136,13 @@ REXCVAR_DEFINE_BOOL(native_shader_dxil, false, "GPU/D3D12",
                     "only")
     .lifecycle(rex::cvar::Lifecycle::kRequiresRestart);
 
+REXCVAR_DEFINE_BOOL(native_shader_dxil_relaxed, false, "GPU/D3D12",
+                    "With native_shader_dxil: DXC without IEEE strictness and the generated "
+                    "HLSL's precise dropped, so the compiler and the driver may fuse multiplies "
+                    "and adds as they do with the DXBC translations; off, the strict variant, "
+                    "exact against FXC's (docs/analysis/d3d-hle-n6.md 19.3.9, decision 2)")
+    .lifecycle(rex::cvar::Lifecycle::kRequiresRestart);
+
 REXCVAR_DEFINE_BOOL(native_shader_vertex_survey, false, "GPU/D3D12",
                     "Log every vertex shader translated: its ucode key, fetch-blind and coarse "
                     "keys, fetches and host types, and the fetch fields in which keys of one "
@@ -801,6 +808,7 @@ std::unique_ptr<ShaderOverrides> ShaderOverrides::Create(const HostConfig& confi
   }
   if (overrides->native_ && REXCVAR_GET(native_shader_dxil)) {
     overrides->dxil_compiler_ = DxilCompiler::Load();
+    overrides->dxil_relaxed_ = REXCVAR_GET(native_shader_dxil_relaxed);
     if (overrides->dxil_compiler_ && !overrides->cache_directory_.empty()) {
       std::error_code error;
       std::filesystem::path dxil_directory = overrides->cache_directory_ / "dxil";
@@ -810,8 +818,9 @@ std::unique_ptr<ShaderOverrides> ShaderOverrides::Create(const HostConfig& confi
       }
     }
     if (overrides->dxil_compiler_) {
-      REXGPU_INFO("DXIL shaders: the DXIL world on, DXC {}",
-                  overrides->dxil_compiler_->version());
+      REXGPU_INFO("DXIL shaders: the DXIL world on, DXC {}, {}",
+                  overrides->dxil_compiler_->version(),
+                  overrides->dxil_relaxed_ ? "relaxed" : "strict");
     }
   }
   overrides->last_poll_ = std::chrono::steady_clock::now();
@@ -1685,7 +1694,8 @@ uint64_t ShaderOverrides::CacheKey(
   XXH3_state_t state;
   XXH3_64bits_reset(&state);
   uint64_t header[] = {kCacheVersion, dxil ? dxil_compiler_->identity() : compiler_id_,
-                       library_hash_, dxil ? uint64_t(kDxilCacheMagic) : uint64_t(kCompileFlags)};
+                       library_hash_,
+                       dxil ? uint64_t(kDxilCacheMagic) + dxil_relaxed_ : uint64_t(kCompileFlags)};
   XXH3_64bits_update(&state, header, sizeof(header));
   if (dxil) {
     XXH3_64bits_update(&state, kDxilTarget, sizeof(kDxilTarget));
@@ -1916,9 +1926,15 @@ bool ShaderOverrides::RunCompile(const CompileJob& job, const std::vector<uint8_
   std::vector<uint8_t> dxil_binary;
   std::string dxil_messages;
   if (job.dxil) {
-    // The DXIL world: DXC with IEEE strictness, as FXC's flags.
+    // The DXIL world: DXC with IEEE strictness, as FXC's flags, or relaxed
+    // (native_shader_dxil_relaxed): no strictness, and precise defined away.
+    std::vector<std::pair<std::string, std::string>> dxil_defines = job.defines;
+    if (dxil_relaxed_) {
+      dxil_defines.emplace_back("precise", "");
+    }
     result = dxil_compiler_->Compile(job.source, name, vertex ? kDxilVertexTarget : kDxilTarget,
-                                     job.defines, &include, true, dxil_binary, dxil_messages)
+                                     dxil_defines, &include, !dxil_relaxed_, dxil_binary,
+                                     dxil_messages)
                  ? S_OK
                  : E_FAIL;
   } else {
