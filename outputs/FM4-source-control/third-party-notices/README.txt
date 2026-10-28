@@ -94,6 +94,21 @@ Files the SDK vendors in its thirdparty folder (mostly from Xenia)
                                FidelityFX CAS and FSR 1 shader bytecode of the presenter (MIT).
 
 Microsoft.GameInput, in SDL's GameInput driver
+  DirectXShaderCompiler-LICENSE-MS.txt, DirectXShaderCompiler-LICENSE-LLVM.txt,
+  DirectXShaderCompiler-LICENCE-MIT.txt
+    The DirectX Shader Compiler, release v1.9.2609 of 29 September 2026
+    (https://github.com/microsoft/DirectXShaderCompiler/releases/tag/v1.9.2609,
+    dxc_2026_09_29.zip, SHA-256 ad31b1fc...a4a7e7f1): Microsoft's software license terms for
+    the DirectX Shader Compiler, the University of Illinois/NCSA Open Source License of LLVM
+    ("Copyright (c) 2003-2015 University of Illinois at Urbana-Champaign") and MIT ("Copyright
+    (c) Microsoft Corporation"), the release's three license files. Its x64 dxcompiler.dll and
+    dxil.dll compile the native path's DXIL shaders with native_shader_dxil
+    (docs/analysis/d3d-hle-n6.md 19.3.9). They are never distributed by the project: setup
+    takes them from the release zip in the BuildRoot (fetched from its URL only when it is
+    missing) and the GUI launcher fetches the same release on the user's computer; the three
+    license files stay beside the DLLs. No export carries any file of the release. The
+    runtime loads them from beside the executable and compiles with FXC without them.
+
   Microsoft-GameInput-LICENSE.txt
     The Microsoft.GameInput package, version 3.5.283 (NuGet, SHA-512 59083faf...fe77705),
     "Copyright (c) Microsoft Corporation", MIT: its public header native/include/GameInput.h

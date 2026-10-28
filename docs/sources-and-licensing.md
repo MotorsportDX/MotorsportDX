@@ -93,7 +93,7 @@ Reviewed on 25 October 2026 against the build's CMake files, the link map of `fm
 | AMD FidelityFX SDK (FSR 3.1) and Microsoft `d3dx12.h` | v1.1.4 | MIT | `rexgpu-xenos.dll` with `-Fsr on` | the notice in all copies; see [below](#third-party-code-amd-fidelityfx-sdk-fsr-31) |
 | GNU binutils PowerPC disassembler (`thirdparty/disasm`) | the SDK's commit | GPL 2.0 or later | `rexglue.exe` only, never exported | source and license text if `rexglue.exe` were given to others |
 | DirectX Shader Compiler of the FidelityFX SDK | 1.8.2403 | Microsoft's DXC terms | build time only, with `-Fsr on` | not shipped |
-| DirectX Shader Compiler release (planned for N6's increment 1.2) | v1.9.2609 | Microsoft's DXC terms, with LLVM's NCSA license and MIT | not used yet; fetched on the user's computer by setup and the GUI launcher | not shipped; see [below](#third-party-code-directx-shader-compiler) |
+| DirectX Shader Compiler release (N6's increment 1.2) | v1.9.2609 | Microsoft's DXC terms, with LLVM's NCSA license and MIT | the native path's DXIL shaders with `native_shader_dxil` (off by default); fetched on the user's computer by setup and the GUI launcher | not shipped; its license files in the notices; see [below](#third-party-code-directx-shader-compiler) |
 
 Not built: tiny-AES-c (compiled as a static library that no binary links), Vulkan, SPIR-V, glslang, Tracy, Catch2 and the upstream SDK's own FidelityFX option (`REXGLUE_ENABLE_FIDELITYFX`, off). The GUI launcher uses the Segoe UI fonts of Windows and ships no font. The project's look mods and post passes (`work/fm4-rex/look`, `work/fm4-rex/passes`) are the project's own HLSL; they implement published methods that their comments name: GTAO (Jimenez et al., 2016), interleaved gradient noise (Jimenez, 2014), the ACES fit of Krzysztof Narkowicz (2015), Uchimura's GT curve and the Khronos PBR Neutral curve.
 
@@ -170,7 +170,7 @@ The project owner approved, on 25 October 2026, the download of exactly one pack
 
 ## Third-party code: DirectX Shader Compiler
 
-Planned for the offline pass of N6's increment 1.2 ([D3D-level HLE, 19.10](analysis/d3d-hle-n6.md#1910-decisions-for-the-project-owner)); nothing of it is used yet, and nothing of it is in the repository. The project owner approved the download and this release on 28 October 2026, and the route below.
+Used by N6's increment 1.2: the DXIL world and the offline pass, behind `native_shader_dxil`, off by default ([D3D-level HLE, 19.3.9](analysis/d3d-hle-n6.md#1939-increment-12-design-28-october-2026), [19.10](analysis/d3d-hle-n6.md#1910-decisions-for-the-project-owner)). The repository holds no file of the release except its three license files, in the [third-party notices](../outputs/FM4-source-control/third-party-notices/README.txt). `pipeline.py` (`fetch_dxc`, `stage_dxc`) takes the two DLLs from the release zip in the BuildRoot, refused with another SHA-256, and puts them beside the game build with the license files. The runtime (`DxilCompiler`) loads them from beside the executable and compiles with FXC without them. The project owner approved the download and this release on 28 October 2026, and the route below.
 
 | Item | Value |
 |---|---|

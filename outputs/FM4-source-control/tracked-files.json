@@ -393,6 +393,18 @@
       "provenance": "Repository policy/tooling or upstream license"
     },
     {
+      "path": "outputs/FM4-source-control/third-party-notices/DirectXShaderCompiler-LICENSE-MS.txt",
+      "provenance": "Repository policy/tooling or upstream license"
+    },
+    {
+      "path": "outputs/FM4-source-control/third-party-notices/DirectXShaderCompiler-LICENSE-LLVM.txt",
+      "provenance": "Repository policy/tooling or upstream license"
+    },
+    {
+      "path": "outputs/FM4-source-control/third-party-notices/DirectXShaderCompiler-LICENCE-MIT.txt",
+      "provenance": "Repository policy/tooling or upstream license"
+    },
+    {
       "path": "outputs/FM4-source-control/third-party-notices/AMD-FidelityFX-SDK-LICENSE.txt",
       "provenance": "Repository policy/tooling or upstream license"
     },
