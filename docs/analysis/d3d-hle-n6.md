@@ -567,7 +567,21 @@ Part 4 of 19.3.2.
 
 **Expected gains.** At a warm start on this PC, little: the start's creation takes 112 to 174 ms from the driver's cache. The start no longer depends on that cache, whose size is limited and shared with other games. After a driver update, the start creates the stored pipelines once and stores them again, as it does today without the library. On the ROG Xbox Ally X that creation is expected to take about 4 to 8 times this PC's 1.1 s (inferred from 19.3.5, not measured).
 
-**The short check** (the process of 29 October 2026: one job, one queue acquisition, about 15 to 20 minutes): the build and its snapshot; one `career` race at 3/2 on a copy of the BuildRoot's warm cache after the pass (`--cache-copy --offline-pass`), with exit 0, a clean log and a sane capture. Its measurements are 1.4's claim: no stored description created in play, the library's names stored in the pass and loaded at the title's start, the start's creation time and the title's first event.
+**The short check** (the process of 29 October 2026: one job with one queue acquisition, 21 minutes; snapshot `n14a` = `38dfec4` on main `9a2ef69`; the native path at 3/2 with `native_shader_contract` and `native_shader_dxil`, the look `aces`, 240 Hz).
+
+| Check | Result |
+|---|---|
+| The pass on empty caches, then a first career (`n14a-check`) | the pass exit 0 in 54.5 s (1,076 pixel shaders appended); the career exit 0 with its goal, the race 211.16 fps (p99 6.59 ms); 4 pipelines on the draw path, 532 early, 49 waits (348 ms). The storage holds no description at the start, so the library stays closed: as 1.2's check (`n6dx33-check`: 7, 530, 50 and 342 ms) |
+| The pass on a copy of the BuildRoot's warm cache, then a race (`n14a-32`) | the pass exit 0 in 9.4 s; its start stored 3,019 states and loaded 437 (descriptions whose states are equal to another's), 2 names refused; it wrote the library, 30.0 MB, in 49 ms. The title's start loaded all 3,458 states from it and created none |
+| Stored descriptions created in play | none in either run; the starts skipped no stored description |
+| The race (`n14a-32`) | exit 0 with its goal; 237.51 fps, GPU 3.28 ms and render thread 2.95 ms a frame; no pipeline created, early or waited for in the whole run; the captures and the final frame are whole (frame 4, the menu's black transition, is byte for byte `n13-32`'s) |
+| The start against the driver's cache (a boot on the same copy with `d3d12_pipeline_library=false`, `n14a-boot-nolib`) | the title's start creates the 3,458 states in 112 ms from the library against 76 ms from the driver's warm cache; the pass's start in 338 ms while it stores against 86 ms. The title's first event at 7.10 against 6.95 s, within the run-to-run spread (6.15 to 6.82 s on 28 October 2026) |
+| The logs | the same 4 errors as main's runs (`update:\media.zip`, an unimplemented XAM message, two `BaseHeap::Release`); no DXC failure |
+
+- **On this PC the library costs 36 ms at a warm start.** NVIDIA's driver cache is warm after the pass, and loading from it is faster than from the library. The library's gain is where that cache is cold or evicted: after a driver update it is dropped and stored again, as designed, and otherwise the start no longer depends on the driver's cache. Neither case can be produced here without touching the system's driver cache (`dxbc_driver_cache_salt` changes only the 200 DXBC states).
+- **The ROG Xbox Ally X** is the open measurement: whether its driver supports the library (`D3D12_SHADER_CACHE_SUPPORT_LIBRARY`; the log says so), and its start with and without it, from the owner's export. If the library is no faster there either, `d3d12_pipeline_library` goes off by default.
+
+**Effort**: 19.3.5 estimates 2 to 3 person-weeks, 7 to 10 hours of AI calendar time by section 9. The design, the code and the short check took about an hour, the check's GPU time included.
 
 ### 19.4 Item 2: direct D3D12 draws
 
