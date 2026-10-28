@@ -29,6 +29,16 @@ class D3D12Shader : public DxbcShader {
                                 IDxbcConverter* dxbc_converter = nullptr,
                                 IDxcUtils* dxc_utils = nullptr,
                                 IDxcCompiler* dxc_compiler = nullptr);
+
+    // A predicted translation of the start (docs/analysis/d3d-hle-n6.md
+    // 19.3.10) that no draw has used yet: its first draw opens the window of
+    // early pipeline creation, as a translation for a draw does. Set before
+    // the title runs, cleared by the render thread.
+    bool awaiting_first_draw() const { return awaiting_first_draw_; }
+    void set_awaiting_first_draw(bool awaiting) { awaiting_first_draw_ = awaiting; }
+
+   private:
+    bool awaiting_first_draw_ = false;
   };
 
   D3D12Shader(xenos::ShaderType shader_type, uint64_t ucode_data_hash, const uint32_t* ucode_dwords,

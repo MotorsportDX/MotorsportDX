@@ -525,6 +525,7 @@ void PipelineCache::InitializeShaderStorage(const std::filesystem::path& cache_r
             }
             if (TranslateAnalyzedShader(translator, *translation, dxbc_converter, dxc_utils,
                                         dxc_compiler, true)) {
+              translation->set_awaiting_first_draw(true);
               predicted_translated.fetch_add(1, std::memory_order_relaxed);
             } else {
               std::lock_guard<std::mutex> lock(shaders_failed_to_translate_mutex);
@@ -1516,6 +1517,11 @@ bool PipelineCache::TranslateShadersForDraw(D3D12Shader::D3D12Translation* verte
 
   if (translated) {
     // New shaders: new pipelines follow (QueueEarlyPipeline).
+    early_draws_left_ = kEarlyActiveDraws;
+  }
+  if (pixel_shader && pixel_shader->awaiting_first_draw()) {
+    // A predicted translation's first draw: its pipelines are new too.
+    pixel_shader->set_awaiting_first_draw(false);
     early_draws_left_ = kEarlyActiveDraws;
   }
   return true;
