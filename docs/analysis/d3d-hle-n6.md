@@ -420,6 +420,15 @@ Found and fixed on the way:
 
 **The outcome: strict stays the default.** Against today's path it costs nothing resolvable. At 3/2 it is 0.020 ms a race frame faster, and at 2x its interval includes 0. Relaxed is about as fast against today's path, and its 2x gain of 0.023 ms is within the strict variant's spread. It stays a development switch (`native_shader_dxil_relaxed`). That the strict DXIL world is not slower than the driver's fused DXBC means the IEEE strictness of 9.7 costs nothing measurable on this GPU.
 
+**Step 3 and the check.**
+
+- **The launcher.** Its Shaders page runs the pass once a build ([running.md](../running.md#shaders-page)). It fetches the DXC release when the DLLs are missing, through Windows' `tar` and the pinned SHA-256, and compiles in a scratch build of `work/fm4-launcher`. The download itself was not run: the release is in the BuildRoot.
+- **The gate.** By the owner's decision of 29 October 2026, one short check replaces the close gate: `n6dx33` on `d9d0933` (snapshot `n6dx33`). Smoke at 2x, parity, invalidation and the perf comparison move to the final gate of level 1. The steps above cover the precision, the A/B and the fallback without DXC.
+
+| Check | Result |
+|---|---|
+| The pass on empty caches, then a first career at 3/2 on the DXIL path (`n6dx33-check`) | the pass in 53.8 s, exit 0, 6,916 DXC compiles, none failed; the career exit 0 with its goal, no DXC failure in its log, no look mod compiled on the draw path, the race 220.05 fps (p99 6.48 ms) on a cold driver cache; the race's captures are whole |
+
 #### 19.3.10 Increment 1.3: the game's pixel shaders from the disc, 28 October 2026
 
 Part 3 of 19.3.2. The number follows 1.2's design (19.3.9).
