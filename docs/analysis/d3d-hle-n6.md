@@ -299,7 +299,7 @@ N6 leaves it out (19.9). The trigger to take it up: the submit thread above abou
 #### 19.6.1 Today
 
 - **Keys from fetch constants.** `TextureCache::RequestTextures` ([cache.cpp:540](../../work/runtime/src/graphics/pipeline/texture/cache.cpp)) builds a texture's key from the binding's six fetch constant dwords (`BindingInfoFromFetchConstant`, 1168) whenever the binding is out of sync, then finds or creates the texture.
-- **Bindings reset often.** `BeginFrame` resets every binding each frame (329), and any texture whose watch fires sets `texture_became_outdated_`, which resets every binding at the next draw (543, 938): a resolve into a range a texture was loaded from, or a CPU write. That is why the keys are recomputed about 1.5 times a draw (2,327 a race frame, 17.11).
+- **Bindings reset often.** `BeginFrame` resets every binding each frame (329), and any texture whose watch fires sets `texture_became_outdated_`, which resets every binding at the next draw (543, 938): a resolve into a range a texture was loaded from, or a CPU write. The keys are recomputed about 1.5 times a draw (2,327 a race frame, 17.11); step 1's measurement (19.6.5) found that 98% of them follow the title's own fetch constant writes, not these resets.
 - **Uploads and untiling.** A texture's guest memory is copied into the 512 MB shared memory buffer on the render thread (`SharedMemory::RequestRanges`, [shared_memory.cpp:465](../../work/runtime/src/graphics/shared_memory.cpp); `D3D12SharedMemory::UploadRanges`, [d3d12/shared_memory.cpp:307](../../work/runtime/src/graphics/d3d12/shared_memory.cpp)), and a compute shader untiles and decodes it on the GPU (`LoadTextureDataFromResidentMemoryImpl`, [d3d12/texture_cache.cpp:2050](../../work/runtime/src/graphics/d3d12/texture_cache.cpp)).
 - **Validity by page watches.** A loaded texture watches its pages (`MakeUpToDateAndWatch`); a CPU write faults, the shared memory's invalidation callback (shared_memory.cpp:712) clears the pages and fires the watches.
 
@@ -321,7 +321,72 @@ Textures keyed by the title's texture objects: hooks on the XDK's texture creati
 2. No reset by resolves into ranges that no bound texture reads, and no reset at the frame start for bindings whose texture is valid: the binding check of N4 (`d3d12_reuse_draw_bindings_check`) with its perturbation proof. This is the cheap half and may give most of the gain.
 3. Object-keyed bindings with the generation count, behind the same check.
 
-Close gates as in 19.3.4. Expected: the textures zone from about 0.40 to about 0.15 ms a race frame on this PC (the keys 0.17 ms and most of the binding updates); on the Ally X about 0.3 to 0.5 ms of the render thread's 4.4 to 6.1 ms, CPU headroom rather than fps on a device that waits for its GPU. No stutter gain: the warm races have no frame over 25 ms. Effort: step 2 1 to 2 person-weeks, step 3 3 to 5.
+Close gates as in 19.3.4. Expected: the textures zone from about 0.40 to about 0.15 ms a race frame on this PC (the keys 0.17 ms and most of the binding updates); on the Ally X about 0.3 to 0.5 ms of the render thread's 4.4 to 6.1 ms, CPU headroom rather than fps on a device that waits for its GPU. No stutter gain: the warm races have no frame over 25 ms. Effort: step 2 1 to 2 person-weeks, step 3 3 to 5. Step 1 (19.6.5) found the resets far smaller than this estimate assumed.
+
+#### 19.6.5 Step 1: the resets by cause, 28 October 2026
+
+**The counters.** With `REX_N4_TEXTURE_KEYS=1` the perf trace's `texture_keys` object counts each binding reset by its cause ([traces](../e2e/traces.md)): the frame start (`BeginFrame`), a texture outdated by a GPU write (a resolve's `MarkRangeAsResolved`, memexport), by a CPU write (the shared memory's invalidation callback), by both since the last draw, and textures destroyed. For each it counts the valid bindings reset, the keys computed again for them, how many of those keys found the textures the binding had before, how many queued a load, and the valid bindings that held an outdated or missing texture at the reset.
+
+**The measurement**, the build of `cd54c03` (`texture_binding_resets=0`, today's resets), the race and the career at 240 Hz with the fast route, one run a cell, with `REX_N4_TEXTURE_KEYS` and `REX_CP_SPLIT` (both make the keys zone slower). Per race frame at 3/2:
+
+| | a frame | share of the keys |
+|---|---|---|
+| Keys computed again for used bindings out of sync | 3,018.5 | 100% |
+| of these, the fetch constant had the binding's dwords (a compare, no key) | 1,401.3 | 46.4% |
+| of these, the key changed | 1,610.2 | 53.3% |
+| of the key changes, one of the binding's last four keys | 674.7 | 22.4% |
+| Keys after a reset for a GPU write (28.8 resets, 54.9 valid bindings) | 54.9 | 1.8% |
+| Keys after a reset for a CPU write (0.1 resets) | 0.5 | 0.02% |
+| Keys after the frame start's reset (no valid binding at that point) | 0.0 | 0% |
+| Keys after textures were destroyed | 0.0 | 0% |
+
+Of the 54.9 bindings a resolve's reset reset each frame, 10.2 held the outdated texture, 9.8 found their old textures again and 23.8 queued a load check. 1x (3,048.0 keys, 55.5 from resets), 2x with the launchers' plan (2,998.4, 55.4), the career's race (3,347.9, 56.3) and its replay (3,307.5, 60.1) give the same picture. The race's uploads are 66 to 75 KB a frame with 1.4 to 1.7 invalidations a frame, the worst race frame 10.0 to 11.8 ms (17.9 ms in the career's race), as in 19.2.3.
+
+**The open questions of the handoff, answered:**
+
+1. **The share of the keys.** The resets cost 1.8% of the race's keys, nearly all of them after resolves; the frame start's reset finds no valid binding, and CPU writes and destroyed textures are rare. The other 98% follow the title's own fetch constant writes: 1,401 a frame rewrite the binding's dwords, which `texture_bindings_keep_same_dwords` already turns into a compare, and 1,610 change the key, which no reset policy saves. Step 3 targets these, not step 2. Item 5 (b)'s deferred guest layout writes fire no watch: the watches fire at the resolve, in `MarkRangeAsResolved`, as before (b), so the texture cache sees the resolve when it did before.
+2. **Validity without a key.** A binding kept across a reset is valid when its textures are those a lookup of its key gives (`FindTexture` of the key after `ResolveTextureKey`, which applies the scaled and scene resolve state and the host size limits) and are up to date (the texture's outdated mask under the global lock). The key changes only with the fetch constant's dwords, which the in-sync mask already tracks; the lookup changes only when a texture is destroyed (which still resets every binding) or when a resolve changes the range's state, and that resolve's watch makes the texture in that range outdated. The binding check compares exactly that (19.6.6). A generation count is not needed for step 2.
+3. **A resolve's reset by range.** Yes, by the textures' state instead of the range: once the watches have fired, the bindings that hold an outdated texture are the ones the resolve hit. That set is what a range test would give, since a watch fires only for textures that overlap the range, and needs no range passed through. It resets 13.3 bindings a race frame instead of 54.9.
+4. **Measuring the saving.** By the textures zone a draw and the render thread's busy time a frame on capped races, three runs each on one binary (19.6.6). The Ally X's trace is not needed for this step: the saving is about 0.01 ms a race frame on this PC.
+
+#### 19.6.6 Step 2: resets of stale bindings only, 28 October 2026
+
+**The design**, in `cd54c03`, off by default. `texture_binding_resets` is a bit mask:
+
+- **Bit 1**: a texture that became outdated (`texture_became_outdated_`, now with the cause's bits) resets only the valid bindings whose texture or signed texture is outdated, or missing where the binding's signs need it (`GetBindingsToReload`). The other bindings keep their keys and textures.
+- **Bit 2**: the frame start resets only those same bindings.
+- Textures destroyed by the memory limits still reset every binding.
+
+**The proof.** `d3d12_reuse_draw_bindings_check` now also checks, after the loads of every draw, each used valid binding: its textures must be those a lookup of its key gives and must not be outdated. A binding met while another texture has just become outdated counts as racing, not as a mismatch: the next draw's reset covers it. A mismatch is put right (the binding reset, or the texture loaded), so each is counted once. `texture_binding_resets_perturb=N` leaves every Nth binding out of the reset for an outdated texture, which the check must catch. The checks, the build of `cd54c03` at 240 Hz, the career at 3/2 unless named:
+
+| Cell | Checks | Key mismatches | Other texture | Outdated | Racing |
+|---|---|---|---|---|---|
+| `texture_binding_resets=0` | 36,930,778 | 0 | 0 | 0 | 3 |
+| `texture_binding_resets=3` | 38,252,216 | 0 | 0 | 0 | 3 |
+| 3, photo mode at 3/2 | 30,715,909 | 0 | 0 | 0 | 4 |
+| 3, the career at 2x with the launchers' plan | 29,941,051 | 0 | 0 | 0 | 6 |
+| 3, both perturbations every 1,000th | 36,060,923 | 36,060 of 36,060 perturbed | 0 | 138 of 306 left out | 2 |
+
+The perturbed run catches every changed key and 138 of the 306 bindings left out; the other 168 never reached a draw with their outdated texture: a fetch constant write with other dwords rebuilt the binding first, the frame start's reset (bit 2) covered it, or another binding's load brought the shared texture up to date. The check does not count these three apart.
+
+**The saving**, the race at 240 Hz with the fast route, three runs each on one binary, without the key trace, medians:
+
+| Scale | Mode | Textures zone, ms a frame (3 runs) | median | µs a draw | Render thread, ms a frame | GPU frame, ms |
+|---|---|---|---|---|---|---|
+| 3/2 | 0 | 0.374, 0.355, 0.372 | 0.372 | 0.195 | 2.99 | 3.44 |
+| 3/2 | 3 | 0.368, 0.363, 0.367 | 0.367 | 0.191 | 2.95 | 3.44 |
+| 1x | 0 | 0.389, 0.378, 0.379 | 0.379 | 0.193 | 3.01 | 2.33 |
+| 1x | 3 | 0.360, 0.356, 0.364 | 0.360 | 0.192 | 2.85 | 2.25 |
+
+The textures zone falls by 0.005 ms a race frame at 3/2 and 0.019 ms at 1x (0.004 and 0.001 µs a draw), against the 0.25 ms that 19.6.4 expected: the 42 keys a frame that the mode saves are 1.4% of the keys. The render thread's 0.04 and 0.16 ms are within its runs' spread (1x mode 0's first run had 2,062 draws a frame against 1,882 to 1,968).
+
+**Alternatives** considered:
+
+- A reset by the resolve's range (passing the range from `MarkRangeAsResolved` to the texture cache): the same bindings as the outdated state, with more plumbing.
+- A generation count a texture: needed for step 3's object-keyed bindings, not here.
+- A per-binding cache of the last four dword sets and their textures, which would skip the key and the lookup for the 675 key changes a frame that return to a recent key: at most about 0.05 ms a race frame on this PC, below the 0.1 ms bar of 19.7.3.
+
+**Risks.** The frame start's reset also retried a texture descriptor that could not be created; with bit 2 a binding whose descriptor failed keeps the failure until its fetch constant changes or its texture becomes outdated. This was not seen in the runs above.
 
 ### 19.7 Item 5: what else the profile shows
 
@@ -522,6 +587,7 @@ The e2e harness first kept its own settings (`native_rt_surfaces=90` at every wh
 - **Smoke at 2x**, the new plan against the earlier one on the same binary: 3 of 3 cells reached their goal, `career` PASS, `photo` and `photo_view` WARN on capture statistics only (another moment), no new error key. Photo mode's GPU frame rose from 7.56 to 8.53 ms in its single run (the resolves of the whole run from 0.80 to 1.28 ms), at its cap of 30 fps; the replay's fell from 7.45 to 7.21 ms.
 - **Freeze parity at 2x**, the new plan against the earlier one: PASS. The 1:1 crops of the frozen frames show whole frames.
 - The smoke at 3/2 was not run again: its runtime and plan are those of the combined gate after the rebase (19.7.5).
+- **Photo mode at 2x, three runs each** (the perf tier's `photo` cell on the build of `1612fb1`, 28 October 2026, with item 4's measurement): photo mode's GPU frame is 7.55, 8.04 and 8.36 ms with 90 (median 8.04) and 8.06, 8.08 and 8.20 ms with the new plan (median 8.08), +0.04 ms, while its draws vary from 2,900 to 4,283 a frame between runs. The single smoke run's 8.53 against 7.56 ms was the runs' spread, not the plan. One run with 90 timed out waiting for the saved photo's message (`SAVE SUCCESSFUL`); the new plan's three runs reached their goal.
 
 ### 19.8 The proposed order
 
