@@ -1035,3 +1035,31 @@ The owner's answers of 28 October 2026 on 4 (the review is in [sources and licen
 - **Level 1, the target:** a native renderer with no stutter. That is the rest of item 1 (increments 1.2 to 1.5), item 2 only if the Ally X's battery runs show CPU-bound frames, and N5's open items, with HDR10 waiting for an HDR display. By the calibration of [section 9](d3d-hle.md#9-stages), it is about 2 days of calendar time (1 to 4) without item 2.
 - **Level 2, not planned:** the game's data in PC formats, with textures, vertex data and XMA audio converted once at install instead of at run time. It is about 1.5 to 2 days (1 to 3.5), a guess without a design. It would be taken up only if a measurement shows the run-time conversion costing loading time or CPU.
 - **Level 3, not planned:** no Xbox 360 shape left (no big-endian guest memory, no Xbox kernel API, no recompiled XDK D3D library). It needs a decompilation of the game's 49,616 functions (plus 9,274 in its two other modules), whose equivalence cannot be proven without the original compiler. There is no honest estimate, and it is not recommended.
+
+### 19.11 The Level 1 final gate, 29 October 2026
+
+The one full gate at the end of Level 1 (the project owner's decision of 29 October 2026, [d3d-hle.md](d3d-hle.md)). It ran on local main `4a5f02f`, Level 1's last increment (snapshot `l1f`, with `dxcompiler.dll` and `dxil.dll` beside the game), against snapshot `n6f4` (`19099bd`, the runtime of main before Level 1, `5d1c4f7`). It was one job with one queue acquisition (`gateL1.sh`), at 240 Hz on the native path with the look `aces`.
+
+- The candidate ran with the shipped defaults: no DXIL or contract cvars, so the DXIL world is on because DXC is beside the game.
+- Each candidate run began with the offline pass, on a copy of the BuildRoot's warm cache.
+- The baselines are `n6f4` cells of 28 October 2026 where they answer the question: `n6hs32` (smoke at 3/2), `n6f4s2x` (smoke at 2x) and `n6f4-32` (the race). The freeze parity pair ran fresh, both sides at once.
+
+| Check | Result |
+|---|---|
+| Smoke at 3/2 (`l1fs32` against `n6hs32`) | 3 of 3 cells reached their goals. `career` PASS: the race at 236.29 fps, p99 5.07 ms. `photo` and `photo_view` WARN on capture statistics only (the races differ) |
+| Smoke at 2x (`l1fs2x` against `n6f4s2x`) | 3 of 3. `career` PASS: the race at 195.03 fps, p99 7.36 ms. `photo` and `photo_view` WARN on capture statistics only |
+| A cold first career after the pass (`l1fcold`, 3/2, empty caches) | exit 0 with its goal; the DXIL world on (DXC 1.9, strict). No look mod compiled on the draw path; 6 pipelines on the draw path (none over 4 ms) and 538 early; 35 waits for pipelines (265 ms). Frames over 50, 100 and 250 ms: 9, 6 and 1, the longest the boot's first (718 ms) |
+| The race at 3/2 (`l1f-32` against `n6f4-32`) | `compare.py` PASS. 237.06 against 238.63 fps; GPU 3.28 against 3.31 ms and render thread 2.89 against 2.91 ms a frame. No pipeline created, early or waited for in the whole run |
+| The freeze parity at 3/2 (`l1fp32` against `l1f-n6f4p32`) | FAIL in the gate on draws a frame, 2,056 and 2,062 against 2,236 and 2,248: a later frozen moment (below). The rerun on the same snapshot (`l1c-l1fp32`) froze at the usual point, 2,236.93 against 2,235.94: PASS on run 1. Its run 2 stopped at the rewind menu's OCR, a known timeout |
+| The DXIL world on a frozen frame (`l1c-ab32`, 3/2, `native_shader_dxil_ab_ms=3000` with `native_shader_contract_ab_precise`, the look `aces,taa=0,windshield=0`) | 0 of 18 comparisons of the DXIL world against the DXBC world differ, 0 pixels. 3,258 pipeline states were created in DXIL |
+| The 1:1 captures beside `n6f4`'s (`I:\FM4-build-usa\e2e\l1f-gate\crops` and `crops-l1c`) | the same look; the cars and the cable cars stand where each run's frozen moment puts them |
+
+**The parity episode.** The gate's freeze cell froze at a later moment in both of its runs: the player's car is nearer the station wagon and the curb, and the cable cars have moved.
+
+- **The bisection** of only that cell over the landing snapshots: 1.2 (`n6dx33`, DXIL off) froze at 2,237 and 2,235 draws a frame, the creation threads fix (`n14b`) at 2,251 and 2,236. Both are the usual point.
+- **The cell does not run the DXIL world.** Freeze cells run with the look `original,taa=0`, which has no shader overrides, so DXC is not loaded and every pipeline state is DXBC (the log: "0 states in DXIL"). The only binary that differs from `n14b` is `rexgpu-xenos.dll`, and the code that differs, the DXIL default in `shader_override.cpp`, does not run in this cell.
+- **The rerun** on the same `l1f` froze at the usual point (2,236.93), and so did `l1f` with `native_shader_dxil=false` (2,234.93 and 2,235.46, PASS).
+- **The cause** is the freeze scenario's own variance. The race advances by wall time, and the frozen moment depends on when the presses that open the rewind land ([frozen frames, baseline variance](../e2e/frozen-frames.md#baseline-variance)). Main's own `n6f4` runs 1 and 2 also freeze at different moments, the station wagon further ahead in run 2. Over about 130 earlier native freeze runs the draws a frame stayed between 2,233 and 2,251, so 2,056 is a rarer neighbouring point, not a change of the game's speed or simulation.
+- **The proof of the look.** Because freeze cells run without shader overrides, the freeze parity does not prove the DXIL world; the in-run A/B on one frozen frame does (0 pixels).
+
+**The outcome: Level 1 passes.** The main session accepted the result on 29 October 2026. Open: the ROG Xbox Ally X, from the owner's export of `4a5f02f`: the offline pass's time, whether its driver supports the pipeline library, and a start with and without it (19.3.11).

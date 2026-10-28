@@ -475,6 +475,14 @@ Step (a) of item 5 of stage N6 ([D3D-level HLE, 19.7.4](../analysis/d3d-hle-n6.m
 - **Against the previous main**: freeze parity at 3/2 and `-Rov`'s at 1x PASS; smoke at 3/2 3 of 3 cells, `career` PASS, `photo` and `photo_view` WARN on capture statistics only. The first build's smoke found a partial resolve (photo mode's start) that wrote a sibling before the skipped texture's copy; the fix copies first, and no cell has logged a missing sibling since. The final runs are on the branch rebased onto the shader contract's increment 3.
 - Not covered: the ROG Xbox Ally X, 60 and 120 Hz, and RTV, which has no host texture writes.
 
+### 29 October 2026: statements replaced by the Level 1 final gate
+
+The [Level 1 final gate](current.md#level-1-final-gate-29-october-2026) retested a fresh install's first career on the latest build. Its row in the status by area read until then:
+
+| Area | State | Evidence |
+|---|---|---|
+| Look mods on empty shader caches (a fresh install) | No compile where a draw meets a shader on the native path and RTV; the `cold` tier | [No look mod compiles in play](current.md#no-look-mod-compiles-in-play-n6-increments-10-and-11-27-october-2026), 27 October 2026 |
+
 ## 5. Superseded settings and decisions
 
 Each row gives the date of the change, the setting that was replaced, and what happened later. The current values are in [running](../running.md) and [current status](current.md).
