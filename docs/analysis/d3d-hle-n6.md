@@ -480,7 +480,13 @@ Only the native path's resolves from private surfaces into host textures (bit 32
 - **Against the previous main** (the build of `0509e97`): smoke 3 of 3 cells, `career` PASS, `photo` and `photo_view` WARN on capture statistics only, as in (a); with the check the same; freeze parity at 3/2 PASS. The 1:1 crops of the A/B's captures at 3/2 and 2x and of the parity capture beside the previous main's show no difference.
 - **The saving**, race runs at 240 Hz on one binary (three each at 3/2, one each at 1x and 2x): at 3/2 the GPU frame is 3.303 ms with the layout from the render target, 3.299 ms with G and 3.197 ms with F (the full-screen resolves' parts 0.414, 0.400 and 0.291 ms); at 1x 2.232 against 2.187 ms (the resolves 0.379 against 0.316 ms) and at 2x 5.075 against 4.870 ms (0.980 against 0.884 ms). At 3/2 G saves nothing: the box-filtered destinations are written at the resolve, and the one layout it defers (`1C0C1000`, the nearest pixel) is written every frame for a 256x256 resolve to `1C1C1000` inside its range. At 1x and 2x two of three layouts are replaced before anything reads them.
 - **The readback on demand** (condition 5) is on by default on the native path (`readback_resolve_on_demand` in the launchers' and the harness's native settings), so the deferral acts by default there; without it bit 2 does nothing and the layouts are written at the resolve from the texture.
+- **After the rebase** onto local main `bb922c6` (increment 5 of N5's shader contract, whose shared `shader_override` code is on every path), the build of `1612fb1`: smoke at 3/2 3 of 3 cells against (b)'s (`photo` and `photo_view` PASS, `career` WARN on the guest's idle wait only), freeze parity at 3/2 PASS against the previous main of (a), and `-Rov` freeze parity at 1x PASS against increment 5's close gate. The 1:1 crops of the frozen captures beside both references show whole frames.
 - Not covered: the ROG Xbox Ally X, 60 and 120 Hz, and RTV and `-Rov`, which this path does not touch.
+
+**The main session's decisions after the gate**, 28 October 2026, taken while the project owner was away:
+
+1. G stays the default. F (`native_rt_resolve_layout=3`) stays opt-in, for measurement, and can be reviewed from the ROG Xbox Ally X's numbers. The memory the guest sees must match the reference: 0.105 ms a frame at 3/2 on this PC (about 3%) does not outweigh bytes that differ by up to 767 steps for a reader that may appear later, and the Ally X's figure is not measured.
+2. The exclusion list that would keep `1C0C1000`'s layout deferred past the 256x256 resolve inside its range (the later write skipping the ranges written since) is not built: it is worth a few hundredths of a ms a frame.
 
 ### 19.8 The proposed order
 
