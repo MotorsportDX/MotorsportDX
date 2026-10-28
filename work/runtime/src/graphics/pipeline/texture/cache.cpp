@@ -84,6 +84,17 @@ REXCVAR_DEFINE_BOOL(texture_bindings_keep_same_dwords, false, "GPU",
                     "Keep a texture binding out of sync whose fetch constant has the dwords "
                     "that made it, without computing its key again (N4 of "
                     "docs/analysis/d3d-hle.md, section 17.11)");
+REXCVAR_DEFINE_INT32(texture_binding_resets, 0, "GPU",
+                     "Which texture bindings a reset covers (docs/analysis/d3d-hle-n6.md 19.6): "
+                     "1 = a texture that became outdated resets only the bindings with an "
+                     "outdated texture, 2 = the frame start resets only the bindings with an "
+                     "outdated or missing texture; 0 = both reset every binding")
+    .range(0, 3);
+REXCVAR_DEFINE_INT32(texture_binding_resets_perturb, 0, "GPU",
+                     "Test of the binding check (d3d12_reuse_draw_bindings_check) with "
+                     "texture_binding_resets: leave every Nth binding an outdated texture's reset "
+                     "should cover in sync, so that the check must report it (0: off)")
+    .range(0, 1000000);
 
 // DEFINE_int32(
 //     draw_resolution_scale_x, 1,
@@ -295,7 +306,7 @@ void TextureCache::CompletedSubmissionUpdated(uint64_t completed_submission_inde
       // of the submission where the texture was last actually used on the GPU
       // doesn't imply that it's not bound currently. Reset bindings if
       // any texture has been destroyed.
-      ResetTextureBindings();
+      ResetTextureBindings(false, BindingResetCause::kDestroyed);
     }
     for (Texture*& written : write_back_textures_) {
       if (written == texture) {
@@ -330,7 +341,13 @@ void TextureCache::BeginFrame() {
   // In case there was a failure to create something in the previous frame, make
   // sure bindings are reset so a new attempt will surely be made if the texture
   // is requested again.
-  ResetTextureBindings();
+  if (REXCVAR_GET(texture_binding_resets) & 2) {
+    // Only those: a binding whose textures exist and are up to date finds them
+    // again (d3d-hle-n6.md 19.6).
+    ResetTextureBindingsOf(GetBindingsToReload(), BindingResetCause::kFrame);
+  } else {
+    ResetTextureBindings(false, BindingResetCause::kFrame);
+  }
 }
 
 void TextureCache::MarkRangeAsResolved(uint32_t start_unscaled, uint32_t length_unscaled) {
@@ -540,11 +557,31 @@ bool TextureCache::CommitPreparedTextureLoad(const PendingTextureLoad& pending_l
 void TextureCache::RequestTextures(uint32_t used_texture_mask) {
   const auto& regs = register_file();
 
-  if (texture_became_outdated_.exchange(false, std::memory_order_acquire)) {
+  if (const uint32_t outdated = texture_became_outdated_.exchange(0, std::memory_order_acquire)) {
     // A texture has become outdated - make sure whether textures are outdated
     // is rechecked in this draw and in subsequent ones to reload the new data
     // if needed.
-    ResetTextureBindings();
+    const BindingResetCause cause = outdated == kOutdatedByGpu   ? BindingResetCause::kOutdatedByGpu
+                                    : outdated == kOutdatedByCpu ? BindingResetCause::kOutdatedByCpu
+                                                                 : BindingResetCause::kOutdatedByBoth;
+    if (REXCVAR_GET(texture_binding_resets) & 1) {
+      // Only the bindings of outdated textures: the others find the textures
+      // they have (d3d-hle-n6.md 19.6).
+      uint32_t reload = GetBindingsToReload();
+      if (const uint32_t perturb = uint32_t(REXCVAR_GET(texture_binding_resets_perturb))) {
+        uint32_t remaining = reload, perturb_index;
+        while (rex::bit_scan_forward(remaining, &perturb_index)) {
+          remaining &= ~(UINT32_C(1) << perturb_index);
+          if (++binding_reset_perturb_count_ % perturb == 0) {
+            reload &= ~(UINT32_C(1) << perturb_index);
+            perf_trace::binding_check_resets_perturbed.fetch_add(1, std::memory_order_relaxed);
+          }
+        }
+      }
+      ResetTextureBindingsOf(reload, cause);
+    } else {
+      ResetTextureBindings(false, cause);
+    }
   }
 
   // Update the texture keys and the textures.
@@ -617,6 +654,22 @@ void TextureCache::RequestTextures(uint32_t used_texture_mask) {
   const bool keep_same_dwords = REXCVAR_GET(texture_bindings_keep_same_dwords);
   uint32_t textures_remaining = used_texture_mask & ~texture_bindings_in_sync_;
   uint32_t index = 0;
+  // The reset whose key this is (REX_N4_TEXTURE_KEYS), counted when the binding
+  // has its textures again.
+  perf_trace::BindingResetCounts* reset_counts = nullptr;
+  size_t loads_before_key = 0;
+  auto count_reset_key = [&](const TextureBinding& binding) {
+    if (!reset_counts) {
+      return;
+    }
+    if (binding.texture == reset_textures_[index][0] &&
+        binding.texture_signed == reset_textures_[index][1]) {
+      ++reset_counts->same_textures;
+    }
+    if (pending_texture_loads.size() != loads_before_key) {
+      ++reset_counts->loads;
+    }
+  };
   while (rex::bit_scan_forward(textures_remaining, &index)) {
     uint32_t index_bit = UINT32_C(1) << index;
     textures_remaining &= ~index_bit;
@@ -624,6 +677,17 @@ void TextureCache::RequestTextures(uint32_t used_texture_mask) {
     xenos::xe_gpu_texture_fetch_t fetch = regs.GetTextureFetch(index);
     if (trace_keys) {
       TraceTextureKey(index, fetch);
+      reset_counts = nullptr;
+      for (size_t cause = 0; cause < bindings_reset_by_cause_.size(); ++cause) {
+        if (bindings_reset_by_cause_[cause] & index_bit) {
+          if (!reset_counts) {
+            reset_counts = &perf_trace::texture_keys.resets[cause];
+            ++reset_counts->keys;
+          }
+          bindings_reset_by_cause_[cause] &= ~index_bit;
+        }
+      }
+      loads_before_key = pending_texture_loads.size();
     }
     static_assert(sizeof(fetch) == sizeof(binding.fetch_dwords));
     if (keep_same_dwords) {
@@ -650,6 +714,7 @@ void TextureCache::RequestTextures(uint32_t used_texture_mask) {
       if (keep_same_dwords) {
         std::memcpy(binding.fetch_dwords, &fetch, sizeof(fetch));
       }
+      count_reset_key(binding);
       continue;
     }
     if (keep_same_dwords) {
@@ -715,6 +780,7 @@ void TextureCache::RequestTextures(uint32_t used_texture_mask) {
     if (load_signed_data) {
       queue_pending_texture_load(binding.texture_signed);
     }
+    count_reset_key(binding);
   }
 
   perf_trace::ZoneEnd(perf_trace::Zone::kTexturesKeys, keys_start);
@@ -751,6 +817,9 @@ void TextureCache::RequestTextures(uint32_t used_texture_mask) {
   if (bindings_changed) {
     const perf_trace::DetailZoneScope zone(perf_trace::Zone::kTexturesBindings);
     UpdateTextureBindingsImpl(bindings_changed);
+  }
+  if (binding_check_) {
+    CheckBindingTextures(used_texture_mask);
   }
 
   if (write_back_textures_[0]) {
@@ -940,7 +1009,8 @@ void TextureCache::WatchCallback(const std::unique_lock<std::recursive_mutex>& g
                                  bool invalidated_by_gpu) {
   Texture& texture = *static_cast<Texture*>(context);
   texture.WatchCallback(global_lock, argument != 0);
-  texture.texture_cache().texture_became_outdated_.store(true, std::memory_order_release);
+  texture.texture_cache().texture_became_outdated_.fetch_or(
+      invalidated_by_gpu ? kOutdatedByGpu : kOutdatedByCpu, std::memory_order_release);
 }
 
 void TextureCache::DestroyAllTextures(bool from_destructor) {
@@ -950,7 +1020,7 @@ void TextureCache::DestroyAllTextures(bool from_destructor) {
   COUNT_profile_set("gpu/texture_cache/textures", 0);
 }
 
-TextureCache::Texture* TextureCache::FindOrCreateTexture(TextureKey key) {
+bool TextureCache::ResolveTextureKey(TextureKey& key) {
   // Check if the texture is a scaled resolve texture.
   if (IsDrawResolutionScaled() && key.tiled && IsScaledResolveSupportedForFormat(key)) {
     texture_util::TextureGuestLayout scaled_resolve_guest_layout = key.GetGuestLayout();
@@ -1055,9 +1125,16 @@ TextureCache::Texture* TextureCache::FindOrCreateTexture(TextureKey key) {
       size_adjusted = true;
     }
     if (!size_adjusted) {
-      return nullptr;
+      return false;
     }
     get_host_extent(host_width, host_height, host_depth_or_array_size);
+  }
+  return true;
+}
+
+TextureCache::Texture* TextureCache::FindOrCreateTexture(TextureKey key) {
+  if (!ResolveTextureKey(key)) {
+    return nullptr;
   }
 
   // Try to find an existing texture.
@@ -1273,19 +1350,132 @@ void TextureCache::BindingInfoFromFetchConstant(const xenos::xe_gpu_texture_fetc
   }
 }
 
-void TextureCache::ResetTextureBindings(bool from_destructor) {
-  uint32_t bindings_reset = 0;
+void TextureCache::ResetTextureBindings(bool from_destructor, BindingResetCause cause) {
+  ResetTextureBindingsOf(UINT32_MAX, cause, from_destructor);
+}
+
+void TextureCache::ResetTextureBindingsOf(uint32_t mask, BindingResetCause cause,
+                                          bool from_destructor) {
+  const bool trace_keys = !from_destructor && perf_trace::TextureKeysEnabled();
+  if (trace_keys && cause != BindingResetCause::kFrame && cause != BindingResetCause::kDestroyed) {
+    // The valid bindings that the outdated texture concerns (or that have no
+    // texture), which a reset of only those would cover.
+    perf_trace::texture_keys.resets[size_t(cause)].outdated +=
+        rex::bit_count(GetBindingsToReload());
+  }
+  uint32_t bindings_reset = 0, bindings_valid = 0;
   for (size_t i = 0; i < texture_bindings_.size(); ++i) {
     TextureBinding& binding = texture_bindings_[i];
     if (!binding.key.is_valid) {
       continue;
     }
+    bindings_valid |= UINT32_C(1) << i;
+    if (!(mask & (UINT32_C(1) << i))) {
+      continue;
+    }
+    if (trace_keys) {
+      reset_textures_[i] = {binding.texture, binding.texture_signed};
+    }
     binding.Reset();
     bindings_reset |= UINT32_C(1) << i;
   }
   texture_bindings_in_sync_ &= ~bindings_reset;
+  bindings_reset_by_cause_[size_t(cause)] |= bindings_reset;
+  if (trace_keys) {
+    perf_trace::BindingResetCounts& counts = perf_trace::texture_keys.resets[size_t(cause)];
+    ++counts.resets;
+    counts.bindings += rex::bit_count(bindings_reset);
+    counts.kept += rex::bit_count(bindings_valid & ~bindings_reset);
+  }
   if (!from_destructor && bindings_reset) {
     UpdateTextureBindingsImpl(bindings_reset);
+  }
+}
+
+uint32_t TextureCache::GetBindingsToReload() const {
+  uint32_t reload = 0;
+  for (size_t i = 0; i < texture_bindings_.size(); ++i) {
+    const TextureBinding& binding = texture_bindings_[i];
+    if (!binding.key.is_valid) {
+      continue;
+    }
+    // The versions the binding needs, as RequestTextures finds them.
+    bool needs_unsigned = true, needs_signed = false;
+    if (IsSignedVersionSeparateForFormat(binding.key)) {
+      needs_unsigned = texture_util::IsAnySignNotSigned(binding.swizzled_signs);
+      needs_signed = texture_util::IsAnySignSigned(binding.swizzled_signs);
+    }
+    if ((needs_unsigned && (!binding.texture || binding.texture->outdated_mask())) ||
+        (needs_signed && (!binding.texture_signed || binding.texture_signed->outdated_mask()))) {
+      reload |= UINT32_C(1) << i;
+    }
+  }
+  return reload;
+}
+
+void TextureCache::CheckBindingTextures(uint32_t used_texture_mask) {
+  // After the keys and the loads: every used binding has the textures a lookup
+  // of its key gives, up to date (d3d-hle-n6.md 19.6). A mismatch is put right
+  // (the binding reset, the texture loaded), so each is counted once.
+  static uint32_t messages = 0;
+  uint32_t remaining = used_texture_mask, index;
+  while (rex::bit_scan_forward(remaining, &index)) {
+    remaining &= ~(UINT32_C(1) << index);
+    TextureBinding& binding = texture_bindings_[index];
+    if (!binding.key.is_valid) {
+      continue;
+    }
+    const bool separate = IsSignedVersionSeparateForFormat(binding.key);
+    for (uint32_t is_signed = 0; is_signed < 2; ++is_signed) {
+      const bool needed = separate ? (is_signed ? texture_util::IsAnySignSigned(binding.swizzled_signs)
+                                                : texture_util::IsAnySignNotSigned(binding.swizzled_signs))
+                                   : !is_signed;
+      Texture* bound = is_signed ? binding.texture_signed : binding.texture;
+      Texture* expected = nullptr;
+      if (needed) {
+        TextureKey key = binding.key;
+        key.signed_separate = is_signed;
+        if (ResolveTextureKey(key)) {
+          expected = FindTexture(key);
+        }
+      }
+      if (bound != expected) {
+        perf_trace::binding_check_textures.fetch_add(1, std::memory_order_relaxed);
+        if (messages < 64) {
+          ++messages;
+          REXGPU_ERROR("Binding check: kept binding with another texture than its key's");
+          REXGPU_WARN("Binding check: fetch constant {} has a texture its key no longer finds",
+                      index);
+        }
+        binding.Reset();
+        texture_bindings_in_sync_ &= ~(UINT32_C(1) << index);
+        UpdateTextureBindingsImpl(UINT32_C(1) << index);
+        break;
+      }
+      if (!bound) {
+        continue;
+      }
+      bool outdated;
+      {
+        auto global_lock = global_critical_region_.Acquire();
+        outdated = bound->base_outdated(global_lock) || bound->mips_outdated(global_lock);
+      }
+      if (!outdated) {
+        continue;
+      }
+      if (texture_became_outdated_.load(std::memory_order_acquire)) {
+        // Outdated since this draw's reset: the next draw's reset covers it.
+        perf_trace::binding_check_outdated_racing.fetch_add(1, std::memory_order_relaxed);
+        continue;
+      }
+      perf_trace::binding_check_outdated.fetch_add(1, std::memory_order_relaxed);
+      if (messages < 64) {
+        ++messages;
+        REXGPU_ERROR("Binding check: kept binding with an outdated texture");
+        REXGPU_WARN("Binding check: fetch constant {} kept an outdated texture", index);
+      }
+      LoadTextureData(*bound);
+    }
   }
 }
 

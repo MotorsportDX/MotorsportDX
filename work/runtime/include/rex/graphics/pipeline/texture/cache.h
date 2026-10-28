@@ -623,6 +623,10 @@ class TextureCache {
   // create the texture - if it's nullptr, occasionally a recreation attempt
   // should be made.
   Texture* FindOrCreateTexture(TextureKey key);
+  // The key FindOrCreateTexture looks up for a binding's key: the resolution
+  // scale and the scene's scale decided, reduced to what the host supports.
+  // False where it would return nullptr without creating anything.
+  bool ResolveTextureKey(TextureKey& key);
   // The texture of key if it exists (a key from Texture::key(), with the
   // resolution scale decided).
   Texture* FindTexture(const TextureKey& key) const;
@@ -654,10 +658,28 @@ class TextureCache {
   static void BindingInfoFromFetchConstant(const xenos::xe_gpu_texture_fetch_t& fetch,
                                            TextureKey& key_out, uint8_t* swizzled_signs_out);
 
+  // Why the bindings are reset (the counts of REX_N4_TEXTURE_KEYS,
+  // d3d-hle-n6.md 19.6): the frame start, a texture outdated by the GPU (a
+  // resolve, memexport), by the CPU, by both, or textures destroyed.
+  enum class BindingResetCause : uint8_t {
+    kFrame,
+    kOutdatedByGpu,
+    kOutdatedByCpu,
+    kOutdatedByBoth,
+    kDestroyed,
+    kCount,
+  };
   // Makes all texture bindings invalid. Also requesting textures after calling
   // this will cause another attempt to create a texture or to untile it if
   // there was an error.
-  void ResetTextureBindings(bool from_destructor = false);
+  void ResetTextureBindings(bool from_destructor = false,
+                            BindingResetCause cause = BindingResetCause::kDestroyed);
+  // Makes the valid bindings of mask invalid.
+  void ResetTextureBindingsOf(uint32_t mask, BindingResetCause cause,
+                              bool from_destructor = false);
+  // The valid bindings whose textures are outdated, or missing where the key
+  // needs one (a failed creation or load to try again).
+  uint32_t GetBindingsToReload() const;
 
   const TextureBinding* GetValidTextureBinding(uint32_t fetch_constant_index) const {
     const TextureBinding& binding = texture_bindings_[fetch_constant_index];
@@ -751,8 +773,10 @@ class TextureCache {
 
   // Whether a texture has become outdated (a memory watch has been triggered),
   // so need to recheck if textures aren't outdated, disregarding whether fetch
-  // constants have been changed.
-  std::atomic<bool> texture_became_outdated_{false};
+  // constants have been changed: kOutdatedByGpu and kOutdatedByCpu.
+  static constexpr uint32_t kOutdatedByGpu = UINT32_C(1) << 0;
+  static constexpr uint32_t kOutdatedByCpu = UINT32_C(1) << 1;
+  std::atomic<uint32_t> texture_became_outdated_{0};
 
   std::array<TextureBinding, xenos::kTextureFetchConstantCount> texture_bindings_;
 
@@ -776,6 +800,15 @@ class TextureCache {
   };
   std::unique_ptr<KeyTrace[]> key_trace_;
   void TraceTextureKey(uint32_t index, const xenos::xe_gpu_texture_fetch_t& fetch);
+  // The bindings reset by each cause and not computed again since, with their
+  // textures before the reset (REX_N4_TEXTURE_KEYS).
+  std::array<uint32_t, size_t(BindingResetCause::kCount)> bindings_reset_by_cause_ = {};
+  std::array<std::array<Texture*, 2>, xenos::kTextureFetchConstantCount> reset_textures_ = {};
+  // The binding check of texture_binding_resets (d3d-hle-n6.md 19.6): the in
+  // sync bindings whose texture differs from a lookup of their key, or is
+  // outdated; every Nth binding a reset should cover is left in sync.
+  uint64_t binding_reset_perturb_count_ = 0;
+  void CheckBindingTextures(uint32_t used_texture_mask);
 };
 
 }  // namespace rex::graphics

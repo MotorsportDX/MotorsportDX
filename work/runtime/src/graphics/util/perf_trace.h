@@ -648,8 +648,21 @@ inline RenderTargetGuardCounts render_target_guard;
 // constant has the dwords of the binding's last one, those whose binding stayed
 // the same with other dwords, those whose key changed, and of these the keys
 // equal to one of the binding's last four.
+//
+// And the binding resets by cause (d3d-hle-n6.md 19.6: the frame start, a
+// texture outdated by the GPU, by the CPU, by both, textures destroyed): the
+// resets, the valid bindings reset, the keys computed again for them, those
+// that found the textures they had, those that loaded a texture, the bindings
+// texture_binding_resets kept, and at an outdated reset, the valid bindings
+// with an outdated texture.
+struct BindingResetCounts {
+  uint64_t resets = 0, bindings = 0, keys = 0, same_textures = 0, loads = 0, kept = 0,
+           outdated = 0;
+};
+inline constexpr size_t kBindingResetCauses = 5;
 struct TextureKeyCounts {
   uint64_t recomputes = 0, same_dwords = 0, same_binding = 0, key_changes = 0, recent_keys = 0;
+  BindingResetCounts resets[kBindingResetCauses];
 };
 inline TextureKeyCounts texture_keys;
 inline bool TextureKeysEnabled() {
@@ -664,6 +677,12 @@ inline bool TextureKeysEnabled() {
 // compared with fresh keys, mismatches, comparisons changed on purpose.
 inline std::atomic<uint64_t> binding_checks{0}, binding_check_mismatches{0},
     binding_check_perturbed{0};
+// With texture_binding_resets (d3d-hle-n6.md 19.6): in sync bindings whose
+// texture differs from a lookup of their key, in sync bindings with an
+// outdated texture, those met while another texture became outdated (not
+// counted as mismatches), and the resets left out on purpose.
+inline std::atomic<uint64_t> binding_check_textures{0}, binding_check_outdated{0},
+    binding_check_outdated_racing{0}, binding_check_resets_perturbed{0};
 inline uint64_t host_oplist_replays = 0, host_oplists_decoded = 0;
 inline std::atomic<uint64_t> host_oplists_invalidated{0}, host_oplists_stale{0};
 inline std::atomic<bool> host_check{false};
@@ -987,7 +1006,12 @@ inline void OnSwap() {
                 << binding_checks.exchange(0, std::memory_order_relaxed) << ",\"mismatches\":"
                 << binding_check_mismatches.exchange(0, std::memory_order_relaxed)
                 << ",\"perturbed\":" << binding_check_perturbed.exchange(0, std::memory_order_relaxed)
-                << '}'
+                << ",\"textures\":" << binding_check_textures.exchange(0, std::memory_order_relaxed)
+                << ",\"outdated\":" << binding_check_outdated.exchange(0, std::memory_order_relaxed)
+                << ",\"outdated_racing\":"
+                << binding_check_outdated_racing.exchange(0, std::memory_order_relaxed)
+                << ",\"resets_perturbed\":"
+                << binding_check_resets_perturbed.exchange(0, std::memory_order_relaxed) << '}'
                 << ",\"native_rt_resolve\":{\"resolves\":"
                 << native_resolves.exchange(0, std::memory_order_relaxed) << ",\"textures\":"
                 << native_resolve_textures.exchange(0, std::memory_order_relaxed)
@@ -1170,7 +1194,17 @@ inline void OnSwap() {
                     << ",\"same_dwords\":" << texture_keys.same_dwords
                     << ",\"same_binding\":" << texture_keys.same_binding
                     << ",\"key_changes\":" << texture_keys.key_changes
-                    << ",\"recent_keys\":" << texture_keys.recent_keys << '}';
+                    << ",\"recent_keys\":" << texture_keys.recent_keys;
+      static const char* const kCauseNames[kBindingResetCauses] = {"frame", "gpu", "cpu", "both",
+                                                                   "destroyed"};
+      state->output << ",\"resets\":{";
+      for (size_t i = 0; i < kBindingResetCauses; ++i) {
+        const BindingResetCounts& r = texture_keys.resets[i];
+        state->output << (i ? ",\"" : "\"") << kCauseNames[i] << "\":[" << r.resets << ','
+                      << r.bindings << ',' << r.keys << ',' << r.same_textures << ',' << r.loads
+                      << ',' << r.kept << ',' << r.outdated << ']';
+      }
+      state->output << "}}";
       texture_keys = TextureKeyCounts{};
     }
     if (CaptureSplitEnabled()) {
