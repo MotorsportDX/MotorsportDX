@@ -511,6 +511,7 @@ void PipelineCache::InitializeShaderStorage(const std::filesystem::path& cache_r
             shader_to_translate->type() == xenos::ShaderType::kPixel) {
           std::vector<uint64_t> predicted;
           PredictPixelShaderModifications(*shader_to_translate, translator, predicted);
+          ShaderCompileQueue::BackgroundScope background;
           for (uint64_t modification : predicted) {
             D3D12Shader::D3D12Translation* translation =
                 static_cast<D3D12Shader::D3D12Translation*>(
@@ -1551,6 +1552,10 @@ bool PipelineCache::ConfigurePipelineDescribed(
   }
   pipelines_.emplace(hash, new_pipeline);
   COUNT_profile_set("gpu/pipeline_cache/pipelines", pipelines_.size());
+  if (mod_compile_async_ && runtime_description.pixel_shader) {
+    // A predicted translation's mod waiting in the background is needed now.
+    mod_compile_queue_.Promote(runtime_description.pixel_shader);
+  }
   if (DxbcShaderTranslator::Modification(description.pixel_shader_modification)
           .pixel.scene_scale) {
     perf_trace::scene_variant_pipelines.fetch_add(1, std::memory_order_relaxed);
@@ -1681,6 +1686,9 @@ void PipelineCache::QueueEarlyPipeline(
     early_queue_.push_back(pipeline);
   }
   creation_request_cond_.notify_one();
+  if (mod_compile_async_ && runtime_description.pixel_shader) {
+    mod_compile_queue_.Promote(runtime_description.pixel_shader);
+  }
   early_draws_left_ = kEarlyActiveDraws;
   ++perf_trace::early_pipelines.queued;
 }

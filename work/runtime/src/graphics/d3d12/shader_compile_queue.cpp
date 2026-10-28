@@ -23,6 +23,13 @@ REXCVAR_DEFINE_BOOL(shader_override_async, true, "GPU/D3D12",
 
 namespace rex::graphics::d3d12 {
 
+namespace {
+thread_local uint32_t background_scopes = 0;
+}  // namespace
+
+ShaderCompileQueue::BackgroundScope::BackgroundScope() { ++background_scopes; }
+ShaderCompileQueue::BackgroundScope::~BackgroundScope() { --background_scopes; }
+
 void ShaderCompileQueue::Push(D3D12Shader::D3D12Translation* translation, Job job) {
   {
     std::lock_guard<std::mutex> lock(mutex_);
@@ -32,9 +39,29 @@ void ShaderCompileQueue::Push(D3D12Shader::D3D12Translation* translation, Job jo
     StartWorkers();
     // Counted before a worker can take it, so the count never goes below zero.
     perf_trace::mods_pending.fetch_add(1, std::memory_order_relaxed);
-    jobs_.emplace_back(translation, std::move(job));
+    if (background_scopes) {
+      background_jobs_.emplace_back(translation, std::move(job));
+      background_job_count_.store(background_jobs_.size(), std::memory_order_release);
+    } else {
+      jobs_.emplace_back(translation, std::move(job));
+    }
   }
   cond_.notify_one();
+}
+
+void ShaderCompileQueue::Promote(const D3D12Shader::D3D12Translation* translation) {
+  if (!background_job_count_.load(std::memory_order_acquire)) {
+    return;
+  }
+  std::lock_guard<std::mutex> lock(mutex_);
+  auto it = std::find_if(background_jobs_.begin(), background_jobs_.end(),
+                         [translation](const auto& entry) { return entry.first == translation; });
+  if (it == background_jobs_.end()) {
+    return;
+  }
+  jobs_.push_back(std::move(*it));
+  background_jobs_.erase(it);
+  background_job_count_.store(background_jobs_.size(), std::memory_order_release);
 }
 
 void ShaderCompileQueue::PushPipeline(void* pipeline, PipelineJob job) {
@@ -84,6 +111,8 @@ void ShaderCompileQueue::Stop() {
     std::lock_guard<std::mutex> lock(mutex_);
     stop_ = true;
     jobs_.clear();
+    background_jobs_.clear();
+    background_job_count_.store(0, std::memory_order_release);
     pipeline_jobs_.clear();
   }
   cond_.notify_all();
@@ -110,8 +139,9 @@ void ShaderCompileQueue::WorkerMain() {
   SetThreadPriority(GetCurrentThread(), THREAD_PRIORITY_BELOW_NORMAL);
   std::unique_lock<std::mutex> lock(mutex_);
   while (true) {
-    cond_.wait(lock,
-               [this]() { return stop_ || !jobs_.empty() || !pipeline_jobs_.empty(); });
+    cond_.wait(lock, [this]() {
+      return stop_ || !jobs_.empty() || !pipeline_jobs_.empty() || !background_jobs_.empty();
+    });
     if (stop_) {
       return;
     }
@@ -128,8 +158,10 @@ void ShaderCompileQueue::WorkerMain() {
       lock.lock();
       continue;
     }
-    auto [translation, job] = std::move(jobs_.front());
-    jobs_.pop_front();
+    auto& source = jobs_.empty() ? background_jobs_ : jobs_;
+    auto [translation, job] = std::move(source.front());
+    source.pop_front();
+    background_job_count_.store(background_jobs_.size(), std::memory_order_release);
     lock.unlock();
     Result result{translation, job()};
     {
