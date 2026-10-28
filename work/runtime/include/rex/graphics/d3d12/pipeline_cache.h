@@ -539,6 +539,40 @@ class PipelineCache {
   // Pipeline storage output stream, for preload in the next emulator runs.
   FILE* pipeline_storage_file_ = nullptr;
   std::atomic<bool> pipeline_storage_file_flush_needed_ = false;
+  // The stored descriptions' hashes, read at the start, and those created in
+  // play anyway (docs/analysis/d3d-hle-n6.md 19.3.11: none expected).
+  std::unordered_set<uint64_t> stored_description_hashes_;
+  std::atomic<uint32_t> stored_descriptions_in_play_{0};
+
+  // The D3D12 pipeline library (d3d12_pipeline_library, native path only;
+  // docs/analysis/d3d-hle-n6.md 19.3.11): CreateD3D12Pipeline loads a state
+  // from it before creating one, and stores the states the start creates; the
+  // file is written after the start's creation when it stored any.
+  void OpenPipelineLibrary(const std::filesystem::path& cache_root, uint32_t title_id);
+  // After the start's creation: writes the file (on a thread of its own unless
+  // wait), or deletes it when most of its names went unused.
+  void FinishPipelineLibraryStart(bool wait);
+  void WritePipelineLibrary();
+  void ClosePipelineLibrary();
+  ID3D12PipelineState* CreatePipelineStateWithLibrary(
+      const D3D12_GRAPHICS_PIPELINE_STATE_DESC& state_desc);
+  ID3D12PipelineLibrary* pipeline_library_ = nullptr;
+  // The serialized library it was created from, which must outlive it.
+  std::vector<uint8_t> pipeline_library_blob_;
+  std::filesystem::path pipeline_library_path_;
+  // The names in the file, by its header.
+  uint32_t pipeline_library_file_names_ = 0;
+  std::atomic<bool> pipeline_library_store_{false};
+  std::atomic<uint32_t> pipeline_library_loaded_{0};
+  std::atomic<uint32_t> pipeline_library_stored_{0};
+  // StorePipeline refused the name: taken by a state of another description
+  // (a gap in the name), or by an equal state stored by another thread.
+  std::atomic<uint32_t> pipeline_library_refused_{0};
+  // Loading one name on two threads at once needs the caller's lock.
+  static constexpr size_t kPipelineLibraryLoadLocks = 16;
+  std::mutex pipeline_library_load_locks_[kPipelineLibraryLoadLocks];
+  std::thread pipeline_library_write_thread_;
+  std::atomic<bool> pipeline_library_writing_{false};
 
   // Thread for asynchronous writing to the storage streams.
   void StorageWriteThread();

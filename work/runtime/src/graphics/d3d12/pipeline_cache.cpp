@@ -78,6 +78,13 @@ REXCVAR_DEFINE_BOOL(shader_storage_predicted_translations, true, "GPU/D3D12",
                     "compiling on the workers, so its first draw finds it translated "
                     "(docs/analysis/d3d-hle-n6.md 19.3.10)");
 
+REXCVAR_DEFINE_BOOL(d3d12_pipeline_library, true, "GPU/D3D12",
+                    "On the native path: keep the stored pipelines' states in a D3D12 pipeline "
+                    "library (<cache>/shaders/local), loaded at the start instead of created, so "
+                    "the start does not depend on the driver's own cache "
+                    "(docs/analysis/d3d-hle-n6.md 19.3.11)")
+    .lifecycle(rex::cvar::Lifecycle::kRequiresRestart);
+
 // shader_compile_queue.cpp.
 REXCVAR_DECLARE(bool, shader_override_async);
 // command_processor.cpp.
@@ -777,9 +784,18 @@ void PipelineCache::InitializeShaderStorage(const std::filesystem::path& cache_r
            shader_storage_file_);
   }
 
+  stored_description_hashes_.clear();
+  stored_descriptions_in_play_.store(0, std::memory_order_relaxed);
+  for (const PipelineStoredDescription& pipeline_stored_description :
+       pipeline_stored_descriptions) {
+    stored_description_hashes_.insert(pipeline_stored_description.description_hash);
+  }
+
   // Create the pipelines.
   if (!pipeline_stored_descriptions.empty()) {
     uint64_t pipeline_creation_start_ = rex::chrono::Clock::QueryHostTickCount();
+    OpenPipelineLibrary(cache_root, title_id);
+    pipeline_library_store_.store(pipeline_library_ != nullptr, std::memory_order_release);
 
     // Launch additional creation threads to use all cores to create
     // pipelines faster. Will also be using the main thread, so minus 1.
@@ -798,6 +814,8 @@ void PipelineCache::InitializeShaderStorage(const std::filesystem::path& cache_r
 
     size_t pipelines_created = 0;
     size_t scene_pipelines_created = 0;
+    // A stored description whose shaders or root signature are missing.
+    size_t pipelines_skipped = 0;
     for (const PipelineStoredDescription& pipeline_stored_description :
          pipeline_stored_descriptions) {
       const PipelineDescription& pipeline_description = pipeline_stored_description.description;
@@ -821,6 +839,7 @@ void PipelineCache::InitializeShaderStorage(const std::filesystem::path& cache_r
       PipelineRuntimeDescription pipeline_runtime_description;
       auto vertex_shader_it = shaders_.find(pipeline_description.vertex_shader_hash);
       if (vertex_shader_it == shaders_.end()) {
+        ++pipelines_skipped;
         continue;
       }
       D3D12Shader* vertex_shader = vertex_shader_it->second;
@@ -829,12 +848,14 @@ void PipelineCache::InitializeShaderStorage(const std::filesystem::path& cache_r
       if (!pipeline_runtime_description.vertex_shader ||
           !pipeline_runtime_description.vertex_shader->is_translated() ||
           !pipeline_runtime_description.vertex_shader->is_valid()) {
+        ++pipelines_skipped;
         continue;
       }
       D3D12Shader* pixel_shader;
       if (pipeline_description.pixel_shader_hash) {
         auto pixel_shader_it = shaders_.find(pipeline_description.pixel_shader_hash);
         if (pixel_shader_it == shaders_.end()) {
+          ++pipelines_skipped;
           continue;
         }
         pixel_shader = pixel_shader_it->second;
@@ -843,6 +864,7 @@ void PipelineCache::InitializeShaderStorage(const std::filesystem::path& cache_r
         if (!pipeline_runtime_description.pixel_shader ||
             !pipeline_runtime_description.pixel_shader->is_translated() ||
             !pipeline_runtime_description.pixel_shader->is_valid()) {
+          ++pipelines_skipped;
           continue;
         }
       } else {
@@ -864,6 +886,7 @@ void PipelineCache::InitializeShaderStorage(const std::filesystem::path& cache_r
               DxbcShaderTranslator::Modification(pipeline_description.vertex_shader_modification)
                   .vertex.host_vertex_shader_type));
       if (!pipeline_runtime_description.root_signature) {
+        ++pipelines_skipped;
         continue;
       }
       std::memcpy(&pipeline_runtime_description.description, &pipeline_description,
@@ -949,6 +972,25 @@ void PipelineCache::InitializeShaderStorage(const std::filesystem::path& cache_r
       }
     }
 
+    if (pipeline_library_ && !creation_threads_.empty()) {
+      // The library stores what the start creates: await the creations still
+      // running on the creation threads, as EndSubmission would.
+      CreateQueuedPipelinesOnProcessorThread();
+      bool await_creation_completion_event;
+      {
+        std::lock_guard<std::mutex> lock(creation_request_lock_);
+        await_creation_completion_event = creation_threads_busy_ != 0;
+        if (await_creation_completion_event) {
+          creation_completion_event_->Reset();
+          creation_completion_set_event_ = true;
+        }
+      }
+      if (await_creation_completion_event) {
+        creation_request_cond_.notify_one();
+        rex::thread::Wait(creation_completion_event_.get(), false);
+      }
+    }
+
     REXGPU_INFO(
         "Created {} graphics pipelines ({} of scene draws at a fractional scale; {} states in "
         "DXIL and {} in DXBC so far; not including reading the descriptions) from the storage in "
@@ -958,6 +1000,12 @@ void PipelineCache::InitializeShaderStorage(const std::filesystem::path& cache_r
         dxbc_pipelines_.load(std::memory_order_relaxed),
         (rex::chrono::Clock::QueryHostTickCount() - pipeline_creation_start_) * 1000 /
             rex::chrono::Clock::QueryHostTickFrequency());
+    if (pipelines_skipped) {
+      REXGPU_INFO("Skipped {} stored pipeline descriptions: a shader, its translation or the "
+                  "root signature missing",
+                  pipelines_skipped);
+    }
+    FinishPipelineLibraryStart(offline_pass_);
     // If any pipeline descriptions were corrupted (or the whole file has excess
     // bytes in the end), truncate to the last valid pipeline description.
     rex::filesystem::TruncateStdioFile(
@@ -997,6 +1045,7 @@ void PipelineCache::ShutdownShaderStorage() {
   }
   storage_write_shader_queue_.clear();
   storage_write_pipeline_queue_.clear();
+  ClosePipelineLibrary();
 
   if (pipeline_storage_file_) {
     fclose(pipeline_storage_file_);
@@ -1705,6 +1754,16 @@ bool PipelineCache::ConfigurePipelineDescribed(
   }
   pipelines_.emplace(hash, new_pipeline);
   COUNT_profile_set("gpu/pipeline_cache/pipelines", pipelines_.size());
+  if (stored_description_hashes_.count(hash)) {
+    // A stored description the start did not create (its shaders were missing).
+    const uint32_t in_play =
+        stored_descriptions_in_play_.fetch_add(1, std::memory_order_relaxed) + 1;
+    if (in_play <= 32) {
+      REXGPU_INFO("Pipeline storage: a stored description created in play, VS {:016X}, PS "
+                  "{:016X} ({} so far)",
+                  description.vertex_shader_hash, description.pixel_shader_hash, in_play);
+    }
+  }
   if (mod_compile_async_ && runtime_description.pixel_shader) {
     // A predicted translation's mod waiting in the background is needed now.
     mod_compile_queue_.Promote(runtime_description.pixel_shader);
@@ -4063,9 +4122,8 @@ ID3D12PipelineState* PipelineCache::CreateD3D12Pipeline(
   }
 
   // Create the D3D12 pipeline state object.
-  ID3D12Device* device = command_processor_.GetD3D12Provider().GetDevice();
-  ID3D12PipelineState* state;
-  if (FAILED(device->CreateGraphicsPipelineState(&state_desc, IID_PPV_ARGS(&state)))) {
+  ID3D12PipelineState* state = CreatePipelineStateWithLibrary(state_desc);
+  if (!state) {
     if (runtime_description.pixel_shader != nullptr) {
       REXGPU_ERROR("Failed to create graphics pipeline with VS {:016X}, PS {:016X}",
                    runtime_description.vertex_shader->shader().ucode_data_hash(),
@@ -4087,6 +4145,250 @@ ID3D12PipelineState* PipelineCache::CreateD3D12Pipeline(
   }
   state->SetName(reinterpret_cast<LPCWSTR>(name.c_str()));
   return state;
+}
+
+namespace {
+
+// The pipeline library's file: this header, then the library's serialized
+// blob (docs/analysis/d3d-hle-n6.md 19.3.11).
+struct PipelineLibraryHeader {
+  // 'XEPL'.
+  static constexpr uint32_t kMagic = 0x4C504558;
+  // Changes when the names change.
+  static constexpr uint32_t kVersion = 1;
+  uint32_t magic;
+  uint32_t version;
+  // The names stored in the blob.
+  uint32_t names;
+  uint32_t reserved;
+};
+
+// The name of a state in the library: its description with each shader's
+// bytecode hashed in place of the pointer, so it carries the world (DXIL or
+// DXBC), the mod, the look's defines and the scale. The root signature follows
+// from the bytecode's bindings; a state whose description differs anyway is
+// refused by the library and created.
+std::wstring PipelineLibraryName(const D3D12_GRAPHICS_PIPELINE_STATE_DESC& state_desc) {
+  struct {
+    D3D12_GRAPHICS_PIPELINE_STATE_DESC desc;
+    uint64_t bytecode_hashes[5];
+  } key;
+  std::memset(&key, 0, sizeof(key));
+  std::memcpy(&key.desc, &state_desc, sizeof(state_desc));
+  key.desc.pRootSignature = nullptr;
+  D3D12_SHADER_BYTECODE* stages[] = {&key.desc.VS, &key.desc.PS, &key.desc.DS, &key.desc.HS,
+                                     &key.desc.GS};
+  for (size_t i = 0; i < 5; ++i) {
+    if (stages[i]->pShaderBytecode && stages[i]->BytecodeLength) {
+      key.bytecode_hashes[i] = XXH3_64bits(stages[i]->pShaderBytecode, stages[i]->BytecodeLength);
+    }
+    stages[i]->pShaderBytecode = nullptr;
+  }
+  const XXH128_hash_t hash = XXH3_128bits(&key, sizeof(key));
+  const std::string hex = fmt::format("{:016X}{:016X}", hash.high64, hash.low64);
+  return std::wstring(hex.begin(), hex.end());
+}
+
+}  // namespace
+
+void PipelineCache::OpenPipelineLibrary(const std::filesystem::path& cache_root,
+                                        uint32_t title_id) {
+  ClosePipelineLibrary();
+  if (!REXCVAR_GET(d3d12_pipeline_library) || !command_processor_.draw_back_end_replays() ||
+      render_target_cache_.GetPath() == RenderTargetCache::Path::kPixelShaderInterlock) {
+    return;
+  }
+  ID3D12Device* device = command_processor_.GetD3D12Provider().GetDevice();
+  D3D12_FEATURE_DATA_SHADER_CACHE shader_cache = {};
+  if (FAILED(device->CheckFeatureSupport(D3D12_FEATURE_SHADER_CACHE, &shader_cache,
+                                         sizeof(shader_cache))) ||
+      !(shader_cache.SupportFlags & D3D12_SHADER_CACHE_SUPPORT_LIBRARY)) {
+    REXGPU_INFO("Pipeline library: not supported by the driver; states come from its own cache");
+    return;
+  }
+  ID3D12Device1* device1;
+  if (FAILED(device->QueryInterface(IID_PPV_ARGS(&device1)))) {
+    return;
+  }
+  auto local_root = cache_root / "shaders" / "local";
+  std::error_code error;
+  std::filesystem::create_directories(local_root, error);
+  pipeline_library_path_ = local_root / fmt::format("{:08X}.d3d12.plib", title_id);
+  pipeline_library_file_names_ = 0;
+  pipeline_library_loaded_.store(0, std::memory_order_relaxed);
+  pipeline_library_stored_.store(0, std::memory_order_relaxed);
+  pipeline_library_refused_.store(0, std::memory_order_relaxed);
+
+  const char* dropped = nullptr;
+  if (FILE* file = rex::filesystem::OpenFile(pipeline_library_path_, "rb")) {
+    rex::filesystem::Seek(file, 0, SEEK_END);
+    const int64_t size = rex::filesystem::Tell(file);
+    rex::filesystem::Seek(file, 0, SEEK_SET);
+    PipelineLibraryHeader header;
+    if (size > int64_t(sizeof(header)) && fread(&header, sizeof(header), 1, file) &&
+        header.magic == PipelineLibraryHeader::kMagic &&
+        header.version == PipelineLibraryHeader::kVersion) {
+      pipeline_library_blob_.resize(size_t(size) - sizeof(header));
+      if (fread(pipeline_library_blob_.data(), 1, pipeline_library_blob_.size(), file) ==
+          pipeline_library_blob_.size()) {
+        pipeline_library_file_names_ = header.names;
+      } else {
+        pipeline_library_blob_.clear();
+        dropped = "a short file";
+      }
+    } else {
+      dropped = "another format";
+    }
+    fclose(file);
+  }
+  if (!pipeline_library_blob_.empty()) {
+    const HRESULT result = device1->CreatePipelineLibrary(pipeline_library_blob_.data(),
+                                                          pipeline_library_blob_.size(),
+                                                          IID_PPV_ARGS(&pipeline_library_));
+    if (FAILED(result)) {
+      // Dropped as a whole: D3D12 refuses another driver's or adapter's.
+      pipeline_library_ = nullptr;
+      pipeline_library_blob_.clear();
+      pipeline_library_file_names_ = 0;
+      dropped = result == D3D12_ERROR_DRIVER_VERSION_MISMATCH ? "another driver"
+                : result == D3D12_ERROR_ADAPTER_NOT_FOUND    ? "another adapter"
+                                                             : "refused by D3D12";
+    }
+  }
+  if (!pipeline_library_ &&
+      FAILED(device1->CreatePipelineLibrary(nullptr, 0, IID_PPV_ARGS(&pipeline_library_)))) {
+    pipeline_library_ = nullptr;
+    REXGPU_ERROR("Pipeline library: failed to create an empty library");
+  }
+  device1->Release();
+  if (dropped) {
+    REXGPU_INFO("Pipeline library: the file was dropped ({}); the start stores every state again",
+                dropped);
+  }
+  if (pipeline_library_) {
+    REXGPU_INFO("Pipeline library: {} names, {} bytes, in {}", pipeline_library_file_names_,
+                pipeline_library_blob_.size(), rex::path_to_utf8(pipeline_library_path_));
+  }
+}
+
+ID3D12PipelineState* PipelineCache::CreatePipelineStateWithLibrary(
+    const D3D12_GRAPHICS_PIPELINE_STATE_DESC& state_desc) {
+  ID3D12PipelineState* state = nullptr;
+  std::wstring name;
+  // Not while the file is written, whose serialization may hold the library.
+  const bool library =
+      pipeline_library_ && !pipeline_library_writing_.load(std::memory_order_acquire);
+  if (library) {
+    name = PipelineLibraryName(state_desc);
+    std::lock_guard<std::mutex> lock(
+        pipeline_library_load_locks_[std::hash<std::wstring>()(name) % kPipelineLibraryLoadLocks]);
+    if (SUCCEEDED(pipeline_library_->LoadGraphicsPipeline(name.c_str(), &state_desc,
+                                                          IID_PPV_ARGS(&state)))) {
+      pipeline_library_loaded_.fetch_add(1, std::memory_order_relaxed);
+      return state;
+    }
+    state = nullptr;
+  }
+  ID3D12Device* device = command_processor_.GetD3D12Provider().GetDevice();
+  if (FAILED(device->CreateGraphicsPipelineState(&state_desc, IID_PPV_ARGS(&state)))) {
+    return nullptr;
+  }
+  if (library && pipeline_library_store_.load(std::memory_order_acquire)) {
+    if (SUCCEEDED(pipeline_library_->StorePipeline(name.c_str(), state))) {
+      pipeline_library_stored_.fetch_add(1, std::memory_order_relaxed);
+    } else {
+      pipeline_library_refused_.fetch_add(1, std::memory_order_relaxed);
+    }
+  }
+  return state;
+}
+
+void PipelineCache::FinishPipelineLibraryStart(bool wait) {
+  pipeline_library_store_.store(false, std::memory_order_release);
+  if (!pipeline_library_) {
+    return;
+  }
+  const uint32_t loaded = pipeline_library_loaded_.load(std::memory_order_relaxed);
+  const uint32_t stored = pipeline_library_stored_.load(std::memory_order_relaxed);
+  REXGPU_INFO(
+      "Pipeline library: {} states loaded, {} created and stored, {} names refused, of {} names "
+      "in the file",
+      loaded, stored, pipeline_library_refused_.load(std::memory_order_relaxed),
+      pipeline_library_file_names_);
+  // A library cannot drop names: when most of the file went unused (after a
+  // look, scale or build change), it is deleted, and the next start writes one
+  // of its own states.
+  const uint32_t unused =
+      pipeline_library_file_names_ > loaded ? pipeline_library_file_names_ - loaded : 0;
+  if (unused >= 256 && unused > loaded + stored) {
+    std::error_code error;
+    std::filesystem::remove(pipeline_library_path_, error);
+    REXGPU_INFO("Pipeline library: {} of the file's {} names unused; deleted for the next start",
+                unused, pipeline_library_file_names_);
+    return;
+  }
+  if (!stored) {
+    return;
+  }
+  if (wait) {
+    WritePipelineLibrary();
+  } else {
+    pipeline_library_writing_.store(true, std::memory_order_release);
+    pipeline_library_write_thread_ = std::thread([this]() {
+      WritePipelineLibrary();
+      pipeline_library_writing_.store(false, std::memory_order_release);
+    });
+  }
+}
+
+void PipelineCache::WritePipelineLibrary() {
+  const uint64_t start = rex::chrono::Clock::QueryHostTickCount();
+  const SIZE_T size = pipeline_library_->GetSerializedSize();
+  std::vector<uint8_t> data(sizeof(PipelineLibraryHeader) + size);
+  PipelineLibraryHeader header = {};
+  header.magic = PipelineLibraryHeader::kMagic;
+  header.version = PipelineLibraryHeader::kVersion;
+  header.names =
+      pipeline_library_file_names_ + pipeline_library_stored_.load(std::memory_order_relaxed);
+  std::memcpy(data.data(), &header, sizeof(header));
+  if (FAILED(pipeline_library_->Serialize(data.data() + sizeof(header), size))) {
+    REXGPU_ERROR("Pipeline library: failed to serialize {} bytes", size);
+    return;
+  }
+  // Beside the file and renamed over it, so that a hard exit keeps the last
+  // whole library.
+  auto temporary_path = pipeline_library_path_;
+  temporary_path += ".tmp";
+  FILE* file = rex::filesystem::OpenFile(temporary_path, "wb");
+  bool written = file && fwrite(data.data(), 1, data.size(), file) == data.size();
+  if (file) {
+    written = fclose(file) == 0 && written;
+  }
+  std::error_code error;
+  if (written) {
+    std::filesystem::rename(temporary_path, pipeline_library_path_, error);
+  }
+  if (!written || error) {
+    REXGPU_ERROR("Pipeline library: failed to write {}", rex::path_to_utf8(pipeline_library_path_));
+    return;
+  }
+  REXGPU_INFO("Pipeline library: wrote {} names, {} bytes, in {} milliseconds", header.names,
+              data.size(),
+              (rex::chrono::Clock::QueryHostTickCount() - start) * 1000 /
+                  rex::chrono::Clock::QueryHostTickFrequency());
+}
+
+void PipelineCache::ClosePipelineLibrary() {
+  if (pipeline_library_write_thread_.joinable()) {
+    pipeline_library_write_thread_.join();
+  }
+  pipeline_library_store_.store(false, std::memory_order_release);
+  if (pipeline_library_) {
+    pipeline_library_->Release();
+    pipeline_library_ = nullptr;
+  }
+  pipeline_library_blob_.clear();
+  pipeline_library_blob_.shrink_to_fit();
 }
 
 void PipelineCache::StorageWriteThread() {
