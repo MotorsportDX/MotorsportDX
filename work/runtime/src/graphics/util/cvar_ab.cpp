@@ -15,11 +15,11 @@ REXCVAR_DEFINE_STRING(ab_cvar, "", "GPU",
 REXCVAR_DEFINE_STRING(ab_values, "", "GPU",
                       "In-run A/B: the two values of ab_cvar, separated by a comma")
     .lifecycle(rex::cvar::Lifecycle::kInitOnly);
-REXCVAR_DEFINE_INT32(ab_period_ms, 2000, "GPU",
+REXCVAR_DEFINE_INT32(ab_period_ms, 500, "GPU",
                      "In-run A/B: the length of each side's period of the steady clock")
     .range(10, 3600000)
     .lifecycle(rex::cvar::Lifecycle::kInitOnly);
-REXCVAR_DEFINE_INT32(ab_window_ms, 250, "GPU",
+REXCVAR_DEFINE_INT32(ab_window_ms, 125, "GPU",
                      "In-run A/B: the perf trace's window on a grid of this many milliseconds "
                      "instead of one second, so no window spans a flip (a divisor of ab_period_ms)")
     .range(10, 3600000)

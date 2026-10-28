@@ -3,8 +3,8 @@ sets one cvar to the first value in even periods of the steady clock and to the 
 periods, and labels each perf.jsonl window with its side (docs/e2e/experiments.md, "In-run perf
 A/B"). Also compares separate runs the same way, to set an in-run result against N+N runs.
 
-  e2e.py ... --scenario race --arg ab_cvar=<cvar> --arg ab_values=<a>,<b> --arg ab_period_ms=2000
-  perf_ab.py <run> [--phase race] [--margin-ms 250] [--json <file>]
+  e2e.py ... --scenario race --arg ab_cvar=<cvar> --arg ab_values=<a>,<b>
+  perf_ab.py <run> [--phase race] [--margin-ms 125] [--seconds N] [--json <file>]
   perf_ab.py --runs <run or --repeat dir>... --vs <run or --repeat dir>... [--phase race]
 
 In-run: the windows of the phase (summary.json phase_windows) are grouped by period of the
@@ -13,7 +13,11 @@ drawn before the flip whose GPU times arrive after it, transients of the switch)
 a ratio of sums over a period's windows (per frame or per draw). The paired estimate takes every
 two consecutive periods (one per side) and their difference b - a; drifts of the scene cancel,
 since the pairs alternate between a-then-b and b-then-a. It reports the median of those
-differences, their interquartile range, and a 95% interval of the median from a block bootstrap.
+differences, their interquartile range, and a 95% interval from batch medians: the differences
+in consecutive batches (3 to 10, of 5 or more), each batch's median, and Student's t of their
+spread. Batches of consecutive time hold the scene's slow changes, so the interval stays honest
+where the differences are not independent (on two A/A runs, 70 of 72 intervals over 15
+and 30 s held 0).
 
 Separate runs: each run's value is the ratio of sums over its phase's windows; the difference is
 b - a of the means, with a 95% interval from Welch's t (the spread of a 3+3 perf claim).
@@ -26,7 +30,6 @@ import argparse
 import json
 import math
 import pathlib
-import random
 import statistics
 
 
@@ -74,27 +77,36 @@ def ratio(windows, metric):
     return scale * sum(numerator(w) for w in windows) / total if total else None
 
 
-def block_bootstrap_median(values, block=4, resamples=4000, seed=1):
-    """95% interval of the median of values by a moving block bootstrap (consecutive paired
-    differences share a period, so they are not independent)."""
-    if len(values) < 2:
-        return None, None
-    block = max(1, min(block, len(values)))
-    starts = len(values) - block + 1
-    rng = random.Random(seed)
-    medians = []
-    for _ in range(resamples):
-        sample = []
-        while len(sample) < len(values):
-            first = rng.randrange(starts)
-            sample.extend(values[first:first + block])
-        medians.append(statistics.median(sample[:len(values)]))
-    medians.sort()
-    return medians[int(0.025 * resamples)], medians[int(0.975 * resamples) - 1]
+def batch_interval(values):
+    """95% interval of the median of values from the spread of the medians of consecutive
+    batches (paired differences share periods and the scene drifts, so they are not
+    independent), and that standard error."""
+    batches = max(3, min(10, len(values) // 5))
+    if len(values) < batches:
+        return None, None, None
+    size = len(values) // batches
+    medians = [statistics.median(values[i * size:(i + 1) * size]) for i in range(batches)]
+    se = statistics.stdev(medians) / math.sqrt(batches)
+    middle = statistics.median(values)
+    t = T95[batches - 2]
+    return middle - t * se, middle + t * se, se
 
 
-def in_run(run, phase, margin_ms):
-    windows = load_run(run, phase)
+def first_seconds(windows, seconds):
+    """The windows of the first seconds of the phase (all with None)."""
+    if not seconds:
+        return windows
+    kept, elapsed = [], 0.0
+    for w in windows:
+        if elapsed >= seconds * 1000:
+            break
+        kept.append(w)
+        elapsed += w['window_ms']
+    return kept
+
+
+def in_run(run, phase, margin_ms, seconds=None):
+    windows = first_seconds(load_run(run, phase), seconds)
     labelled = [w for w in windows if 'ab' in w]
     if not labelled:
         raise SystemExit(f'{run}: no windows with an "ab" label in the phase; was ab_cvar set and '
@@ -125,9 +137,9 @@ def in_run(run, phase, margin_ms):
             differences.append(b - a if current % 2 else a - b)
         entry = {'a': sides[0], 'b': sides[1], 'pairs': len(differences)}
         if differences:
-            low, high = block_bootstrap_median(differences)
+            low, high, se = batch_interval(differences)
             quartiles = statistics.quantiles(differences, n=4) if len(differences) >= 2 else [0, 0, 0]
-            entry.update(median_diff=statistics.median(differences), ci95=[low, high],
+            entry.update(median_diff=statistics.median(differences), ci95=[low, high], se=se,
                          iqr=quartiles[2] - quartiles[0])
         result['metrics'][metric] = entry
     return result
@@ -181,13 +193,13 @@ def show(result):
               f"windows {result['windows']} ({result['windows_dropped']} in the margin of "
               f"{result['margin_ms']} ms)")
         print(f"{'metric':24} {'a':>9} {'b':>9} {'median b-a':>11} {'95% interval':>21} "
-              f"{'IQR':>8} {'pairs':>5}")
+              f"{'se':>8} {'IQR':>8} {'pairs':>5}")
         for metric, entry in result['metrics'].items():
             low, high = entry.get('ci95', (None, None))
             print(f"{metric:24} {number(entry['a']):>9} {number(entry['b']):>9} "
                   f"{number(entry.get('median_diff')):>11} "
                   f"{'[' + number(low) + ', ' + number(high) + ']':>21} "
-                  f"{number(entry.get('iqr')):>8} {entry['pairs']:>5}")
+                  f"{number(entry.get('se')):>8} {number(entry.get('iqr')):>8} {entry['pairs']:>5}")
     else:
         print(f"{len(result['runs'])} runs against {len(result['vs'])}  phase {result['phase']}")
         print(f"{'metric':24} {'a':>9} {'b':>9} {'mean b-a':>11} {'95% interval':>21} {'se':>8}")
@@ -205,8 +217,10 @@ def main():
     parser.add_argument('--runs', nargs='+', help='separate runs of side a (or --repeat directories)')
     parser.add_argument('--vs', nargs='+', help='separate runs of side b (or --repeat directories)')
     parser.add_argument('--phase', default='race', help="summary.json phase to read ('' for all windows)")
-    parser.add_argument('--margin-ms', type=float, default=250,
+    parser.add_argument('--margin-ms', type=float, default=125,
                         help='drop windows that start this soon after their flip')
+    parser.add_argument('--seconds', type=float,
+                        help='read only the first this many seconds of the phase (in-run)')
     parser.add_argument('--json', help='also write the result to this file')
     options = parser.parse_args()
     if options.runs or options.vs:
@@ -214,7 +228,7 @@ def main():
             parser.error('separate runs need --runs and --vs and no run')
         result = separate(options.runs, options.vs, options.phase)
     elif options.run:
-        result = in_run(options.run, options.phase, options.margin_ms)
+        result = in_run(options.run, options.phase, options.margin_ms, options.seconds)
     else:
         parser.error('give a run, or --runs and --vs')
     show(result)

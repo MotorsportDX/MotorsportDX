@@ -2,7 +2,7 @@
 e2e.py they read, the input file of the freeze scenario's pulses and the screen events of the
 fast route.
 Run: python outputs/FM4-build/e2e/test_e2e_tools.py"""
-import contextlib, io, json, os, sys, tempfile, time, unittest
+import contextlib, io, json, os, random, sys, tempfile, time, unittest
 from pathlib import Path
 
 HERE = Path(__file__).resolve().parent
@@ -765,10 +765,11 @@ class PerfAbTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as tmp:
             run = Path(tmp)
             lines = [{'window_ms': 1000, 'draws': 1, 'frame_ms': [9.0]}]  # before the race
+            noise = random.Random(1)
             for period in range(100, 140):
                 side = period % 2
                 for step in range(8):
-                    drift = 0.002 * (period * 8 + step - 800)
+                    drift = 0.002 * (period * 8 + step - 800) + noise.gauss(0, 0.03)
                     # The first window after a flip carries frames of the other side.
                     stale = 0.5 if step == 0 else 0.0
                     lines.append(self.window(period, step * 250, side, 3.0 + drift + 0.1 * side + stale))
@@ -783,6 +784,7 @@ class PerfAbTests(unittest.TestCase):
         self.assertLess(gpu['ci95'][0], 0.1 + 1e-9)
         self.assertGreater(gpu['ci95'][1], 0.1 - 1e-9)
         self.assertAlmostEqual(result['metrics']['textures_ms_per_frame']['median_diff'], -0.01, places=6)
+        self.assertLess(gpu['ci95'][1] - gpu['ci95'][0], 0.1)
         self.assertAlmostEqual(result['metrics']['draws_per_frame']['median_diff'], 0.0)
 
     def test_unlabelled_run_fails(self):
