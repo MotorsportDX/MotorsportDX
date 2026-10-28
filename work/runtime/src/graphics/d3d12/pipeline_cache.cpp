@@ -946,9 +946,12 @@ void PipelineCache::InitializeShaderStorage(const std::filesystem::path& cache_r
     }
 
     REXGPU_INFO(
-        "Created {} graphics pipelines ({} of scene draws at a fractional scale; not including "
-        "reading the descriptions) from the storage in {} milliseconds",
+        "Created {} graphics pipelines ({} of scene draws at a fractional scale; {} states in "
+        "DXIL and {} in DXBC so far; not including reading the descriptions) from the storage in "
+        "{} milliseconds",
         pipelines_created, scene_pipelines_created,
+        dxil_pipelines_.load(std::memory_order_relaxed),
+        dxbc_pipelines_.load(std::memory_order_relaxed),
         (rex::chrono::Clock::QueryHostTickCount() - pipeline_creation_start_) * 1000 /
             rex::chrono::Clock::QueryHostTickFrequency());
     // If any pipeline descriptions were corrupted (or the whole file has excess
@@ -1055,6 +1058,17 @@ void PipelineCache::EndSubmission() {
 }
 
 void PipelineCache::SwapCompiledMods(uint64_t retire_submission) {
+  if (shader_overrides_ && shader_overrides_->dxil()) {
+    // The DXIL world's share of the states created, every 1,000 (native_shader_dxil).
+    uint64_t created = dxil_pipelines_.load(std::memory_order_relaxed) +
+                       dxbc_pipelines_.load(std::memory_order_relaxed);
+    if (created / 1000 != pipelines_logged_ / 1000) {
+      pipelines_logged_ = created;
+      REXGPU_INFO("DXIL shaders: {} pipeline states created in DXIL, {} in DXBC",
+                  dxil_pipelines_.load(std::memory_order_relaxed),
+                  dxbc_pipelines_.load(std::memory_order_relaxed));
+    }
+  }
   if (!mod_compile_queue_.HasResults() && !mod_compile_queue_.HasPipelineResults()) {
     return;
   }
@@ -3675,6 +3689,7 @@ ID3D12PipelineState* PipelineCache::CreateD3D12Pipeline(
   const PipelineDescription& description = runtime_description.description;
   // DXBC or DXIL for every shader of the pipeline, never both.
   const bool use_dxil = dxil && PipelineUsesDxil(runtime_description);
+  (use_dxil ? dxil_pipelines_ : dxbc_pipelines_).fetch_add(1, std::memory_order_relaxed);
   auto vertex_binary = [&]() -> const std::vector<uint8_t>& {
     return use_dxil ? runtime_description.vertex_shader->dxil_binary()
                     : runtime_description.vertex_shader->translated_binary();

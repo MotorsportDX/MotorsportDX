@@ -438,6 +438,11 @@ class PipelineCache {
   bool dxil_start_async_ = false;
   // shader_offline_pass (the app's cvar).
   bool offline_pass_ = false;
+  // The states CreateD3D12Pipeline created in each world, and the count last
+  // logged (SwapCompiledMods' thread).
+  std::atomic<uint64_t> dxil_pipelines_{0};
+  std::atomic<uint64_t> dxbc_pipelines_{0};
+  uint64_t pipelines_logged_ = 0;
   bool mod_compile_async_ = false;
   // Pipeline states replaced by hot reload or SwapCompiledMods, and the
   // submission after which the GPU no longer uses them.
