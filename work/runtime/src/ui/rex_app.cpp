@@ -90,7 +90,7 @@ std::string JsonEscape(const std::string& text) {
 // The offline pass (shader_offline_pass): runs after the executable is loaded
 // and before its main thread starts, so the image's containers are as the disc
 // has them.
-void RunShaderOfflinePass(Runtime& runtime) {
+bool RunShaderOfflinePass(Runtime& runtime) {
   FILE* progress_file = nullptr;
   std::string progress_path = REXCVAR_GET(shader_offline_pass_progress);
   if (!progress_path.empty()) {
@@ -149,6 +149,7 @@ void RunShaderOfflinePass(Runtime& runtime) {
   if (progress_file) {
     fclose(progress_file);
   }
+  return ok;
 }
 
 }  // namespace
@@ -564,9 +565,14 @@ void ReXApp::LaunchModule() {
     }
 
     if (REXCVAR_GET(shader_offline_pass)) {
-      RunShaderOfflinePass(*runtime_);
-      app_context().QuitFromUIThread();
-      return;
+      bool ok = RunShaderOfflinePass(*runtime_);
+      // As the window's close does: a hard exit rather than the subsystems'
+      // teardown, which faults with the title's main thread created but never
+      // resumed. The pass has closed its files; the exit code tells the
+      // launcher whether it finished.
+      REXLOG_INFO("Offline pass done; hard-exiting process.");
+      rex::FlushLogging();
+      std::_Exit(ok ? 0 : 1);
     }
 
     auto* graphics_system = runtime_->graphics_system();
