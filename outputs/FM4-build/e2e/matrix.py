@@ -147,6 +147,8 @@ def main():
     parser.add_argument('--cache-copy', action='store_true',
                         help="each cell on a private copy of the BuildRoot's warm caches (e2e.py "
                              '--cache-copy): for an image-only tier beside another game')
+    parser.add_argument('--offline-pass', action='store_true',
+                        help='every cell runs the offline shader pass first (e2e.py --offline-pass)')
     parser.add_argument('--cold-cache', action='store_true',
                         help='every cell on cold shader caches as the cold tier: empty, or those its '
                              'CACHE_FROM cell left (e2e.py --cold-cache, --cache-from)')
@@ -189,6 +191,8 @@ def main():
         extra += ['--quality', options.quality]
     if options.native:
         extra += ['--native']
+    if options.offline_pass:
+        extra += ['--offline-pass']
     if options.cache_copy:
         extra += ['--cache-copy']
     if options.offline_pass:

@@ -1199,6 +1199,24 @@ def without_driving_input(steps):
     return result
 
 
+def offline_pass(command, root, env, out):
+    """The offline shader pass before the run (shader_offline_pass, docs/analysis/d3d-hle-n6.md
+    19.3.9): the same executable, cvars and caches, exiting once the shader storage is translated
+    and compiled. Its time, exit code and last progress line go to <out>/offline-pass.json."""
+    progress = out / 'offline-pass.jsonl'
+    started = time.time()
+    with open(out / 'offline-pass.log', 'w', encoding='utf-8', errors='replace') as log:
+        code = subprocess.call(command + ['--shader_offline_pass=true',
+                                          f'--shader_offline_pass_progress={progress}'],
+                               cwd=root, env=env, stdout=log, stderr=subprocess.STDOUT,
+                               timeout=3600)
+    lines = progress.read_text(encoding='utf-8').splitlines() if progress.is_file() else []
+    result = {'seconds': round(time.time() - started, 1), 'exit': code,
+              'progress': json.loads(lines[-1]) if lines else None}
+    (out / 'offline-pass.json').write_text(json.dumps(result, indent=1), encoding='utf-8')
+    print(f'offline pass: {result["seconds"]} s, exit {code}, {result["progress"]}', flush=True)
+
+
 def run_once(options, out):
     root = Path(options.build_root)
     out.mkdir(parents=True, exist_ok=True)
@@ -1389,6 +1407,8 @@ def run_once(options, out):
         steps = with_race_seconds(steps, options.race_seconds)
     check_actions(steps)
 
+    if options.offline_pass:
+        offline_pass(command, root, env, out)
     n0_trace = env.get('FM4_N0_TRACE') and str(root / env['FM4_N0_TRACE'])
     # The title appends to the trace, so this run's lines start at its present size.
     n0_offset = os.path.getsize(n0_trace) if n0_trace and os.path.isfile(n0_trace) else 0
@@ -2006,6 +2026,10 @@ def main():
     parser.add_argument('--shader-dev', action='store_true',
                         help='shader mod development like pipeline.py --shader-dev: hot reload and '
                              'every look knob live (--arg shader_mod_path=<dir> for another directory)')
+    parser.add_argument('--offline-pass', action='store_true',
+                        help='run the offline shader pass (shader_offline_pass) with the same '
+                             'executable, cvars and caches before the run (docs/analysis/'
+                             'd3d-hle-n6.md 19.3.9); its time in <out>/offline-pass.json')
     parser.add_argument('--race-seconds', type=float,
                         help="measure the race phase this long instead of the scenario's (30 s in "
                              'race), for in-run perf A/Bs (docs/e2e/experiments.md)')
