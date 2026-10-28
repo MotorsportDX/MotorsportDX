@@ -236,6 +236,19 @@ Cells that measure speed (smoke, perf, full, the race scenarios, in-run perf A/B
 - Give each concurrent cell its own `--out` and its own path for any trace you pass (`--env REX_...=<file>`, `FM4_N0_TRACE`), and start the second cell a few seconds after the first.
 - The game's config file next to the executable (`fm4_rex.toml`) is read, never written, unless the settings overlay saves it.
 
+Validation, 28 October 2026 (snapshot `perfab2`, the native path, the parity tier's freeze cell with `--cache-copy`, two runs each; RTX 5070 Ti Laptop GPU with 12 GB):
+
+| Cells | Wall time | Parity | Peak VRAM |
+| --- | --- | --- | --- |
+| `pab4-solo` alone | 7:18 | PASS (run1 against run2) | 3.9 GB |
+| `pab4-c1` and `pab4-c2` at once | 7:27 | PASS within each cell and against `pab4-solo` | 7.3 GB |
+| `pab4-c3` and `pab4-c4` at once | 7:21 | PASS within each cell and against `pab4-solo` | 7.4 GB |
+
+- All 10 runs reached their goal without a crash. The frozen frame's draws and predicated draws a frame stay within 0.1% of the solo cell's.
+- A pair of cells takes the wall time of one cell, so it saves about 7 minutes per pair.
+- The render thread's busy time a frame rises by about 8% beside another game, which is why speed cells still run alone.
+- A byte check (`native_rt_resolve_layout_check=30`) beside a freeze cell found no differing word in 187 layouts, as alone (190 layouts).
+
 ## Frame rate and launcher settings
 
 The harness uses the launcher environment (`pipeline.launch_env`):
