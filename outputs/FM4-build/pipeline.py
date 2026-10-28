@@ -1959,6 +1959,13 @@ def launch_plan(root,disc1,single_tile=False,fixed_vblank=False,frame_rate=None,
                                                   bool(native and msaa_samples==2))
     cvars.update(upscaled)
     description+=upscale_description+quality_note
+    if (native and msaa_samples==2 and 'native_draw_scale' not in cvars and
+            int(cvars.get('draw_resolution_scale_x','1'))>1):
+        # A whole scale of 2 or more at 16:9 through the scene draws' path too, with bit 32: the
+        # resolves write the scene's textures from the render target, 0.15 ms less GPU a race
+        # frame at 2x on a discrete GPU; 1x keeps its loads (d3d-hle-n6.md 19.7.6).
+        cvars.update({'native_draw_scale':cvars['draw_resolution_scale_x'],
+                      'native_draw_scale_variant':'true','native_rt_surfaces':'58'})
     if native and msaa_samples==2 and entry0_scale(entry0)=='s':
         # The title's tiling entry 0 (the boot, the menus, photo mode) at the scene's scale: one
         # pass with 4x MSAA in a private 4x pair, photo mode in its three tiles there

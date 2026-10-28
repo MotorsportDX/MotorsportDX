@@ -593,8 +593,15 @@ class PipelineTests(unittest.TestCase):
         cvars,_,description=plan((1920,1080,1.0),native=True)
         self.assertEqual(scales(cvars),(None,'3/2','122'))
         self.assertIn('render 3/2 (1920x1080)',description)
+        # A whole scale of 2 or more at 16:9 takes the scene draws' path too, with bit 32
+        # (d3d-hle-n6.md 19.7.6); 1x keeps 90.
         cvars,_,description=plan((2560,1440,1.0),native=True)
-        self.assertEqual(scales(cvars),('2',None,'90'))
+        self.assertEqual(scales(cvars),('2','2','122'))
+        self.assertEqual(cvars['native_draw_scale_variant'],'true')
+        self.assertIn('render 2x (2560x1440)',description)
+        cvars,_,_=plan((1280,720,1.0),native=True)
+        self.assertEqual(scales(cvars),(None,None,'90'))
+        self.assertNotIn('native_draw_scale_variant',cvars)
         # 16:10: Vert+, 1280x800 (d3d-hle-n5.md 18.23), the whole 2 through the scene draws' path.
         cvars,_,description=plan((2560,1600,1.5),native=True)
         self.assertEqual(scales(cvars),('2','2','122'))
@@ -618,9 +625,9 @@ class PipelineTests(unittest.TestCase):
         self.assertEqual(pipeline.logical_view(1920,1080),(1280,720,3,2))
         self.assertEqual(pipeline.logical_view(3840,2160),(1280,720,3,1))
         cvars,_,_=plan((3840,2160,2.0),native=True)
-        self.assertEqual(scales(cvars),('3',None,'90'))
+        self.assertEqual(scales(cvars),('3','3','122'))
         cvars,_,_=plan((1920,1080,1.0),native=True,supersample=True)
-        self.assertEqual(scales(cvars),('2',None,'90'))
+        self.assertEqual(scales(cvars),('2','2','122'))
         integrated=(1920,1080,1.5,120,48,120,True)
         cvars,_,description=plan(integrated)
         self.assertEqual(scales(cvars),(None,None,'90'))
@@ -632,6 +639,7 @@ class PipelineTests(unittest.TestCase):
         self.assertEqual(scales(cvars),(None,'3/2','122'))
         cvars,_,_=plan((1920,1080,1.0),native=True,msaa_samples=4)
         self.assertEqual(scales(cvars),('2',None,'26'))
+        self.assertNotIn('native_draw_scale_variant',cvars)
         # The default is the native path at the screen's own scale; RTV (-Rtv) keeps the whole
         # multiple that covers the screen.
         cvars,_,description=plan((1920,1080,1.0))
@@ -642,6 +650,10 @@ class PipelineTests(unittest.TestCase):
         self.assertNotIn('letterboxed',description)
         cvars,_,_=plan((1920,1080,1.0),rov=True)
         self.assertEqual(scales(cvars),('2',None,None))
+        for options in ({'native':False},{'rov':True}):
+            cvars,_,_=plan((2560,1440,1.0),**options)
+            self.assertEqual(scales(cvars),('2',None,None))
+            self.assertNotIn('native_draw_scale_variant',cvars)
         for options in ({'native':False},{'rov':True},{'native':True,'single_tile':True}):
             with self.assertRaises(ValueError):
                 plan((1920,1080,1.0),resolution_scale='panel',**options)

@@ -1050,6 +1050,15 @@ Plan LaunchPlan(const LauncherData& data, const std::string& root, const std::st
       UpscaleSettings(data, options.upscale, cvars, AaMethod(knobs), native && msaa_samples == 2);
   Update(cvars, upscaled);
   description += upscale_description + quality_note;
+  if (native && msaa_samples == 2 && cvars.Get("native_draw_scale").empty() &&
+      std::stoi(cvars.Get("draw_resolution_scale_x", "1")) > 1) {
+    // A whole scale of 2 or more at 16:9 through the scene draws' path too, with bit 32: the
+    // resolves write the scene's textures from the render target, 0.15 ms less GPU a race frame
+    // at 2x on a discrete GPU; 1x keeps its loads (d3d-hle-n6.md 19.7.6).
+    cvars.Set("native_draw_scale", cvars.Get("draw_resolution_scale_x"));
+    cvars.Set("native_draw_scale_variant", "true");
+    cvars.Set("native_rt_surfaces", "58");
+  }
   if (!options.entry0.empty() && options.entry0 != "s" && options.entry0 != "k")
     throw PlanError("Unknown -Entry0 '" + options.entry0 + "'; use s, k.");
   if (native && msaa_samples == 2 && options.entry0 != "k") {

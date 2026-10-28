@@ -341,6 +341,10 @@ picture that fits the screen, at a fractional scale of 1280x720 where it needs o
 at 9/4, 2880x1620, letterboxed). The launcher sets `native_draw_scale` and the
 `native_rt_surfaces` the fraction needs together ([D3D-level HLE,
 18.19](analysis/d3d-hle-n5.md#1819-increment-3-the-screens-own-resolution-in-the-launcher-25-october-2026)).
+A whole scale of 2 or more takes the same path (`native_draw_scale` at that scale with
+`native_draw_scale_variant`), so the resolves write the scene's textures straight from the
+render target; 1x keeps loading them from the guest's memory
+([D3D-level HLE, 19.7.6](analysis/d3d-hle-n6.md#1976-step-c-bit-32-at-the-whole-scales-28-october-2026)).
 A screen of another aspect than 16:9 renders its own aspect: wider than 16:9 with more on
 each side (Hor+, 720 lines and a wider logical width: 3440x1440 renders 1720x720 at 2),
 narrower with more above and below (Vert+, 1280 wide and a taller logical height: 2560x1600
