@@ -48,6 +48,12 @@
 #include <filesystem>
 #include <string_view>
 
+REXCVAR_DEFINE_BOOL(shader_offline_pass, false, "GPU",
+                    "The offline shader pass (docs/analysis/d3d-hle-n6.md 19.3.9): translate and "
+                    "compile the shader storage as the start does, then exit before the title "
+                    "runs; shader_offline_pass_progress writes its progress")
+    .lifecycle(rex::cvar::Lifecycle::kRequiresRestart);
+
 REXCVAR_DEFINE_STRING(gpu_plugin, "", "GPU",
                       "GPU emulation plugin to load at startup (e.g. 'xenos'); empty disables "
                       "GPU emulation")
@@ -576,6 +582,11 @@ void ReXApp::LaunchModule() {
         REXLOG_INFO("Initializing shader storage for title {:08X}...", title_id);
         graphics_system->InitializeShaderStorage(runtime_->cache_root(), title_id, true);
       }
+    }
+    if (REXCVAR_GET(shader_offline_pass)) {
+      REXLOG_INFO("Offline shader pass: the shader storage is translated and compiled; exiting");
+      app_context().QuitFromUIThread();
+      return;
     }
 
     if (offline_pass) {

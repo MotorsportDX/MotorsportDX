@@ -1789,7 +1789,54 @@ bool ShaderOverrides::LoadCached(const std::filesystem::path& path, uint64_t key
   }
   binary_out.assign(data.begin() + offset, data.end());
   files_out = std::move(files);
+  if (magic_expected == kDxilCacheMagic) {
+    // Its last use, for PruneDxilCache.
+    std::error_code error;
+    std::filesystem::last_write_time(path, std::filesystem::file_time_type::clock::now(), error);
+  }
   return true;
+}
+
+void ShaderOverrides::PruneDxilCache(uint64_t limit) const {
+  if (dxil_cache_directory_.empty()) {
+    return;
+  }
+  struct File {
+    std::filesystem::path path;
+    std::filesystem::file_time_type time;
+    uint64_t size;
+  };
+  std::vector<File> files;
+  std::error_code error;
+  uint64_t total = 0;
+  for (const auto& item : std::filesystem::directory_iterator(dxil_cache_directory_, error)) {
+    if (item.path().extension() != ".dxil" || !item.is_regular_file(error)) {
+      continue;
+    }
+    File& file = files.emplace_back();
+    file.path = item.path();
+    file.time = item.last_write_time(error);
+    file.size = item.file_size(error);
+    total += file.size;
+  }
+  if (total <= limit) {
+    return;
+  }
+  // The least recently used first.
+  std::sort(files.begin(), files.end(),
+            [](const File& a, const File& b) { return a.time < b.time; });
+  size_t removed = 0;
+  for (const File& file : files) {
+    if (total <= limit) {
+      break;
+    }
+    if (std::filesystem::remove(file.path, error)) {
+      total -= file.size;
+      ++removed;
+    }
+  }
+  REXGPU_INFO("DXIL shaders: the cache pruned by {} least recently used files to {} MB", removed,
+              total >> 20);
 }
 
 void ShaderOverrides::StoreCached(const std::filesystem::path& path, uint64_t key,

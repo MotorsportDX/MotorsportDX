@@ -150,6 +150,9 @@ class ShaderOverrides {
   bool ab_precise() const { return ab_precise_; }
   // native_shader_dxil: the DXIL world, DXC loaded.
   bool dxil() const { return dxil_compiler_ != nullptr; }
+  // The DXIL cache down to limit bytes, the least recently loaded files first
+  // (docs/analysis/d3d-hle-n6.md 19.3.9, part 6).
+  void PruneDxilCache(uint64_t limit = uint64_t(512) << 20) const;
   void MarkPrecise(D3D12Shader::D3D12Translation& translation) const;
 
   // The translation of a native shader contract entry without the DXBC

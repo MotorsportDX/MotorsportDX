@@ -85,6 +85,13 @@ REXCVAR_DECLARE(bool, native_draw_scale_variant);
 // shader_override.cpp.
 REXCVAR_DECLARE(bool, native_shader_dxil);
 
+REXCVAR_DEFINE_STRING(shader_offline_pass_progress, "", "GPU/D3D12",
+                      "A file for the progress of the shader storage's translations at the start, "
+                      "one JSON line about every 250 ms and a last one with \"finished\": the "
+                      "offline pass's page reads it (shader_offline_pass, "
+                      "docs/analysis/d3d-hle-n6.md 19.3.9)")
+    .lifecycle(rex::cvar::Lifecycle::kRequiresRestart);
+
 REXCVAR_DEFINE_INT32(native_shader_dxil_ab_ms, 0, "GPU/D3D12",
                      "Development, with native_shader_dxil: an in-run A/B of the DXIL world "
                      "against the DXBC world, alternating every this many milliseconds (0: off). "
@@ -94,6 +101,61 @@ REXCVAR_DEFINE_INT32(native_shader_dxil_ab_ms, 0, "GPU/D3D12",
     .lifecycle(rex::cvar::Lifecycle::kRequiresRestart);
 
 namespace rex::graphics::d3d12 {
+
+namespace {
+
+// shader_offline_pass_progress: the translations of the storage done and to do.
+class StorageProgress {
+ public:
+  StorageProgress(const std::string& path, size_t total) : total_(total) {
+    if (!path.empty()) {
+      file_ = rex::filesystem::OpenFile(path, "wb");
+    }
+    start_ = std::chrono::steady_clock::now();
+  }
+  ~StorageProgress() {
+    if (file_) {
+      fclose(file_);
+    }
+  }
+  void Done() {
+    size_t done = done_.fetch_add(1, std::memory_order_relaxed) + 1;
+    if (!file_) {
+      return;
+    }
+    auto now = std::chrono::steady_clock::now();
+    std::lock_guard<std::mutex> lock(mutex_);
+    if (now - last_ >= std::chrono::milliseconds(250)) {
+      last_ = now;
+      Write(done, false);
+    }
+  }
+  void Finish() {
+    if (file_) {
+      std::lock_guard<std::mutex> lock(mutex_);
+      Write(done_.load(std::memory_order_relaxed), true);
+    }
+  }
+
+ private:
+  // Needs mutex_.
+  void Write(size_t done, bool finished) {
+    auto elapsed = std::chrono::duration_cast<std::chrono::milliseconds>(
+                       std::chrono::steady_clock::now() - start_)
+                       .count();
+    fmt::print(file_, "{{\"done\": {}, \"total\": {}, \"elapsed_ms\": {}{}}}\n", done, total_,
+               elapsed, finished ? ", \"finished\": true" : "");
+    fflush(file_);
+  }
+
+  FILE* file_ = nullptr;
+  size_t total_;
+  std::atomic<size_t> done_{0};
+  std::mutex mutex_;
+  std::chrono::steady_clock::time_point start_, last_;
+};
+
+}  // namespace
 
 namespace {
 // A pixel shader translated for a scene draw at a fractional scale while the
@@ -455,6 +517,8 @@ void PipelineCache::InitializeShaderStorage(const std::filesystem::path& cache_r
     ucode_dwords.reserve(0xFFFF);
     size_t shaders_translated = 0;
 
+    StorageProgress progress(REXCVAR_GET(shader_offline_pass_progress),
+                             shader_translations_needed.size());
     // Threads overlapping file reading.
     std::mutex shaders_translation_thread_mutex;
     std::condition_variable shaders_translation_thread_cond;
@@ -526,6 +590,7 @@ void PipelineCache::InitializeShaderStorage(const std::filesystem::path& cache_r
             std::lock_guard<std::mutex> lock(shaders_failed_to_translate_mutex);
             shaders_failed_to_translate.push_back(translation);
           }
+          progress.Done();
         }
         // A pixel shader that no stored pipeline names (the disc inventory's):
         // its predicted modifications, with the look mod queued on the workers
@@ -638,6 +703,11 @@ void PipelineCache::InitializeShaderStorage(const std::filesystem::path& cache_r
           delete shader;
         }
       }
+    }
+    progress.Finish();
+    if (shader_overrides_) {
+      // The DXIL cache by last use (native_shader_dxil).
+      shader_overrides_->PruneDxilCache();
     }
     REXGPU_INFO("Translated {} shaders from the storage in {} milliseconds", shaders_translated,
                 (rex::chrono::Clock::QueryHostTickCount() - shader_storage_initialization_start) *
