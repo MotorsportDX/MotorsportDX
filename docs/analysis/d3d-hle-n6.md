@@ -583,6 +583,21 @@ Part 4 of 19.3.2.
 
 **Effort**: 19.3.5 estimates 2 to 3 person-weeks, 7 to 10 hours of AI calendar time by section 9. The design, the code and the short check took about an hour, the check's GPU time included.
 
+**The start's creation threads** (a fix found during 1.4; `e8bf5ce`, snapshot `n14b`, short check of 29 October 2026, 23 minutes).
+
+- **The fault.** `InitializeShaderStorage` means to add creation threads for the stored pipelines, up to all logical processors but one, and to stop them after its creation. Its loop compared with the original count, so it never added any (15 threads of 20 here), and the block that stops them and awaits the start's creations never ran.
+- **The fix**: the loop compares with the needed count (19 here).
+- **The claim**, a warm start (boots at 3/2 on a copy of the BuildRoot's warm cache after the pass, the DXIL world, two a side alternating with `n14a`, which is `dafdebc`'s runtime):
+
+| Measure | With the fix (`n14b-boot1`, `-boot2`) | Without (`n14a-boot1`, `-boot2`) |
+|---|---|---|
+| The title's start: the stored pipelines, all from the library | 97 and 100 ms | 106 and 106 ms |
+| The pass's start, creating and storing them | 334 and 318 ms | 327 and 318 ms |
+| The title's first event | 7.18 and 7.18 s | 7.78 and 7.46 s |
+
+- The fix gains 6 to 9 ms at the title's start; the earlier first event is within the run-to-run spread (6.15 to 7.78 s over these days) and not claimed. The pass's creation is bound by the library's stores.
+- The cold first career with the pass (`n14b-check`): exit 0 with its goal, the race 214.67 fps (p99 6.71 ms), 10 pipelines on the draw path, 533 early, 54 waits (400 ms), within the cold cells' spread; the same 4 log errors as main's runs.
+
 ### 19.4 Item 2: direct D3D12 draws
 
 #### 19.4.1 Today
