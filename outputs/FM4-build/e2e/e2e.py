@@ -1380,6 +1380,8 @@ def run_once(options, out):
     ai_driving = 'engageaionstart' in env.get('FM4_GAME_CMDLINE', '')
     if ai_driving:
         steps = without_driving_input(steps)
+    if options.race_seconds:
+        steps = with_race_seconds(steps, options.race_seconds)
     check_actions(steps)
 
     n0_trace = env.get('FM4_N0_TRACE') and str(root / env['FM4_N0_TRACE'])
@@ -1731,6 +1733,17 @@ def shader_work_line(stats):
             f"longest {stats['longest_frame_ms']:.0f} ms")
 
 
+def with_race_seconds(steps, seconds):
+    """The steps with the wait right after 'phase:race' set to seconds (a longer measured race,
+    for in-run perf A/Bs: docs/e2e/experiments.md)."""
+    steps = [list(step) for step in steps]
+    for index, step in enumerate(steps[:-1]):
+        if step[1] == 'phase:race' and steps[index + 1][1] == 'wait':
+            steps[index + 1][0] = seconds
+            return steps
+    raise SystemExit('--race-seconds: the steps have no wait right after phase:race')
+
+
 def windows_by_phase(marks, total):
     """{phase: [first, end)} perf windows of each phase from its marks (name, windows written
     when it started); a phase ends at the next mark or at total."""
@@ -1950,6 +1963,9 @@ def main():
     parser.add_argument('--shader-dev', action='store_true',
                         help='shader mod development like pipeline.py --shader-dev: hot reload and '
                              'every look knob live (--arg shader_mod_path=<dir> for another directory)')
+    parser.add_argument('--race-seconds', type=float,
+                        help="measure the race phase this long instead of the scenario's (30 s in "
+                             'race), for in-run perf A/Bs (docs/e2e/experiments.md)')
     parser.add_argument('--tail', type=float, default=10, help='seconds to keep running after the last step')
     parser.add_argument('--keep-ppm', action='store_true', help='keep full-resolution captures')
     parser.add_argument('--info', action='store_true',

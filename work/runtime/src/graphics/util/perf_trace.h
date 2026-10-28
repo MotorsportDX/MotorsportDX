@@ -19,6 +19,7 @@
 #include <rex/system/gpu_progress.h>
 #include <rex/ui/present_stats.h>
 
+#include "cvar_ab.h"
 #include "process_cpu.h"
 #include "read_trace.h"
 
@@ -109,6 +110,10 @@ struct State {
   std::ofstream output;
   Wait cause = Wait::kOther;
   uint64_t frequency = 0, origin = 0, window_start = 0, last_swap = 0;
+  // ab_cvar: the side the window's frames were drawn with (-1: off, or the
+  // window before the first flip) and the index of its period.
+  int32_t ab_side = -1;
+  uint64_t ab_period = 0;
   uint64_t max_frame = 0, readback_bytes = 0, upload_bytes = 0;
   uint32_t swaps = 0, draws = 0, copies = 0, readbacks = 0;
   uint64_t wait_ticks[size_t(Wait::kCount)]{};
@@ -986,14 +991,33 @@ inline void OnSwap() {
   state->last_swap = now;
   ++state->swaps;
   const uint64_t elapsed = now - state->window_start;
-  if (elapsed < state->frequency) return;
+  // With ab_cvar, windows end on a grid of ab_window_ms and at each flip
+  // (cvar_ab::OnSwap runs first), so each holds the frames of one side.
+  const cvar_ab::Config* ab = cvar_ab::Get();
+  if (ab) {
+    const cvar_ab::Applied applied = cvar_ab::Current();
+    if (now / ab->window_ns == state->window_start / ab->window_ns &&
+        applied.side == state->ab_side && applied.period == state->ab_period) {
+      return;
+    }
+  } else if (elapsed < state->frequency) {
+    return;
+  }
   const auto ms = [&](uint64_t ticks) { return double(ticks) * 1000.0 / double(state->frequency); };
   static const char* const kNames[] = {"guest_idle", "frame_latency", "resolve_readback",
                                        "occlusion", "memexport", "wait_reg_mem",
                                        "readback_publish", "other"};
   state->output << "{\"t\":" << ms(now - state->origin) / 1000.0
-                << ",\"window_ms\":" << ms(elapsed)
-                << ",\"fps\":" << double(state->swaps) * 1000.0 / ms(elapsed)
+                << ",\"window_ms\":" << ms(elapsed);
+  if (ab && state->ab_side >= 0) {
+    // The side, its value, its period of the steady clock and the window's
+    // start within that period.
+    state->output << ",\"ab\":{\"side\":" << state->ab_side << ",\"value\":\""
+                  << ab->values[state->ab_side] << "\",\"period\":" << state->ab_period
+                  << ",\"offset_ms\":"
+                  << double(state->window_start - state->ab_period * ab->period_ns) / 1e6 << '}';
+  }
+  state->output << ",\"fps\":" << double(state->swaps) * 1000.0 / ms(elapsed)
                 << ",\"frame_max_ms\":" << ms(state->max_frame) << ",\"draws\":" << state->draws
                 << ",\"copies\":" << state->copies << ",\"readbacks\":" << state->readbacks
                 << ",\"readback_kb\":" << (state->readback_bytes >> 10)
@@ -1506,6 +1530,11 @@ inline void OnSwap() {
   state->origin = origin;
   state->window_start = state->last_swap = now;
   state->window_tsc = __rdtsc();
+  if (ab) {
+    const cvar_ab::Applied applied = cvar_ab::Current();
+    state->ab_side = applied.side;
+    state->ab_period = applied.period;
+  }
 }
 
 }  // namespace rex::graphics::perf_trace

@@ -285,6 +285,10 @@
       "provenance": "Original test tooling for this project; no game content or original game function bodies"
     },
     {
+      "path": "outputs/FM4-build/e2e/perf_ab.py",
+      "provenance": "Original test tooling for this project; no game content or original game function bodies"
+    },
+    {
       "path": "outputs/FM4-build/e2e/override_fxc.py",
       "provenance": "Original test tooling for this project; no game content or original game function bodies"
     },
@@ -4779,6 +4783,14 @@
     },
     {
       "path": "work/runtime/src/graphics/util/process_cpu.cpp",
+      "provenance": "runtime-fork"
+    },
+    {
+      "path": "work/runtime/src/graphics/util/cvar_ab.h",
+      "provenance": "runtime-fork"
+    },
+    {
+      "path": "work/runtime/src/graphics/util/cvar_ab.cpp",
       "provenance": "runtime-fork"
     },
     {

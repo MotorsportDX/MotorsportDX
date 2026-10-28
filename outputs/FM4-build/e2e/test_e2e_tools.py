@@ -12,6 +12,7 @@ import cpu_power  # noqa: E402
 import e2e  # noqa: E402
 import frame_diff  # noqa: E402
 import parity  # noqa: E402
+import perf_ab  # noqa: E402
 
 W, H = 96, 64
 
@@ -748,6 +749,56 @@ class ContentImportTests(unittest.TestCase):
                     contextlib.redirect_stdout(output):
                 e2e.import_content(root)
             self.assertIn('names no Disc 2', output.getvalue())
+
+
+class PerfAbTests(unittest.TestCase):
+    """perf_ab.py on a synthetic A/B trace: side b costs 0.1 GPU ms a frame more, under a drift
+    of the scene; and e2e.py --race-seconds."""
+
+    def window(self, period, offset, side, gpu):
+        return {'window_ms': 250, 'draws': 2000 * 60, 'frame_ms': [4.0] * 60,
+                'ab': {'side': side, 'value': ['0', '3'][side], 'period': period, 'offset_ms': offset},
+                'gpu': {'frames': 60, 'frame_ms': gpu}, 'render_thread_busy_ms': 180.0,
+                'cpu_ms': {'draw_textures': 24.0 - 0.6 * side}}
+
+    def test_paired_difference(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            run = Path(tmp)
+            lines = [{'window_ms': 1000, 'draws': 1, 'frame_ms': [9.0]}]  # before the race
+            for period in range(100, 140):
+                side = period % 2
+                for step in range(8):
+                    drift = 0.002 * (period * 8 + step - 800)
+                    # The first window after a flip carries frames of the other side.
+                    stale = 0.5 if step == 0 else 0.0
+                    lines.append(self.window(period, step * 250, side, 3.0 + drift + 0.1 * side + stale))
+            (run / 'perf.jsonl').write_text('\n'.join(json.dumps(l) for l in lines) + '\n')
+            (run / 'summary.json').write_text(json.dumps({'phase_windows': {'race': [1, len(lines)]}}))
+            result = perf_ab.in_run(run, 'race', 250)
+        gpu = result['metrics']['gpu_ms_per_frame']
+        self.assertEqual(result['periods'], [20, 20])
+        self.assertEqual(result['windows_dropped'], 40)
+        self.assertEqual(gpu['pairs'], 39)
+        self.assertAlmostEqual(gpu['median_diff'], 0.1, delta=0.02)
+        self.assertLess(gpu['ci95'][0], 0.1 + 1e-9)
+        self.assertGreater(gpu['ci95'][1], 0.1 - 1e-9)
+        self.assertAlmostEqual(result['metrics']['textures_ms_per_frame']['median_diff'], -0.01, places=6)
+        self.assertAlmostEqual(result['metrics']['draws_per_frame']['median_diff'], 0.0)
+
+    def test_unlabelled_run_fails(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            run = Path(tmp)
+            (run / 'perf.jsonl').write_text(json.dumps({'window_ms': 1000, 'draws': 1}) + '\n')
+            with self.assertRaises(SystemExit):
+                perf_ab.in_run(run, '', 250)
+
+    def test_race_seconds(self):
+        steps = e2e.with_race_seconds(e2e.FAST_SCENARIOS['race'], 90)
+        index = [s[1] for s in steps].index('phase:race')
+        self.assertEqual(steps[index + 1], [90, 'wait', 0])
+        self.assertEqual(e2e.FAST_SCENARIOS['race'][index + 1][0], 30)
+        with self.assertRaises(SystemExit):
+            e2e.with_race_seconds(e2e.SCENARIOS['boot'], 90)
 
 
 if __name__ == '__main__':

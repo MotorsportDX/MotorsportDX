@@ -25,6 +25,7 @@
 #include <sstream>
 #include <utility>
 
+#include "../util/cvar_ab.h"
 #include "../util/perf_trace.h"
 #include "../util/pm4_stats.h"
 
@@ -3370,6 +3371,8 @@ void D3D12CommandProcessor::OnGammaRampPWLValueWritten() {
 void D3D12CommandProcessor::IssueSwap(uint32_t frontbuffer_ptr, uint32_t frontbuffer_width,
                                       uint32_t frontbuffer_height) {
   SCOPE_profile_cpu_f("gpu");
+  // ab_cvar flips first, so the perf trace closes its window at the flip.
+  cvar_ab::OnSwap();
   perf_trace::OnSwap();
   pm4_stats::OnSwap();
   perf_trace::ZoneScope perf_zone(perf_trace::Zone::kSwap);

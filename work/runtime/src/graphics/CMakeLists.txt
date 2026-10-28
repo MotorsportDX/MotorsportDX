@@ -26,6 +26,7 @@ set(REXGPU_XENOS_SOURCES
     util/draw.cpp
     util/read_trace.cpp
     util/process_cpu.cpp
+    util/cvar_ab.cpp
     packet_disassembler.cpp
     primitive_processor.cpp
     pipeline/render_target/cache.cpp

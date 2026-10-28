@@ -40,6 +40,7 @@
 !/outputs/FM4-build/e2e/inventory.py
 !/outputs/FM4-build/e2e/matrix.py
 !/outputs/FM4-build/e2e/override_ab.py
+!/outputs/FM4-build/e2e/perf_ab.py
 !/outputs/FM4-build/e2e/override_fxc.py
 !/outputs/FM4-build/e2e/material_atlas.py
 !/outputs/FM4-build/e2e/look_coverage.py
