@@ -96,7 +96,9 @@ after editing `work/fm4-rex/look` or `work/fm4-rex/passes`, run `build` or use
 
 ### Shaders page
 
-The launcher's Shaders page runs the offline shader pass
+On the native path the game's shaders compile with Microsoft's DirectX Shader Compiler (DXC)
+when its two DLLs are beside the game (`native_shader_dxil`, on by default), and with FXC
+otherwise. The launcher's Shaders page runs the offline shader pass
 ([D3D-level HLE, 19.3.9](analysis/d3d-hle-n6.md#1939-increment-12-design-28-october-2026) and
 [19.3.10](analysis/d3d-hle-n6.md#19310-increment-13-the-games-pixel-shaders-from-the-disc-28-october-2026)).
 The game's executable starts with the active profile's settings and `shader_offline_pass=true`.

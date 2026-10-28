@@ -53,11 +53,17 @@ above.
   the game's D-PAD STEERING and mouse steering are untested.
 - **The first press in some menus is ignored** by the game after several screens open; press
   again.
-- **The game's own look for a moment on the first visit to a track or screen**: the look's
-  shaders compile in the background, and until each is ready (usually within a few seconds of a
-  load) some surfaces, or the whole picture, show the game's original colours. Short pauses
-  can still come in the loads while new graphics states are created. Both go away on later
-  visits (the shader cache).
+- **The first start after an install or an update compiles the shaders.** The launcher opens
+  its Shaders page and runs the shader pass by itself. On a fast PC it takes about a minute, and
+  longer on a slower one such as the ROG Xbox Ally X (not measured yet). The first time, the
+  launcher also downloads Microsoft's DirectX Shader Compiler (32 MB) from GitHub. Without an
+  internet connection the shaders compile with the older compiler (FXC) instead, as before.
+  Skip is allowed: what is left then compiles while you play.
+- **The game's own look for a moment on the first visit to a track or screen**: shaders the pass
+  could not know about (mostly those of a car's or a track's first draw) compile in the
+  background, and until each is ready (usually within a few seconds of a load) some surfaces, or
+  the whole picture, show the game's original colours. Short pauses can still come in the loads
+  while new graphics states are created. Both go away on later visits (the shader cache).
 - **Sun glare** looks different from the Xbox and between quality settings; this is a known
   limit of the emulated GPU, and the default look evens it out.
 - **16-car races at the Low and Medium race quality** (and `xbox`, Medium's earlier name) use

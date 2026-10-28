@@ -429,6 +429,18 @@ Found and fixed on the way:
 |---|---|
 | The pass on empty caches, then a first career at 3/2 on the DXIL path (`n6dx33-check`) | the pass in 53.8 s, exit 0, 6,916 DXC compiles, none failed; the career exit 0 with its goal, no DXC failure in its log, no look mod compiled on the draw path, the race 220.05 fps (p99 6.48 ms) on a cold driver cache; the race's captures are whole |
 
+**Step 4: what a player gets by default** (the main session's task of 29 October 2026 for level 1).
+
+- `native_shader_dxil` is on by default and no longer needs `native_shader_contract`. On the native path with DXC beside the game, the shaders compile with DXC, strict. Without DXC, or with it off, everything stays DXBC, as RTV and ROV always are.
+- The launcher runs the pass once a build, fetching DXC first when it is missing.
+
+| Check | Result |
+|---|---|
+| The launcher's download (`FetchDxc` of `work/fm4-launcher/src/shaders.cpp` in a test program, with no mirror, into empty folders; the project owner's go of 29 October 2026 for one download) | the release URL in 3 s; `dxc_2026_09_29.zip` of 32,287,592 bytes with the pinned SHA-256; the two DLLs with their pinned digests and the three license files beside the game folder |
+| The default settings on `df22435` (snapshot `n6dx34`), a first career at 3/2 on empty caches after its pass (`n6dx34-check`) | the DXIL world on without any cvar; the pass in 53.0 s, 6,916 DXC compiles, none failed; the career exit 0 with its goal, no look mod compiled on the draw path, the race 229.24 fps (p99 5.92 ms); the race's captures are whole |
+| The same without the DLLs (`n6dx34-nodxc`) | "no dxcompiler.dll beside the executable; shaders compile with FXC"; the career exit 0 with its goal, the race 227.38 fps |
+| The launcher | compiles (a scratch build) |
+
 #### 19.3.10 Increment 1.3: the game's pixel shaders from the disc, 28 October 2026
 
 Part 3 of 19.3.2. The number follows 1.2's design (19.3.9).
