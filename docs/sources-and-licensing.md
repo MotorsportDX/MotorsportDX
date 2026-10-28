@@ -93,6 +93,7 @@ Reviewed on 25 October 2026 against the build's CMake files, the link map of `fm
 | AMD FidelityFX SDK (FSR 3.1) and Microsoft `d3dx12.h` | v1.1.4 | MIT | `rexgpu-xenos.dll` with `-Fsr on` | the notice in all copies; see [below](#third-party-code-amd-fidelityfx-sdk-fsr-31) |
 | GNU binutils PowerPC disassembler (`thirdparty/disasm`) | the SDK's commit | GPL 2.0 or later | `rexglue.exe` only, never exported | source and license text if `rexglue.exe` were given to others |
 | DirectX Shader Compiler of the FidelityFX SDK | 1.8.2403 | Microsoft's DXC terms | build time only, with `-Fsr on` | not shipped |
+| DirectX Shader Compiler release (planned for N6's increment 1.2) | v1.9.2609 | Microsoft's DXC terms, with LLVM's NCSA license and MIT | not used yet; fetched on the user's computer by setup and the GUI launcher | not shipped; see [below](#third-party-code-directx-shader-compiler) |
 
 Not built: tiny-AES-c (compiled as a static library that no binary links), Vulkan, SPIR-V, glslang, Tracy, Catch2 and the upstream SDK's own FidelityFX option (`REXGLUE_ENABLE_FIDELITYFX`, off). The GUI launcher uses the Segoe UI fonts of Windows and ships no font. The project's look mods and post passes (`work/fm4-rex/look`, `work/fm4-rex/passes`) are the project's own HLSL; they implement published methods that their comments name: GTAO (Jimenez et al., 2016), interleaved gradient noise (Jimenez, 2014), the ACES fit of Krzysztof Narkowicz (2015), Uchimura's GT curve and the Khronos PBR Neutral curve.
 
@@ -166,6 +167,19 @@ The project owner approved, on 25 October 2026, the download of exactly one pack
 | SDL | SDL 3 (zlib, "Copyright (C) 1997-2026 Sam Lantinga") knows GameInput API v1 and v2 only; `outputs/FM4-build/sdl3-gameinput-v3.patch` adds v3 (the namespace, creation through the loader's `GameInputInitialize`, the controller counts from `controllerInfo` with a null check). `patch_thirdparty` in `pipeline.py` applies it to the fetched source and refuses a mismatch. [Notice](../outputs/FM4-source-control/third-party-notices/SDL-LICENSE.txt) |
 | Exports | `Build.ps1 -Action export` copies `third-party-notices` into the export folder; no file of the package is copied |
 | Pre-commit check | `check-staged-content.py` blocks a file with the text of the package's header or loader |
+
+## Third-party code: DirectX Shader Compiler
+
+Planned for the offline pass of N6's increment 1.2 ([D3D-level HLE, 19.10](analysis/d3d-hle-n6.md#1910-decisions-for-the-project-owner)); nothing of it is used yet, and nothing of it is in the repository. The project owner approved the download and this release on 28 October 2026, and the route below.
+
+| Item | Value |
+|---|---|
+| Source | [DirectX Shader Compiler](https://github.com/microsoft/DirectXShaderCompiler/releases/tag/v1.9.2609) v1.9.2609, "DX Compiler Release for September 2026", published 29 September 2026: `dxc_2026_09_29.zip`, 32,287,592 bytes, SHA-256 `ad31b1fc8443175d204f77a611fdb3ef2ec42759bdc2f1167368de24a4a7e7f1` (the digest GitHub lists for the asset, and the downloaded file's) |
+| Used | `bin/x64/dxcompiler.dll` (22,274,872 bytes, SHA-256 `0689e2fee0a1c9df8662a59680469f24e2a3ad7ce6bbbcc9284f7a83172bfc59`) and `bin/x64/dxil.dll` (1,995,584 bytes, SHA-256 `64be2368211d257a038a7d4ea6bb3e24c878eb8d588c7b8414fccf759b69c2ac`). The release's other files (`dxc.exe`, `dxv.exe`, the arm64 and x86 builds, the headers and import libraries) are not used |
+| License | Three files in the release, read on 28 October 2026: `LICENSE-MS.txt` (Microsoft's software license terms for the DirectX Shader Compiler), `LICENSE-LLVM.txt` (the University of Illinois/NCSA Open Source License of LLVM) and `LICENCE-MIT.txt` (MIT, Microsoft). `LICENSE-MS.txt` allows the distribution of the object code on the release's distributables file list only, and the release carries no such list; distributing also requires end-user terms that protect the code and Microsoft as much and an indemnity |
+| How it reaches the game | It is never distributed by the project. Setup fetches the release into the BuildRoot for builds. The GUI launcher fetches the same release, from the same URL with the same SHA-256, before its offline pass when the two DLLs are not beside it; without a connection the shaders compile with FXC as today. The three license files stay beside the DLLs |
+| Exports | No file of the release, so a launcher on another computer fetches it itself |
+| Not covered | Whether the GUI launcher may be given to others: [distribution](#distribution) allows no binaries today, and the project has no license yet ([open items](#open-items-before-a-public-release)) |
 
 ## Inventory and the pre-commit check
 
