@@ -29,6 +29,7 @@
 #endif
 #include <windows.h>
 #include <objbase.h>
+#include <share.h>
 #endif
 
 namespace rex::input::wheel {
@@ -197,9 +198,8 @@ void WheelHost::Start() {
                                                  nullptr, 0)),
                       L'\0');
     MultiByteToWideChar(CP_UTF8, 0, path.data(), int(path.size()), wide.data(), int(wide.size()));
-    if (_wfopen_s(&record_, wide.c_str(), L"w") != 0) {
-      record_ = nullptr;
-    }
+    // Readable while the host writes it (_wfopen_s would deny other readers).
+    record_ = _wfsopen(wide.c_str(), L"w", _SH_DENYWR);
 #else
     record_ = std::fopen(options_.record_path.c_str(), "w");
 #endif
@@ -551,6 +551,7 @@ void WheelHost::Run() {
   uint64_t last_tick_ns = 0;
   uint64_t last_scan_ns = 0;
   uint64_t last_snapshot_ns = 0;
+  uint64_t last_flush_ns = 0;
   uint64_t last_source_ns = 0;
   uint64_t ticks = 0;
   double tick_sum_ms = 0.0;
@@ -572,6 +573,9 @@ void WheelHost::Run() {
       governor_.SetBlocked(kBlockExit, true);
       governor_.Step(now_s);
       SendForces(now_s, 0.0, 0.0);
+      if (record_) {
+        std::fflush(record_);
+      }
       emergency_done_ = true;
       // Nothing more is sent until the process ends; the thread stays to answer Stop.
       while (!stop_.load(std::memory_order_relaxed)) {
@@ -633,6 +637,12 @@ void WheelHost::Run() {
     const double constant = governor_.Step(now_s);
     const double spring = governor_.ConditionLevel(spring_request);
     SendForces(now_s, constant, spring);
+
+    // A process that is killed keeps what was flushed (the e2e harness ends the game that way).
+    if (record_ && now_ns - last_flush_ns >= 250'000'000ull) {
+      last_flush_ns = now_ns;
+      std::fflush(record_);
+    }
 
     if (now_ns - last_snapshot_ns >= 8'000'000ull) {
       last_snapshot_ns = now_ns;

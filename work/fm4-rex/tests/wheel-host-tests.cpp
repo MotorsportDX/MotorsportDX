@@ -150,6 +150,8 @@ int main(int argc, char** argv) {
 
     host.SetTest(wheel::TestEffect::kSine, 0.4);
     Sleep(1200);
+    // Flushed while running, so a killed process keeps its recording.
+    Check(ReadRecording(record).size() > 100, "the recording is flushed while the host runs");
     host.SetFocus(false);
     Sleep(150);
     host.SetFocus(true);
