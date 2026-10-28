@@ -1736,6 +1736,9 @@ def shader_work_line(stats):
     return (f"shader work: {get('mod_compiles', 'count')} mod compiles on the draw path "
             f"({get('mod_compiles', 'ms') / 1000:.1f} s, longest {get('mod_compiles', 'max_ms'):.0f} ms), "
             f"{get('mod_compiles_worker', 'count')} on workers, {get('mod_swaps', 'count')} swaps; "
+            f"pipelines {get('pipelines', 'count')} on the draw path ({get('pipelines', 'over_4ms')} over "
+            f"4 ms), {get('pipelines_early', 'count')} early, {get('pipeline_waits', 'count')} waits "
+            f"({get('pipeline_waits', 'ms'):.0f} ms, {get('pipeline_waits', 'over_4ms')} over 4 ms); "
             f"frames over 50/100/250 ms {'/'.join(str(v) for v in stats['frames_over_ms'].values())}, "
             f"{stats['frames_over_50ms_mod_compile']} over 50 ms with a mod compile, "
             f"longest {stats['longest_frame_ms']:.0f} ms")

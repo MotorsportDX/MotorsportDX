@@ -20,6 +20,7 @@
 #include <deque>
 #include <mutex>
 #include <set>
+#include <shared_mutex>
 #include <unordered_set>
 #include <utility>
 #include <vector>
@@ -64,6 +65,11 @@ REXCVAR_DEFINE_INT32(d3d12_pipeline_creation_threads, -1, "GPU/D3D12",
 
 REXCVAR_DEFINE_BOOL(d3d12_tessellation_wireframe, false, "GPU/D3D12",
                     "Render tessellation as wireframe");
+
+REXCVAR_DEFINE_BOOL(d3d12_pipeline_early_creation, true, "GPU/D3D12",
+                    "With d3d12_draw_back_end=2: queue a draw's new pipeline on the creation "
+                    "threads where the draw is issued, so that the replay of the list finds it "
+                    "created or waits only for the rest (docs/analysis/d3d-hle-n6.md 19.3.2 part 5)");
 
 // shader_compile_queue.cpp.
 REXCVAR_DECLARE(bool, shader_override_async);
@@ -199,6 +205,12 @@ bool PipelineCache::Initialize() {
       creation_threads_.push_back(std::move(creation_thread));
     }
   }
+  // The creation threads take the root signature (bindless: one of two) and
+  // the translations; hot reload and asynchronous compilation change those in
+  // place.
+  early_creation_ = bindless_resources_used_ && !creation_threads_.empty() &&
+                    !(shader_overrides_ && shader_overrides_->hot_reload()) &&
+                    !REXCVAR_GET(async_shader_compilation);
   return true;
 }
 
@@ -227,6 +239,22 @@ void PipelineCache::Shutdown() {
   // Destroy all pipelines.
   ReleaseRetiredPipelineStates(true);
   current_pipeline_ = nullptr;
+  {
+    std::lock_guard<std::mutex> lock(creation_request_lock_);
+    early_queue_.clear();
+  }
+  for (auto it : early_pipelines_) {
+    ID3D12PipelineState* state = it.second->state.load(std::memory_order_acquire);
+    if (state) {
+      state->Release();
+    }
+    delete it.second;
+  }
+  early_pipelines_.clear();
+  early_known_.clear();
+  early_seeds_.clear();
+  early_seeds_pending_.store(false, std::memory_order_relaxed);
+  std::memset(&early_last_description_, 0, sizeof(early_last_description_));
   for (auto it : pipelines_) {
     ID3D12PipelineState* state = it.second->state.load(std::memory_order_acquire);
     if (state) {
@@ -677,6 +705,11 @@ void PipelineCache::InitializeShaderStorage(const std::filesystem::path& cache_r
           bound_rts, shader_writes_color_targets, shader_writes_depth);
       pipelines_.emplace(pipeline_stored_description.description_hash, new_pipeline);
       COUNT_profile_set("gpu/pipeline_cache/pipelines", pipelines_.size());
+      if (early_creation_) {
+        std::lock_guard<std::mutex> lock(early_mutex_);
+        early_seeds_.push_back(pipeline_stored_description.description_hash);
+        early_seeds_pending_.store(true, std::memory_order_release);
+      }
       if (DxbcShaderTranslator::Modification(pipeline_description.pixel_shader_modification)
               .pixel.scene_scale) {
         ++scene_pipelines_created;
@@ -865,6 +898,12 @@ void PipelineCache::SwapCompiledMods(uint64_t retire_submission) {
   if (!mod_compile_queue_.HasResults()) {
     return;
   }
+  // No creation thread may read a binary while it is replaced: while one
+  // creates an early pipeline, the swap waits for a later call.
+  std::unique_lock<std::shared_mutex> binaries_lock(early_binaries_mutex_, std::defer_lock);
+  if (early_creation_ && !binaries_lock.try_lock()) {
+    return;
+  }
   std::vector<ShaderCompileQueue::Result> compiled;
   mod_compile_queue_.TakeResults(compiled);
   perf_trace::mods_pending.fetch_sub(int64_t(compiled.size()), std::memory_order_relaxed);
@@ -882,14 +921,13 @@ void PipelineCache::SwapCompiledMods(uint64_t retire_submission) {
   // since the driver's compile of one can take hundreds of milliseconds.
   size_t recreated = 0;
   if (!swapped.empty()) {
-    for (const auto& pipeline_entry : pipelines_) {
-      Pipeline* pipeline = pipeline_entry.second;
+    auto recreate = [&](Pipeline* pipeline) {
       // A pixel shader's mod or entry, or a vertex shader's generated HLSL
       // (docs/analysis/shader-contract.md 9).
       if ((!pipeline->description.pixel_shader ||
            swapped.find(pipeline->description.pixel_shader) == swapped.end()) &&
           swapped.find(pipeline->description.vertex_shader) == swapped.end()) {
-        continue;
+        return;
       }
       PipelineRuntimeDescription runtime_description;
       std::memcpy(&runtime_description, &pipeline->description, sizeof(runtime_description));
@@ -903,6 +941,19 @@ void PipelineCache::SwapCompiledMods(uint64_t retire_submission) {
         return state;
       });
       ++recreated;
+    };
+    for (const auto& pipeline_entry : pipelines_) {
+      recreate(pipeline_entry.second);
+    }
+    // Early pipelines not taken yet: those created have the plain binary, the
+    // queued ones will take the compiled one (none is being created now).
+    if (early_creation_) {
+      std::lock_guard<std::mutex> lock(early_mutex_);
+      for (const auto& pipeline_entry : early_pipelines_) {
+        if (pipeline_entry.second->early.load(std::memory_order_acquire) == kEarlyCreated) {
+          recreate(pipeline_entry.second);
+        }
+      }
     }
   }
   REXGPU_INFO("Shader overrides: {} compiled on workers swapped in{}, {} pipelines to recreate",
@@ -1347,9 +1398,17 @@ bool PipelineCache::ConfigurePipelineDescribed(
   }
   PROFILE_PIPELINE_CACHE_MISS();
 
-  Pipeline* new_pipeline = new Pipeline;
-  std::memcpy(&new_pipeline->description, &runtime_description, sizeof(runtime_description));
-  new_pipeline->root_signature.store(runtime_description.root_signature, std::memory_order_release);
+  // An early pipeline (QueueEarlyPipeline) is created when it is taken.
+  Pipeline* new_pipeline =
+      early_creation_ && !use_async ? TakeEarlyPipeline(hash, runtime_description, created_out)
+                                    : nullptr;
+  const bool early = new_pipeline != nullptr;
+  if (!early) {
+    new_pipeline = new Pipeline;
+    std::memcpy(&new_pipeline->description, &runtime_description, sizeof(runtime_description));
+    new_pipeline->root_signature.store(runtime_description.root_signature,
+                                       std::memory_order_release);
+  }
   pipelines_.emplace(hash, new_pipeline);
   COUNT_profile_set("gpu/pipeline_cache/pipelines", pipelines_.size());
   if (DxbcShaderTranslator::Modification(description.pixel_shader_modification)
@@ -1374,7 +1433,7 @@ bool PipelineCache::ConfigurePipelineDescribed(
       creation_queue_.push(new_pipeline);
     }
     creation_request_cond_.notify_one();
-  } else {
+  } else if (!early) {
     const uint64_t create_start = perf_trace::ZoneStart();
     new_pipeline->state.store(CreateD3D12Pipeline(runtime_description), std::memory_order_release);
     if (create_start) {
@@ -1413,6 +1472,166 @@ bool PipelineCache::ConfigurePipelineDescribed(
   *pipeline_handle_out = new_pipeline;
   *root_signature_out = new_pipeline->root_signature.load(std::memory_order_acquire);
   return true;
+}
+
+void PipelineCache::QueueEarlyPipeline(
+    D3D12Shader::D3D12Translation* vertex_shader, D3D12Shader::D3D12Translation* pixel_shader,
+    const PrimitiveProcessor::ProcessingResult& primitive_processing_result,
+    reg::RB_DEPTHCONTROL normalized_depth_control, uint32_t normalized_color_mask,
+    uint32_t bound_depth_and_color_render_target_bits,
+    const uint32_t* bound_depth_and_color_render_target_formats) {
+  if (!early_creation_ || !REXCVAR_GET(d3d12_pipeline_early_creation)) {
+    return;
+  }
+  struct Timed {
+    uint64_t start = perf_trace::Get() ? __rdtsc() : 0;
+    ~Timed() {
+      if (start) {
+        perf_trace::early_pipelines.tsc += __rdtsc() - start;
+      }
+    }
+  } timed;
+  // The replay's description of this draw (the draw back end's check compares
+  // the two).
+  PipelineRuntimeDescription runtime_description;
+  if (!GetCurrentStateDescription(register_file_, vertex_shader, pixel_shader,
+                                  primitive_processing_result, normalized_depth_control,
+                                  normalized_color_mask, bound_depth_and_color_render_target_bits,
+                                  bound_depth_and_color_render_target_formats, runtime_description,
+                                  false, true)) {
+    return;
+  }
+  const PipelineDescription& description = runtime_description.description;
+  if (!std::memcmp(&description, &early_last_description_, sizeof(description))) {
+    return;
+  }
+  std::memcpy(&early_last_description_, &description, sizeof(description));
+  if (early_seeds_pending_.load(std::memory_order_acquire)) {
+    std::lock_guard<std::mutex> lock(early_mutex_);
+    early_known_.insert(early_seeds_.begin(), early_seeds_.end());
+    early_seeds_.clear();
+    early_seeds_pending_.store(false, std::memory_order_relaxed);
+  }
+  const uint64_t hash = XXH3_64bits(&description, sizeof(description));
+  if (!early_known_.insert(hash).second) {
+    return;
+  }
+  Pipeline* pipeline = new Pipeline;
+  std::memcpy(&pipeline->description, &runtime_description, sizeof(runtime_description));
+  pipeline->early.store(kEarlyQueued, std::memory_order_relaxed);
+  {
+    std::lock_guard<std::mutex> lock(early_mutex_);
+    early_pipelines_.emplace(hash, pipeline);
+  }
+  {
+    std::lock_guard<std::mutex> lock(creation_request_lock_);
+    early_queue_.push_back(pipeline);
+  }
+  creation_request_cond_.notify_one();
+  ++perf_trace::early_pipelines.queued;
+}
+
+void PipelineCache::CreateEarlyPipeline(Pipeline* pipeline) {
+  std::shared_lock<std::shared_mutex> binaries_lock(early_binaries_mutex_);
+  uint8_t expected = kEarlyQueued;
+  if (!pipeline->early.compare_exchange_strong(expected, kEarlyCreating,
+                                               std::memory_order_acq_rel)) {
+    // The replay took it first and created it.
+    return;
+  }
+  const uint64_t start = perf_trace::ZoneStart();
+  PipelineRuntimeDescription runtime_description;
+  std::memcpy(&runtime_description, &pipeline->description, sizeof(runtime_description));
+  const PipelineDescription& description = runtime_description.description;
+  const DxbcShaderTranslator::Modification vertex_modification(
+      description.vertex_shader_modification);
+  // As GetCurrentStateDescription's (bindless: one of two root signatures).
+  runtime_description.root_signature = command_processor_.GetRootSignature(
+      static_cast<const DxbcShader*>(&runtime_description.vertex_shader->shader()),
+      runtime_description.pixel_shader
+          ? static_cast<const DxbcShader*>(&runtime_description.pixel_shader->shader())
+          : nullptr,
+      Shader::IsHostVertexShaderTypeDomain(vertex_modification.vertex.host_vertex_shader_type));
+  GeometryShaderKey geometry_shader_key;
+  runtime_description.geometry_shader =
+      GetGeometryShaderKey(
+          description.geometry_shader, vertex_modification,
+          DxbcShaderTranslator::Modification(description.pixel_shader_modification),
+          geometry_shader_key)
+          ? &GetGeometryShader(geometry_shader_key)
+          : nullptr;
+  ID3D12PipelineState* state =
+      runtime_description.root_signature ? CreateD3D12Pipeline(runtime_description) : nullptr;
+  if (start) {
+    perf_trace::AddShaderWork(perf_trace::ShaderWork::kPipelineEarly, perf_trace::Now() - start);
+  }
+  pipeline->state.store(state, std::memory_order_release);
+  {
+    std::lock_guard<std::mutex> lock(early_mutex_);
+    pipeline->description.root_signature = runtime_description.root_signature;
+    pipeline->description.geometry_shader = runtime_description.geometry_shader;
+    pipeline->root_signature.store(runtime_description.root_signature, std::memory_order_release);
+    pipeline->early.store(kEarlyCreated, std::memory_order_release);
+  }
+  early_created_cond_.notify_all();
+}
+
+PipelineCache::Pipeline* PipelineCache::TakeEarlyPipeline(
+    uint64_t hash, const PipelineRuntimeDescription& runtime_description, bool* created_out) {
+  Pipeline* pipeline = nullptr;
+  {
+    std::lock_guard<std::mutex> lock(early_mutex_);
+    auto found_range = early_pipelines_.equal_range(hash);
+    for (auto it = found_range.first; it != found_range.second; ++it) {
+      if (!std::memcmp(&it->second->description.description, &runtime_description.description,
+                       sizeof(runtime_description.description))) {
+        pipeline = it->second;
+        early_pipelines_.erase(it);
+        break;
+      }
+    }
+  }
+  if (!pipeline) {
+    return nullptr;
+  }
+  uint8_t expected = kEarlyQueued;
+  if (pipeline->early.compare_exchange_strong(expected, kEarlyCreating,
+                                              std::memory_order_acq_rel)) {
+    // No creation thread has started it: created here rather than after the
+    // pipelines queued before it.
+    std::memcpy(&pipeline->description, &runtime_description, sizeof(runtime_description));
+    pipeline->root_signature.store(runtime_description.root_signature, std::memory_order_release);
+    const uint64_t create_start = perf_trace::ZoneStart();
+    pipeline->state.store(CreateD3D12Pipeline(runtime_description), std::memory_order_release);
+    if (create_start) {
+      perf_trace::AddShaderWork(perf_trace::ShaderWork::kPipeline,
+                                perf_trace::Now() - create_start);
+    }
+    pipeline->early.store(kEarlyCreated, std::memory_order_release);
+    if (created_out) {
+      *created_out = true;
+    }
+    perf_trace::back_end_replay.early[2].fetch_add(1, std::memory_order_relaxed);
+    return pipeline;
+  }
+  if (expected == kEarlyCreating) {
+    // A creation thread is creating it: only the rest of its creation.
+    const uint64_t wait_start = perf_trace::ZoneStart();
+    {
+      std::unique_lock<std::mutex> lock(early_mutex_);
+      early_created_cond_.wait(lock, [pipeline]() {
+        return pipeline->early.load(std::memory_order_acquire) == kEarlyCreated;
+      });
+    }
+    if (wait_start) {
+      perf_trace::AddShaderWork(perf_trace::ShaderWork::kPipelineWait,
+                                perf_trace::Now() - wait_start);
+    }
+    perf_trace::back_end_replay.early[1].fetch_add(1, std::memory_order_relaxed);
+  } else {
+    perf_trace::back_end_replay.early[0].fetch_add(1, std::memory_order_relaxed);
+  }
+  return pipeline;
 }
 
 bool PipelineCache::TranslateAnalyzedShader(DxbcShaderTranslator& translator,
@@ -3097,6 +3316,8 @@ void PipelineCache::CreateDxbcGeometryShader(GeometryShaderKey key,
 }
 
 const std::vector<uint32_t>& PipelineCache::GetGeometryShader(GeometryShaderKey key) {
+  // The elements stay where they are when others are added.
+  std::lock_guard<std::mutex> lock(geometry_shaders_mutex_);
   auto it = geometry_shaders_.find(key);
   if (it != geometry_shaders_.end()) {
     return it->second;
@@ -3641,6 +3862,7 @@ bool PipelineCache::PrepareRuntimeDescriptionForQueuedCreation(
 void PipelineCache::CreationThread(size_t thread_index) {
   while (true) {
     Pipeline* pipeline_to_create = nullptr;
+    Pipeline* early_pipeline = nullptr;
 
     // Check if need to shut down or set the completion event and dequeue the
     // pipeline if there is any.
@@ -3655,16 +3877,26 @@ void PipelineCache::CreationThread(size_t thread_index) {
         if (thread_index >= creation_threads_shutdown_from_) {
           return;
         }
-        creation_request_cond_.wait(lock);
-        continue;
+        if (early_queue_.empty()) {
+          creation_request_cond_.wait(lock);
+          continue;
+        }
+        // Early pipelines after the queue that EndSubmission awaits.
+        early_pipeline = early_queue_.front();
+        early_queue_.pop_front();
+      } else {
+        // Take the pipeline from the queue and increment the busy thread count
+        // until the pipeline is created - other threads must be able to dequeue
+        // requests, but can't set the completion event until the pipelines are
+        // fully created (rather than just started creating).
+        pipeline_to_create = creation_queue_.top();
+        creation_queue_.pop();
+        ++creation_threads_busy_;
       }
-      // Take the pipeline from the queue and increment the busy thread count
-      // until the pipeline is created - other threads must be able to dequeue
-      // requests, but can't set the completion event until the pipelines are
-      // fully created (rather than just started creating).
-      pipeline_to_create = creation_queue_.top();
-      creation_queue_.pop();
-      ++creation_threads_busy_;
+    }
+    if (early_pipeline) {
+      CreateEarlyPipeline(early_pipeline);
+      continue;
     }
 
     PipelineRuntimeDescription runtime_description;

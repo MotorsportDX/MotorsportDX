@@ -602,13 +602,22 @@ inline bool CaptureSplitEnabled() {
 // (pipeline, viewport, scissor, fixed function, system constants, samplers)
 // and comparisons changed on purpose.
 // With d3d12_draw_back_end=2 also the pipelines the replay created (and its
-// time stamp counter ticks for them) and the draws it dropped.
+// time stamp counter ticks for them), the draws it dropped, and the early
+// pipelines it took (d3d12_pipeline_early_creation): created, still being
+// created (it waited), and still queued (it created them).
 struct alignas(64) BackEndReplayCounts {
   std::atomic<uint64_t> replays{0}, tsc{0}, checks{0}, perturbed{0};
   std::atomic<uint64_t> pipelines{0}, pipeline_tsc{0}, dropped{0};
+  std::atomic<uint64_t> early[3]{};
   std::atomic<uint64_t> mismatches[7]{};
 };
 inline BackEndReplayCounts back_end_replay;
+// d3d12_pipeline_early_creation where the draws are issued: the pipelines
+// queued, and the time stamp counter ticks of the descriptions and the queue.
+struct alignas(64) EarlyPipelineCounts {
+  uint64_t queued = 0, tsc = 0;
+};
+inline EarlyPipelineCounts early_pipelines;
 
 // REX_N4_REPLAY_SPLIT=1 (with the trace): the replay of the deferred command
 // lists by command kind (DeferredCommandList::Command order): time stamp
@@ -720,10 +729,13 @@ inline void CountHostRecord(uint64_t depth, uint64_t pushed) {
 // pixel shaders and the look mods' FXC compiles and override cache loads where
 // the draw is issued (the host render thread or the command processor), the
 // pipelines created for a draw (there, or on the draw back end's replay), and
-// the post passes' FXC compiles. Off it, on the compile workers
-// (shader_override_async): the mods compiled, and the pipelines recreated when
-// a compiled mod replaces the plain translation. Not counted: the start-up's
-// translations and pipelines (InitializeShaderStorage) and hot reload.
+// the post passes' FXC compiles, and the replay's waits for an early pipeline
+// that a creation thread is still creating (d3d12_pipeline_early_creation).
+// Off it, on the compile workers (shader_override_async): the mods compiled,
+// and the pipelines recreated when a compiled mod replaces the plain
+// translation; and on the creation threads, the early pipelines. Not counted:
+// the start-up's translations and pipelines (InitializeShaderStorage) and hot
+// reload.
 enum class ShaderWork : uint32_t {
   kVertexTranslation,
   kPixelTranslation,
@@ -733,11 +745,14 @@ enum class ShaderWork : uint32_t {
   kModSwap,
   kPassCompile,
   kModCompileWorker,
+  kPipelineEarly,
+  kPipelineWait,
   kCount
 };
 inline constexpr const char* kShaderWorkNames[] = {
-    "translations_vs", "translations_ps", "mod_compiles", "mod_cache_loads",
-    "pipelines",       "mod_swaps",       "pass_compiles", "mod_compiles_worker"};
+    "translations_vs", "translations_ps", "mod_compiles",        "mod_cache_loads",
+    "pipelines",       "mod_swaps",       "pass_compiles",       "mod_compiles_worker",
+    "pipelines_early", "pipeline_waits"};
 static_assert(sizeof(kShaderWorkNames) / sizeof(kShaderWorkNames[0]) == size_t(ShaderWork::kCount));
 // The plan's threshold for one piece of work on the draw path (19.3.4).
 constexpr uint64_t kShaderWorkLongNs = 4000000;
@@ -770,7 +785,10 @@ inline void AddShaderWork(ShaderWork kind, uint64_t ns) {
   uint64_t max = counts.max_ns.load(std::memory_order_relaxed);
   while (ns > max && !counts.max_ns.compare_exchange_weak(max, ns, std::memory_order_relaxed)) {
   }
-  if (kind == ShaderWork::kModCompileWorker || kind == ShaderWork::kModSwap) return;
+  if (kind == ShaderWork::kModCompileWorker || kind == ShaderWork::kModSwap ||
+      kind == ShaderWork::kPipelineEarly) {
+    return;
+  }
   if (ns > kShaderWorkLongNs) counts.long_count.fetch_add(1, std::memory_order_relaxed);
   frame_shader_ns.fetch_add(ns, std::memory_order_relaxed);
   if (kind == ShaderWork::kModCompile) {
@@ -1198,6 +1216,12 @@ inline void OnSwap() {
                                      : 0.0)
                   << ",\"dropped\":"
                   << back_end_replay.dropped.exchange(0, std::memory_order_relaxed)
+                  << ",\"early_queued\":" << early_pipelines.queued << ",\"early_ms\":"
+                  << (tsc_per_ms > 0 ? double(early_pipelines.tsc) / tsc_per_ms : 0.0)
+                  << ",\"early\":["
+                  << back_end_replay.early[0].exchange(0, std::memory_order_relaxed) << ','
+                  << back_end_replay.early[1].exchange(0, std::memory_order_relaxed) << ','
+                  << back_end_replay.early[2].exchange(0, std::memory_order_relaxed) << ']'
                   << ",\"mismatches\":[";
     for (size_t i = 0; i < 7; ++i) {
       state->output << (i ? "," : "")
@@ -1205,6 +1229,7 @@ inline void OnSwap() {
     }
     state->output << "]}";
     back_end_capture = BackEndCaptureCounts{};
+    early_pipelines = EarlyPipelineCounts{};
     if (render_target_guard.draws) {
       state->output << ",\"rt_update_guard\":{\"draws\":" << render_target_guard.draws
                     << ",\"skips\":" << render_target_guard.skips

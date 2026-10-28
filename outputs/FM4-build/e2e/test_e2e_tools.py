@@ -520,6 +520,20 @@ class ShaderWorkTests(unittest.TestCase):
                                                          run(stall)['shader_work']['run']]})
         self.assertEqual(len(compare.check_fail(run(moved), repeat)), 2)
 
+    def test_early_pipelines(self):
+        # Early pipelines (19.3.2 part 5) are off the draw path; the replay's waits for them warn.
+        def run(waits):
+            w = self.window()
+            w['shader_work'].update(pipelines=[10, 30.0, 6.0, 2], pipelines_early=[400, 900.0, 60.0, 50],
+                                    pipeline_waits=list(waits))
+            return compare.normalize({'fps_mean': 60, 'errors': {}, 'cache': {'cold': True},
+                                      'shader_work': e2e.shader_work_summary([w], [])})
+        line = e2e.shader_work_line(run((5, 40.0, 20.0, 3))['shader_work']['run'])
+        self.assertIn('pipelines 10 on the draw path (2 over 4 ms), 400 early, 5 waits (40 ms, 3 over 4 ms)', line)
+        warn = compare.check_warn(run((1, 2.0, 2.0, 0)), run((5, 40.0, 20.0, 3)))
+        self.assertTrue(any('pipeline_waits over 4 ms on the draw path 0 -> 3' in w for w in warn))
+        self.assertFalse(any('pipelines_early' in w for w in warn))
+
     def test_matrix_cold_cells(self):
         import matrix
         root = Path('B:/root')

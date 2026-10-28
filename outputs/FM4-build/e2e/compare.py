@@ -28,9 +28,12 @@ CAPTURE_KEYS = ["luma_mean", "black_pct", "saturated_pct"]
 PHASE_KEYS = ["fps_mean", "frame_ms_p99", "cp_busy_ms_per_s_median", "gpu_frame_ms_median"]
 # The shader work of a run (summary.json "shader_work", docs/analysis/d3d-hle-n6.md 19.3.4).
 SHADER_WORK_KINDS = ["mod_compiles", "mod_compiles_worker", "mod_cache_loads", "mod_swaps",
-                     "translations_ps", "translations_vs", "pipelines", "pass_compiles"]
-# Draw path work whose pieces over 4 ms warn when they rise (the plan's threshold).
-SHADER_WORK_LONG_KINDS = ["translations_ps", "translations_vs", "pipelines", "mod_cache_loads"]
+                     "translations_ps", "translations_vs", "pipelines", "pipelines_early",
+                     "pipeline_waits", "pass_compiles"]
+# Draw path work whose pieces over 4 ms warn when they rise (the plan's threshold); the replay's
+# waits for early pipelines (19.3.2 part 5) are on the draw path too.
+SHADER_WORK_LONG_KINDS = ["translations_ps", "translations_vs", "pipelines", "pipeline_waits",
+                          "mod_cache_loads"]
 
 
 def load(path):

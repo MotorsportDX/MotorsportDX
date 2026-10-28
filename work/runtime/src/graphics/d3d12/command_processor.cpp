@@ -4388,6 +4388,12 @@ bool D3D12CommandProcessor::IssueDraw(xenos::PrimitiveType primitive_type, uint3
                                                   pixel_shader_translation)) {
       return false;
     }
+    // A new pipeline is created ahead of the replay.
+    pipeline_cache_->QueueEarlyPipeline(vertex_shader_translation, pixel_shader_translation,
+                                        primitive_processing_result, normalized_depth_control,
+                                        normalized_color_mask,
+                                        bound_depth_and_color_render_target_bits,
+                                        bound_depth_and_color_render_target_formats);
   } else if (!pipeline_cache_->ConfigurePipeline(
                  vertex_shader_translation, pixel_shader_translation,
                  primitive_processing_result, normalized_depth_control, normalized_color_mask,

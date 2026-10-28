@@ -19,9 +19,11 @@
 #include <memory>
 #include <mutex>
 #include <queue>
+#include <shared_mutex>
 #include <string>
 #include <thread>
 #include <unordered_map>
+#include <unordered_set>
 #include <utility>
 #include <vector>
 
@@ -122,6 +124,20 @@ class PipelineCache {
       const uint32_t* bound_depth_and_color_render_target_formats, bool use_async,
       void** pipeline_handle_out, ID3D12RootSignature** root_signature_out,
       bool* created_out = nullptr);
+
+  // d3d12_pipeline_early_creation (d3d-hle-n6.md 19.3.2 part 5), on the thread
+  // that issues the draws with d3d12_draw_back_end=2, after
+  // TranslateShadersForDraw: the description of the pipeline that the replay
+  // will configure for this draw, and if no pipeline with it exists or is
+  // queued, its creation on the creation threads, which the replay then takes
+  // instead of creating it itself.
+  void QueueEarlyPipeline(D3D12Shader::D3D12Translation* vertex_shader,
+                          D3D12Shader::D3D12Translation* pixel_shader,
+                          const PrimitiveProcessor::ProcessingResult& primitive_processing_result,
+                          reg::RB_DEPTHCONTROL normalized_depth_control,
+                          uint32_t normalized_color_mask,
+                          uint32_t bound_depth_and_color_render_target_bits,
+                          const uint32_t* bound_depth_and_color_render_target_formats);
 
   // Returns a pipeline with deferred creation by its handle. May return nullptr
   // if failed to create the pipeline.
@@ -350,6 +366,12 @@ class PipelineCache {
   const std::vector<uint32_t>& GetGeometryShader(GeometryShaderKey key);
 
   ID3D12PipelineState* CreateD3D12Pipeline(const PipelineRuntimeDescription& runtime_description);
+  // Early creation (QueueEarlyPipeline): a creation thread's, and the replay's
+  // take of an early pipeline with the description it looked up (nullptr if
+  // none was queued; otherwise created when it returns).
+  void CreateEarlyPipeline(Pipeline* pipeline);
+  Pipeline* TakeEarlyPipeline(uint64_t hash, const PipelineRuntimeDescription& runtime_description,
+                              bool* created_out);
   bool PrepareRuntimeDescriptionForQueuedCreation(Pipeline* pipeline,
                                                   PipelineRuntimeDescription& runtime_description);
 
@@ -412,6 +434,8 @@ class PipelineCache {
       bindless_sampler_layout_map_;
 
   // Geometry shaders for Xenos primitive types not supported by Direct3D 12.
+  // Locked: the early creation reads them on the creation threads.
+  std::mutex geometry_shaders_mutex_;
   std::unordered_map<GeometryShaderKey, std::vector<uint32_t>, GeometryShaderKey::Hasher>
       geometry_shaders_;
 
@@ -427,6 +451,15 @@ class PipelineCache {
     D3D12Shader::D3D12Translation* pending_vertex_shader = nullptr;
     D3D12Shader::D3D12Translation* pending_pixel_shader = nullptr;
     uint8_t priority = 0;
+    // EarlyState: where an early pipeline's creation is.
+    std::atomic<uint8_t> early{0};
+  };
+  enum EarlyState : uint8_t {
+    kEarlyNone,
+    kEarlyQueued,
+    kEarlyCreating,
+    // Its state and root signature are set, and its description's.
+    kEarlyCreated,
   };
   struct PipelineCreationPriorityComparator {
     bool operator()(const Pipeline* a, const Pipeline* b) const {
@@ -472,6 +505,27 @@ class PipelineCache {
   bool storage_write_thread_shutdown_ = false;
   std::unique_ptr<rex::thread::Thread> storage_write_thread_;
 
+  // d3d12_pipeline_early_creation: possible here (bindless, the draw back end's
+  // replay, no hot reload and no asynchronous compilation).
+  bool early_creation_ = false;
+  // The thread issuing the draws: the last description it looked at, and the
+  // hashes of the descriptions it queued or that the storage created.
+  PipelineDescription early_last_description_ = {};
+  std::unordered_set<uint64_t, rex::IdentityHasher<uint64_t>> early_known_;
+  // Protects early_pipelines_, early_seeds_ and a pipeline's change to
+  // kEarlyCreated (with early_created_cond_).
+  std::mutex early_mutex_;
+  std::condition_variable early_created_cond_;
+  // The early pipelines that the replay has not taken yet, by description hash.
+  std::unordered_multimap<uint64_t, Pipeline*, rex::IdentityHasher<uint64_t>> early_pipelines_;
+  // The hashes of the storage's pipelines, for early_known_ (another thread
+  // loads the storage).
+  std::vector<uint64_t> early_seeds_;
+  std::atomic<bool> early_seeds_pending_{false};
+  // Shared while a creation thread creates an early pipeline from the
+  // translations' binaries, exclusive while SwapCompiledMods replaces them.
+  std::shared_mutex early_binaries_mutex_;
+
   // Pipeline creation threads.
   void CreationThread(size_t thread_index);
   void CreateQueuedPipelinesOnProcessorThread();
@@ -481,6 +535,11 @@ class PipelineCache {
   // when set.
   std::priority_queue<Pipeline*, std::vector<Pipeline*>, PipelineCreationPriorityComparator>
       creation_queue_;
+  // Early pipelines in the order of their draws, after creation_queue_ and not
+  // counted in creation_threads_busy_ (EndSubmission does not await them).
+  // Protected with creation_request_lock_, notify_one creation_request_cond_
+  // when pushed.
+  std::deque<Pipeline*> early_queue_;
   // Number of threads that are currently creating a pipeline - incremented when
   // a pipeline is dequeued (the completion event can't be triggered before this
   // is zero). Protected with creation_request_lock_.
