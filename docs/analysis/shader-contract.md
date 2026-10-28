@@ -1,6 +1,6 @@
 # Native shader contract
 
-Status: stage N5 item of the [native port](d3d-hle.md#82-shaders-on-the-native-path), 28 October 2026. The design was approved by the main session on 27 October 2026; increments 1, 2, 4, 3 and 5 are implemented behind `native_shader_contract` (off by default). The other N5 items are in [d3d-hle-n5.md](d3d-hle-n5.md).
+Status: stage N5 item of the [native port](d3d-hle.md#82-shaders-on-the-native-path), 28 October 2026. The design was approved by the main session on 27 October 2026; increments 1, 2, 4, 3 and 5 are implemented behind `native_shader_contract` (off by default). Increment 6 (vertex shader hooks) is a draft design with open decisions (section 9). The other N5 items are in [d3d-hle-n5.md](d3d-hle-n5.md).
 
 ## Summary
 
@@ -10,7 +10,8 @@ Status: stage N5 item of the [native port](d3d-hle.md#82-shaders-on-the-native-p
 - **Increment 2**: an entry's translation is made without the DXBC translator: the HLSL generator assigns the bindings as the DXBC translator does, and the signatures are checked against those derived from the modification and the ucode analysis. With an empty override cache the DXBC translation draws until a worker compiles the entry. The bindings of all 568 pixel shaders of a career and a photo run match their DXBC translations, and the entry draws byte for byte as before (section 5).
 - **Increment 4**: the per-pass decisions. The car materials draw most of their race draws into the mirrors, which the manifest classes; the project owner kept the mirrors as the scene (section 6).
 - **Increment 3**: declared resources. An entry reads the post passes' textures by name (`srv = ["post:<name>"]`) and PNG files of the look directory (`"file:<name>"`, at most 8, each an 8-bit RGB or RGBA PNG up to 4,096 by 4,096). The race's final combine became an entry that reads the occlusion by name and draws byte for byte as its classic mod; a test pattern from a look file reaches the screen byte for byte as the same values computed in the shader (section 7).
-- **Increment 5**: replacement shaders. An entry's `shader` takes the place of the game shader's HLSL and reads the game's inputs by names the manifest gives to registers (`[pixel.inputs]`). A probe proved the names, packed indices, bindings and signatures byte for byte; the race's final combine is now the project's own tone mapping, written from the documented formula (the project owner's decision of 27 October 2026), and matches the game at the game's knob values within 1 level in 1 pixel of a 2x frame (section 8). Increment 6 (vertex shader hooks) is next; the increments are in section 3.
+- **Increment 5**: replacement shaders. An entry's `shader` takes the place of the game shader's HLSL and reads the game's inputs by names the manifest gives to registers (`[pixel.inputs]`). A probe proved the names, packed indices, bindings and signatures byte for byte; the race's final combine is now the project's own tone mapping, written from the documented formula (the project owner's decision of 27 October 2026), and matches the game at the game's knob values within 1 level in 1 pixel of a 2x frame (section 8). The increments are in section 3.
+- **Increment 6** (draft, 28 October 2026): vertex shader hooks through a vertex HLSL generator that mirrors the DXBC translator, keyed by the ucode keys of the native path, proven byte for byte with every vertex shader of a frame through the generator; the decisions are open (section 9).
 
 ## 1. What ties a look mod to the DXBC translation
 
@@ -421,3 +422,151 @@ BuildRoot `I:\FM4-build-usa`, the native path with `native_shader_contract=true`
 | After the rebase onto `ee2dbba` (`5854933`: `n5sc10-check`, `n5sc10-nat` against `n5sc9-nat`, `n5sc10-game`) | the CPU tests pass, the DXBC fingerprints unchanged; the check's 38 entry checks match, 560 shaders and 1,212 translations with the generator's bindings, 0 mismatches, no DXBC fallback; smoke 3 of 3 cells, races 235.2 and 236.5 fps (p99 5.67 and 5.33 ms), `career` FAIL on the whole run's p99 (33.12 against 17.38 ms, a menu window) with its phases within the limits, `photo` and `photo_view` WARN on the guest's register waits and capture statistics; the match against the game: 10 captures, 0 pixels differ in all 18 comparisons |
 
 Not covered: RTV (out of the gates; the contract is native only), 60 and 120 Hz, the final combine's variants with the vignette and depth of field (classic mods), a replacement in some passes only, and `b`, `position` and `front_face` inputs on the GPU (the CPU tests compile them; the final combine reads none).
+
+## 9. Increment 6: vertex shader hooks (draft)
+
+A draft design, read from the code of `bb922c6`, for the main session's decisions; nothing of it is implemented. The decisions are in 9.3, each with its alternatives and a recommendation.
+
+### 9.1 What the design starts from
+
+- **Vertex shaders have no mods today.** `HlslShaderTranslator::StartTranslation` refuses every shader that is not a pixel shader, and `ProcessVertexFetchInstruction` refuses vertex fetch. Every vertex shader draws its DXBC translation, on every path.
+- **The DXBC translator's vertex path** ([dxbc_translator.cpp](../../work/runtime/src/graphics/pipeline/shader/dxbc_translator.cpp), [dxbc_translator_fetch.cpp](../../work/runtime/src/graphics/pipeline/shader/dxbc_translator_fetch.cpp)):
+  - the prologue (`StartVertexOrDomainShader`, `StartVertexShader_LoadVertexIndex`): every register and every interpolator output zeroed; `SV_VertexID` into `r0.x`, zeroed for the closing vertex of a line loop, endian-swapped by `vertex_index_endian`, offset by `vertex_index_offset`, masked to 24 bits, clamped to `vertex_index_min` and `vertex_index_max`, converted to float. The domain shader types of tessellation take other prologues;
+  - vertex fetch (`ProcessVertexFetchInstruction`): the element's byte address from the fetch constant and the index (floored, or rounded with `is_index_rounded`, times the stride), kept for the `vfetch_mini` instructions after a `vfetch_full`; the needed words loaded raw from shared memory (the SRV `t0`, or the UAV `u0` when `kSysFlag_SharedMemoryIsUAV` says the draw has memexport); the endian swap from the fetch constant (8-in-16, 8-in-32, 16-in-32); the unpacking of the format (the packed 8, 10, 11 and 16-bit formats, the half and full floats, 32-bit integers), signed and unsigned, normalized with the signed mode of `signed_rf_mode` or integer, the exponent adjust, and the destination swizzle with constant 0 and 1;
+  - the exports: `oPos` into a system temporary, `o0` to `o15` into the interpolator outputs of the modification's mask (packed, in register order), and `oPts` (point size, edge flag, vertex kill);
+  - the epilogue (`CompleteVertexOrDomainShader`): W from 1/W unless `kSysFlag_WNotReciprocal`, XY and Z multiplied back by W where the guest returned them divided (`kSysFlag_XYDividedByW`, `kSysFlag_ZDividedByW`, all from `PA_CL_VTE_CNTL`), the user clip planes as clip or cull distances, the guest-to-host clip space transform (`ndc_scale`, `ndc_offset` times W; the native path's jitter and the logical width's horizontal scale already sit in those constants), the vertex kill (a cull distance with the AND rule, else W set to NaN), and the point size.
+- **The signatures** (`WriteInputSignature`, `WriteOutputSignature`): the input is `SV_VertexID`; the outputs are `TEXCOORD0` and up for the interpolators of the mask, `SV_Position`, the clip and cull distances of the modification, and `XEPSIZE` where the point size is written. The pixel shader and the geometry shaders of points and rectangle lists read these.
+- **The vertex shader keys.** The runtime keys a vertex shader by XXH3 over its microcode, and the XDK's vertex fetch rewrite at the draw flush writes the bound vertex layout's fetch instructions into the shader's own microcode ([d3d-hle.md 2.6](d3d-hle.md#26-shaders-and-their-hash-keys), [13.3](d3d-hle.md#133-shader-keys-and-constant-blocks)). One shader of the title therefore has several keys, one per vertex layout it has been drawn with, and a key exists only once the title has drawn with it. The native path keeps these keys (`Shader::ucode_data_hash`, the native draw records' translations). `passes.toml` already lists such siblings by hand: the car paint's motion source is both `8D05A46C3584CA9E` and `BBD01C26B1C45733`, and the glass, lights and cockpit have two keys each.
+- **What increments 1 to 5 give.** The manifest and its parser (only `[[pass]]` and `[[pixel]]`), the pass classes (`Classify`, the host values' W), the live knob slots in `b0`, the bindings assigned by the generator as the DXBC translator does (5.1), the expected signatures and their check, the override cache per ucode hash and modification, the compile off the draw path with the swap (`SwapCompiledMods`), the check mode (`native_shader_contract_check`) and the in-run A/B (`native_shader_contract_ab_ms`). Stage N6's offline pass ([d3d-hle-n6.md 19.3.2](d3d-hle-n6.md#1932-design), part 2) waits for this increment to take vertex shaders through the generator; until then it takes their DXBC translations.
+
+### 9.2 The design
+
+#### 9.2.1 The vertex HLSL generator
+
+`HlslShaderTranslator` takes vertex shaders of the host type `kVertex`, as `xe_vertex_shader(inout XeVertex v)`, mirroring the DXBC translator operation by operation as the pixel path does ("keep both in sync"):
+
+- **The prologue** in the library (`xe_vs_prologue`): the registers and the 16 export registers zeroed, the vertex index as the DXBC translator loads it, from the same system constants.
+- **Vertex fetch** in the library (`xe_vfetch_address`, `xe_vfetch_load`, `xe_vfetch_unpack_<format>`): the generator writes per instruction the address (kept in a variable for the `vfetch_mini` that follow), the load of the needed words through `ByteAddressBuffer xe_shared_memory : register(t0)` or `RWByteAddressBuffer xe_shared_memory_uav : register(u0)` behind the same flag test, the endian swap with the fetch constant's endianness, and the unpacking with the instruction's format, signedness, signed mode, integer flag and exponent adjust as literals. Every format the DXBC translator unpacks is generated; one it refuses stays refused (a translation error, so the fallback).
+- **The ALU and control flow** of the pixel path, unchanged; `StoreResult` gains the vertex targets: `oPos` (`v.position`), `o<n>` (`v.o[n]`), `oPts` (`v.point_size_edge_flag_kill`). Memexport stays refused, as in the pixel path.
+- **Vertex texture fetch** through the pixel path's fetch code; the vertex shader's bindings are assigned by the same mirrored code (5.1), stored with `SetBindingsOnce`, and compared by the check mode.
+- **The epilogue** in the library (`xe_vs_epilogue`): the W, XY and Z conventions, the user clip planes, the guest-to-host transform, the vertex kill and the point size, as `CompleteVertexOrDomainShader`, then the packing of the export registers of the mask into `TEXCOORD0` and up.
+- **Exactness.** The generated code keeps the DXBC translator's operations and their order: `precise` on every temporary, `mad()` where the DXBC translator writes `mad`, a division where it divides (`1/W`), `asfloat` literals for NaN, so that FXC cannot fuse, reorder or fold them. The pixel path reaches byte-identical pictures this way (5.2); the vertex path's position goes into rasterization, where one unit in the last place can move an edge pixel, so 9.2.4 measures it on every vertex shader of a frame, not only on entries.
+- **Out of scope**, a translation error and so the fallback (9.2.6): the domain shader types of tessellation, memexport, and an unsupported fetch. A survey (9.4, step 6a) counts which vertex shaders of a career and a photo run fall back.
+
+The generated HLSL is made at run time and stays out of the repository (2.6), as for pixel shaders.
+
+#### 9.2.2 Hooks
+
+A vertex entry's hooks file is included into the generated shader as a pixel entry's is, with defaults that change nothing:
+
+- `XE_HOOK_VFETCH(fetch, offset, value)`: the unpacked result of each vertex fetch (its fetch constant and word offset as literals), before the destination swizzle;
+- `XE_HOOK_CONSTANT(n, value)`: float constant c<n>, as for pixel shaders (`XE_C(n)` by the vertex shader's packed index);
+- `XE_HOOK_VERTEX_OUTPUT(v, input)`: the exports after the ucode and before the epilogue's guest-to-host transform. `v.position` is the guest's clip space position with the W, XY and Z conventions already applied, so a hook reads and writes an ordinary homogeneous position, before the jitter, the logical width's scale and the viewport conversion; `v.o[n]` are the guest's export registers `o0` to `o15` (those outside the modification's mask are dropped by the epilogue); `v.point_size_edge_flag_kill` is `oPts`; `input` is the vertex after the prologue (the index in `r0.x`).
+
+The library defines `XE_VERTEX_SHADER`, `XE_INTERPOLATOR_MASK` (the modification's mask, so a hook can test whether an export reaches the pixel shader), the pass class (`xe_native_pass()`, 2.2) and the knobs of `params` as for pixel entries.
+
+#### 9.2.3 The manifest
+
+```toml
+[[vertex]]
+hash = ["8D05A46C3584CA9E", "BBD01C26B1C45733"]  # the car paint: one per vertex layout
+hooks = "vs-car-paint.mod.hlsli"
+passes = ["scene", "mirror"]   # optional, as for pixel entries
+params = ["FM4_LOOK_EXAMPLE"]  # optional
+```
+
+- `hash` is a key or a list of keys (decision 1); a key in two entries is refused, and a key may have a pixel and a vertex entry, since the two kinds of keys are separate.
+- `hooks` only: vertex replacements (a `shader` with named inputs and outputs) are a later increment; the parser refuses `shader`, `inputs` and `srv` in a vertex entry.
+- `passes`: the draw's class (2.2), now also computed for draws whose vertex shader has an entry; outside the entry's passes the draw takes the DXBC translation (a vertex `native_plain` bit in the modification's second word, which the translator does not read, as for pixel shaders).
+- The hooks file follows the look directory's rules and is named so that the classic mods' lookup (`shader_<hash>.mod.hlsli`) never takes it as a pixel mod: anything but the `shader_` prefix.
+
+#### 9.2.4 The checks and the gate's byte-identical proof
+
+- **Signatures and bindings.** `native_shader_contract_check` compares, for every vertex shader the DXBC translator translates, the bindings the generator assigns with the DXBC translation's, and for every vertex entry the override's input and output signatures with the DXBC translation's and with those expected from the modification (9.1). Every mismatch is an error, as in increment 2.
+- **Every vertex shader through the generator** (`native_shader_contract_vertex_all`, a development switch, off by default): every vertex shader of the host type `kVertex` draws its generated HLSL without hooks, entry or not. With the in-run A/B (`native_shader_contract_ab_ms`), the periods alternate between the generated vertex shaders and their DXBC translations (the vertex `native_plain` bit), and the pixel shaders do not change. The gate's byte-identical proof is this A/B on a frozen frame at 2x (`taa=0,windshield=0`, `FM4_TILING_SCENARIO=2`): 0 pixels differ in every comparison, over all vertex shaders of the frame at once: the scene, the mirrors, the shadow maps, the environment cube, the post chain's quads and the HUD.
+- **A regression fingerprint.** `fm4_shader_mod_tests` compiles the library's vertex main against a synthetic contract (every export, the epilogue's flags) and records its DXBC fingerprint beside the 414 of the pixel mods, so a later library change that alters vertex code shows in the CPU tests.
+
+#### 9.2.5 The first hooks
+
+- **Without an effect (6a).** A gate look outside the repository with an identity hook entry (`XE_HOOK_VERTEX_OUTPUT` that writes back what it reads) for the car paint's keys: the A/B of the entry against the DXBC translation byte-identical, the pass log showing the entry's draws in `scene` and `mirror`, and the check matching its signatures.
+- **With a visible effect (6b).** A probe in the same gate look: the car paint's hook moves the position by a fixed offset in guest clip space (`v.position.xy += k * v.position.w`, k chosen for 16 host pixels at 2x) and zeroes one export register that the paint's pixel shader reads. At 1:1, in the entry's periods of the A/B the car body is shifted by exactly 16 pixels against the rest of the car (glass, lights, rims, which are other vertex shaders), and the zeroed interpolator shows as the paint's change; in the other periods the frame is the reference. Neither hook goes into the repository: they prove the mechanism, as 5a's probe did.
+- **A hook in the repository** comes with a look decision of the project owner, as 5b did. No look needs one today: the widescreen projection that [d3d-hle.md 8.2](d3d-hle.md#82-shaders-on-the-native-path) gives as the example is done by the logical width in the guest-to-host transform. A candidate is the cockpit camera's field of view as a knob; it would need the post passes' camera (`passes.toml`'s `camera`, read from the vertex shaders' constants) to see the same projection, or the motion vectors, TAA and GTAO would disagree with the picture, so it is a design of its own.
+
+#### 9.2.6 Fallback and what stays the same
+
+- The DXBC translation, with an error naming the entry, the key and the modification, per modification: a host type other than `kVertex`, memexport, an unsupported fetch, a failed compile or a signature mismatch. While a worker compiles an entry, its DXBC translation draws, and `SwapCompiledMods` swaps the vertex translation's pipelines as it does a pixel translation's; the root signature follows the vertex shader's bindings, which the check holds to the DXBC translator's.
+- RTV and `-Rov`: no vertex entry, no generated vertex shader (the contract and the switch are native only). The DXBC translator does not change, so its DXBC is main's, and the 414 fingerprints of the pixel mods stay main's.
+- The override cache keys a vertex entry's binary by its key, modification, generated HLSL, library and hooks, as for pixel entries, so stage N6's offline pass takes vertex entries, and with the switch every vertex shader, the same way.
+
+### 9.3 The decisions
+
+| # | Decision | Recommendation | Cost (person-days) |
+|---|---|---|---|
+| 1 | The manifest's key for vertex entries | the ucode key, one or a list, with a warning for keys that look like an entry's under another layout | 1 |
+| 2 | What hooks see | the guest's exports by register, the position in the guest's clip space before the guest-to-host transform | 1 |
+| 3 | How the byte-identical gate is measured | the in-run A/B with every vertex shader through the generator, plus the signature and binding check | 1.5 |
+| 4 | The first hooks | 6a an identity hook, 6b a probe moving the car paint and zeroing an export, both in a gate look outside the repository; no repository hook without a look decision | 1 |
+| 5 | `passes` for vertex entries | yes, with a vertex `native_plain` bit | 1 |
+| 6 | The generator's scope | `kVertex` only; tessellation and memexport fall back | 0 |
+
+#### 9.3.1 The key
+
+- **A (recommended): the ucode key, a string or a list of keys.** The same key the runtime, the native draw records and `passes.toml` use. The survey (9.4) logs, per vertex shader, its key and a fetch-blind key: XXH3 over the microcode with the fields of every vertex fetch instruction that the rewrite writes (format, stride, offset, signedness, number format, exponent adjust) zeroed. A run that meets a key whose fetch-blind key equals one of an entry's keys' but that is not listed logs a warning once ("vertex shader <key> looks like entry <first key> under another vertex layout; not hooked"), so a new car, track or layout cannot lose a hook without a line in the log. Cost: 1 day with the survey's log.
+- **B: the fetch-blind key itself as the manifest's key** (`family = "<key>"`). It covers layouts that no run has met, which A cannot. It needs the survey first: the rewrite has to change only the fields that are zeroed, which today is an observation of `sub_826EC0C0` (2.6) and not a measurement, and two shaders of the title that differ only in their fetch formats would share a hook (they are then the same shader under two layouts, which is what a hook wants). Cost: 1.5 days, and B can be added to A later without a change to A's entries.
+- **C: the guest's shader object** (the address at `SetVertexShader`): not stable across runs (heap addresses) and not known on a recorded command buffer's replay. Not recommended.
+
+Why A: it is the key every tool of the project already reads, the hook works on the exports and not on the fetches, and the warning closes A's gap at the cost of a log line. If the survey shows that a hooked shader meets layouts in play that the gate runs do not, B follows.
+
+#### 9.3.2 What hooks see
+
+- **A (recommended): the guest's exports by register**, `v.position` in the guest's clip space with the W, XY and Z conventions applied, `v.o[n]`, `v.point_size_edge_flag_kill`, the registers in `input`, at one point before the guest-to-host transform (9.2.2). As the pixel hooks read `p.r[i]` and `XE_C(n)`, the vertex hooks read registers; the meaning of a register is an observation written into the hooks file, as the look's comments do today.
+- **B: named outputs** from the manifest (`[vertex.outputs]`, `position = "oPos"`, `uv = "o0.xy"`), as replacements name their inputs. That is the contract of vertex replacements, a later increment; for hooks it adds a parser and a check for no gain, since a hook writes back into the same registers.
+- **C: the raw `oPos`**, before the W, XY and Z conventions: every hook would carry the three `PA_CL_VTE_CNTL` cases. Not recommended.
+- **D: the position after the guest-to-host transform** (host clip space): a hook would see the jitter, the logical width's scale and the half-pixel offset and could undo them by accident. Not recommended; a hook that needs host pixels reads `ndc_scale` and `ndc_offset` through the library.
+
+#### 9.3.3 How the byte-identical gate is measured
+
+- **A (recommended): the in-run A/B with `native_shader_contract_vertex_all`** on a frozen frame at 2x, every vertex shader of the frame generated in one period and DXBC in the other, 0 pixels differ; with the signature and binding check of every vertex shader translated in a career at 2x. It covers every vertex shader a frame draws, uses the cells and tools of increments 1 to 5 (`ab_compare.py`, `ab_levels.py`), and needs only the switch (1 day with the A/B's vertex bit). Its limit: an output that no pixel reads (an export outside every mask, a clipped vertex) is not seen, and a difference shows as edge pixels whose source the A/B does not name.
+- **B: the vertex outputs compared per draw** (stream output of both translations into a buffer for sampled draws, compared by dword). It names the shader and the export that differs and sees what the picture does not, but it adds stream-output pipelines next to every sampled pipeline and a readback path, 3 to 4 days of code used by the gate only. Recommended only as the diagnostic if A finds a difference that its crops do not explain.
+- **C: DXBC fingerprints of the generated shaders against the DXBC translator's**: the two translators write different code for the same function, so the fingerprints never match; they serve as a regression check of the library (9.2.4), not as the proof.
+
+#### 9.3.4 The first hooks
+
+As 9.2.5: 6a, an identity hook on the car paint's keys, byte-identical in the A/B; 6b, a probe in a gate look outside the repository with an exact, measurable effect (a shift of 16 host pixels at 2x and a zeroed interpolator) at 1:1. Alternatives: a repository hook with a visible effect now (the cockpit's field of view), which is a look decision for the project owner with the post passes' camera to redesign (9.2.5), or only 6a, which proves nothing a hook changes. The recommendation keeps the repository's look unchanged in this increment.
+
+#### 9.3.5 `passes` for vertex entries
+
+- **A (recommended): yes**, the draw's class for entries of either kind; outside an entry's passes the DXBC translation (a vertex `native_plain` bit). The classification exists and costs one lookup per draw; a hook that should leave the shadow pass or the mirror alone needs it.
+- **B: no `passes` in this increment**, every draw of a hooked shader hooked: a day less, and the first hook in the repository would wait for it.
+
+#### 9.3.6 The generator's scope
+
+- **A (recommended): `kVertex` only.** The domain shader types are the tessellated draws; whether FM4 draws any is a question for the survey (9.4), and they fall back to the DXBC translation with an error if one has an entry. Memexport falls back as in the pixel path.
+- **B: the domain shaders too**: four more prologues and the hull shader's interplay, about 3 days, for shaders the title may not have.
+
+### 9.4 Steps, gates and effort
+
+- **6a: the generator and the mechanism.** The survey first (a log line per vertex shader: the key, the fetch-blind key, the host types and modifications met, the fetch formats, whether it would fall back); then the generator, the library's vertex main, prologue, fetch and epilogue, the manifest's `[[vertex]]`, the passes, the hooks, the expected signatures, the check, the switch and the A/B bit, the override cache and the swap for vertex translations, and the CPU tests (the parser's refusals, the library compiled with every hook, the fingerprint). Step gate: the CPU tests with the 414 fingerprints unchanged; the check in a career at 2x (every vertex shader's bindings, every entry's signatures, 0 mismatches, the fallbacks counted); the A/B with the switch byte-identical on a frozen frame at 2x; the identity hook's A/B byte-identical with its pass log.
+- **6b: the probe.** The gate look's probe at 1:1 (crops at 2x), the A/B's periods against each other.
+- **The close gate**, as increment 5's: empty caches (the vertex shaders' compiles on the workers, none on the draw path), smoke on the native path with the contract and with the switch, perf at 2x (three runs; with the switch the generated vertex shaders' GPU time a frame against their DXBC translations', judged per draw), freeze parity off against on, `-Rov` freeze parity at 1x, and a native capture against the `-Rov` reference at 1:1.
+
+| Part | Person-days |
+|---|---|
+| The survey | 0.5 to 1 |
+| The generator: prologue, vertex fetch with every format and the endian swaps, the exports, the epilogue | 6 to 8 |
+| The library's vertex main, `XeVertex`, the hooks | 1 to 1.5 |
+| The manifest, the passes for vertex entries, the warning of decision 1 | 2 |
+| The expected signatures and the check; the switch and the A/B bit | 2 to 2.5 |
+| The override cache, the compile off the draw path and the swap for vertex translations | 2 to 3 |
+| The CPU tests | 1.5 to 2 |
+| 6a's step gate, 6b's probe, the close gate | 5 to 6 |
+| **Total** | **20 to 26** |
+
+That is 4 to 5 person-weeks, inside section 3's 3 to 5.
+
+### 9.5 Risks
+
+1. **Byte-identical positions.** FXC compiles the generated HLSL, while the DXBC translator writes its instructions directly; a fused multiply-add, a reciprocal for a division or a folded constant changes a position by one unit in the last place, which moves the coverage of edge pixels. The pixel path shows that `precise` and the explicit operations reach byte identity, but a position difference shows as scattered edge pixels whose shader the A/B does not name. Mitigation: the switch takes all vertex shaders, so a difference shows in the first A/B; the per-draw output comparison (9.3.3 B) is the diagnostic; a vertex shader that cannot be made exact stays on its DXBC translation and cannot take hooks.
+2. **Keys that the gate runs never meet.** A hooked shader under a vertex layout that no gate run drew has a key the manifest does not list; decision 1's warning names it, and B would close it.
+3. **The swap of vertex translations.** The compile off the draw path swaps pipelines by translation; a vertex translation sits in more pipelines than a pixel one (every pixel shader it pairs with), so the swap recreates more pipelines at once, and the root signature must hold for all of them (the check of the vertex bindings).
+4. **Shared code with `-Rov`.** The library and the DXBC translator are shared; the vertex code is new and compiled only for the native path's generated vertex shaders, and the pixel fingerprints and the `-Rov` freeze parity prove that nothing else changed.
