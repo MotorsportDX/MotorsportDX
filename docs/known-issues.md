@@ -33,7 +33,8 @@ above.
 - **The native path is the default render path on every computer** (before, only with
   integrated GPUs). It has run on two GPUs only (see [Tested hardware](#tested-hardware)): if
   a picture looks wrong or the game stops on your GPU, try the launcher's render path "RTV"
-  (`-Rtv`) and say in your [bug report](bug-reports.md) whether it changes anything.
+  (`-Rtv`) and say in your [bug report](bug-reports.md) whether it changes anything. RTV is no
+  longer tested since 28 October 2026, so it can have problems of its own.
 - **The cockpit view in the game's own look is very dark on sunny tracks.** This is the game's own
   interior lighting. The default look fills the interior with the game's own sky light since
   26 October 2026 (`cockpit_fill`), which keeps the gauges readable; `-Look original` shows the
