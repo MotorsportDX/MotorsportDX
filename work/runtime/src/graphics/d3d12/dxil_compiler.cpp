@@ -47,15 +47,24 @@ class IncludeAdapter : public IDxcIncludeHandler {
   HRESULT STDMETHODCALLTYPE LoadSource(LPCWSTR file_name, IDxcBlob** blob_out) override {
     *blob_out = nullptr;
     std::string name = Narrow(file_name);
-    // DXC names an include relative to the including file's directory.
+    // DXC names an include relative to the including file's directory
+    // (.\generated\xenos_override.hlsli); FXC's handler resolves the name the
+    // #include gives, so the directories are dropped.
     while (name.size() > 2 && name[0] == '.' && (name[1] == '/' || name[1] == '\\')) {
       name.erase(0, 2);
     }
     LPCVOID data = nullptr;
     UINT bytes = 0;
-    if (!include_ || FAILED(include_->Open(D3D_INCLUDE_LOCAL, name.c_str(), nullptr, &data,
-                                           &bytes))) {
+    if (!include_) {
       return E_FAIL;
+    }
+    if (FAILED(include_->Open(D3D_INCLUDE_LOCAL, name.c_str(), nullptr, &data, &bytes))) {
+      size_t slash = name.find_last_of("/\\");
+      if (slash == std::string::npos ||
+          FAILED(include_->Open(D3D_INCLUDE_LOCAL, name.c_str() + slash + 1, nullptr, &data,
+                                &bytes))) {
+        return E_FAIL;
+      }
     }
     IDxcBlobEncoding* blob = nullptr;
     HRESULT result = utils_->CreateBlob(data, bytes, DXC_CP_UTF8, &blob);
