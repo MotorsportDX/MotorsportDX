@@ -162,7 +162,8 @@ class SDLInputDriver final : public InputDriver, public rex::ui::WindowListener 
   std::atomic<bool> input_thread_running_{false};
   std::atomic<bool> input_thread_stop_{false};
   std::unique_ptr<rex::input::wheel::WheelHost> wheel_;
-  bool wheel_subsystems_ = false;
+  // The SDL subsystems StartWheel started (SDL_INIT_JOYSTICK, SDL_INIT_HAPTIC).
+  SDL_InitFlags wheel_subsystems_ = 0;
 };
 
 }  // namespace rex::input::sdl

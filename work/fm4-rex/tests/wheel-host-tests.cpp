@@ -97,6 +97,12 @@ int main(int argc, char** argv) {
     std::printf("FAIL SDL_Init: %s\n", SDL_GetError());
     return 1;
   }
+  // The runtime's SDL must be built with haptics (SDL_HAPTIC). Starting the subsystem sends no
+  // force: the hosts below use the recording backend and open no haptic device.
+  if (!SDL_InitSubSystem(SDL_INIT_HAPTIC)) {
+    std::printf("FAIL SDL's haptic subsystem: %s\n", SDL_GetError());
+    ++failures;
+  }
 
   SDL_VirtualJoystickDesc desc;
   SDL_INIT_INTERFACE(&desc);

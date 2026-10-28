@@ -269,7 +269,9 @@ else()
     endif()
 endif()
 set(SDL_RENDER OFF CACHE BOOL "" FORCE)
-set(SDL_HAPTIC OFF CACHE BOOL "" FORCE)
+# The racing wheel's force feedback (rex/input/wheel); started only with the wheel cvar or the
+# launcher's wheel test, never by the pad driver.
+set(SDL_HAPTIC ON CACHE BOOL "" FORCE)
 set(SDL_SENSOR OFF CACHE BOOL "" FORCE)
 set(SDL_POWER OFF CACHE BOOL "" FORCE)
 set(SDL_FILESYSTEM OFF CACHE BOOL "" FORCE)

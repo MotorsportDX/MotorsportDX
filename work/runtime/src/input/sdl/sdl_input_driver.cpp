@@ -566,11 +566,17 @@ void SDLInputDriver::StopVibration() {
 
 void SDLInputDriver::StartWheel() {
   namespace wheel = rex::input::wheel;
-  if (!SDL_InitSubSystem(SDL_INIT_JOYSTICK | SDL_INIT_HAPTIC)) {
-    REXLOG_ERROR("Wheel: SDL's joystick and haptic subsystems did not start: {}", SDL_GetError());
+  if (!SDL_InitSubSystem(SDL_INIT_JOYSTICK)) {
+    REXLOG_ERROR("Wheel: SDL's joystick subsystem did not start: {}", SDL_GetError());
     return;
   }
-  wheel_subsystems_ = true;
+  wheel_subsystems_ = SDL_INIT_JOYSTICK;
+  // Without haptics the wheel is still read; the host finds no force device.
+  if (SDL_InitSubSystem(SDL_INIT_HAPTIC)) {
+    wheel_subsystems_ |= SDL_INIT_HAPTIC;
+  } else {
+    REXLOG_ERROR("Wheel: SDL's haptic subsystem did not start: {}", SDL_GetError());
+  }
   wheel::HostOptions options;
   options.governor.cap = REXCVAR_GET(wheel_ffb_cap);
   options.governor.gain = REXCVAR_GET(wheel_ffb_gain);
@@ -597,8 +603,8 @@ void SDLInputDriver::StopWheel() {
     wheel_.reset();
   }
   if (wheel_subsystems_) {
-    SDL_QuitSubSystem(SDL_INIT_JOYSTICK | SDL_INIT_HAPTIC);
-    wheel_subsystems_ = false;
+    SDL_QuitSubSystem(wheel_subsystems_);
+    wheel_subsystems_ = 0;
   }
 }
 

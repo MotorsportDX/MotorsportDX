@@ -1646,10 +1646,9 @@ void App::StartWheelTest() {
   namespace wheel = rex::input::wheel;
   if (wheel_) return;
   if (!wheel_haptic_) {
-    if (!SDL_InitSubSystem(SDL_INIT_JOYSTICK | SDL_INIT_HAPTIC)) {
-      WheelLog(std::string("Wheel: SDL's joystick and haptic subsystems did not start: ") + SDL_GetError());
-      return;
-    }
+    // The joystick subsystem runs already (SDL_INIT_GAMEPAD); without haptics the wheel is still read.
+    if (!SDL_InitSubSystem(SDL_INIT_HAPTIC))
+      WheelLog(std::string("Wheel: SDL's haptic subsystem did not start: ") + SDL_GetError());
     wheel_haptic_ = true;
   }
   wheel::HostOptions options;
