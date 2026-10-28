@@ -217,6 +217,30 @@ class InputTests(unittest.TestCase):
         e2e.check_actions([[1, 'key=A', 0], [1, 'key=W+key=Control', 0.5], [1, 'key=D,key=A', 0.12]])
 
 
+class WholeScalePlanTests(unittest.TestCase):
+    """The launchers' plan at a whole 16:9 scale of 2 or more (e2e.whole_scale_plan)."""
+
+    def test_plan(self):
+        two = {'draw_resolution_scale_x': '2', 'draw_resolution_scale_y': '2'}
+        self.assertEqual(e2e.whole_scale_plan(two, True),
+                         {'native_draw_scale': '2', 'native_draw_scale_variant': 'true',
+                          'native_rt_surfaces': '122'})
+        self.assertEqual(e2e.whole_scale_plan({**two, 'draw_resolution_scale_x': '3',
+                                               'draw_resolution_scale_y': '3'}, False),
+                         {'native_draw_scale': '3', 'native_draw_scale_variant': 'true',
+                          'native_rt_surfaces': '58'})
+
+    def test_no_plan(self):
+        self.assertEqual(e2e.whole_scale_plan({}, True), {})
+        self.assertEqual(e2e.whole_scale_plan({'draw_resolution_scale_x': '1',
+                                               'draw_resolution_scale_y': '1'}, True), {})
+        self.assertEqual(e2e.whole_scale_plan({'draw_resolution_scale_x': '2',
+                                               'draw_resolution_scale_y': '1'}, True), {})
+        two = {'draw_resolution_scale_x': '2', 'draw_resolution_scale_y': '2'}
+        for key in e2e.WHOLE_SCALE_PLAN_KEYS:
+            self.assertEqual(e2e.whole_scale_plan({**two, key: '90'}, True), {}, key)
+
+
 class EventTests(unittest.TestCase):
     """Screen events (FM4_TEST_EVENTS_FILE), '@' checks and the fast route's scenarios."""
     class Process:

@@ -305,6 +305,25 @@ DISC_PROMPT_SCENE = re.compile(r'^scene \d+ (\S*DISC\S*)$')
 FIRST_RUN_SCENE = re.compile(r'^scene \d+ (830_GAMMA_ADJUST|1_C_INI_IE_LOADING)$')
 
 
+# The settings that keep whole_scale_plan's run at the earlier plain whole scale.
+WHOLE_SCALE_PLAN_KEYS = ('native_draw_scale', 'native_draw_scale_variant', 'native_rt_surfaces',
+                         'native_logical_width', 'native_logical_height', 'native_scene_input_scale')
+
+
+def whole_scale_plan(args, entry0):
+    """The launchers' plan for a whole scale of 2 or more at 16:9 in one pass with 2x MSAA
+    (pipeline.py): the scene draws' path at that scale with bit 32, so a gate runs what the players
+    run (docs/analysis/d3d-hle-n6.md 19.7.6). Empty for 1x, two different axes, or any of these
+    settings given through --arg, which keeps the earlier plain whole scale
+    (--arg native_rt_surfaces=90 for the baselines before 28 October 2026)."""
+    whole = args.get('draw_resolution_scale_x', '1')
+    if (whole != args.get('draw_resolution_scale_y', '1') or not whole.isdigit() or int(whole) < 2
+            or any(key in args for key in WHOLE_SCALE_PLAN_KEYS)):
+        return {}
+    return {'native_draw_scale': whole, 'native_draw_scale_variant': 'true',
+            'native_rt_surfaces': '122' if entry0 else '58'}
+
+
 def race_needed(options):
     """Whether the run's goal includes a race (the race check)."""
     if options.goal:
@@ -1318,6 +1337,8 @@ def run_once(options, out):
             # the scene's scale, as the launchers' -Entry0 s (d3d-hle-n5.md 18.26); --entry0 k,
             # or native_rt_surfaces given without bit 64, keeps it at the whole scale.
             entry0 = one_pass_samples == '2' and options.entry0 != 'k'
+            if one_pass_samples == '2':
+                args.update(whole_scale_plan(args, entry0))
             args.setdefault('native_rt_surfaces', '90' if entry0 else '26')
             if (entry0 and int(args['native_rt_surfaces']) & 64 and
                     not any(item.startswith('FM4_ONE_PASS_ENTRY0=') for item in options.env)):

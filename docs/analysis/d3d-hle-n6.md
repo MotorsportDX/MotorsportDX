@@ -512,7 +512,7 @@ Only the native path's resolves from private surfaces into host textures (bit 32
 2. 1x keeps 90, the integrated GPUs and the ROG Xbox Ally X at 1x included, until the Ally X's numbers exist.
 3. The resolves without host texture writes get none.
 
-The e2e harness keeps choosing its own settings (`e2e.py` gives `native_rt_surfaces=90` at a whole scale unless `--arg` says otherwise), so its runs at 2x keep the earlier plan unless they pass the launchers' settings.
+The e2e harness first kept its own settings (`native_rt_surfaces=90` at every whole scale). The main session's second decision of 28 October 2026: the harness follows the launchers' plan, so a gate runs what the players run. Since then `e2e.py --native` in one pass with 2x MSAA at a whole scale of 2 or more (the freeze scenario's pinned 2x included) gives `native_draw_scale` at that scale, `native_draw_scale_variant=true` and `native_rt_surfaces=122` (58 with `--entry0 k`), unless `--arg` gives any of `native_draw_scale`, `native_draw_scale_variant`, `native_rt_surfaces`, `native_logical_width`, `native_logical_height` or `native_scene_input_scale`. A comparison with a 2x baseline from before this change passes `--arg native_rt_surfaces=90` (and no variant) to run the earlier plan.
 
 **The gate**, BuildRoot `I:\FM4-build-usa`. The runtime does not change, so the cells ran the build of `1612fb1` with the launchers' new settings passed as `--arg` (`native_draw_scale=2`, `native_draw_scale_variant=true`, `native_rt_surfaces=122` at 2x) against the earlier plan (90):
 
