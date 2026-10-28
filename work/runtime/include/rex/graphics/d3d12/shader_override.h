@@ -198,7 +198,10 @@ class ShaderOverrides {
   // With queue (shader_override_async, a draw meets the translation), a compile
   // the cache does not hold goes to the queue's workers, and the translation
   // keeps its DXBC until the pipeline cache swaps the compiled binary in.
-  void Apply(D3D12Shader::D3D12Translation& translation, ShaderCompileQueue* queue = nullptr);
+  // dxil_queue: the same for the DXIL world's compile (native_shader_dxil),
+  // which also goes to the workers at the start unless the offline pass runs.
+  void Apply(D3D12Shader::D3D12Translation& translation, ShaderCompileQueue* queue = nullptr,
+             ShaderCompileQueue* dxil_queue = nullptr);
 
   // Whether the system constant buffer carries the knobs: with
   // shader_mod_live_knobs, or for the params of the manifest's entries.

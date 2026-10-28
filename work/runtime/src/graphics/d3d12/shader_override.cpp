@@ -2597,12 +2597,12 @@ void ShaderOverrides::ApplyDxil(D3D12Shader::D3D12Translation& translation,
 }
 
 void ShaderOverrides::Apply(D3D12Shader::D3D12Translation& translation,
-                            ShaderCompileQueue* queue) {
+                            ShaderCompileQueue* queue, ShaderCompileQueue* dxil_queue) {
   if (!translation.is_valid()) {
     return;
   }
   if (dxil()) {
-    ApplyDxil(translation, queue);
+    ApplyDxil(translation, dxil_queue);
   }
   if (translation.shader().type() == xenos::ShaderType::kVertex) {
     // A vertex shader whose generated HLSL the cache did not hold.

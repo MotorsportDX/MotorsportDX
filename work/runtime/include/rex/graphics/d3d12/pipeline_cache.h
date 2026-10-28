@@ -435,6 +435,7 @@ class PipelineCache {
   std::unordered_multimap<uint64_t, uint32_t> pixel_inputs_;
   // native_shader_dxil_ab_ms (docs/analysis/d3d-hle-n6.md 19.3.9).
   bool dxil_ab_ = false;
+  bool dxil_start_async_ = false;
   bool mod_compile_async_ = false;
   // Pipeline states replaced by hot reload or SwapCompiledMods, and the
   // submission after which the GPU no longer uses them.

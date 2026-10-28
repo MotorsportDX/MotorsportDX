@@ -233,6 +233,10 @@ PipelineCache::PipelineCache(D3D12CommandProcessor& command_processor,
     REXGPU_INFO("Shader overrides: compiles in play on workers (shader_override_async)");
   }
   dxil_ab_ = shader_overrides_ && shader_overrides_->dxil() && REXCVAR_GET(native_shader_dxil_ab_ms);
+  // The DXIL world's compiles of the start's storage on the workers, so the
+  // title starts on the DXBC world, except in the offline pass, which waits
+  // for them (shader_offline_pass is the app's cvar).
+  dxil_start_async_ = mod_compile_async_ && !REXCVAR_QUERY(bool, shader_offline_pass);
   if (dxil_ab_) {
     REXGPU_INFO("DXIL shaders: A/B against the DXBC world every {} ms",
                 REXCVAR_GET(native_shader_dxil_ab_ms));
@@ -1942,6 +1946,8 @@ bool PipelineCache::TranslateAnalyzedShader(DxbcShaderTranslator& translator,
   // shader_override_async: a draw meets the translation, so a mod or entry
   // that the cache does not hold compiles on a worker.
   ShaderCompileQueue* mod_queue = for_draw && mod_compile_async_ ? &mod_compile_queue_ : nullptr;
+  ShaderCompileQueue* dxil_queue =
+      (for_draw && mod_compile_async_) || dxil_start_async_ ? &mod_compile_queue_ : nullptr;
   // A native shader contract entry is translated without the DXBC translator
   // (docs/analysis/shader-contract.md, increment 2); otherwise, if that fails,
   // or until a worker compiles an entry that the cache does not hold, the DXBC
@@ -1979,7 +1985,7 @@ bool PipelineCache::TranslateAnalyzedShader(DxbcShaderTranslator& translator,
       if (shader_overrides_->check()) {
         shader_overrides_->CheckBindings(translation);
       }
-      shader_overrides_->Apply(translation, mod_queue);
+      shader_overrides_->Apply(translation, mod_queue, dxil_queue);
     }
   }
 
