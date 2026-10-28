@@ -1659,8 +1659,10 @@ def run_offline_pass(command, root, env, out):
         progress.unlink()
     started = time.time()
     with open(out / 'offline-pass.log', 'w', encoding='utf-8', errors='replace') as log:
+        # Its own runtime log: the title's run after it starts runtime.log anew.
         code = subprocess.run(command + ['--shader_offline_pass=true',
-                                         f'--shader_offline_pass_progress={progress}'],
+                                         f'--shader_offline_pass_progress={progress}',
+                                         f'--log_file={out / "offline-pass-runtime.log"}'],
                               cwd=root, env=env, stdout=log, stderr=subprocess.STDOUT,
                               timeout=OFFLINE_PASS_TIMEOUT).returncode
     stages = {}
