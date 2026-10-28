@@ -1392,6 +1392,7 @@ def run_once(options, out):
     n0_trace = env.get('FM4_N0_TRACE') and str(root / env['FM4_N0_TRACE'])
     # The title appends to the trace, so this run's lines start at its present size.
     n0_offset = os.path.getsize(n0_trace) if n0_trace and os.path.isfile(n0_trace) else 0
+    offline_pass = run_offline_pass(command, root, env, out) if options.offline_pass else None
     stderr = open(out / 'stderr.log', 'w', encoding='utf-8', errors='replace')
     started = time.time()
     process = subprocess.Popen(command, cwd=root, env=env, stdout=stderr, stderr=subprocess.STDOUT)
@@ -1546,6 +1547,8 @@ def run_once(options, out):
         'cache': {'cold': bool(options.cold_cache or options.cache_from),
                   'copy': bool(options.cache_copy),
                   'from': str(Path(options.cache_from).resolve()) if options.cache_from else None},
+        # The offline pass run before the title (--offline-pass): its last progress line per stage.
+        'offline_pass': offline_pass,
         'shader_work': shader_work_summary(perf, phases),
         'phase_frames': phase_frames,
         'phase_steady_ms': phase_steady_ms,
@@ -1647,6 +1650,33 @@ def aggregate(runs):
     return summary
 
 
+def run_offline_pass(command, root, env, out):
+    """--offline-pass: the game's executable with shader_offline_pass=true on the run's caches
+    before the title (docs/analysis/d3d-hle-n6.md 19.3.10). Returns the last progress line of each
+    stage, from <out>/offline-pass.jsonl."""
+    progress = out / 'offline-pass.jsonl'
+    if progress.exists():
+        progress.unlink()
+    started = time.time()
+    with open(out / 'offline-pass.log', 'w', encoding='utf-8', errors='replace') as log:
+        code = subprocess.run(command + ['--shader_offline_pass=true',
+                                         f'--shader_offline_pass_progress={progress}'],
+                              cwd=root, env=env, stdout=log, stderr=subprocess.STDOUT,
+                              timeout=OFFLINE_PASS_TIMEOUT).returncode
+    stages = {}
+    if progress.exists():
+        for line in progress.read_text(encoding='utf-8', errors='replace').splitlines():
+            try:
+                entry = json.loads(line)
+            except ValueError:
+                continue
+            stages[entry.get('stage', '?')] = entry
+    result = {'exit': code, 'seconds': round(time.time() - started, 1), 'stages': stages}
+    print(f"Offline pass: exit {code} in {result['seconds']} s; " +
+          '; '.join(f'{k}: {json.dumps(v)}' for k, v in stages.items()))
+    return result
+
+
 def prepare_cache(options, out, root=None):
     """<out>/cache for --cold-cache (empty), --cache-from (a copy of that run's cache) or
     --cache-copy (a copy of the BuildRoot's warm cache, for runs beside another game), or None.
@@ -1670,6 +1700,8 @@ def prepare_cache(options, out, root=None):
 # Frames over these many milliseconds per segment (the trace lists those over 50 ms with their
 # shader work, perf_trace.h long_frames).
 LONG_FRAME_MS = (50, 100, 250)
+# The longest the offline pass may take before the cell gives up on it.
+OFFLINE_PASS_TIMEOUT = 900
 
 
 def shader_work_stats(windows):
@@ -1998,6 +2030,10 @@ def main():
                         help="start with a private copy of the BuildRoot's warm caches in <out>/cache, "
                              'so the run can share the machine with another game (docs/e2e/README.md, '
                              '"Concurrent cells")')
+    parser.add_argument('--offline-pass', action='store_true',
+                        help='run the offline shader pass (shader_offline_pass=true: the disc '
+                             "inventory of the title's pixel shaders) on the run's caches before the "
+                             'title (docs/analysis/d3d-hle-n6.md 19.3.10)')
     parser.add_argument('--min-free-gb', type=float, default=MIN_FREE_GB,
                         help='refuse to run with less free space on the drive of --out')
     options = parser.parse_args()
