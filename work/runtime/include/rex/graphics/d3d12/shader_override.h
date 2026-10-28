@@ -143,6 +143,11 @@ class ShaderOverrides {
   // native_shader_contract_vertex_all: every vertex shader takes its generated
   // HLSL (docs/analysis/shader-contract.md 9.2.4).
   bool native_vertex_all() const { return native_vertex_all_; }
+  // native_shader_contract_ab_precise: the DXBC translations of vertex and
+  // pixel shaders are marked precise (MarkPrecise, before Apply), as FXC marks
+  // the generated HLSL (docs/analysis/shader-contract.md 9.7).
+  bool ab_precise() const { return ab_precise_; }
+  void MarkPrecise(D3D12Shader::D3D12Translation& translation) const;
 
   // The translation of a native shader contract entry without the DXBC
   // translator (increment 2, docs/analysis/shader-contract.md): the game
@@ -431,6 +436,7 @@ class ShaderOverrides {
   // native_shader_pass_debug: entries tint their colour by pass class.
   bool native_pass_debug_ = false;
   bool native_vertex_all_ = false;
+  bool ab_precise_ = false;
   // native_shader_contract_check, and its counts: translations whose
   // bindings were compared, the shaders among them (logged once each), the
   // translations whose bindings differ, those without HLSL (an unsupported

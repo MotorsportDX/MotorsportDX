@@ -1455,6 +1455,9 @@ bool PipelineCache::TranslateAnalyzedShader(DxbcShaderTranslator& translator,
                                 perf_trace::Now() - translate_start);
     }
     if (shader_overrides_) {
+      if (shader_overrides_->ab_precise()) {
+        shader_overrides_->MarkPrecise(translation);
+      }
       if (shader_overrides_->check()) {
         shader_overrides_->CheckBindings(translation);
       }

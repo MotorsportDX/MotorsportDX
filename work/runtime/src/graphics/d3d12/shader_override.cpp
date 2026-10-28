@@ -36,6 +36,7 @@
 #include "shader_override_hlsli.h"
 
 #include "../util/perf_trace.h"
+#include "thirdparty/dxbc/DXBCChecksum.h"
 
 REXCVAR_DEFINE_STRING(shader_override_path, "", "GPU/D3D12",
                       "Directory of HLSL pixel shader overrides, "
@@ -118,6 +119,13 @@ REXCVAR_DEFINE_BOOL(native_shader_contract_vertex_all, false, "GPU/D3D12",
                     "generated HLSL, entry or not (and its DXBC translation in the other periods "
                     "of native_shader_contract_ab_ms), to prove the generator against the DXBC "
                     "translator (docs/analysis/shader-contract.md 9.2.4)")
+    .lifecycle(rex::cvar::Lifecycle::kRequiresRestart);
+
+REXCVAR_DEFINE_BOOL(native_shader_contract_ab_precise, false, "GPU/D3D12",
+                    "Development, with native_shader_contract: the DXBC translations of vertex "
+                    "and pixel shaders marked precise as FXC marks the generated HLSL, so that "
+                    "the driver rounds both alike and native_shader_contract_ab_ms compares "
+                    "exact code on both sides (docs/analysis/shader-contract.md 9.7)")
     .lifecycle(rex::cvar::Lifecycle::kRequiresRestart);
 
 REXCVAR_DEFINE_BOOL(native_shader_vertex_survey, false, "GPU/D3D12",
@@ -377,6 +385,110 @@ uint32_t ReadU32(const std::vector<uint8_t>& data, size_t offset) {
 constexpr uint32_t FourCC(char a, char b, char c, char d) {
   return uint32_t(uint8_t(a)) | (uint32_t(uint8_t(b)) << 8) | (uint32_t(uint8_t(c)) << 16) |
          (uint32_t(uint8_t(d)) << 24);
+}
+
+// native_shader_contract_ab_precise: the precise flags (bits 19:22 of the
+// opcode token, one per component) on every instruction that writes a
+// register, as FXC's IEEE strictness sets them on the generated HLSL: not on
+// the declarations, which use those bits for other fields, nor on flow control,
+// whose first operand is a source. The DXBC translator sets none, and the
+// driver may fuse its mul and add where they are not precise, so without the
+// flags the DXBC translation is not a deterministic reference for exact code
+// (docs/analysis/shader-contract.md 9.7). The container is signed again. False
+// if the container cannot be read.
+bool MarkPrecise(std::vector<uint8_t>& dxbc) {
+  if (dxbc.size() < 32 || std::memcmp(dxbc.data(), "DXBC", 4)) {
+    return false;
+  }
+  using dxbc::Opcode;
+  auto marked = [](uint32_t opcode) {
+    if ((opcode >= uint32_t(Opcode::kDclResource) && opcode <= uint32_t(Opcode::kDclGlobalFlags)) ||
+        // The hull shader's phases and D3D11's declarations.
+        (opcode >= 113 && opcode <= 116) ||
+        (opcode >= uint32_t(Opcode::kDclStream) && opcode <= 162)) {
+      return false;
+    }
+    switch (Opcode(opcode)) {
+      case Opcode::kCallC:
+      case Opcode::kCase:
+      case Opcode::kDiscard:
+      case Opcode::kIf:
+      case Opcode::kRetC:
+      case Opcode::kSwitch:
+      case Opcode(3):  // breakc
+      case Opcode(8):  // continuec
+        return false;
+      default:
+        return true;
+    }
+  };
+  uint32_t chunk_count = ReadU32(dxbc, 28);
+  for (uint32_t i = 0; i < chunk_count; ++i) {
+    size_t chunk = ReadU32(dxbc, 32 + size_t(i) * 4);
+    uint32_t fourcc = ReadU32(dxbc, chunk);
+    if (fourcc != FourCC('S', 'H', 'E', 'X') && fourcc != FourCC('S', 'H', 'D', 'R')) {
+      continue;
+    }
+    size_t program = chunk + 8;
+    size_t end = program + size_t(ReadU32(dxbc, program + 4)) * 4;
+    if (end > dxbc.size()) {
+      return false;
+    }
+    for (size_t token = program + 8; token < end;) {
+      uint32_t opcode_token = ReadU32(dxbc, token);
+      uint32_t opcode = opcode_token & 0x7FF;
+      uint32_t length;
+      if (opcode == uint32_t(Opcode::kCustomData)) {
+        length = ReadU32(dxbc, token + 4);
+      } else {
+        length = dxbc::GetOpcodeTokenInstructionLength(opcode_token);
+        // The first operand follows the extended opcode tokens.
+        size_t operand = token + 4;
+        for (uint32_t extended = opcode_token; (extended >> 31) && operand < token + length * 4;
+             operand += 4) {
+          extended = ReadU32(dxbc, operand);
+        }
+        const size_t instruction_end = token + size_t(length) * 4;
+        if (marked(opcode) && operand < instruction_end) {
+          uint32_t operand_token = ReadU32(dxbc, operand);
+          // A null first destination (sincos, udiv, imul): the second, as FXC.
+          size_t next = operand + 4 * (1 + (operand_token >> 31));
+          if (((operand_token >> 12) & 0xFF) == 13 && next < instruction_end) {
+            operand_token = ReadU32(dxbc, next);
+          }
+          uint32_t type = (operand_token >> 12) & 0xFF;
+          // Temporaries, outputs, indexable temporaries, oDepth, oMask, output
+          // control points, the conservative depth outputs and the stencil
+          // reference: not resources, UAVs or null.
+          bool written = type == 0 || type == 2 || type == 3 || type == 12 || type == 15 ||
+                         type == 26 || type == 38 || type == 39 || type == 41;
+          uint32_t mask = 0;
+          if ((operand_token & 3) == 1) {
+            mask = 0b0001;
+          } else if ((operand_token & 3) == 2 && ((operand_token >> 2) & 3) == 0) {
+            mask = (operand_token >> 4) & 0xF;
+          }
+          // FXC marks the four components of a texture load or sample.
+          if (opcode == uint32_t(Opcode::kLd) || opcode == uint32_t(Opcode::kLdMS) ||
+              (opcode >= 69 && opcode <= 74)) {
+            mask = 0xF;
+          }
+          if (written && mask) {
+            opcode_token |= mask << 19;
+            std::memcpy(dxbc.data() + token, &opcode_token, sizeof(opcode_token));
+          }
+        }
+      }
+      if (!length) {
+        return false;
+      }
+      token += size_t(length) * 4;
+    }
+  }
+  uint32_t checksum[4];
+  CalculateDXBCChecksum(dxbc.data(), uint32_t(dxbc.size()), checksum);
+  std::memcpy(dxbc.data() + 4, checksum, sizeof(checksum));
+  return true;
 }
 
 // The ISGN/ISG1 or OSGN/OSG1 chunk of a DXBC container.
@@ -641,6 +753,7 @@ std::unique_ptr<ShaderOverrides> ShaderOverrides::Create(const HostConfig& confi
       overrides->LoadLookFiles();
       overrides->native_pass_debug_ = REXCVAR_GET(native_shader_pass_debug);
       overrides->check_ = REXCVAR_GET(native_shader_contract_check);
+      overrides->ab_precise_ = REXCVAR_GET(native_shader_contract_ab_precise);
       overrides->knob_defaults_ = ScanKnobDefaults(overrides->mod_directory_);
     }
   }
@@ -2206,6 +2319,21 @@ bool ShaderOverrides::TranslateEntry(D3D12Shader::D3D12Translation& translation,
     Record(translation, std::vector<uint8_t>(), files, true);
   }
   return true;
+}
+
+void ShaderOverrides::MarkPrecise(D3D12Shader::D3D12Translation& translation) const {
+  xenos::ShaderType type = translation.shader().type();
+  if (!native_ || !ab_precise_ || !translation.is_valid() ||
+      (type != xenos::ShaderType::kVertex && type != xenos::ShaderType::kPixel)) {
+    return;
+  }
+  std::vector<uint8_t> binary = translation.translated_binary();
+  if (!::rex::graphics::d3d12::MarkPrecise(binary)) {
+    REXGPU_ERROR("native_shader_contract_ab_precise: {:016X}: the DXBC translation cannot be read",
+                 translation.shader().ucode_data_hash());
+    return;
+  }
+  translation.ReplaceTranslatedBinary(std::move(binary));
 }
 
 void ShaderOverrides::CheckBindings(const D3D12Shader::D3D12Translation& translation) {
