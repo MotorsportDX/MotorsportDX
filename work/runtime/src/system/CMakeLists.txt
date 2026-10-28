@@ -42,6 +42,7 @@ set(REXSYSTEM_SOURCES
     entry_table.cpp
     export_resolver.cpp
     lzx.cpp
+    shader_inventory.cpp
     mmio_handler.cpp
     map_parser.cpp
     module.cpp

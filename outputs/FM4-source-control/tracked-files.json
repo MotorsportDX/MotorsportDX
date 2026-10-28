@@ -4758,11 +4758,19 @@
       "provenance": "runtime-fork"
     },
     {
+      "path": "work/runtime/include/rex/system/shader_inventory.h",
+      "provenance": "runtime-fork"
+    },
+    {
       "path": "work/runtime/include/rex/system/native_records.h",
       "provenance": "runtime-fork"
     },
     {
       "path": "work/runtime/src/system/gpu_progress.cpp",
+      "provenance": "runtime-fork"
+    },
+    {
+      "path": "work/runtime/src/system/shader_inventory.cpp",
       "provenance": "runtime-fork"
     },
     {

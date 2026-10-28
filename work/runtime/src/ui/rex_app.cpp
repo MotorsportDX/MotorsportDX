@@ -34,6 +34,8 @@
 #include <rex/system/achievement_manager.h>
 #include <rex/system/gpu_plugin.h>
 #include <rex/system/kernel_state.h>
+#include <rex/system/shader_inventory.h>
+#include <rex/system/user_module.h>
 #include <rex/system/xthread.h>
 #include <rex/ui/graphics_provider.h>
 #include <rex/ui/keybinds.h>
@@ -50,8 +52,106 @@ REXCVAR_DEFINE_STRING(gpu_plugin, "", "GPU",
                       "GPU emulation plugin to load at startup (e.g. 'xenos'); empty disables "
                       "GPU emulation")
     .lifecycle(rex::cvar::Lifecycle::kInitOnly);
+REXCVAR_DEFINE_BOOL(shader_offline_pass, false, "GPU",
+                    "Run the offline shader pass instead of the title and exit: first the "
+                    "inventory of the title's pixel shaders on the disc and in the installed "
+                    "content, appended to the shader storage (docs/analysis/d3d-hle-n6.md 19.3.10)")
+    .lifecycle(rex::cvar::Lifecycle::kInitOnly);
+REXCVAR_DEFINE_STRING(shader_offline_pass_progress, "", "GPU",
+                      "Write the offline pass's progress here as JSON lines (stage, done, total, "
+                      "current, errors); empty: to the log only")
+    .lifecycle(rex::cvar::Lifecycle::kInitOnly);
+REXCVAR_DEFINE_STRING(shader_inventory_keys, "", "GPU",
+                      "Write the inventory's pixel shader keys here, one '<key> <source class>' "
+                      "line each, for the gates' check against the storage (game-derived: keep it "
+                      "outside the repository)")
+    .lifecycle(rex::cvar::Lifecycle::kInitOnly);
 
 namespace rex {
+
+namespace {
+
+std::string JsonEscape(const std::string& text) {
+  std::string out;
+  out.reserve(text.size());
+  for (char ch : text) {
+    if (ch == '\\' || ch == '"') {
+      out.push_back('\\');
+      out.push_back(ch);
+    } else if (uint8_t(ch) < 0x20) {
+      out += fmt::format("\\u{:04x}", uint8_t(ch));
+    } else {
+      out.push_back(ch);
+    }
+  }
+  return out;
+}
+
+// The offline pass (shader_offline_pass): runs after the executable is loaded
+// and before its main thread starts, so the image's containers are as the disc
+// has them.
+void RunShaderOfflinePass(Runtime& runtime) {
+  FILE* progress_file = nullptr;
+  std::string progress_path = REXCVAR_GET(shader_offline_pass_progress);
+  if (!progress_path.empty()) {
+    progress_file = filesystem::OpenFile(to_path(progress_path), "wb");
+  }
+  auto line = [&](const std::string& text) {
+    REXLOG_INFO("Offline pass: {}", text);
+    if (progress_file) {
+      fprintf(progress_file, "%s\n", text.c_str());
+      fflush(progress_file);
+    }
+  };
+
+  uint32_t title_id = runtime.kernel_state()->title_id();
+  system::shader_inventory::Sources sources;
+  sources.roots.push_back(runtime.game_data_root());
+  // Installed content (the DLC and the content install disc), in
+  // <user data>/<profile>/<title>/00000002/<package>.
+  std::error_code error;
+  if (!runtime.user_data_root().empty() && runtime.user_data_root() != runtime.game_data_root()) {
+    for (const auto& profile :
+         std::filesystem::directory_iterator(runtime.user_data_root(), error)) {
+      auto content = profile.path() / fmt::format("{:08X}", title_id) / "00000002";
+      if (std::filesystem::is_directory(content, error)) {
+        sources.roots.push_back(content);
+      }
+    }
+  }
+  auto executable = runtime.kernel_state()->GetExecutableModule();
+  if (executable && executable->processor_module()) {
+    auto* module = executable->processor_module();
+    if (module->base_address() && module->image_size()) {
+      sources.image = runtime.kernel_state()->memory()->TranslateVirtual<const uint8_t*>(
+          module->base_address());
+      sources.image_size = module->image_size();
+    }
+  }
+
+  system::shader_inventory::Result result;
+  auto progress = [&](size_t done, size_t total, const std::string& current) {
+    line(fmt::format(R"({{"stage":"inventory","done":{},"total":{},"current":"{}"}})", done,
+                     total, JsonEscape(current)));
+  };
+  auto storage_path =
+      runtime.cache_root() / "shaders" / "shareable" / fmt::format("{:08X}.xsh", title_id);
+  bool ok = !runtime.cache_root().empty() && title_id &&
+            system::shader_inventory::Run(sources, storage_path, result, progress,
+                                          to_path(std::string(REXCVAR_GET(shader_inventory_keys))));
+  line(fmt::format(
+      R"({{"stage":"inventory","finished":{},"pixel_shaders":{},"containers":{},"files":{},)"
+      R"("archives":{},"entries":{},"errors":{},"from_files":{},"from_archives":{},)"
+      R"("from_image":{},"stored":{},"appended":{},"ms":{:.1f}}})",
+      ok ? "true" : "false", result.unique, result.containers, result.files, result.archives,
+      result.entries, result.errors, result.unique_files, result.unique_archives,
+      result.unique_image, result.stored, result.appended, result.milliseconds));
+  if (progress_file) {
+    fclose(progress_file);
+  }
+}
+
+}  // namespace
 
 // --- ReXApp ---
 
@@ -459,6 +559,12 @@ void ReXApp::LaunchModule() {
     auto main_thread = runtime_->PrepareModuleLaunch();
     if (!main_thread) {
       REXLOG_ERROR("Failed to launch module");
+      app_context().QuitFromUIThread();
+      return;
+    }
+
+    if (REXCVAR_GET(shader_offline_pass)) {
+      RunShaderOfflinePass(*runtime_);
       app_context().QuitFromUIThread();
       return;
     }
