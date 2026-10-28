@@ -110,6 +110,8 @@
 !/work/fm4-launcher/src/runner.h
 !/work/fm4-launcher/src/settings.cpp
 !/work/fm4-launcher/src/settings.h
+!/work/fm4-launcher/src/shaders.cpp
+!/work/fm4-launcher/src/shaders.h
 !/work/fm4-launcher/src/tests.cpp
 !/work/fm4-rex/look/fm4-car.hlsli
 !/work/fm4-rex/look/fm4-cockpit.hlsli

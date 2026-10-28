@@ -8,6 +8,7 @@
 #include <SDL3/SDL_main.h>
 
 #include <atomic>
+#include <functional>
 #include <cctype>
 #include <chrono>
 #include <cmath>
@@ -28,6 +29,7 @@
 
 #include "discs.h"
 #include "runner.h"
+#include "shaders.h"
 #include "settings.h"
 
 namespace fm4 {
@@ -316,6 +318,9 @@ class App {
   void KeyboardSection();
   void GameDataPage();
   void AdvancedPage();
+  void ShadersPage();
+  // The Shaders page's task on its own thread: fetching DXC, or the offline pass.
+  void StartShaderTask(std::function<std::string()> task);
   void AboutPage();
   void Footer();
   void Play();
@@ -366,6 +371,12 @@ class App {
   int page_ = 0;
   std::atomic<bool> running_ = false;
   std::thread waiter_;
+  // The Shaders page (shaders.h): one task at a time.
+  std::thread shader_task_;
+  std::atomic<bool> shader_busy_{false};
+  std::mutex shader_mutex_;
+  std::string shader_message_;      // shader_mutex_
+  void* shader_process_ = nullptr;  // shader_mutex_: the running pass
   std::chrono::steady_clock::time_point started_;
   std::string banner_;
   bool banner_error_ = false;
@@ -631,6 +642,12 @@ void App::Run() {
     ImGui_ImplDX11_RenderDrawData(ImGui::GetDrawData());
     swap_chain_->Present(1, 0);
   }
+  {
+    // A pass still running ends with the launcher; a fetch finishes first.
+    std::lock_guard<std::mutex> lock(shader_mutex_);
+    if (shader_process_) TerminateProcess(shader_process_, 1);
+  }
+  if (shader_task_.joinable()) shader_task_.join();
   if (load_error_.empty()) SaveSettings();
   ImGui_ImplDX11_Shutdown();
   ImGui_ImplSDL3_Shutdown();
@@ -927,6 +944,7 @@ void App::Frame() {
     case 2: ControlsPage(); break;
     case 3: GameDataPage(); break;
     case 4: AdvancedPage(); break;
+    case 5: ShadersPage(); break;
     default: AboutPage(); break;
   }
   ImGui::EndChild();
@@ -984,7 +1002,7 @@ void App::Banner() {
 }
 
 void App::Navigation() {
-  static const char* pages[] = {"Display", "Look", "Controls", "Game data", "Advanced", "About"};
+  static const char* pages[] = {"Display", "Look", "Controls", "Game data", "Advanced", "Shaders", "About"};
   ImGui::Dummy(ImVec2(0, 2 * scale_));
   for (int i = 0; i < static_cast<int>(IM_ARRAYSIZE(pages)); ++i) {
     const bool selected = page_ == i;
@@ -1789,6 +1807,109 @@ void App::AdvancedPage() {
       SDL_SetClipboardText(text.c_str());
     }
   }
+}
+
+void App::StartShaderTask(std::function<std::string()> task) {
+  if (shader_busy_.exchange(true)) return;
+  if (shader_task_.joinable()) shader_task_.join();
+  shader_task_ = std::thread([this, task = std::move(task)] {
+    std::string message;
+    try {
+      message = task();
+    } catch (const std::exception& exception) {
+      message = exception.what();
+    }
+    {
+      std::lock_guard<std::mutex> lock(shader_mutex_);
+      shader_message_ = message;
+    }
+    shader_busy_ = false;
+  });
+}
+
+// The offline shader pass (docs/analysis/d3d-hle-n6.md 19.3.9, the owner's answer 5 of 19.10):
+// the game's executable with the plan's settings translates and compiles its shader storage and
+// exits before the title runs, so the shaders are not compiled while the game plays. With
+// native_shader_dxil it compiles with the DirectX Shader Compiler, which this page fetches from
+// Microsoft's release on this computer (never shipped with the launcher).
+void App::ShadersPage() {
+  const fs::path game = root_ / "game-build";
+  const fs::path progress_file = root_ / "logs" / "shader-pass.jsonl";
+  const bool busy = shader_busy_;
+  ImGui::TextWrapped("The shader pass compiles the game's shaders for the current settings before "
+                     "you play, so they are not compiled during a race. It runs once after an "
+                     "install or an update; Skip stops it, and what is left compiles while you play.");
+  ImGui::Dummy(ImVec2(0, 8 * scale_));
+  const bool dxc = DxcPresent(game);
+  ImGui::Text("DirectX Shader Compiler: %s", dxc ? "beside the game" : "not fetched (the shaders compile with FXC)");
+  ImGui::BeginDisabled(busy || dxc);
+  if (ImGui::Button("Fetch the DirectX Shader Compiler")) {
+    StartShaderTask([this, game] {
+      const std::string error = FetchDxc(game, root_ / "downloads" / "dxc");
+      return error.empty() ? std::string("The DirectX Shader Compiler is beside the game.") : error;
+    });
+  }
+  ImGui::EndDisabled();
+  ImGui::TextColored(kMuted, "Microsoft's release v1.9.2609 from GitHub, checked by its SHA-256 (or FM4_DXC_MIRROR)");
+  ImGui::Dummy(ImVec2(0, 8 * scale_));
+  ImGui::BeginDisabled(busy);
+  if (ImGui::Button("Compile shaders")) {
+    std::string error;
+    const auto plan = CurrentPlan(error);
+    if (!plan) {
+      std::lock_guard<std::mutex> lock(shader_mutex_);
+      shader_message_ = error;
+    } else if (ProcessRunning(L"fm4_rex.exe")) {
+      std::lock_guard<std::mutex> lock(shader_mutex_);
+      shader_message_ = "The game is running (fm4_rex.exe). Close it first.";
+    } else {
+      std::vector<std::string> args = GameArgs(*plan);
+      args.push_back("--shader_offline_pass=true");
+      args.push_back("--shader_offline_pass_progress=" + Utf8(progress_file));
+      const Pairs env = plan->env;
+      StartShaderTask([this, args, env, progress_file] {
+        std::error_code ignored;
+        fs::remove(progress_file, ignored);
+        void* process = StartProcess(args, env, root_, root_ / "logs" / "shader-pass.log");
+        {
+          std::lock_guard<std::mutex> lock(shader_mutex_);
+          shader_process_ = process;
+        }
+        const unsigned long code = WaitProcess(process);
+        {
+          std::lock_guard<std::mutex> lock(shader_mutex_);
+          shader_process_ = nullptr;
+        }
+        PassProgress progress;
+        const bool read = ReadPassProgress(progress_file, progress);
+        if (read && progress.finished)
+          return "The shaders are compiled: " + std::to_string(progress.done) + " translations, " +
+                 std::to_string(progress.errors) + " errors.";
+        return code ? "The shader pass stopped (exit " + std::to_string(code) + ")."
+                    : std::string("The shader pass ended without its last progress line.");
+      });
+    }
+  }
+  ImGui::EndDisabled();
+  ImGui::SameLine();
+  ImGui::BeginDisabled(!busy);
+  if (ImGui::Button("Skip")) {
+    std::lock_guard<std::mutex> lock(shader_mutex_);
+    if (shader_process_) TerminateProcess(shader_process_, 1);
+  }
+  ImGui::EndDisabled();
+  PassProgress progress;
+  if (busy && ReadPassProgress(progress_file, progress) && progress.total > 0) {
+    ImGui::ProgressBar(static_cast<float>(progress.done) / static_cast<float>(progress.total),
+                       ImVec2(420 * scale_, 0),
+                       (progress.stage + ": " + std::to_string(progress.done) + " of " +
+                        std::to_string(progress.total))
+                           .c_str());
+  } else if (busy) {
+    ImGui::TextColored(kMuted, "Working...");
+  }
+  std::lock_guard<std::mutex> lock(shader_mutex_);
+  if (!shader_message_.empty()) ImGui::TextWrapped("%s", shader_message_.c_str());
 }
 
 // Who made this possible, in short; CREDITS.txt beside the launcher (outputs/FM4-build/CREDITS.txt,

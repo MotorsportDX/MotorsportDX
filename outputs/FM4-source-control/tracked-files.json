@@ -541,6 +541,14 @@
       "provenance": "Original GUI launcher source (port of the pipeline.py launch rules, SDL3 and Dear ImGui front end); no game content"
     },
     {
+      "path": "work/fm4-launcher/src/shaders.cpp",
+      "provenance": "Original GUI launcher source (port of the pipeline.py launch rules, SDL3 and Dear ImGui front end); no game content"
+    },
+    {
+      "path": "work/fm4-launcher/src/shaders.h",
+      "provenance": "Original GUI launcher source (port of the pipeline.py launch rules, SDL3 and Dear ImGui front end); no game content"
+    },
+    {
       "path": "work/fm4-launcher/src/tests.cpp",
       "provenance": "Original GUI launcher source (port of the pipeline.py launch rules, SDL3 and Dear ImGui front end); no game content"
     },
