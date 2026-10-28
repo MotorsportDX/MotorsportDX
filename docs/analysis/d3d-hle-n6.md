@@ -368,6 +368,32 @@ The step gates:
 6. **The post passes** stay FXC and DXBC in 1.2.
 7. **Without DXC** everything stays DXBC, and one gate cell runs without the DLLs. Setup copies the DLLs from `<BuildRoot>\dxc-download`, pinned by SHA-256, and fetches the URL only when the zip is missing (`DXC_MIRROR`). The launcher is tested against a local mirror. No download runs in the gates or without the owner.
 
+**Step 1: the DXIL world** (`95c4cc9` on main `01e3293`, snapshot `n6dx26`; cells `n6dx27`, the look `aces,taa=0,windshield=0` with `FM4_TILING_SCENARIO=2`, the native path with `native_shader_contract` and `native_shader_dxil`).
+
+What it is:
+
+- `DxilCompiler` ([dxil_compiler.cpp](../../work/runtime/src/graphics/d3d12/dxil_compiler.cpp)) loads the release's DLLs from beside the executable and reports DXC 1.9 (5,512 commits, `01b62ad4`).
+- Every translation keeps its DXBC and gains a DXIL binary: its mod, its entry, or none, from the generated HLSL. The binaries are cached in `<override cache>\dxil` with the magic `'DXIL'`.
+- `PipelineCache::PipelineUsesDxil` picks the world per pipeline. A pipeline takes DXIL when both shaders have DXIL and it has no geometry or hull shader and no built-in pixel shader.
+- `native_shader_dxil_ab_ms` keeps a DXBC state beside each DXIL one for the in-run A/B.
+- At the start the DXIL compiles go to 1.1's workers. In the pass (1.3's `shader_offline_pass`) they all wait, the predicted translations' included.
+
+| Check | Result |
+|---|---|
+| The pass at the start of the warm-ups (`n6dx27-warm32`, `-warm2x`) | 1,665 of 1,665 of the storage's translations, 0 errors. 3/2: 26.6 s in all, the compile stage 18.9 s. 2x: 16.9 s, 9.9 s (the inventory: 0.19 s, 1,076 pixel shaders) |
+| The in-run A/B of the DXIL world against the DXBC world with `native_shader_contract_ab_precise`, 3/2 (`n6dx27-ab32`) | 0 pixels differ in every comparison; 4,923 translations loaded from the DXIL cache, 2 compiled by DXC, none failed |
+| The same at 2x (`n6dx27-ab2x`) | 7 of 3,686,400 pixels differ by at most 3 levels, at the interior mirror (the tile of shader-contract.md 9.8's 2x residual); 3,293 loaded from the DXIL cache |
+| The check, `career` at 2x (`n6dx27-check`) | 4,925 DXC compiles, none failed, no signature mismatch against the DXBC translations |
+| Without the DLLs (`n6dx26-nodxc`, `n6dx27-nodxc`) | "no dxcompiler.dll beside the executable; shaders compile with FXC"; the freeze passed in `n6dx20`, and `n6dx27`'s stopped at the rewind menu's OCR (a known timeout), after its race |
+| The launcher with the Shaders page | compiles (a scratch build of `work/fm4-launcher`) |
+
+Found and fixed on the way:
+
+- **Includes:** DXC asks for an include relative to the including file (`.\generated\xenos_override.hlsli`), so the handler retries with the bare name. With the include missing, DXC 1.9 crashed in `dxcompiler.dll` (`n6dx20`).
+- **The replacement entry:** DXC answers an include of the main source's own name with that source. The final combine's replacement includes the file it is named after, so the source gets a name of its own.
+- **The log:** DXC repeats the include chain in every diagnostic. Messages are cut at 4 KB, after 51 MB logs in `n6dx23`.
+- **The start:** with an empty DXIL cache the start waited 28 s for DXC before the title's first frame (`n6dx22`). The compiles now go to the workers, and the title starts on the DXBC world.
+
 #### 19.3.10 Increment 1.3: the game's pixel shaders from the disc, 28 October 2026
 
 Part 3 of 19.3.2. The number follows 1.2's design (19.3.9).
