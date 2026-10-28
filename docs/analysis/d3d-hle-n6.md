@@ -290,6 +290,65 @@ The cold cells differ between runs by the order the threads finish in: the caree
 
 **Rebased onto main `fbe6511`** (the shader contract's increment 6, whose vertex shaders are swapped in as the pixel shaders' mods are; `SwapCompiledMods` recreates early pipelines by both), snapshot `n6f4`: smoke at 3/2 passed 3 of 3 (`n6hs32` against `n6fs32`, `career` PASS, the race 237.38 fps, p99 5.06 ms). A cold career at 2x with `native_shader_contract=true`, `native_shader_contract_vertex_all=true`, a fresh salt and the back end's check (`n6f4-vcold`, beside main's `n5sc17-cold-240-career`): 35,064,814 draws checked, no mismatch, no dropped draw; 539 early pipelines, 475 taken created and 57 waited for (452 ms, 29 over 4 ms); 7 created on the draw path in 0.3 ms; frames over 50, 100 and 250 ms 10, 4 and 1 (main 10, 5 and 1, with 539 pipelines on the draw path, 54 over 4 ms). `compare.py` WARN: one vertex translation over 4 ms on the draw path (0 before).
 
+#### 19.3.8 Increment 1.2: design, 28 October 2026
+
+The offline pass to DXIL with DXC, and its cache (parts 2 and 6 of 19.3.2). The design is read from `fbe6511`, the shader contract's increment 6 on main. The decisions below are open; each lists its alternatives.
+
+**What the design starts from.**
+
+- **One pipeline, one container.** D3D12 does not create a graphics pipeline that mixes a DXBC and a DXIL shader. A probe on this PC (an RTX 5070 Ti Laptop GPU, shader model 6.6) created a pipeline from FXC's `vs_5_1` and `ps_5_1` and from DXC's `vs_6_0` and `ps_6_0`, and refused a DXBC vertex shader with a DXIL pixel shader and the reverse (`E_INVALIDARG`). A pixel shader in DXIL therefore needs every vertex shader it draws with in DXIL, and the reverse.
+- **The generator covers every shader.** Increment 6's check, a career at 2x with `native_shader_contract_vertex_all`:
+  - all 408 vertex translations and 1,211 pixel translations have the generator's bindings, with no fallback;
+  - the vertex shaders' generated code draws the DXBC translation's picture, 0 pixels at 3/2 and at most 4 single pixels at 2x (shader-contract.md 9.8);
+  - the classic mods already go through the generator and FXC.
+  Plain pixel shaders without a mod have not yet been compared that way.
+- **Today's compile costs**, the cold career at 2x with every vertex shader generated (`n5sc17-cold`):
+  - 219 FXC compiles on the workers, 50.1 s in all, the longest 3.9 s;
+  - the DXBC translations: 280 vertex and 325 pixel, 51 ms in all;
+  - the post passes' 25 FXC compiles: 0.8 s before the title's first frame.
+- **DXC is already optional in the runtime.** `D3D12Provider` loads `dxcompiler.dll` and `dxilconv.dll` from the search path for the disassembly of converted DXIL. The release of 19.10 reports `IDxcVersionInfo` 1.9 and compiled the probe's shaders with `-Gis -HV 2018`. The generated code has not been through DXC yet.
+
+**The design.**
+
+1. **Two worlds, chosen per pipeline.** The DXIL world:
+   - every native shader through the generator, with DXC (SM 6.0, `-HV 2018`, `-Gis`);
+   - vertex shaders as with `native_shader_contract_vertex_all`, pixel shaders with their entry, their classic mod or no mod.
+   The DXBC world is today's: the DXBC translator, and FXC for mods.
+   - A pipeline takes the DXIL world when both of its shaders have a DXIL binary and it has no geometry shader, and the DXBC world otherwise. The geometry shaders of point, rectangle and quad lists are DXBC that the runtime writes itself. A shader the generator refuses therefore takes its partners' pipelines with it, and those draw as today.
+   - **Two binaries per translation.** A translation keeps the DXBC translator's binary and gains a DXIL binary, which holds its mod or entry compiled by DXC. Its DXBC binary takes the mod from FXC only when a DXBC pipeline needs it: one with a geometry shader, or one whose partner has no DXIL. That compile runs on 1.1's workers, and the game's look shows until it arrives. Step 1 counts the pipelines with a geometry shader.
+   - `native_shader_dxil` is the switch: off until the close gate, native only. RTV and `-Rov` keep the DXBC world.
+2. **The offline pass**:
+   - **What it does.** It loads the shader and pipeline storages, the look and the manifest. Then it builds every translation that the pipeline storage names, for the DXIL world, on all logical processors but one, and writes the cache. It writes its progress as JSON lines (done, total, current, errors) and exits before the title runs.
+   - **How it starts.** `shader_offline_pass=true` on the game's executable.
+   - **What uses it.** The GUI launcher's page (19.10, answer 5) starts it and shows the progress; Skip ends it. `e2e.py --offline-pass` runs it before a cell.
+   - **In play,** what is still missing compiles on increment 1.1's workers with DXC, and its pipelines keep the DXBC world until both shaders are in.
+3. **The cache** (part 6):
+   - **Where:** `cache\shaders\local\dxil`, beside the FXC override cache, which stays for the DXBC world.
+   - **The key:** the generated HLSL with the library, the hooks and the contract (their hashes, as `LoadCached` checks them today); the generator's version; DXC's version and commit (`IDxcVersionInfo2`); the flags. The scale enters through the HLSL's macros. The look's knobs enter only for classic mods (their defines) until those move to `params`.
+   - **The file:** magic `'DXIL'` and its own version.
+   - **Pruning:** at the end of each pass, by last use, down to 512 MB.
+4. **The fetch** (19.10):
+   - `pipeline.py` setup takes the release's two DLLs and its three license files from `<BuildRoot>\dxc-download\v1.9.2609` beside the game, pinned by SHA-256. It fetches from the release URL only when the zip is missing, with a `DXC_MIRROR` for a local file.
+   - The launcher fetches the same zip and checks its SHA-256 before the pass when the DLLs are missing.
+   - Without them, or when `dxcompiler.dll` does not load or is another version, everything stays in the DXBC world: today's path, which a gate cell without the DLLs keeps tested.
+
+**Steps and effort.** The effort is in AI calendar time, by the calibration of [section 9](d3d-hle.md#9-stages), about 3.5 hours a person-week (range 2 to 7):
+
+| Step | Person-weeks | Hours |
+|---|---|---|
+| 1. The DXC loader, the DXIL world behind `native_shader_dxil`, the DXIL cache, the setup copy | 1.5 | about 5 (3 to 10) |
+| 2. The offline pass, the pruning, the invalidation | 1 | about 3.5 (2 to 7) |
+| 3. The launcher's page and fetch | 1 | about 3.5 (2 to 7) |
+| 4. The notices, sources-and-licensing and the README credits; the close gate | 0.5 | about 2 (1 to 3.5) |
+| **Total** | **4** | **about 14 (8 to 28)** |
+
+The step gates:
+
+- **Step 1:** the in-run A/B of the DXIL world against the DXBC world with `native_shader_contract_ab_precise` on a frozen frame at 3/2 and 2x, the criterion of shader-contract.md 9.8; the check with 0 mismatches; a cell without the DLLs that runs as today.
+- **Step 2:** a cold `career` after the pass with no compile in play; the pass's time on this PC; a hook's source and the scale changed, recompiling only what they key.
+- **Step 3:** the page against a local mirror. No download in the gates: the release is in the BuildRoot.
+- **The close gate** as 19.3.4's for 1.1. The pass on the ROG Xbox Ally X runs from the owner's export later.
+
 #### 19.3.10 Increment 1.3: the game's pixel shaders from the disc, 28 October 2026
 
 Part 3 of 19.3.2. The number follows 1.2's design (19.3.9).
