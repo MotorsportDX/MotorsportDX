@@ -367,7 +367,7 @@ hooks = "shader_0123456789ABCDEF.mod.hlsli"
                 "[\"nowhere\"]\n"),
         "a vertex entry in an unknown pass");
   Check(Refused("[[vertex]]\nhash = \"0123456789ABCDEF\"\nhooks = \"a.hlsli\"\nparams = "
-                "[\"lower\"]\n"),
+                "[\"1BAD\"]\n"),
         "a vertex param that is not a define name");
   Check(Refused("vertex = 1\n"), "vertex not an array of tables");
 
