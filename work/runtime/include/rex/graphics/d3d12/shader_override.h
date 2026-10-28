@@ -445,7 +445,7 @@ class ShaderOverrides {
   std::filesystem::path cache_directory_;
   uint64_t library_hash_ = 0;
   uint64_t compiler_id_ = 0;
-  // native_shader_dxil (docs/analysis/d3d-hle-n6.md 19.3.8): DXC, and its
+  // native_shader_dxil (docs/analysis/d3d-hle-n6.md 19.3.9): DXC, and its
   // cache beside the override cache.
   std::unique_ptr<DxilCompiler> dxil_compiler_;
   std::filesystem::path dxil_cache_directory_;

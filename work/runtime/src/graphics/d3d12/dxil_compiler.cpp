@@ -1,6 +1,6 @@
 /**
  * @file        graphics/d3d12/dxil_compiler.cpp
- * @brief       DXC for the native path's DXIL shaders (docs/analysis/d3d-hle-n6.md 19.3.8)
+ * @brief       DXC for the native path's DXIL shaders (docs/analysis/d3d-hle-n6.md 19.3.9)
  */
 
 #include <rex/graphics/d3d12/dxil_compiler.h>

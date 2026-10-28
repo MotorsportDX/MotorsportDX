@@ -290,7 +290,7 @@ The cold cells differ between runs by the order the threads finish in: the caree
 
 **Rebased onto main `fbe6511`** (the shader contract's increment 6, whose vertex shaders are swapped in as the pixel shaders' mods are; `SwapCompiledMods` recreates early pipelines by both), snapshot `n6f4`: smoke at 3/2 passed 3 of 3 (`n6hs32` against `n6fs32`, `career` PASS, the race 237.38 fps, p99 5.06 ms). A cold career at 2x with `native_shader_contract=true`, `native_shader_contract_vertex_all=true`, a fresh salt and the back end's check (`n6f4-vcold`, beside main's `n5sc17-cold-240-career`): 35,064,814 draws checked, no mismatch, no dropped draw; 539 early pipelines, 475 taken created and 57 waited for (452 ms, 29 over 4 ms); 7 created on the draw path in 0.3 ms; frames over 50, 100 and 250 ms 10, 4 and 1 (main 10, 5 and 1, with 539 pipelines on the draw path, 54 over 4 ms). `compare.py` WARN: one vertex translation over 4 ms on the draw path (0 before).
 
-#### 19.3.8 Increment 1.2: design, 28 October 2026
+#### 19.3.9 Increment 1.2: design, 28 October 2026
 
 The offline pass to DXIL with DXC, and its cache (parts 2 and 6 of 19.3.2). The design is read from `fbe6511`, the shader contract's increment 6 on main. The decisions below are open; each lists its alternatives.
 

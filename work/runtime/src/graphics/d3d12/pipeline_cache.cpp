@@ -89,7 +89,7 @@ REXCVAR_DEFINE_INT32(native_shader_dxil_ab_ms, 0, "GPU/D3D12",
                      "Development, with native_shader_dxil: an in-run A/B of the DXIL world "
                      "against the DXBC world, alternating every this many milliseconds (0: off). "
                      "Pipelines that take DXIL are created in both, so it needs a warm cache: a "
-                     "swap in play updates the DXIL state only (docs/analysis/d3d-hle-n6.md 19.3.8)")
+                     "swap in play updates the DXIL state only (docs/analysis/d3d-hle-n6.md 19.3.9)")
     .range(0, 60000)
     .lifecycle(rex::cvar::Lifecycle::kRequiresRestart);
 

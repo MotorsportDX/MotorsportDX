@@ -387,7 +387,7 @@ class PipelineCache {
   // (PipelineUsesDxil), else from their DXBC.
   ID3D12PipelineState* CreateD3D12Pipeline(const PipelineRuntimeDescription& runtime_description,
                                            bool dxil = true);
-  // The DXIL world (native_shader_dxil, docs/analysis/d3d-hle-n6.md 19.3.8):
+  // The DXIL world (native_shader_dxil, docs/analysis/d3d-hle-n6.md 19.3.9):
   // whether the pipeline takes DXIL, since D3D12 does not mix DXBC and DXIL in
   // one pipeline. Both shaders need a DXIL binary, and the pipeline no shader
   // that only exists as DXBC: a geometry or hull shader, or a built-in pixel
@@ -433,7 +433,7 @@ class PipelineCache {
   // The disc inventory's interpolator words by pixel shader key, read at the
   // start of InitializeShaderStorage (PredictPixelShaderModifications).
   std::unordered_multimap<uint64_t, uint32_t> pixel_inputs_;
-  // native_shader_dxil_ab_ms (docs/analysis/d3d-hle-n6.md 19.3.8).
+  // native_shader_dxil_ab_ms (docs/analysis/d3d-hle-n6.md 19.3.9).
   bool dxil_ab_ = false;
   bool mod_compile_async_ = false;
   // Pipeline states replaced by hot reload or SwapCompiledMods, and the

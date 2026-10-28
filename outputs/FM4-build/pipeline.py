@@ -407,6 +407,79 @@ def fetch_gameinput(root):
                 target.write_bytes(data)
     return directory
 
+# The DirectX Shader Compiler release for the native path's DXIL shaders (native_shader_dxil,
+# docs/analysis/d3d-hle-n6.md 19.3.9, the owner's approval in 19.10): the release zip in
+# <BuildRoot>/dxc-download/<DXC_VERSION>, refused with any other SHA-256, fetched from DXC_URL
+# only when it is missing (DXC_MIRROR names a local file or another URL). Its x64
+# dxcompiler.dll and dxil.dll go beside the game with the release's three license files; an
+# export carries none of them (docs/sources-and-licensing.md#third-party-code-directx-shader-compiler).
+DXC_VERSION = 'v1.9.2609'
+DXC_URL = ('https://github.com/microsoft/DirectXShaderCompiler/releases/download/'
+           f'{DXC_VERSION}/dxc_2026_09_29.zip')
+DXC_SHA256 = 'ad31b1fc8443175d204f77a611fdb3ef2ec42759bdc2f1167368de24a4a7e7f1'
+DXC_FILES = {'bin/x64/dxcompiler.dll':'0689e2fee0a1c9df8662a59680469f24e2a3ad7ce6bbbcc9284f7a83172bfc59',
+             'bin/x64/dxil.dll':'64be2368211d257a038a7d4ea6bb3e24c878eb8d588c7b8414fccf759b69c2ac',
+             'LICENSE-MS.txt':None,'LICENSE-LLVM.txt':None,'LICENCE-MIT.txt':None}
+
+def fetch_dxc(root):
+    """<BuildRoot>/dxc-download/<DXC_VERSION>/x64: the files of DXC_FILES from the pinned release
+    zip, which is fetched only when it is missing. Returns the directory."""
+    directory=root/'dxc-download'/DXC_VERSION
+    package=directory/DXC_URL.rsplit('/',1)[1]
+    def valid(path):
+        return path.is_file() and hashlib.sha256(path.read_bytes()).hexdigest()==DXC_SHA256
+    if not valid(package):
+        directory.mkdir(parents=True,exist_ok=True)
+        partial=package.with_suffix('.partial')
+        for source in filter(None,(os.environ.get('DXC_MIRROR'),DXC_URL)):
+            try:
+                if Path(source).is_file():
+                    shutil.copyfile(source,partial)
+                else:
+                    with urllib.request.urlopen(source,timeout=300) as response:
+                        partial.write_bytes(response.read())
+            except (OSError,ValueError) as error:
+                print(f'DirectX Shader Compiler: {source} failed: {error}')
+                continue
+            if valid(partial):
+                partial.replace(package)
+                break
+            print(f'DirectX Shader Compiler: {source} does not have the pinned SHA-256.')
+        partial.unlink(missing_ok=True)
+        if not valid(package):
+            raise RuntimeError(f'The DirectX Shader Compiler {DXC_VERSION} cannot be fetched with its '
+                               'pinned SHA-256 (docs/setup.md).')
+    target_directory=directory/'x64'
+    target_directory.mkdir(exist_ok=True)
+    with zipfile.ZipFile(package) as archive:
+        # The release names its members with backslashes.
+        members={info.filename.replace('\\','/'):info for info in archive.infolist()}
+        for member,sha256 in DXC_FILES.items():
+            data=archive.read(members[member])
+            if sha256 and hashlib.sha256(data).hexdigest()!=sha256:
+                raise RuntimeError(f'DirectX Shader Compiler: {member} does not have its pinned SHA-256.')
+            target=target_directory/Path(member).name
+            if not target.is_file() or target.read_bytes()!=data:
+                target.write_bytes(data)
+    return target_directory
+
+def stage_dxc(root,build):
+    """The DXC files beside the game build, for native_shader_dxil."""
+    source=fetch_dxc(root)
+    for member in DXC_FILES:
+        name=Path(member).name
+        if not (build/name).is_file() or (build/name).read_bytes()!=(source/name).read_bytes():
+            shutil.copyfile(source/name,build/name)
+
+def dxc_status(root):
+    """doctor's line on the DirectX Shader Compiler release."""
+    directory=root/'dxc-download'/DXC_VERSION/'x64'
+    ready=all((directory/Path(member).name).is_file() for member in DXC_FILES)
+    mirror=os.environ.get('DXC_MIRROR')
+    return (f'DirectX Shader Compiler: {DXC_VERSION} in {directory} '
+            f'{"extracted" if ready else "not extracted yet (setup and build take it)"}; '
+            f'{"mirror " + mirror if mirror else "no mirror (DXC_MIRROR is not set)"}.')
+
 def gameinput_status(root):
     """doctor's line on the GameInput package."""
     directory=root/'gameinput-sdk'/GAMEINPUT_VERSION
@@ -602,6 +675,7 @@ def build_runtime(root, fxc, jobs, fsr=None, build=None):
 def setup(root, fxc, jobs, fsr=None):
     fetch_fidelityfx(root)
     fetch_gameinput(root)
+    fetch_dxc(root)
     build_runtime(root, fxc, jobs, fsr)
     (root/'setup-complete.json').write_text(json.dumps({'thirdparty_revision':SDK_REV,
                                                         'fidelityfx_revision':FFX_REV,
@@ -706,6 +780,7 @@ def build_game(root,fxc,jobs,flavor=(),fsr=None):
     # Always stage the matching runtime/plugin, including incremental builds.
     for dll in (install/'bin').glob('*.dll'):
         shutil.copyfile(dll,build/dll.name)
+    stage_dxc(root,build)
     run([build/'fm4_instruction_tests.exe'],cwd=build,log=root/f'logs/instruction-tests{suffix}.log')
     post_pass_tests(root,jobs)
     artifacts = ['fm4_rex.exe','fm4_rex_XMediaFacade_default.dll','fm4_rex_SpeechFacade_default.dll','rexruntime.dll','rexgpu-xenos.dll']
@@ -2423,6 +2498,7 @@ def main():
     fxc=doctor()
     print(ffx_status(root))
     print(gameinput_status(root))
+    print(dxc_status(root))
     if args.action=='doctor': return
     discs=None
     if args.content and args.action not in ('generate','all','run'):

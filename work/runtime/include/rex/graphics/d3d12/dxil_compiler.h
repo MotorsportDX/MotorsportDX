@@ -1,6 +1,6 @@
 /**
  * @file        graphics/d3d12/dxil_compiler.h
- * @brief       DXC for the native path's DXIL shaders (docs/analysis/d3d-hle-n6.md 19.3.8)
+ * @brief       DXC for the native path's DXIL shaders (docs/analysis/d3d-hle-n6.md 19.3.9)
  *
  * The DirectX Shader Compiler is Microsoft's (docs/sources-and-licensing.md) and is not in the
  * repository: the runtime loads the release's dxcompiler.dll from beside the executable, where

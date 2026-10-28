@@ -132,7 +132,7 @@ REXCVAR_DEFINE_BOOL(native_shader_dxil, false, "GPU/D3D12",
                     "With native_shader_contract: the DXIL world beside the DXBC one. Every "
                     "shader also through the generated HLSL and DXC, from the dxcompiler.dll and "
                     "dxil.dll beside the executable, and a pipeline takes DXIL where both of its "
-                    "shaders have it (docs/analysis/d3d-hle-n6.md 19.3.8); without DXC, DXBC "
+                    "shaders have it (docs/analysis/d3d-hle-n6.md 19.3.9); without DXC, DXBC "
                     "only")
     .lifecycle(rex::cvar::Lifecycle::kRequiresRestart);
 
