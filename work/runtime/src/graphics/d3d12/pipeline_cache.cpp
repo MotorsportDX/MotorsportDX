@@ -85,13 +85,6 @@ REXCVAR_DECLARE(bool, native_draw_scale_variant);
 // shader_override.cpp.
 REXCVAR_DECLARE(bool, native_shader_dxil);
 
-REXCVAR_DEFINE_STRING(shader_offline_pass_progress, "", "GPU/D3D12",
-                      "A file for the progress of the shader storage's translations at the start, "
-                      "one JSON line about every 250 ms and a last one with \"finished\": the "
-                      "offline pass's page reads it (shader_offline_pass, "
-                      "docs/analysis/d3d-hle-n6.md 19.3.9)")
-    .lifecycle(rex::cvar::Lifecycle::kRequiresRestart);
-
 REXCVAR_DEFINE_INT32(native_shader_dxil_ab_ms, 0, "GPU/D3D12",
                      "Development, with native_shader_dxil: an in-run A/B of the DXIL world "
                      "against the DXBC world, alternating every this many milliseconds (0: off). "
@@ -104,12 +97,14 @@ namespace rex::graphics::d3d12 {
 
 namespace {
 
-// shader_offline_pass_progress: the translations of the storage done and to do.
+// The offline pass's compile stage in its progress file (shader_offline_pass_progress, the
+// app's cvar, after the inventory's lines; docs/analysis/d3d-hle-n6.md 19.3.9): the
+// translations of the storage done and to do.
 class StorageProgress {
  public:
   StorageProgress(const std::string& path, size_t total) : total_(total) {
     if (!path.empty()) {
-      file_ = rex::filesystem::OpenFile(path, "wb");
+      file_ = rex::filesystem::OpenFile(path, "ab");
     }
     start_ = std::chrono::steady_clock::now();
   }
@@ -236,7 +231,8 @@ PipelineCache::PipelineCache(D3D12CommandProcessor& command_processor,
   // The DXIL world's compiles of the start's storage on the workers, so the
   // title starts on the DXBC world, except in the offline pass, which waits
   // for them (shader_offline_pass is the app's cvar).
-  dxil_start_async_ = mod_compile_async_ && !REXCVAR_QUERY(bool, shader_offline_pass);
+  offline_pass_ = REXCVAR_QUERY(bool, shader_offline_pass);
+  dxil_start_async_ = mod_compile_async_ && !offline_pass_;
   if (dxil_ab_) {
     REXGPU_INFO("DXIL shaders: A/B against the DXBC world every {} ms",
                 REXCVAR_GET(native_shader_dxil_ab_ms));
@@ -528,7 +524,9 @@ void PipelineCache::InitializeShaderStorage(const std::filesystem::path& cache_r
     ucode_dwords.reserve(0xFFFF);
     size_t shaders_translated = 0;
 
-    StorageProgress progress(REXCVAR_GET(shader_offline_pass_progress),
+    StorageProgress progress(REXCVAR_QUERY(bool, shader_offline_pass)
+                                 ? REXCVAR_QUERY(std::string, shader_offline_pass_progress)
+                                 : std::string(),
                              shader_translations_needed.size());
     // Threads overlapping file reading.
     std::mutex shaders_translation_thread_mutex;
@@ -1946,8 +1944,10 @@ bool PipelineCache::TranslateAnalyzedShader(DxbcShaderTranslator& translator,
   // shader_override_async: a draw meets the translation, so a mod or entry
   // that the cache does not hold compiles on a worker.
   ShaderCompileQueue* mod_queue = for_draw && mod_compile_async_ ? &mod_compile_queue_ : nullptr;
+  // In the offline pass every DXIL compile waits, also a predicted translation's (as for a draw).
   ShaderCompileQueue* dxil_queue =
-      (for_draw && mod_compile_async_) || dxil_start_async_ ? &mod_compile_queue_ : nullptr;
+      !offline_pass_ && ((for_draw && mod_compile_async_) || dxil_start_async_) ? &mod_compile_queue_
+                                                                                : nullptr;
   // A native shader contract entry is translated without the DXBC translator
   // (docs/analysis/shader-contract.md, increment 2); otherwise, if that fails,
   // or until a worker compiles an entry that the cache does not hold, the DXBC

@@ -48,12 +48,6 @@
 #include <filesystem>
 #include <string_view>
 
-REXCVAR_DEFINE_BOOL(shader_offline_pass, false, "GPU",
-                    "The offline shader pass (docs/analysis/d3d-hle-n6.md 19.3.9): translate and "
-                    "compile the shader storage as the start does, then exit before the title "
-                    "runs; shader_offline_pass_progress writes its progress")
-    .lifecycle(rex::cvar::Lifecycle::kRequiresRestart);
-
 REXCVAR_DEFINE_STRING(gpu_plugin, "", "GPU",
                       "GPU emulation plugin to load at startup (e.g. 'xenos'); empty disables "
                       "GPU emulation")
@@ -571,7 +565,9 @@ void ReXApp::LaunchModule() {
     }
 
     // The offline pass's inventory stage, before the storage loads what it
-    // appends; the start's translations follow as at every start.
+    // appends; the start's translations follow as at every start, the compile
+    // stage with them (docs/analysis/d3d-hle-n6.md 19.3.9: in the pass, the
+    // DXIL world's compiles wait there instead of going to the workers).
     const bool offline_pass = REXCVAR_GET(shader_offline_pass);
     const bool offline_pass_ok = offline_pass && RunShaderOfflinePass(*runtime_);
 
@@ -583,15 +579,6 @@ void ReXApp::LaunchModule() {
         graphics_system->InitializeShaderStorage(runtime_->cache_root(), title_id, true);
       }
     }
-    if (REXCVAR_GET(shader_offline_pass)) {
-      // Everything it wrote is in place (the cache files are renamed in whole),
-      // and the title never ran: no shutdown, whose teardown of a module that
-      // was loaded but never resumed corrupted the heap.
-      REXLOG_INFO("Offline shader pass: the shader storage is translated and compiled; exiting");
-      rex::FlushLogging();
-      std::_Exit(0);
-    }
-
     if (offline_pass) {
       bool ok = offline_pass_ok;
       // As the window's close does: a hard exit rather than the subsystems'

@@ -436,6 +436,8 @@ class PipelineCache {
   // native_shader_dxil_ab_ms (docs/analysis/d3d-hle-n6.md 19.3.9).
   bool dxil_ab_ = false;
   bool dxil_start_async_ = false;
+  // shader_offline_pass (the app's cvar).
+  bool offline_pass_ = false;
   bool mod_compile_async_ = false;
   // Pipeline states replaced by hot reload or SwapCompiledMods, and the
   // submission after which the GPU no longer uses them.
