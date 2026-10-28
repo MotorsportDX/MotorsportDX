@@ -75,6 +75,13 @@ The race phase of `photo` is 30 seconds of racing after 10 seconds of driving, w
 
 BuildRoots on 20 October 2026: `I:\FM4-build-usa` (USA discs, the development base) and `I:\FM4-build-pass` (Japan/Asia discs, for side builds). `I:\FM4-build2`, `I:\FM4-build-iter` and `I:\FM4-build-gtao` were removed that day; the runs, shader dumps, inventories, gate logs, material atlas and shader storage that the docs cite were moved first to `I:\FM4-archive\<BuildRoot>` with the same relative paths, and the docs point there. Results named with a bare BuildRoot of those three describe where a run was made.
 
+### Racing wheel, stages 0 and 1, 29 October 2026
+
+- Stage 0 of [native racing wheel support](../analysis/racing-wheels.md#stage-0-done-29-october-2026): a wheel host shared by the runtime and the GUI launcher (SDL's joystick and haptic APIs, a 1,000 Hz force thread, the safety governor, stops on crash and exit, a recording backend), `wheel` and `wheel_ffb_*` cvars off by default, the launcher's wheel test without the game, and the owner's [checklist](../running.md#racing-wheel-test-checklist). The runtime's SDL is now built with haptics. Stage 1 traced the title's control path and its anti-cheat rule ([findings](../analysis/racing-wheels.md#stage-1-findings-29-october-2026)); the game gets no wheel input or force yet.
+- Build: `I:\FM4-build-usa`, snapshot `whl2` from `782ba03` (not dirty); `fm4_wheel_ffb_tests`, `fm4_wheel_host_tests` (an SDL virtual wheel, no force device) and `fm4_pad_shaping_tests` pass; the launcher built from the same source passes its tests (504 plans).
+- A career at 3/2 and 240 Hz with the defaults: exit 0, race 238.59 fps, the same four log errors as main's; against `l1fs32` WARN on `wait_reg_mem` only (435.40 to 532.20 ms/s), where the same code path at `a787079` (snapshot `whl1`) passed. With `wheel=true` on the recording sink: exit 0, the host started in the game, and the recording held zero force, blocked for focus.
+- Not covered: a real wheel (this PC has none). The owner's checklist covers the device, the forces, focus loss and a killed process.
+
 ### Level 1 final gate, 29 October 2026
 
 The one full gate at the end of Level 1 of the native port ([D3D-level HLE, 19.11](../analysis/d3d-hle-n6.md#1911-the-level-1-final-gate-29-october-2026)), on local main `4a5f02f` with the shipped defaults (the DXIL world on, DXC beside the game) and the shader pass before each run, against main before Level 1 (`5d1c4f7`'s runtime, snapshot `n6f4`). `I:\FM4-build-usa`, 240 Hz, the native path, the look `aces`.
