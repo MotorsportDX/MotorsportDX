@@ -118,7 +118,10 @@ class StorageProgress {
       fclose(file_);
     }
   }
-  void Done() {
+  void Done(bool failed) {
+    if (failed) {
+      errors_.fetch_add(1, std::memory_order_relaxed);
+    }
     size_t done = done_.fetch_add(1, std::memory_order_relaxed) + 1;
     if (!file_) {
       return;
@@ -143,14 +146,18 @@ class StorageProgress {
     auto elapsed = std::chrono::duration_cast<std::chrono::milliseconds>(
                        std::chrono::steady_clock::now() - start_)
                        .count();
-    fmt::print(file_, "{{\"done\": {}, \"total\": {}, \"elapsed_ms\": {}{}}}\n", done, total_,
-               elapsed, finished ? ", \"finished\": true" : "");
+    fmt::print(file_,
+               "{{\"stage\": \"compile\", \"done\": {}, \"total\": {}, \"errors\": {}, "
+               "\"elapsed_ms\": {}{}}}\n",
+               done, total_, errors_.load(std::memory_order_relaxed), elapsed,
+               finished ? ", \"finished\": true" : "");
     fflush(file_);
   }
 
   FILE* file_ = nullptr;
   size_t total_;
   std::atomic<size_t> done_{0};
+  std::atomic<size_t> errors_{0};
   std::mutex mutex_;
   std::chrono::steady_clock::time_point start_, last_;
 };
@@ -584,13 +591,14 @@ void PipelineCache::InitializeShaderStorage(const std::filesystem::path& cache_r
           // If it's a shader previously encountered in the game, translation of
           // which has failed, and the shader storage is loaded later, keep it
           // this way not to try to translate it again.
-          if (!translation->is_translated() &&
-              !TranslateAnalyzedShader(translator, *translation, dxbc_converter, dxc_utils,
-                                       dxc_compiler)) {
+          bool failed = !translation->is_translated() &&
+                        !TranslateAnalyzedShader(translator, *translation, dxbc_converter,
+                                                 dxc_utils, dxc_compiler);
+          if (failed) {
             std::lock_guard<std::mutex> lock(shaders_failed_to_translate_mutex);
             shaders_failed_to_translate.push_back(translation);
           }
-          progress.Done();
+          progress.Done(failed);
         }
         // A pixel shader that no stored pipeline names (the disc inventory's):
         // its predicted modifications, with the look mod queued on the workers
