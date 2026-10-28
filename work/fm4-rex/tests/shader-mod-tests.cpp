@@ -451,6 +451,206 @@ Result Compile(const std::string& library, const std::filesystem::path& mods,
   return result;
 }
 
+// What ShaderOverrides::BuildContract writes for a vertex shader of the host vertex stage
+// (docs/analysis/shader-contract.md 9): interpolators 0 to 3 of the mask, no texture, every
+// float constant; with distances, two user clip planes as clip distances, the vertex kill's
+// AND rule as a cull distance and the point size.
+std::string VertexContract(bool distances, bool live_knobs, Native native) {
+  std::string out =
+      "// Synthetic vertex contract (fm4_shader_mod_tests).\n#define XE_PIXEL_SHADER 0\n"
+      "#define XE_VERTEX_SHADER 1\n";
+  auto line = [&out](const std::string& text) { out += text + "\n"; };
+  if (live_knobs) {
+    line("#define XE_SYSTEM_CONSTANT_VECTORS " +
+         std::to_string(kSystemConstantVectors + kHostValueVectors + kKnobCount / 4));
+    line("#define XE_SYS_MOD_KNOBS " +
+         std::to_string((kSystemConstantVectors + kHostValueVectors) * 16) + "u");
+  } else {
+    line("#define XE_SYSTEM_CONSTANT_VECTORS " +
+         std::to_string(kSystemConstantVectors + kHostValueVectors));
+  }
+  line("#define XE_SYS_GUEST_VBLANK_RATE " + std::to_string(kSystemConstantVectors * 16) + "u");
+  line("#define XE_SYS_GUEST_FRAME_INTERVAL " + std::to_string(kSystemConstantVectors * 16 + 4) +
+       "u");
+  line("#define XE_SYS_GUEST_DESIGN_FRAME_RATE " + std::to_string(kSystemConstantVectors * 16 + 8) +
+       "u");
+  if (native != Native::kNone) {
+    line("#define XE_NATIVE_CONTRACT 1");
+    line("#define XE_SYS_NATIVE_PASS " + std::to_string(kSystemConstantVectors * 16 + 12) + "u");
+    const char* const kPasses[] = {"OTHER", "POST", "HUD", "SCENE", "MIRROR"};
+    for (uint32_t pass = 0; pass < std::size(kPasses); ++pass) {
+      line(std::string("#define XE_NATIVE_PASS_") + kPasses[pass] + " " + std::to_string(pass) +
+           "u");
+    }
+  }
+  line("#define XE_SYS_FLAGS 0u");
+  line("#define XE_SYS_TEXTURE_SWIZZLED_SIGNS 16u");
+  line("#define XE_SYS_TEXTURES_RESOLUTION_SCALED 48u");
+  line("#define XE_SYS_SAMPLE_COUNT_LOG2 52u");
+  line("#define XE_SYS_ALPHA_TEST_REFERENCE 60u");
+  line("#define XE_SYS_ALPHA_TO_MASK 64u");
+  line("#define XE_SYS_COLOR_EXP_BIAS 80u");
+  line("#define XE_SYS_TEXTURE_INTEGER_SCALE_BITS 96u");
+  line("#define XE_SYSFLAG_PRIMITIVE_POLYGONAL 2u");
+  line("#define XE_SYSFLAG_PRIMITIVE_LINE_SHIFT 2u");
+  line("#define XE_SYSFLAG_DEPTH_FLOAT24 8u");
+  line("#define XE_SYSFLAG_ALPHA_PASS_IF_LESS_SHIFT 4u");
+  line("#define XE_SYSFLAG_CONVERT_COLOR0_TO_GAMMA_SHIFT 7u");
+  line("#define XE_SYS_LINE_LOOP_CLOSING_INDEX 12u");
+  line("#define XE_SYS_VERTEX_INDEX_ENDIAN 16u");
+  line("#define XE_SYS_VERTEX_INDEX_OFFSET 20u");
+  line("#define XE_SYS_VERTEX_INDEX_MIN 24u");
+  line("#define XE_SYS_VERTEX_INDEX_MAX 28u");
+  line("#define XE_SYS_USER_CLIP_PLANES 32u");
+  line("#define XE_SYS_NDC_SCALE 128u");
+  line("#define XE_SYS_NDC_OFFSET 144u");
+  line("#define XE_SYS_POINT_VERTEX_DIAMETER_MIN 140u");
+  line("#define XE_SYS_POINT_VERTEX_DIAMETER_MAX 156u");
+  line("#define XE_SYSFLAG_SHARED_MEMORY_IS_UAV 1024u");
+  line("#define XE_SYSFLAG_W_NOT_RECIPROCAL 2048u");
+  line("#define XE_SYSFLAG_XY_DIVIDED_BY_W 4096u");
+  line("#define XE_SYSFLAG_Z_DIVIDED_BY_W 8192u");
+  line("#define XE_RESOLUTION_SCALE_X 2");
+  line("#define XE_RESOLUTION_SCALE_Y 2");
+  line("#define XE_REVERT_RESOLUTION_SCALE_AXES 3u");
+  line("#define XE_GAMMA_RENDER_TARGET_AS_UNORM8 1");
+  line("#define XE_MSAA_2X_SUPPORTED 1");
+  line("#define XE_FUZZY_ALPHA_EPSILON 0");
+  line("#define XE_POST_VIEWS " + std::to_string(kPostViews) + "u");
+  line("#define XE_POST_VIEW_COUNT 8u");
+  line("#define XE_REGISTER_COUNT 8");
+  line("#define XE_INTERPOLATOR_MASK 0x000Fu");
+  line(std::string("#define XE_USER_CLIP_PLANE_COUNT ") + (distances ? "2u" : "0u"));
+  line("#define XE_USER_CLIP_PLANE_FIRST 0u");
+  line(std::string("#define XE_WRITES_VERTEX_KILL ") + (distances ? "1" : "0"));
+  line(std::string("#define XE_VERTEX_KILL_AND ") + (distances ? "1" : "0"));
+  line(std::string("#define XE_VERTEX_KILL_DISTANCE ") + (distances ? "2u" : "0u"));
+  line("#define XE_FLOAT_CONSTANT_COUNT 256");
+  for (uint32_t i = 0; i < 256; ++i) {
+    line("#define XE_FLOAT_CONSTANT_" + std::to_string(i) + " xe_float_constants[" +
+         std::to_string(i) + "]");
+  }
+  line("#define XE_DESCRIPTOR_INDEX_VECTORS 0");
+  line("struct XeVsInput {");
+  line("  uint xe_vertex_id : SV_VertexID;");
+  line("};");
+  line("struct XeVsOutput {");
+  std::string store = "#define XE_STORE_OUTPUTS(output, p, distances)";
+  for (uint32_t i = 0; i < 4; ++i) {
+    line("  float4 xe_interpolator" + std::to_string(i) + " : TEXCOORD" + std::to_string(i) + ";");
+    store += " output.xe_interpolator" + std::to_string(i) + " = p.o[" + std::to_string(i) + "];";
+  }
+  line("  float4 xe_position : SV_Position;");
+  if (distances) {
+    line("  float2 xe_clip0 : SV_ClipDistance0;");
+    line("  float xe_cull0 : SV_CullDistance0;");
+    line("  float xe_point_size : XEPSIZE;");
+    store += " output.xe_clip0.x = distances[0]; output.xe_clip0.y = distances[1];"
+             " output.xe_cull0 = distances[2]; output.xe_point_size = p.point_size_edge_flag_kill.x;";
+  }
+  line("};");
+  out += store + "\n";
+  return out;
+}
+
+// A vertex shader in the form HlslShaderTranslator generates: a 32-bit float position and a
+// signed normalized 8_8_8_8 normal from shared memory (vertex fetch through XE_HOOK_VFETCH),
+// constants through XE_CONSTANT, the position and three interpolators exported.
+const char kVertexShader[] = R"(void xe_vertex_shader(inout XeVertex p) {
+  precise float ps = 0.0;
+  bool p0 = false;
+  int a0 = 0;
+  int4 aL = 0;
+  uint4 loop_count = 0u;
+  float4 grad_h_lod = 0.0;
+  float4 grad_v = 0.0;
+  int vfetch_address = 0;
+  {
+    precise float vfetch_index = floor(p.r[0].x);
+    vfetch_address = int(vfetch_index) * 16 + int(xe_vfetch_word(95u, 0u) & 0xFFFFFFFCu);
+    uint4 w = 0u;
+    w.x = xe_shared_memory_word(vfetch_address + 0);
+    w.y = xe_shared_memory_word(vfetch_address + 4);
+    w.z = xe_shared_memory_word(vfetch_address + 8);
+    w = xe_vfetch_swap(w, xe_vfetch_word(95u, 1u) & 3u);
+    precise float4 v = asfloat(w);
+    v.w = 0.0;
+    v = XE_HOOK_VFETCH(95u, 0, v);
+    p.r[1].xyz = (v).xyz;
+    p.r[1].w = 1.0;
+  }
+  {
+    uint4 w = 0u;
+    w.x = xe_shared_memory_word(vfetch_address + 12);
+    w = xe_vfetch_swap(w, xe_vfetch_word(95u, 1u) & 3u);
+    precise float4 v = asfloat(w);
+    v.x = float(xe_ibfe(w.x, 8u, 0u));
+    v.x = v.x * asfloat(0x3C010204u);
+    v.x = max(v.x, -1.0);
+    v.y = float(xe_ibfe(w.x, 8u, 8u));
+    v.y = v.y * asfloat(0x3C010204u);
+    v.y = max(v.y, -1.0);
+    v.z = float(xe_ibfe(w.x, 8u, 16u));
+    v.z = v.z * asfloat(0x3C010204u);
+    v.z = max(v.z, -1.0);
+    v = XE_HOOK_VFETCH(95u, 3, v);
+    p.r[2].xyz = (v).xyz;
+  }
+  {
+    precise float4 v = float4(dot(p.r[1], XE_CONSTANT(0)), dot(p.r[1], XE_CONSTANT(1)),
+                              dot(p.r[1], XE_CONSTANT(2)), dot(p.r[1], XE_CONSTANT(3)));
+    p.position = v;
+    p.point_size_edge_flag_kill.z = XE_CONSTANT(4).x;
+  }
+  p.o[0] = p.r[2];
+  p.o[1] = p.r[1];
+  p.o[2].xy = XE_CONSTANT(5).xy;
+  return;
+}
+)";
+
+// A vertex entry's hooks: none, the identity (writes back what it reads), or a move of the
+// position by a fixed offset in clip space with one export zeroed.
+enum class VertexHook { kNone, kIdentity, kMove };
+
+Result CompileVertex(const std::string& library, VertexHook hook, bool distances,
+                     bool live_knobs = false, Native native = Native::kNone) {
+  std::string source = VertexContract(distances, live_knobs, native) +
+                       "#include \"xenos_override.hlsli\"\n";
+  if (hook == VertexHook::kIdentity) {
+    source += "#undef XE_HOOK_VERTEX_OUTPUT\n#define XE_HOOK_VERTEX_OUTPUT(p, input) "
+              "{ p.position = p.position; p.o[0] = p.o[0]; }\n";
+  } else if (hook == VertexHook::kMove) {
+    source += "#undef XE_HOOK_VERTEX_OUTPUT\n#define XE_HOOK_VERTEX_OUTPUT(p, input) "
+              "{ p.position.xy += 0.0125 * p.position.w; p.o[1] = 0.0; }\n";
+  }
+  source += "#line 1 \"vertex.vs.hlsl\"\n";
+  source += kVertexShader;
+  source += "\n#define XE_OVERRIDE_MAIN\n#include \"xenos_override.hlsli\"\n";
+  Include include(library, {});
+  ComPtr<ID3DBlob> code, errors;
+  HRESULT hr = D3DCompile(source.data(), source.size(), "main.hlsl", nullptr, &include, "main",
+                          "vs_5_1",
+                          D3DCOMPILE_ENABLE_UNBOUNDED_DESCRIPTOR_TABLES |
+                              D3DCOMPILE_IEEE_STRICTNESS | D3DCOMPILE_OPTIMIZATION_LEVEL3,
+                          0, &code, &errors);
+  Result result;
+  if (errors) {
+    result.messages.assign(static_cast<const char*>(errors->GetBufferPointer()),
+                           errors->GetBufferSize());
+  }
+  if (FAILED(hr) || !code) {
+    return result;
+  }
+  result.compiled = true;
+  result.fingerprint = 0xCBF29CE484222325ull;
+  const uint8_t* bytes = static_cast<const uint8_t*>(code->GetBufferPointer());
+  for (size_t i = 0; i < code->GetBufferSize(); ++i) {
+    result.fingerprint = (result.fingerprint ^ bytes[i]) * 0x100000001B3ull;
+  }
+  return result;
+}
+
 void Report(const Result& result, const std::string& what) {
   Check(result.compiled, what + " compiles");
   if (!result.compiled || result.messages.find("warning") != std::string::npos) {
@@ -657,6 +857,33 @@ int main(int argc, char** argv) {
   Report(combine_live, std::string(kFinalCombine) + ", live knobs, pass debug view");
   Check(combine_live.compiled && combine_live.reads_knobs,
         std::string(kFinalCombine) + ", live knobs: reads the knobs at run time");
+
+  // Vertex shaders (docs/analysis/shader-contract.md 9): the library's vertex main with a
+  // shader in the generator's form, with no hooks, the identity hooks (the same DXBC), and
+  // hooks that move the position (another DXBC); with the distances and the point size; with
+  // live knobs and the native contract's pass class.
+  Result vertex_plain = CompileVertex(library, VertexHook::kNone, false);
+  Report(vertex_plain, "a vertex shader");
+  std::printf("     vertex shader: fingerprint %016llX\n",
+              static_cast<unsigned long long>(vertex_plain.fingerprint));
+  Result vertex_identity = CompileVertex(library, VertexHook::kIdentity, false);
+  Report(vertex_identity, "a vertex shader with identity hooks");
+  Check(vertex_identity.compiled && vertex_identity.fingerprint == vertex_plain.fingerprint,
+        "a vertex shader with identity hooks: the same DXBC");
+  Result vertex_move = CompileVertex(library, VertexHook::kMove, false);
+  Report(vertex_move, "a vertex shader with hooks that move the position");
+  Check(vertex_move.compiled && vertex_move.fingerprint != vertex_plain.fingerprint,
+        "a vertex shader with hooks that move the position: the DXBC changes");
+  Result vertex_distances = CompileVertex(library, VertexHook::kNone, true);
+  Report(vertex_distances, "a vertex shader with clip and cull distances and the point size");
+  std::printf("     vertex shader with distances: fingerprint %016llX\n",
+              static_cast<unsigned long long>(vertex_distances.fingerprint));
+  Result vertex_native = CompileVertex(library, VertexHook::kMove, false, false, Native::kPass);
+  Report(vertex_native, "a vertex shader with the native contract's pass class");
+  Check(vertex_native.compiled && vertex_native.fingerprint == vertex_move.fingerprint,
+        "a vertex shader with the native contract: the same DXBC without a pass read");
+  Result vertex_live = CompileVertex(library, VertexHook::kMove, false, true, Native::kPass);
+  Report(vertex_live, "a vertex shader with live knobs and the native contract's pass class");
 
   std::printf("%s (%d failures)\n", failures ? "FAILED" : "PASSED", failures);
   return failures ? 1 : 0;

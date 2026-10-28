@@ -140,6 +140,9 @@ class ShaderOverrides {
   // native_shader_pass_debug: entries tint their draws by pass class, and the
   // command processor logs the classes it gives.
   bool native_pass_debug() const { return native_pass_debug_; }
+  // native_shader_contract_vertex_all: every vertex shader takes its generated
+  // HLSL (docs/analysis/shader-contract.md 9.2.4).
+  bool native_vertex_all() const { return native_vertex_all_; }
 
   // The translation of a native shader contract entry without the DXBC
   // translator (increment 2, docs/analysis/shader-contract.md): the game
@@ -161,6 +164,12 @@ class ShaderOverrides {
   // native_shader_contract_check: whether to check the entries and the
   // bindings against DXBC translations.
   bool check() const { return check_; }
+  // Every vertex shader translated, with vertex entries in the manifest: a
+  // warning, once, for a key that the manifest does not list but whose
+  // fetch-blind key (VertexFetchBlindKey) one of an entry's keys has, since the
+  // XDK rewrote its fetches for a layout the entry does not list
+  // (docs/analysis/shader-contract.md 9.3.1).
+  void NoteVertexShader(const Shader& shader);
   // With check(): the bindings HlslShaderTranslator assigns to a pixel shader
   // against those its DXBC translation stored (every pixel shader translated
   // with the DXBC translator), and an entry's override against a DXBC
@@ -323,9 +332,13 @@ class ShaderOverrides {
   std::string CheckSignatures(const Shader& shader, uint64_t modification,
                               const std::vector<uint8_t>& dxbc,
                               const std::vector<uint8_t>& binary) const;
-  // entry: the manifest's entry the translation takes, or nullptr.
+  // entry: the manifest's entry the translation takes, or nullptr (for a
+  // vertex shader, vertex_entry).
   std::string BuildContract(const D3D12Shader::D3D12Translation& translation,
-                            const native_shader_contract::PixelEntry* entry) const;
+                            const native_shader_contract::PixelEntry* entry,
+                            const native_shader_contract::VertexEntry* vertex_entry = nullptr) const;
+  std::string BuildVertexContract(const D3D12Shader::D3D12Translation& translation,
+                                  uint32_t register_count) const;
   // Whether the translation has every input a replacement entry names (an
   // interpolator of its mask, a float constant its shader reads, a texture it
   // fetches): empty if so, else the first that it lacks.
@@ -345,7 +358,7 @@ class ShaderOverrides {
   bool Compile(const D3D12Shader::D3D12Translation& translation,
                const std::vector<uint8_t>& dxbc, const std::string& contract,
                const std::string& text, const std::string& name, const std::string& mod,
-               const native_shader_contract::PixelEntry* entry,
+               const std::vector<std::string>* params,
                std::vector<uint8_t>& binary_out, std::vector<Dependency>& files_out,
                std::unique_ptr<CompileJob>* job_out = nullptr) const;
   // The manifest's entry a translation takes (not in the A/B's classic periods,
@@ -353,6 +366,19 @@ class ShaderOverrides {
   // nullptr.
   const native_shader_contract::PixelEntry* NativeEntry(
       const D3D12Shader::D3D12Translation& translation) const;
+  // The same for a vertex shader's translation (not outside the entry's passes
+  // or in the A/B's other periods).
+  const native_shader_contract::VertexEntry* NativeVertexEntry(
+      const D3D12Shader::D3D12Translation& translation) const;
+  // Whether a vertex shader's translation takes its generated HLSL: a vertex
+  // shader of the host vertex stage without memexport, with an entry or
+  // native_shader_contract_vertex_all, not in native_plain or native_classic.
+  bool GeneratesVertex(const D3D12Shader::D3D12Translation& translation) const;
+  // Build for a vertex shader: its generated HLSL with the entry's hooks.
+  Outcome BuildVertex(const D3D12Shader::D3D12Translation& translation,
+                      const std::vector<uint8_t>& dxbc, std::vector<uint8_t>& binary_out,
+                      std::vector<Dependency>& files_out,
+                      std::unique_ptr<CompileJob>* job_out = nullptr);
   // FXC, the check against the signatures of dxbc and the cache store of a job
   // (on_worker: a compile worker runs it).
   bool RunCompile(const CompileJob& job, const std::vector<uint8_t>& dxbc,
@@ -404,16 +430,27 @@ class ShaderOverrides {
   bool entry_knobs_ = false;
   // native_shader_pass_debug: entries tint their colour by pass class.
   bool native_pass_debug_ = false;
+  bool native_vertex_all_ = false;
   // native_shader_contract_check, and its counts: translations whose
   // bindings were compared, the shaders among them (logged once each), the
   // translations whose bindings differ, those without HLSL (an unsupported
   // fetch or memexport), the entries checked.
   bool check_ = false;
   std::mutex check_mutex_;
-  std::unordered_set<uint64_t, rex::IdentityHasher<uint64_t>> checked_shaders_;
-  uint32_t checked_bindings_ = 0;
-  uint32_t checked_mismatches_ = 0;
-  uint32_t checked_without_hlsl_ = 0;
+  struct CheckCounts {
+    std::unordered_set<uint64_t, rex::IdentityHasher<uint64_t>> shaders;
+    uint32_t bindings = 0;
+    uint32_t mismatches = 0;
+    uint32_t without_hlsl = 0;
+  };
+  // Pixel shaders, then vertex shaders.
+  CheckCounts checked_[2];
+  // NoteVertexShader: the keys seen, the fetch-blind keys of the entries' keys
+  // seen (with the key), and the unlisted keys by fetch-blind key.
+  std::mutex vertex_keys_mutex_;
+  std::unordered_set<uint64_t, rex::IdentityHasher<uint64_t>> vertex_keys_seen_;
+  std::unordered_map<uint64_t, uint64_t> vertex_entry_blind_keys_;
+  std::unordered_map<uint64_t, std::vector<uint64_t>> vertex_unlisted_keys_;
   std::atomic<uint32_t> checked_entries_{0};
   // Entries translated with the DXBC translator after all (TranslateEntry
   // failed), each logged with its reason.

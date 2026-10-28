@@ -103,9 +103,24 @@ struct PixelEntry {
   std::vector<Resource> srv;
 };
 
+// A [[vertex]] entry (docs/analysis/shader-contract.md 9): hooks into the vertex shader's
+// generated HLSL. One shader of the title has a ucode key per vertex layout the XDK rewrote its
+// fetches for, so an entry lists every key it hooks.
+struct VertexEntry {
+  // The runtime's keys of the guest vertex shader (XXH3 of its ucode), each in one entry.
+  std::vector<uint64_t> hashes;
+  // The mod in shader_mod_path that hooks into the shader's generated HLSL.
+  std::string hooks;
+  // Bit per pass class the entry applies in; the others take the DXBC translation.
+  uint32_t pass_mask = kAllPasses;
+  // As for pixel entries: defines of the mod read as constants after the host values.
+  std::vector<std::string> params;
+};
+
 struct Manifest {
   std::vector<PassRule> passes;
   std::vector<PixelEntry> pixel;
+  std::vector<VertexEntry> vertex;
 
   uint32_t PassCount() const { return kFirstTitlePass + uint32_t(passes.size()); }
 
@@ -139,6 +154,17 @@ struct Manifest {
     for (const PixelEntry& entry : pixel) {
       if (entry.hash == hash) {
         return &entry;
+      }
+    }
+    return nullptr;
+  }
+
+  const VertexEntry* FindVertex(uint64_t hash) const {
+    for (const VertexEntry& entry : vertex) {
+      for (uint64_t entry_hash : entry.hashes) {
+        if (entry_hash == hash) {
+          return &entry;
+        }
       }
     }
     return nullptr;

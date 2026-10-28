@@ -170,6 +170,13 @@ class DxbcShaderTranslator : public ShaderTranslator {
       // uint32_t 1.
       // Pipeline stage and input configuration.
       Shader::HostVertexShaderType host_vertex_shader_type : Shader::kHostVertexShaderTypeBitCount;
+      // Not used by the translator: with native_shader_contract, a draw of a
+      // vertex shader that would take its generated HLSL (a manifest entry, or
+      // native_shader_contract_vertex_all) takes the DXBC translation instead,
+      // outside the entry's passes (native_plain) or in the A/B's other
+      // periods (native_classic); see docs/analysis/shader-contract.md 9.
+      uint32_t native_plain : 1;
+      uint32_t native_classic : 1;
     } vertex;
     struct PixelShaderModification {
       // uint32_t 0.

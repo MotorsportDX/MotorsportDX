@@ -1,6 +1,6 @@
 /**
  * @file        graphics/pipeline/shader/hlsl_translator.h
- * @brief       Guest pixel shader ucode to HLSL shader overrides
+ * @brief       Guest pixel and vertex shader ucode to HLSL shader overrides
  */
 
 #pragma once
@@ -23,9 +23,13 @@ namespace rex::graphics {
 // translator does (FindOrAddTextureBinding, FindOrAddSamplerBinding: the same
 // bindings in the same order, so the same bindless descriptor indices), so a
 // shader can be translated without its DXBC translation (the native shader
-// contract's entries, docs/analysis/shader-contract.md). Vertex fetch,
-// getWeights, getCompTexLOD, getBCF and memexport are fatal errors (the DXBC
-// translation then stays).
+// contract's entries, docs/analysis/shader-contract.md). getWeights,
+// getCompTexLOD, getBCF and memexport are fatal errors (the DXBC translation
+// then stays).
+// Vertex shaders of the host vertex stage (not the domain shaders of
+// tessellation) generate void xe_vertex_shader(inout XeVertex p) the same way,
+// with vertex fetch from shared memory (docs/analysis/shader-contract.md 9);
+// kill and getGradients in a vertex shader are fatal errors.
 class HlslShaderTranslator : public ShaderTranslator {
  public:
   HlslShaderTranslator() = default;
@@ -90,6 +94,8 @@ class HlslShaderTranslator : public ShaderTranslator {
   void StoreResult(const InstructionResult& result, const std::string& value);
   void EmitVectorOperation(const ParsedAluInstruction& instr);
   void EmitScalarOperation(const ParsedAluInstruction& instr);
+  // The body of a vertex fetch instruction.
+  void EmitVertexFetch(const ParsedVertexFetchInstruction& instr);
   void EmitDisassembly(const std::string& disassembly);
 
   // DxbcShaderTranslator::FindOrAddTextureBinding and FindOrAddSamplerBinding

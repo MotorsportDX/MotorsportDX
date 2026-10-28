@@ -176,7 +176,7 @@ bool ParseManifest(std::string_view text, const std::string& file_name, Manifest
     return fail(
         Text({"line ", std::to_string(error.source().begin.line), ": ", error.description()}));
   }
-  if (std::string_view key = UnknownKey(root, {"pass", "pixel"}); !key.empty()) {
+  if (std::string_view key = UnknownKey(root, {"pass", "pixel", "vertex"}); !key.empty()) {
     return fail(Text({"unknown key '", key, "'"}));
   }
 
@@ -365,6 +365,75 @@ bool ParseManifest(std::string_view text, const std::string& file_name, Manifest
             {kind == "post" ? Resource::Kind::kPost : Resource::Kind::kFile, std::move(name)});
       }
       manifest.pixel.push_back(std::move(entry));
+    }
+  }
+  // [[vertex]]: hooks into vertex shaders, by one key or a list of keys.
+  if (const toml::node* node = root.get("vertex")) {
+    const toml::array* vertices = node->as_array();
+    if (!vertices) {
+      return fail("'vertex' must be an array of tables ([[vertex]])");
+    }
+    for (const toml::node& item : *vertices) {
+      const toml::table* fields = item.as_table();
+      if (!fields) {
+        return fail("'vertex' must be an array of tables ([[vertex]])");
+      }
+      std::vector<std::string> hash_texts;
+      const bool hashes_valid = StringList(fields->get("hash"), hash_texts);
+      const std::string label = hash_texts.empty() ? std::string() : hash_texts.front();
+      if (std::string_view key = UnknownKey(*fields, {"hash", "hooks", "passes", "params"});
+          !key.empty()) {
+        return fail(Text({"[[vertex]] ", label, ": unknown key '", key, "'"}));
+      }
+      if (!hashes_valid || hash_texts.empty()) {
+        return fail("[[vertex]]: hash must be a key or a list of keys");
+      }
+      VertexEntry entry;
+      for (const std::string& hash_text : hash_texts) {
+        char* end = nullptr;
+        uint64_t hash = std::strtoull(hash_text.c_str(), &end, 16);
+        if (hash_text.size() != 16 || end != hash_text.c_str() + 16) {
+          return fail(Text({"[[vertex]]: hash '", hash_text, "' is not 16 hexadecimal digits"}));
+        }
+        if (manifest.FindVertex(hash) ||
+            std::find(entry.hashes.begin(), entry.hashes.end(), hash) != entry.hashes.end()) {
+          return fail(Text({"[[vertex]] ", hash_text, ": the hash has two entries"}));
+        }
+        entry.hashes.push_back(hash);
+      }
+      entry.hooks = (*fields)["hooks"].value_or(std::string());
+      if (entry.hooks.empty() || entry.hooks.find_first_of("/\\:") != std::string::npos) {
+        return fail(
+            Text({"[[vertex]] ", label, ": hooks must name a file of the look directory"}));
+      }
+      // The classic mods' lookup takes shader_<hash>.mod.hlsli as a pixel shader's mod.
+      if (entry.hooks.rfind("shader_", 0) == 0) {
+        return fail(Text({"[[vertex]] ", label,
+                          ": hooks must not begin with shader_ (the classic pixel mods' names)"}));
+      }
+      std::vector<std::string> names;
+      if (!StringList(fields->get("passes"), names)) {
+        return fail(Text({"[[vertex]] ", label, ": passes must be pass names"}));
+      }
+      if (fields->contains("passes")) {
+        entry.pass_mask = 0;
+        for (const std::string& name : names) {
+          uint32_t pass = manifest.FindPass(name);
+          if (pass == UINT32_MAX) {
+            return fail(Text({"[[vertex]] ", label, ": no pass '", name, "'"}));
+          }
+          entry.pass_mask |= uint32_t(1) << pass;
+        }
+      }
+      if (!StringList(fields->get("params"), entry.params)) {
+        return fail(Text({"[[vertex]] ", label, ": params must be define names"}));
+      }
+      for (const std::string& name : entry.params) {
+        if (!IsDefineName(name)) {
+          return fail(Text({"[[vertex]] ", label, ": param '", name, "' is not a define name"}));
+        }
+      }
+      manifest.vertex.push_back(std::move(entry));
     }
   }
   // The look files of all entries, each name once.

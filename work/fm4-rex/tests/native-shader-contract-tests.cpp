@@ -306,6 +306,71 @@ face = "front_face"
         "unknown entry key");
   Check(Refused("[[pass]\n"), "syntax error");
 
+  // Vertex entries (docs/analysis/shader-contract.md 9): a key or a list of keys, hooks, passes
+  // and params.
+  nsc::Manifest vertex;
+  Check(Parses(R"(
+[[pass]]
+name = "scene"
+depth_base = 1024
+
+[[vertex]]
+hash = ["8D05A46C3584CA9E", "bbd01c26b1c45733"]
+hooks = "vs-car-paint.mod.hlsli"
+passes = ["scene"]
+params = ["FM4_LOOK_EXAMPLE"]
+
+[[vertex]]
+hash = "0123456789ABCDEF"
+hooks = "vs-other.mod.hlsli"
+
+[[pixel]]
+hash = "0123456789ABCDEF"
+hooks = "shader_0123456789ABCDEF.mod.hlsli"
+)",
+               vertex),
+        "a manifest with vertex entries parses");
+  const nsc::VertexEntry* paint = vertex.FindVertex(0xBBD01C26B1C45733ull);
+  Check(paint && paint == vertex.FindVertex(0x8D05A46C3584CA9Eull) && paint->hashes.size() == 2,
+        "both keys of a vertex entry find it");
+  Check(paint && paint->hooks == "vs-car-paint.mod.hlsli" &&
+            paint->pass_mask == uint32_t(1) << vertex.FindPass("scene") &&
+            paint->params.size() == 1 && paint->params[0] == "FM4_LOOK_EXAMPLE",
+        "the vertex entry's hooks, passes and params");
+  const nsc::VertexEntry* other = vertex.FindVertex(0x0123456789ABCDEFull);
+  Check(other && other->pass_mask == nsc::kAllPasses && other->params.empty(),
+        "a vertex entry of one key applies in every pass");
+  Check(vertex.FindPixel(0x0123456789ABCDEFull) != nullptr,
+        "a key may have a pixel and a vertex entry");
+  Check(!vertex.FindVertex(0x1111111111111111ull), "an unlisted vertex key has no entry");
+  Check(Refused("[[vertex]]\nhooks = \"a.hlsli\"\n"), "a vertex entry without a key");
+  Check(Refused("[[vertex]]\nhash = []\nhooks = \"a.hlsli\"\n"), "a vertex entry with no keys");
+  Check(Refused("[[vertex]]\nhash = \"0123\"\nhooks = \"a.hlsli\"\n"), "a short vertex key");
+  Check(Refused("[[vertex]]\nhash = [\"0123456789ABCDEF\", \"0123456789abcdef\"]\nhooks = "
+                "\"a.hlsli\"\n"),
+        "a key twice in one vertex entry");
+  Check(Refused("[[vertex]]\nhash = \"0123456789ABCDEF\"\nhooks = \"a.hlsli\"\n[[vertex]]\nhash = "
+                "[\"1111111111111111\", \"0123456789ABCDEF\"]\nhooks = \"b.hlsli\"\n"),
+        "a key in two vertex entries");
+  Check(Refused("[[vertex]]\nhash = \"0123456789ABCDEF\"\n"), "a vertex entry without hooks");
+  Check(Refused("[[vertex]]\nhash = \"0123456789ABCDEF\"\nhooks = \"dir/a.hlsli\"\n"),
+        "vertex hooks outside the look directory");
+  Check(Refused("[[vertex]]\nhash = \"0123456789ABCDEF\"\nhooks = "
+                "\"shader_0123456789ABCDEF.mod.hlsli\"\n"),
+        "vertex hooks named as a classic pixel mod");
+  Check(Refused("[[vertex]]\nhash = \"0123456789ABCDEF\"\nshader = \"a.hlsli\"\n"),
+        "vertex replacements are not supported");
+  Check(Refused("[[vertex]]\nhash = \"0123456789ABCDEF\"\nhooks = \"a.hlsli\"\nsrv = "
+                "[\"post:x\"]\n"),
+        "srv in a vertex entry");
+  Check(Refused("[[vertex]]\nhash = \"0123456789ABCDEF\"\nhooks = \"a.hlsli\"\npasses = "
+                "[\"nowhere\"]\n"),
+        "a vertex entry in an unknown pass");
+  Check(Refused("[[vertex]]\nhash = \"0123456789ABCDEF\"\nhooks = \"a.hlsli\"\nparams = "
+                "[\"lower\"]\n"),
+        "a vertex param that is not a define name");
+  Check(Refused("vertex = 1\n"), "vertex not an array of tables");
+
   if (failures) {
     std::printf("%d failures\n", failures);
     return 1;

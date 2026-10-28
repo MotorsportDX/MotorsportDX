@@ -368,8 +368,15 @@ void xe_texture_gradients(uint lod_flags, float lod, float3 location, float3 siz
       }
     }
   } else {
+#if XE_PIXEL_SHADER
     gradient_x = ddx_coarse(location) * gradient_scale;
     gradient_y = ddy_coarse(location) * gradient_scale;
+#else
+    // A vertex shader computes no LOD from derivatives (the generator passes
+    // XE_LOD_COMPUTED only with register gradients there).
+    gradient_x = 0.0;
+    gradient_y = 0.0;
+#endif
   }
 }
 
@@ -904,6 +911,150 @@ void xe_native_pass_debug(inout XePixel p) {
 
 #endif  // XE_PIXEL_SHADER
 
+// ---------------------------------------------------------------------------
+// Vertex shader state (StartVertexOrDomainShader, StartVertexShader_LoadVertexIndex,
+// ProcessVertexFetchInstruction, CompleteVertexOrDomainShader for the host
+// vertex stage; docs/analysis/shader-contract.md 9). The contract defines
+// XE_VERTEX_SHADER, XeVsInput, XeVsOutput and XE_STORE_OUTPUTS.
+
+#if XE_VERTEX_SHADER
+
+ByteAddressBuffer xe_shared_memory : register(t0, space0);
+RWByteAddressBuffer xe_shared_memory_uav : register(u0, space0);
+
+// A word of guest memory at a byte address: through the UAV when the draw binds
+// shared memory as one (memexport in the pipeline), else through the SRV.
+uint xe_shared_memory_word(int address) {
+  uint word;
+  if (xe_flags() & XE_SYSFLAG_SHARED_MEMORY_IS_UAV) {
+    word = xe_shared_memory_uav.Load(uint(address));
+  } else {
+    word = xe_shared_memory.Load(uint(address));
+  }
+  return word;
+}
+
+// Dword 0 or 1 of vertex fetch constant vf<fetch>: vf0 is [0].xy of the fetch
+// constants, vf1 [0].zw, vf2 [1].xy.
+uint xe_vfetch_word(uint fetch, uint word) {
+  uint dword = fetch * 2u + word;
+  return xe_fetch_constants[dword >> 2u][dword & 3u];
+}
+
+// Endian swap of words or of a vertex index: 8-in-16 or one half of 8-in-32,
+// then 16-in-32 or the other half of 8-in-32 (xenos::Endian and Endian128 alike
+// for these values).
+uint4 xe_vfetch_swap(uint4 value, uint endian) {
+  if (endian == 1u || endian == 2u) {
+    value = (((value & 0x00FF00FFu)) << 8u) | ((value >> 8u) & 0x00FF00FFu);
+  }
+  if (endian == 2u || endian == 3u) {
+    value = (value << 16u) | (value >> 16u);
+  }
+  return value;
+}
+
+// The point size clamped as the guest clamps it (as signed integers: -NaN and
+// -Infinity...-0 to the minimum, +NaN to the maximum).
+float xe_clamp_point_size(float size) {
+  return asfloat(min(max(asint(size), asint(xe_system_float(XE_SYS_POINT_VERTEX_DIAMETER_MIN))),
+                     asint(xe_system_float(XE_SYS_POINT_VERTEX_DIAMETER_MAX))));
+}
+
+struct XeVertex {
+  // r# with the vertex index in r0.x, the rest zero.
+  float4 r[XE_REGISTER_COUNT];
+  // oPos, as the guest exports it; xe_vs_normalize_position applies the W, XY
+  // and Z conventions of PA_CL_VTE_CNTL before the hooks see it.
+  float4 position;
+  // o0...o15, the guest's export registers (those of XE_INTERPOLATOR_MASK
+  // reach the pixel shader).
+  float4 o[16];
+  // oPts: the point size (-1: the default), the edge flag, the vertex kill.
+  float4 point_size_edge_flag_kill;
+};
+
+XeVertex xe_vs_prologue(XeVsInput input) {
+  XeVertex p;
+  [unroll] for (uint i = 0u; i < XE_REGISTER_COUNT; ++i) {
+    p.r[i] = 0.0;
+  }
+  [unroll] for (uint j = 0u; j < 16u; ++j) {
+    p.o[j] = 0.0;
+  }
+  p.position = 0.0;
+  p.point_size_edge_flag_kill = float4(-1.0, 0.0, 0.0, 0.0);
+  // The vertex index: zero for the closing vertex of a line loop, endian
+  // swapped, offset by the base vertex, masked to 24 bits and clamped.
+  uint index = input.xe_vertex_id;
+  index &= (index != xe_system_uint(XE_SYS_LINE_LOOP_CLOSING_INDEX)) ? 0xFFFFFFFFu : 0u;
+  index = xe_vfetch_swap(uint4(index, 0u, 0u, 0u), xe_system_uint(XE_SYS_VERTEX_INDEX_ENDIAN)).x;
+  index = (index + xe_system_uint(XE_SYS_VERTEX_INDEX_OFFSET)) & 0xFFFFFFu;
+  index = max(index, xe_system_uint(XE_SYS_VERTEX_INDEX_MIN));
+  index = min(index, xe_system_uint(XE_SYS_VERTEX_INDEX_MAX));
+  p.r[0].x = float(index);
+  return p;
+}
+
+// The W, XY and Z conventions: W from 1/W unless the guest returns W, XY and Z
+// multiplied back by W where the guest returns them divided by it.
+void xe_vs_normalize_position(inout XeVertex p) {
+  uint flags = xe_flags();
+  precise float4 position = p.position;
+  if (!(flags & XE_SYSFLAG_W_NOT_RECIPROCAL)) {
+    position.w = 1.0 / position.w;
+  }
+  if (flags & XE_SYSFLAG_XY_DIVIDED_BY_W) {
+    position.xy = position.xy * position.w;
+  }
+  if (flags & XE_SYSFLAG_Z_DIVIDED_BY_W) {
+    position.z = position.z * position.w;
+  }
+  p.position = position;
+}
+
+XeVsOutput xe_vs_epilogue(XeVertex p) {
+  XeVsOutput output;
+  precise float4 position = p.position;
+  // The clip and cull distances in the order of the DXBC translation's
+  // components: the user clip planes (as clip or cull distances), then the
+  // vertex kill's cull distance with the AND rule.
+  float xe_distances[8] = {0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0};
+  [unroll] for (uint plane = 0u; plane < XE_USER_CLIP_PLANE_COUNT; ++plane) {
+    float4 plane_vector;
+    [unroll] for (uint c = 0u; c < 4u; ++c) {
+      plane_vector[c] = xe_system_float(XE_SYS_USER_CLIP_PLANES + 16u * plane + 4u * c);
+    }
+    xe_distances[XE_USER_CLIP_PLANE_FIRST + plane] = dot(position, plane_vector);
+  }
+  // The guest-to-host viewport and clip space transform (the native path's
+  // jitter and logical width sit in these constants), the offset times W.
+  float3 ndc_scale = float3(xe_system_float(XE_SYS_NDC_SCALE), xe_system_float(XE_SYS_NDC_SCALE + 4u),
+                            xe_system_float(XE_SYS_NDC_SCALE + 8u));
+  float3 ndc_offset =
+      float3(xe_system_float(XE_SYS_NDC_OFFSET), xe_system_float(XE_SYS_NDC_OFFSET + 4u),
+             xe_system_float(XE_SYS_NDC_OFFSET + 8u));
+  position.xyz = position.xyz * ndc_scale;
+  position.xyz = mad(ndc_offset, position.www, position.xyz);
+  // The vertex kill: bits 0:30 of oPts.z not zero.
+#if XE_WRITES_VERTEX_KILL
+  bool killed = (asuint(p.point_size_edge_flag_kill.z) & 0x7FFFFFFFu) != 0u;
+#else
+  bool killed = false;
+#endif
+#if XE_VERTEX_KILL_AND
+  xe_distances[XE_VERTEX_KILL_DISTANCE] = killed ? -1.0 : 0.0;
+#elif XE_WRITES_VERTEX_KILL
+  // The OR rule: W as NaN kills the primitive.
+  position.w = killed ? asfloat(0x7FC00000u) : position.w;
+#endif
+  output.xe_position = position;
+  XE_STORE_OUTPUTS(output, p, xe_distances)
+  return output;
+}
+
+#endif  // XE_VERTEX_SHADER
+
 // Hooks of shader mods (shader_mod_path), included after this part: they #undef
 // and redefine these. The defaults change nothing, so generated overrides stay
 // exact without a mod.
@@ -913,10 +1064,20 @@ void xe_native_pass_debug(inout XePixel p) {
 //   XE_HOOK_INPUT(p): the registers after the prologue.
 //   XE_HOOK_OUTPUT(p, input): the outputs before the epilogue (input: the
 //     registers after the prologue and XE_HOOK_INPUT).
+//   XE_HOOK_VFETCH(fetch, offset, value): the unpacked result of each vertex
+//     fetch of a generated vertex shader (its fetch constant vf<fetch> and its
+//     word offset), before the destination swizzle.
+//   XE_HOOK_VERTEX_OUTPUT(p, input): a vertex shader's exports before the
+//     epilogue: p.position in the guest's clip space with the W, XY and Z
+//     conventions applied (before the guest-to-host transform), p.o[n] the
+//     export registers, p.point_size_edge_flag_kill; input: the registers after
+//     the prologue (the vertex index in r0.x).
 #define XE_HOOK_TFETCH(fetch, value, coord) (value)
 #define XE_HOOK_CONSTANT(n, value) (value)
 #define XE_HOOK_INPUT(p)
 #define XE_HOOK_OUTPUT(p, input)
+#define XE_HOOK_VFETCH(fetch, offset, value) (value)
+#define XE_HOOK_VERTEX_OUTPUT(p, input)
 
 #else  // XE_OVERRIDE_MAIN
 
@@ -941,6 +1102,17 @@ XePsOutput main(XePsInput xe_input) {
   xe_native_pass_debug(p);
 #endif
   return xe_ps_epilogue(p, xe_input);
+}
+#endif
+
+#if XE_VERTEX_SHADER
+XeVsOutput main(XeVsInput xe_input) {
+  XeVertex p = xe_vs_prologue(xe_input);
+  XeVertex xe_input_vertex = p;
+  xe_vertex_shader(p);
+  xe_vs_normalize_position(p);
+  XE_HOOK_VERTEX_OUTPUT(p, xe_input_vertex);
+  return xe_vs_epilogue(p);
 }
 #endif
 

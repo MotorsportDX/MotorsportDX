@@ -1168,6 +1168,8 @@ class D3D12CommandProcessor : public CommandProcessor {
   // shader-contract.md).
   const native_shader_contract::Manifest* native_shader_contract_ = nullptr;
   bool native_shader_pass_debug_ = false;
+  // native_shader_contract_vertex_all: every vertex shader takes its generated HLSL.
+  bool native_shader_vertex_all_ = false;
   uint32_t native_shader_pass_ = 0;
   // shader_mod_live_knobs: the knob values written after the system constants
   // (ShaderOverrides::kKnobsOffset), and where they come from (nullptr without

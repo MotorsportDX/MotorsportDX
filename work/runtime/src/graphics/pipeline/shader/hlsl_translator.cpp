@@ -1,6 +1,6 @@
 /**
  * @file        graphics/pipeline/shader/hlsl_translator.cpp
- * @brief       Guest pixel shader ucode to HLSL shader overrides
+ * @brief       Guest pixel and vertex shader ucode to HLSL shader overrides
  *
  * Mirrors DxbcShaderTranslator (dxbc_translator*.cpp) operation by operation,
  * with the helpers of d3d12/shader_override.hlsli, so that the override renders
@@ -240,19 +240,35 @@ void HlslShaderTranslator::EmitDisassembly(const std::string& disassembly) {
 }
 
 void HlslShaderTranslator::StartTranslation() {
-  if (!is_pixel_shader()) {
-    EmitTranslationError("HLSL overrides are generated only for pixel shaders");
+  if (is_vertex_shader()) {
+    // Vertex shaders of the host vertex stage only, not the domain shaders of
+    // tessellation (docs/analysis/shader-contract.md 9.2.1).
+    DxbcShaderTranslator::Modification modification(current_translation().modification());
+    if (modification.vertex.host_vertex_shader_type != Shader::HostVertexShaderType::kVertex) {
+      EmitTranslationError("HLSL is generated only for vertex shaders of the vertex stage");
+      return;
+    }
+  } else if (!is_pixel_shader()) {
+    EmitTranslationError("HLSL overrides are generated only for pixel and vertex shaders");
     return;
   }
   const Shader& shader = current_shader();
   // Labels (jump, loop and call targets) need the pc loop of the translator.
   use_pc_loop_ = !shader.label_addresses().empty();
   Line(fmt::format(
-      "// Generated from pixel shader {:016X}, modification {:016X}, by HlslShaderTranslator:",
-      shader.ucode_data_hash(), current_translation().modification()));
+      "// Generated from {} shader {:016X}, modification {:016X}, by HlslShaderTranslator:",
+      is_vertex_shader() ? "vertex" : "pixel", shader.ucode_data_hash(),
+      current_translation().modification()));
   Line("// the operations of its DXBC translation. Each block follows the guest");
   Line("// instruction in the comment above it.");
-  Open("void xe_pixel_shader(inout XePixel p) {");
+  if (is_vertex_shader()) {
+    Open("void xe_vertex_shader(inout XeVertex p) {");
+    // The byte address of the last vfetch_full's element, for the vfetch_mini
+    // after it (system_temp_grad_v_vfetch_address_.w).
+    Line("int vfetch_address = 0;");
+  } else {
+    Open("void xe_pixel_shader(inout XePixel p) {");
+  }
   Line("precise float ps = 0.0;");
   Line("bool p0 = false;");
   Line("int a0 = 0;");
@@ -269,7 +285,7 @@ void HlslShaderTranslator::StartTranslation() {
 }
 
 std::vector<uint8_t> HlslShaderTranslator::CompleteTranslation() {
-  if (!is_pixel_shader()) {
+  if (!is_pixel_shader() && !is_vertex_shader()) {
     return std::vector<uint8_t>();
   }
   CloseExec();
@@ -384,8 +400,220 @@ void HlslShaderTranslator::ProcessAllocInstruction(const ParsedAllocInstruction&
   }
 }
 
-void HlslShaderTranslator::ProcessVertexFetchInstruction(const ParsedVertexFetchInstruction&) {
-  EmitTranslationError("vertex fetch is not supported in HLSL pixel shader overrides");
+// DxbcShaderTranslator::ProcessVertexFetchInstruction: the same address, words,
+// endian swap, unpacking and exponent adjust, with the library's shared memory
+// loads (xe_shared_memory_word). Keep both in sync.
+void HlslShaderTranslator::ProcessVertexFetchInstruction(
+    const ParsedVertexFetchInstruction& instr) {
+  if (!is_vertex_shader()) {
+    EmitTranslationError("vertex fetch in a pixel shader");
+    return;
+  }
+  string::StringBuffer disassembly;
+  instr.Disassemble(&disassembly);
+  EmitDisassembly(disassembly.to_string());
+  if (instr.is_predicated) {
+    Open(fmt::format("if (p0 == {}) {{", Bool(instr.predicate_condition)));
+  }
+  Open("{");
+  EmitVertexFetch(instr);
+  Close();
+  if (instr.is_predicated) {
+    Close();
+  }
+}
+
+void HlslShaderTranslator::EmitVertexFetch(const ParsedVertexFetchInstruction& instr) {
+  const auto& attributes = instr.attributes;
+  uint32_t used_result_components = instr.result.GetUsedResultComponents();
+  uint32_t needed_words =
+      xenos::GetVertexFormatNeededWords(attributes.data_format, used_result_components);
+  if (!needed_words && instr.is_mini_fetch) {
+    StoreResult(instr.result, "float4(0.0, 0.0, 0.0, 0.0)");
+    return;
+  }
+  // The fetch constant: vf<n> is dwords 2n and 2n + 1 of the fetch constants.
+  uint32_t fetch_constant = instr.operands[1].storage_index;
+  if (!instr.is_mini_fetch) {
+    if (attributes.stride) {
+      // The index floored, or rounded as floor(index + 0.5), times the stride,
+      // plus the buffer's byte address.
+      std::string index = LoadOperand(instr.operands[0], 0b0001).Component(0);
+      if (attributes.is_index_rounded) {
+        Line(fmt::format("precise float vfetch_index = floor({} + 0.5);", index));
+      } else {
+        Line(fmt::format("precise float vfetch_index = floor({});", index));
+      }
+      Line(fmt::format("vfetch_address = int(vfetch_index) * {} + int(xe_vfetch_word({}u, 0u) & "
+                       "0xFFFFFFFCu);",
+                       attributes.stride * uint32_t(sizeof(uint32_t)), fetch_constant));
+    } else {
+      Line(fmt::format("vfetch_address = int(xe_vfetch_word({}u, 0u) & 0xFFFFFFFCu);",
+                       fetch_constant));
+    }
+  }
+  if (!needed_words) {
+    StoreResult(instr.result, "float4(0.0, 0.0, 0.0, 0.0)");
+    return;
+  }
+  // The words, endian-swapped by the fetch constant's endianness.
+  Line("uint4 w = 0u;");
+  for (uint32_t i = 0; i < 4; ++i) {
+    if (needed_words & (1u << i)) {
+      Line(fmt::format("w.{} = xe_shared_memory_word(vfetch_address + {});", kComponents[i],
+                       (attributes.offset + int32_t(i)) * int32_t(sizeof(uint32_t))));
+    }
+  }
+  Line(fmt::format("w = xe_vfetch_swap(w, xe_vfetch_word({}u, 1u) & 3u);", fetch_constant));
+
+  // Unpacking.
+  uint32_t used_format_components =
+      used_result_components &
+      ((1u << xenos::GetVertexFormatComponentCount(attributes.data_format)) - 1);
+  uint32_t packed_widths[4] = {}, packed_offsets[4] = {};
+  // The word of each component of the packed formats.
+  uint32_t packed_words[4] = {};
+  switch (attributes.data_format) {
+    case xenos::VertexFormat::k_8_8_8_8:
+      packed_widths[0] = packed_widths[1] = packed_widths[2] = packed_widths[3] = 8;
+      packed_offsets[1] = 8;
+      packed_offsets[2] = 16;
+      packed_offsets[3] = 24;
+      break;
+    case xenos::VertexFormat::k_2_10_10_10:
+      packed_widths[0] = packed_widths[1] = packed_widths[2] = 10;
+      packed_widths[3] = 2;
+      packed_offsets[1] = 10;
+      packed_offsets[2] = 20;
+      packed_offsets[3] = 30;
+      break;
+    case xenos::VertexFormat::k_10_11_11:
+      packed_widths[0] = packed_widths[1] = 11;
+      packed_widths[2] = 10;
+      packed_offsets[1] = 11;
+      packed_offsets[2] = 22;
+      break;
+    case xenos::VertexFormat::k_11_11_10:
+      packed_widths[0] = 10;
+      packed_widths[1] = packed_widths[2] = 11;
+      packed_offsets[1] = 10;
+      packed_offsets[2] = 21;
+      break;
+    case xenos::VertexFormat::k_16_16:
+      packed_widths[0] = packed_widths[1] = 16;
+      packed_offsets[1] = 16;
+      break;
+    case xenos::VertexFormat::k_16_16_16_16:
+      packed_widths[0] = packed_widths[1] = packed_widths[2] = packed_widths[3] = 16;
+      packed_offsets[1] = packed_offsets[3] = 16;
+      packed_words[2] = packed_words[3] = 1;
+      break;
+    default:
+      break;
+  }
+  // Exact float constants, as the DXBC translator's literals.
+  auto exact = [](float value) {
+    uint32_t bits;
+    std::memcpy(&bits, &value, sizeof(bits));
+    return fmt::format("asfloat(0x{:08X}u)", bits);
+  };
+  Line("precise float4 v = asfloat(w);");
+  for (uint32_t i = 0; i < 4; ++i) {
+    if (!(used_format_components & (1u << i))) {
+      continue;
+    }
+    const char c = kComponents[i];
+    if (packed_widths[0]) {
+      const char word = kComponents[packed_words[i]];
+      if (attributes.is_signed) {
+        Line(fmt::format("v.{} = float(xe_ibfe(w.{}, {}u, {}u));", c, word, packed_widths[i],
+                         packed_offsets[i]));
+        if (!attributes.is_integer) {
+          switch (attributes.signed_rf_mode) {
+            case xenos::SignedRepeatingFractionMode::kZeroClampMinusOne:
+              if (packed_widths[i] > 2) {
+                Line(fmt::format(
+                    "v.{0} = v.{0} * {1};", c,
+                    exact(1.0f / float((uint32_t(1) << (packed_widths[i] - 1)) - 1))));
+              }
+              // Both -(2^(n-1)) and -(2^(n-1)-1) are -1.
+              Line(fmt::format("v.{0} = max(v.{0}, -1.0);", c));
+              break;
+            case xenos::SignedRepeatingFractionMode::kNoZero: {
+              float zero = 1.0f / float((uint32_t(1) << packed_widths[i]) - 1);
+              Line(fmt::format("v.{0} = mad(v.{0}, {1}, {2});", c, exact(2.0f * zero),
+                               exact(zero)));
+            } break;
+            default:
+              EmitTranslationError("unknown signed repeating fraction mode");
+              break;
+          }
+        }
+      } else {
+        Line(fmt::format("v.{} = float((w.{} >> {}u) & 0x{:X}u);", c, word, packed_offsets[i],
+                         (uint32_t(1) << packed_widths[i]) - 1));
+        if (!attributes.is_integer && packed_widths[i] > 1) {
+          Line(fmt::format("v.{0} = v.{0} * {1};", c,
+                           exact(1.0f / float((uint32_t(1) << packed_widths[i]) - 1))));
+        }
+      }
+      continue;
+    }
+    switch (attributes.data_format) {
+      case xenos::VertexFormat::k_16_16_FLOAT:
+      case xenos::VertexFormat::k_16_16_16_16_FLOAT:
+        // D3D10+ float16 (with NaNs), as the DXBC translator converts it.
+        Line(fmt::format("v.{} = f16tof32(w.{} >> {}u);", c, kComponents[i >> 1],
+                         (i & 1) ? 16 : 0));
+        break;
+      case xenos::VertexFormat::k_32:
+      case xenos::VertexFormat::k_32_32:
+      case xenos::VertexFormat::k_32_32_32_32:
+        Line(fmt::format("v.{0} = float({1}(w.{0}));", c, attributes.is_signed ? "asint" : ""));
+        if (!attributes.is_integer) {
+          if (attributes.is_signed) {
+            switch (attributes.signed_rf_mode) {
+              case xenos::SignedRepeatingFractionMode::kZeroClampMinusOne:
+                Line(fmt::format("v.{0} = v.{0} * {1};", c, exact(1.0f / 2147483647.0f)));
+                break;
+              case xenos::SignedRepeatingFractionMode::kNoZero:
+                Line(fmt::format("v.{0} = mad(v.{0}, {1}, {2});", c,
+                                 exact(1.0f / 2147483647.5f), exact(0.5f / 2147483647.5f)));
+                break;
+              default:
+                EmitTranslationError("unknown signed repeating fraction mode");
+                break;
+            }
+          } else {
+            Line(fmt::format("v.{0} = v.{0} * {1};", c, exact(1.0f / 4294967295.0f)));
+          }
+        }
+        break;
+      case xenos::VertexFormat::k_32_FLOAT:
+      case xenos::VertexFormat::k_32_32_FLOAT:
+      case xenos::VertexFormat::k_32_32_32_32_FLOAT:
+      case xenos::VertexFormat::k_32_32_32_FLOAT:
+        // Already in place.
+        break;
+      default:
+        EmitTranslationError("unknown vertex format");
+        break;
+    }
+  }
+  // The exponent bias.
+  if (attributes.exp_adjust) {
+    std::string mask = Mask(used_format_components);
+    Line(fmt::format("v.{0} = v.{0} * {1};", mask,
+                     exact(std::ldexp(1.0f, attributes.exp_adjust))));
+  }
+  // Zeros in the components the format does not have.
+  std::string missing = Mask(used_result_components & ~used_format_components);
+  if (!missing.empty()) {
+    Line(fmt::format("v.{} = 0.0;", missing));
+  }
+  // Through the vertex fetch hook of shader mods.
+  Line(fmt::format("v = XE_HOOK_VFETCH({}u, {}, v);", fetch_constant, attributes.offset));
+  StoreResult(instr.result, "v");
 }
 
 std::string HlslShaderTranslator::RelativeIndex(InstructionStorageAddressingMode mode,
@@ -465,6 +693,17 @@ void HlslShaderTranslator::StoreResult(const InstructionResult& result, const st
     case InstructionStorageTarget::kColor:
       dest = fmt::format("p.color[{}]", result.storage_index);
       break;
+    case InstructionStorageTarget::kInterpolator:
+      // Every export register: the epilogue outputs those of the modification's
+      // interpolator mask, as the DXBC translator stores only those.
+      dest = fmt::format("p.o[{}]", result.storage_index);
+      break;
+    case InstructionStorageTarget::kPosition:
+      dest = "p.position";
+      break;
+    case InstructionStorageTarget::kPointSizeEdgeFlagKillVertex:
+      dest = "p.point_size_edge_flag_kill";
+      break;
     case InstructionStorageTarget::kDepth:
       // Saturated: depth outside 0...1 is unsafe for float24 and ROV.
       dest = "p.depth";
@@ -472,7 +711,7 @@ void HlslShaderTranslator::StoreResult(const InstructionResult& result, const st
       scalar_dest = true;
       break;
     default:
-      EmitTranslationError("unsupported result target in an HLSL pixel shader override");
+      EmitTranslationError("unsupported result target in generated HLSL");
       return;
   }
   std::string dest_mask, source_swizzle, constant_mask, constant_values;
@@ -504,6 +743,12 @@ void HlslShaderTranslator::StoreResult(const InstructionResult& result, const st
                                ? constant_values
                                : fmt::format("float{}({})", constant_mask.size(), constant_values);
     Line((scalar_dest ? dest : dest + "." + constant_mask) + " = " + constant + ";");
+  }
+  // The point size clamped to the guest's bounds as signed integers, as the
+  // DXBC translator clamps it.
+  if (result.storage_target == InstructionStorageTarget::kPointSizeEdgeFlagKillVertex &&
+      (used_write_mask & 0b0001)) {
+    Line("p.point_size_edge_flag_kill.x = xe_clamp_point_size(p.point_size_edge_flag_kill.x);");
   }
 }
 
@@ -640,6 +885,9 @@ void HlslShaderTranslator::EmitVectorOperation(const ParsedAluInstruction& instr
                                : opcode == AluVectorOpcode::kKillGe ? "o0 >= o1"
                                                                     : "o0 != o1";
       Line(fmt::format("bool kill = any({});", comparison));
+      if (is_vertex_shader()) {
+        EmitTranslationError("kill in a vertex shader");
+      }
       Line("if (kill) { discard; }");
       Line("precise float4 v = (kill ? 1.0 : 0.0).xxxx;");
     } break;
@@ -683,6 +931,9 @@ void HlslShaderTranslator::EmitScalarOperation(const ParsedAluInstruction& instr
   };
   auto kill = [&](const std::string& condition) {
     Line("bool kill_s = " + condition + ";");
+    if (is_vertex_shader()) {
+      EmitTranslationError("kill in a vertex shader");
+    }
     Line("if (kill_s) { discard; }");
     Line("ps = kill_s ? 1.0 : 0.0;");
   };
@@ -901,6 +1152,9 @@ void HlslShaderTranslator::ProcessTextureFetchInstruction(
       if (!non_zero) {
         StoreResult(instr.result, "float4(0.0, 0.0, 0.0, 0.0)");
         break;
+      }
+      if (is_vertex_shader()) {
+        EmitTranslationError("getGradients in a vertex shader");
       }
       Operand operand = LoadOperand(
           instr.operands[0], ((non_zero & 0b0011) ? 0b0001 : 0) | ((non_zero & 0b1100) ? 0b0010 : 0));

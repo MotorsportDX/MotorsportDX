@@ -884,8 +884,11 @@ void PipelineCache::SwapCompiledMods(uint64_t retire_submission) {
   if (!swapped.empty()) {
     for (const auto& pipeline_entry : pipelines_) {
       Pipeline* pipeline = pipeline_entry.second;
-      if (!pipeline->description.pixel_shader ||
-          swapped.find(pipeline->description.pixel_shader) == swapped.end()) {
+      // A pixel shader's mod or entry, or a vertex shader's generated HLSL
+      // (docs/analysis/shader-contract.md 9).
+      if ((!pipeline->description.pixel_shader ||
+           swapped.find(pipeline->description.pixel_shader) == swapped.end()) &&
+          swapped.find(pipeline->description.vertex_shader) == swapped.end()) {
         continue;
       }
       PipelineRuntimeDescription runtime_description;
@@ -1384,12 +1387,16 @@ bool PipelineCache::ConfigurePipelineDescribed(
   }
 
   // Pipelines of the shader override A/B (DXBC instead of the override) and of
-  // the native shader contract's A/B (the classic mod instead of the entry)
-  // are for this process only.
+  // the native shader contract's A/B (the classic mod instead of the entry, the
+  // DXBC translation instead of a generated vertex shader) are for this process
+  // only.
   const DxbcShaderTranslator::Modification stored_modification(
       description.pixel_shader_modification);
+  const DxbcShaderTranslator::Modification stored_vertex_modification(
+      description.vertex_shader_modification);
   if (pipeline_storage_file_ && !stored_modification.pixel.hlsl_override_disabled &&
-      !stored_modification.pixel.native_classic) {
+      !stored_modification.pixel.native_classic &&
+      !stored_vertex_modification.vertex.native_classic) {
     assert_not_null(storage_write_thread_);
     pipeline_storage_file_flush_needed_ = true;
     {
@@ -1455,8 +1462,13 @@ bool PipelineCache::TranslateAnalyzedShader(DxbcShaderTranslator& translator,
     }
   }
 
-  if (shader.type() == xenos::ShaderType::kVertex && VertexSurveyEnabled()) {
-    SurveyVertexTranslation(translation);
+  if (shader.type() == xenos::ShaderType::kVertex) {
+    if (VertexSurveyEnabled()) {
+      SurveyVertexTranslation(translation);
+    }
+    if (shader_overrides_) {
+      shader_overrides_->NoteVertexShader(shader);
+    }
   }
 
   const char* host_shader_type;

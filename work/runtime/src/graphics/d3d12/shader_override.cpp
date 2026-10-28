@@ -113,6 +113,13 @@ REXCVAR_DEFINE_BOOL(native_shader_contract_check, false, "GPU/D3D12",
                     "check; mismatches are errors")
     .lifecycle(rex::cvar::Lifecycle::kRequiresRestart);
 
+REXCVAR_DEFINE_BOOL(native_shader_contract_vertex_all, false, "GPU/D3D12",
+                    "Development, with native_shader_contract: every vertex shader draws its "
+                    "generated HLSL, entry or not (and its DXBC translation in the other periods "
+                    "of native_shader_contract_ab_ms), to prove the generator against the DXBC "
+                    "translator (docs/analysis/shader-contract.md 9.2.4)")
+    .lifecycle(rex::cvar::Lifecycle::kRequiresRestart);
+
 REXCVAR_DEFINE_BOOL(native_shader_vertex_survey, false, "GPU/D3D12",
                     "Log every vertex shader translated: its ucode key, fetch-blind and coarse "
                     "keys, fetches and host types, and the fetch fields in which keys of one "
@@ -143,6 +150,8 @@ constexpr char kHlsliName[] = "xenos_override.hlsli";
 // native_shader_contract's manifest in shader_mod_path.
 constexpr char kNativeManifestName[] = "shaders.toml";
 constexpr char kTarget[] = "ps_5_1";
+// The generated vertex shaders (docs/analysis/shader-contract.md 9).
+constexpr char kVertexTarget[] = "vs_5_1";
 constexpr UINT kCompileFlags = D3DCOMPILE_ENABLE_UNBOUNDED_DESCRIPTOR_TABLES |
                                D3DCOMPILE_IEEE_STRICTNESS | D3DCOMPILE_OPTIMIZATION_LEVEL3;
 
@@ -496,6 +505,45 @@ void ExpectedPixelSignatures(const Shader& shader, const DxbcShaderTranslator::M
   }
 }
 
+// The same for the DXBC translation of a vertex shader of the host vertex stage
+// (WriteInputSignature, WriteOutputSignature): the vertex index; the
+// interpolators of the mask, the position, the clip and cull distances (clip
+// first, four components a register, a parameter per kind and register), the
+// point size.
+void ExpectedVertexSignatures(const DxbcShaderTranslator::Modification& modification,
+                              std::vector<SignatureElement>& inputs_out,
+                              std::vector<SignatureElement>& outputs_out) {
+  inputs_out.clear();
+  outputs_out.clear();
+  inputs_out.push_back({"SV_VERTEXID", 0, kComponentUInt32, 0});
+  uint32_t register_index = 0;
+  uint32_t interpolators = modification.vertex.interpolator_mask;
+  for (uint32_t i = 0; i < xenos::kMaxInterpolators; ++i) {
+    if (interpolators & (UINT32_C(1) << i)) {
+      outputs_out.push_back({"TEXCOORD", register_index, kComponentFloat32, register_index});
+      ++register_index;
+    }
+  }
+  outputs_out.push_back({"SV_POSITION", 0, kComponentFloat32, register_index++});
+  uint32_t clip_count = modification.GetVertexClipDistanceCount();
+  uint32_t cull_count = modification.GetVertexCullDistanceCount();
+  uint32_t clip_parameter = 0, cull_parameter = 0;
+  for (uint32_t first = 0; first < clip_count + cull_count; first += 4) {
+    if (first < clip_count) {
+      outputs_out.push_back(
+          {"SV_CLIPDISTANCE", clip_parameter++, kComponentFloat32, register_index});
+    }
+    if (cull_count && first + 4 > clip_count) {
+      outputs_out.push_back(
+          {"SV_CULLDISTANCE", cull_parameter++, kComponentFloat32, register_index});
+    }
+    ++register_index;
+  }
+  if (modification.vertex.output_point_size) {
+    outputs_out.push_back({"XEPSIZE", 0, kComponentFloat32, register_index++});
+  }
+}
+
 // CompareSignatures against expected signatures instead of a DXBC translation.
 std::string CompareExpectedSignatures(const std::vector<SignatureElement>& expected_inputs,
                                       const std::vector<SignatureElement>& expected_outputs,
@@ -581,8 +629,14 @@ std::unique_ptr<ShaderOverrides> ShaderOverrides::Create(const HostConfig& confi
       for (const native_shader_contract::PixelEntry& entry : manifest->pixel) {
         overrides->entry_knobs_ |= !entry.params.empty();
       }
-      REXGPU_INFO("Native shader contract: {} pixel shader entries; passes {}",
-                  manifest->pixel.size(), passes);
+      for (const native_shader_contract::VertexEntry& entry : manifest->vertex) {
+        overrides->entry_knobs_ |= !entry.params.empty();
+      }
+      overrides->native_vertex_all_ = REXCVAR_GET(native_shader_contract_vertex_all);
+      REXGPU_INFO("Native shader contract: {} pixel shader entries, {} vertex shader entries{}; "
+                  "passes {}",
+                  manifest->pixel.size(), manifest->vertex.size(),
+                  overrides->native_vertex_all_ ? ", every vertex shader generated" : "", passes);
       overrides->native_ = std::move(manifest);
       overrides->LoadLookFiles();
       overrides->native_pass_debug_ = REXCVAR_GET(native_shader_pass_debug);
@@ -718,8 +772,15 @@ void ShaderOverrides::RebuildCompileDefines() {
   // The params of the manifest's entries: a knob slot each, with the value of
   // shader_mod_defines or the look files' default.
   if (native_) {
+    std::vector<const std::vector<std::string>*> param_lists;
     for (const native_shader_contract::PixelEntry& entry : native_->pixel) {
-      for (const std::string& name : entry.params) {
+      param_lists.push_back(&entry.params);
+    }
+    for (const native_shader_contract::VertexEntry& entry : native_->vertex) {
+      param_lists.push_back(&entry.params);
+    }
+    for (const std::vector<std::string>* params : param_lists) {
+      for (const std::string& name : *params) {
         if (knob_slots_.count(name)) {
           continue;
         }
@@ -905,9 +966,12 @@ const native_shader_contract::PixelEntry* ShaderOverrides::NativeEntry(
   return native_->FindPixel(translation.shader().ucode_data_hash());
 }
 
-std::string ShaderOverrides::BuildContract(
-    const D3D12Shader::D3D12Translation& translation,
-    const native_shader_contract::PixelEntry* entry) const {
+// The vertex shader's part of its contract (BuildContract): its registers,
+// exports and signatures (StartTranslation, StartVertexOrDomainShader,
+// CompleteVertexOrDomainShader, WriteInputSignature, WriteOutputSignature for
+// the host vertex stage), its float constants and descriptor slots.
+std::string ShaderOverrides::BuildVertexContract(const D3D12Shader::D3D12Translation& translation,
+                                                 uint32_t register_count) const {
   const auto& shader = static_cast<const D3D12Shader&>(translation.shader());
   Modification modification(translation.modification());
   std::string out;
@@ -915,14 +979,138 @@ std::string ShaderOverrides::BuildContract(
     fmt::format_to(std::back_inserter(out), format, std::forward<Args>(args)...);
     out.push_back('\n');
   };
+  const uint32_t interpolator_mask = modification.vertex.interpolator_mask;
+  const uint32_t clip_count = modification.GetVertexClipDistanceCount();
+  const uint32_t cull_count = modification.GetVertexCullDistanceCount();
+  const bool writes_kill = (shader.writes_point_size_edge_flag_kill_vertex() & 0b100) != 0;
+  line("#define XE_REGISTER_COUNT {}", register_count);
+  line("#define XE_INTERPOLATOR_MASK 0x{:04X}u", interpolator_mask);
+  line("#define XE_USER_CLIP_PLANE_COUNT {}u", uint32_t(modification.vertex.user_clip_plane_count));
+  // The user clip planes' first distance component: after the clip distances
+  // if they cull.
+  line("#define XE_USER_CLIP_PLANE_FIRST {}u",
+       modification.vertex.user_clip_plane_cull ? clip_count : 0u);
+  line("#define XE_WRITES_VERTEX_KILL {}", int(writes_kill));
+  line("#define XE_VERTEX_KILL_AND {}", uint32_t(modification.vertex.vertex_kill_and));
+  // The AND rule's cull distance: the last component.
+  line("#define XE_VERTEX_KILL_DISTANCE {}u",
+       clip_count + cull_count ? clip_count + cull_count - 1 : 0u);
 
-  line("// Contract of the DXBC translation of pixel shader {:016X}, modification {:016X}.",
-       shader.ucode_data_hash(), translation.modification());
-  line("#define XE_PIXEL_SHADER 1");
+  // Float constants, tightly packed like the translator's constant buffer.
+  const Shader::ConstantRegisterMap& constants = shader.constant_register_map();
+  line("#define XE_FLOAT_CONSTANT_COUNT {}", constants.float_count);
+  for (uint32_t i = 0; i < 256; ++i) {
+    uint32_t packed = constants.GetPackedFloatConstantIndex(i);
+    if (packed != UINT32_MAX) {
+      line("#define XE_FLOAT_CONSTANT_{} xe_float_constants[{}]", i, packed);
+    }
+  }
+
+  // Bindless descriptor index slots (vertex texture fetch).
+  const auto& textures = shader.GetTextureBindingsAfterTranslation();
+  const auto& samplers = shader.GetSamplerBindingsAfterTranslation();
+  uint32_t descriptor_index_count = 0;
+  for (const auto& texture : textures) {
+    descriptor_index_count =
+        std::max(descriptor_index_count, texture.bindless_descriptor_index + 1);
+  }
+  for (const auto& sampler : samplers) {
+    descriptor_index_count =
+        std::max(descriptor_index_count, sampler.bindless_descriptor_index + 1);
+  }
+  line("#define XE_DESCRIPTOR_INDEX_VECTORS {}", (descriptor_index_count + 3) / 4);
+  for (const auto& texture : textures) {
+    line("#define {} {}u",
+         HlslShaderTranslator::TextureSlotName(texture.fetch_constant, texture.dimension,
+                                               texture.is_signed),
+         texture.bindless_descriptor_index);
+  }
+  for (const auto& sampler : samplers) {
+    line("#define {} {}u", HlslShaderTranslator::SamplerSlotName(sampler),
+         sampler.bindless_descriptor_index);
+  }
+
+  // Input signature: the vertex index.
+  line("struct XeVsInput {{");
+  line("  uint xe_vertex_id : SV_VertexID;");
+  line("}};");
+  // Output signature: the interpolators of the mask, the position, the clip
+  // and cull distances (clip first, four components a register), the point
+  // size.
+  line("struct XeVsOutput {{");
+  uint32_t semantic_index = 0;
+  std::string store = "#define XE_STORE_OUTPUTS(output, p, distances)";
+  for (uint32_t i = 0; i < xenos::kMaxInterpolators; ++i) {
+    if (interpolator_mask & (UINT32_C(1) << i)) {
+      line("  float4 xe_interpolator{} : TEXCOORD{};", i, semantic_index++);
+      store += fmt::format(" output.xe_interpolator{0} = p.o[{0}];", i);
+    }
+  }
+  line("  float4 xe_position : SV_Position;");
+  uint32_t clip_parameter = 0, cull_parameter = 0;
+  for (uint32_t first = 0; first < clip_count + cull_count; first += 4) {
+    uint32_t end = std::min(first + 4, clip_count + cull_count);
+    if (first < clip_count) {
+      uint32_t count = std::min(end, clip_count) - first;
+      line("  float{} xe_clip{} : SV_ClipDistance{};", count == 1 ? std::string() : std::to_string(count),
+           clip_parameter, clip_parameter);
+      for (uint32_t c = 0; c < count; ++c) {
+        store += fmt::format(" output.xe_clip{}{} = distances[{}];", clip_parameter,
+                             count == 1 ? std::string() : std::string(".") + "xyzw"[c], first + c);
+      }
+      ++clip_parameter;
+    }
+    if (end > clip_count) {
+      uint32_t cull_first = std::max(first, clip_count);
+      uint32_t count = end - cull_first;
+      line("  float{} xe_cull{} : SV_CullDistance{};", count == 1 ? std::string() : std::to_string(count),
+           cull_parameter, cull_parameter);
+      for (uint32_t c = 0; c < count; ++c) {
+        store += fmt::format(" output.xe_cull{}{} = distances[{}];", cull_parameter,
+                             count == 1 ? std::string() : std::string(".") + "xyzw"[c],
+                             cull_first + c);
+      }
+      ++cull_parameter;
+    }
+  }
+  if (modification.vertex.output_point_size) {
+    line("  float xe_point_size : XEPSIZE;");
+    store += " output.xe_point_size = p.point_size_edge_flag_kill.x;";
+  }
+  line("}};");
+  out += store;
+  out.push_back('\n');
+  return out;
+}
+
+std::string ShaderOverrides::BuildContract(
+    const D3D12Shader::D3D12Translation& translation,
+    const native_shader_contract::PixelEntry* entry,
+    const native_shader_contract::VertexEntry* vertex_entry) const {
+  const auto& shader = static_cast<const D3D12Shader&>(translation.shader());
+  Modification modification(translation.modification());
+  // A vertex shader's contract (docs/analysis/shader-contract.md 9): its
+  // registers, exports and output signature in place of the pixel shader's.
+  const bool vertex = shader.type() == xenos::ShaderType::kVertex;
+  std::string out;
+  auto line = [&out]<typename... Args>(fmt::format_string<Args...> format, Args&&... args) {
+    fmt::format_to(std::back_inserter(out), format, std::forward<Args>(args)...);
+    out.push_back('\n');
+  };
+
+  line("// Contract of the DXBC translation of {} shader {:016X}, modification {:016X}.",
+       vertex ? "vertex" : "pixel", shader.ucode_data_hash(), translation.modification());
+  if (vertex) {
+    line("#define XE_PIXEL_SHADER 0");
+    line("#define XE_VERTEX_SHADER 1");
+  } else {
+    line("#define XE_PIXEL_SHADER 1");
+  }
 
   // System constants (DxbcShaderTranslator::SystemConstants), the host values
   // and the live knobs after them (also for the params of a manifest entry).
-  if (live_knobs_ || (entry && !entry->params.empty())) {
+  if (live_knobs_ || (entry && !entry->params.empty()) ||
+      (vertex_entry && !vertex_entry->params.empty())) {
     line("#define XE_SYSTEM_CONSTANT_VECTORS {}", (kKnobsOffset + kKnobsSize + 15) / 16);
     line("#define XE_SYS_MOD_KNOBS {}u", kKnobsOffset);
   } else {
@@ -931,7 +1119,7 @@ std::string ShaderOverrides::BuildContract(
   line("#define XE_SYS_GUEST_VBLANK_RATE {}u", kHostValuesOffset);
   line("#define XE_SYS_GUEST_FRAME_INTERVAL {}u", kHostValuesOffset + 4);
   line("#define XE_SYS_GUEST_DESIGN_FRAME_RATE {}u", kHostValuesOffset + 8);
-  if (entry) {
+  if (entry || vertex_entry) {
     // The native shader contract (docs/analysis/shader-contract.md): the draw's
     // pass class in the host values' W, and the classes by name.
     line("#define XE_NATIVE_CONTRACT 1");
@@ -942,6 +1130,8 @@ std::string ShaderOverrides::BuildContract(
                      [](char c) { return char(std::toupper(uint8_t(c))); });
       line("#define XE_NATIVE_PASS_{} {}u", name, pass);
     }
+  }
+  if (entry) {
     if (native_pass_debug_) {
       line("#define XE_NATIVE_PASS_DEBUG 1");
     }
@@ -1012,19 +1202,47 @@ std::string ShaderOverrides::BuildContract(
        uint32_t(DxbcShaderTranslator::kSysFlag_AlphaPassIfLess_Shift));
   line("#define XE_SYSFLAG_CONVERT_COLOR0_TO_GAMMA_SHIFT {}u",
        uint32_t(DxbcShaderTranslator::kSysFlag_ConvertColor0ToGamma_Shift));
+  if (vertex) {
+    // The vertex index, the exports' conventions and the guest-to-host
+    // transform (StartVertexShader_LoadVertexIndex, CompleteVertexOrDomainShader).
+    line("#define XE_SYS_LINE_LOOP_CLOSING_INDEX {}u",
+         offsetof(SystemConstants, line_loop_closing_index));
+    line("#define XE_SYS_VERTEX_INDEX_ENDIAN {}u", offsetof(SystemConstants, vertex_index_endian));
+    line("#define XE_SYS_VERTEX_INDEX_OFFSET {}u", offsetof(SystemConstants, vertex_index_offset));
+    line("#define XE_SYS_VERTEX_INDEX_MIN {}u", offsetof(SystemConstants, vertex_index_min));
+    line("#define XE_SYS_VERTEX_INDEX_MAX {}u", offsetof(SystemConstants, vertex_index_max));
+    line("#define XE_SYS_USER_CLIP_PLANES {}u", offsetof(SystemConstants, user_clip_planes));
+    line("#define XE_SYS_NDC_SCALE {}u", offsetof(SystemConstants, ndc_scale));
+    line("#define XE_SYS_NDC_OFFSET {}u", offsetof(SystemConstants, ndc_offset));
+    line("#define XE_SYS_POINT_VERTEX_DIAMETER_MIN {}u",
+         offsetof(SystemConstants, point_vertex_diameter_min));
+    line("#define XE_SYS_POINT_VERTEX_DIAMETER_MAX {}u",
+         offsetof(SystemConstants, point_vertex_diameter_max));
+    line("#define XE_SYSFLAG_SHARED_MEMORY_IS_UAV {}u",
+         uint32_t(DxbcShaderTranslator::kSysFlag_SharedMemoryIsUAV));
+    line("#define XE_SYSFLAG_W_NOT_RECIPROCAL {}u",
+         uint32_t(DxbcShaderTranslator::kSysFlag_WNotReciprocal));
+    line("#define XE_SYSFLAG_XY_DIVIDED_BY_W {}u",
+         uint32_t(DxbcShaderTranslator::kSysFlag_XYDividedByW));
+    line("#define XE_SYSFLAG_Z_DIVIDED_BY_W {}u",
+         uint32_t(DxbcShaderTranslator::kSysFlag_ZDividedByW));
+  }
 
-  // Host configuration of the translator.
+  // Host configuration of the translator. The scene's scale is a pixel shader
+  // modification.
+  const bool scene_scale = !vertex && modification.pixel.scene_scale;
+  const bool scene_input_scale = !vertex && modification.pixel.scene_input_scale;
   uint32_t scale_x = config_.draw_resolution_scale_x, scale_y = config_.draw_resolution_scale_y;
-  const DrawScale scene = modification.pixel.scene_input_scale ? config_.scene_input_scale
-                                                               : config_.scene_draw_scale;
-  if (modification.pixel.scene_scale && !scene.IsWhole()) {
+  const DrawScale scene =
+      scene_input_scale ? config_.scene_input_scale : config_.scene_draw_scale;
+  if (scene_scale && !scene.IsWhole()) {
     // A scene draw at a fractional scale (18.13): the macros as floats.
     line("#define XE_RESOLUTION_SCALE_X ({}.0 / {}.0)", scene.numerator, scene.denominator);
     line("#define XE_RESOLUTION_SCALE_Y ({}.0 / {}.0)", scene.numerator, scene.denominator);
     line("#define XE_REVERT_RESOLUTION_SCALE_AXES {}u",
          REXCVAR_GET(draw_resolution_scaled_texture_offsets) ? 3u : 0u);
   } else {
-    if (modification.pixel.scene_scale) {
+    if (scene_scale) {
       scale_x = scale_y = scene.Floor();
     }
     line("#define XE_RESOLUTION_SCALE_X {}", scale_x);
@@ -1034,7 +1252,7 @@ std::string ShaderOverrides::BuildContract(
              ? uint32_t(scale_x > 1) | (uint32_t(scale_y > 1) << 1)
              : 0u);
   }
-  if (modification.pixel.scene_scale && modification.pixel.scene_input_scale) {
+  if (scene_scale && scene_input_scale) {
     const float lod_bias =
         DxbcShaderTranslator::SceneInputLodBias(config_.scene_input_scale, config_.scene_draw_scale);
     if (lod_bias != 0.0f) {
@@ -1059,8 +1277,12 @@ std::string ShaderOverrides::BuildContract(
   // Registers and interpolators (StartTranslation, StartPixelShader).
   uint32_t register_count = shader.register_static_address_bound();
   if (shader.uses_register_dynamic_addressing()) {
-    register_count =
-        std::max(register_count, uint32_t(modification.pixel.dynamic_addressable_register_count));
+    register_count = std::max(
+        register_count, uint32_t(vertex ? modification.vertex.dynamic_addressable_register_count
+                                        : modification.pixel.dynamic_addressable_register_count));
+  }
+  if (vertex) {
+    return out + BuildVertexContract(translation, std::max(register_count, uint32_t(1)));
   }
   uint32_t interpolator_mask = modification.pixel.interpolator_mask;
   int32_t param_gen_interpolator =
@@ -1338,9 +1560,10 @@ uint64_t ShaderOverrides::CacheKey(
 
 std::filesystem::path ShaderOverrides::CachePath(
     const D3D12Shader::D3D12Translation& translation, uint64_t key) const {
-  return cache_directory_ / fmt::format("shader_{:016X}_{:016X}_{:016X}.dxbc",
-                                        translation.shader().ucode_data_hash(),
-                                        translation.modification(), key);
+  return cache_directory_ /
+         fmt::format("{}_{:016X}_{:016X}_{:016X}.dxbc",
+                     translation.shader().type() == xenos::ShaderType::kVertex ? "vertex" : "shader",
+                     translation.shader().ucode_data_hash(), translation.modification(), key);
 }
 
 std::filesystem::path ShaderOverrides::ResolveInclude(
@@ -1455,7 +1678,7 @@ bool ShaderOverrides::Compile(const D3D12Shader::D3D12Translation& translation,
                               const std::vector<uint8_t>& dxbc, const std::string& contract,
                               const std::string& text, const std::string& name,
                               const std::string& mod,
-                              const native_shader_contract::PixelEntry* entry,
+                              const std::vector<std::string>* params,
                               std::vector<uint8_t>& binary_out,
                               std::vector<Dependency>& files_out,
                               std::unique_ptr<CompileJob>* job_out) const {
@@ -1481,8 +1704,8 @@ bool ShaderOverrides::Compile(const D3D12Shader::D3D12Translation& translation,
     std::lock_guard<std::mutex> lock(knob_mutex_);
     define_values = compile_defines_;
     // A manifest entry reads its params from their knob slots.
-    if (entry) {
-      for (const std::string& param : entry->params) {
+    if (params) {
+      for (const std::string& param : *params) {
         auto slot = knob_slots_.find(param);
         if (slot != knob_slots_.end()) {
           SetDefine(define_values, param, fmt::format("xe_mod_knob({}u)", slot->second));
@@ -1537,9 +1760,10 @@ bool ShaderOverrides::RunCompile(const CompileJob& job, const std::vector<uint8_
   ID3DBlob* code = nullptr;
   ID3DBlob* messages = nullptr;
   auto start = std::chrono::steady_clock::now();
-  HRESULT result = pD3DCompile(d3d_compile_)(job.source.data(), job.source.size(), name.c_str(),
-                                             defines.data(), &include, "main", kTarget,
-                                             kCompileFlags, 0, &code, &messages);
+  HRESULT result = pD3DCompile(d3d_compile_)(
+      job.source.data(), job.source.size(), name.c_str(), defines.data(), &include, "main",
+      job.shader->type() == xenos::ShaderType::kVertex ? kVertexTarget : kTarget, kCompileFlags,
+      0, &code, &messages);
   auto elapsed = std::chrono::steady_clock::now() - start;
   double milliseconds = std::chrono::duration<double, std::milli>(elapsed).count();
   if (on_worker || perf_trace::shader_work_for_draw) {
@@ -1679,6 +1903,9 @@ ShaderOverrides::Outcome ShaderOverrides::Build(const D3D12Shader::D3D12Translat
                                                 std::vector<Dependency>& files_out,
                                                 std::unique_ptr<CompileJob>* job_out) {
   Shader& shader = translation.shader();
+  if (shader.type() == xenos::ShaderType::kVertex) {
+    return BuildVertex(translation, dxbc, binary_out, files_out, job_out);
+  }
   uint64_t hash = shader.ucode_data_hash();
   Modification modification(translation.modification());
   // native_plain: outside the passes of the shader's manifest entry.
@@ -1784,14 +2011,81 @@ ShaderOverrides::Outcome ShaderOverrides::Build(const D3D12Shader::D3D12Translat
   }
   files_out.clear();
   std::unique_ptr<CompileJob> job;
-  bool compiled = Compile(translation, dxbc, contract, text, name, mod, entry, binary_out,
-                          files_out, job_out ? &job : nullptr);
+  bool compiled = Compile(translation, dxbc, contract, text, name, mod,
+                          entry ? &entry->params : nullptr, binary_out, files_out,
+                          job_out ? &job : nullptr);
   if (job) {
     *job_out = std::move(job);
     return Outcome::kQueued;
   }
   if (!path.empty()) {
     files_out.push_back({path.filename().string(), path, HashBytes(text.data(), text.size())});
+  }
+  return compiled ? Outcome::kCompiled : Outcome::kFailed;
+}
+
+const native_shader_contract::VertexEntry* ShaderOverrides::NativeVertexEntry(
+    const D3D12Shader::D3D12Translation& translation) const {
+  Modification modification(translation.modification());
+  if (!native_ || modification.vertex.native_plain || modification.vertex.native_classic) {
+    return nullptr;
+  }
+  return native_->FindVertex(translation.shader().ucode_data_hash());
+}
+
+bool ShaderOverrides::GeneratesVertex(const D3D12Shader::D3D12Translation& translation) const {
+  Modification modification(translation.modification());
+  if (!native_ || translation.shader().type() != xenos::ShaderType::kVertex ||
+      modification.vertex.native_plain || modification.vertex.native_classic ||
+      modification.vertex.host_vertex_shader_type != Shader::HostVertexShaderType::kVertex ||
+      translation.shader().memexport_eM_written()) {
+    return false;
+  }
+  return native_vertex_all_ || native_->FindVertex(translation.shader().ucode_data_hash());
+}
+
+ShaderOverrides::Outcome ShaderOverrides::BuildVertex(
+    const D3D12Shader::D3D12Translation& translation, const std::vector<uint8_t>& dxbc,
+    std::vector<uint8_t>& binary_out, std::vector<Dependency>& files_out,
+    std::unique_ptr<CompileJob>* job_out) {
+  if (!GeneratesVertex(translation)) {
+    return Outcome::kNone;
+  }
+  Shader& shader = translation.shader();
+  const uint64_t hash = shader.ucode_data_hash();
+  const uint64_t modification = translation.modification();
+  const native_shader_contract::VertexEntry* entry = NativeVertexEntry(translation);
+  std::string contract = BuildContract(translation, nullptr, entry);
+  // The vertex shader's HLSL doing the operations of its DXBC translation, with
+  // the entry's hooks.
+  HlslShaderTranslator translator;
+  HlslShaderTranslator::Translation generated(shader, modification);
+  if (!translator.TranslateAnalyzedShader(generated)) {
+    REXGPU_WARN("Native shader contract: vertex shader {:016X}: no HLSL generated for "
+                "modification {:016X}",
+                hash, modification);
+    return Outcome::kFailed;
+  }
+  std::string text = generated.GetTranslatedBinaryString();
+  std::string file_name = fmt::format("vertex_{:016X}_{:016X}.vs.hlsl", hash, modification);
+  std::string name;
+  if (!generate_path_.empty()) {
+    std::filesystem::path directory(generate_path_);
+    std::error_code error;
+    std::filesystem::create_directories(directory, error);
+    std::ofstream(directory / file_name, std::ios::binary) << text;
+    name = (directory / file_name).generic_string();
+  } else {
+    name = "generated/" + file_name;
+  }
+  files_out.clear();
+  std::unique_ptr<CompileJob> job;
+  bool compiled = Compile(translation, dxbc, contract, text, name, entry ? entry->hooks : "",
+                          entry ? &entry->params : nullptr, binary_out, files_out,
+                          job_out ? &job : nullptr);
+  if (job) {
+    *job_out = std::move(job);
+    return Outcome::kQueued;
   }
   return compiled ? Outcome::kCompiled : Outcome::kFailed;
 }
@@ -1824,21 +2118,31 @@ std::string ShaderOverrides::CheckSignatures(const Shader& shader, uint64_t modi
     return CompareSignatures(dxbc, binary);
   }
   std::vector<SignatureElement> inputs, outputs;
-  ExpectedPixelSignatures(shader, Modification(modification), inputs, outputs);
+  if (shader.type() == xenos::ShaderType::kVertex) {
+    ExpectedVertexSignatures(Modification(modification), inputs, outputs);
+  } else {
+    ExpectedPixelSignatures(shader, Modification(modification), inputs, outputs);
+  }
   return CompareExpectedSignatures(inputs, outputs, binary);
 }
 
 bool ShaderOverrides::TranslateEntry(D3D12Shader::D3D12Translation& translation,
                                      ShaderCompileQueue* queue) {
   Shader& shader = translation.shader();
-  if (!native_ || shader.type() != xenos::ShaderType::kPixel || !NativeEntry(translation)) {
+  // A vertex shader's translation takes its generated HLSL with an entry, or
+  // with native_shader_contract_vertex_all (docs/analysis/shader-contract.md 9).
+  const bool vertex = shader.type() == xenos::ShaderType::kVertex;
+  if (!native_ || (vertex ? !GeneratesVertex(translation)
+                          : shader.type() != xenos::ShaderType::kPixel ||
+                                !NativeEntry(translation))) {
     return false;
   }
   Modification modification(translation.modification());
-  if (modification.pixel.depth_stencil_mode ==
-          Modification::DepthStencilMode::kFloat24Truncating ||
-      modification.pixel.depth_stencil_mode == Modification::DepthStencilMode::kFloat24Rounding ||
-      shader.memexport_eM_written()) {
+  if (!vertex && (modification.pixel.depth_stencil_mode ==
+                      Modification::DepthStencilMode::kFloat24Truncating ||
+                  modification.pixel.depth_stencil_mode ==
+                      Modification::DepthStencilMode::kFloat24Rounding ||
+                  shader.memexport_eM_written())) {
     // Not supported by overrides: the DXBC translation (Build keeps it too).
     return false;
   }
@@ -1848,9 +2152,10 @@ bool ShaderOverrides::TranslateEntry(D3D12Shader::D3D12Translation& translation,
   // which sets every field again.
   auto fallback = [&](const char* reason) {
     uint32_t count = entry_fallbacks_.fetch_add(1, std::memory_order_relaxed) + 1;
-    REXGPU_WARN("Native shader contract: entry {:016X} modification {:016X}: DXBC fallback {} "
+    REXGPU_WARN("Native shader contract: {} {:016X} modification {:016X}: DXBC fallback {} "
                 "({})",
-                shader.ucode_data_hash(), modification.value, count, reason);
+                vertex ? "vertex shader" : "entry", shader.ucode_data_hash(), modification.value,
+                count, reason);
     return false;
   };
   // The generation counts as the pixel shader's translation in the shader
@@ -1859,11 +2164,13 @@ bool ShaderOverrides::TranslateEntry(D3D12Shader::D3D12Translation& translation,
   HlslShaderTranslator translator;
   bool generated = translator.TranslateAnalyzedShader(translation);
   if (translate_start) {
-    perf_trace::AddShaderWork(perf_trace::ShaderWork::kPixelTranslation,
+    perf_trace::AddShaderWork(vertex ? perf_trace::ShaderWork::kVertexTranslation
+                                     : perf_trace::ShaderWork::kPixelTranslation,
                               perf_trace::Now() - translate_start);
   }
   if (!generated) {
-    return fallback("no HLSL: an unsupported fetch");
+    return fallback(vertex ? "no HLSL: an unsupported instruction or export"
+                           : "no HLSL: an unsupported fetch");
   }
   auto& dxbc_shader = static_cast<D3D12Shader&>(shader);
   if (!dxbc_shader.SetBindingsOnce(translator.texture_bindings(), translator.sampler_bindings())) {
@@ -1884,9 +2191,10 @@ bool ShaderOverrides::TranslateEntry(D3D12Shader::D3D12Translation& translation,
     // so its cache file, is this one's: the contract and the HLSL come from
     // the shader's analysis and bindings, not from the DXBC translation.
     uint32_t count = entry_placeholders_.fetch_add(1, std::memory_order_relaxed) + 1;
-    REXGPU_INFO("Native shader contract: entry {:016X} modification {:016X} is not in the cache: "
+    REXGPU_INFO("Native shader contract: {} {:016X} modification {:016X} is not in the cache: "
                 "its DXBC translation until a worker compiles it ({} so far)",
-                shader.ucode_data_hash(), modification.value, count);
+                vertex ? "vertex shader" : "entry", shader.ucode_data_hash(), modification.value,
+                count);
     return false;
   }
   if (outcome != Outcome::kCompiled) {
@@ -1902,7 +2210,18 @@ bool ShaderOverrides::TranslateEntry(D3D12Shader::D3D12Translation& translation,
 
 void ShaderOverrides::CheckBindings(const D3D12Shader::D3D12Translation& translation) {
   const auto& shader = static_cast<const D3D12Shader&>(translation.shader());
-  if (shader.type() != xenos::ShaderType::kPixel || !translation.is_valid()) {
+  // Pixel shaders, and vertex shaders of the host vertex stage (the generator
+  // takes no domain shader).
+  const bool vertex = shader.type() == xenos::ShaderType::kVertex;
+  if (vertex) {
+    if (Modification(translation.modification()).vertex.host_vertex_shader_type !=
+        Shader::HostVertexShaderType::kVertex) {
+      return;
+    }
+  } else if (shader.type() != xenos::ShaderType::kPixel) {
+    return;
+  }
+  if (!translation.is_valid()) {
     return;
   }
   HlslShaderTranslator translator;
@@ -1910,35 +2229,37 @@ void ShaderOverrides::CheckBindings(const D3D12Shader::D3D12Translation& transla
   bool generated_valid = translator.TranslateAnalyzedShader(generated);
   bool matches = generated_valid &&
                  shader.HasBindings(translator.texture_bindings(), translator.sampler_bindings());
+  const char* kind = vertex ? "vertex" : "pixel";
+  CheckCounts& counts = checked_[vertex ? 1 : 0];
   std::lock_guard<std::mutex> lock(check_mutex_);
-  bool first = checked_shaders_.insert(shader.ucode_data_hash()).second;
+  bool first = counts.shaders.insert(shader.ucode_data_hash()).second;
   if (!generated_valid) {
-    // getWeights, getCompTexLOD, getBCF or memexport (the generator logged
-    // which): no HLSL to compare, and an entry of this shader would take the
-    // DXBC translation.
-    ++checked_without_hlsl_;
+    // getWeights, getCompTexLOD, getBCF or memexport, or in a vertex shader
+    // kill or getGradients (the generator logged which): no HLSL to compare,
+    // and an entry of this shader would take the DXBC translation.
+    ++counts.without_hlsl;
     if (first) {
-      REXGPU_INFO("Native shader contract check: pixel shader {:016X}: no HLSL",
+      REXGPU_INFO("Native shader contract check: {} shader {:016X}: no HLSL", kind,
                   shader.ucode_data_hash());
     }
     return;
   }
-  ++checked_bindings_;
+  ++counts.bindings;
   if (!matches) {
-    ++checked_mismatches_;
-    REXGPU_ERROR("Native shader contract check: {:016X} modification {:016X}: the bindings of the "
-                 "HLSL differ from the DXBC translation's ({}; {} mismatches)",
-                 shader.ucode_data_hash(), translation.modification(),
+    ++counts.mismatches;
+    REXGPU_ERROR("Native shader contract check: {} shader {:016X} modification {:016X}: the "
+                 "bindings of the HLSL differ from the DXBC translation's ({}; {} mismatches)",
+                 kind, shader.ucode_data_hash(), translation.modification(),
                  shader.DescribeBindingDifference(translator.texture_bindings(),
                                                   translator.sampler_bindings()),
-                 checked_mismatches_);
+                 counts.mismatches);
   } else if (first) {
-    REXGPU_INFO("Native shader contract check: pixel shader {:016X}: the bindings of its DXBC "
+    REXGPU_INFO("Native shader contract check: {} shader {:016X}: the bindings of its DXBC "
                 "translation ({} textures, {} samplers; {} shaders, {} translations compared, {} "
                 "mismatches, {} without HLSL)",
-                shader.ucode_data_hash(), translator.texture_bindings().size(),
-                translator.sampler_bindings().size(), checked_shaders_.size(), checked_bindings_,
-                checked_mismatches_, checked_without_hlsl_);
+                kind, shader.ucode_data_hash(), translator.texture_bindings().size(),
+                translator.sampler_bindings().size(), counts.shaders.size(), counts.bindings,
+                counts.mismatches, counts.without_hlsl);
   }
 }
 
@@ -1947,7 +2268,12 @@ void ShaderOverrides::CheckEntry(const D3D12Shader::D3D12Translation& translatio
   const auto& shader = static_cast<const D3D12Shader&>(translation.shader());
   std::string mismatch = CompareSignatures(dxbc, translation.translated_binary());
   std::vector<SignatureElement> inputs, outputs;
-  ExpectedPixelSignatures(shader, Modification(translation.modification()), inputs, outputs);
+  const bool vertex = shader.type() == xenos::ShaderType::kVertex;
+  if (vertex) {
+    ExpectedVertexSignatures(Modification(translation.modification()), inputs, outputs);
+  } else {
+    ExpectedPixelSignatures(shader, Modification(translation.modification()), inputs, outputs);
+  }
   std::string expected = CompareExpectedSignatures(inputs, outputs, dxbc);
   if (!expected.empty()) {
     expected = "the DXBC translation against the expected: " + expected;
@@ -1959,20 +2285,29 @@ void ShaderOverrides::CheckEntry(const D3D12Shader::D3D12Translation& translatio
                             expected.empty() ? "" : "; ", binding_mismatches);
   }
   uint32_t count = checked_entries_.fetch_add(1, std::memory_order_relaxed) + 1;
+  const char* kind = vertex ? "vertex shader" : "entry";
   if (!mismatch.empty() || !expected.empty()) {
-    REXGPU_ERROR("Native shader contract check: entry {:016X} modification {:016X}: {}{}{}",
+    REXGPU_ERROR("Native shader contract check: {} {:016X} modification {:016X}: {}{}{}", kind,
                  shader.ucode_data_hash(), translation.modification(), mismatch,
                  mismatch.empty() || expected.empty() ? "" : "; ", expected);
     return;
   }
-  REXGPU_INFO("Native shader contract check: entry {:016X} modification {:016X} (check {}): the "
+  REXGPU_INFO("Native shader contract check: {} {:016X} modification {:016X} (check {}): the "
               "signatures and bindings of its DXBC translation",
-              shader.ucode_data_hash(), translation.modification(), count);
+              kind, shader.ucode_data_hash(), translation.modification(), count);
 }
 
 void ShaderOverrides::Apply(D3D12Shader::D3D12Translation& translation,
                             ShaderCompileQueue* queue) {
-  if (translation.shader().type() != xenos::ShaderType::kPixel || !translation.is_valid()) {
+  if (!translation.is_valid()) {
+    return;
+  }
+  if (translation.shader().type() == xenos::ShaderType::kVertex) {
+    // A vertex shader whose generated HLSL the cache did not hold.
+    if (!GeneratesVertex(translation)) {
+      return;
+    }
+  } else if (translation.shader().type() != xenos::ShaderType::kPixel) {
     return;
   }
   std::vector<uint8_t> binary;
@@ -2292,6 +2627,43 @@ uint64_t VertexFetchBlindKey(const Shader& shader, bool coarse) {
     }
   }
   return HashBytes(ucode.data(), ucode.size() * sizeof(uint32_t));
+}
+
+void ShaderOverrides::NoteVertexShader(const Shader& shader) {
+  if (!native_ || native_->vertex.empty() || shader.type() != xenos::ShaderType::kVertex) {
+    return;
+  }
+  const uint64_t key = shader.ucode_data_hash();
+  std::lock_guard<std::mutex> lock(vertex_keys_mutex_);
+  if (!vertex_keys_seen_.insert(key).second) {
+    return;
+  }
+  const uint64_t blind = VertexFetchBlindKey(shader);
+  if (!blind) {
+    return;
+  }
+  auto warn = [blind](uint64_t unlisted, uint64_t listed) {
+    REXGPU_WARN("Native shader contract: vertex shader {:016X} looks like the entry of {:016X} "
+                "under another vertex layout (fetch-blind key {:016X}); not hooked",
+                unlisted, listed, blind);
+  };
+  if (native_->FindVertex(key)) {
+    vertex_entry_blind_keys_.emplace(blind, key);
+    auto unlisted = vertex_unlisted_keys_.find(blind);
+    if (unlisted != vertex_unlisted_keys_.end()) {
+      for (uint64_t other : unlisted->second) {
+        warn(other, key);
+      }
+      vertex_unlisted_keys_.erase(unlisted);
+    }
+    return;
+  }
+  auto listed = vertex_entry_blind_keys_.find(blind);
+  if (listed != vertex_entry_blind_keys_.end()) {
+    warn(key, listed->second);
+  } else {
+    vertex_unlisted_keys_[blind].push_back(key);
+  }
 }
 
 bool VertexSurveyEnabled() { return REXCVAR_GET(native_shader_vertex_survey); }

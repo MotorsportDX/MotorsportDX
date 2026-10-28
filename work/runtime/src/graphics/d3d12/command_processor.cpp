@@ -2542,6 +2542,7 @@ bool D3D12CommandProcessor::SetupContext() {
   std::memset(shader_mod_host_values_, 0, sizeof(shader_mod_host_values_));
   native_shader_contract_ = shader_overrides ? shader_overrides->native_contract() : nullptr;
   native_shader_pass_debug_ = native_shader_contract_ && shader_overrides->native_pass_debug();
+  native_shader_vertex_all_ = native_shader_contract_ && shader_overrides->native_vertex_all();
   native_shader_pass_ = 0;
 
   D3D12_HEAP_FLAGS heap_flag_create_not_zeroed = provider.GetHeapFlagCreateNotZeroed();
@@ -4286,10 +4287,22 @@ bool D3D12CommandProcessor::IssueDraw(xenos::PrimitiveType primitive_type, uint3
   // The native shader contract (docs/analysis/shader-contract.md): a pixel
   // shader with a manifest entry takes it in the passes the entry lists and the
   // plain translation elsewhere, or its classic mod in the A/B's classic
-  // periods; its draws carry their pass class in the host values.
-  if (native_shader_contract_ && pixel_shader) {
-    if (const native_shader_contract::PixelEntry* entry =
-            native_shader_contract_->FindPixel(pixel_shader->ucode_data_hash())) {
+  // periods; a vertex shader with an entry takes its hooks the same way, and
+  // its DXBC translation outside the passes and in the A/B's other periods
+  // (with native_shader_contract_vertex_all every vertex shader takes its
+  // generated HLSL, and the DXBC translation in those periods). The draws of
+  // entries carry their pass class in the host values.
+  if (native_shader_contract_) {
+    const native_shader_contract::PixelEntry* entry =
+        pixel_shader ? native_shader_contract_->FindPixel(pixel_shader->ucode_data_hash())
+                     : nullptr;
+    const native_shader_contract::VertexEntry* vertex_entry =
+        native_shader_contract_->FindVertex(vertex_shader->ucode_data_hash());
+    if ((vertex_entry || native_shader_vertex_all_) &&
+        ShaderOverrides::IsNativeAbClassicPhase()) {
+      vertex_shader_modification.vertex.native_classic = 1;
+    }
+    if (entry || vertex_entry) {
       const auto depth_info = regs.Get<reg::RB_DEPTH_INFO>();
       const uint32_t depth_base = depth_info.depth_base | depth_info.depth_base_bit_11 << 11;
       // The viewport's width in guest pixels, 0 without viewport scaling.
@@ -4304,23 +4317,31 @@ bool D3D12CommandProcessor::IssueDraw(xenos::PrimitiveType primitive_type, uint3
       native_shader_pass_ = native_shader_contract_->Classify(depth_tested, depth_base,
                                                               viewport_width, after_final);
       if (native_shader_pass_debug_) {
-        // Each kind of draw an entry's pixel shader gets, once (the first 64).
+        // Each kind of draw an entry's shader gets, once (the first 64): the pixel
+        // shader's if it has an entry, else the vertex shader's.
         static std::set<std::tuple<uint64_t, uint32_t, uint32_t, uint32_t, bool, bool>> logged;
-        auto kind = std::make_tuple(pixel_shader->ucode_data_hash(), native_shader_pass_,
+        auto kind = std::make_tuple(entry ? pixel_shader->ucode_data_hash()
+                                          : vertex_shader->ucode_data_hash(),
+                                    native_shader_pass_,
                                     depth_base, viewport_width, depth_tested, after_final);
         if (logged.size() < 64 && logged.insert(kind).second) {
           REXGPU_INFO(
-              "Native shader contract: pixel shader {:016X} in pass {} (depth base {}, viewport "
+              "Native shader contract: {} shader {:016X} in pass {} (depth base {}, viewport "
               "{} wide, depth or stencil test {}, after the final point {})",
-              pixel_shader->ucode_data_hash(),
+              entry ? "pixel" : "vertex", std::get<0>(kind),
               native_shader_contract_->PassName(native_shader_pass_), depth_base, viewport_width,
               depth_tested, after_final);
         }
       }
-      if (!(entry->pass_mask & (uint32_t(1) << native_shader_pass_))) {
-        pixel_shader_modification.pixel.native_plain = 1;
-      } else if (ShaderOverrides::IsNativeAbClassicPhase()) {
-        pixel_shader_modification.pixel.native_classic = 1;
+      if (entry) {
+        if (!(entry->pass_mask & (uint32_t(1) << native_shader_pass_))) {
+          pixel_shader_modification.pixel.native_plain = 1;
+        } else if (ShaderOverrides::IsNativeAbClassicPhase()) {
+          pixel_shader_modification.pixel.native_classic = 1;
+        }
+      }
+      if (vertex_entry && !(vertex_entry->pass_mask & (uint32_t(1) << native_shader_pass_))) {
+        vertex_shader_modification.vertex.native_plain = 1;
       }
     }
   }
