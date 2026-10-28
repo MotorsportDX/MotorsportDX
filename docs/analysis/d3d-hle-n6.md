@@ -290,6 +290,97 @@ The cold cells differ between runs by the order the threads finish in: the caree
 
 **Rebased onto main `fbe6511`** (the shader contract's increment 6, whose vertex shaders are swapped in as the pixel shaders' mods are; `SwapCompiledMods` recreates early pipelines by both), snapshot `n6f4`: smoke at 3/2 passed 3 of 3 (`n6hs32` against `n6fs32`, `career` PASS, the race 237.38 fps, p99 5.06 ms). A cold career at 2x with `native_shader_contract=true`, `native_shader_contract_vertex_all=true`, a fresh salt and the back end's check (`n6f4-vcold`, beside main's `n5sc17-cold-240-career`): 35,064,814 draws checked, no mismatch, no dropped draw; 539 early pipelines, 475 taken created and 57 waited for (452 ms, 29 over 4 ms); 7 created on the draw path in 0.3 ms; frames over 50, 100 and 250 ms 10, 4 and 1 (main 10, 5 and 1, with 539 pipelines on the draw path, 54 over 4 ms). `compare.py` WARN: one vertex translation over 4 ms on the draw path (0 before).
 
+#### 19.3.10 Increment 1.3: the game's pixel shaders from the disc, 28 October 2026
+
+Part 3 of 19.3.2. The number follows 1.2's design (19.3.9).
+
+**What the design starts from** (measured on `I:\FM4-build-usa` before any code, 28 October 2026).
+
+- **Only `.fxobj` entries hold shader containers.** In the 32 track archives (`Media\tracks\<track>\bin.zip`), 1,132 of 125,279 entries are `.fxobj`. They hold the archives' containers, 22 MB inflated of 7.2 GB.
+  - The entries are LZX (zip method 21) or stored (method 0); no deflate.
+  - `look_coverage.py` inflates every entry and takes 29 s for the tracks; inflating the `.fxobj` entries only, the whole Python inventory takes 0.7 s.
+- **Installed content.** Every package is installed as plain files under `<user data>\<profile>\4D530910\00000002\<package>`.
+  - Disc 2's four packages (`4d5309100000000{1..4}`) hold no `.fxobj`: the content install disc adds no pixel shader.
+  - Of the DLC, only the Launch Track Pack does: 82 entries, LZX.
+- **The inventory against the storage.** The inventory finds 1,076 unique pixel shaders. The BuildRoot's warm storage holds 576 pixel and 354 vertex shaders, and its pipeline storage (`.rtv.d3d12.xpso`) names 569 of those pixel shaders in 3,458 pipelines.
+  - 575 of the 576 stored pixel shaders are in the inventory.
+  - The one missing (`A4A965C189287B99`) is 9 dwords that `default.xex` holds raw, outside a shader container (an XDK shader of the title's D3D, presumably). The container scan cannot find it, and the title's first draw with it stores it.
+- **The modifications.** The start translates only the pairs of shader and modification that a stored pipeline names (`shader_translations_needed` in `InitializeShaderStorage`). A pixel shader added to the storage without a pipeline is only analyzed: no translation, no mod compile. So the inventory needs the modifications it will draw with predicted. In the warm pipeline storage, a pixel shader has 1 to 8 modifications (210 have 1, 189 have 2, 102 have 4).
+  - The interpolator mask and the dynamically indexable register count never differ within a shader.
+  - What differs comes from the draw: centroid sampling (164 shaders; the target's MSAA), the depth mode (42; alpha test), and the scene variants (289 and 162; the storage mixes runs at many scales).
+
+**The design** (the main session's decisions of 28 October 2026, taken while the project owner was away and open to the owner's review; each lists what was not taken).
+
+1. **The reader is runtime code** (`rex::system::shader_inventory`, `work/runtime/src/system/shader_inventory.cpp`). It is a zip central-directory reader with LZX through the runtime's `lzx_decompress`, and the container scan of `material_atlas.py` with XXH3_64 of the big-endian microcode. `default.xex`'s containers are read from the loaded module's image in guest memory. Not taken: the launcher, which would need its own LZX and XEX decryption.
+2. **It runs as the first stage of the offline pass** (`shader_offline_pass=true`), after the executable is loaded and before its main thread starts. The inventory is the only stage that depends on the pass: the predicted translations (4) run at every start. The pass reads the whole inventory every time, since it takes 0.2 s from the file cache (5 s the first time the files are read from disk). Not taken: a stamp of the container set to skip it, and a run at every title start.
+3. **The storage file**: the inventory appends the pixel shaders the storage lacks to `<cache_root>\shaders\shareable\<title>.xsh`, in its present format and version, after the last valid record. A file with another magic or version is rewritten with the current header, as `InitializeShaderStorage` does. Not taken: a version change.
+   - Beside it the inventory writes `<title>.inputs`: each pixel shader's interpolator word from its container's header (`'XEPI'`, a version, then the key and the word per record).
+   - The word is the 7th of the pixel shader's header, the one the container's offset 24 points at. Its low half is the interpolators the shader reads, and its high half the ones it samples at the pixel center (the others at the centroid with MSAA).
+   - Against the warm pipeline storage, the low half equals the stored interpolator mask in 1,212 of 1,251 modifications; the rest have a vertex shader that writes fewer. Centroid sampling is 0 or the mask without the high half in 1,228.
+   - The file became necessary after the first step gate: the prediction from the register count alone matched 15 of 234 stored modifications.
+4. **Predicted modifications at the start** (`shader_storage_predicted_translations`, on by default). A stored pixel shader that no stored pipeline names, and that has an interpolator word, is translated with these modifications (`PipelineCache::PredictPixelShaderModifications`):
+   - the word's interpolators, with and without its centroid sampling;
+   - no parameter generation;
+   - the depth modes its analysis allows (the early hint, and no modifiers where the draw's alpha may decide coverage);
+   - the scene variants of this start's scale.
+   A self-check at every start compares the prediction with the modifications the stored pipelines name and logs the hit rate. Not taken: exact modifications from a committed table, which is derived from runs of the game (1.4's manifest and its review can refine the prediction).
+5. **The look mods** of predicted translations go to 1.1's workers at a level below everything else: the title's own compiles and the pipeline recreations go first (`ShaderCompileQueue::BackgroundScope`). A pipeline created with such a translation moves its mod ahead (`Promote`). With 1.2, the pass compiles them to DXIL instead. Not taken: a blocking FXC stage in the pass, since FXC costs about 0.23 s a compile.
+6. **Vertex shaders** stay out of scope, as 19.3.2 says.
+
+The main session's two conditions:
+
+- the predicted translations must not lengthen the start noticeably: about 1 s from the start to the first frame against `n6f4` on this PC, or they move into the pass or to a lower priority;
+- the self-check's hit rate is reported as a number.
+
+**The interface with 1.2** (agreed through the main session):
+
+- The pass is one process: the inventory, then `InitializeShaderStorage`, then 1.2's compile, then the exit.
+- Its progress lines are JSON with `stage`, `done`, `total`, `current` and `errors`, and a last line per stage with `finished`.
+- 1.2's compile stage takes the predicted translations as it takes the storage's pipelines' translations.
+- Whichever lands first carries the flag and the progress format, and the other rebases. The pass ends with a hard exit (`std::_Exit`, its result as the exit code), as the window's close does. The subsystems' teardown faults while the title's main thread exists unresumed (0xC0000374 and 0xC0000005 in the first runs).
+- `e2e.py --offline-pass` and `matrix.py --offline-pass` run the pass on a cell's caches before the title.
+
+**Effort**: 19.3.5 estimates 2 to 4 person-weeks, 7 to 14 hours of AI calendar time by section 9. The design, the three steps, three step gates and the close gate took about 3 hours of calendar time, the gates' GPU time included.
+
+**The inventory against the storage** (step 1; `passcheck`, the pass on a copy of the BuildRoot's warm storage and on an empty one):
+
+| Check | Result |
+|---|---|
+| Keys against `look_coverage.py`'s | equal: 1,076 pixel shaders (491 from `Media\Shaders`, 420 from the archives, 166 from `default.xex`'s image), 5,021 pixel shader containers in 171 files and 853 archives (1,214 `.fxobj` entries, no error) |
+| The BuildRoot's 576 stored pixel shaders | 575 found; the one missing is the raw shader of `default.xex` above |
+| The storage after the pass | the warm one 1,077 pixel shaders (501 appended), the empty one 1,076; the start translates every record |
+| The pass's time | 0.19 s for the inventory from the file cache (5.0 s the first time from disk); 6.5 to 7.6 s of wall time for the whole process, its start and the storage's load included |
+
+**Step gates** (the `cold` tier at 240 Hz and 1x on the native path, `matrix.py --tier cold --native --fast-route`, the look `aces`, one run a cell, each with a salt no earlier run used; with the pass, `--offline-pass`, against the same build without it). The `photo` cell starts with the caches `career` left: the second session of a fresh install, on a new track.
+
+| Cells | Pixel translations on the draw path (career, photo) | Look mods compiled on the workers (career, photo) | Mods swapped in late (career, photo) | Pipelines on the draw path over 4 ms | Frames over 50, 100, 250 ms (career) | First title event |
+|---|---|---|---|---|---|---|
+| Without the pass (`n13n1`, `n13n2`) | 233, 74 to 75 | 62 to 63, 15 | 88 to 89, 28 to 29 | 0 | 11, 3 to 4, 1 | 6.78 to 6.82 s |
+| Predicted from the register count (`n13p1`, `n13p2`) | 221, 79 | 336, 16 to 17 | 78 to 85, 30 to 31 | 0 | 9 to 10, 4, 1 | 6.61 to 6.84 s |
+| From the interpolator words (`n13q1`, `n13q2`) | 7, 0 | 470, 0 | 16 to 18, 0 | 2 to 3 | 7 to 12, 4, 1 | 6.17 to 6.24 s |
+| With the early window at a predicted translation's first draw (`n13r1`) | 7, 0 | 470, 0 | 18, 0 | 0 | 12, 5, 1 | 6.15 s |
+
+- **The new track** (`photo`) draws no pixel shader that the start did not translate, compiles no look mod and swaps none in: every mod it draws was ready before its first draw. Without the pass it compiles 15 and swaps 28 to 29 in, the game's look showing until each arrives.
+- **The first career** swaps 16 to 18 mods in late instead of 88 to 89. The rest are mods of translations outside the prediction and pipelines of mods that arrive after the first draw: the 470 compiles of the predicted translations, 200 s of the workers' time at below normal priority, run in the menus. No compile runs in the race.
+- **The hit rate** (the self-check). Against the modifications of the pipelines that the first career stored, at this configuration, 227 of 234 are predicted exactly (97.0%); 4 belong to shaders without an interpolator word. Against the BuildRoot's warm pipeline storage of many scales and paths (1,257 modifications), 767 are predicted exactly, and 1,236 (98.3%) when the scene variants of other scales are left out.
+- **The start** costs nothing measurable: the storage's load, 3,471 predicted translations included, takes 54 to 56 ms against 34 to 40 ms; the title's first event comes at 6.15 to 6.24 s against 6.78 to 6.82 s without the pass (run-to-run spread). The main session's limit was about 1 s.
+- **The frames over 50 ms** stay within the cold cells' spread: they come from the boot's first frame and the pipelines' driver compiles, which the pass does not change.
+- **Pipelines over 4 ms on the draw path** appeared with the first accurate prediction (2 and 3): a pixel shader translated at the start no longer opened 1.5's window of early creation at its first draw. Its first draw now opens it (`D3D12Translation::awaiting_first_draw`), and `n13r1` has none.
+
+**Close gate** (`I:\FM4-build-usa`, snapshot `n13d` = `2df81e1`, the look `aces`, native path). The lean close gate: the candidate runs the pass on its own copy of the BuildRoot's warm cache (`--cache-copy --offline-pass`), as a warm install after the pass; the baselines are local main's runtime (`n6f4`) on a copy of the same cache. The cold cells are the step gates'.
+
+| Check | Result |
+|---|---|
+| Smoke, 3/2 (`n13s32` against `n6hs32`) | 3 of 3; `career` PASS (race 234.84 fps, p99 5.56 ms); `photo` and `photo_view` WARN on capture statistics (the races differ), `photo` also on its race p99 (5.84 against 4.80 ms; no shader work in its race) |
+| Smoke, 2x, the launchers' plan (`n13s2x` against `n6f4s2x`, the same day) | 3 of 3; `career` PASS (race 200.39 against 197.64 fps); `photo` and `photo_view` WARN on capture statistics |
+| Freeze parity, 3/2 (`n13p32` against `n6f4p32`, the two at once) | PASS: draws a frame 2,235.93 against 2,235.92; the native capture at 1:1 beside main's shows the same look (`n13-crops`) |
+| Race at 3/2, one run each (`n13-32` against `n6f4-32`) | 238.62 against 238.63 fps; GPU 3.25 against 3.31 ms, render thread 2.80 against 2.91 ms a frame. No compile in the race |
+| The start | the title's first event at 6.33 to 6.77 s with the pass against 6.52 s (`n6f4-32`); the storage's load with 3,286 predicted translations of 508 shaders within 0.2 s |
+| The prediction on the warm storage at 3/2 | 1,062 of 1,257 stored modifications exact (84.5%); 1,236 (98.3%) without the scene variants, which the storage holds from other scales |
+| Tests | `test_e2e_tools` (50) and `test_pipeline` (29) pass |
+
+On the warm cache the start queued the look mods of 124 predicted translations on the workers: they compiled in the menus, 100 to 110 s of the workers' time, and none ran in a race.
+
 ### 19.4 Item 2: direct D3D12 draws
 
 #### 19.4.1 Today
