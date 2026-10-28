@@ -809,9 +809,17 @@ std::unique_ptr<ShaderOverrides> ShaderOverrides::Create(const HostConfig& confi
   if (overrides->native_ && REXCVAR_GET(native_shader_dxil)) {
     overrides->dxil_compiler_ = DxilCompiler::Load();
     overrides->dxil_relaxed_ = REXCVAR_GET(native_shader_dxil_relaxed);
-    if (overrides->dxil_compiler_ && !overrides->cache_directory_.empty()) {
+    // cache_root/shaders/local/dxil, where the storage's comment places host
+    // binaries (docs/analysis/d3d-hle-n6.md 19.3.9, decision 3), else beside
+    // the override cache.
+    std::string cache_root = REXCVAR_QUERY(std::string, cache_root);
+    if (overrides->dxil_compiler_ &&
+        (!cache_root.empty() || !overrides->cache_directory_.empty())) {
       std::error_code error;
-      std::filesystem::path dxil_directory = overrides->cache_directory_ / "dxil";
+      std::filesystem::path dxil_directory =
+          !cache_root.empty()
+              ? std::filesystem::path(cache_root) / "shaders" / "local" / "dxil"
+              : overrides->cache_directory_ / "dxil";
       std::filesystem::create_directories(dxil_directory, error);
       if (!error) {
         overrides->dxil_cache_directory_ = dxil_directory;

@@ -373,7 +373,7 @@ The step gates:
 What it is:
 
 - `DxilCompiler` ([dxil_compiler.cpp](../../work/runtime/src/graphics/d3d12/dxil_compiler.cpp)) loads the release's DLLs from beside the executable and reports DXC 1.9 (5,512 commits, `01b62ad4`).
-- Every translation keeps its DXBC and gains a DXIL binary: its mod, its entry, or none, from the generated HLSL. The binaries are cached in `<override cache>\dxil` with the magic `'DXIL'`.
+- Every translation keeps its DXBC and gains a DXIL binary: its mod, its entry, or none, from the generated HLSL. The binaries are cached in `<cache_root>\shaders\local\dxil` with the magic `'DXIL'` (in step 1's cells, beside the override cache).
 - `PipelineCache::PipelineUsesDxil` picks the world per pipeline. A pipeline takes DXIL when both shaders have DXIL and it has no geometry or hull shader and no built-in pixel shader.
 - `native_shader_dxil_ab_ms` keeps a DXBC state beside each DXIL one for the in-run A/B.
 - At the start the DXIL compiles go to 1.1's workers. In the pass (1.3's `shader_offline_pass`) they all wait, the predicted translations' included.
