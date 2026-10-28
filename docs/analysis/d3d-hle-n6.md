@@ -394,6 +394,32 @@ Found and fixed on the way:
 - **The log:** DXC repeats the include chain in every diagnostic. Messages are cut at 4 KB, after 51 MB logs in `n6dx23`.
 - **The start:** with an empty DXIL cache the start waited 28 s for DXC before the title's first frame (`n6dx22`). The compiles now go to the workers, and the title starts on the DXBC world.
 
+**Step 2: the pass and its cache** (`bfd5d39`, snapshot `n6dx30`, the native path with `native_shader_contract` and `native_shader_dxil`, strict).
+
+- **What it adds.** The pass's compile stage appends its JSON lines (`stage` `compile`, `done`, `total`, `errors`, `elapsed_ms`, and `finished` on the last) after the inventory's in `shader_offline_pass_progress`.
+- **Its counts.** `done` and `total` count the translations that the stored pipelines name. The predicted translations of 1.3 also compile with DXC in the pass, which waits for them, but they are not counted.
+- **Pruning.** Each start prunes the DXIL cache to 512 MB, the least recently loaded files first (`PruneDxilCache`).
+- **The harness.** `e2e.py --offline-pass` gives the pass a runtime log of its own (`offline-pass-runtime.log`).
+
+| Check | Result |
+|---|---|
+| The pass on empty caches, 3/2 (`n6dx30-cold32`) | 54.0 s on this PC: the inventory 0.42 s (1,076 pixel shaders appended to an empty storage), then 6,916 DXC compiles, the predicted translations' and their mods' |
+| The first career at 2x on empty caches after its pass (`n6dx30-cold2x`) | no look mod compiled on the draw path; 6 pipelines created there (none over 4 ms) and 537 early; 1,023 compiles on the workers, the vertex shaders and modifications that an empty storage cannot predict (19.3.2: the vertex shaders' keys exist only once drawn) |
+
+**The precision, decision 2's measurement** (`n6dx31-*`, one race of 90 s each at 240 Hz with the AI driver, `native_shader_dxil_ab_ms=-1` and `ab_cvar=native_shader_dxil_dxbc` in periods of 500 ms; `perf_ab.py`, the race's windows).
+
+- The A/B's side a is the DXIL world and side b is today's DXBC world, so b − a > 0 means DXIL is faster.
+- 3,258 pipeline states were created in DXIL in each race, and each had a DXBC twin.
+
+| Race | GPU ms a frame, DXIL | DXBC | b − a, 95% interval |
+|---|---|---|---|
+| Strict, 3/2 | 3.155 | 3.177 | +0.020 ms, [+0.005, +0.034] |
+| Strict, 2x | 4.704 | 4.693 | −0.007 ms, [−0.026, +0.011] |
+| Relaxed, 3/2 | 3.130 | 3.150 | +0.016 ms, [+0.004, +0.027] |
+| Relaxed, 2x | 4.638 | 4.654 | +0.023 ms, [+0.003, +0.044] |
+
+**The outcome: strict stays the default.** Against today's path it costs nothing resolvable. At 3/2 it is 0.020 ms a race frame faster, and at 2x its interval includes 0. Relaxed is about as fast against today's path, and its 2x gain of 0.023 ms is within the strict variant's spread. It stays a development switch (`native_shader_dxil_relaxed`). That the strict DXIL world is not slower than the driver's fused DXBC means the IEEE strictness of 9.7 costs nothing measurable on this GPU.
+
 #### 19.3.10 Increment 1.3: the game's pixel shaders from the disc, 28 October 2026
 
 Part 3 of 19.3.2. The number follows 1.2's design (19.3.9).
