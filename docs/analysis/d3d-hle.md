@@ -260,6 +260,21 @@ Every stage is behind a switch, off by default until its gate passes, with the P
 
 The measurement part of N0 was done on 21 October 2026 (section 13). N0 to N4 total about 26 to 42 person-weeks. The earlier estimates for design A alone were 24 by the design and 40 to 56 with the reviewers' corrections; this plan reuses the backend in N1 and N2, which is why its range starts lower.
 
+**Calibration against the work done (28 October 2026).** The project owner asked for estimates that fit the work done, which AI sessions do in full. These are the calendar times from a stage's or item's design to its close gate. The sessions work around the clock, two or three at once, on one GPU. All dates are October 2026.
+
+| Work | Estimate | Calendar time | Hours per person-week |
+|---|---|---|---|
+| N0 | 2 to 3 person-weeks | about 3.5 hours (21 October) | about 1.2 to 1.7 |
+| N1 | 6 to 9 | about 10 hours (21 to 22) | about 1.1 to 1.7 |
+| N2 | 3 to 5 | about 4 hours (22) | about 0.8 to 1.3 |
+| N3 | 12 to 20 | about 42 hours (22 to 24) | about 2 to 3.5 |
+| N4 | 3 to 5 | about 21 hours, beside N3 (22 to 23) | about 4 to 7 |
+| N6, increments 1.0 and 1.1 | 1 to 2 | about 7 hours (27) | about 3.5 to 7 |
+| N6, item 5 | 3 to 6 | about 18 hours (27 to 28) | about 3 to 6 |
+| N6, item 4, steps 1 and 2 | 1 to 2 | about 4 hours (28) | about 2 to 4 |
+
+One person-week of the tables in this note and in sections 18 and 19 is therefore about 1 to 7 hours of calendar time. Since N3 it has been about 3.5 hours, because the gates on the one GPU, not the writing of the code, set the pace. The estimates stay in person-weeks so that they can be compared with each other. To read them as calendar time, multiply by about 3.5 hours (2 to 7).
+
 ## 10. Validation and success criteria
 
 - Races are not deterministic ([e2e](../e2e/README.md)), so image parity uses frozen rewind frames at a pinned look (`-Look "original,taa=0"`, the tiles and MSAA of `-Quality` where tiles are compared) with the occlusion knobs pinned, plus the variance of two identical baseline runs.

@@ -616,7 +616,9 @@ The owner's order is stutter first, then CPU headroom on the ROG Xbox Ally X. Th
 5. **Item 4, step 3, with 19.7.1's step 4**, if step 2 leaves most of the keys or the resolved textures' copies are still worth removing. Step 2 leaves 98% of the keys; step 3 moved to a later stage unless the Ally X's render thread limits its frames (19.6.6).
 6. **Item 2**, starting with its measurement (19.4.4 step 1), only if the Ally X's battery runs (17 W) show the CPU time still worth fps after the items above, or this PC's headroom is wanted for 4K and high draw loads; otherwise it moves to a later stage.
 
-N6 by this order is about 17 to 30 person-weeks without item 2 and 27 to 46 with it, besides N5's increments 1 and 2.
+N6 by this order is about 17 to 30 person-weeks without item 2 and 27 to 46 with it, besides N5's increments 1 and 2. In calendar time, by the calibration of 28 October 2026 ([D3D-level HLE, section 9](d3d-hle.md#9-stages)), what is left after item 4 is:
+- increments 1.2 to 1.5 (about 8.5 to 15 person-weeks; 1.5 reached its close gate on 28 October): about 1 to 4 days, about 1.5 to 2 days at the median rate;
+- item 2, if it is taken up (about 10 to 16 person-weeks): about 1 to 5 days more, about 2 days at the median rate.
 
 ### 19.9 What N6 leaves out
 
