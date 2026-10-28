@@ -15,6 +15,7 @@
 #include <cmath>
 #include <cstdio>
 #include <ctime>
+#include <deque>
 #include <fstream>
 #include <map>
 #include <mutex>
@@ -27,6 +28,8 @@
 #include "imgui_impl_sdl3.h"
 #include "imgui_impl_dx11.h"
 #include "misc/cpp/imgui_stdlib.h"
+
+#include <rex/input/wheel/wheel_host.h>
 
 #include "discs.h"
 #include "runner.h"
@@ -317,6 +320,11 @@ class App {
   void ControlsPage();
   void ControllerSection();
   void KeyboardSection();
+  // The racing wheel's test mode, without the game (docs/running.md#racing-wheel-test).
+  void WheelSection();
+  void StartWheelTest();
+  void StopWheelTest();
+  void WheelLog(std::string_view text);
   void GameDataPage();
   void AdvancedPage();
   void ShadersPage();
@@ -397,6 +405,13 @@ class App {
   std::mutex dialog_mutex_;
   std::vector<std::pair<DialogTarget, std::vector<std::string>>> dialog_results_;
   bool quit_ = false;
+  std::unique_ptr<rex::input::wheel::WheelHost> wheel_;
+  bool wheel_haptic_ = false;
+  float wheel_cap_ = 0.25f;
+  bool wheel_invert_ = false;
+  bool wheel_record_ = true;
+  std::mutex wheel_log_mutex_;
+  std::deque<std::string> wheel_log_;  // wheel_log_mutex_: the host's last lines
 };
 
 bool App::Init(int argc, char** argv) {
@@ -469,9 +484,16 @@ bool App::Init(int argc, char** argv) {
   if (load_error_.empty()) Refresh(true);
   // --play: press Play at start with the active profile, for a desktop shortcut.
   bool play = false;
-  for (int i = 1; i < argc; ++i)
+  bool wheel_test = false;
+  for (int i = 1; i < argc; ++i) {
     if (std::string(argv[i]) == "--play" && load_error_.empty()) play = true;
-  if (play) {
+    // --wheel-test: the Controls page with the racing wheel's test running.
+    if (std::string(argv[i]) == "--wheel-test") wheel_test = true;
+  }
+  if (wheel_test) {
+    page_ = 2;
+    StartWheelTest();
+  } else if (play) {
     Play();
   } else if (load_error_.empty() && fs::exists(root_ / "game-build" / "fm4_rex.exe")) {
     // The shader pass once after an install or an update (the owner's answer 5 of 19.10).
@@ -633,6 +655,9 @@ void App::Run() {
           continue;
         }
         ImGui_ImplSDL3_ProcessEvent(&event);
+        if (wheel_ && (event.type == SDL_EVENT_WINDOW_FOCUS_LOST || event.type == SDL_EVENT_WINDOW_FOCUS_GAINED) &&
+            event.window.windowID == SDL_GetWindowID(window_))
+          wheel_->SetFocus(event.type == SDL_EVENT_WINDOW_FOCUS_GAINED);
         if (event.type == SDL_EVENT_WINDOW_RESIZED && event.window.windowID == SDL_GetWindowID(window_)) {
           ReleaseTarget();
           swap_chain_->ResizeBuffers(0, 0, 0, DXGI_FORMAT_UNKNOWN, 0);
@@ -759,6 +784,8 @@ std::vector<std::string> App::GameArgs(const Plan& plan) {
 }
 
 void App::Play() {
+  // The game opens the wheel itself.
+  StopWheelTest();
   Refresh(false);
   const auto fail = [&](const std::string& message) {
     banner_ = message;
@@ -1599,8 +1626,149 @@ void App::KeyboardSection() {
   ImGui::Dummy(ImVec2(0, 4 * scale_));
 }
 
+void App::WheelLog(std::string_view text) {
+  std::time_t now = std::time(nullptr);
+  std::tm local{};
+  localtime_s(&local, &now);
+  char stamp[16];
+  std::strftime(stamp, sizeof(stamp), "%H:%M:%S", &local);
+  const std::string line = std::string(stamp) + " " + std::string(text);
+  std::lock_guard lock(wheel_log_mutex_);
+  wheel_log_.push_back(line);
+  while (wheel_log_.size() > 12) wheel_log_.pop_front();
+  std::error_code error;
+  fs::create_directories(root_ / "logs", error);
+  std::ofstream file(root_ / "logs" / "wheel-test.log", std::ios::binary | std::ios::app);
+  file << line << '\n';
+}
+
+void App::StartWheelTest() {
+  namespace wheel = rex::input::wheel;
+  if (wheel_) return;
+  if (!wheel_haptic_) {
+    if (!SDL_InitSubSystem(SDL_INIT_JOYSTICK | SDL_INIT_HAPTIC)) {
+      WheelLog(std::string("Wheel: SDL's joystick and haptic subsystems did not start: ") + SDL_GetError());
+      return;
+    }
+    wheel_haptic_ = true;
+  }
+  wheel::HostOptions options;
+  options.governor.cap = wheel_cap_;
+  options.invert = wheel_invert_;
+  if (wheel_record_) {
+    std::error_code error;
+    fs::create_directories(root_ / "logs", error);
+    options.record_path = Utf8(root_ / "logs" / "wheel-test-forces.csv");
+  }
+  wheel_ = std::make_unique<wheel::WheelHost>(options,
+                                              [this](wheel::LogLevel, std::string_view text) { WheelLog(text); });
+  wheel_->SetFocus((SDL_GetWindowFlags(window_) & SDL_WINDOW_INPUT_FOCUS) != 0);
+  wheel_->Start();
+}
+
+void App::StopWheelTest() {
+  if (!wheel_) return;
+  wheel_->Stop();
+  wheel_.reset();
+}
+
+void App::WheelSection() {
+  namespace wheel = rex::input::wheel;
+  ImGui::Dummy(ImVec2(0, 6 * scale_));
+  ImGui::TextColored(kSecondary, "Racing wheel test");
+  Muted("Reads a racing wheel and sends test forces to it, without the game: the device, its axes and buttons, the "
+        "force's direction, a centring spring and a slow sine. The game does not use the wheel yet. Every force goes "
+        "through the safety limits: it stops when this window loses focus, ramps in over 1.5 s and never exceeds the "
+        "force cap. Start with the wheel centred and your hands on it.");
+  ImGui::Dummy(ImVec2(0, 2 * scale_));
+  ImGui::PushStyleColor(ImGuiCol_Header, kField);
+  const bool open = ImGui::CollapsingHeader("Wheel test", wheel_ ? ImGuiTreeNodeFlags_DefaultOpen : 0);
+  ImGui::PopStyleColor();
+  if (!open) return;
+  if (!wheel_) {
+    Label("Force cap", "The hard upper limit of every test force, a fraction of the wheel's full force.");
+    ImGui::SetNextItemWidth(300 * scale_);
+    ImGui::SliderFloat("##wheel_cap", &wheel_cap_, 0.05f, 0.5f, "%.2f");
+    Label("Invert force", "Flip the force's direction, if the direction pulse turns the wheel to the left.");
+    ImGui::Checkbox("##wheel_invert", &wheel_invert_);
+    Label("Record forces", "Write every force sent to logs\\wheel-test-forces.csv.");
+    ImGui::Checkbox("##wheel_record", &wheel_record_);
+    if (ImGui::Button("Start wheel test")) StartWheelTest();
+  } else {
+    const wheel::Snapshot snap = wheel_->GetSnapshot();
+    if (ImGui::Button("Stop wheel test")) {
+      StopWheelTest();
+      return;
+    }
+    ImGui::SameLine();
+    ImGui::TextColored(kMuted, "cap %.2f%s", wheel_cap_, wheel_invert_ ? ", inverted" : "");
+    if (!snap.connected) {
+      Colored(kWarning, "No wheel found yet. Connect it and check that Pit House sees it; this checks again every second.");
+    } else {
+      ImGui::Text("%s  (vendor %04x, product %04x, %s)", snap.name.c_str(), snap.vendor, snap.product,
+                  snap.is_wheel_type ? "SDL wheel" : "joystick");
+      ImGui::TextColored(snap.haptic ? kSecondary : kWarning, "Force feedback: %s%s",
+                         snap.haptic ? "yes" : "none (SDL found no haptic device for it)",
+                         snap.haptic && !snap.spring ? ", no spring effect" : "");
+      ImGui::Dummy(ImVec2(0, 2 * scale_));
+      ImGui::BeginDisabled(!snap.haptic);
+      if (ImGui::Button("Direction pulse 5%")) wheel_->SetTest(wheel::TestEffect::kPulse, 0.05);
+      ImGui::SameLine();
+      ImGui::BeginDisabled(!snap.spring);
+      if (ImGui::Button("Spring 10%")) wheel_->SetTest(wheel::TestEffect::kSpring, 0.10);
+      ImGui::SameLine();
+      if (ImGui::Button("Spring 25%")) wheel_->SetTest(wheel::TestEffect::kSpring, 0.25);
+      ImGui::EndDisabled();
+      ImGui::SameLine();
+      if (ImGui::Button("Sine 10%")) wheel_->SetTest(wheel::TestEffect::kSine, 0.10);
+      ImGui::SameLine();
+      if (ImGui::Button("Sine 25%")) wheel_->SetTest(wheel::TestEffect::kSine, 0.25);
+      ImGui::SameLine();
+      if (ImGui::Button("Stop force")) wheel_->SetTest(wheel::TestEffect::kNone, 0.0);
+      ImGui::EndDisabled();
+      static const char* kTests[] = {"none", "direction pulse", "spring", "sine"};
+      const char* state = "on";
+      if (snap.blocked & wheel::kBlockFocus) state = "zero: this window has no focus";
+      else if (snap.blocked) state = "zero";
+      else if (snap.flags & wheel::kFlagWatchdog) state = "zero: no force requested";
+      else if (snap.flags & wheel::kFlagRamping) state = "ramping in";
+      ImGui::Text("Test: %s   Force: %+.3f   Spring: %.3f   Ramp: %.0f%%   (%s)", kTests[static_cast<int>(snap.test)],
+                  snap.output, snap.spring_level, snap.envelope * 100.0, state);
+      ImGui::TextColored(kMuted, "Device updates: %llu, mean %.0f us, max %.0f us; force thread tick mean %.3f ms, max %.3f ms",
+                         static_cast<unsigned long long>(snap.sends), snap.send_us_mean, snap.send_us_max,
+                         snap.tick_ms_mean, snap.tick_ms_max);
+      ImGui::Dummy(ImVec2(0, 2 * scale_));
+      for (size_t i = 0; i < snap.axes.size(); ++i) {
+        const float fraction = (static_cast<float>(snap.axes[i]) + 32768.0f) / 65535.0f;
+        char text[32];
+        std::snprintf(text, sizeof(text), "%d", snap.axes[i]);
+        ImGui::TextColored(kSecondary, "Axis %zu", i);
+        ImGui::SameLine(80 * scale_);
+        ImGui::ProgressBar(fraction, ImVec2(300 * scale_, 0), text);
+      }
+      std::string pressed;
+      for (size_t i = 0; i < snap.buttons.size(); ++i)
+        if (snap.buttons[i]) pressed += (pressed.empty() ? "" : " ") + std::to_string(i);
+      ImGui::TextColored(kSecondary, "Buttons (%zu):", snap.buttons.size());
+      ImGui::SameLine();
+      ImGui::TextUnformatted(pressed.empty() ? "none pressed" : pressed.c_str());
+      for (size_t i = 0; i < snap.hats.size(); ++i) {
+        ImGui::TextColored(kSecondary, "Hat %zu:", i);
+        ImGui::SameLine();
+        ImGui::Text("%u", static_cast<unsigned>(snap.hats[i]));
+      }
+    }
+  }
+  std::lock_guard lock(wheel_log_mutex_);
+  if (!wheel_log_.empty()) {
+    ImGui::Dummy(ImVec2(0, 2 * scale_));
+    for (const auto& line : wheel_log_) Muted(line);
+  }
+}
+
 void App::ControlsPage() {
   ControllerSection();
+  WheelSection();
   KeyboardSection();
   Muted("Keyboard bindings, by their function in the game's DEFAULT LAYOUT 1 (the pad input in brackets). "
         "Several keys are separated by commas, modifiers are written as Shift+Up. Ctrl is the precision key "

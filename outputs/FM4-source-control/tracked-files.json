@@ -1833,6 +1833,18 @@
       "provenance": "runtime-fork"
     },
     {
+      "path": "work/runtime/include/rex/input/wheel/ffb_governor.h",
+      "provenance": "runtime-fork"
+    },
+    {
+      "path": "work/runtime/include/rex/input/wheel/wheel_host.h",
+      "provenance": "runtime-fork"
+    },
+    {
+      "path": "work/runtime/src/input/wheel/wheel_host.cpp",
+      "provenance": "runtime-fork"
+    },
+    {
       "path": "work/runtime/include/rex/input/keyboard_model.h",
       "provenance": "runtime-fork"
     },
@@ -4728,6 +4740,14 @@
     {
       "path": "work/fm4-rex/tests/pad-shaping-tests.cpp",
       "provenance": "Synthetic tests/oracle; the title's steering conversion as measured (numbers only, no game data)"
+    },
+    {
+      "path": "work/fm4-rex/tests/wheel-ffb-tests.cpp",
+      "provenance": "Synthetic tests/oracle; synthetic force streams, no game data"
+    },
+    {
+      "path": "work/fm4-rex/tests/wheel-host-tests.cpp",
+      "provenance": "Synthetic tests/oracle; an SDL virtual wheel and the recording backend, no game data"
     },
     {
       "path": "work/fm4-rex/tests/keyboard-model-tests.cpp",

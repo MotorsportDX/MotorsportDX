@@ -1163,6 +1163,79 @@ Select-String -Path logs\runtime.log -Pattern 'SDL pad report:','SDL joystick dr
 
 The lines contain the pads' names and device paths, not the Windows user name.
 
+## Racing wheel
+
+Native racing wheel support is in development ([racing wheels](analysis/racing-wheels.md)).
+Stage 0 is done: the runtime and the GUI launcher can read a wheel through SDL's joystick API
+and send it force feedback through a safety governor, but the game does not use the wheel
+yet. A wheel that SDL maps as a gamepad still reaches the game as a pad, as before.
+
+### Racing wheel test
+
+The GUI launcher's Controls page has a **Racing wheel test** section, which runs without the
+game (`MotorsportDX.exe --wheel-test` opens it with the test running). Start it with the
+wheel centred and your hands on the wheel. It shows:
+
+- the wheel SDL found (the first joystick of SDL's wheel type, else the first joystick that is
+  not a gamepad), its vendor and product ID and whether it has force feedback and a spring;
+- every axis at the device's resolution (-32,768 to 32,767), the buttons held and the hats;
+- the force sent, the ramp, the reason the force is zero, and how long each update to the
+  device took.
+
+The test forces: **Direction pulse 5%** pushes towards positive for one second (to the right;
+if the wheel turns left, stop the test, tick **Invert force** and start it again), **Spring
+10%** and **25%** a centring spring that the wheel's firmware runs, **Sine 10%** and **25%** a
+1 Hz back-and-forth sent as a constant force every millisecond, **Stop force** ends them. Every
+force goes through the governor: it ramps in over 1.5 seconds, never exceeds **Force cap**
+(0.25 of the wheel's full force by default, at most 0.5 in the test), is spread out when it
+would jump, and drops to zero at once when the launcher's window loses focus or the test
+stops. The launcher writes the test's lines to `logs\wheel-test.log` and, with **Record
+forces**, every force sent to `logs\wheel-test-forces.csv`. Pressing Play stops the test.
+
+The runtime has the same host behind cvars (Advanced page, Extra cvars); with `--wheel=true`
+the game opens the wheel and logs a `Wheel report:` line, but sends no force yet:
+
+| Cvar | Default | Description |
+| --- | --- | --- |
+| `wheel` | `false` | Opens the wheel and runs its force feedback host (stage 0: always zero force). Needs the SDL input backend (the default). |
+| `wheel_name` | empty | Only a joystick whose name contains this. |
+| `wheel_ffb_cap` | 0.25 | The hard upper limit of the force, a fraction of the wheel's full force, independent of the gain. |
+| `wheel_ffb_gain` | 1 | Multiplies the game's force before the cap. |
+| `wheel_ffb_invert` | `false` | Flips the force's direction. |
+| `wheel_ffb_sink` | `device` | `record` sends no force to any device and only records it (with `wheel_ffb_record`). |
+| `wheel_ffb_record` | empty | A CSV file of every force sent. |
+
+The force stops on focus loss, at exit (closing the game window stops and releases the wheel
+before the process ends) and on a crash (an unhandled exception filter and a SIGABRT handler
+stop the effects). A process that is killed cannot stop them itself; what the wheelbase then
+does is part of the owner's test below.
+
+### Racing wheel test checklist
+
+For the owner's MOZA R9 with the ESX wheel and the SR-P pedals, from an
+[export](#export-to-another-computer). Keep one Pit House profile for every test and note its
+settings (maximum angle, force feedback strength, road sensitivity, damper, friction,
+inertia).
+
+1. Open Pit House with that profile, then the GUI launcher, Controls page, **Wheel test**.
+   Leave **Force cap** at 0.25, then **Start wheel test**.
+2. Check the device line: the name, `vendor 346e`, `SDL wheel`, `Force feedback: yes`.
+3. Turn the wheel lock to lock and press each pedal fully: note which axis moves, and its
+   values at both ends and at rest. Press each button and both paddles: note their numbers.
+4. **Direction pulse 5%**: the wheel must turn to the right. If it turns left, note it,
+   stop the test, tick **Invert force** and repeat.
+5. **Spring 10%**, then **Spring 25%**: the wheel must centre gently, ramping in over about
+   1.5 seconds. **Stop force**.
+6. **Sine 10%**, then **Sine 25%**: a slow back-and-forth. Note any roughness or clicks.
+7. With a force running, Alt+Tab to another window: the force must stop at once. Return:
+   it ramps in again.
+8. With a force running, end `MotorsportDX.exe` in Task Manager: note whether the force stops,
+   and how quickly.
+
+What to send back: the launcher folder's `logs\wheel-test.log` (its `Wheel report:` line names
+the wheel's axes, buttons and force feedback effects) and `logs\wheel-test-forces.csv`, plus
+the notes of steps 3 to 8.
+
 ## Keyboard
 
 The game knows only the Xbox 360 pad; the runtime's keyboard driver turns keys into a

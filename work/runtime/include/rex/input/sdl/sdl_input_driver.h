@@ -28,6 +28,10 @@
 #define HID_SDL_REPEAT_DELAY 400
 #define HID_SDL_REPEAT_RATE 100
 
+namespace rex::input::wheel {
+class WheelHost;
+}
+
 namespace rex::input::sdl {
 
 class SDLInputDriver final : public InputDriver, public rex::ui::WindowListener {
@@ -124,6 +128,9 @@ class SDLInputDriver final : public InputDriver, public rex::ui::WindowListener 
   void StartLatencyProbe();
   void StopLatencyProbe();
   void ObserveProbeReadLocked(ControllerState& controller);
+  // wheel: the racing wheel's host (rex/input/wheel/wheel_host.h), on the UI thread.
+  void StartWheel();
+  void StopWheel();
 
   rex::ui::Window* attached_window_ = nullptr;
   bool sdl_events_initialized_;
@@ -154,6 +161,8 @@ class SDLInputDriver final : public InputDriver, public rex::ui::WindowListener 
   std::thread input_thread_;
   std::atomic<bool> input_thread_running_{false};
   std::atomic<bool> input_thread_stop_{false};
+  std::unique_ptr<rex::input::wheel::WheelHost> wheel_;
+  bool wheel_subsystems_ = false;
 };
 
 }  // namespace rex::input::sdl

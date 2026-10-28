@@ -14,6 +14,9 @@ if(NOT EXISTS "${FM4_THIRDPARTY}/imgui/imgui.h")
     message(FATAL_ERROR "Set FM4_THIRDPARTY to <BuildRoot>/runtime-source/thirdparty")
 endif()
 
+# The runtime's source, for the racing wheel's host (default: beside FM4_THIRDPARTY).
+set(FM4_RUNTIME_SOURCE "${FM4_THIRDPARTY}/.." CACHE PATH "The runtime's source (BuildRoot/runtime-source)")
+
 find_package(SDL3 CONFIG REQUIRED COMPONENTS SDL3-static)
 
 set(IMGUI_DIR "${FM4_THIRDPARTY}/imgui")
@@ -25,6 +28,8 @@ add_executable(fm4_launcher WIN32
     src/settings.cpp
     src/shaders.cpp
     src/tests.cpp
+    # The racing wheel's host, shared with the runtime (its wheel test, docs/running.md).
+    ${FM4_RUNTIME_SOURCE}/src/input/wheel/wheel_host.cpp
     ${IMGUI_DIR}/imgui.cpp
     ${IMGUI_DIR}/imgui_draw.cpp
     ${IMGUI_DIR}/imgui_tables.cpp
@@ -39,6 +44,8 @@ target_include_directories(fm4_launcher PRIVATE
     ${IMGUI_DIR}/backends
     ${FM4_THIRDPARTY}/inja/third_party/include
 )
+# Only rex/input/wheel of the runtime's headers, which need nothing else of the runtime.
+target_include_directories(fm4_launcher PRIVATE ${FM4_RUNTIME_SOURCE}/include)
 target_compile_definitions(fm4_launcher PRIVATE UNICODE _UNICODE NOMINMAX WIN32_LEAN_AND_MEAN)
-target_link_libraries(fm4_launcher PRIVATE SDL3::SDL3-static d3d11 dxgi d3dcompiler bcrypt shcore shell32 advapi32 user32 urlmon)
+target_link_libraries(fm4_launcher PRIVATE SDL3::SDL3-static d3d11 dxgi d3dcompiler bcrypt shcore shell32 advapi32 user32 urlmon ole32)
 set_target_properties(fm4_launcher PROPERTIES OUTPUT_NAME MotorsportDX)

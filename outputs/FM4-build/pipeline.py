@@ -813,8 +813,9 @@ def post_pass_tests(root,jobs):
     the texture replacement content hash and DDS files (docs/analysis/texture-replacement.md),
     the draw resolution scale as a fraction (docs/analysis/d3d-hle-n5.md), the physical pads'
     stick and trigger shaping (docs/analysis/modern-gamepads.md), the keyboard's steering and
-    pedal model (docs/analysis/keyboard-controls.md), and the native shader contract's manifest
-    and pass classes (docs/analysis/shader-contract.md).
+    pedal model (docs/analysis/keyboard-controls.md), the native shader contract's manifest
+    and pass classes (docs/analysis/shader-contract.md), and the racing wheel's force feedback
+    governor and host with an SDL virtual wheel and no force device (docs/analysis/racing-wheels.md).
     work/fm4-rex/tests, synced here like the runtime, built against the installed runtime headers. The WARP scene's checks were set with a GTAO radius of 1 m."""
     source,build=root/'project/tests',root/'tests-build'
     inventory=json.loads((REPO/'outputs/FM4-source-control/tracked-files.json').read_text())
@@ -829,12 +830,14 @@ def post_pass_tests(root,jobs):
     fsr=([f'-DREX_RUNTIME_SOURCE={(root/"runtime-source").as_posix()}']+
          (['-DREX_FSR=ON',f'-DREX_FSR_SDK_DIR={sdk.as_posix()}'] if sdk else ['-DREX_FSR=OFF']))
     run(['cmake','-S',source,'-B',build,'-G','Ninja','-DCMAKE_BUILD_TYPE=Release',
-         '-DCMAKE_CXX_COMPILER=clang++',f'-DREX_HEADER_ROOT={root/"runtime-install/include"}',*fsr],
+         '-DCMAKE_CXX_COMPILER=clang++',f'-DREX_HEADER_ROOT={root/"runtime-install/include"}',
+         f'-DCMAKE_PREFIX_PATH={root/"runtime-install"}',*fsr],
         log=root/'logs/tests-configure.log')
     run(['cmake','--build',build,'--parallel',jobs,'--target','fm4_post_pass_camera_tests',
          'fm4_post_pass_shader_tests','fm4_shader_mod_tests','fm4_track_settings_tests',
          'fm4_texture_replacement_tests','fm4_draw_scale_tests','fm4_pad_shaping_tests',
-         'fm4_keyboard_model_tests','fm4_native_shader_contract_tests'],
+         'fm4_keyboard_model_tests','fm4_native_shader_contract_tests','fm4_wheel_ffb_tests',
+         'fm4_wheel_host_tests'],
         log=root/'logs/tests-build.log')
     run([build/'fm4_track_settings_tests.exe'],cwd=build,log=root/'logs/track-settings-tests.log')
     run([build/'fm4_texture_replacement_tests.exe'],cwd=build,
@@ -843,6 +846,8 @@ def post_pass_tests(root,jobs):
     run([build/'fm4_draw_scale_tests.exe'],cwd=build,log=root/'logs/draw-scale-tests.log')
     run([build/'fm4_pad_shaping_tests.exe'],cwd=build,log=root/'logs/pad-shaping-tests.log')
     run([build/'fm4_keyboard_model_tests.exe'],cwd=build,log=root/'logs/keyboard-model-tests.log')
+    run([build/'fm4_wheel_ffb_tests.exe'],cwd=build,log=root/'logs/wheel-ffb-tests.log')
+    run([build/'fm4_wheel_host_tests.exe',build],cwd=build,log=root/'logs/wheel-host-tests.log')
     run([build/'fm4_native_shader_contract_tests.exe',LOOK_DIRECTORY/'shaders.toml'],cwd=build,
         log=root/'logs/native-shader-contract-tests.log')
     run([build/'fm4_post_pass_shader_tests.exe',root/'runtime-source/src/graphics/d3d12/post_pass.hlsli',

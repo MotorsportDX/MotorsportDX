@@ -71,3 +71,15 @@ target_include_directories(fm4_track_settings_tests PRIVATE ../src)
 add_executable(fm4_texture_replacement_tests texture-replacement-tests.cpp)
 target_include_directories(fm4_texture_replacement_tests SYSTEM PRIVATE "${REX_HEADER_ROOT}")
 target_compile_options(fm4_texture_replacement_tests PRIVATE -march=x86-64-v2)
+# The racing wheel's force feedback governor on synthetic streams (header only).
+add_executable(fm4_wheel_ffb_tests wheel-ffb-tests.cpp)
+target_include_directories(fm4_wheel_ffb_tests SYSTEM PRIVATE "${REX_HEADER_ROOT}")
+# The racing wheel's host with an SDL virtual wheel and the recording backend: the runtime's
+# wheel_host.cpp against the installed runtime's SDL3 (CMAKE_PREFIX_PATH); argument: a directory
+# for the recordings.
+find_package(SDL3 CONFIG REQUIRED COMPONENTS SDL3-static)
+add_executable(fm4_wheel_host_tests wheel-host-tests.cpp
+               "${REX_RUNTIME_SOURCE}/src/input/wheel/wheel_host.cpp")
+target_include_directories(fm4_wheel_host_tests SYSTEM PRIVATE "${REX_HEADER_ROOT}")
+target_compile_definitions(fm4_wheel_host_tests PRIVATE NOMINMAX WIN32_LEAN_AND_MEAN)
+target_link_libraries(fm4_wheel_host_tests PRIVATE SDL3::SDL3-static ole32)

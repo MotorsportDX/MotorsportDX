@@ -23,6 +23,7 @@
 #include <rex/input/flags.h>
 #include <rex/input/pad_settings.h>
 #include <rex/input/sdl/sdl_input_driver.h>
+#include <rex/input/wheel/wheel_host.h>
 #include <rex/logging.h>
 #include <rex/platform.h>
 #include <rex/ui/virtual_key.h>
@@ -80,6 +81,27 @@ REXCVAR_DEFINE_STRING(pad_left_paddle2, "a", "Input",
     .allowed({"a", "b", "x", "y", "lb", "rb", "back", "start", "ls", "rs", "up", "down", "left",
               "right", "guide", "none"})
     .lifecycle(rex::cvar::Lifecycle::kRequiresRestart);
+REXCVAR_DEFINE_BOOL(wheel, false, "Input",
+                    "Racing wheel (stage 0 of docs/analysis/racing-wheels.md): read a wheel "
+                    "through SDL's joystick API and run its force feedback host; the game gets no "
+                    "wheel input or force yet, so the force stays zero");
+REXCVAR_DEFINE_STRING(wheel_name, "", "Input",
+                      "Racing wheel: only a joystick whose name contains this (empty: SDL's "
+                      "first wheel, else the first joystick that is not a gamepad)");
+REXCVAR_DEFINE_STRING(wheel_ffb_sink, "device", "Input",
+                      "Racing wheel force feedback: device (the wheel, through SDL's haptic API) "
+                      "or record (no force reaches any device; with wheel_ffb_record)");
+REXCVAR_DEFINE_STRING(wheel_ffb_record, "", "Input",
+                      "Racing wheel force feedback: a CSV file of every force sent (empty: none)");
+REXCVAR_DEFINE_DOUBLE(wheel_ffb_cap, 0.25, "Input",
+                      "Racing wheel force feedback: the hard upper limit, a fraction of the "
+                      "wheel's full force, independent of the gain")
+    .range(0.0, 1.0);
+REXCVAR_DEFINE_DOUBLE(wheel_ffb_gain, 1.0, "Input",
+                      "Racing wheel force feedback: multiplies the game's force before the cap")
+    .range(0.0, 4.0);
+REXCVAR_DEFINE_BOOL(wheel_ffb_invert, false, "Input",
+                    "Racing wheel force feedback: flip the force's direction");
 REXCVAR_DEFINE_STRING(pad_touchpad, "guide", "Input",
                       "Guest button of the touchpad click (PlayStation pads)")
     .allowed({"a", "b", "x", "y", "lb", "rb", "back", "start", "ls", "rs", "up", "down", "left",
@@ -442,6 +464,9 @@ void SDLInputDriver::OnWindowAvailable(rex::ui::Window* window) {
       if (REXCVAR_GET(input_latency_probe)) {
         StartLatencyProbe();
       }
+      if (REXCVAR_GET(wheel)) {
+        StartWheel();
+      }
       if (REXCVAR_GET(input_sdl_thread)) {
         StartInputThread();
       }
@@ -464,6 +489,7 @@ void SDLInputDriver::OnClosing(rex::ui::UIEvent&) {
       StopTriggerRumbleLocked();
     }
     StopLatencyProbe();
+    StopWheel();
     for (auto& controller : controllers_) {
       SDL_CloseGamepad(controller.sdl);
     }
@@ -482,6 +508,9 @@ void SDLInputDriver::OnClosing(rex::ui::UIEvent&) {
 
 void SDLInputDriver::OnLostFocus(rex::ui::UISetupEvent&) {
   has_focus_ = false;
+  if (wheel_) {
+    wheel_->SetFocus(false);
+  }
   if (background_events_) {
     REXLOG_INFO("SDL input: the window lost focus; pads are still read");
     return;
@@ -495,11 +524,19 @@ void SDLInputDriver::OnLostFocus(rex::ui::UISetupEvent&) {
 
 void SDLInputDriver::OnGotFocus(rex::ui::UISetupEvent&) {
   has_focus_ = true;
+  if (wheel_) {
+    wheel_->SetFocus(true);
+  }
   REXLOG_INFO("SDL input: the window has focus");
 }
 
 void SDLInputDriver::StopVibration() {
   vibration_stopped_ = true;
+  if (wheel_) {
+    // The app hard-exits after this (std::_Exit: no atexit, no OnClosing), so the host zeroes
+    // the force and closes the wheel here, on its own thread, before returning.
+    wheel_->Stop();
+  }
   if (!SDL_Gamepad_initialized_) {
     return;
   }
@@ -524,6 +561,44 @@ void SDLInputDriver::StopVibration() {
   if (probe_) {
     std::lock_guard probe_lock(probe_->mutex);
     REXLOG_INFO("SDL latency probe at exit: {}", probe_->RumbleSummary());
+  }
+}
+
+void SDLInputDriver::StartWheel() {
+  namespace wheel = rex::input::wheel;
+  if (!SDL_InitSubSystem(SDL_INIT_JOYSTICK | SDL_INIT_HAPTIC)) {
+    REXLOG_ERROR("Wheel: SDL's joystick and haptic subsystems did not start: {}", SDL_GetError());
+    return;
+  }
+  wheel_subsystems_ = true;
+  wheel::HostOptions options;
+  options.governor.cap = REXCVAR_GET(wheel_ffb_cap);
+  options.governor.gain = REXCVAR_GET(wheel_ffb_gain);
+  options.invert = REXCVAR_GET(wheel_ffb_invert);
+  options.sink = REXCVAR_GET(wheel_ffb_sink) == "record" ? wheel::Sink::kRecord
+                                                          : wheel::Sink::kDevice;
+  options.record_path = REXCVAR_GET(wheel_ffb_record);
+  options.name_filter = REXCVAR_GET(wheel_name);
+  wheel_ = std::make_unique<wheel::WheelHost>(
+      options, [](wheel::LogLevel level, std::string_view text) {
+        switch (level) {
+          case wheel::LogLevel::kInfo: REXLOG_INFO("{}", text); break;
+          case wheel::LogLevel::kWarning: REXLOG_WARN("{}", text); break;
+          case wheel::LogLevel::kError: REXLOG_ERROR("{}", text); break;
+        }
+      });
+  wheel_->SetFocus(has_focus_);
+  wheel_->Start();
+}
+
+void SDLInputDriver::StopWheel() {
+  if (wheel_) {
+    wheel_->Stop();
+    wheel_.reset();
+  }
+  if (wheel_subsystems_) {
+    SDL_QuitSubSystem(SDL_INIT_JOYSTICK | SDL_INIT_HAPTIC);
+    wheel_subsystems_ = false;
   }
 }
 

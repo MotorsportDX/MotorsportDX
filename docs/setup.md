@@ -319,9 +319,11 @@ runtime edits need only this stage. It then:
   private project again, leaving unchanged files untouched, as `generate` does;
 - compiles the application and both modules;
 - stages the matching runtime and GPU DLLs;
-- runs the arithmetic instruction tests, the post pass tests (the GTAO passes on WARP)
-  and the shader-mod CPU tests (no GPU needed; see the
-  [post pass framework](analysis/post-pass-framework.md));
+- runs the arithmetic instruction tests, the post pass tests (the GTAO passes on WARP),
+  the shader-mod CPU tests (no GPU needed; see the
+  [post pass framework](analysis/post-pass-framework.md)) and the CPU tests of the pads, the
+  keyboard and the racing wheel (its force feedback governor, and its host against an SDL
+  virtual wheel with no force device, [racing wheels](analysis/racing-wheels.md));
 - writes `build-result.json`, which lists the SHA-256 hashes of the artifacts, records
   `gameplay_verified: false`, and records in `source` what was compiled: the `head` of the
   checkout that ran the build, `dirty` when its `work/runtime` or `work/fm4-rex` differ from

@@ -1,6 +1,6 @@
 # Native racing wheel support
 
-Status: research and design, 27 October 2026. Static analysis only: no runtime code changes and no game run. The project runs the base Disc 1 executable without a title update, so every address below is from the recompiled base `default.xex` (USA; Japan/Asia share the code).
+Status: research and design of 27 October 2026; stage 0 (the device and safety shell) done on 29 October 2026 ([below](#stage-0-done-29-october-2026)). The project runs the base Disc 1 executable without a title update, so every address below is from the recompiled base `default.xex` (USA; Japan/Asia share the code).
 
 The goal is native PC wheel support, not gamepad emulation:
 
@@ -211,7 +211,7 @@ On a direct-drive base, safety is a requirement, not a setting. A governor sits 
 
 ## Staged plan
 
-Each stage ends with its own step gate ([e2e harness](../e2e/README.md)). Input stages still compare one native capture with the reference at 1:1, as every gate does.
+Each stage lands after one short check (the owner's process since 29 October 2026): the build, the unit tests and one career at 3/2 with the default pad, to show that nothing regressed ([e2e harness](../e2e/README.md)).
 
 ### Stage 0: device and safety shell (no title change)
 
@@ -233,6 +233,22 @@ Owner's test script:
 4. Feel the spring and sine at 10% and 25%.
 5. Alt-tab: the force must stop.
 6. Kill the process: the force must stop.
+
+#### Stage 0 done, 29 October 2026
+
+- **The host** ([wheel_host.h](../../work/runtime/include/rex/input/wheel/wheel_host.h), [wheel_host.cpp](../../work/runtime/src/input/wheel/wheel_host.cpp)) is free of runtime dependencies, so the runtime and the GUI launcher share it. It takes SDL's first joystick of the wheel type (SDL lists the MOZA R3 to R21 bases, the R9 as `346e:0002`), else the first joystick that is not a gamepad, and checks every second while none is open. It logs one `Wheel report:` line: name, type, vendor and product, axes, buttons, hats, and the haptic device's axes, effect counts and features. Its own thread runs at 1,000 Hz with high priority and does every haptic call:
+  - a constant force on the steering axis (`SDL_HAPTIC_STEERING_AXIS`), updated only when its 16-bit level changes;
+  - a spring for the test, which the firmware runs, with its coefficient and saturation set to the governed level, so the cap holds at any wheel position;
+  - each device update timed, and the tick period measured.
+- **The governor** ([ffb_governor.h](../../work/runtime/include/rex/input/wheel/ffb_governor.h), header only) implements [Force feedback safety](#force-feedback-safety): zero at once on any block reason (focus, pause, exit, no device, the user's stop), a linear ramp-in over 1.5 s after every start and zero state, a watchdog (50 ms without a new source value: the force falls at the slew limit and ramps in again later), a slew limit of 4 full scales per second with each tick counted at most 10 ms (a stalled thread cannot jump), NaN, infinities and values outside -1..1 as zero, the gain, and a cap independent of the gain (default 0.25). Condition effects take the same block, ramp and cap.
+- **Exit and crash.** The first host installs an unhandled exception filter (chained to the previous one), a SIGABRT handler and an `atexit` handler that zero every running host: the force thread answers within a tick, else the caller stops the effects itself. The runtime ends with `std::_Exit` after `ReXApp::OnClosing` (no `atexit`, no driver teardown), so the SDL driver's `StopVibration` stops the host synchronously: zero, stop, destroy the effects, close the wheel.
+- **The recording backend.** `Sink::kRecord` opens no haptic device and records every force; with a path, the device sink records too. One CSV line per force sent or state change: time, target, output, spring, ramp, block reasons, governor flags, update cost.
+- **The runtime.** The SDL input driver starts the host with `wheel=true` (default off), with `wheel_name`, `wheel_ffb_cap`, `wheel_ffb_gain`, `wheel_ffb_invert`, `wheel_ffb_sink` and `wheel_ffb_record` ([running.md](../running.md#racing-wheel)), and passes the window's focus. No source is connected yet, so the watchdog keeps the force at zero. Nothing reaches the title.
+- **The launcher's test mode** (Controls page, `--wheel-test`): the live device view and the test forces (direction pulse, spring and sine at 10% and 25%), focus loss as a block, a log and a recording in the export's `logs` folder. The owner's checklist is in [running.md](../running.md#racing-wheel-test-checklist).
+- **Verified without hardware** (`pipeline.py build` runs both):
+  - `fm4_wheel_ffb_tests`: the governor on synthetic streams (the ramp, the cap at gain 4, six kinds of bad values, a full-scale spike, five block reasons and two at once, the watchdog and the ramp after it, a one-second stall, the condition level, the configuration's sanitizing);
+  - `fm4_wheel_host_tests`: the host with SDL's real joystick drivers off and no haptic subsystem, against an SDL virtual wheel and the recording backend: the wheel found and typed, its three axes read exactly (12,345, -32,768 and 1), button 17 and the hat; a sine of 0.4 under a cap of 0.15 recorded within the cap, zero while unfocused and at the end; the emergency stop ending a pulse at zero; the disconnect noticed. The tick period was 1.00 ms on average.
+- **Not verified:** a real wheel, the cost of a DirectInput update, and what the R9 does when the process is killed. These are the owner's checklist.
 
 ### Stage 1: trace the title's control path
 
