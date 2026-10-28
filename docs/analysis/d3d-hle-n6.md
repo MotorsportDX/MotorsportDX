@@ -321,7 +321,7 @@ Textures keyed by the title's texture objects: hooks on the XDK's texture creati
 2. No reset by resolves into ranges that no bound texture reads, and no reset at the frame start for bindings whose texture is valid: the binding check of N4 (`d3d12_reuse_draw_bindings_check`) with its perturbation proof. This is the cheap half and may give most of the gain.
 3. Object-keyed bindings with the generation count, behind the same check.
 
-Close gates as in 19.3.4. Expected: the textures zone from about 0.40 to about 0.15 ms a race frame on this PC (the keys 0.17 ms and most of the binding updates); on the Ally X about 0.3 to 0.5 ms of the render thread's 4.4 to 6.1 ms, CPU headroom rather than fps on a device that waits for its GPU. No stutter gain: the warm races have no frame over 25 ms. Effort: step 2 1 to 2 person-weeks, step 3 3 to 5. Step 1 (19.6.5) found the resets far smaller than this estimate assumed.
+Close gates as in 19.3.4. Expected: the textures zone from about 0.40 to about 0.15 ms a race frame on this PC (the keys 0.17 ms and most of the binding updates); on the Ally X about 0.3 to 0.5 ms of the render thread's 4.4 to 6.1 ms, CPU headroom rather than fps on a device that waits for its GPU. No stutter gain: the warm races have no frame over 25 ms. Effort: step 2 1 to 2 person-weeks, step 3 3 to 5. Step 1 (19.6.5) corrected this estimate: the resets are 1.8% of the keys, and 98% come from the title's own fetch constant writes, so step 2 saves about 0.01 ms a race frame and only step 3 could reach the keys' 0.17 ms.
 
 #### 19.6.5 Step 1: the resets by cause, 28 October 2026
 
@@ -387,6 +387,22 @@ The textures zone falls by 0.005 ms a race frame at 3/2 and 0.019 ms at 1x (0.00
 - A per-binding cache of the last four dword sets and their textures, which would skip the key and the lookup for the 675 key changes a frame that return to a recent key: at most about 0.05 ms a race frame on this PC, below the 0.1 ms bar of 19.7.3.
 
 **Risks.** The frame start's reset also retried a texture descriptor that could not be created; with bit 2 a binding whose descriptor failed keeps the failure until its fetch constant changes or its texture becomes outdated. This was not seen in the runs above.
+
+**The main session's decision of 28 October 2026**, taken while the project owner was away: `texture_binding_resets` stays off by default as an experiment switch, with the counters and the extended binding check; steps 1 and 2 close without a step 2 gate. Step 3 (object-keyed bindings) moves to a later stage unless a trace of the ROG Xbox Ally X shows its render thread limiting frames. The alternatives were mode 3 as the native path's default (about 0.01 ms a race frame, after a step 2 gate, and no retry of a failed descriptor at each frame start) and a per-binding cache of the last four dword sets (at most about 0.05 ms, below the 0.1 ms bar).
+
+**The default against the previous main.** The counters, the cause mapping and the split of `FindOrCreateTexture` change code that `-Rov` shares, so the build of `cd54c03` at its default (`texture_binding_resets=0`, no trace) was gated against the build of `1612fb1`, the previous main's runtime, on 28 October 2026:
+
+| Check | Steps 1 and 2 (`cd54c03`) | Previous main (`1612fb1`) | Result |
+| --- | --- | --- | --- |
+| Races at 3/2, three runs each: textures zone a draw | 0.205, 0.199, 0.204 µs | 0.212, 0.200, 0.205 µs | same |
+| Same runs: render thread a frame | 3.18, 3.30, 3.20 ms | 3.06, 3.26, 3.20 ms | same |
+| Smoke at 3/2 | 3 of 3 cells | baseline | `career` WARN on `wait_reg_mem` only, `photo` and `photo_view` WARN on capture statistics of frames at other places on the track |
+| Smoke at 2x (the launchers' plan) | 3 of 3 cells | baseline of the same plan | `career` and `photo_view` PASS, `photo` WARN on `guest_idle` only |
+| Freeze parity at 3/2 | PASS | baseline | PASS |
+| `-Rov` smoke at 1x | 3 of 3 cells | run in the same gate | `photo` and `career` PASS, `photo_view` WARN on capture statistics |
+| `-Rov` freeze parity at 1x | PASS | baseline | PASS |
+
+The freeze frame at 3/2 beside `-Rov`'s at 1x, cropped at 1:1 (the car ahead with the mirror, and the wall at the left), shows the same picture, sharper at 3/2.
 
 ### 19.7 Item 5: what else the profile shows
 
@@ -596,8 +612,8 @@ The owner's order is stutter first, then CPU headroom on the ROG Xbox Ally X. Th
 1. **Item 1, increments 1.0 and 1.1** (counters and the cold-cache cell, compiles off the render thread): the stalls players meet first, gone in about 1 to 2 person-weeks, without waiting for N5. Together with step 3 it lets a public preview start without a shipped cache.
 2. **Item 5's resolves (19.7.1), steps 1 to 3**: the Ally X's largest lever, at its panel's resolution most of all, about 3 to 6 person-weeks; step 1's measurement can run beside item 1.
 3. **Item 1, increments 1.2 to 1.5** (the offline pass to DXIL with DXC and its cache, N5's increment 7, on N5's increments 1 and 2; the disc's pixel shaders; the pipeline manifest and library; early creation of missed pipelines): the mods on time and no pipeline created in play, about 8.5 to 15 person-weeks. 1.2 starts when N5's increments 1 and 2 have landed, 1.3 and 1.5 can go before it; 1.5 first if the cold-driver measurement (19.3.6) shows pipeline stalls of more than a few milliseconds.
-4. **Item 4, steps 1 and 2** (the binding resets): the cheapest CPU saving, on both devices, about 1 to 2 person-weeks.
-5. **Item 4, step 3, with 19.7.1's step 4**, if step 2 leaves most of the keys or the resolved textures' copies are still worth removing.
+4. **Item 4, steps 1 and 2** (the binding resets): the cheapest CPU saving, on both devices, about 1 to 2 person-weeks. Step 1 found the resets 1.8% of the keys (19.6.5), so step 2 saves about 0.01 ms a race frame and stays off by default (19.6.6).
+5. **Item 4, step 3, with 19.7.1's step 4**, if step 2 leaves most of the keys or the resolved textures' copies are still worth removing. Step 2 leaves 98% of the keys; step 3 moved to a later stage unless the Ally X's render thread limits its frames (19.6.6).
 6. **Item 2**, starting with its measurement (19.4.4 step 1), only if the Ally X's battery runs (17 W) show the CPU time still worth fps after the items above, or this PC's headroom is wanted for 4K and high draw loads; otherwise it moves to a later stage.
 
 N6 by this order is about 17 to 30 person-weeks without item 2 and 27 to 46 with it, besides N5's increments 1 and 2.

@@ -80,7 +80,8 @@ Item 4 of stage N6 measured what the texture binding resets cost ([D3D-level HLE
 
 - **The resets are a small share of the keys**: of 3,018 texture keys a race frame at 3/2, 55 (1.8%) follow resets, nearly all after resolves; the frame start's reset finds no valid binding. The other 98% follow the title's own fetch constant writes (1,401 a frame with unchanged dwords, a compare only, and 1,610 key changes).
 - **Resetting only stale bindings** (`texture_binding_resets=3`, off by default) cuts the keys after resets from 55 to 13 a frame and saves 0.005 ms of the textures zone a race frame at 3/2 and 0.019 ms at 1x, three runs each, against the 0.25 ms the plan expected. With it the binding check finds 0 mismatches in 99 million checks over the career at 3/2 and 2x and photo mode at 3/2, and catches its perturbation.
-- The players' default does not change.
+- **The players' default does not change**: the main session's decision of 28 October 2026 keeps `texture_binding_resets` off as an experiment switch and closes steps 1 and 2 without a step 2 gate; step 3 (object-keyed bindings) waits for a trace of the ROG Xbox Ally X that shows its render thread limiting frames.
+- **The default against the previous main**: the counters and the check change shared texture cache code (`-Rov`'s too), so the build of steps 1 and 2 at its default was gated against the previous main's runtime. Races at 3/2, three runs each: the textures zone 0.204 against 0.205 µs a draw and the render thread 3.20 against 3.20 ms a frame (medians). Smoke 3 of 3 cells at 3/2 and at 2x (WARNs on capture statistics of frames at other places on the track and on wait times only), freeze parity at 3/2 and `-Rov`'s smoke and 1x freeze parity PASS, and a native capture at 3/2 beside `-Rov`'s at 1:1 shows the same picture.
 
 ### Resolves without needless writes, N6 item 5, 28 October 2026
 
