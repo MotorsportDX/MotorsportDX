@@ -628,3 +628,22 @@ The cause is open. Both sides are precise, so it is not a fusion by the driver. 
 - **The texture offsets' scale revert:** a factor of 1/2 at 2x, which is exact.
 
 At a whole scale, many edges pass through sample positions exactly, so one unit in the last place of a position decides a pixel's coverage more often than at 3/2. The close gate's bisect cells (9.9) run the 2x A/B without the scene draws' path at a whole scale (`native_draw_scale_variant=false`), with 122 and with 90 surfaces.
+
+### 9.9 Close gate, 28 October 2026
+
+BuildRoot `I:\FM4-build-usa`, the native path. The gate ran on `848b52a` (main `c4607b8`), from the snapshot of the step gate (`snapshots\n5sc16-ab2x1`), against the same day's cells of main (`n6es2x`, `n6ep32`). It follows the gate rules of 28 October 2026: RTV and `-Rov` are out of all tests, so the image proof is the native path against main's own runs. Image-only cells ran two at once, each with its own run folder, profile copy and cold caches. The vertex A/Bs use the gate look `look-v0`, `native_shader_contract_vertex_all` and `native_shader_contract_ab_precise`, as in 9.8.
+
+| Check | Result |
+|---|---|
+| Smoke at 2x, the default path (`n5sc17-s2x` against `n6es2x`) | 3 of 3 cells; `career` PASS, its race 186.2 against 187.9 fps; `photo` and `photo_view` WARN on capture statistics only (other race moments; at 1:1 the same rendering), the photo phase's GPU time 8.19 against 8.77 ms |
+| Empty caches, `career` at 2x with the contract and `native_shader_contract_vertex_all` (`n5sc17-cold`) | no mod compiled on the draw path; 219 on the workers, 367 swaps, every vertex shader among them; frames over 50, 100 and 250 ms 10, 5 and 1, none over 50 ms with a mod compile, the longest 698 ms |
+| Freeze parity at 3/2 without the contract (`n5sc17-p32` against `n6ep32`) and with it (`n5sc17-p32c` against `n5sc17-p32`) | parity PASS and PASS (`n5sc17-p32` WARN only on the guest's idle waits, 62.85 against 1.35 ms a second, with the other cell running beside it). A native capture at 1:1 beside main's shows the same picture |
+| The 2x bisect: the vertex A/B without the scene draws' path at a whole scale (`n5sc17-bv`, `native_draw_scale_variant=false`, 122 surfaces) | 2 pixels of 3,686,400 differ by 1 level in every comparison: the residual stays without the scene draws' path |
+| The same with 90 surfaces (`n5sc18-bs90`, `native_rt_surfaces=90`, no scene draws' path), alone | 1 pixel differs by 2 levels in every comparison. The paired run of this cell (`n5sc17-bs90`) stopped at its start: both cells of the pair wrote the BuildRoot's look directory (`I:\FM4-build-usa\look`) at once |
+| After the rebase onto main `1803b36` (`2f745f4`: `n5sc18-s2x` against `n6es2x`, `n5sc18-check`) | the CPU tests pass, the 276 DXBC fingerprints of `f0b8f02`'s log unchanged; smoke 3 of 3 cells, `career` PASS (race 192.7 fps), `photo` and `photo_view` WARN on capture statistics; the check's 446 vertex checks and 1,211 pixel translations, 0 mismatches, none without HLSL |
+
+**The bisect's result.** The residual at 2x stays without the scene draws' path and with either number of surfaces, so it is not tied to that path. It stays an open 2x rasterization sensitivity of the vertex A/B, accepted by decision A of 9.8. Where to look next, if a vertex entry in the repository ever needs strict byte identity at 2x: the vertex A/B of one shader at a time, by a manifest entry instead of `native_shader_contract_vertex_all`, on the mirror's and the trackside boards' draws, where the pixels sit; then the per-draw output comparison (9.3.3 B) for that shader.
+
+**Two cells at once.** The freeze parity pair (`n5sc17-p32`, `n5sc17-p32c`, the look `original,taa=0`) ran in 6.8 minutes of wall time instead of 13.6, and both cells passed. A pair of cells with a look that has mods conflicts: `pipeline.look_cvars` deletes and writes `<BuildRoot>\look` for each run, so the second cell of the pair stopped when the first removed a file under it. Such cells run one at a time until the harness gives each run its own look directory.
+
+Not covered: RTV and `-Rov` (out of all tests since 28 October 2026; the contract is native only), 60 and 120 Hz, perf at 2x with the switch (the generated vertex shaders draw only with the development switch or an entry, and the repository has no vertex entry), a vertex entry in the repository's look, and the domain shader types (the survey found none).
