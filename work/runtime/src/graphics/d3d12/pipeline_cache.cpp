@@ -1282,6 +1282,8 @@ bool PipelineCache::TranslateShadersForDraw(D3D12Shader::D3D12Translation* verte
   // The translation of ConfigurePipeline without asynchronous compilation
   // (d3d12_draw_back_end=2 needs it off), for a pipeline the replay configures.
   const bool use_async = false;
+  const bool translated =
+      !vertex_shader->is_translated() || (pixel_shader && !pixel_shader->is_translated());
   // Ensure shaders are translated - needed now for GetCurrentStateDescription.
   // Edge flags are not supported yet (because polygon primitives are not).
   assert_true(register_file_.Get<reg::SQ_PROGRAM_CNTL>().vs_export_mode !=
@@ -1351,6 +1353,10 @@ bool PipelineCache::TranslateShadersForDraw(D3D12Shader::D3D12Translation* verte
     }
   }
 
+  if (translated) {
+    // New shaders: new pipelines follow (QueueEarlyPipeline).
+    early_draws_left_ = kEarlyActiveDraws;
+  }
   return true;
 }
 
@@ -1434,6 +1440,10 @@ bool PipelineCache::ConfigurePipelineDescribed(
     }
     creation_request_cond_.notify_one();
   } else if (!early) {
+    if (early_creation_) {
+      // The thread issuing the draws describes them again for a while.
+      early_replay_misses_.fetch_add(1, std::memory_order_relaxed);
+    }
     const uint64_t create_start = perf_trace::ZoneStart();
     new_pipeline->state.store(CreateD3D12Pipeline(runtime_description), std::memory_order_release);
     if (create_start) {
@@ -1483,6 +1493,15 @@ void PipelineCache::QueueEarlyPipeline(
   if (!early_creation_ || !REXCVAR_GET(d3d12_pipeline_early_creation)) {
     return;
   }
+  const uint64_t replay_misses = early_replay_misses_.load(std::memory_order_relaxed);
+  if (replay_misses != early_replay_misses_seen_) {
+    early_replay_misses_seen_ = replay_misses;
+    early_draws_left_ = kEarlyActiveDraws;
+  }
+  if (!early_draws_left_) {
+    return;
+  }
+  --early_draws_left_;
   struct Timed {
     uint64_t start = perf_trace::Get() ? __rdtsc() : 0;
     ~Timed() {
@@ -1528,6 +1547,7 @@ void PipelineCache::QueueEarlyPipeline(
     early_queue_.push_back(pipeline);
   }
   creation_request_cond_.notify_one();
+  early_draws_left_ = kEarlyActiveDraws;
   ++perf_trace::early_pipelines.queued;
 }
 

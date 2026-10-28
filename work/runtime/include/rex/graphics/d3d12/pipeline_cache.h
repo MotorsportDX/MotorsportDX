@@ -508,6 +508,14 @@ class PipelineCache {
   // d3d12_pipeline_early_creation: possible here (bindless, the draw back end's
   // replay, no hot reload and no asynchronous compilation).
   bool early_creation_ = false;
+  // The thread issuing the draws describes them only while new pipelines are
+  // likely: for kEarlyActiveDraws draws after a shader translated for a draw,
+  // a pipeline it queued, or a pipeline the replay created without it
+  // (early_replay_misses_ changed). With a warm cache it then costs a branch.
+  static constexpr uint32_t kEarlyActiveDraws = 1000000;
+  uint32_t early_draws_left_ = kEarlyActiveDraws;
+  uint64_t early_replay_misses_seen_ = 0;
+  std::atomic<uint64_t> early_replay_misses_{0};
   // The thread issuing the draws: the last description it looked at, and the
   // hashes of the descriptions it queued or that the storage created.
   PipelineDescription early_last_description_ = {};
