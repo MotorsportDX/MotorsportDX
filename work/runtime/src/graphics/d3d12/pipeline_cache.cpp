@@ -1455,6 +1455,10 @@ bool PipelineCache::TranslateAnalyzedShader(DxbcShaderTranslator& translator,
     }
   }
 
+  if (shader.type() == xenos::ShaderType::kVertex && VertexSurveyEnabled()) {
+    SurveyVertexTranslation(translation);
+  }
+
   const char* host_shader_type;
   if (shader.type() == xenos::ShaderType::kVertex) {
     DxbcShaderTranslator::Modification modification(translation.modification());

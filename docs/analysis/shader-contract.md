@@ -1,6 +1,6 @@
 # Native shader contract
 
-Status: stage N5 item of the [native port](d3d-hle.md#82-shaders-on-the-native-path), 28 October 2026. The design was approved by the main session on 27 October 2026; increments 1, 2, 4, 3 and 5 are implemented behind `native_shader_contract` (off by default). Increment 6 (vertex shader hooks) is a draft design with open decisions (section 9). The other N5 items are in [d3d-hle-n5.md](d3d-hle-n5.md).
+Status: stage N5 item of the [native port](d3d-hle.md#82-shaders-on-the-native-path), 28 October 2026. The design was approved by the main session on 27 October 2026; increments 1, 2, 4, 3 and 5 are implemented behind `native_shader_contract` (off by default). Increment 6 (vertex shader hooks) is designed, its decisions taken by the main session on 28 October 2026 (section 9), and in implementation. The other N5 items are in [d3d-hle-n5.md](d3d-hle-n5.md).
 
 ## Summary
 
@@ -11,7 +11,7 @@ Status: stage N5 item of the [native port](d3d-hle.md#82-shaders-on-the-native-p
 - **Increment 4**: the per-pass decisions. The car materials draw most of their race draws into the mirrors, which the manifest classes; the project owner kept the mirrors as the scene (section 6).
 - **Increment 3**: declared resources. An entry reads the post passes' textures by name (`srv = ["post:<name>"]`) and PNG files of the look directory (`"file:<name>"`, at most 8, each an 8-bit RGB or RGBA PNG up to 4,096 by 4,096). The race's final combine became an entry that reads the occlusion by name and draws byte for byte as its classic mod; a test pattern from a look file reaches the screen byte for byte as the same values computed in the shader (section 7).
 - **Increment 5**: replacement shaders. An entry's `shader` takes the place of the game shader's HLSL and reads the game's inputs by names the manifest gives to registers (`[pixel.inputs]`). A probe proved the names, packed indices, bindings and signatures byte for byte; the race's final combine is now the project's own tone mapping, written from the documented formula (the project owner's decision of 27 October 2026), and matches the game at the game's knob values within 1 level in 1 pixel of a 2x frame (section 8). The increments are in section 3.
-- **Increment 6** (draft, 28 October 2026): vertex shader hooks through a vertex HLSL generator that mirrors the DXBC translator, keyed by the ucode keys of the native path, proven byte for byte with every vertex shader of a frame through the generator; the decisions are open (section 9).
+- **Increment 6** (in implementation, 28 October 2026): vertex shader hooks through a vertex HLSL generator that mirrors the DXBC translator, keyed by the ucode keys of the native path, proven byte for byte with every vertex shader of a frame through the generator (section 9).
 
 ## 1. What ties a look mod to the DXBC translation
 
@@ -423,9 +423,9 @@ BuildRoot `I:\FM4-build-usa`, the native path with `native_shader_contract=true`
 
 Not covered: RTV (out of the gates; the contract is native only), 60 and 120 Hz, the final combine's variants with the vignette and depth of field (classic mods), a replacement in some passes only, and `b`, `position` and `front_face` inputs on the GPU (the CPU tests compile them; the final combine reads none).
 
-## 9. Increment 6: vertex shader hooks (draft)
+## 9. Increment 6: vertex shader hooks
 
-A draft design, read from the code of `bb922c6`, for the main session's decisions; nothing of it is implemented. The decisions are in 9.3, each with its alternatives and a recommendation.
+The design, read from the code of `bb922c6`. The main session took decisions 1 to 6 as recommended below on 28 October 2026, while the project owner was away; the owner may overturn them. They are in 9.3, each with its alternatives.
 
 ### 9.1 What the design starts from
 
@@ -500,7 +500,14 @@ params = ["FM4_LOOK_EXAMPLE"]  # optional
 
 ### 9.3 The decisions
 
-| # | Decision | Recommendation | Cost (person-days) |
+The main session's decisions of 28 October 2026, taken while the project owner was away and open to the owner's review: 1 to 6 as recommended in the table. Beside them:
+
+- Decision 1: the fetch-blind key (B) is considered only if the survey shows a hooked shader under layouts that the gate runs do not meet.
+- Decision 3: the A/B with `native_shader_contract_vertex_all` runs at 3/2 as well as at 2x, both with 0 pixels different: at 3/2 `ndc_scale` and `ndc_offset` are fractional, where a fusion by FXC that integer scales hide would show.
+- Decision 4: the cockpit camera's field of view stays a candidate for the project owner, with the post passes' camera to redesign (9.2.5); it is not part of the increment.
+- Decision 6: the survey counts the domain shaders; if FM4 draws any in a race or photo mode, the next report names them, and the scope stays `kVertex`.
+
+| # | Decision | Recommendation (taken) | Cost (person-days) |
 |---|---|---|---|
 | 1 | The manifest's key for vertex entries | the ucode key, one or a list, with a warning for keys that look like an entry's under another layout | 1 |
 | 2 | What hooks see | the guest's exports by register, the position in the guest's clip space before the guest-to-host transform | 1 |

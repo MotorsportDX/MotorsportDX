@@ -64,6 +64,22 @@ namespace rex::graphics::d3d12 {
 // look) until the pipeline cache swaps the compiled binary into it and its
 // pipelines. The start-up's translations (InitializeShaderStorage) still
 // compile before the title runs, and hot reload keeps compiling in place.
+// Vertex shader keys (docs/analysis/shader-contract.md 9.3.1): the XDK writes
+// the bound vertex layout's fetch instructions into a vertex shader's own
+// microcode at the draw flush, so one shader of the title has a ucode key per
+// layout. The fetch-blind key is the XXH3 of the microcode with the fields of
+// every vertex fetch instruction that describe the layout zeroed (format,
+// signedness, number format, signed mode, exponent adjust, stride, offset);
+// the coarse key also zeroes the fetch constant, the prefetch count and both
+// swizzles. Both are 0 for a shader without vertex fetch or not analyzed.
+uint64_t VertexFetchBlindKey(const Shader& shader, bool coarse = false);
+// native_shader_vertex_survey (9.4): logs each vertex shader once with its keys
+// and fetches, each of its translations once with the host type and the
+// modification, and for every key whose coarse key an earlier key had, the
+// fetch instruction fields in which the two differ.
+bool VertexSurveyEnabled();
+void SurveyVertexTranslation(const D3D12Shader::D3D12Translation& translation);
+
 class ShaderOverrides {
  public:
   struct HostConfig {

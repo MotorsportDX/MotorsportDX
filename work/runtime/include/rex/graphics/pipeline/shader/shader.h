@@ -854,6 +854,12 @@ class Shader {
   // All vertex bindings used in the shader.
   const std::vector<VertexBinding>& vertex_bindings() const { return vertex_bindings_; }
 
+  // The instruction index (3 dwords each) of every vertex fetch instruction in
+  // the analyzed control flow, in the order of analysis.
+  const std::vector<uint32_t>& vertex_fetch_instructions() const {
+    return vertex_fetch_instructions_;
+  }
+
   // All texture bindings used in the shader.
   const std::vector<TextureBinding>& texture_bindings() const { return texture_bindings_; }
 
@@ -1009,6 +1015,7 @@ class Shader {
 
   std::string ucode_disassembly_;
   std::vector<VertexBinding> vertex_bindings_;
+  std::vector<uint32_t> vertex_fetch_instructions_;
   std::vector<TextureBinding> texture_bindings_;
   ConstantRegisterMap constant_register_map_ = {};
   std::set<uint32_t> label_addresses_;

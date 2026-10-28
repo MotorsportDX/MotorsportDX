@@ -355,6 +355,7 @@ void Shader::GatherExecInformation(const ParsedExecInstruction& instr,
     if (sequence & 0b01) {
       auto& op = *reinterpret_cast<const FetchInstruction*>(op_ptr);
       if (op.opcode() == FetchOpcode::kVertexFetch) {
+        vertex_fetch_instructions_.push_back(instr_offset);
         GatherVertexFetchInformation(op.vertex_fetch(), previous_vfetch_full, ucode_disasm_buffer);
       } else {
         GatherTextureFetchInformation(op.texture_fetch(), unique_texture_bindings,

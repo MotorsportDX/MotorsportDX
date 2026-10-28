@@ -16,6 +16,7 @@
 #include <initializer_list>
 #include <iterator>
 #include <list>
+#include <set>
 #include <sstream>
 #include <thread>
 
@@ -110,6 +111,12 @@ REXCVAR_DEFINE_BOOL(native_shader_contract_check, false, "GPU/D3D12",
                     "assigns against those of the DXBC translation of every pixel shader, and "
                     "each entry translated without the DXBC translator against one made for the "
                     "check; mismatches are errors")
+    .lifecycle(rex::cvar::Lifecycle::kRequiresRestart);
+
+REXCVAR_DEFINE_BOOL(native_shader_vertex_survey, false, "GPU/D3D12",
+                    "Log every vertex shader translated: its ucode key, fetch-blind and coarse "
+                    "keys, fetches and host types, and the fetch fields in which keys of one "
+                    "coarse key differ (docs/analysis/shader-contract.md 9.4)")
     .lifecycle(rex::cvar::Lifecycle::kRequiresRestart);
 
 // host_render_records.cpp: the native path.
@@ -2177,6 +2184,203 @@ void ShaderOverrides::EndReload() {
   changed_shaders_.clear();
   changed_files_.clear();
   defines_changed_ = false;
+}
+
+namespace {
+
+// The bit fields of a vertex fetch instruction's three dwords
+// (ucode::VertexFetchInstruction).
+struct VertexFetchField {
+  const char* name;
+  uint32_t dword;
+  uint32_t mask;
+  // Zeroed in the fetch-blind key; the coarse key zeroes these and the
+  // coarse_only ones.
+  bool blind;
+  bool coarse_only;
+};
+constexpr VertexFetchField kVertexFetchFields[] = {
+    {"opcode", 0, 0x0000001Fu, false, false},
+    {"src_reg", 0, 0x000007E0u, false, false},
+    {"src_reg_am", 0, 0x00000800u, false, false},
+    {"dst_reg", 0, 0x0003F000u, false, false},
+    {"dst_reg_am", 0, 0x00040000u, false, false},
+    {"must_be_one", 0, 0x00080000u, false, false},
+    {"const_index", 0, 0x01F00000u, false, true},
+    {"const_index_sel", 0, 0x06000000u, false, true},
+    {"prefetch_count", 0, 0x38000000u, false, true},
+    {"src_swiz", 0, 0xC0000000u, false, true},
+    {"dst_swiz", 1, 0x00000FFFu, false, true},
+    {"is_signed", 1, 0x00001000u, true, false},
+    {"num_format", 1, 0x00002000u, true, false},
+    {"signed_rf_mode", 1, 0x00004000u, true, false},
+    {"is_index_rounded", 1, 0x00008000u, false, false},
+    {"format", 1, 0x003F0000u, true, false},
+    {"reserved2", 1, 0x00C00000u, false, false},
+    {"exp_adjust", 1, 0x3F000000u, true, false},
+    {"is_mini_fetch", 1, 0x40000000u, false, false},
+    {"is_predicated", 1, 0x80000000u, false, false},
+    {"stride", 2, 0x000000FFu, true, false},
+    {"offset", 2, 0x7FFFFF00u, true, false},
+    {"pred_condition", 2, 0x80000000u, false, false},
+};
+
+std::vector<uint32_t> VertexFetchInstructions(const Shader& shader) {
+  std::vector<uint32_t> instructions(shader.vertex_fetch_instructions());
+  std::sort(instructions.begin(), instructions.end());
+  instructions.erase(std::unique(instructions.begin(), instructions.end()), instructions.end());
+  return instructions;
+}
+
+const char* HostVertexShaderTypeName(Shader::HostVertexShaderType type) {
+  switch (type) {
+    case Shader::HostVertexShaderType::kVertex:
+      return "vertex";
+    case Shader::HostVertexShaderType::kLineDomainCPIndexed:
+      return "line_domain_cp";
+    case Shader::HostVertexShaderType::kLineDomainPatchIndexed:
+      return "line_domain_patch";
+    case Shader::HostVertexShaderType::kTriangleDomainCPIndexed:
+      return "triangle_domain_cp";
+    case Shader::HostVertexShaderType::kTriangleDomainPatchIndexed:
+      return "triangle_domain_patch";
+    case Shader::HostVertexShaderType::kQuadDomainCPIndexed:
+      return "quad_domain_cp";
+    case Shader::HostVertexShaderType::kQuadDomainPatchIndexed:
+      return "quad_domain_patch";
+    default:
+      return "other";
+  }
+}
+
+struct VertexSurvey {
+  std::mutex mutex;
+  std::unordered_set<uint64_t> shaders;
+  std::set<std::pair<uint64_t, uint64_t>> translations;
+  // Per coarse key, the first key met with it.
+  struct First {
+    uint64_t key;
+    uint64_t blind;
+    std::vector<uint32_t> ucode;
+  };
+  std::unordered_map<uint64_t, First> coarse_first;
+};
+
+}  // namespace
+
+uint64_t VertexFetchBlindKey(const Shader& shader, bool coarse) {
+  if (!shader.is_ucode_analyzed()) {
+    return 0;
+  }
+  std::vector<uint32_t> instructions = VertexFetchInstructions(shader);
+  if (instructions.empty()) {
+    return 0;
+  }
+  std::vector<uint32_t> ucode(shader.ucode_data());
+  uint32_t masks[3] = {};
+  for (const VertexFetchField& field : kVertexFetchFields) {
+    if (field.blind || (coarse && field.coarse_only)) {
+      masks[field.dword] |= field.mask;
+    }
+  }
+  for (uint32_t instruction : instructions) {
+    for (uint32_t i = 0; i < 3; ++i) {
+      size_t index = size_t(instruction) * 3 + i;
+      if (index < ucode.size()) {
+        ucode[index] &= ~masks[i];
+      }
+    }
+  }
+  return HashBytes(ucode.data(), ucode.size() * sizeof(uint32_t));
+}
+
+bool VertexSurveyEnabled() { return REXCVAR_GET(native_shader_vertex_survey); }
+
+void SurveyVertexTranslation(const D3D12Shader::D3D12Translation& translation) {
+  static VertexSurvey survey;
+  const Shader& shader = translation.shader();
+  if (shader.type() != xenos::ShaderType::kVertex) {
+    return;
+  }
+  const uint64_t key = shader.ucode_data_hash();
+  Modification modification(translation.modification());
+  std::lock_guard<std::mutex> lock(survey.mutex);
+  if (survey.shaders.insert(key).second) {
+    const uint64_t blind = VertexFetchBlindKey(shader);
+    const uint64_t coarse = VertexFetchBlindKey(shader, true);
+    std::vector<uint32_t> instructions = VertexFetchInstructions(shader);
+    const std::vector<uint32_t>& ucode = shader.ucode_data();
+    std::string fetches;
+    for (uint32_t instruction : instructions) {
+      if (size_t(instruction) * 3 + 2 >= ucode.size()) {
+        continue;
+      }
+      const auto& op = *reinterpret_cast<const ucode::VertexFetchInstruction*>(
+          ucode.data() + size_t(instruction) * 3);
+      fetches += fmt::format(" {}{}:vf{}:f{}{}:s{}:o{}", op.is_mini_fetch() ? "mini" : "full",
+                             instruction, op.fetch_constant_index(), uint32_t(op.data_format()),
+                             op.is_signed() ? "s" : "u", op.stride(), op.offset());
+    }
+    REXGPU_INFO(
+        "Vertex survey: shader {:016X} blind {:016X} coarse {:016X} dwords {} fetches {} "
+        "textures {} memexport {} dynamic_addressing {}:{}",
+        key, blind, coarse, ucode.size(), instructions.size(), shader.texture_bindings().size(),
+        shader.memexport_eM_written() ? 1 : 0, shader.uses_register_dynamic_addressing() ? 1 : 0,
+        fetches);
+    if (coarse) {
+      auto it = survey.coarse_first.find(coarse);
+      if (it == survey.coarse_first.end()) {
+        survey.coarse_first.emplace(coarse, VertexSurvey::First{key, blind, ucode});
+      } else if (it->second.ucode.size() == ucode.size()) {
+        // The fields in which this key's fetch instructions differ from the
+        // first key's of the same coarse key, and any dword elsewhere.
+        const std::vector<uint32_t>& first = it->second.ucode;
+        std::vector<bool> is_fetch(ucode.size());
+        for (uint32_t instruction : instructions) {
+          for (uint32_t i = 0; i < 3; ++i) {
+            size_t index = size_t(instruction) * 3 + i;
+            if (index < is_fetch.size()) {
+              is_fetch[index] = true;
+            }
+          }
+        }
+        uint32_t other_dwords = 0;
+        for (size_t i = 0; i < ucode.size(); ++i) {
+          other_dwords += !is_fetch[i] && ucode[i] != first[i];
+        }
+        std::string fields;
+        for (const VertexFetchField& field : kVertexFetchFields) {
+          uint32_t count = 0;
+          for (uint32_t instruction : instructions) {
+            size_t index = size_t(instruction) * 3 + field.dword;
+            if (index < ucode.size() && ((ucode[index] ^ first[index]) & field.mask)) {
+              ++count;
+            }
+          }
+          if (count) {
+            fields += fmt::format(" {}:{}{}", field.name, count,
+                                  field.blind ? "" : (field.coarse_only ? "(coarse)" : "(kept)"));
+          }
+        }
+        REXGPU_INFO(
+            "Vertex survey: rewrite {:016X} against {:016X} (coarse {:016X}, blind {}): "
+            "other dwords {}, fetch fields{}",
+            key, it->second.key, coarse, blind == it->second.blind ? "same" : "differs",
+            other_dwords,
+            fields.empty() ? std::string(" none") : fields);
+      }
+    }
+  }
+  if (survey.translations.emplace(key, translation.modification()).second) {
+    REXGPU_INFO(
+        "Vertex survey: translation {:016X} modification {:016X} host {} interpolators {:04X} "
+        "clip {} cull {} point_size {} dynamic_registers {}",
+        key, translation.modification(),
+        HostVertexShaderTypeName(modification.vertex.host_vertex_shader_type),
+        uint32_t(modification.vertex.interpolator_mask), modification.GetVertexClipDistanceCount(),
+        modification.GetVertexCullDistanceCount(), uint32_t(modification.vertex.output_point_size),
+        uint32_t(modification.vertex.dynamic_addressable_register_count));
+  }
 }
 
 }  // namespace rex::graphics::d3d12
