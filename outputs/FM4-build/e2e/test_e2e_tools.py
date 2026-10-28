@@ -538,7 +538,8 @@ class ShaderWorkTests(unittest.TestCase):
     def test_prepare_cache(self):
         with tempfile.TemporaryDirectory() as tmp:
             first, second = Path(tmp) / 'first', Path(tmp) / 'second'
-            options = lambda **kw: type('Options', (), {'cold_cache': False, 'cache_from': None, **kw})
+            options = lambda **kw: type('Options', (), {'cold_cache': False, 'cache_from': None,
+                                                        'cache_copy': False, **kw})
             self.assertIsNone(e2e.prepare_cache(options(), first))
             cache = e2e.prepare_cache(options(cold_cache=True), first)
             (cache / 'shader-overrides').mkdir()
@@ -549,6 +550,16 @@ class ShaderWorkTests(unittest.TestCase):
             self.assertEqual(list(e2e.prepare_cache(options(cold_cache=True), first).iterdir()), [])
             with self.assertRaises(SystemExit):
                 e2e.prepare_cache(options(cache_from=str(Path(tmp) / 'none')), second)
+            # --cache-copy: a private copy of the BuildRoot's warm cache.
+            root = Path(tmp) / 'root'
+            (root / 'cache' / 'shaders').mkdir(parents=True)
+            (root / 'cache' / 'shaders' / 'p.bin').write_bytes(b'2')
+            private = e2e.prepare_cache(options(cache_copy=True), second, root)
+            self.assertEqual(private, second / 'cache')
+            (private / 'shaders' / 'p.bin').write_bytes(b'3')
+            self.assertEqual((root / 'cache' / 'shaders' / 'p.bin').read_bytes(), b'2')
+            with self.assertRaises(SystemExit):
+                e2e.prepare_cache(options(cache_copy=True), second, Path(tmp) / 'no-root')
 
 
 class CoverageTests(unittest.TestCase):

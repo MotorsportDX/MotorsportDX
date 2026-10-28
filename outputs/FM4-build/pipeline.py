@@ -1149,8 +1149,10 @@ def look_track_settings(knobs):
             items+=[f'{attribute}*={value!r}' for attribute in attributes]
     return ';'.join(items)
 
-def look_cvars(root,look,shader_dev=False,upscale_ratio=1.0):
+def look_cvars(root,look,shader_dev=False,upscale_ratio=1.0,stage=None):
     """Cvars of the look mods (work/fm4-rex/look/fm4-look.hlsli): copies them to BuildRoot/look
+    (or <stage>/look: e2e.py gives each run its own, so two runs at once never rewrite the
+    files the other's game reads)
     and passes the knobs of the look (look_knobs; knobs left out keep the original look). Only
     post pass knobs ('original': TAA): the post passes and their params without the look mods;
     none ('original,taa=0'): no mods at all.
@@ -1168,7 +1170,7 @@ def look_cvars(root,look,shader_dev=False,upscale_ratio=1.0):
         defines=[define for define in defines if not define.startswith('FM4_LOOK_')]
         if defines:
             cvars['shader_mod_defines']=';'.join(defines)
-        cvars.update(ao_cvars(root,taa_enabled(knobs) or windshield_strength(knobs)>0))
+        cvars.update(ao_cvars(root,taa_enabled(knobs) or windshield_strength(knobs)>0,stage=stage))
         return cvars
     if shader_dev:
         directory=LOOK_DIRECTORY
@@ -1176,7 +1178,7 @@ def look_cvars(root,look,shader_dev=False,upscale_ratio=1.0):
         defines+=[f'{name}={float(value)!r}' for name,value in look_knob_defaults().items()
                   if name not in given]
     else:
-        directory=root/'look'
+        directory=(stage or root)/'look'
         if directory.is_dir():
             shutil.rmtree(directory)
         directory.mkdir()
@@ -1187,7 +1189,7 @@ def look_cvars(root,look,shader_dev=False,upscale_ratio=1.0):
         cvars.update(shader_mod_hot_reload='true',shader_mod_live_knobs='true')
     # The ao, taa and windshield knobs need the runtime's post passes.
     cvars.update(ao_cvars(root,float(knobs.get('ao','0'))>0 or taa_enabled(knobs)
-                          or windshield_strength(knobs)>0,shader_dev))
+                          or windshield_strength(knobs)>0,shader_dev,stage))
     return cvars
 
 def sun_cvars(strength):
@@ -1773,14 +1775,15 @@ def info_overlay(cvars,env,look,quality,display=None):
 # (docs/analysis/gtao-design.md), whose passes.toml names the vertex shaders that carry the
 # scene camera and holds the radius picked with the user from a 2x variant grid. The look knob
 # ao applies it in the final combine shaders (xe_post_ao); --ao alone only runs the pass.
-def ao_cvars(root,enabled,shader_dev=False):
-    """Cvars of the post passes: copies work/fm4-rex/passes to BuildRoot/passes, or with
-    shader_dev uses it in place (the look's hot reload then reloads saved pass files too)."""
+def ao_cvars(root,enabled,shader_dev=False,stage=None):
+    """Cvars of the post passes: copies work/fm4-rex/passes to BuildRoot/passes (or
+    <stage>/passes, as look_cvars), or with shader_dev uses it in place (the look's hot reload
+    then reloads saved pass files too)."""
     if not enabled:
         return {}
     if shader_dev:
         return {'post_pass_path':PASSES_DIRECTORY}
-    directory=root/'passes'
+    directory=(stage or root)/'passes'
     if directory.is_dir():
         shutil.rmtree(directory)
     directory.mkdir()

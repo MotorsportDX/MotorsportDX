@@ -1220,10 +1220,11 @@ def run_once(options, out):
     args = {k: str(v) for k, v in pipeline.launch_cvars(root, state['disc1'], out / 'runtime.log').items()}
     # Nobody can type into the host keyboard dialog: XAM prompts answer with their defaults.
     args['headless'] = 'true'
-    cache = prepare_cache(options, out)
+    cache = prepare_cache(options, out, root)
     if cache:
-        # A fresh install's caches (docs/analysis/d3d-hle-n6.md 19.3.4): the run's own cache_root
-        # (the shader and pipeline storage, the title's cache partition) and override cache.
+        # A fresh install's caches (docs/analysis/d3d-hle-n6.md 19.3.4), or a copy of the warm
+        # ones: the run's own cache_root (the shader and pipeline storage, the title's cache
+        # partition, the files the game writes there) and override cache.
         args['cache_root'] = str(cache)
         args['shader_override_cache_path'] = str(cache / 'shader-overrides')
     if options.profile:
@@ -1234,10 +1235,14 @@ def run_once(options, out):
     # The upscale ratio of --arg native_scene_input_scale (FSR's sharpening follows it).
     scale_args = dict(item.lstrip('-').split('=', 1) for item in options.arg
                       if item.lstrip('-').startswith(('native_draw_scale=', 'native_scene_input_scale=')))
+    # The look mods and post passes are copied into <out>/look and <out>/passes, not the
+    # BuildRoot's, so two runs at once never rewrite the files the other's game reads (the
+    # override cache keys on file contents, so it stays warm).
     look_args = {k: str(v) for k, v in pipeline.look_cvars(
-        root, look, options.shader_dev, pipeline.scene_upscale_ratio(scale_args)).items()}
+        root, look, options.shader_dev, pipeline.scene_upscale_ratio(scale_args), stage=out).items()}
     args.update(look_args)
-    args.update({k: str(v) for k, v in pipeline.ao_cvars(root, options.ao, options.shader_dev).items()})
+    args.update({k: str(v) for k, v in pipeline.ao_cvars(root, options.ao, options.shader_dev,
+                                                          stage=out).items()})
     # The quality tier's GTAO quality (pipeline.quality_cvars), before the --arg items.
     args.update(pipeline.quality_cvars(options.quality, args))
     if freeze:
@@ -1539,6 +1544,7 @@ def run_once(options, out):
         # The shader cache the run started with: the BuildRoot's, empty (--cold-cache) or a copy
         # of an earlier run's (--cache-from).
         'cache': {'cold': bool(options.cold_cache or options.cache_from),
+                  'copy': bool(options.cache_copy),
                   'from': str(Path(options.cache_from).resolve()) if options.cache_from else None},
         'shader_work': shader_work_summary(perf, phases),
         'phase_frames': phase_frames,
@@ -1641,19 +1647,21 @@ def aggregate(runs):
     return summary
 
 
-def prepare_cache(options, out):
-    """<out>/cache for --cold-cache (empty) or --cache-from (a copy of that run's cache), or None.
+def prepare_cache(options, out, root=None):
+    """<out>/cache for --cold-cache (empty), --cache-from (a copy of that run's cache) or
+    --cache-copy (a copy of the BuildRoot's warm cache, for runs beside another game), or None.
     Each run of a --repeat starts from the same state."""
-    if not (options.cold_cache or options.cache_from):
+    if not (options.cold_cache or options.cache_from or options.cache_copy):
         return None
     cache = out / 'cache'
     if cache.exists():
         shutil.rmtree(cache)
-    if options.cache_from:
-        source = Path(options.cache_from) / 'cache'
+    if options.cache_from or options.cache_copy:
+        source = Path(options.cache_from) / 'cache' if options.cache_from else root / 'cache'
         if not source.is_dir():
             raise SystemExit(f'--cache-from: {source} is not a directory (a --cold-cache run keeps '
-                             'its cache in <out>/cache)')
+                             'its cache in <out>/cache)' if options.cache_from else
+                             f'--cache-copy: {source} is not a directory')
         shutil.copytree(source, cache)
     cache.mkdir(parents=True, exist_ok=True)
     return cache
@@ -1983,6 +1991,10 @@ def main():
                              "shader_override_cache_path in <out>/cache (docs/analysis/d3d-hle-n6.md 19.3.4)")
     parser.add_argument('--cache-from', help='start with a copy of the <run>/cache of an earlier '
                                              '--cold-cache or --cache-from run (a later session)')
+    parser.add_argument('--cache-copy', action='store_true',
+                        help="start with a private copy of the BuildRoot's warm caches in <out>/cache, "
+                             'so the run can share the machine with another game (docs/e2e/README.md, '
+                             '"Concurrent cells")')
     parser.add_argument('--min-free-gb', type=float, default=MIN_FREE_GB,
                         help='refuse to run with less free space on the drive of --out')
     options = parser.parse_args()
@@ -1991,6 +2003,8 @@ def main():
     # Captures and logs show game content; they must never land in the repository.
     if out == REPO or REPO in out.parents:
         parser.error('--out must be outside the repository, for example <BuildRoot>/e2e/<name>')
+    if options.cache_copy and (options.cold_cache or options.cache_from):
+        parser.error('--cache-copy starts from the warm caches; --cold-cache and --cache-from start from others')
     if options.fast_route and not options.steps and not options.goal and options.scenario not in FAST_SCENARIOS:
         parser.error(f'--fast-route covers {", ".join(sorted(FAST_SCENARIOS))}, not {options.scenario}')
     if not options.resummarize:

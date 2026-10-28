@@ -210,6 +210,14 @@ class PipelineTests(unittest.TestCase):
                 self.assertTrue((root/'passes'/name).is_file(),name)
             self.assertEqual(pipeline.ao_cvars(root,True),{'post_pass_path':root/'passes'})
             self.assertEqual(pipeline.ao_cvars(root,False),{})
+            # e2e.py stages a run's look and passes in its own directory (concurrent runs).
+            stage=root/'run'
+            stage.mkdir()
+            cvars=pipeline.look_cvars(root,'pc',stage=stage)
+            self.assertEqual(Path(cvars['shader_mod_path']),stage/'look')
+            self.assertEqual(Path(cvars['post_pass_path']),stage/'passes')
+            self.assertTrue((stage/'passes'/'passes.toml').is_file())
+            self.assertEqual(pipeline.look_cvars(root,'original',stage=stage)['post_pass_path'],stage/'passes')
             self.assertEqual(pipeline.look_cvars(root,'pc',shader_dev=True)['post_pass_path'],
                              pipeline.PASSES_DIRECTORY)
             self.assertNotIn('post_pass_path',pipeline.look_cvars(root,'original,taa=0',shader_dev=True))
