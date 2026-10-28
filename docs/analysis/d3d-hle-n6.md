@@ -235,7 +235,7 @@ Not covered: the ROG Xbox Ally X (an export ships the build computer's cache, so
 
 #### 19.3.8 Increment 1.5, 28 October 2026
 
-Built on local main `c4607b8` (item 4) as `f76f8e6` and `b4b6de7`, snapshot `n6f1`; rebased onto main `1803b36` as `0d6072e` and `da03738` (snapshot `n6f2`), with the active window below as `09578aa` (snapshot `n6f3`).
+On local main as `e420971` to `18286f1`. The gates ran on the branch's builds before its rebases: on main `c4607b8` (item 4), snapshot `n6f1`; on main `1803b36`, snapshot `n6f2`, and with the active window below, `n6f3`; on main `fbe6511`, snapshot `n6f4`.
 
 **What it does** (part 5 of 19.3.2).
 
@@ -271,14 +271,14 @@ Built on local main `c4607b8` (item 4) as `f76f8e6` and `b4b6de7`, snapshot `n6f
 |---|---|
 | Smoke, native, 3/2 (`n6fs32` against `n6es32`) | 3 of 3; `career` PASS (race 232.97 fps, p99 5.33 ms); `photo` and `photo_view` WARN on capture statistics only (the races differ) |
 | Smoke, native, 2x, the launchers' plan (`n6fs2x` against `n6es2x`) | 3 of 3; `photo_view` PASS; `career` WARN on `wait_reg_mem` (race 191.04 fps, p99 7.95 ms), `photo` WARN on capture statistics |
-| Freeze parity, native, 3/2 (`n6fp32` against `n6ep32`) | PASS. Run on its own copy of the BuildRoot's cache (`matrix.py --cache-from`) beside the perturbation run; the native capture at 1:1 beside main's shows the same look (`n6f-crops`) |
+| Freeze parity, native, 3/2 (`n6fp32` against `n6ep32`) | PASS. Run on its own copy of the BuildRoot's warm cache (`--cache-from`, as `--cache-copy` does now) beside the perturbation run; the native capture at 1:1 beside main's shows the same look (`n6f-crops`) |
 | The back end's check, perturbed (`n6f2-perturb`, a cold career with salt 1504, `d3d12_draw_back_end_check_perturb=1000`) | 37,113 pipeline mismatches, equal to the 37,113 comparisons perturbed; no other mismatch, no dropped draw. With a cold driver cache again: 533 early pipelines, 465 taken created and 68 waited for (606 ms) |
 | Race at 3/2, one run (`n6f-32` against `n6e-d0-32`, three runs) | 234.1 fps, render thread 3.17 ms and GPU 3.46 ms a frame, textures zone 0.206 µs a draw; main 232.7 to 235.2 fps, 3.18 to 3.30 ms, 3.48 to 3.53 ms, 0.199 to 0.205 µs. The early description cost 0.046 µs a draw (0.084 ms a frame) before the active window |
 | Tests | `test_e2e_tools` (47) and `test_pipeline` (29) pass |
 
 The two image-only cells ran at once for the first time: the 3/2 parity (7.3 min) and the perturbation run (3.7 min) took 7 min of wall time together, about 4 min saved, with nothing shared but the snapshot (each its own run folder, profile copy and cache). The parity passed beside the other game, so the pair is usable for image cells; speed cells stay alone.
 
-**The active window** (`09578aa`). After the rebase onto `1803b36`, smoke at 3/2 passed 3 of 3 (`n6gs32`, `career` PASS), and main's in-run A/B (`--arg ab_cvar=d3d12_pipeline_early_creation`, 90 s of race at 3/2, `perf_ab.py`) measured the description on every draw at 0.090 ms of render thread a race frame (95% interval 0.063 to 0.118 ms; `n6g-ab32`), with GPU and frame time unchanged. A warm race queues nothing, so the render thread now describes draws only for 1,000,000 draws (a few seconds) after a shader translated for a draw, a queued early pipeline or a pipeline the replay created itself (a miss it counts for the render thread). Each restarts the window; the first draws of a load always translate shaders or miss.
+**The active window** (`18286f1`). After the rebase onto `1803b36`, smoke at 3/2 passed 3 of 3 (`n6gs32`, `career` PASS), and main's in-run A/B (`--arg ab_cvar=d3d12_pipeline_early_creation`, 90 s of race at 3/2, `perf_ab.py`) measured the description on every draw at 0.090 ms of render thread a race frame (95% interval 0.063 to 0.118 ms; `n6g-ab32`), with GPU and frame time unchanged. A warm race queues nothing, so the render thread now describes draws only for 1,000,000 draws (a few seconds) after a shader translated for a draw, a queued early pipeline or a pipeline the replay created itself (a miss it counts for the render thread). Each restarts the window; the first draws of a load always translate shaders or miss.
 
 | Check (snapshot `n6f3`) | Result |
 |---|---|
