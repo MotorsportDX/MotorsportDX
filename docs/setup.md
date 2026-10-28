@@ -279,7 +279,7 @@ license review is in [sources and licensing](sources-and-licensing.md#third-part
 
 #### The DirectX Shader Compiler
 
-The native path's DXIL shaders (`native_shader_dxil`, off by default;
+The native path's DXIL shaders (`native_shader_dxil`, on by default where the DLLs are beside the game;
 [D3D-level HLE, 19.3.9](analysis/d3d-hle-n6.md#1939-increment-12-design-28-october-2026)) are
 compiled by Microsoft's DirectX Shader Compiler, release v1.9.2609. `setup` and `build` take its
 zip, `dxc_2026_09_29.zip`, from `BuildRoot\dxc-download\v1.9.2609` (`fetch_dxc` in

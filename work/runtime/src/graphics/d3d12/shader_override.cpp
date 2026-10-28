@@ -128,12 +128,12 @@ REXCVAR_DEFINE_BOOL(native_shader_contract_ab_precise, false, "GPU/D3D12",
                     "exact code on both sides (docs/analysis/shader-contract.md 9.7)")
     .lifecycle(rex::cvar::Lifecycle::kRequiresRestart);
 
-REXCVAR_DEFINE_BOOL(native_shader_dxil, false, "GPU/D3D12",
-                    "With native_shader_contract: the DXIL world beside the DXBC one. Every "
-                    "shader also through the generated HLSL and DXC, from the dxcompiler.dll and "
-                    "dxil.dll beside the executable, and a pipeline takes DXIL where both of its "
-                    "shaders have it (docs/analysis/d3d-hle-n6.md 19.3.9); without DXC, DXBC "
-                    "only")
+REXCVAR_DEFINE_BOOL(native_shader_dxil, true, "GPU/D3D12",
+                    "On the native path: the DXIL world beside the DXBC one. Every shader also "
+                    "through the generated HLSL and DXC, from the dxcompiler.dll and dxil.dll "
+                    "beside the executable, and a pipeline takes DXIL where both of its shaders "
+                    "have it (docs/analysis/d3d-hle-n6.md 19.3.9); without DXC, or off, DXBC "
+                    "only, as RTV and ROV always are")
     .lifecycle(rex::cvar::Lifecycle::kRequiresRestart);
 
 REXCVAR_DEFINE_BOOL(native_shader_dxil_relaxed, false, "GPU/D3D12",
@@ -806,7 +806,9 @@ std::unique_ptr<ShaderOverrides> ShaderOverrides::Create(const HostConfig& confi
       overrides->cache_directory_ = cache_path;
     }
   }
-  if (overrides->native_ && REXCVAR_GET(native_shader_dxil)) {
+  // The native path's DXIL world, with or without the contract's manifest (the
+  // generator takes every shader; entries are hooked where the manifest has them).
+  if (REXCVAR_GET(host_render_native) && REXCVAR_GET(native_shader_dxil)) {
     overrides->dxil_compiler_ = DxilCompiler::Load();
     overrides->dxil_relaxed_ = REXCVAR_GET(native_shader_dxil_relaxed);
     // cache_root/shaders/local/dxil, where the storage's comment places host
