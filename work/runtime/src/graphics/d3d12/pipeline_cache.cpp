@@ -87,11 +87,15 @@ REXCVAR_DECLARE(bool, native_shader_dxil);
 
 REXCVAR_DEFINE_INT32(native_shader_dxil_ab_ms, 0, "GPU/D3D12",
                      "Development, with native_shader_dxil: an in-run A/B of the DXIL world "
-                     "against the DXBC world, alternating every this many milliseconds (0: off). "
+                     "against the DXBC world, alternating every this many milliseconds (0: off; "
+                     "-1: native_shader_dxil_dxbc picks, for the in-run perf A/B's ab_cvar). "
                      "Pipelines that take DXIL are created in both, so it needs a warm cache: a "
                      "swap in play updates the DXIL state only (docs/analysis/d3d-hle-n6.md 19.3.9)")
-    .range(0, 60000)
+    .range(-1, 60000)
     .lifecycle(rex::cvar::Lifecycle::kRequiresRestart);
+REXCVAR_DEFINE_BOOL(native_shader_dxil_dxbc, false, "GPU/D3D12",
+                    "With native_shader_dxil_ab_ms=-1: draw the DXBC world's states of the "
+                    "pipelines that take DXIL (hot, for ab_cvar)");
 
 namespace rex::graphics::d3d12 {
 
@@ -3648,7 +3652,10 @@ const std::vector<uint32_t>& PipelineCache::GetGeometryShader(GeometryShaderKey 
 
 bool PipelineCache::IsDxilAbDxbcPhase() {
   int32_t period = REXCVAR_GET(native_shader_dxil_ab_ms);
-  if (period <= 0) {
+  if (period < 0) {
+    return REXCVAR_GET(native_shader_dxil_dxbc);
+  }
+  if (period == 0) {
     return false;
   }
   auto milliseconds = std::chrono::duration_cast<std::chrono::milliseconds>(
