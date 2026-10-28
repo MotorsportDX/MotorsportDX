@@ -1783,6 +1783,10 @@ void PipelineCache::CreateEarlyPipeline(Pipeline* pipeline) {
     perf_trace::AddShaderWork(perf_trace::ShaderWork::kPipelineEarly, perf_trace::Now() - start);
   }
   pipeline->state.store(state, std::memory_order_release);
+  if (state && dxil_ab_ && PipelineUsesDxil(runtime_description)) {
+    pipeline->dxbc_state.store(CreateD3D12Pipeline(runtime_description, false),
+                               std::memory_order_release);
+  }
   {
     std::lock_guard<std::mutex> lock(early_mutex_);
     pipeline->description.root_signature = runtime_description.root_signature;
@@ -1819,7 +1823,7 @@ PipelineCache::Pipeline* PipelineCache::TakeEarlyPipeline(
     std::memcpy(&pipeline->description, &runtime_description, sizeof(runtime_description));
     pipeline->root_signature.store(runtime_description.root_signature, std::memory_order_release);
     const uint64_t create_start = perf_trace::ZoneStart();
-    pipeline->state.store(CreateD3D12Pipeline(runtime_description), std::memory_order_release);
+    StorePipelineStates(*pipeline, runtime_description);
     if (create_start) {
       perf_trace::AddShaderWork(perf_trace::ShaderWork::kPipeline,
                                 perf_trace::Now() - create_start);
