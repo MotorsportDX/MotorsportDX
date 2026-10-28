@@ -142,7 +142,15 @@ class PipelineCache {
   // Returns a pipeline with deferred creation by its handle. May return nullptr
   // if failed to create the pipeline.
   ID3D12PipelineState* GetD3D12PipelineByHandle(void* handle) const {
-    return reinterpret_cast<const Pipeline*>(handle)->state.load(std::memory_order_acquire);
+    const Pipeline* pipeline = reinterpret_cast<const Pipeline*>(handle);
+    if (dxil_ab_) {
+      // The in-run A/B of the DXIL world: its other periods draw the DXBC one.
+      ID3D12PipelineState* dxbc_state = pipeline->dxbc_state.load(std::memory_order_acquire);
+      if (dxbc_state && IsDxilAbDxbcPhase()) {
+        return dxbc_state;
+      }
+    }
+    return pipeline->state.load(std::memory_order_acquire);
   }
 
   // The draw back end's check (d3d12_draw_back_end_check, d3d-hle-n4.md 17.6): the
@@ -375,7 +383,21 @@ class PipelineCache {
   static void CreateDxbcGeometryShader(GeometryShaderKey key, std::vector<uint32_t>& shader_out);
   const std::vector<uint32_t>& GetGeometryShader(GeometryShaderKey key);
 
-  ID3D12PipelineState* CreateD3D12Pipeline(const PipelineRuntimeDescription& runtime_description);
+  // dxil: from the translations' DXIL binaries where both have one
+  // (PipelineUsesDxil), else from their DXBC.
+  ID3D12PipelineState* CreateD3D12Pipeline(const PipelineRuntimeDescription& runtime_description,
+                                           bool dxil = true);
+  // The DXIL world (native_shader_dxil, docs/analysis/d3d-hle-n6.md 19.3.8):
+  // whether the pipeline takes DXIL, since D3D12 does not mix DXBC and DXIL in
+  // one pipeline. Both shaders need a DXIL binary, and the pipeline no shader
+  // that only exists as DXBC: a geometry or hull shader, or a built-in pixel
+  // shader.
+  bool PipelineUsesDxil(const PipelineRuntimeDescription& runtime_description) const;
+  // The pipeline's state, and with native_shader_dxil_ab_ms the DXBC world's
+  // state of a pipeline that takes DXIL.
+  void StorePipelineStates(Pipeline& pipeline,
+                           const PipelineRuntimeDescription& runtime_description);
+  static bool IsDxilAbDxbcPhase();
   // Early creation (QueueEarlyPipeline): a creation thread's, and the replay's
   // take of an early pipeline with the description it looked up (nullptr if
   // none was queued; otherwise created when it returns).
@@ -411,6 +433,8 @@ class PipelineCache {
   // The disc inventory's interpolator words by pixel shader key, read at the
   // start of InitializeShaderStorage (PredictPixelShaderModifications).
   std::unordered_multimap<uint64_t, uint32_t> pixel_inputs_;
+  // native_shader_dxil_ab_ms (docs/analysis/d3d-hle-n6.md 19.3.8).
+  bool dxil_ab_ = false;
   bool mod_compile_async_ = false;
   // Pipeline states replaced by hot reload or SwapCompiledMods, and the
   // submission after which the GPU no longer uses them.
@@ -459,6 +483,9 @@ class PipelineCache {
   struct Pipeline {
     // nullptr if creation has failed.
     std::atomic<ID3D12PipelineState*> state{nullptr};
+    // native_shader_dxil_ab_ms: the DXBC world's state of a pipeline whose
+    // state takes DXIL, else nullptr.
+    std::atomic<ID3D12PipelineState*> dxbc_state{nullptr};
     std::atomic<ID3D12RootSignature*> root_signature{nullptr};
     PipelineRuntimeDescription description;
     D3D12Shader::D3D12Translation* pending_vertex_shader = nullptr;

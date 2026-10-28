@@ -18,6 +18,7 @@
 #include <utility>
 #include <vector>
 
+#include <rex/graphics/d3d12/dxil_compiler.h>
 #include <rex/graphics/d3d12/native_shader_contract.h>
 #include <rex/graphics/d3d12/shader.h>
 #include <rex/graphics/d3d12/shader_compile_queue.h>
@@ -147,6 +148,8 @@ class ShaderOverrides {
   // pixel shaders are marked precise (MarkPrecise, before Apply), as FXC marks
   // the generated HLSL (docs/analysis/shader-contract.md 9.7).
   bool ab_precise() const { return ab_precise_; }
+  // native_shader_dxil: the DXIL world, DXC loaded.
+  bool dxil() const { return dxil_compiler_ != nullptr; }
   void MarkPrecise(D3D12Shader::D3D12Translation& translation) const;
 
   // The translation of a native shader contract entry without the DXBC
@@ -313,6 +316,8 @@ class ShaderOverrides {
     std::vector<std::pair<std::string, std::string>> defines;
     uint64_t key = 0;
     std::filesystem::path cache_path;
+    // DXC to DXIL (native_shader_dxil) instead of FXC to DXBC.
+    bool dxil = false;
   };
   // What hot reload knows about a translation that has, or had, an override.
   struct Entry {
@@ -354,10 +359,12 @@ class ShaderOverrides {
   // for it.
   // With job_out, a compile the cache does not hold is returned there for a
   // worker (kQueued).
+  // dxil: for the DXIL world (native_shader_dxil), where a shader without a
+  // mod or entry takes its generated HLSL too, and DXC compiles it.
   Outcome Build(const D3D12Shader::D3D12Translation& translation,
                 const std::vector<uint8_t>& dxbc, std::vector<uint8_t>& binary_out,
                 std::vector<Dependency>& files_out,
-                std::unique_ptr<CompileJob>* job_out = nullptr);
+                std::unique_ptr<CompileJob>* job_out = nullptr, bool dxil = false);
   // With job_out, a compile the cache does not hold is not run: its job is
   // returned there (false is returned, job_out set).
   bool Compile(const D3D12Shader::D3D12Translation& translation,
@@ -365,7 +372,7 @@ class ShaderOverrides {
                const std::string& text, const std::string& name, const std::string& mod,
                const std::vector<std::string>* params,
                std::vector<uint8_t>& binary_out, std::vector<Dependency>& files_out,
-               std::unique_ptr<CompileJob>* job_out = nullptr) const;
+               std::unique_ptr<CompileJob>* job_out = nullptr, bool dxil = false) const;
   // The manifest's entry a translation takes (not in the A/B's classic periods,
   // outside the entry's passes, or in the shader override A/B's off phase), or
   // nullptr.
@@ -380,10 +387,15 @@ class ShaderOverrides {
   // native_shader_contract_vertex_all, not in native_plain or native_classic.
   bool GeneratesVertex(const D3D12Shader::D3D12Translation& translation) const;
   // Build for a vertex shader: its generated HLSL with the entry's hooks.
+  // dxil: every vertex shader of the host vertex stage without memexport, the
+  // entry's hooks where it has one.
   Outcome BuildVertex(const D3D12Shader::D3D12Translation& translation,
                       const std::vector<uint8_t>& dxbc, std::vector<uint8_t>& binary_out,
                       std::vector<Dependency>& files_out,
-                      std::unique_ptr<CompileJob>* job_out = nullptr);
+                      std::unique_ptr<CompileJob>* job_out = nullptr, bool dxil = false);
+  // The DXIL world: the translation's DXIL binary from the cache or DXC, or a
+  // worker's job for it.
+  void ApplyDxil(D3D12Shader::D3D12Translation& translation, ShaderCompileQueue* queue);
   // FXC, the check against the signatures of dxbc and the cache store of a job
   // (on_worker: a compile worker runs it).
   bool RunCompile(const CompileJob& job, const std::vector<uint8_t>& dxbc,
@@ -392,15 +404,19 @@ class ShaderOverrides {
 
   // shader_override_cache_path.
   uint64_t CacheKey(const std::string& source,
-                    const std::vector<std::pair<std::string, std::string>>& defines) const;
+                    const std::vector<std::pair<std::string, std::string>>& defines,
+                    bool dxil = false) const;
   std::filesystem::path CachePath(const D3D12Shader::D3D12Translation& translation,
-                                  uint64_t key) const;
+                                  uint64_t key, bool dxil = false) const;
   // Includes resolve in directories, as OverrideInclude resolves them.
+  // magic: the format's, FXC's 'FXCO' or DXC's 'DXIL'.
   bool LoadCached(const std::filesystem::path& path, uint64_t key,
                   const std::vector<std::filesystem::path>& directories,
-                  std::vector<uint8_t>& binary_out, std::vector<Dependency>& files_out) const;
+                  std::vector<uint8_t>& binary_out, std::vector<Dependency>& files_out,
+                  uint32_t magic = 0) const;
   void StoreCached(const std::filesystem::path& path, uint64_t key,
-                   const std::vector<Dependency>& files, const std::vector<uint8_t>& binary) const;
+                   const std::vector<Dependency>& files, const std::vector<uint8_t>& binary,
+                   uint32_t magic = 0) const;
   // The file an include of name resolves to, as OverrideInclude resolves it.
   static std::filesystem::path ResolveInclude(
       const std::string& name, const std::vector<std::filesystem::path>& directories);
@@ -429,6 +445,10 @@ class ShaderOverrides {
   std::filesystem::path cache_directory_;
   uint64_t library_hash_ = 0;
   uint64_t compiler_id_ = 0;
+  // native_shader_dxil (docs/analysis/d3d-hle-n6.md 19.3.8): DXC, and its
+  // cache beside the override cache.
+  std::unique_ptr<DxilCompiler> dxil_compiler_;
+  std::filesystem::path dxil_cache_directory_;
 
   // native_shader_contract: the manifest, and whether its entries have params.
   std::unique_ptr<native_shader_contract::Manifest> native_;

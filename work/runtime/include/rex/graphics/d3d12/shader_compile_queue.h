@@ -37,6 +37,8 @@ class ShaderCompileQueue {
   struct Result {
     D3D12Shader::D3D12Translation* translation;
     std::vector<uint8_t> binary;
+    // A DXC compile for the translation's DXIL binary (native_shader_dxil).
+    bool dxil = false;
   };
   // Runs on a worker and returns the binary, or an empty one on a failure.
   using Job = std::function<std::vector<uint8_t>()>;
@@ -53,7 +55,7 @@ class ShaderCompileQueue {
   ShaderCompileQueue& operator=(const ShaderCompileQueue&) = delete;
   ~ShaderCompileQueue() { Stop(); }
 
-  void Push(D3D12Shader::D3D12Translation* translation, Job job);
+  void Push(D3D12Shader::D3D12Translation* translation, Job job, bool dxil = false);
   // While one exists on a thread, the jobs that thread pushes wait behind every
   // other job: the start's predicted translations of pixel shaders that no
   // stored pipeline names (docs/analysis/d3d-hle-n6.md 19.3.10), so that what
@@ -90,8 +92,13 @@ class ShaderCompileQueue {
 
   std::mutex mutex_;
   std::condition_variable cond_;
-  std::deque<std::pair<D3D12Shader::D3D12Translation*, Job>> jobs_;
-  std::deque<std::pair<D3D12Shader::D3D12Translation*, Job>> background_jobs_;
+  struct QueuedJob {
+    D3D12Shader::D3D12Translation* translation;
+    Job job;
+    bool dxil;
+  };
+  std::deque<QueuedJob> jobs_;
+  std::deque<QueuedJob> background_jobs_;
   std::atomic<size_t> background_job_count_{0};
   std::deque<std::pair<void*, PipelineJob>> pipeline_jobs_;
   bool stop_ = false;

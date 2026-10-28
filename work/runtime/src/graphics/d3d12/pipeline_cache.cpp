@@ -82,6 +82,16 @@ REXCVAR_DEFINE_BOOL(shader_storage_predicted_translations, true, "GPU/D3D12",
 REXCVAR_DECLARE(bool, shader_override_async);
 // command_processor.cpp.
 REXCVAR_DECLARE(bool, native_draw_scale_variant);
+// shader_override.cpp.
+REXCVAR_DECLARE(bool, native_shader_dxil);
+
+REXCVAR_DEFINE_INT32(native_shader_dxil_ab_ms, 0, "GPU/D3D12",
+                     "Development, with native_shader_dxil: an in-run A/B of the DXIL world "
+                     "against the DXBC world, alternating every this many milliseconds (0: off). "
+                     "Pipelines that take DXIL are created in both, so it needs a warm cache: a "
+                     "swap in play updates the DXIL state only (docs/analysis/d3d-hle-n6.md 19.3.8)")
+    .range(0, 60000)
+    .lifecycle(rex::cvar::Lifecycle::kRequiresRestart);
 
 namespace rex::graphics::d3d12 {
 
@@ -152,6 +162,11 @@ PipelineCache::PipelineCache(D3D12CommandProcessor& command_processor,
                        !shader_overrides_->hot_reload() && !REXCVAR_GET(async_shader_compilation);
   if (mod_compile_async_) {
     REXGPU_INFO("Shader overrides: compiles in play on workers (shader_override_async)");
+  }
+  dxil_ab_ = shader_overrides_ && shader_overrides_->dxil() && REXCVAR_GET(native_shader_dxil_ab_ms);
+  if (dxil_ab_) {
+    REXGPU_INFO("DXIL shaders: A/B against the DXBC world every {} ms",
+                REXCVAR_GET(native_shader_dxil_ab_ms));
   }
 }
 
@@ -268,6 +283,10 @@ void PipelineCache::Shutdown() {
     ID3D12PipelineState* state = it.second->state.load(std::memory_order_acquire);
     if (state) {
       state->Release();
+    }
+    ID3D12PipelineState* dxbc_state = it.second->dxbc_state.load(std::memory_order_acquire);
+    if (dxbc_state) {
+      dxbc_state->Release();
     }
     delete it.second;
   }
@@ -806,8 +825,7 @@ void PipelineCache::InitializeShaderStorage(const std::filesystem::path& cache_r
         }
         creation_request_cond_.notify_one();
       } else {
-        new_pipeline->state.store(CreateD3D12Pipeline(pipeline_runtime_description),
-                                  std::memory_order_release);
+        StorePipelineStates(*new_pipeline, pipeline_runtime_description);
       }
       ++pipelines_created;
     }
@@ -997,8 +1015,13 @@ void PipelineCache::SwapCompiledMods(uint64_t retire_submission) {
       // The compile failed: the DXBC translation stays.
       continue;
     }
-    // The pipelines created from now on take the compiled binary.
-    entry.translation->ReplaceTranslatedBinary(std::move(entry.binary));
+    // The pipelines created from now on take the compiled binary: DXC's into
+    // the DXIL world (native_shader_dxil), FXC's into the DXBC one.
+    if (entry.dxil) {
+      entry.translation->SetDxilBinary(std::move(entry.binary));
+    } else {
+      entry.translation->ReplaceTranslatedBinary(std::move(entry.binary));
+    }
     swapped.insert(entry.translation);
   }
   // The pipelines that existed before are recreated with it on the workers,
@@ -1616,7 +1639,7 @@ bool PipelineCache::ConfigurePipelineDescribed(
       early_replay_misses_.fetch_add(1, std::memory_order_relaxed);
     }
     const uint64_t create_start = perf_trace::ZoneStart();
-    new_pipeline->state.store(CreateD3D12Pipeline(runtime_description), std::memory_order_release);
+    StorePipelineStates(*new_pipeline, runtime_description);
     if (create_start) {
       perf_trace::AddShaderWork(perf_trace::ShaderWork::kPipeline,
                                 perf_trace::Now() - create_start);
@@ -3521,9 +3544,53 @@ const std::vector<uint32_t>& PipelineCache::GetGeometryShader(GeometryShaderKey 
   return geometry_shaders_.emplace(key, std::move(shader)).first->second;
 }
 
-ID3D12PipelineState* PipelineCache::CreateD3D12Pipeline(
-    const PipelineRuntimeDescription& runtime_description) {
+bool PipelineCache::IsDxilAbDxbcPhase() {
+  int32_t period = REXCVAR_GET(native_shader_dxil_ab_ms);
+  if (period <= 0) {
+    return false;
+  }
+  auto milliseconds = std::chrono::duration_cast<std::chrono::milliseconds>(
+                          std::chrono::steady_clock::now().time_since_epoch())
+                          .count();
+  return ((milliseconds / period) & 1) != 0;
+}
+
+bool PipelineCache::PipelineUsesDxil(const PipelineRuntimeDescription& runtime_description) const {
   const PipelineDescription& description = runtime_description.description;
+  if (runtime_description.vertex_shader->dxil_binary().empty() ||
+      runtime_description.geometry_shader != nullptr ||
+      DxbcShaderTranslator::Modification(runtime_description.vertex_shader->modification())
+              .vertex.host_vertex_shader_type != Shader::HostVertexShaderType::kVertex) {
+    return false;
+  }
+  if (runtime_description.pixel_shader) {
+    return !runtime_description.pixel_shader->dxil_binary().empty();
+  }
+  // Depth only: no pixel shader unless a built-in DXBC one converts the depth.
+  return render_target_cache_.GetPath() != RenderTargetCache::Path::kPixelShaderInterlock &&
+         !(render_target_cache_.depth_float24_convert_in_pixel_shader() &&
+           (description.depth_func != xenos::CompareFunction::kAlways || description.depth_write) &&
+           description.depth_format == xenos::DepthRenderTargetFormat::kD24FS8);
+}
+
+void PipelineCache::StorePipelineStates(Pipeline& pipeline,
+                                        const PipelineRuntimeDescription& runtime_description) {
+  pipeline.state.store(CreateD3D12Pipeline(runtime_description), std::memory_order_release);
+  if (dxil_ab_ && PipelineUsesDxil(runtime_description)) {
+    pipeline.dxbc_state.store(CreateD3D12Pipeline(runtime_description, false),
+                              std::memory_order_release);
+  }
+}
+
+ID3D12PipelineState* PipelineCache::CreateD3D12Pipeline(
+    const PipelineRuntimeDescription& runtime_description, bool dxil) {
+  const PipelineDescription& description = runtime_description.description;
+  // DXBC or DXIL for every shader of the pipeline, never both.
+  const bool use_dxil = dxil && PipelineUsesDxil(runtime_description);
+  auto vertex_binary = [&]() -> const std::vector<uint8_t>& {
+    return use_dxil ? runtime_description.vertex_shader->dxil_binary()
+                    : runtime_description.vertex_shader->translated_binary();
+  };
 
   if (runtime_description.pixel_shader != nullptr) {
     REXGPU_DEBUG("Creating graphics pipeline with VS {:016X}, PS {:016X}",
@@ -3651,8 +3718,8 @@ ID3D12PipelineState* PipelineCache::CreateD3D12Pipeline(
       // Fallback vertex shaders are not needed on Direct3D 12.
       return nullptr;
     }
-    state_desc.VS.pShaderBytecode = runtime_description.vertex_shader->translated_binary().data();
-    state_desc.VS.BytecodeLength = runtime_description.vertex_shader->translated_binary().size();
+    state_desc.VS.pShaderBytecode = vertex_binary().data();
+    state_desc.VS.BytecodeLength = vertex_binary().size();
     PipelinePrimitiveTopologyType primitive_topology_type =
         PipelinePrimitiveTopologyType(description.primitive_topology_type_or_tessellation_mode);
     switch (primitive_topology_type) {
@@ -3679,8 +3746,11 @@ ID3D12PipelineState* PipelineCache::CreateD3D12Pipeline(
       assert_always();
       return nullptr;
     }
-    state_desc.PS.pShaderBytecode = runtime_description.pixel_shader->translated_binary().data();
-    state_desc.PS.BytecodeLength = runtime_description.pixel_shader->translated_binary().size();
+    const std::vector<uint8_t>& pixel_binary =
+        use_dxil ? runtime_description.pixel_shader->dxil_binary()
+                 : runtime_description.pixel_shader->translated_binary();
+    state_desc.PS.pShaderBytecode = pixel_binary.data();
+    state_desc.PS.BytecodeLength = pixel_binary.size();
   } else if (edram_rov_used) {
     state_desc.PS.pShaderBytecode = depth_only_pixel_shader_.data();
     state_desc.PS.BytecodeLength = depth_only_pixel_shader_.size();
@@ -4097,8 +4167,7 @@ void PipelineCache::CreationThread(size_t thread_index) {
     if (!PrepareRuntimeDescriptionForQueuedCreation(pipeline_to_create, runtime_description)) {
       pipeline_to_create->state.store(nullptr, std::memory_order_release);
     } else {
-      pipeline_to_create->state.store(CreateD3D12Pipeline(runtime_description),
-                                      std::memory_order_release);
+      StorePipelineStates(*pipeline_to_create, runtime_description);
     }
 
     // Pipeline created - the thread is not busy anymore, safe to set the
@@ -4128,8 +4197,7 @@ void PipelineCache::CreateQueuedPipelinesOnProcessorThread() {
       pipeline_to_create->state.store(nullptr, std::memory_order_release);
       continue;
     }
-    pipeline_to_create->state.store(CreateD3D12Pipeline(runtime_description),
-                                    std::memory_order_release);
+    StorePipelineStates(*pipeline_to_create, runtime_description);
   }
 }
 

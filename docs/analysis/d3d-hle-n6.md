@@ -349,6 +349,25 @@ The step gates:
 - **Step 3:** the page against a local mirror. No download in the gates: the release is in the BuildRoot.
 - **The close gate** as 19.3.4's for 1.1. The pass on the ROG Xbox Ally X runs from the owner's export later.
 
+**The decisions** (the main session's of 28 October 2026, taken while the project owner was away and open to the owner's review):
+
+1. **The scope:** two worlds, chosen per pipeline, behind `native_shader_dxil` (native only, off until the close gate). Plain pixel shaders take the generator after a pixel-wide in-run A/B with `native_shader_contract_ab_precise`. Not taken: DXIL from `dxilconv` for the DXBC translations, or DXIL only where both shaders are entries.
+2. **The precision:** both variants are built. Strict (`-Gis` and the generator's `precise`) is the A/B reference. Relaxed lets the compiler and the driver fuse, as the DXBC translations without precise flags do today.
+   - The in-run perf A/B measures them at 3/2 (the Ally X's panel) and at 2x.
+   - Strict stays the default if it costs nothing resolvable: its 95% interval includes 0 at both scales, or the cost is under about 0.02 ms a race frame.
+   - Otherwise relaxed is the default, if its parity and 1:1 crops against today's path show only rounding noise at edges. Strict then stays a development switch for the A/B proofs.
+   - Where the title needs exactness (for example the same position in a depth pass and a colour pass drawn by different vertex shaders), the code stays precise.
+   - Not taken: a choice without a measurement.
+3. **The cache** as designed: `cache\shaders\local\dxil`, pruned to 512 MB; the FXC override cache stays for the DXBC world. Not taken: one cache replacing the override cache.
+4. **The pass:**
+   - it runs in the game's executable with `shader_offline_pass=true`;
+   - the launcher's page and `e2e.py --offline-pass` start it;
+   - misses compile on 1.1's workers with DXC.
+   Not taken: a separate tool, or a splash screen at the runtime's start.
+5. **The shader model:** SM 6.0 with `-HV 2018`.
+6. **The post passes** stay FXC and DXBC in 1.2.
+7. **Without DXC** everything stays DXBC, and one gate cell runs without the DLLs. Setup copies the DLLs from `<BuildRoot>\dxc-download`, pinned by SHA-256, and fetches the URL only when the zip is missing (`DXC_MIRROR`). The launcher is tested against a local mirror. No download runs in the gates or without the owner.
+
 #### 19.3.10 Increment 1.3: the game's pixel shaders from the disc, 28 October 2026
 
 Part 3 of 19.3.2. The number follows 1.2's design (19.3.9).

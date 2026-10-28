@@ -37,8 +37,16 @@ class D3D12Shader : public DxbcShader {
     bool awaiting_first_draw() const { return awaiting_first_draw_; }
     void set_awaiting_first_draw(bool awaiting) { awaiting_first_draw_ = awaiting; }
 
+    // The DXIL world (native_shader_dxil, docs/analysis/d3d-hle-n6.md 19.3.9):
+    // the translation compiled by DXC beside its DXBC, empty until then. Set
+    // where the DXBC binary is replaced: at the translation, and by the swap of
+    // a worker's compile on the thread that creates pipelines.
+    const std::vector<uint8_t>& dxil_binary() const { return dxil_binary_; }
+    void SetDxilBinary(std::vector<uint8_t> binary) { dxil_binary_ = std::move(binary); }
+
    private:
     bool awaiting_first_draw_ = false;
+    std::vector<uint8_t> dxil_binary_;
   };
 
   D3D12Shader(xenos::ShaderType shader_type, uint64_t ucode_data_hash, const uint32_t* ucode_dwords,

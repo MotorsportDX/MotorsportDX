@@ -128,6 +128,14 @@ REXCVAR_DEFINE_BOOL(native_shader_contract_ab_precise, false, "GPU/D3D12",
                     "exact code on both sides (docs/analysis/shader-contract.md 9.7)")
     .lifecycle(rex::cvar::Lifecycle::kRequiresRestart);
 
+REXCVAR_DEFINE_BOOL(native_shader_dxil, false, "GPU/D3D12",
+                    "With native_shader_contract: the DXIL world beside the DXBC one. Every "
+                    "shader also through the generated HLSL and DXC, from the dxcompiler.dll and "
+                    "dxil.dll beside the executable, and a pipeline takes DXIL where both of its "
+                    "shaders have it (docs/analysis/d3d-hle-n6.md 19.3.8); without DXC, DXBC "
+                    "only")
+    .lifecycle(rex::cvar::Lifecycle::kRequiresRestart);
+
 REXCVAR_DEFINE_BOOL(native_shader_vertex_survey, false, "GPU/D3D12",
                     "Log every vertex shader translated: its ucode key, fetch-blind and coarse "
                     "keys, fetches and host types, and the fetch fields in which keys of one "
@@ -167,6 +175,10 @@ constexpr UINT kCompileFlags = D3DCOMPILE_ENABLE_UNBOUNDED_DESCRIPTOR_TABLES |
 // (name length, name, content XXH3), the DXBC (size, bytes).
 constexpr uint32_t kCacheMagic = 0x4F435846;  // 'FXCO'
 constexpr uint32_t kCacheVersion = 1;
+// The same format for DXC's DXIL (native_shader_dxil), in <cache>/dxil.
+constexpr uint32_t kDxilCacheMagic = 0x4C495844;  // 'DXIL'
+constexpr char kDxilTarget[] = "ps_6_0";
+constexpr char kDxilVertexTarget[] = "vs_6_0";
 
 // The instance shader_mod_set talks to.
 std::mutex g_instance_mutex;
@@ -785,6 +797,21 @@ std::unique_ptr<ShaderOverrides> ShaderOverrides::Create(const HostConfig& confi
       REXGPU_WARN("Shader override cache: cannot create '{}': {}", cache_path, error.message());
     } else {
       overrides->cache_directory_ = cache_path;
+    }
+  }
+  if (overrides->native_ && REXCVAR_GET(native_shader_dxil)) {
+    overrides->dxil_compiler_ = DxilCompiler::Load();
+    if (overrides->dxil_compiler_ && !overrides->cache_directory_.empty()) {
+      std::error_code error;
+      std::filesystem::path dxil_directory = overrides->cache_directory_ / "dxil";
+      std::filesystem::create_directories(dxil_directory, error);
+      if (!error) {
+        overrides->dxil_cache_directory_ = dxil_directory;
+      }
+    }
+    if (overrides->dxil_compiler_) {
+      REXGPU_INFO("DXIL shaders: the DXIL world on, DXC {}",
+                  overrides->dxil_compiler_->version());
     }
   }
   overrides->last_poll_ = std::chrono::steady_clock::now();
@@ -1654,12 +1681,17 @@ std::string ShaderOverrides::CheckInputs(const D3D12Shader::D3D12Translation& tr
 
 uint64_t ShaderOverrides::CacheKey(
     const std::string& source,
-    const std::vector<std::pair<std::string, std::string>>& defines) const {
+    const std::vector<std::pair<std::string, std::string>>& defines, bool dxil) const {
   XXH3_state_t state;
   XXH3_64bits_reset(&state);
-  uint64_t header[] = {kCacheVersion, compiler_id_, library_hash_, kCompileFlags};
+  uint64_t header[] = {kCacheVersion, dxil ? dxil_compiler_->identity() : compiler_id_,
+                       library_hash_, dxil ? uint64_t(kDxilCacheMagic) : uint64_t(kCompileFlags)};
   XXH3_64bits_update(&state, header, sizeof(header));
-  XXH3_64bits_update(&state, kTarget, sizeof(kTarget));
+  if (dxil) {
+    XXH3_64bits_update(&state, kDxilTarget, sizeof(kDxilTarget));
+  } else {
+    XXH3_64bits_update(&state, kTarget, sizeof(kTarget));
+  }
   uint64_t source_size = source.size();
   XXH3_64bits_update(&state, &source_size, sizeof(source_size));
   XXH3_64bits_update(&state, source.data(), source.size());
@@ -1672,11 +1704,12 @@ uint64_t ShaderOverrides::CacheKey(
 }
 
 std::filesystem::path ShaderOverrides::CachePath(
-    const D3D12Shader::D3D12Translation& translation, uint64_t key) const {
-  return cache_directory_ /
-         fmt::format("{}_{:016X}_{:016X}_{:016X}.dxbc",
+    const D3D12Shader::D3D12Translation& translation, uint64_t key, bool dxil) const {
+  return (dxil ? dxil_cache_directory_ : cache_directory_) /
+         fmt::format("{}_{:016X}_{:016X}_{:016X}.{}",
                      translation.shader().type() == xenos::ShaderType::kVertex ? "vertex" : "shader",
-                     translation.shader().ucode_data_hash(), translation.modification(), key);
+                     translation.shader().ucode_data_hash(), translation.modification(), key,
+                     dxil ? "dxil" : "dxbc");
 }
 
 std::filesystem::path ShaderOverrides::ResolveInclude(
@@ -1696,7 +1729,10 @@ std::filesystem::path ShaderOverrides::ResolveInclude(
 bool ShaderOverrides::LoadCached(const std::filesystem::path& path, uint64_t key,
                                  const std::vector<std::filesystem::path>& directories,
                                  std::vector<uint8_t>& binary_out,
-                                 std::vector<Dependency>& files_out) const {
+                                 std::vector<Dependency>& files_out, uint32_t magic_expected) const {
+  if (!magic_expected) {
+    magic_expected = kCacheMagic;
+  }
   std::string data;
   if (!ReadFile(path, data)) {
     return false;
@@ -1712,7 +1748,7 @@ bool ShaderOverrides::LoadCached(const std::filesystem::path& path, uint64_t key
   };
   uint32_t magic, version, count;
   uint64_t stored_key;
-  if (!read(&magic, 4) || magic != kCacheMagic || !read(&version, 4) ||
+  if (!read(&magic, 4) || magic != magic_expected || !read(&version, 4) ||
       version != kCacheVersion || !read(&stored_key, 8) || stored_key != key ||
       !read(&count, 4)) {
     return false;
@@ -1748,12 +1784,12 @@ bool ShaderOverrides::LoadCached(const std::filesystem::path& path, uint64_t key
 
 void ShaderOverrides::StoreCached(const std::filesystem::path& path, uint64_t key,
                                   const std::vector<Dependency>& files,
-                                  const std::vector<uint8_t>& binary) const {
+                                  const std::vector<uint8_t>& binary, uint32_t magic) const {
   std::string data;
   auto write = [&data](const void* in, size_t size) {
     data.append(static_cast<const char*>(in), size);
   };
-  uint32_t header[] = {kCacheMagic, kCacheVersion};
+  uint32_t header[] = {magic ? magic : kCacheMagic, kCacheVersion};
   write(header, sizeof(header));
   write(&key, sizeof(key));
   uint32_t count = uint32_t(files.size());
@@ -1794,8 +1830,9 @@ bool ShaderOverrides::Compile(const D3D12Shader::D3D12Translation& translation,
                               const std::vector<std::string>* params,
                               std::vector<uint8_t>& binary_out,
                               std::vector<Dependency>& files_out,
-                              std::unique_ptr<CompileJob>* job_out) const {
+                              std::unique_ptr<CompileJob>* job_out, bool dxil) const {
   auto job = std::make_unique<CompileJob>();
+  job->dxil = dxil;
   job->shader = &translation.shader();
   job->modification = translation.modification();
   job->name = name;
@@ -1827,13 +1864,13 @@ bool ShaderOverrides::Compile(const D3D12Shader::D3D12Translation& translation,
     }
   }
 
-  if (!cache_directory_.empty()) {
+  if (!(dxil ? dxil_cache_directory_ : cache_directory_).empty()) {
     const uint64_t load_start =
         perf_trace::shader_work_for_draw ? perf_trace::ZoneStart() : 0;
-    job->key = CacheKey(source, define_values);
-    job->cache_path = CachePath(translation, job->key);
+    job->key = CacheKey(source, define_values, dxil);
+    job->cache_path = CachePath(translation, job->key, dxil);
     if (LoadCached(job->cache_path, job->key, {mod_directory_, directory_}, binary_out,
-                   files_out)) {
+                   files_out, dxil ? kDxilCacheMagic : 0)) {
       std::string mismatch =
           CheckSignatures(translation.shader(), translation.modification(), dxbc, binary_out);
       if (mismatch.empty()) {
@@ -1841,8 +1878,9 @@ bool ShaderOverrides::Compile(const D3D12Shader::D3D12Translation& translation,
           perf_trace::AddShaderWork(perf_trace::ShaderWork::kModCacheLoad,
                                     perf_trace::Now() - load_start);
         }
-        REXGPU_INFO("Shader override {}{}{} loaded from the cache for modification {:016X}",
-                    name, mod.empty() ? "" : " with ", mod, translation.modification());
+        REXGPU_INFO("Shader override {}{}{} loaded from the {}cache for modification {:016X}",
+                    name, mod.empty() ? "" : " with ", mod, dxil ? "DXIL " : "",
+                    translation.modification());
         return true;
       }
     }
@@ -1872,11 +1910,23 @@ bool ShaderOverrides::RunCompile(const CompileJob& job, const std::vector<uint8_
   OverrideInclude include({mod_directory_, directory_});
   ID3DBlob* code = nullptr;
   ID3DBlob* messages = nullptr;
+  const bool vertex = job.shader->type() == xenos::ShaderType::kVertex;
   auto start = std::chrono::steady_clock::now();
-  HRESULT result = pD3DCompile(d3d_compile_)(
-      job.source.data(), job.source.size(), name.c_str(), defines.data(), &include, "main",
-      job.shader->type() == xenos::ShaderType::kVertex ? kVertexTarget : kTarget, kCompileFlags,
-      0, &code, &messages);
+  HRESULT result = E_FAIL;
+  std::vector<uint8_t> dxil_binary;
+  std::string dxil_messages;
+  if (job.dxil) {
+    // The DXIL world: DXC with IEEE strictness, as FXC's flags.
+    result = dxil_compiler_->Compile(job.source, name, vertex ? kDxilVertexTarget : kDxilTarget,
+                                     job.defines, &include, true, dxil_binary, dxil_messages)
+                 ? S_OK
+                 : E_FAIL;
+  } else {
+    result = pD3DCompile(d3d_compile_)(job.source.data(), job.source.size(), name.c_str(),
+                                       defines.data(), &include, "main",
+                                       vertex ? kVertexTarget : kTarget, kCompileFlags, 0, &code,
+                                       &messages);
+  }
   auto elapsed = std::chrono::steady_clock::now() - start;
   double milliseconds = std::chrono::duration<double, std::milli>(elapsed).count();
   if (on_worker || perf_trace::shader_work_for_draw) {
@@ -1892,36 +1942,41 @@ bool ShaderOverrides::RunCompile(const CompileJob& job, const std::vector<uint8_
       files_out.push_back({read.name, read.path, read.hash});
     }
   }
-  std::string message_text;
+  std::string message_text = std::move(dxil_messages);
   if (messages) {
     message_text.assign(static_cast<const char*>(messages->GetBufferPointer()),
                         messages->GetBufferSize());
     messages->Release();
   }
-  if (FAILED(result) || !code) {
-    REXGPU_ERROR("Shader override {}: FXC failed (0x{:08X}):\n{}", name, uint32_t(result),
-                 message_text);
+  const char* compiler = job.dxil ? "DXC" : "FXC";
+  if (FAILED(result) || (!job.dxil && !code)) {
+    REXGPU_ERROR("Shader override {}: {} failed (0x{:08X}):\n{}", name, compiler,
+                 uint32_t(result), message_text);
     if (code) {
       code->Release();
     }
     return false;
   }
-  const uint8_t* bytes = static_cast<const uint8_t*>(code->GetBufferPointer());
-  binary_out.assign(bytes, bytes + code->GetBufferSize());
-  code->Release();
+  if (job.dxil) {
+    binary_out = std::move(dxil_binary);
+  } else {
+    const uint8_t* bytes = static_cast<const uint8_t*>(code->GetBufferPointer());
+    binary_out.assign(bytes, bytes + code->GetBufferSize());
+    code->Release();
+  }
   if (!message_text.empty()) {
-    REXGPU_WARN("Shader override {}: FXC warnings:\n{}", name, message_text);
+    REXGPU_WARN("Shader override {}: {} warnings:\n{}", name, compiler, message_text);
   }
   std::string mismatch = CheckSignatures(*job.shader, job.modification, dxbc, binary_out);
   if (!mismatch.empty()) {
     REXGPU_ERROR("Shader override {}: {}", name, mismatch);
     return false;
   }
-  REXGPU_INFO("Shader override {}{}{} compiled for modification {:016X} in {:.1f} ms{}", name,
-              mod.empty() ? "" : " with ", mod, job.modification, milliseconds,
+  REXGPU_INFO("Shader override {}{}{} compiled by {} for modification {:016X} in {:.1f} ms{}",
+              name, mod.empty() ? "" : " with ", mod, compiler, job.modification, milliseconds,
               on_worker ? " on a worker" : "");
   if (!job.cache_path.empty()) {
-    StoreCached(job.cache_path, job.key, files_out, binary_out);
+    StoreCached(job.cache_path, job.key, files_out, binary_out, job.dxil ? kDxilCacheMagic : 0);
   }
   return true;
 }
@@ -2014,19 +2069,24 @@ ShaderOverrides::Outcome ShaderOverrides::Build(const D3D12Shader::D3D12Translat
                                                 const std::vector<uint8_t>& dxbc,
                                                 std::vector<uint8_t>& binary_out,
                                                 std::vector<Dependency>& files_out,
-                                                std::unique_ptr<CompileJob>* job_out) {
+                                                std::unique_ptr<CompileJob>* job_out, bool dxil) {
   Shader& shader = translation.shader();
   if (shader.type() == xenos::ShaderType::kVertex) {
-    return BuildVertex(translation, dxbc, binary_out, files_out, job_out);
+    return BuildVertex(translation, dxbc, binary_out, files_out, job_out, dxil);
   }
   uint64_t hash = shader.ucode_data_hash();
   Modification modification(translation.modification());
-  // native_plain: outside the passes of the shader's manifest entry.
+  // native_plain: outside the passes of the shader's manifest entry. In the
+  // DXIL world such a translation takes its generated HLSL without a mod.
   bool disabled = modification.pixel.hlsl_override_disabled || modification.pixel.native_plain;
-  const native_shader_contract::PixelEntry* entry = NativeEntry(translation);
+  const bool plain = dxil && disabled;
+  if (plain) {
+    disabled = false;
+  }
+  const native_shader_contract::PixelEntry* entry = plain ? nullptr : NativeEntry(translation);
   // A replacement entry takes the place of the game shader's HLSL.
   const bool replacement = entry && !entry->shader.empty();
-  const std::string& dump_path = REXCVAR_GET(dump_shaders);
+  const std::string& dump_path = dxil ? std::string() : REXCVAR_GET(dump_shaders);
 
   // A hand-written override, for this modification or for all.
   std::filesystem::path path;
@@ -2045,10 +2105,10 @@ ShaderOverrides::Outcome ShaderOverrides::Build(const D3D12Shader::D3D12Translat
   std::string mod;
   if (entry) {
     mod = replacement ? entry->shader : entry->hooks;
-  } else if (mod_shaders_.find(hash) != mod_shaders_.end()) {
+  } else if (!plain && mod_shaders_.find(hash) != mod_shaders_.end()) {
     mod = fmt::format("shader_{:016X}.mod.hlsli", hash);
   }
-  bool use_generated = use_generated_ || !mod.empty();
+  bool use_generated = use_generated_ || !mod.empty() || dxil;
   bool generate = path.empty() && !disabled && (use_generated || !generate_path_.empty());
   if (path.empty() && !generate && dump_path.empty()) {
     return Outcome::kNone;
@@ -2126,7 +2186,7 @@ ShaderOverrides::Outcome ShaderOverrides::Build(const D3D12Shader::D3D12Translat
   std::unique_ptr<CompileJob> job;
   bool compiled = Compile(translation, dxbc, contract, text, name, mod,
                           entry ? &entry->params : nullptr, binary_out, files_out,
-                          job_out ? &job : nullptr);
+                          job_out ? &job : nullptr, dxil);
   if (job) {
     *job_out = std::move(job);
     return Outcome::kQueued;
@@ -2160,8 +2220,18 @@ bool ShaderOverrides::GeneratesVertex(const D3D12Shader::D3D12Translation& trans
 ShaderOverrides::Outcome ShaderOverrides::BuildVertex(
     const D3D12Shader::D3D12Translation& translation, const std::vector<uint8_t>& dxbc,
     std::vector<uint8_t>& binary_out, std::vector<Dependency>& files_out,
-    std::unique_ptr<CompileJob>* job_out) {
-  if (!GeneratesVertex(translation)) {
+    std::unique_ptr<CompileJob>* job_out, bool dxil) {
+  if (dxil) {
+    // The DXIL world: every vertex shader the generator takes, the entry's
+    // hooks where it has one (NativeVertexEntry).
+    Modification vertex_modification(translation.modification());
+    if (translation.shader().type() != xenos::ShaderType::kVertex ||
+        vertex_modification.vertex.host_vertex_shader_type !=
+            Shader::HostVertexShaderType::kVertex ||
+        translation.shader().memexport_eM_written()) {
+      return Outcome::kNone;
+    }
+  } else if (!GeneratesVertex(translation)) {
     return Outcome::kNone;
   }
   Shader& shader = translation.shader();
@@ -2195,7 +2265,7 @@ ShaderOverrides::Outcome ShaderOverrides::BuildVertex(
   std::unique_ptr<CompileJob> job;
   bool compiled = Compile(translation, dxbc, contract, text, name, entry ? entry->hooks : "",
                           entry ? &entry->params : nullptr, binary_out, files_out,
-                          job_out ? &job : nullptr);
+                          job_out ? &job : nullptr, dxil);
   if (job) {
     *job_out = std::move(job);
     return Outcome::kQueued;
@@ -2245,6 +2315,11 @@ bool ShaderOverrides::TranslateEntry(D3D12Shader::D3D12Translation& translation,
   // A vertex shader's translation takes its generated HLSL with an entry, or
   // with native_shader_contract_vertex_all (docs/analysis/shader-contract.md 9).
   const bool vertex = shader.type() == xenos::ShaderType::kVertex;
+  // In the DXIL world every translation keeps the DXBC translator's binary for
+  // the DXBC world's pipelines, and Apply builds both.
+  if (dxil()) {
+    return false;
+  }
   if (!native_ || (vertex ? !GeneratesVertex(translation)
                           : shader.type() != xenos::ShaderType::kPixel ||
                                 !NativeEntry(translation))) {
@@ -2425,10 +2500,46 @@ void ShaderOverrides::CheckEntry(const D3D12Shader::D3D12Translation& translatio
               kind, shader.ucode_data_hash(), translation.modification(), count);
 }
 
+void ShaderOverrides::ApplyDxil(D3D12Shader::D3D12Translation& translation,
+                                ShaderCompileQueue* queue) {
+  xenos::ShaderType type = translation.shader().type();
+  if (type != xenos::ShaderType::kVertex && type != xenos::ShaderType::kPixel) {
+    return;
+  }
+  std::vector<uint8_t> binary;
+  std::vector<Dependency> files;
+  std::unique_ptr<CompileJob> job;
+  Outcome outcome = Build(translation, translation.translated_binary(), binary, files,
+                          queue ? &job : nullptr, true);
+  if (outcome == Outcome::kQueued) {
+    // Its pipelines stay in the DXBC world until both of their shaders have
+    // DXIL (PipelineCache::SwapCompiledMods).
+    std::shared_ptr<CompileJob> shared_job(std::move(job));
+    queue->Push(
+        &translation,
+        [this, shared_job]() {
+          std::vector<uint8_t> compiled;
+          std::vector<Dependency> compiled_files;
+          if (!RunCompile(*shared_job, shared_job->dxbc, compiled, compiled_files, true)) {
+            compiled.clear();
+          }
+          return compiled;
+        },
+        true);
+    return;
+  }
+  if (outcome == Outcome::kCompiled) {
+    translation.SetDxilBinary(std::move(binary));
+  }
+}
+
 void ShaderOverrides::Apply(D3D12Shader::D3D12Translation& translation,
                             ShaderCompileQueue* queue) {
   if (!translation.is_valid()) {
     return;
+  }
+  if (dxil()) {
+    ApplyDxil(translation, queue);
   }
   if (translation.shader().type() == xenos::ShaderType::kVertex) {
     // A vertex shader whose generated HLSL the cache did not hold.

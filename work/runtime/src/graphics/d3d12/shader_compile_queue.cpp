@@ -30,7 +30,7 @@ thread_local uint32_t background_scopes = 0;
 ShaderCompileQueue::BackgroundScope::BackgroundScope() { ++background_scopes; }
 ShaderCompileQueue::BackgroundScope::~BackgroundScope() { --background_scopes; }
 
-void ShaderCompileQueue::Push(D3D12Shader::D3D12Translation* translation, Job job) {
+void ShaderCompileQueue::Push(D3D12Shader::D3D12Translation* translation, Job job, bool dxil) {
   {
     std::lock_guard<std::mutex> lock(mutex_);
     if (stop_) {
@@ -40,10 +40,10 @@ void ShaderCompileQueue::Push(D3D12Shader::D3D12Translation* translation, Job jo
     // Counted before a worker can take it, so the count never goes below zero.
     perf_trace::mods_pending.fetch_add(1, std::memory_order_relaxed);
     if (background_scopes) {
-      background_jobs_.emplace_back(translation, std::move(job));
+      background_jobs_.push_back({translation, std::move(job), dxil});
       background_job_count_.store(background_jobs_.size(), std::memory_order_release);
     } else {
-      jobs_.emplace_back(translation, std::move(job));
+      jobs_.push_back({translation, std::move(job), dxil});
     }
   }
   cond_.notify_one();
@@ -55,7 +55,7 @@ void ShaderCompileQueue::Promote(const D3D12Shader::D3D12Translation* translatio
   }
   std::lock_guard<std::mutex> lock(mutex_);
   auto it = std::find_if(background_jobs_.begin(), background_jobs_.end(),
-                         [translation](const auto& entry) { return entry.first == translation; });
+                         [translation](const auto& entry) { return entry.translation == translation; });
   if (it == background_jobs_.end()) {
     return;
   }
@@ -159,11 +159,11 @@ void ShaderCompileQueue::WorkerMain() {
       continue;
     }
     auto& source = jobs_.empty() ? background_jobs_ : jobs_;
-    auto [translation, job] = std::move(source.front());
+    QueuedJob queued = std::move(source.front());
     source.pop_front();
     background_job_count_.store(background_jobs_.size(), std::memory_order_release);
     lock.unlock();
-    Result result{translation, job()};
+    Result result{queued.translation, queued.job(), queued.dxil};
     {
       std::lock_guard<std::mutex> results_lock(results_mutex_);
       results_.push_back(std::move(result));
