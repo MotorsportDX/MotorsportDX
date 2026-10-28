@@ -488,6 +488,41 @@ Only the native path's resolves from private surfaces into host textures (bit 32
 1. G stays the default. F (`native_rt_resolve_layout=3`) stays opt-in, for measurement, and can be reviewed from the ROG Xbox Ally X's numbers. The memory the guest sees must match the reference: 0.105 ms a frame at 3/2 on this PC (about 3%) does not outweigh bytes that differ by up to 767 steps for a reader that may appear later, and the Ally X's figure is not measured.
 2. The exclusion list that would keep `1C0C1000`'s layout deferred past the 256x256 resolve inside its range (the later write skipping the ranges written since) is not built: it is worth a few hundredths of a ms a frame.
 
+#### 19.7.6 Step (c): bit 32 at the whole scales, 28 October 2026
+
+**What bit 32 needs.** `native_rt_surfaces` bit 32 writes the scene's textures from the host render target only where the scene has textures at its own scale (`SetSceneTextures`, [command_processor.cpp](../../work/runtime/src/graphics/d3d12/command_processor.cpp)): at a fractional `native_draw_scale`, while upscaling, or with `native_draw_scale_variant` at a whole one (the scene draws' path, 18.13, which the launchers' logical sizes already take). At a whole scale without the variant, `native_rt_surfaces=122` writes no host texture and runs as 90. Step 1's column "1x with bit 32" (19.7.3) ran with the variant. So step (c) at a whole 16:9 scale means the scene draws' path with bit 32, as the logical sizes run.
+
+**The measurement**, the build of `1612fb1` ((a) and (b) on by default), race runs at 240 Hz on one binary, three runs each, medians over the race phase's windows in ms of GPU a frame:
+
+| Settings | 1x: GPU frame (3 runs) | median | resolves | loads | 2x: GPU frame (3 runs) | median | resolves | loads |
+|---|---|---|---|---|---|---|---|---|
+| 90, the launchers' plain whole scale | 2.313, 2.173, 2.210 | 2.210 | 0.248 | 0.175 | 4.952, 4.999, 4.966 | 4.966 | 0.570 | 0.511 |
+| 122 without the variant | 2.219, 2.176, 2.184 | 2.184 | 0.248 | 0.175 | 4.958, 4.958, 5.146 | 4.958 | 0.573 | 0.509 |
+| 90 with the variant | 2.200, 2.221, 2.223 | 2.221 | 0.247 | 0.175 | 4.865, 5.012, 5.051 | 5.012 | 0.565 | 0.522 |
+| 122 with the variant | 2.261, 2.191, 2.141 | 2.191 | 0.317 | 0.109 | 4.815, 4.864, 4.799 | 4.815 | 0.866 | 0.204 |
+
+- **1x**: bit 32 with the variant against the plain 90 is -0.019 ms, inside the runs' spread of 0.14 ms: the resolves rise by 0.069 ms (five host texture writes, 0.135 ms, the guest layout deferred) and the loads fall by 0.066 ms. Nothing to gain.
+- **2x**: -0.151 ms (-3.0%), all three runs below every other 2x run, the race from 197.8 to 203.8 fps: the resolves rise by 0.296 ms (host texture writes 0.43 ms), the loads fall by 0.307 ms and the post passes by 0.068 ms. The variant alone costs nothing measurable (+0.046 ms, within the spread).
+- **3/2** on the same binary (`native_rt_surfaces=122`, the settings of 19.7.5's runs): 3.307, 3.327 and 3.327 ms, median 3.327 against 3.299 on the build of `4b97062`, +0.028 ms.
+- **The resolves without host texture writes** (the shadow maps, the 256x256 blur, the `8_8` mip chain, the 64x64 faces; 19.7.4): about 0.09 ms at 3/2 for their layouts and loads together. Host writes and a deferred layout could save at most that, below 19.7.3's bar of 0.1 ms, and (a) found host writes of small surfaces dearer than their loads. They keep their loads.
+
+**The main session's decision of 28 October 2026**, taken while the project owner was away, between keeping every plan as it was and the recommendation, which it took:
+
+1. The launchers (`pipeline.py`'s `launch_plan` and the GUI launcher's `LaunchPlan`) give a whole 16:9 scale of 2 or more on the native path in one pass with 2x MSAA (2560x1440 at 2x, 4K at 3x, and the whole scales of `-Supersample` and `-ResolutionScale`) `native_draw_scale` at that scale, `native_draw_scale_variant` and bit 32 (`native_rt_surfaces=58`, 122 with entry 0 at the scene's scale). One pass with 4x MSAA (`ultra` at a whole 16:9 scale), RTV and `-Rov` do not change.
+2. 1x keeps 90, the integrated GPUs and the ROG Xbox Ally X at 1x included, until the Ally X's numbers exist.
+3. The resolves without host texture writes get none.
+
+The e2e harness keeps choosing its own settings (`e2e.py` gives `native_rt_surfaces=90` at a whole scale unless `--arg` says otherwise), so its runs at 2x keep the earlier plan unless they pass the launchers' settings.
+
+**The gate**, BuildRoot `I:\FM4-build-usa`. The runtime does not change, so the cells ran the build of `1612fb1` with the launchers' new settings passed as `--arg` (`native_draw_scale=2`, `native_draw_scale_variant=true`, `native_rt_surfaces=122` at 2x) against the earlier plan (90):
+
+- **The plans**: `test_pipeline.py` passes, and the GUI launcher built from the branch gives the plans of `pipeline.py` in all 504 cases of its tests, 97 of them a whole 16:9 scale on the scene draws' path. One pass with 4x MSAA (`ultra` at a whole 16:9 scale), RTV and `-Rov` keep their plans.
+- **The byte checks** on `career` at 2x (`native_rt_resolve_check=30`, `native_rt_surfaces_check=30`, `native_rt_resolve_skip=7`, `native_rt_resolve_layout=15` with its check every 30th frame): 7,200 texture checks, 16,510 resolve checks and 162 guest layouts compared, 0 mismatches; 5,395 skipped textures copied back from their siblings, none missing; 12 misses, as before.
+- **The perturbation** (`native_rt_resolve_layout=31`, `native_rt_resolve_skip=15`): every layout the check compared differs (1,885; the error `Guest layout from the texture differs from the render target's` 1,888 times), and 16,328 skipped textures found their sibling overwritten; the broken picture stops the career before its grid.
+- **Smoke at 2x**, the new plan against the earlier one on the same binary: 3 of 3 cells reached their goal, `career` PASS, `photo` and `photo_view` WARN on capture statistics only (another moment), no new error key. Photo mode's GPU frame rose from 7.56 to 8.53 ms in its single run (the resolves of the whole run from 0.80 to 1.28 ms), at its cap of 30 fps; the replay's fell from 7.45 to 7.21 ms.
+- **Freeze parity at 2x**, the new plan against the earlier one: PASS. The 1:1 crops of the frozen frames show whole frames.
+- The smoke at 3/2 was not run again: its runtime and plan are those of the combined gate after the rebase (19.7.5).
+
 ### 19.8 The proposed order
 
 The owner's order is stutter first, then CPU headroom on the ROG Xbox Ally X. The Ally X waits for its GPU in every mode (17.21, 17.25), so CPU time it saves reaches the frame only through the shared power budget (1 to 3%), while the resolves of 19.7.1 hold 19 to 28% of its GPU frame. The proposal therefore puts the resolves second, as the Ally X's headroom, and the CPU items after them:
