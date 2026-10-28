@@ -564,16 +564,10 @@ void ReXApp::LaunchModule() {
       return;
     }
 
-    if (REXCVAR_GET(shader_offline_pass)) {
-      bool ok = RunShaderOfflinePass(*runtime_);
-      // As the window's close does: a hard exit rather than the subsystems'
-      // teardown, which faults with the title's main thread created but never
-      // resumed. The pass has closed its files; the exit code tells the
-      // launcher whether it finished.
-      REXLOG_INFO("Offline pass done; hard-exiting process.");
-      rex::FlushLogging();
-      std::_Exit(ok ? 0 : 1);
-    }
+    // The offline pass's inventory stage, before the storage loads what it
+    // appends; the start's translations follow as at every start.
+    const bool offline_pass = REXCVAR_GET(shader_offline_pass);
+    const bool offline_pass_ok = offline_pass && RunShaderOfflinePass(*runtime_);
 
     auto* graphics_system = runtime_->graphics_system();
     if (graphics_system && !runtime_->cache_root().empty()) {
@@ -582,6 +576,17 @@ void ReXApp::LaunchModule() {
         REXLOG_INFO("Initializing shader storage for title {:08X}...", title_id);
         graphics_system->InitializeShaderStorage(runtime_->cache_root(), title_id, true);
       }
+    }
+
+    if (offline_pass) {
+      bool ok = offline_pass_ok;
+      // As the window's close does: a hard exit rather than the subsystems'
+      // teardown, which faults with the title's main thread created but never
+      // resumed. The pass has closed its files; the exit code tells the
+      // launcher whether it finished.
+      REXLOG_INFO("Offline pass done; hard-exiting process.");
+      rex::FlushLogging();
+      std::_Exit(ok ? 0 : 1);
     }
 
     OnPostLaunchModule(main_thread.get());

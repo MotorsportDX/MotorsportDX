@@ -48,6 +48,7 @@
 #include <rex/math.h>
 #include <rex/string.h>
 #include <rex/string/buffer.h>
+#include <rex/system/shader_inventory.h>
 #include <rex/thread.h>
 #include <rex/types.h>
 #include <rex/ui/d3d12/d3d12_util.h>
@@ -402,6 +403,9 @@ void PipelineCache::InitializeShaderStorage(const std::filesystem::path& cache_r
   uint64_t shader_storage_initialization_start = rex::chrono::Clock::QueryHostTickCount();
   auto shader_storage_file_path =
       shader_storage_shareable_root / fmt::format("{:08X}.xsh", title_id);
+  // The disc inventory's interpolator words (docs/analysis/d3d-hle-n6.md
+  // 19.3.10), for the predicted translations.
+  rex::system::shader_inventory::ReadInputs(shader_storage_file_path, pixel_inputs_);
   shader_storage_file_ = rex::filesystem::OpenFile(shader_storage_file_path, "a+b");
   if (!shader_storage_file_) {
     REXGPU_ERROR(
@@ -624,7 +628,8 @@ void PipelineCache::InitializeShaderStorage(const std::filesystem::path& cache_r
       // gives those shaders. The fields left out step by step show what it
       // misses: centroid sampling (the target's MSAA), then the depth mode
       // (alpha test), then the scene variants (another scale's runs).
-      size_t pairs = 0, exact = 0, without_centroid = 0, without_depth = 0, without_scene = 0;
+      size_t pairs = 0, without_word = 0, exact = 0, without_centroid = 0, without_depth = 0,
+             without_scene = 0;
       std::vector<uint64_t> predicted;
       constexpr uint64_t kCentroid = UINT64_C(0xFFFF0000);
       constexpr uint64_t kDepth = UINT64_C(3) << 46;
@@ -637,6 +642,10 @@ void PipelineCache::InitializeShaderStorage(const std::filesystem::path& cache_r
         }
         PredictPixelShaderModifications(*it->second, *shader_translator_, predicted);
         ++pairs;
+        if (predicted.empty()) {
+          ++without_word;
+          continue;
+        }
         auto hit = [&](uint64_t ignored) {
           return std::any_of(predicted.begin(), predicted.end(), [&](uint64_t p) {
             return (p & ~ignored) == (modification & ~ignored);
@@ -649,10 +658,11 @@ void PipelineCache::InitializeShaderStorage(const std::filesystem::path& cache_r
       }
       REXGPU_INFO(
           "Predicted translations: {} pixel shaders without a stored pipeline, {} translations; "
-          "the prediction against the {} stored pixel shader modifications: {} exact, {} without "
-          "centroid, {} also without the depth mode, {} also without the scene variants",
-          predicted_shaders.load(), predicted_translated.load(), pairs, exact, without_centroid,
-          without_depth, without_scene);
+          "the prediction against the {} stored pixel shader modifications ({} of shaders "
+          "without an interpolator word): {} exact, {} without centroid, {} also without the "
+          "depth mode, {} also without the scene variants",
+          predicted_shaders.load(), predicted_translated.load(), pairs, without_word, exact,
+          without_centroid, without_depth, without_scene);
     }
     rex::filesystem::TruncateStdioFile(shader_storage_file_, shader_storage_valid_bytes);
   } else {
@@ -1263,19 +1273,18 @@ void PipelineCache::PredictPixelShaderModifications(const Shader& shader,
   assert_true(shader.type() == xenos::ShaderType::kPixel);
   assert_true(shader.is_ucode_analyzed());
   modifications.clear();
-  // The title sets SQ_PROGRAM_CNTL's register count from the shader's own, so
-  // the dynamically indexable count and the interpolators follow from the
-  // registers the shader addresses; the vertex shaders are assumed to write
-  // every interpolator the pixel shader reads.
+  // The interpolators from the container's header, which the inventory
+  // recorded: without a word, no prediction. The vertex shaders are assumed to
+  // write every interpolator the pixel shader reads (in the BuildRoot's warm
+  // storage, 1,212 of 1,251 stored modifications), and the title to set
+  // SQ_PROGRAM_CNTL's register count from the shader's own.
+  auto words = pixel_inputs_.equal_range(shader.ucode_data_hash());
+  if (words.first == words.second) {
+    return;
+  }
   uint32_t register_bound = shader.register_static_address_bound();
   uint32_t dynamic_count =
       shader.GetDynamicAddressableRegisterCount(register_bound ? register_bound - 1 : 0);
-  DxbcShaderTranslator::Modification base(
-      translator.GetDefaultPixelShaderModification(dynamic_count));
-  uint32_t interpolator_count =
-      std::min(xenos::kMaxInterpolators, std::max(register_bound, dynamic_count));
-  base.pixel.interpolator_mask = (UINT32_C(1) << interpolator_count) - 1;
-  base.pixel.interpolators_centroid = 0;
 
   using DepthStencilMode = DxbcShaderTranslator::Modification::DepthStencilMode;
   DepthStencilMode depth_modes[3];
@@ -1295,7 +1304,7 @@ void PipelineCache::PredictPixelShaderModifications(const Shader& shader,
       depth_modes[depth_mode_count++] = DepthStencilMode::kNoModifiers;
     }
   } else {
-    depth_modes[depth_mode_count++] = base.pixel.depth_stencil_mode;
+    depth_modes[depth_mode_count++] = DepthStencilMode::kNoModifiers;
   }
 
   // The scene variants (GetCurrentPixelShaderModification's caller sets them):
@@ -1304,19 +1313,36 @@ void PipelineCache::PredictPixelShaderModifications(const Shader& shader,
   const bool upscaled = render_target_cache_.IsSceneUpscaled();
   const bool scene = !render_target_cache_.scene_draw_scale().IsWhole() || upscaled ||
                      REXCVAR_GET(native_draw_scale_variant);
-  for (size_t i = 0; i < depth_mode_count; ++i) {
-    DxbcShaderTranslator::Modification modification(base);
-    modification.pixel.depth_stencil_mode = depth_modes[i];
-    modifications.push_back(modification.value);
-    if (scene) {
-      modification.pixel.scene_scale = 1;
-      modifications.push_back(modification.value);
-      if (upscaled) {
-        modification.pixel.scene_input_scale = 1;
+  for (auto word = words.first; word != words.second; ++word) {
+    uint32_t interpolator_count =
+        std::min(xenos::kMaxInterpolators, std::max(register_bound, dynamic_count));
+    uint32_t mask = word->second & 0xFFFF & ((UINT32_C(1) << interpolator_count) - 1);
+    DxbcShaderTranslator::Modification base(
+        translator.GetDefaultPixelShaderModification(dynamic_count));
+    base.pixel.interpolator_mask = mask;
+    // Centroid sampling only into MSAA targets, for what is not sampled at the
+    // center.
+    const uint32_t centroids[2] = {0, mask & ~(word->second >> 16)};
+    for (uint32_t c = 0; c < (centroids[1] ? 2u : 1u); ++c) {
+      base.pixel.interpolators_centroid = centroids[c];
+      for (size_t i = 0; i < depth_mode_count; ++i) {
+        DxbcShaderTranslator::Modification modification(base);
+        modification.pixel.depth_stencil_mode = depth_modes[i];
         modifications.push_back(modification.value);
+        if (scene) {
+          modification.pixel.scene_scale = 1;
+          modifications.push_back(modification.value);
+          if (upscaled) {
+            modification.pixel.scene_input_scale = 1;
+            modifications.push_back(modification.value);
+          }
+        }
       }
     }
   }
+  std::sort(modifications.begin(), modifications.end());
+  modifications.erase(std::unique(modifications.begin(), modifications.end()),
+                      modifications.end());
 }
 
 bool PipelineCache::ConfigurePipeline(

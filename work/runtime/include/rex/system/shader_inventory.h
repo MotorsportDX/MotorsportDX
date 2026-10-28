@@ -18,6 +18,7 @@
 #include <filesystem>
 #include <functional>
 #include <string>
+#include <unordered_map>
 #include <vector>
 
 namespace rex::system::shader_inventory {
@@ -49,6 +50,8 @@ struct Result {
   // Pixel shaders the storage held before, and those appended.
   size_t stored = 0;
   size_t appended = 0;
+  // Interpolator words written beside the storage.
+  size_t inputs = 0;
   double milliseconds = 0.0;
 };
 
@@ -65,5 +68,15 @@ using Progress = std::function<void(size_t done, size_t total, const std::string
 bool Run(const Sources& sources, const std::filesystem::path& storage_path, Result& result,
          const Progress& progress = nullptr,
          const std::filesystem::path& keys_path = std::filesystem::path());
+
+// The inventory also writes, beside the storage (<title>.inputs), each pixel
+// shader's interpolator word from its container's header: the interpolators it
+// reads in the low half and those it samples at the pixel center in the high
+// half (the others at the centroid with MSAA). The start predicts the
+// modifications of a shader that no stored pipeline names from it. A shader in
+// several containers may have several words.
+std::filesystem::path InputsPath(const std::filesystem::path& storage_path);
+bool ReadInputs(const std::filesystem::path& storage_path,
+                std::unordered_multimap<uint64_t, uint32_t>& inputs);
 
 }  // namespace rex::system::shader_inventory

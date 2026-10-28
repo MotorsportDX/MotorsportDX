@@ -338,9 +338,11 @@ class PipelineCache {
 
   // The modifications a pixel shader without a stored pipeline (the disc
   // inventory's, docs/analysis/d3d-hle-n6.md 19.3.10) is predicted to draw with,
-  // from its analysis and this start's configuration: interpolators up to its
-  // register count, no centroid sampling, no parameter generation, its depth
-  // modes, and the scene variants of the scale. The shader must be analyzed.
+  // from its container's interpolator word (the inventory's, pixel_inputs_),
+  // its analysis and this start's configuration: the interpolators it reads,
+  // with and without centroid sampling, no parameter generation, its depth
+  // modes, and the scene variants of the scale. None without a word. The
+  // shader must be analyzed.
   void PredictPixelShaderModifications(const Shader& shader, const DxbcShaderTranslator& translator,
                                        std::vector<uint64_t>& modifications) const;
 
@@ -406,6 +408,9 @@ class PipelineCache {
   // shader_override_async: the compile workers (after shader_overrides_, whose
   // compiles they run, so that they stop first).
   ShaderCompileQueue mod_compile_queue_;
+  // The disc inventory's interpolator words by pixel shader key, read at the
+  // start of InitializeShaderStorage (PredictPixelShaderModifications).
+  std::unordered_multimap<uint64_t, uint32_t> pixel_inputs_;
   bool mod_compile_async_ = false;
   // Pipeline states replaced by hot reload or SwapCompiledMods, and the
   // submission after which the GPU no longer uses them.

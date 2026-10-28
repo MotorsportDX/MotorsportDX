@@ -7,6 +7,7 @@
 #include <cstdio>
 #include <cstring>
 #include <map>
+#include <set>
 #include <system_error>
 #include <unordered_set>
 
@@ -27,6 +28,10 @@ namespace {
 constexpr uint32_t kStorageMagic = 0x48534558;
 constexpr uint32_t kStorageVersion = 0x20201219;
 constexpr uint32_t kPixelTypeBit = UINT32_C(1) << 31;
+// The interpolator words: 'XEPI', the version, then per word its shader's key
+// and the word, in host order.
+constexpr uint32_t kInputsMagic = 0x49504558;
+constexpr uint32_t kInputsVersion = 1;
 
 // Zip records.
 constexpr uint32_t kZipEndOfDirectory = 0x06054B50;
@@ -147,6 +152,7 @@ class Inventory {
   }
 
   const std::map<uint64_t, std::vector<uint8_t>>& shaders() const { return shaders_; }
+  const std::set<std::pair<uint64_t, uint32_t>>& inputs() const { return inputs_; }
   size_t containers() const { return containers_; }
   size_t unique(SourceClass source_class) const { return unique_[source_class].size(); }
   bool from(SourceClass source_class, uint64_t key) const {
@@ -159,7 +165,7 @@ class Inventory {
     // that the shader's own header at offset 24 names.
     uint32_t vertex_size = ReadBe32(c + 4);
     uint32_t header_offset = ReadBe32(c + 24);
-    if (uint64_t(header_offset) + 8 > size) {
+    if (uint64_t(header_offset) + 28 > size) {
       return;
     }
     uint64_t start = uint64_t(vertex_size) + ReadBe32(c + header_offset);
@@ -171,12 +177,16 @@ class Inventory {
     uint64_t key = XXH3_64bits(code, length);
     ++containers_;
     unique_[source_class].insert(key);
+    // The header's interpolator word: the interpolators the shader reads (low
+    // half) and those it samples at the pixel center (high half).
+    inputs_.emplace(key, ReadBe32(c + header_offset + 24));
     if (!shaders_.count(key)) {
       shaders_.emplace(key, std::vector<uint8_t>(code, code + length));
     }
   }
 
   std::map<uint64_t, std::vector<uint8_t>> shaders_;
+  std::set<std::pair<uint64_t, uint32_t>> inputs_;
   std::array<std::unordered_set<uint64_t>, kSourceClassCount> unique_;
   size_t containers_ = 0;
 };
@@ -290,6 +300,36 @@ bool HasExtension(const std::filesystem::path& path, const char* extension) {
 }
 
 }  // namespace
+
+std::filesystem::path InputsPath(const std::filesystem::path& storage_path) {
+  auto path = storage_path;
+  path.replace_extension(".inputs");
+  return path;
+}
+
+bool ReadInputs(const std::filesystem::path& storage_path,
+                std::unordered_multimap<uint64_t, uint32_t>& inputs) {
+  inputs.clear();
+  FILE* file = rex::filesystem::OpenFile(InputsPath(storage_path), "rb");
+  if (!file) {
+    return false;
+  }
+  uint32_t header[2];
+  bool ok = fread(header, sizeof(header), 1, file) && header[0] == kInputsMagic &&
+            header[1] == kInputsVersion;
+  if (ok) {
+    uint8_t record[12];
+    while (fread(record, sizeof(record), 1, file)) {
+      uint64_t key;
+      uint32_t word;
+      std::memcpy(&key, record, sizeof(key));
+      std::memcpy(&word, record + 8, sizeof(word));
+      inputs.emplace(key, word);
+    }
+  }
+  fclose(file);
+  return ok;
+}
 
 bool Run(const Sources& sources, const std::filesystem::path& storage_path, Result& result,
          const Progress& progress, const std::filesystem::path& keys_path) {
@@ -430,15 +470,30 @@ bool Run(const Sources& sources, const std::filesystem::path& storage_path, Resu
   }
   fclose(storage);
 
+  // The interpolator words beside the storage (WriteInputs).
+  auto inputs_path = InputsPath(storage_path);
+  if (FILE* inputs = rex::filesystem::OpenFile(inputs_path, "wb")) {
+    uint32_t header[2] = {kInputsMagic, kInputsVersion};
+    fwrite(header, sizeof(header), 1, inputs);
+    for (const auto& [key, word] : inventory.inputs()) {
+      fwrite(&key, sizeof(key), 1, inputs);
+      fwrite(&word, sizeof(word), 1, inputs);
+    }
+    fclose(inputs);
+    result.inputs = inventory.inputs().size();
+  } else {
+    REXSYS_ERROR("Shader inventory: failed to write {}", rex::path_to_utf8(inputs_path));
+  }
+
   result.milliseconds =
       std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - start).count();
   REXSYS_INFO(
       "Shader inventory: {} pixel shaders ({} containers; {} from files, {} from archives, {} from "
       "the image) in {} files and {} archives ({} entries, {} errors); the storage held {}, {} "
-      "appended; {:.1f} ms",
+      "appended; {} interpolator words; {:.1f} ms",
       result.unique, result.containers, result.unique_files, result.unique_archives,
       result.unique_image, result.files, result.archives, result.entries, result.errors,
-      result.stored, result.appended, result.milliseconds);
+      result.stored, result.appended, result.inputs, result.milliseconds);
   return true;
 }
 
