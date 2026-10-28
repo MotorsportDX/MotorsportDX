@@ -30,10 +30,11 @@ PHASE_KEYS = ["fps_mean", "frame_ms_p99", "cp_busy_ms_per_s_median", "gpu_frame_
 SHADER_WORK_KINDS = ["mod_compiles", "mod_compiles_worker", "mod_cache_loads", "mod_swaps",
                      "translations_ps", "translations_vs", "pipelines", "pipelines_early",
                      "pipeline_waits", "pass_compiles"]
-# Draw path work whose pieces over 4 ms warn when they rise (the plan's threshold); the replay's
-# waits for early pipelines (19.3.2 part 5) are on the draw path too.
-SHADER_WORK_LONG_KINDS = ["translations_ps", "translations_vs", "pipelines", "pipeline_waits",
-                          "mod_cache_loads"]
+# Draw path work whose pieces over 4 ms warn when they rise (the plan's threshold). A pipeline on
+# the draw path is created there or waited for there (an early pipeline still being created, 19.3.2
+# part 5), so "pipelines" counts both kinds.
+SHADER_WORK_LONG_KINDS = ["translations_ps", "translations_vs", "pipelines", "mod_cache_loads"]
+SHADER_WORK_LONG_ADDED = {"pipelines": ["pipelines", "pipeline_waits"]}
 
 
 def load(path):
@@ -107,6 +108,15 @@ def cold_cache(s):
     """Whether the run started with an empty or copied shader cache (e2e.py --cold-cache,
     --cache-from)."""
     return bool((s.get("cache") or {}).get("cold"))
+
+
+def shader_work_long(s, kind):
+    """The pieces over 4 ms of a SHADER_WORK_LONG_KINDS kind with its SHADER_WORK_LONG_ADDED
+    kinds (a run without a kind counts 0 for it), or None without the kind itself."""
+    if not num(shader_work_value(s, (kind, "over_4ms"))):
+        return None
+    values = [shader_work_value(s, (k, "over_4ms")) for k in SHADER_WORK_LONG_ADDED.get(kind, [kind])]
+    return sum(v for v in values if num(v))
 
 
 def shader_work_value(s, path):
@@ -242,7 +252,7 @@ def check_warn(b, c):
             warn.append(f"phase {name} frame_ms_p99 rose {p[0]:.2f} -> {p[1]:.2f} ms")
     if cold_cache(b) and cold_cache(c):
         for kind in SHADER_WORK_LONG_KINDS:
-            p = shader_work_value(b, (kind, "over_4ms")), shader_work_value(c, (kind, "over_4ms"))
+            p = shader_work_long(b, kind), shader_work_long(c, kind)
             if num(p[0]) and num(p[1]) and p[1] > p[0]:
                 warn.append(f"cold cache: {kind} over 4 ms on the draw path {p[0]:g} -> {p[1]:g}")
         frames = lambda s: statistics.median([r["frames_over_ms"]["100"] for r in shader_work_runs(s)])

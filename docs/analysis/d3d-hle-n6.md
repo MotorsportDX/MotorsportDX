@@ -151,7 +151,7 @@ A new gate cell for stutter: a run on an empty `cache_root` and override cache (
 
 #### 19.3.6 Open measurements
 
-- A pipeline creation with a cold driver cache, on this PC and the Ally X. Clearing the driver's cache is the user's system state; a build whose translator emits one changed instruction per shader (a different bytecode, so a driver miss) measures it without touching the cache.
+- A pipeline creation with a cold driver cache, on this PC and the Ally X. Clearing the driver's cache is the user's system state; a build whose translator emits one changed instruction per shader (a different bytecode, so a driver miss) measures it without touching the cache. Since 28 October 2026 `dxbc_driver_cache_salt=N` does that on any build (19.3.8); this PC's result is in 19.3.8, the Ally X's is open.
 - The vertex shaders' translations in play, once the counters of increment 1.0 time them.
 
 #### 19.3.7 Increments 1.0 and 1.1, 27 October 2026
@@ -232,6 +232,38 @@ uns
 | Tests | `test_e2e_tools.py` (44) and `test_pipeline.py` (28) pass; the builds' shader mod, post pass and shader contract tests pass. `launcher_tests` is not touched |
 
 Not covered: the ROG Xbox Ally X (an export ships the build computer's cache, so its first sessions need an export without one), 60 and 120 Hz, and a cold driver cache on purpose (19.3.6).
+
+#### 19.3.8 Increment 1.5, 28 October 2026
+
+Built on local main `c4607b8` (item 4), commits `f76f8e6` and `b4b6de7`, snapshot `n6f1`.
+
+**What it does** (part 5 of 19.3.2).
+
+- `PipelineCache::QueueEarlyPipeline`, on the render thread after `TranslateShadersForDraw`: the description of the pipeline the replay will look up for the draw (`GetCurrentStateDescription` without a root signature or a geometry shader, the function the draw back end's check compares on both sides). When it differs from the previous draw's and its hash is new (the render thread's own set, seeded with the storage's pipelines), the pipeline goes to the creation threads (`d3d12_pipeline_creation_threads`, three quarters of the cores) in the order of the draws, after their own queue and outside what `EndSubmission` awaits.
+- The replay's `ConfigurePipelineDescribed`, on a miss, takes the early pipeline with the same description: created (no wait), being created (it waits for the rest), or still queued (it creates it itself, ahead of the queue). A description that the render thread did not see creates on the replay as before.
+- Look mods compiled on the workers (1.1): `SwapCompiledMods` replaces a binary only while no creation thread creates an early pipeline (otherwise it tries again at the next submission) and also recreates the early pipelines created but not taken yet; the queued ones take the compiled binary.
+- `d3d12_pipeline_early_creation` (on by default) turns it off for an A/B. It needs bindless resources and no hot reload or `async_shader_compilation`, as the draw back end does. `-Rov` and the PM4 RTV path create pipelines where the draw is issued and are not changed.
+- Not done: the skip switch of 19.3.2 (a draw whose pipeline is missing after 2 ms dropped) and moving the translations to the creation threads. The waits left are below, and the translations in play are no stalls (19.3.7: 0.5 ms the longest).
+- `dxbc_driver_cache_salt=N` (0 by default, no change) starts every DXBC translation with a dead write of N, so the driver's cache of earlier runs misses: the cold-driver measurement of 19.3.6 without touching the system's cache.
+- The perf trace adds `shader_work.pipelines_early` (off the draw path), `shader_work.pipeline_waits` (on it) and `back_end.early_queued`, `early_ms` and `early` ([traces](../e2e/traces.md#the-draw-back-end-d3d12_draw_back_end)); `compare.py`'s cold rule counts the waits over 4 ms with the pipelines created on the draw path.
+
+**Step gate** (`matrix.py --tier cold --native --fast-route` at 240 Hz and 1x, the look `aces`, one run a cell, each side with a salt no earlier run used: a cold driver cache).
+
+| Cell | Segment | Pipelines created on the draw path (count, ms, over 4 ms) | Early pipelines (count, ms on the creation threads) | Replay's waits (count, ms, longest, over 4 ms) | Frames over 50, 100, 250 ms | Longest frame |
+|---|---|---|---|---|---|---|
+| `n6f1off-240-career` (off) | run | 533, 2,827 ms, 227 | 0 | 0 | 18, 8, 5 | 709 ms |
+| `n6f1off-240-career` (off) | menus and the load | 475, 2,721 ms, 214 | 0 | 0 | 17, 7, 5 | 709 ms |
+| `n6f1off-240-career` (off) | race | 37, 66 ms, 7 | 0 | 0 | 0, 0, 0 | 22 ms |
+| `n6f1-240-career` (on) | run | 0 | 535, 5,093 ms | 59, 463 ms, 37 ms, 31 | 8, 3, 1 | 677 ms |
+| `n6f1-240-career` (on) | menus and the load | 0 | 475, 4,969 ms | 48, 395 ms, 37 ms, 23 | 7, 2, 1 | 677 ms |
+| `n6f1-240-career` (on) | race | 0 | 39, 69 ms | 6, 45 ms, 15 ms, 5 | 0, 0, 0 | 17 ms |
+| `n6f1off-240-photo` (off) | run | 333, 807 ms, 72 | 0 | 0 | 16, 7, 3 | 660 ms |
+| `n6f1-240-photo` (on) | run | 0 | 339, 1,051 ms | 24, 125 ms, 17 ms, 12 | 11, 6, 2 | 678 ms |
+
+- **With a cold driver cache** a pipeline took 5.3 ms on average on the replay (n6c12's career, 27 October 2026: 3.6 ms, 184 over 4 ms). Early creation takes all of them off the draw path: of 535 in the first career the replay found 476 created and waited for 59, 463 ms in all (from 2,827 ms), the longest 37 ms (from 45 ms). The frames over 100 ms went from 8 to 3 and over 250 ms from 5 to 1, the boot's first frame (677 ms) being the one left. On the creation threads the pipelines took 5.1 s, 9.5 ms each: the driver's compiles in parallel run slower each, off the draw path.
+- **The back end's check**, on a cold career with early creation (`n6f1-check`, salt 1503): 37,878,861 draws checked, no mismatch, no dropped draw; the replay took 531 early pipelines (473 created, 58 waited for).
+- **The render thread** pays for the description at every draw: 0.042 to 0.045 µs a draw (0.07 to 0.09 ms a race frame of 1,700 to 2,200 draws). A warm race at 3/2 (`n6f1-r32`, one run) ran 234.7 fps with the render thread at 3.17 ms and the GPU at 3.49 ms a frame, against main's runtime on 28 October 2026 (`n6e-d0-32`, three runs: 232.7 to 235.2 fps, 3.18 to 3.30 ms, 3.48 to 3.53 ms). With a warm cache it queued nothing: the storage's pipelines are known.
+- `compare.py` on the career: FAIL on the whole run's p99 (33.04 against 17.08 ms), which one 30 fps menu window decides as in 19.3.7 (the race's p99 5.26 against 5.11 ms); WARN on `wait_reg_mem`. The photo cell WARNs on capture statistics (the races differ). The captures of photo mode show the look's mods on both sides; parity at 1:1 is the close gate's.
 
 ### 19.4 Item 2: direct D3D12 draws
 
