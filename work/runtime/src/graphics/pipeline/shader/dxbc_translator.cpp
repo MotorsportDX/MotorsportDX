@@ -29,6 +29,12 @@ REXCVAR_DEFINE_BOOL(dxbc_switch, true, "GPU/Shader", "Use switch statements in D
 
 REXCVAR_DEFINE_BOOL(dxbc_source_map, false, "GPU/Shader", "Generate source maps for DXBC");
 
+REXCVAR_DEFINE_INT32(dxbc_driver_cache_salt, 0, "GPU/Shader",
+                     "Measurements with a cold driver shader cache (docs/analysis/d3d-hle-n6.md "
+                     "19.3.6): when not 0, every translation starts with a dead write of this "
+                     "value, so that the driver's cache of earlier runs misses it")
+    .lifecycle(rex::cvar::Lifecycle::kRequiresRestart);
+
 namespace rex::graphics {
 using namespace ucode;
 
@@ -798,6 +804,13 @@ void DxbcShaderTranslator::StartPixelShader() {
 }
 
 void DxbcShaderTranslator::StartTranslation() {
+  // dxbc_driver_cache_salt: a different binary, the same shader.
+  if (const uint32_t salt = uint32_t(REXCVAR_GET(dxbc_driver_cache_salt))) {
+    const uint32_t salt_temp = PushSystemTemp();
+    a_.OpMov(dxbc::Dest::R(salt_temp, 0b0001), dxbc::Src::LU(salt));
+    PopSystemTemp();
+  }
+
   // Set up the input and output registers.
   Modification shader_modification = GetDxbcShaderModification();
   // The scale the literals of this translation use.
