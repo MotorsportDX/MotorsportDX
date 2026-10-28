@@ -520,6 +520,55 @@ The main session's two conditions:
 
 On the warm cache the start queued the look mods of 124 predicted translations on the workers: they compiled in the menus, 100 to 110 s of the workers' time, and none ran in a race.
 
+#### 19.3.11 Increment 1.4: the pipeline manifest and library, 29 October 2026
+
+Part 4 of 19.3.2.
+
+**What the design starts from** (the logs of 28 October 2026 on `I:\FM4-build-usa`, before any code).
+
+- **The pipeline storage is already the manifest's content.** `<cache_root>\shaders\shareable\4D530910.rtv.d3d12.xpso` holds pipeline descriptions: the shaders' hashes, their modifications and the fixed function state, no microcode. It is written from the user's own runs.
+- **Every start creates the stored descriptions** whose shaders the storage holds, before the title runs (`InitializeShaderStorage`):
+  - 3,458 pipelines in 112 to 174 ms with the driver's cache warm (`n6f4-32`, `n13-32`, `n6dx31-strict32`);
+  - 1,125 ms in the offline pass of `n6dx31-strict32`, which created them in DXIL for the first time.
+  - The pass runs that start too (1.3, 1.2), so its pipelines reach the driver's cache before the title starts, but no cache of the runtime's own.
+- **The modification has no scale.** It carries one bit for a scene draw at a fractional scale (`scene_scale`, and `scene_input_scale` while upscaling). The same descriptions serve 3/2, and 2x with `native_draw_scale_variant`; the scale enters the translation's code, so the bytecode.
+- **A first career's waits** (`n6dx30-cold2x`: the DXIL world at 2x, on empty caches after the pass):
+  - the replay waited for 35 pipelines, 310.9 ms in all, the longest 37.9 ms;
+  - 138 vertex shaders were translated on the draw path, 14.4 ms in all, one over 4 ms;
+  - the storage started with the disc's 1,076 pixel shaders and no vertex shader, so each of the 35 waits involves a vertex shader first seen in that run. The same holds for the 62 waits (433.1 ms) of `n13r1-240-career` (1x, DXBC).
+
+**The design** (the main session's decision on item 1 of 29 October 2026, the n6 session's on items 2 to 4; open to the project owner's review).
+
+1. **Vertex shaders: the gap is accepted.**
+   - Every wait of a first career involves a new vertex shader, but none waits for the vertex shader's translation: they wait for the pipeline's state, which needs the draw's fixed function state.
+   - Re-running the XDK's rewrite (`sub_826EC0C0`) offline would remove the 138 translations (14.4 ms) and none of the waits, as long as no description of the first session exists before it. That also needs a committed manifest of the first session's descriptions, which item 2 leaves for later.
+   - 1.4 therefore covers the later sessions, a driver update and the driver's cache; 1.5 still covers the first session.
+   - Not taken: the offline rewrite.
+2. **The manifest is local: it is the pipeline storage.** The project owner allows a committed manifest of hashes, modification bits and fixed function state (19.10, answer 3); 1.4 does not commit one, because it would gain little for its cost.
+   - **What a committed manifest reaches.** On a fresh install it creates nothing in the first session: the storage holds no vertex shader (item 1). In the second session, on a new track (the cold tier's `photo` cells after `career`: `n13r1`, `n13q1`, `n6f3c`), the BuildRoot's storage as the manifest holds all 331 to 337 descriptions that the session creates, and 165 to 172 of them have a vertex shader that the first session stored, so the start could create about half.
+   - **What it costs.** That start would also create every other manifest description whose shaders the storage holds: 1,737 of the BuildRoot's 3,458 (after `n13r1-240-career`), with their translations and look mods, for the about 170 that the session draws. The pass does not run again then, so they would be created at the title's start, about 0.5 s on this PC with a cold driver cache and several seconds on the Ally X, and their mods compiled in the menus.
+   - **What it would save**: at most about half of those sessions' 23 to 25 pipeline waits, 115 to 175 ms in all, of which 5 (43 to 62 ms) in the race.
+   - The storage is generated locally, from the user's runs, and lives under the cache. 1.4 adds no second file with the same descriptions.
+   - A committed manifest is worth its cost together with the vertex shaders of a first session (the offline rewrite of item 1). Then the pass appends its descriptions to the pipeline storage, as 1.3's inventory appends pixel shaders to the shader storage, and the start creates them like every stored description; its entry in [sources and licensing](../sources-and-licensing.md) comes with it.
+   - Not taken: a committed manifest now; a separate manifest file under the cache.
+3. **Which descriptions, at which scales**: every stored description, at the start's scale, as today.
+   - No manifest per scale: the modification has no scale, and the bytecode, which the library's names hash, has it.
+   - Not taken: deriving each description's other `scene_scale` variant for a change between a whole and a fractional scale; the launcher's presets draw the scene variants at 3/2 and at 2x.
+4. **The library**: an `ID3D12PipelineLibrary` in `<cache_root>\shaders\local\4D530910.d3d12.plib`, on the native path only (`d3d12_pipeline_library`, on by default). RTV and `-Rov` keep the driver's cache.
+   - **A state's name** is the XXH3-128 of its D3D12 description, with each shader's bytecode hashed in place of the pointer. The bytecode carries the world (DXIL or DXBC), the mod, the look's defines and the scale, so the name needs no other key. The root signature follows from the bytecode's bindings.
+   - **Loading**: `CreateD3D12Pipeline` asks the library first, wherever it runs (the start, the creation threads, early creation, the draw path). A miss creates the state as before.
+   - **Storing**: the states the start creates for the stored descriptions, in the pass and at the title's start. A pipeline first created in play becomes a stored description and enters the library at the next start, whose creation then finds it in the driver's cache.
+   - **Writing**: after the start's creation, when it stored anything. The pass writes before its exit; the title's start writes on a thread of its own, and the library is not used while it serializes. The file is written beside the old one and renamed over it, so a hard exit keeps the last whole library.
+   - **Invalidation**: D3D12 refuses a library of another driver or adapter (`D3D12_ERROR_DRIVER_VERSION_MISMATCH`, `D3D12_ERROR_ADAPTER_NOT_FOUND`). The start then drops the file as a whole, and creates and stores every state again. A header of the runtime's own (magic `'XEPL'`, a version, the count of names) drops the file when the names change.
+   - **Pruning**: a library cannot drop names. When over half of the file's names (and at least 256) go unused at a start, after a look, scale or build change, the file is deleted, and the next start writes a new one from its own states.
+   - Without the driver's support (`D3D12_SHADER_CACHE_SUPPORT_LIBRARY`) the library stays off.
+   - Not taken: storing in play, which would rewrite a file of hundreds of megabytes during play; a library per world.
+- **A counter for the gate**: a stored description that the start skipped (its shaders, translation or root signature missing) and play creates anyway is logged ("a stored description created in play"); the start logs the count it skipped.
+
+**Expected gains.** At a warm start on this PC, little: the start's creation takes 112 to 174 ms from the driver's cache. The start no longer depends on that cache, whose size is limited and shared with other games. After a driver update, the start creates the stored pipelines once and stores them again, as it does today without the library. On the ROG Xbox Ally X that creation is expected to take about 4 to 8 times this PC's 1.1 s (inferred from 19.3.5, not measured).
+
+**The short check** (the process of 29 October 2026: one job, one queue acquisition, about 15 to 20 minutes): the build and its snapshot; one `career` race at 3/2 on a copy of the BuildRoot's warm cache after the pass (`--cache-copy --offline-pass`), with exit 0, a clean log and a sane capture. Its measurements are 1.4's claim: no stored description created in play, the library's names stored in the pass and loaded at the title's start, the start's creation time and the title's first event.
+
 ### 19.4 Item 2: direct D3D12 draws
 
 #### 19.4.1 Today
