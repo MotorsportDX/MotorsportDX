@@ -144,6 +144,9 @@ def main():
                                           "launcher's, high), for example extrahigh")
     parser.add_argument('--native', action='store_true',
                         help='every cell on the native path (e2e.py --native)')
+    parser.add_argument('--cache-copy', action='store_true',
+                        help="each cell on a private copy of the BuildRoot's warm caches (e2e.py "
+                             '--cache-copy): for an image-only tier beside another game')
     parser.add_argument('--cold-cache', action='store_true',
                         help='every cell on cold shader caches as the cold tier: empty, or those its '
                              'CACHE_FROM cell left (e2e.py --cold-cache, --cache-from)')
@@ -162,6 +165,8 @@ def main():
     scenarios = sorted(scenarios, key=lambda s: s not in PROFILE_FROM.values() and
                        s not in CACHE_FROM.values())
     cold = scenarios if options.cold_cache or options.tier == 'cold' else None
+    if cold and options.cache_copy:
+        parser.error('--cache-copy starts from the warm caches; the cold tier starts from empty ones')
     # A full drive or missing content packages fail here once instead of in every cell; Disc 2 and
     # the content packages of local.json are imported before the first cell when they are not yet.
     check_free_space(root / 'e2e', MIN_FREE_GB)
@@ -181,6 +186,8 @@ def main():
         extra += ['--quality', options.quality]
     if options.native:
         extra += ['--native']
+    if options.cache_copy:
+        extra += ['--cache-copy']
     log = root / 'e2e' / f'{options.name}.log'
     log.parent.mkdir(parents=True, exist_ok=True)
     started, results = time.time(), []
