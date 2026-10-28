@@ -9,6 +9,7 @@
 
 #include <atomic>
 #include <functional>
+#include <iterator>
 #include <cctype>
 #include <chrono>
 #include <cmath>
@@ -319,6 +320,10 @@ class App {
   void GameDataPage();
   void AdvancedPage();
   void ShadersPage();
+  // The offline pass with the current plan, the DXC release fetched first when it is missing
+  // (19.10's route); automatic once a build: marker() is what it last finished for.
+  void CompileShaders();
+  std::string ShaderPassMarker();
   // The Shaders page's task on its own thread: fetching DXC, or the offline pass.
   void StartShaderTask(std::function<std::string()> task);
   void AboutPage();
@@ -463,8 +468,20 @@ bool App::Init(int argc, char** argv) {
   ImGui_ImplDX11_Init(device_, context_);
   if (load_error_.empty()) Refresh(true);
   // --play: press Play at start with the active profile, for a desktop shortcut.
+  bool play = false;
   for (int i = 1; i < argc; ++i)
-    if (std::string(argv[i]) == "--play" && load_error_.empty()) Play();
+    if (std::string(argv[i]) == "--play" && load_error_.empty()) play = true;
+  if (play) {
+    Play();
+  } else if (load_error_.empty() && fs::exists(root_ / "game-build" / "fm4_rex.exe")) {
+    // The shader pass once after an install or an update (the owner's answer 5 of 19.10).
+    std::ifstream marker(root_ / "logs" / "shader-pass.done", std::ios::binary);
+    std::string done((std::istreambuf_iterator<char>(marker)), std::istreambuf_iterator<char>());
+    if (done != ShaderPassMarker()) {
+      page_ = 5;
+      CompileShaders();
+    }
+  }
   return true;
 }
 
@@ -1809,6 +1826,64 @@ void App::AdvancedPage() {
   }
 }
 
+// The build the pass last finished for: the game's executable as build-result.json names it,
+// and whether DXC was beside it.
+std::string App::ShaderPassMarker() {
+  try {
+    std::ifstream stream(root_ / "build-result.json", std::ios::binary);
+    const Json report = Json::parse(stream);
+    return report.at("artifacts").at("fm4_rex.exe").get<std::string>() +
+           (DxcPresent(root_ / "game-build") ? " dxil" : " fxc");
+  } catch (const std::exception&) {
+    return {};
+  }
+}
+
+void App::CompileShaders() {
+  std::string error;
+  const auto plan = CurrentPlan(error);
+  if (!plan || ProcessRunning(L"fm4_rex.exe")) {
+    std::lock_guard<std::mutex> lock(shader_mutex_);
+    shader_message_ = plan ? "The game is running (fm4_rex.exe). Close it first." : error;
+    return;
+  }
+  std::vector<std::string> args = GameArgs(*plan);
+  const fs::path progress_file = root_ / "logs" / "shader-pass.jsonl";
+  args.push_back("--shader_offline_pass=true");
+  args.push_back("--shader_offline_pass_progress=" + Utf8(progress_file));
+  const Pairs env = plan->env;
+  StartShaderTask([this, args, env, progress_file] {
+    const fs::path game = root_ / "game-build";
+    std::string fetch_error;
+    if (!DxcPresent(game)) fetch_error = FetchDxc(game, root_ / "downloads" / "dxc");
+    std::error_code ignored;
+    fs::remove(progress_file, ignored);
+    void* process = StartProcess(args, env, root_, root_ / "logs" / "shader-pass.log");
+    {
+      std::lock_guard<std::mutex> lock(shader_mutex_);
+      shader_process_ = process;
+    }
+    const unsigned long code = WaitProcess(process);
+    {
+      std::lock_guard<std::mutex> lock(shader_mutex_);
+      shader_process_ = nullptr;
+    }
+    PassProgress progress;
+    const bool finished = ReadPassProgress(progress_file, progress) && progress.finished && code == 0;
+    std::string message;
+    if (finished) {
+      std::ofstream(root_ / "logs" / "shader-pass.done", std::ios::binary | std::ios::trunc)
+          << ShaderPassMarker();
+      message = "The shaders are compiled: " + std::to_string(progress.done) + " translations, " +
+                std::to_string(progress.errors) + " errors.";
+    } else {
+      message = "The shader pass stopped (exit " + std::to_string(code) +
+                "); what is left compiles while you play.";
+    }
+    return fetch_error.empty() ? message : fetch_error + "\n" + message;
+  });
+}
+
 void App::StartShaderTask(std::function<std::string()> task) {
   if (shader_busy_.exchange(true)) return;
   if (shader_task_.joinable()) shader_task_.join();
@@ -1853,43 +1928,7 @@ void App::ShadersPage() {
   ImGui::TextColored(kMuted, "Microsoft's release v1.9.2609 from GitHub, checked by its SHA-256 (or FM4_DXC_MIRROR)");
   ImGui::Dummy(ImVec2(0, 8 * scale_));
   ImGui::BeginDisabled(busy);
-  if (ImGui::Button("Compile shaders")) {
-    std::string error;
-    const auto plan = CurrentPlan(error);
-    if (!plan) {
-      std::lock_guard<std::mutex> lock(shader_mutex_);
-      shader_message_ = error;
-    } else if (ProcessRunning(L"fm4_rex.exe")) {
-      std::lock_guard<std::mutex> lock(shader_mutex_);
-      shader_message_ = "The game is running (fm4_rex.exe). Close it first.";
-    } else {
-      std::vector<std::string> args = GameArgs(*plan);
-      args.push_back("--shader_offline_pass=true");
-      args.push_back("--shader_offline_pass_progress=" + Utf8(progress_file));
-      const Pairs env = plan->env;
-      StartShaderTask([this, args, env, progress_file] {
-        std::error_code ignored;
-        fs::remove(progress_file, ignored);
-        void* process = StartProcess(args, env, root_, root_ / "logs" / "shader-pass.log");
-        {
-          std::lock_guard<std::mutex> lock(shader_mutex_);
-          shader_process_ = process;
-        }
-        const unsigned long code = WaitProcess(process);
-        {
-          std::lock_guard<std::mutex> lock(shader_mutex_);
-          shader_process_ = nullptr;
-        }
-        PassProgress progress;
-        const bool read = ReadPassProgress(progress_file, progress);
-        if (read && progress.finished)
-          return "The shaders are compiled: " + std::to_string(progress.done) + " translations, " +
-                 std::to_string(progress.errors) + " errors.";
-        return code ? "The shader pass stopped (exit " + std::to_string(code) + ")."
-                    : std::string("The shader pass ended without its last progress line.");
-      });
-    }
-  }
+  if (ImGui::Button("Compile shaders")) CompileShaders();
   ImGui::EndDisabled();
   ImGui::SameLine();
   ImGui::BeginDisabled(!busy);
