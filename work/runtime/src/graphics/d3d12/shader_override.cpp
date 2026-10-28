@@ -2012,6 +2012,12 @@ bool ShaderOverrides::RunCompile(const CompileJob& job, const std::vector<uint8_
     messages->Release();
   }
   const char* compiler = job.dxil ? "DXC" : "FXC";
+  // DXC repeats the include chain at every diagnostic: the first part only.
+  constexpr size_t kMessageLimit = 4096;
+  if (message_text.size() > kMessageLimit) {
+    message_text = fmt::format("{}\n... ({} more bytes)", message_text.substr(0, kMessageLimit),
+                               message_text.size() - kMessageLimit);
+  }
   if (FAILED(result) || (!job.dxil && !code)) {
     REXGPU_ERROR("Shader override {}: {} failed (0x{:08X}):\n{}", name, compiler,
                  uint32_t(result), message_text);

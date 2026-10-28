@@ -169,7 +169,10 @@ bool DxilCompiler::Compile(std::string_view source, const std::string& name, con
     messages_out = "DXC: cannot create a compiler";
     return false;
   }
-  std::vector<std::wstring> strings = {Wide(name), L"-E", L"main", L"-T", Wide(target),
+  // The source's own name, not a file's: DXC gives the source to an include of
+  // its name, and a replacement entry's source includes the file it is named
+  // after.
+  std::vector<std::wstring> strings = {Wide(name + ".main"), L"-E", L"main", L"-T", Wide(target),
                                        L"-HV", L"2018", L"-O3"};
   if (strict) {
     strings.push_back(DXC_ARG_IEEE_STRICTNESS);

@@ -584,9 +584,12 @@ void ReXApp::LaunchModule() {
       }
     }
     if (REXCVAR_GET(shader_offline_pass)) {
+      // Everything it wrote is in place (the cache files are renamed in whole),
+      // and the title never ran: no shutdown, whose teardown of a module that
+      // was loaded but never resumed corrupted the heap.
       REXLOG_INFO("Offline shader pass: the shader storage is translated and compiled; exiting");
-      app_context().QuitFromUIThread();
-      return;
+      rex::FlushLogging();
+      std::_Exit(0);
     }
 
     if (offline_pass) {
