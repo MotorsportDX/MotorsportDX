@@ -153,6 +153,9 @@ def main():
     parser.add_argument('--fast-route', action='store_true',
                         help='cells with a fast route reach their race through the title\'s screen events '
                              '(e2e.py --fast-route); the others keep their menus')
+    parser.add_argument('--offline-pass', action='store_true',
+                        help='every cell runs the offline shader pass on its caches before the title '
+                             '(e2e.py --offline-pass)')
     options = parser.parse_args()
     root = options.build_root.resolve()
     scenarios, rates, repeat = TIERS[options.tier]
@@ -188,6 +191,8 @@ def main():
         extra += ['--native']
     if options.cache_copy:
         extra += ['--cache-copy']
+    if options.offline_pass:
+        extra += ['--offline-pass']
     log = root / 'e2e' / f'{options.name}.log'
     log.parent.mkdir(parents=True, exist_ok=True)
     started, results = time.time(), []
