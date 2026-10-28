@@ -163,6 +163,55 @@ These switches make shader work faster. They are described in [shader-mod-iterat
 
 With live knobs the mods are larger and branch at run time, so measure performance without them.
 
+## In-run perf A/B
+
+`ab_cvar`, `ab_values` and `ab_period_ms` measure both sides of one runtime switch inside one run. At the guest swap, the runtime sets the cvar to the first value in even periods of the steady clock and to the second in odd periods (period index = steady milliseconds / `ab_period_ms`). The perf trace then closes its windows on a grid of `ab_window_ms` and at each flip, and labels each window with its side (the `ab` object on the [traces page](traces.md#performance-trace-rex_perf_trace_file)). [`perf_ab.py`](../../outputs/FM4-build/e2e/perf_ab.py) reads the result.
+
+| Cvar | Default | Meaning |
+| --- | --- | --- |
+| `ab_cvar` | empty (off) | the runtime cvar to alternate. When off, the swap costs one branch |
+| `ab_values` | empty | its two values, `<a>,<b>` (no comma inside a value) |
+| `ab_period_ms` | 500 | the length of each side's period |
+| `ab_window_ms` | 125 | the perf trace's window in this mode, a divisor of `ab_period_ms` |
+
+The runtime refuses a cvar that needs a restart or is init-only (`kRequiresRestart`, `kInitOnly`), a command, an unknown name or a value the cvar rejects. It logs the error to `runtime.log` and runs without the A/B, and `perf_ab.py` then finds no labelled windows.
+
+```
+python outputs\FM4-build\e2e\e2e.py --build-root <BuildRoot> --game-build snapshots\<name> --out <BuildRoot>\e2e\<run> --scenario race --race-seconds 90 --fast-route --native --profile copy --env FM4_GAME_CMDLINE=engageaionstart --env FM4_FIXED_SEED=1 --arg=--video_mode_refresh_rate=240 --env FM4_FRAME_RATE=240 --arg ab_cvar=native_rt_resolve_skip --arg ab_values=0,3
+python outputs\FM4-build\e2e\perf_ab.py <BuildRoot>\e2e\<run>
+```
+
+`perf_ab.py` takes the race phase (`--phase`), groups its windows by period and drops the first window after each flip (`--margin-ms 125`: frames drawn before the flip whose GPU times arrive after it, and short transients of the switch). For each side it prints the GPU ms a frame, the render thread's busy ms a frame, the textures zone a draw and a frame, the draws a frame and the mean frame time. The paired estimate is the median of the differences b - a of every two consecutive periods; since the pairs alternate between a-then-b and b-then-a, slow changes of the scene cancel. The 95% interval comes from the medians of consecutive batches of those differences with Student's t. `--seconds N` reads only the first N seconds of the phase. `perf_ab.py --runs <runs> --vs <runs>` prints the same metrics for separate runs (or `--repeat` directories): the difference of the means, with a 95% interval from Welch's t.
+
+### When to use it
+
+Use it for a perf question about one runtime switch on one binary: one race of 90 s (`--race-seconds 90`) gives a tighter answer than 3+3 separate races. The boot, menus, loading, countdown and teardown of a run cost the same whatever the race's length, so a longer race costs little.
+
+It does not replace separate runs for:
+
+- switches that need a restart (`kRequiresRestart`, `kInitOnly`): the runtime refuses them;
+- a cvar that is declared hot-reloadable but read once at start-up: the runtime cannot tell. Check that a counter of the switch moves between the sides (for example a perf trace field it changes);
+- one binary against another;
+- effects that build up over seconds (caches filling, memory growing, thermal changes): use a longer `ab_period_ms`, which lowers the precision, since the scene changes more between consecutive periods;
+- the frame rate itself: the frame rate is capped (240 Hz in these cells), and a hitch in one period shows only as an outlier.
+
+### Validation, 28 October 2026
+
+Races at 3/2 (`--arg draw_resolution_scale_x=1 --arg draw_resolution_scale_y=1 --arg native_draw_scale=3/2 --arg native_rt_surfaces=122`) on the build of the A/B, 90 s each. Values are b - a in ms a frame, with the 95% interval.
+
+| Run | Switch | GPU | Render thread busy | Textures zone |
+| --- | --- | --- | --- | --- |
+| `pab2-aa` | A/A: `texture_binding_resets` 0 and 0 | -0.004 [-0.015, 0.006] | 0.010 [-0.020, 0.039] | 0.004 [-0.007, 0.014] |
+| `pab2-skip` | `native_rt_resolve_skip` 0 against 3 | -0.173 [-0.185, -0.161] | -0.010 [-0.036, 0.016] | 0.004 [-0.005, 0.012] |
+| `pab2-tbr1`, `pab2-tbr2` | `texture_binding_resets` 0 against 3, the two runs pooled | -0.009 [-0.018, 0.000] | -0.006 [-0.021, 0.010] | -0.003 [-0.011, 0.005] |
+| `n6d3-m0-32` against `n6d3-m3-32` | the same, 3+3 separate races of 30 s | 0.023 [-0.025, 0.070] | 0.003 [-0.103, 0.109] | -0.001 [-0.022, 0.021] |
+
+- The A/A holds 0 on every metric. Its GPU interval is about a fifth of the 3+3 interval's width (standard error 0.0045 against 0.015 ms); the first 30 s of the same run match 3+3 (0.013 ms).
+- The resolve skips save 0.17 ms of GPU a frame, found as clearly in the first 30 s (-0.162 [-0.203, -0.121]). Dropping no window after the flip, or two, changes the estimate by less than 0.01 ms: no transient shows.
+- The textures zone's saving of `texture_binding_resets` 3 (0.005 ms a frame at 3/2 in the 3+3 means of [d3d-hle-n6.md 19.6.6](../analysis/d3d-hle-n6.md#1966-step-2-resets-of-stale-bindings-only-28-october-2026)) is below what either method resolves. The two in-run races put it at -0.003 ms with an interval of ±0.008 ms; the 3+3 interval is ±0.021 ms.
+- An earlier A/A with periods of 2 s (`pab1-aa1`, `pab1-aa2`) was no better than 3+3 (GPU standard error 0.012 and 0.026 ms). Re-phasing the same data offline put periods of 500 ms at about 0.007 ms, which the defaults now use: the scene changes over seconds, so closer pairs cancel more of it.
+- Wall time: 3+3 separate races of 30 s take 14.1 min (6 times 2 min 21 s); one in-run race of 90 s takes 3 min 25 s. A perf question about a runtime switch saves about 10.7 min per resolution, with a tighter answer for GPU and the render thread.
+
 ## Shader A/B (same scene, two shaders)
 
 `--arg shader_override_ab_ms=<N>` draws with the DXBC translations instead of the overrides in every other period of N ms of the steady clock, so one static scene shows both. [`override_ab.py`](../../outputs/FM4-build/e2e/override_ab.py) lists consecutive captures of a `--keep-ppm` run with their phase. In a static scene, same-phase pairs are identical, and on/off pairs are identical if the override renders exactly like the translation.

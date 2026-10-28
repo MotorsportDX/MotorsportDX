@@ -256,7 +256,7 @@ What the perf trace and the gates measure is the guest side: its frames, their t
 
 ## Comparing runs
 
-Single runs vary by about 10-20% in FPS, and a hot laptop drifts: the same binary measured 53.4 and then 48.8 fps (3 runs each) half an hour apart. Bracket a candidate with baseline runs before and after it. Measure each configuration with `--repeat 3`: runs go to `<out>\run1..run3`, and `<out>\summary.json` aggregates them (median of medians, minimum of minimums, union of errors). A/B a cvar on the same binary with `--arg`, for example `--arg=--readback_resolve=fast`. Then:
+Single runs vary by about 10-20% in FPS, and a hot laptop drifts: the same binary measured 53.4 and then 48.8 fps (3 runs each) half an hour apart. Bracket a candidate with baseline runs before and after it. Measure each configuration with `--repeat 3`: runs go to `<out>\run1..run3`, and `<out>\summary.json` aggregates them (median of medians, minimum of minimums, union of errors). A/B a cvar on the same binary with `--arg`, for example `--arg=--readback_resolve=fast`. For a perf question about one runtime switch on one binary, an [in-run perf A/B](experiments.md#in-run-perf-ab) (`ab_cvar`, one race of `--race-seconds 90`, read with `perf_ab.py`) answers more tightly than 3+3 separate races in about a quarter of the wall time; switches that need a restart and binary-against-binary comparisons still need separate runs. Then:
 
 ```
 python outputs\FM4-build\e2e\compare.py <BuildRoot>\e2e\baseline-v2 <BuildRoot>\e2e\candidate
