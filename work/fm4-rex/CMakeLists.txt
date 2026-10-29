@@ -49,6 +49,7 @@ set(FM4REX_SOURCES
     src/fm4-test-events.cpp
     src/fm4-vblank-rate.cpp
     src/fm4-wheel-input.cpp
+    src/fm4-write-watch.cpp
 )
 
 if(WIN32)

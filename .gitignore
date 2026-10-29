@@ -298,6 +298,7 @@
 !/work/fm4-rex/src/fm4-test-events.cpp
 !/work/fm4-rex/src/fm4-vblank-rate.cpp
 !/work/fm4-rex/src/fm4-wheel-input.cpp
+!/work/fm4-rex/src/fm4-write-watch.cpp
 !/work/fm4-rex/src/fm4-vector-fixes.h
 !/work/fm4-rex/src/fm4_rex_app.h
 !/work/fm4-rex/src/instruction-tests.cpp

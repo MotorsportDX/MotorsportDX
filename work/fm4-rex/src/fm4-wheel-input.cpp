@@ -102,6 +102,10 @@ REX_EXTERN(__imp__sub_822E6B30);
 REX_EXTERN(__imp__sub_828C3330);
 REX_EXTERN(__imp__sub_823921F8);
 REX_EXTERN(__imp__sub_828C5B18);
+REX_EXTERN(__imp__sub_828154B0);
+
+// fm4-write-watch.cpp.
+void FM4WriteWatch(uint8_t* base, uint32_t address);
 
 namespace {
 
@@ -134,6 +138,9 @@ constexpr uint32_t kSpringSpeedSlipScale = 0x540;
 // sub_826D5E78's return address from storing whether the player drives (sub_823921F8), right
 // after the force feedback block's update.
 constexpr uint32_t kDrivingSet = 0x826D6788;
+// ... from reading the steering torque (CCarDynamics slot 254, sub_828154B0).
+constexpr uint32_t kTorqueRead = 0x826D6754;
+constexpr uint32_t kTorqueOffset = 0x30;
 
 uint32_t Load32(uint8_t* base, uint32_t address) {
   return rex::memory::load_and_swap<uint32_t>(base + address);
@@ -451,4 +458,12 @@ REX_HOOK_RAW(sub_828C5B18) {
     TraceLine("ffb %.2f u=%u reset", SteadyMs(),
               fm4_diagnostic_updates.load(std::memory_order_relaxed));
   }
+}
+
+// The steering torque's getter (r3 = the car's CCarDynamics): with FM4_WRITE_WATCH_FILE, the
+// control step's read arms the write watch on the torque, to find its writer and its rate.
+REX_HOOK_RAW(sub_828154B0) {
+  static const bool watch = std::getenv("FM4_WRITE_WATCH_FILE") != nullptr;
+  if (watch && uint32_t(ctx.lr) == kTorqueRead) FM4WriteWatch(base, ctx.r3.u32 + kTorqueOffset);
+  __imp__sub_828154B0(ctx, base);
 }
