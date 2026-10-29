@@ -1,6 +1,6 @@
 # Native racing wheel support
 
-Status: research and design of 27 October 2026; stage 0 (the device and safety shell), stage 1 (the control path), stage 2 (native input), stage 3 (force feedback from the title's torque) and stage 4 (the physics-rate force and the kerb and impact effects) done on 29 October 2026 ([stage 0](#stage-0-done-29-october-2026), [stage 1](#stage-1-findings-29-october-2026), [stage 2](#stage-2-done-29-october-2026), [stage 3](#stage-3-done-29-october-2026), [stage 4](#stage-4-done-29-october-2026)). The project runs the base Disc 1 executable without a title update, so every address below is from the recompiled base `default.xex` (USA; Japan/Asia share the code).
+Status: research and design of 27 October 2026; stage 0 (the device and safety shell), stage 1 (the control path), stage 2 (native input), stage 3 (force feedback from the title's torque), stage 4 (the physics-rate force and the kerb and impact effects) and stage 5 (each car's steering lock with an end stop, and the drawn wheel) done on 29 October 2026 ([stage 0](#stage-0-done-29-october-2026), [stage 1](#stage-1-findings-29-october-2026), [stage 2](#stage-2-done-29-october-2026), [stage 3](#stage-3-done-29-october-2026), [stage 4](#stage-4-done-29-october-2026), [stage 5](#stage-5-done-29-october-2026)). The project runs the base Disc 1 executable without a title update, so every address below is from the recompiled base `default.xex` (USA; Japan/Asia share the code).
 
 The goal is native PC wheel support, not gamepad emulation:
 
@@ -93,13 +93,13 @@ The database has no lock-to-lock angle for the steering wheel:
 
 | Source | Value |
 |---|---|
-| `Data_Car.SteerMaxAngle` | 42 for the cars checked |
-| `Data_Car.SteerMaxAngleFiltered` | the road-wheel angle the title uses, 12 to 35 degrees, average 27.2, over 503 cars |
+| `Data_Car.SteerMaxAngle` | the road-wheel lock at full steering in wheel mode 2 (`CCarDynamics` +0x54, radians): 42 degrees for 441 of the 503 cars, 36 for 37 GT racing cars, 30 for 25 prototypes ([stage 5](#stage-5-done-29-october-2026)) |
+| `Data_Car.SteerMaxAngleFiltered` | 12 to 35 degrees, average 27.2, over 503 cars (`CCarDynamics` +0x58); not the lock in wheel mode 2 |
 | the shared `GlobalCarAttribs.xml` (driver) | `SteeringWheelAngleScale` 0.75 |
 | per-car `carattribs.xml` | `SteeringWheelAngleOverride`, 0 for the cars read in the FM3 car converter work |
 | driver animations | `SteerLock2LockSmall` and `SteerLock2LockLarge` in two variants |
 
-The angle the cockpit's steering wheel shows reaches the presentation through `CCarPresentationDeferred::SetSteeringWheelAngle` (`sub_822E6B30`, executed by `sub_822C5728`). A hook there can measure, per car, the drawn wheel's angle at full lock. A per-car soft lock can then match what the driver sees in the cockpit.
+The angle the cockpit's steering wheel shows reaches the presentation through `CCarPresentationDeferred::SetSteeringWheelAngle` (`sub_822E6B30`, executed by `sub_822C5728`), and the model turns by 0.75 of it ([stage 5](#stage-5-done-29-october-2026)). The title has no steering ratio, so stage 5 sets each car's lock from its road-wheel lock at one steering ratio.
 
 ## The title's force feedback
 
@@ -352,7 +352,7 @@ Owner's script: a lap in a known car, in cockpit view, checking that the drawn w
   | 2, the 900-degree wheel's | linear | 50 ms | 12 ms | 0 |
 
   In mode 2 the steering equals the target in every steady frame and during the whole sine, and the target is 0.733 times the input in every frame (1,750 frames with an input above 0.05), full lock and slides included: no countersteer deviation showed in this run.
-- **The drawn steering wheel** (`SetSteeringWheelAngle`, `sub_822E6B30`, one call per frame for the cockpit car): in mode 2 it turns about 7.6 radians per unit of input, close to 2.5π (450 degrees each way, a 900-degree wheel), and stops at ±π/2 (90 degrees); in mode 0 it turns 0.39 radians at 0.25, in mode 1 0.50 radians. So in mode 2 the cockpit's wheel matches a wheel set to 900 degrees 1:1 up to 90 degrees either way, and holds there beyond. Whether the limit is the title's animation or a per-car value is open; only the Ford Ka was traced.
+- **The drawn steering wheel** (`SetSteeringWheelAngle`, `sub_822E6B30`, one call per frame for the cockpit car): in mode 2 it turns about 7.6 radians per unit of input, close to 2.5π (450 degrees each way, a 900-degree wheel), and stops at ±π/2 (90 degrees); in mode 0 it turns 0.39 radians at 0.25, in mode 1 0.50 radians. So in mode 2 the cockpit's wheel matches a wheel set to 900 degrees 1:1 up to 90 degrees either way, and holds there beyond (stage 5 found that the model turns 0.75 of this angle, so it stops at 67.5 degrees). Whether the limit is the title's animation or a per-car value is open; only the Ford Ka was traced.
 - **Unit tests** (`pipeline.py build`): `fm4_wheel_mapping_tests` (the steering's resolution and lock, the pedals' calibration in either order, deadzone, gamma, missing axes and buttons, the press counters) and `fm4_wheel_host_tests` (the mapped controls published every tick from an SDL virtual wheel: the steering at full resolution, a pedal calibrated in reverse, a shift press counted once).
 - **The career's rewards**: see the anti-cheat rule below.
 
@@ -480,6 +480,68 @@ Delivers:
 
 Verified: the end-stop force traced at the lock in the recording backend, and the owner's lock-to-lock check per car class.
 
+#### Stage 5 done, 29 October 2026
+
+Route (a), the main session's decision of 29 October 2026: the soft lock is an end stop built from the force feedback. The MOZA SDK waits for the owner's decision after the R9 test, and RPM and shift lights stay out (they would need the SDK).
+
+**The car's lock.** The title has no steering ratio and no lock-to-lock angle. What it has per car is the road-wheel lock at full steering, `Data_Car.SteerMaxAngle`, which the car's `CCarDynamics` holds at +0x54 in radians (stage 2's dump of the Ford Ka: 0.7330, 42 degrees; +0x58 holds `SteerMaxAngleFiltered`, 29 degrees). In wheel mode 2 the steering target (+0x24) is the record's steering times it. Over the 503 cars of the database it takes three values: 42 degrees for 441 cars, 36 for 37 GT racing cars (the DBR9, the Corvette C5-R and C6-R, the Viper GTS-R and others) and 30 for 25 prototypes (the R10, the 908, the 333 SP and others).
+
+- **The integration** ([fm4-wheel-input.cpp](../../work/fm4-rex/src/fm4-wheel-input.cpp)) publishes that lock with each record of the first player's car.
+- **The host** ([wheel_mapping.h](../../work/runtime/include/rex/input/wheel/wheel_mapping.h)) makes the car's steering lock `wheel_car_lock` x the road-wheel lock / 42, with `wheel_car_lock` 900 degrees by default (the title's own 900-degree wheel for a 42-degree car):
+  - 771 degrees for the GT cars and 643 for the prototypes, so every car has the same steering ratio (10.7:1 at 900);
+  - a fixed `wheel_steer_lock` replaces it for every car;
+  - the lock is never more than the wheel's rotation (`wheel_steer_range`, 900 by default).
+  - `wheel_steer_lock` 0 used to mean the wheel's rotation; it now means the car's own lock, which is the same 900 degrees for a 42-degree car at the defaults.
+
+**The input.** The steering is the wheel's angle over half the car's lock: linear and 1:1, full at the lock, held at full beyond it, in wheel mode 2 as before (no rate limit). A 540-degree car on a 900-degree wheel reaches full steering at 270 degrees either way.
+
+**The end stop.** `EndStop` in [ffb_governor.h](../../work/runtime/include/rex/input/wheel/ffb_governor.h), computed by the host at 1,000 Hz from the wheel's angle:
+- zero inside the lock;
+- past it, a parabola over the first 2 degrees (so the force and its slope start at zero), then linear up to its strength 6 degrees past the lock, held beyond;
+- a damper on the wheel's speed (smoothed over 10 ms): turning outwards at v degrees a second adds what the spring adds over v x 0.02 s, and turning back takes as much away. It fades in over the first 2 degrees like the spring, and it never pushes outwards.
+
+The governor adds it to the constant force after the title's gain, minimum force and smoothing, and before the ramp-in, the cap and the slew limit. It runs only while the title drives the player's car, and it is zero whenever a block or the watchdog zeroes the force. Its strength is `wheel_end_stop` (1, a fraction of full scale), so at the defaults the cap bounds it: it gets what the spring, the damper and the vibrations leave of the cap. The title's spring, at its saturation that far from the centre, pushes the same way.
+
+**The drawn wheel.** The lap logic `sub_823446C0` sets each car's drawn steering wheel through the car's presentation:
+- the call: car +11604, slot 32, `SetSteeringWheelAngle`, from `0x82344A20`, with car +15024 plus +15032;
+- in wheel mode 2 the angle is the record's steering x 2.5 pi, held at +-pi/2, the title's 900-degree mapping;
+- the presentation (`sub_823143F8`) turns the wheel's model by a global (`0x82D92B44`: 2.5 in the image, 0.75 at run time, `GlobalCarAttribs.xml`'s `SteeringWheelAngleScale`) times that angle.
+
+So the title's drawn wheel turns 0.75 of a 900-degree wheel's angle and stops at 67.5 degrees; stage 2's reading of 1:1 up to 90 degrees took the angle passed for the model's.
+
+For the first player's car while the wheel steers it, the hook passes the wheel's own angle, up to half the car's lock, divided by that global, and keeps the title's other term. The model then turns 1:1 with the wheel. The car is the one the anti-cheat count takes right after the wheel's record; the lap logic passes the same car. `FM4_WHEEL_DRAWN=title` keeps the title's angle. The driver's hands follow the title's hand animation of the same angle: past about 90 degrees they keep the full-turn pose, one hand over the top of the rim, and no gap or distortion showed in the captures.
+
+**Verified without hardware.** Snapshots `whl10` (`04e4680`, the lock and the end stop) and `whl12` (`7946238`, the drawn wheel), with `whl11` between them (a first version of the drawn wheel, without the model's scale); native path, 240 Hz.
+
+- **The input** (`whl10vk`, the career's Ford Ka, `steer_range=1080` with the car's lock; `whl10va`, the Quick Race's 1980 131 Abarth, `steer_range=900` with `car_lock=540`):
+  - the virtual wheel swept lock to lock to the axis' ends, 90 and 180 degrees past the lock, then turned into the stop in 0.3 s;
+  - the lock published was 42 degrees in every record of the player's car, so the locks were 900 and 540;
+  - 7,565 and 12,010 records were driven by the wheel, all in mode 2;
+  - inside the lock the steering equalled the angle over half the lock to within 0.00002;
+  - every record past the lock (2,141 and 5,511) had full steering.
+- **The end stop**, in the same recordings:
+  - it was zero in all 25,440 and 16,703 driven rows inside the lock, and present in the 4,998 and 6,735 rows past it, reaching its strength;
+  - the force pushed back towards the lock in 4,565 of 4,759 and 6,502 of 6,502 rows more than 6 degrees past it; the others came during the fast turns back to the lock, where the damper takes the push away and the title's force or the slew limit remains;
+  - the force, spring, damper and vibrations never exceeded 0.250016, no rise exceeded the slew limit, and every row outside a driven race (8,930 and 384) was zero.
+- **The drawn wheel** (`whl12vd` at 2x, the Abarth in the cockpit view, the virtual wheel held at 0, 45, 90, 135, 180, 270, 360 and 420 degrees, then -135 and -270):
+  - the angle passed was the wheel's over 0.75 (the global read at run time) at every hold;
+  - in the 1:1 crops of the full captures the model at 360 degrees matched 0, the labelled spoke stood at 9 o'clock at 90 degrees and at 12 at 180, and mirrored at -270.
+  - `whl11vt` ran with the title's angle for comparison.
+- **Different locks.** All the cars the e2e scenarios reach have a 42-degree road-wheel lock, so the in-game runs covered the lock through the options (900 and 540 degrees). The unit tests cover 36 and 30 degrees (771 and 643), and a host test covers a 30-degree car with its end stop.
+- **The landing checks:** the career at 3/2 and 240 Hz with the defaults, exit 0, main's four log errors, no grey or washed-out captures.
+  - `whl10` ran beside a wheel cell, and its replay was 17% below `whl9`'s;
+  - `whl11` and `whl12` alone passed against `whl9` (race 234 and 237 fps).
+- **Unit tests:**
+  - `fm4_wheel_mapping_tests`: the car's lock for 42, 36 and 30 degrees, full steering at 270 degrees for a 540-degree car, a fixed lock, the range's limit, bad values;
+  - `fm4_wheel_ffb_tests`: the end stop's onset, knee, strength, direction, continuity, damper, bad values; through the governor within the cap and the slew limit, not scaled by the gain, zero when blocked or stale;
+  - `fm4_wheel_host_tests`: a 30-degree car's lock from the published road-wheel lock, the end stop both ways within the cap and zero outside a driven race;
+  - the launcher's tests (531 plans) and `--screenshot` of the Racing wheel tab.
+
+**Not verified:**
+- a real wheel ([checklist](../running.md#racing-wheel-test-checklist) steps 28 to 32), in particular whether the stop holds without oscillating on the R9. The virtual wheel follows its script, so it never pushes back;
+- a car with a 36- or 30-degree lock in the game;
+- the drawn wheel and the hands in other cars.
+
 ### Stage 6: options, docs and close gate
 
 Delivers:
@@ -499,14 +561,14 @@ Delivers:
 - **Title update 2 bugs in the base build.** The anti-cheat rule (stage 1) is input-based, with no rewards as its consequence, in any device class; stage 2 scales its threshold to the frame time for every device (the main session's decision of 29 October 2026). The countersteer bug of the 900-degree set, whose filters (wheel mode 2) the wheel now uses, did not show in stage 2's trace, but a long held slide was not traced.
 - **The filters per wheel mode** were measured in stage 2 (mode 2: linear, a full-lock step in 50 ms); their readers are still not found statically.
 - **Frame-rate torque.** The title computes its torque once a frame; stage 4 evaluates the title's torque model after each physics step and plays the points back about a frame behind (10 ms above 60 fps). A change of the model's state between the steps (the restored bytes) would show as a difference between the last step's value and the title's, which the trace's `phys` lines check.
-- **MOZA SDK terms are unknown.** Without them, soft lock falls back to a force feedback end stop, and no LEDs.
+- **MOZA SDK terms are unknown.** Stage 5 built the soft lock as a force feedback end stop (the main session's decision); the SDK's limit angle and any LEDs wait for the owner's decision after the R9 test. Whether the end stop holds firmly and without oscillation on a direct-drive base is open until then.
 - **Pit House interaction.** The base's own angle limit, damper and filters can mask or double what the game sends.
 - **Hardware verification needs the owner.** Every force feedback stage ends with the owner's script; nothing in the repository can judge the feel.
 
 ## Open questions for the owner
 
 1. **Menus and layouts.** Should the game show its wheel options and layouts, if stage 1 allows the wheel class, or keep the controller screens?
-2. **Soft lock rule.** Per car, matching the cockpit's drawn wheel; a fixed angle (for example 900 or 540 degrees); or Pit House's setting?
+2. **Soft lock rule.** Per car, matching the cockpit's drawn wheel; a fixed angle (for example 900 or 540 degrees); or Pit House's setting? Stage 5 sets each car's own (900 degrees for most road cars, from the game's road-wheel lock) with a fixed lock as an option; the owner may still choose otherwise.
 3. **MOZA SDK.** Download it and check its terms, or ask MOZA support whether it may be loaded by a free, non-commercial project and whether it controls the wheel's LEDs?
 4. **Pit House profile.** Which settings do you run on the R9 (maximum angle, force feedback strength, road sensitivity, damper, friction, inertia), and may the test script fix one profile?
 5. **ESX on PC.** What do Windows' game controller panel and Pit House show for the ESX: button count, paddles, rotary knobs, LEDs?

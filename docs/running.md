@@ -1230,10 +1230,11 @@ The lines contain the pads' names and device paths, not the Windows user name.
 ## Racing wheel
 
 Native racing wheel support is in development ([racing wheels](analysis/racing-wheels.md)).
-Stages 0 to 4 are done: the runtime and the GUI launcher read a wheel through SDL's joystick
+Stages 0 to 5 are done: the runtime and the GUI launcher read a wheel through SDL's joystick
 API, its steering, pedals and buttons drive the car at the wheel's full resolution beside
-the controller, and the game's steering torque, at its physics rate, drives the wheel's force
-feedback through a safety governor, with kerb, surface and impact effects. A wheel that SDL maps as a gamepad also reaches the game as a pad, as
+the controller, each car has its own steering lock with an end stop past it, and the game's
+steering torque, at its physics rate, drives the wheel's force feedback through a safety
+governor, with kerb, surface and impact effects. A wheel that SDL maps as a gamepad also reaches the game as a pad, as
 before.
 
 ```powershell
@@ -1245,14 +1246,22 @@ before.
 The GUI launcher's Controls page has a **Racing wheel** tab beside the **Wheel test** tab. **Use
 a racing wheel** opens the wheel in the game. The wheel then drives the car of the first player:
 
-- **Steering:** the axis, an inversion, the wheel's rotation lock to lock (set it to Pit
-  House's maximum angle: the wheel reports that rotation over its whole axis) and the steering
-  lock, the rotation that gives the car's full steering (0: the wheel's rotation, so the car
-  steers 1:1 with the wheel). The game's steering deadzones and the pad's steering rate
-  limit do not apply: while the wheel steers, the car gets the game's own filters for a
-  900-degree wheel, which follow the wheel linearly. The cockpit's drawn steering wheel then
-  turns as a 900-degree wheel, up to 90 degrees either way; for it to match the wheel, set
-  Pit House to 900 degrees and leave the steering lock at 0.
+- **Steering:** the axis, an inversion, and the wheel's rotation lock to lock (**Wheel
+  rotation**: set it to Pit House's maximum angle, since the wheel reports that rotation over
+  its whole axis).
+  - **Car steering lock**, lock to lock, is each car's own. The game gives each car a
+    road-wheel lock: 42 degrees for most cars, 36 for GT racing cars and 30 for prototypes.
+    This row is the lock of a 42-degree car (900 by default); GT cars get 6/7 of it (771) and
+    prototypes 5/7 (643).
+  - **Fixed steering lock** replaces it with one lock for every car (0: each car's own).
+  - The lock is never more than the wheel's rotation. The car steers 1:1 with the wheel and
+    reaches full steering at half the lock either way. Past it, the **End stop** holds the
+    wheel with force feedback ([below](#racing-wheel-force-feedback)).
+  - The game's steering deadzones and the pad's steering rate limit do not apply: while the
+    wheel steers, the car gets the game's own filters for a 900-degree wheel, which follow the
+    wheel linearly.
+  - The cockpit's drawn steering wheel turns 1:1 with the wheel up to the car's lock. Past
+    about 90 degrees the driver's hands keep the game's full-turn pose.
 - **Pedals:** throttle, brake and clutch, each an axis (-1: none), its raw values at rest and
   fully pressed (A on the **Rest** and **Pressed** rows takes them from the wheel test while it
   runs; the order may be either way round), a deadzone at the rest end and a response curve
@@ -1274,7 +1283,8 @@ driven with the controller or the keyboard. Every value is a knob of `-Wheel` (t
 | `steer_axis` | 0 | `wheel_steer_axis` |
 | `steer_invert` | 0 | `wheel_steer_invert` |
 | `steer_range` | 900 | `wheel_steer_range` (degrees) |
-| `steer_lock` | 0 | `wheel_steer_lock` (degrees; 0: the range) |
+| `car_lock` | 900 | `wheel_car_lock` (degrees, the lock of a car with a 42-degree road-wheel lock) |
+| `steer_lock` | 0 | `wheel_steer_lock` (degrees, one lock for every car; 0: each car's own) |
 | `throttle_axis`, `brake_axis`, `clutch_axis` | 1, 2, -1 | `wheel_throttle_axis`, ... |
 | `throttle_rest`, `brake_rest`, `clutch_rest` | -32768 | `wheel_throttle_rest`, ... |
 | `throttle_pressed`, `brake_pressed`, `clutch_pressed` | 32767 | `wheel_throttle_pressed`, ... |
@@ -1291,6 +1301,7 @@ driven with the controller or the keyboard. Every value is a knob of `-Wheel` (t
 | `ffb_road` | 0.25 | `wheel_ffb_road` (0 to 1) |
 | `ffb_impact` | 0.5 | `wheel_ffb_impact` (0 to 1) |
 | `ffb_physics` | 1 | `wheel_ffb_physics` |
+| `end_stop` | 1 | `wheel_end_stop` (0 to 1; 0: off) |
 
 The game's anti-cheat rule withholds a race's credits and experience when a lap has fewer
 than 10 frames with a fast steering change. Its threshold is a change per frame, so at a high
@@ -1315,7 +1326,11 @@ the Xbox 360 wheel, but sent from a thread of its own at 1,000 Hz:
 - a light damper, also in the firmware;
 - the vibration of kerbs, rumble strips, grass and gravel, from the game's surface rumble, and
   a short jolt when the car hits a wall, another car or an object, from its collision rumble,
-  both scaled by the game's wheel rumble table and run by the firmware as vibrations.
+  both scaled by the game's wheel rumble table and run by the firmware as vibrations;
+- the end stop of the car's steering lock ([stage 5](analysis/racing-wheels.md#stage-5-done-29-october-2026)):
+  past the lock, a force back towards it that starts softly, reaches its strength 6 degrees
+  past the lock and holds it, with a damper that takes the bounce out of the stop. It is part
+  of the constant force, inside the cap, and only in a race you drive.
 
 The `-Wheel` knobs set them: `ffb_cap` (the hard limit of the constant force, the spring
 and the damper together, 0.25 of the wheel's full force by default; the spring and the damper
@@ -1324,7 +1339,9 @@ take at most half of it), `ffb_gain` (multiplies all three before the cap), `ffb
 `ffb_smoothing`, `ffb_spring` and `ffb_damper` (1: as the game scales them, 0: off),
 `ffb_road` and `ffb_impact` (the kerbs' and impacts' strength at the game's strongest rumble,
 a fraction of the wheel's full force, 0: off; together they take at most a quarter of the
-cap), `ffb_physics` and `ffb_invert`. The launcher's **Force feedback** section has a control
+cap), `ffb_physics`, `ffb_invert` and `end_stop` (the end stop's strength, a fraction of the
+wheel's full force before the cap, 0: off, the wheel turns on to its own rotation; the
+launcher's **End stop** row in the Steering section). The launcher's **Force feedback** section has a control
 for each: **Force cap**, **Force gain**, **Minimum force**, **Smoothing (ms)**, **Centring
 spring**, **Damper**, **Kerbs and surface**, **Impacts**, **Physics-rate force** and **Invert
 force**. The force is zero at once outside a race you
@@ -1414,9 +1431,10 @@ Stage 2, driving with the wheel:
 
 9. Start the launcher again, turn **Wheel test** on, and on the **Racing wheel** tab turn **Use
    a racing wheel** on. Set the steering axis and **Wheel rotation** to Pit House's maximum
-   angle, leave **Steering lock** at 0. Turn the wheel with a steering row focused: **Steering
-   now** at the right must read -1 at full left, 0 in the centre and 1 at full right (else turn
-   **Invert steering** on).
+   angle, leave **Car steering lock** at 900 and **Fixed steering lock** at 0. Turn the wheel
+   with a steering row focused: **Steering now** at the right must read -1 at 450 degrees left
+   (a road car's lock), 0 in the centre and 1 at 450 degrees right (else turn **Invert
+   steering** on).
 10. For the throttle and the brake: set each axis, then press A on **Rest** with the pedal
     released and on **Pressed** with it pressed fully; with a row of that pedal focused, **The
     pedal now** must go from 0 to 1 over the travel. Set the clutch pedal's axis to None (the
@@ -1425,7 +1443,8 @@ Stage 2, driving with the wheel:
     handbrake on another. Turn **Wheel test** off, then Play.
 12. In the game's options, set the transmission to manual (and once to manual with clutch).
     Drive a lap of a known car and track in the cockpit view: the drawn steering wheel must
-    follow the R9 1:1 at every angle without lag; the car must respond to the smallest
+    follow the R9 1:1 at every angle up to the car's lock without lag; the car must respond to
+    the smallest
     steering movement; the throttle and brake must be smooth from the first millimetre to
     the end of the travel; each paddle press must shift exactly one gear; the clutch button
     must disengage while held (manual with clutch), the handbrake button lock the rear wheels.
@@ -1467,13 +1486,31 @@ Stage 4, the physics-rate force and the effects (still at **Force cap** 0.25):
 27. Note any knock when a vibration starts or ends, and which kerb and impact strengths feel
     right.
 
+Stage 5, each car's steering lock and the end stop (still at **Force cap** 0.25, Pit House at
+900 degrees or more):
+
+28. In a road car (the career's first cars), turn the wheel slowly to full lock both ways at
+    a standstill and while driving: the car's steering must reach full lock at 450 degrees,
+    and the wheel must stop there, softly at first and then firmly. Note how far past the lock
+    you can push it, and whether the stop knocks, buzzes or bounces when you let go of the
+    wheel against it.
+29. Turn quickly into the stop, and let the wheel spin back from it: no oscillation at the
+    stop, no jolt.
+30. Try **End stop** 0.5 and 1, and a higher **Force cap** if 0.25 felt safe: note which holds
+    best.
+31. In a GT racing car (for example the Aston Martin DBR9 or the Corvette C6-R) and a prototype
+    (for example the Audi R10 or the Peugeot 908): the stop must come at about 385 and 320
+    degrees either way. In the cockpit view the drawn wheel must follow the R9 1:1 up to the
+    stop; note how the hands look at large angles.
+32. With **Fixed steering lock** 540, every car must stop at 270 degrees.
+
 What to send back: the launcher folder's `logs\wheel-test.log` (its `Wheel report:` line names
 the wheel's axes, buttons and force feedback effects) and `logs\wheel-test-forces.csv`, the
 `-Wheel` value of the launcher's **Wheel value** field, the lines of the game's
 `logs\runtime.log` that contain `Wheel` (`Select-String -Path logs\runtime.log -Pattern
-'Wheel' | ForEach-Object Line`), plus the notes of steps 3 to 27. For stage 3, add `--wheel_ffb_record=<the launcher folder>\logs\wheel-forces.csv` (a
-full path) to the Advanced page's Extra cvars before the races of steps 15 to 20 and 22 to 26 and send that
-file too.
+'Wheel' | ForEach-Object Line`), plus the notes of steps 3 to 32. For stage 3, add `--wheel_ffb_record=<the launcher folder>\logs\wheel-forces.csv` (a
+full path) to the Advanced page's Extra cvars before the races of steps 15 to 20, 22 to 26 and 28 to 32 and
+send that file too.
 
 ## Keyboard
 

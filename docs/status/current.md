@@ -82,6 +82,28 @@ BuildRoots on 20 October 2026: `I:\FM4-build-usa` (USA discs, the development ba
 - The launcher builds; the launcher tests pass with the plans unchanged (531 plans, discs and 4 content packages).
 - Checked with `--screenshot` at 980x700 at scale 1 and 1470x960 at scale 1.5: Home, Display's three tabs, the developer row and the plan on Extras, the profile popup on Y, and the gradient without a backdrop; for T2 the Look tabs, a knob stepped by the pad and reset with X, and the list scrolled to the focused row; for T3 each Controls tab, the racing wheel's rows with a profile that turns it on. The wheel test and the live wheel values were not run with a wheel (no wheel on the development computer); for T4 both Game data tabs, also on a first run without Discs; for T5 Shaders, and Advanced with and without the developer options; for T6 About, the profiles with two profiles and the delete's confirmation, and every page again. Not yet run on the ROG Xbox Ally X, where the window's fit in the work area and touch on the prompts are still to be seen.
 
+### Racing wheel, stage 5, 29 October 2026
+
+- Stage 5 of [native racing wheel support](../analysis/racing-wheels.md#stage-5-done-29-october-2026):
+  - each car's steering lock comes from its road-wheel lock in the game (`CCarDynamics` +0x54: 42 degrees for most cars, 36 for GT racing cars, 30 for prototypes) at one steering ratio: `wheel_car_lock` 900 for a 42-degree car, so 771 and 643; `wheel_steer_lock` sets one lock for every car (0 now means each car's own) and the lock is never more than the wheel's rotation;
+  - the steering is 1:1 up to the lock;
+  - past the lock an end stop built from the force feedback (`wheel_end_stop`, 1) holds the wheel inside the cap;
+  - the cockpit's drawn steering wheel turns 1:1 with the wheel up to the car's lock (the game's own turns 0.75 of a 900-degree wheel's angle and stops at 67.5 degrees);
+  - new `-Wheel` knobs `car_lock` and `end_stop`, launcher rows Car steering lock, Fixed steering lock and End stop ([running.md](../running.md#racing-wheel-in-the-game)).
+- Build: `I:\FM4-build-usa`, snapshots `whl10` (`04e4680`) and `whl12` (`7946238`), not dirty; `whl11` ran a first version of the drawn wheel, without the model's scale. `fm4_wheel_ffb_tests`, `fm4_wheel_mapping_tests`, `fm4_wheel_host_tests` and `fm4_pad_shaping_tests` pass. The launcher built from the same source passes its tests (531 plans), and `--screenshot` shows the new rows.
+- Landing check: the career at 3/2 and 240 Hz, exit 0, main's four log errors.
+  - `whl11` and `whl12` ran alone and pass against `whl9`;
+  - `whl10` ran beside a wheel cell, and its replay was 17% below `whl9`'s.
+- Virtual wheel sweeps (`whl10vk`, the Ford Ka with the car's 900-degree lock on a 1080-degree wheel; `whl10va`, the 131 Abarth with `car_lock=540`):
+  - the steering equals the wheel's angle over half the lock to within 0.00002, and is full in every record past the lock;
+  - the end stop is zero inside the lock and pushes back past it;
+  - the force, spring, damper and vibrations stay within 0.250016, no rise exceeds the slew limit, and every row outside a driven race is zero.
+- Drawn wheel (`whl12vd`, 2x, held angles up to 420 degrees and -270): the model turns 1:1 (at 360 degrees it matches 0).
+- Not covered:
+  - a real wheel ([checklist](../running.md#racing-wheel-test-checklist) steps 28 to 32), in particular the stop's firmness and whether it oscillates;
+  - a 36- or 30-degree car in the game (the e2e cars all have 42; the unit tests cover them);
+  - the hands in other cars.
+
 ### Racing wheel, stage 4, 29 October 2026
 
 - Stage 4 of [native racing wheel support](../analysis/racing-wheels.md#stage-4-done-29-october-2026): the game computes its steering torque once a frame (a write watch found its one writer, the torque model, after the car's physics steps); the runtime now runs that model after each physics step of the player's car (about 360 a second), restores its state, and the wheel host plays the values back about a frame behind, so the force has the same detail at 60, 120 and 240 Hz. Kerbs, grass and impacts come from the game's rumble inputs through its `<Wheel>` rumble table as firmware vibrations within a quarter of the cap. New `-Wheel` knobs `ffb_road` (0.25), `ffb_impact` (0.5), `ffb_physics` (1) and their launcher rows ([running.md](../running.md#racing-wheel-force-feedback)).

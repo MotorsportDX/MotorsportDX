@@ -50,12 +50,13 @@ above.
   [the game's steering deadzone](running.md#the-games-steering-deadzone)) and leave the game's
   setting at 24.
 - **Racing wheels** are new and off by default (`-Wheel 'on=1'`, or the launcher's Controls
-  page): the steering, pedals and shift buttons drive the car, and the game's steering torque
-  drives the force feedback, with kerb, grass and impact vibrations, checked with a virtual
-  wheel and recorded forces only; no real wheel has been tested yet, so the force's feel and
-  strength are untested (keep the force cap
-  at its default 0.25 until then). The menus still need the controller or the keyboard, and
-  the cockpit's drawn steering wheel turns at most 90 degrees either way.
+  page): the steering, pedals and shift buttons drive the car with each car's own steering
+  lock and an end stop past it, and the game's steering torque drives the force feedback,
+  with kerb, grass and impact vibrations, checked with a virtual wheel and recorded forces
+  only; no real wheel has been tested yet, so the force's feel and strength and the end
+  stop's firmness are untested (keep the force cap at its default 0.25 until then). The menus
+  still need the controller or the keyboard. The cockpit's drawn steering wheel follows the
+  wheel up to the car's lock, but past about 90 degrees the driver's hands keep one pose.
 - **Keyboard:** the smooth steering and pedals are new and tested with injected keys only;
   the game's D-PAD STEERING and mouse steering are untested.
 - **The first press in some menus is ignored** by the game after several screens open; press
