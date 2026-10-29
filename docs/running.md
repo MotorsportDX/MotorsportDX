@@ -56,15 +56,17 @@ touch ([launcher UX](analysis/launcher-ux.md)):
   **Play**, Y **Profile**, B **Back** and A **Select**. The mouse and touch press a prompt as
   the pad presses its button. While Play cannot start, the bar's left end says why ("Choose
   Disc 1 first").
-- **The focus** is a red frame. On every page but About the D-pad, the left stick or the arrow keys
-  move it, A or Enter selects, and on an option row left and right change the
+- **The focus** is a red frame. On every page and in the profiles the D-pad, the left stick or
+  the arrow keys move it, A or Enter selects, and on an option row left and right change the
   value (a click on the row steps it on, a click on a chevron steps it back or on). A slider row
   has a bar that the mouse or a finger drags. A changed row has a red edge and a red label, and
   X, Delete or the X **Reset** prompt resets it. The focused option explains itself in the panel
-  at the right. The other pages use Dear ImGui's own navigation with a thicker focus ring.
+  at the right. The confirmations of the Look and Game data pages use Dear ImGui's own
+  navigation with a thicker focus ring.
 - **The buttons.** LB and RB change the page's tab, B goes back to Home, Start plays from any
-  page, and Y opens the profiles: pick one, save the options under a new name, or delete one
-  after a confirmation. B or Escape closes them.
+  page, and Y opens the profiles: pick one, save the options as a new profile (under the name
+  typed in its field, or `Profile <n>`), or delete the active one after a confirmation. B or
+  Escape steps back.
 - **The window** opens at 980x700 times the screen's scale, made smaller when that does not fit
   the monitor's work area, and centred in it: on the ROG Xbox Ally X at 150% the taskbar never
   covers the prompts. On a touch screen the buttons are larger and a finger dragged over a page
@@ -85,7 +87,7 @@ that has none ([distribution](sources-and-licensing.md#distribution)).
 | Game data | Two tabs. **Discs:** Disc 1 and Disc 2, checked as `generate` checks them, and the texture pack (the `-TextureReplace` folder). A opens the folder picker, X clears Disc 2 or the texture pack, and the right panel shows the check's result and a field to type the folder. **Content:** rows that add downloadable content folders and files, the folders and files searched (A removes one from the list), and the content packages found, with their import state; A on an imported package removes the import from the user data after a confirmation (see [Data directories](#data-directories)). The right panel shows the package's path and size and what the next Play imports. |
 | Shaders | Rows for the shader pass's state, **Compile shaders**, **Skip** and the DirectX Shader Compiler (A fetches it when it is not beside the game), with the pass's progress at the right; see [Shaders page](#shaders-page). |
 | Advanced | The **General** tab: the user data folder (A opens the folder picker, X goes back to the default), rows that open the logs and the user data, and **Show developer options**, which adds a **Developer** tab. |
-| About | Who made Motorsport DX possible (the ReXGlue SDK, Xenia, XenonRecomp and the other projects of [CREDITS.txt](../outputs/FM4-build/CREDITS.txt)), the non-affiliation line, and buttons that open `CREDITS.txt` and the `third-party-notices` folder beside the launcher. |
+| About | Motorsport DX and its build date, with the non-affiliation line at the right; a row for each project that made it possible (the ReXGlue SDK, Xenia, XenonRecomp and the others of [CREDITS.txt](../outputs/FM4-build/CREDITS.txt)), which says at the right what it gave; and rows that open `CREDITS.txt` and the `third-party-notices` folder beside the launcher. |
 
 **Show developer options** (Advanced, saved in `launcher-settings.json`, never part of a launch
 plan) adds the options for comparisons and bug reports:

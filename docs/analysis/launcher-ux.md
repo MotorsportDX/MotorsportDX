@@ -45,9 +45,9 @@ The two machines the launcher has to serve:
   Play cannot start, the bar's left end says why, in the warning colour.
 
 **The controls:**
-- On the themed pages the launcher keeps its own focus, as a game's menu does: always on one
+- On every page and in the profiles the launcher keeps its own focus, as a game's menu does: always on one
   entry, moved by the D-pad, the left stick, the arrow keys or the mouse. A or Enter selects.
-  Dear ImGui's navigation stays off there and serves the pages not yet themed and the popups.
+  Dear ImGui's navigation stays off there and serves the other popups (the confirmations of the Look and Game data pages).
 - An option row is a translucent bar with the label at the left and the value at the right. The
   focused row has a lighter fill, a red frame with a notch in its top right corner, and chevrons
   around its value, which turns red. Left and right step the value; A, or a click on the row,
@@ -108,7 +108,7 @@ calendar time.
 | T3 | Controls: Controller, Racing wheel, Wheel test, Keyboard and Key bindings as LB/RB tabs of rows; the racing wheel's steering, pedals, buttons and force feedback in titled sections, its live values in the detail panel, A to take a pedal's rest and pressed values or a button from the wheel; the wheel test's settings and test force as rows, its device view in the detail panel; the key bindings as rows that wait for a key on A. The racing wheel's knobs stay as the wheel's stages define them | Done |
 | T4 | Game data: Discs and Content tabs. Disc 1, Disc 2 and the texture pack as rows that open the folder picker on A (X clears the optional ones), their checks and a field to type the folder in the detail panel; the content sources as rows, and the content packages with their import state, A removing an import after a confirmation | Done |
 | T5 | Shaders and Advanced: the shader pass's state, Compile, Skip and the DirectX Shader Compiler as rows, the pass's progress in the detail panel; Advanced's General tab as rows, the developer options as a Developer tab that shows while the switch is on | Done |
-| T6 | About, and the profile popup in the theme: the credits in the detail panel style; the profiles as rows | 1 h |
+| T6 | About, and the profile popup in the theme: a row for each project that made Motorsport DX possible, with what it gave in the detail panel; the profiles, Save as a new profile and the delete's confirmation as rows with the popup's own focus | Done |
 
 T3 shares the Racing wheel tab with the racing wheel's own stages (another session): each
 increment rebases on local main before it lands, and keeps the wheel's options, its test and its

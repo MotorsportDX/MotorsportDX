@@ -436,10 +436,6 @@ class App {
   // A themed page: its tabs (LB and RB), a list of option rows and the detail panel.
   void RowsPage(const std::vector<const char*>& tabs, const std::function<void()>& rows,
                 const std::function<void()>& extra);
-  // The pages in the theme: the launcher's own focus, not ImGui's navigation.
-  bool Themed() const {
-    return page_ != kAbout;
-  }
   // The detail panel at the right of a list: the focused entry's title and text.
   void DetailPanel(ImVec2 size, const std::function<void()>& extra);
   void HomeMenu();
@@ -489,7 +485,8 @@ class App {
   std::string ShaderPassMarker();
   // The Shaders page's task on its own thread: fetching DXC, or the offline pass.
   void StartShaderTask(std::function<std::string()> task);
-  void AboutPage();
+  // The About page: who made Motorsport DX possible, the credits and the third-party notices.
+  void AboutRows();
   void Play();
   void Refresh(bool discs);
   std::optional<Plan> CurrentPlan(std::string& error);
@@ -541,8 +538,8 @@ class App {
   int home_focus_ = 0;            // the Home menu's focused entry
   int tab_ = 0;                   // the page's tab
   ImVec2 page_size_;              // the page's column, below the bars
-  // The themed pages' own focus, as a game's menus keep it: always on one entry, moved by the
-  // D-pad, the stick, the arrow keys or the mouse. ImGui's navigation serves the other pages.
+  // The pages' own focus, as a game's menus keep it: always on one entry, moved by the
+  // D-pad, the stick, the arrow keys or the mouse. ImGui's navigation serves the popups.
   int row_focus_ = 0, rows_seen_ = 0, row_count_ = 0;
   int MenuMove();      // -1 up, 1 down, 0
   bool MenuAccept();   // A or Enter, or the A prompt clicked
@@ -552,6 +549,10 @@ class App {
   const char* reset_label_ = "Reset";  // the X prompt's word
   bool row_moved_ = false;      // the focus moved by the pad or the keys: the list scrolls to it
   int row_dragging_ = -1;       // the slider row whose bar the mouse drags
+  // The profiles' popup keeps its own focus while it is open; MenuMove and MenuAccept serve it.
+  int popup_focus_ = 0, popup_count_ = 0;
+  bool in_popup_rows_ = false;
+  bool profile_delete_ = false;  // the popup asks before it deletes the active profile
   ID3D11ShaderResourceView* backdrop_ = nullptr;
   ImVec2 backdrop_size_;
   int page_ = kHome;
@@ -1246,13 +1247,13 @@ void App::Frame() {
     ImGui::End();
     return;
   }
-  // The pad navigates from the first frame on; ImGui's navigation only on the pages not themed.
+  // The pad navigates from the first frame on. The pages and the profiles keep their rows' own
+  // focus; ImGui's navigation serves the other popups.
   if (ImGui::GetFrameCount() < 3) ImGui::SetWindowFocus();
   ImGuiIO& io = ImGui::GetIO();
-  // A popup takes ImGui's navigation on every page.
-  const bool themed = Themed() &&
-                      !ImGui::IsPopupOpen("", ImGuiPopupFlags_AnyPopupId | ImGuiPopupFlags_AnyPopupLevel);
-  if (themed) io.ConfigFlags &= ~(ImGuiConfigFlags_NavEnableGamepad | ImGuiConfigFlags_NavEnableKeyboard);
+  const bool own_focus = ImGui::IsPopupOpen("Profiles") ||
+                         !ImGui::IsPopupOpen("", ImGuiPopupFlags_AnyPopupId | ImGuiPopupFlags_AnyPopupLevel);
+  if (own_focus) io.ConfigFlags &= ~(ImGuiConfigFlags_NavEnableGamepad | ImGuiConfigFlags_NavEnableKeyboard);
   else io.ConfigFlags |= ImGuiConfigFlags_NavEnableGamepad | ImGuiConfigFlags_NavEnableKeyboard;
   PadShortcuts();
   Backdrop();
@@ -1283,21 +1284,7 @@ void App::Frame() {
     case kGameData: GameDataRows(); break;
     case kShaders: ShadersRows(); break;
     case kAdvanced: AdvancedRows(); break;
-    default: {
-      // The pages not yet in the theme, on a panel.
-      ImGui::PushStyleColor(ImGuiCol_ChildBg, ImVec4(0.11f, 0.12f, 0.14f, 0.92f));
-      ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, ImVec2(26 * scale_, 18 * scale_));
-      ImGui::BeginChild("legacy", page_size_, ImGuiChildFlags_AlwaysUseWindowPadding | ImGuiChildFlags_NavFlattened);
-      switch (page_) {
-        default: AboutPage(); break;
-      }
-      if (touch_ && ImGui::IsWindowHovered(ImGuiHoveredFlags_ChildWindows) && !ImGui::IsAnyItemActive() &&
-          ImGui::IsMouseDragging(ImGuiMouseButton_Left))
-        ImGui::SetScrollY(ImGui::GetScrollY() - ImGui::GetIO().MouseDelta.y);
-      ImGui::EndChild();
-      ImGui::PopStyleVar();
-      ImGui::PopStyleColor();
-    }
+    default: AboutRows(); break;
   }
   ImGui::EndGroup();
   ImGui::PopClipRect();
@@ -1555,7 +1542,6 @@ void App::PromptBar() {
   std::vector<Prompt> prompts;
   const std::string not_ready = NotReady();
   const std::string menu = Icon(0xE700);
-  const bool themed = Themed();
   if (not_ready.empty()) prompts.push_back({menu.c_str(), "Play", kPlay});
   prompts.push_back({"Y", "Profile", kProfile});
   if (focus_changed_) prompts.push_back({"X", reset_label_, kReset});
@@ -1571,33 +1557,30 @@ void App::PromptBar() {
     x -= 22 * scale_;
     const float glyph_x = x;
     // The mouse and touch press a prompt as the pad presses its button: the glyph, the word and a
-    // margin. On the pages not yet themed, A is ImGui's own activation, which a click already is.
+    // margin.
     const ImVec2 min(glyph_x - 26 * scale_, window.y + size.y - bar), max(right, window.y + size.y);
-    bool hovered = false;
-    if (it->action != kSelect || themed) {
-      ImGui::SetCursorScreenPos(min);
-      ImGui::PushID(it->text);
-      ImGui::PushItemFlag(ImGuiItemFlags_NoNav, true);
-      const bool pressed = ImGui::InvisibleButton("prompt", max - min);
-      hovered = ImGui::IsItemHovered();
-      ImGui::PopItemFlag();
-      ImGui::PopID();
-      if (hovered)
-        draw->AddRectFilled(min + ImVec2(0, 8 * scale_), max - ImVec2(0, 8 * scale_),
-                            ImGui::GetColorU32(ImVec4(1, 1, 1, 0.10f)), 3 * scale_);
-      if (pressed) {
-        switch (it->action) {
-          case kPlay:
-            if (!shot_) Play();
-            break;
-          case kProfile: ImGui::OpenPopup("Profiles"); break;
-          case kReset: prompt_reset_ = true; break;
-          case kBack:
-            page_ = kHome;
-            tab_ = 0;
-            break;
-          case kSelect: prompt_accept_ = true; break;
-        }
+    ImGui::SetCursorScreenPos(min);
+    ImGui::PushID(it->text);
+    ImGui::PushItemFlag(ImGuiItemFlags_NoNav, true);
+    const bool pressed = ImGui::InvisibleButton("prompt", max - min);
+    const bool hovered = ImGui::IsItemHovered();
+    ImGui::PopItemFlag();
+    ImGui::PopID();
+    if (hovered)
+      draw->AddRectFilled(min + ImVec2(0, 8 * scale_), max - ImVec2(0, 8 * scale_),
+                          ImGui::GetColorU32(ImVec4(1, 1, 1, 0.10f)), 3 * scale_);
+    if (pressed) {
+      switch (it->action) {
+        case kPlay:
+          if (!shot_) Play();
+          break;
+        case kProfile: ImGui::OpenPopup("Profiles"); break;
+        case kReset: prompt_reset_ = true; break;
+        case kBack:
+          page_ = kHome;
+          tab_ = 0;
+          break;
+        case kSelect: prompt_accept_ = true; break;
       }
     }
     draw->AddText(ImVec2(text_x, y - ImGui::GetFontSize() / 2), ImGui::GetColorU32(hovered ? kFocusColor : kText),
@@ -1658,7 +1641,7 @@ int App::OptionRow(const char* id, const char* label, const std::string& value, 
   }
   ImGui::PopFont();
   int result = 0;
-  if (enabled && (focused || hovered)) {
+  if (enabled && (focused || hovered) && !value.empty()) {
     const std::string left = Icon(kIconLeft), right = Icon(kIconRight);
     const float icon = 14 * scale_;
     draw->AddText(body_font_, icon, ImVec2(value_x - chevron, min.y + (height - icon) / 2), ImGui::GetColorU32(kSecondary),
@@ -2092,59 +2075,106 @@ void App::DisplayRows() {
 
 void App::ProfilePopup() {
   ImGui::SetNextWindowPos(ImGui::GetMainViewport()->GetCenter(), ImGuiCond_Appearing, ImVec2(0.5f, 0.5f));
-  ImGui::SetNextWindowSizeConstraints(ImVec2(420 * scale_, 0), ImVec2(FLT_MAX, FLT_MAX));
-  if (ImGui::BeginPopupModal("Profiles", nullptr, ImGuiWindowFlags_AlwaysAutoResize)) {
-    Muted("A profile is one set of run options; the Discs, content, looks and keys are shared.");
-    ImGui::Dummy(ImVec2(0, 4 * scale_));
-    for (const auto& profile : settings_.profiles) {
-      if (ImGui::Selectable(profile.name.c_str(), profile.name == settings_.active, 0, ImVec2(0, ImGui::GetFrameHeight()))) {
-        settings_.active = profile.name;
-        ImGui::CloseCurrentPopup();
-      }
-      if (profile.name == settings_.active && ImGui::IsWindowAppearing()) ImGui::SetItemDefaultFocus();
-    }
-    ImGui::Dummy(ImVec2(0, 4 * scale_));
-    ImGui::Separator();
-    ImGui::TextColored(kMuted, "Save the options as a new profile");
-    ImGui::SetNextItemWidth(260 * scale_);
-    const bool enter = ImGui::InputTextWithHint("##name", "Name", &new_name_, ImGuiInputTextFlags_EnterReturnsTrue);
-    ImGui::SameLine();
-    if ((ImGui::Button("Save") || enter) && !new_name_.empty()) {
-      const Options options = settings_.Active().options;
-      std::erase_if(settings_.profiles, [&](const Profile& p) { return p.name == new_name_; });
-      settings_.profiles.push_back({new_name_, options});
-      settings_.active = new_name_;
-      new_name_.clear();
-    }
-    if (settings_.profiles.size() > 1) {
-      ImGui::Dummy(ImVec2(0, 4 * scale_));
-      if (ImGui::Button(("Delete " + settings_.active).c_str())) ImGui::OpenPopup("Delete profile");
-    }
-    if (ImGui::BeginPopupModal("Delete profile", nullptr, ImGuiWindowFlags_AlwaysAutoResize)) {
-      ImGui::Text("Delete the profile %s?", settings_.active.c_str());
-      Muted("Its options go; the Discs, content, looks and key bindings stay.");
-      if (ImGui::Button("Delete")) {
-        std::erase_if(settings_.profiles, [&](const Profile& p) { return p.name == settings_.active; });
-        settings_.active = settings_.profiles.front().name;
-        ImGui::CloseCurrentPopup();
-      }
-      ImGui::SameLine();
-      if (ImGui::Button("Cancel") || ImGui::IsKeyPressed(ImGuiKey_GamepadFaceRight, false) ||
-          ImGui::IsKeyPressed(ImGuiKey_Escape, false))
-        ImGui::CloseCurrentPopup();
-      ImGui::EndPopup();
-    } else if (ImGui::IsKeyPressed(ImGuiKey_GamepadFaceRight, false) || ImGui::IsKeyPressed(ImGuiKey_Escape, false)) {
-      // B or Escape closes the list, as Back does in a game's menus.
-      ImGui::CloseCurrentPopup();
-    }
-    ImGui::Dummy(ImVec2(0, 4 * scale_));
-    if (ImGui::Button("Close")) ImGui::CloseCurrentPopup();
-    ImGui::EndPopup();
+  ImGui::SetNextWindowSizeConstraints(ImVec2(560 * scale_, 0), ImVec2(560 * scale_, FLT_MAX));
+  ImGui::PushStyleColor(ImGuiCol_PopupBg, ImVec4(0.12f, 0.13f, 0.14f, 0.97f));
+  ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, ImVec2(24 * scale_, 20 * scale_));
+  ImGui::PushStyleVar(ImGuiStyleVar_PopupRounding, 3 * scale_);
+  const bool open = ImGui::BeginPopupModal("Profiles", nullptr, ImGuiWindowFlags_NoTitleBar | ImGuiWindowFlags_AlwaysAutoResize);
+  ImGui::PopStyleVar(2);
+  ImGui::PopStyleColor();
+  if (!open) return;
+  ImGui::PushFont(din_font_, 28);
+  ImGui::TextUnformatted(profile_delete_ ? "DELETE PROFILE" : "PROFILES");
+  ImGui::PopFont();
+  ImGui::PushTextWrapPos(0);
+  Muted(profile_delete_ ? "Delete the profile " + settings_.active +
+                              "? Its options go; the Discs, content, looks and key bindings stay."
+                        : "A profile is one set of run options; the Discs, content, looks and keys are shared.");
+  ImGui::PopTextWrapPos();
+  ImGui::Dummy(ImVec2(0, 8 * scale_));
+  // The popup's own focus, as the pages keep theirs.
+  std::swap(row_focus_, popup_focus_);
+  std::swap(row_count_, popup_count_);
+  const int page_rows = rows_seen_;
+  rows_seen_ = 0;
+  in_popup_rows_ = true;
+  row_moved_ = false;
+  if (ImGui::IsWindowAppearing()) {
+    row_focus_ = 0;
+    for (size_t i = 0; i < settings_.profiles.size(); ++i)
+      if (settings_.profiles[i].name == settings_.active) row_focus_ = static_cast<int>(i);
+  } else if (row_count_ > 0) {
+    row_focus_ = std::clamp(row_focus_ + MenuMove(), 0, row_count_ - 1);
   }
+  bool close = false;
+  if (!profile_delete_) {
+    for (size_t i = 0; i < settings_.profiles.size(); ++i) {
+      const std::string& name = settings_.profiles[i].name;
+      const std::string id = "profile" + std::to_string(i);
+      if (OptionRow(id.c_str(), name.c_str(), name == settings_.active ? "Active" : "", nullptr, true, &kSuccess) == 2) {
+        settings_.active = name;
+        close = true;
+      }
+    }
+    // A new profile takes the name typed below, or the next free "Profile <n>".
+    const auto save = [&] {
+      std::string name = new_name_;
+      for (int n = 2; name.empty(); ++n) {
+        name = "Profile " + std::to_string(n);
+        for (const auto& profile : settings_.profiles)
+          if (profile.name == name) name.clear();
+      }
+      const Options options = settings_.Active().options;
+      std::erase_if(settings_.profiles, [&](const Profile& profile) { return profile.name == name; });
+      settings_.profiles.push_back({name, options});
+      settings_.active = name;
+      new_name_.clear();
+    };
+    if (OptionRow("save", "Save as a new profile", "Press A", nullptr) == 2) save();
+    if (settings_.profiles.size() > 1 &&
+        OptionRow("delete", ("Delete " + settings_.active).c_str(), "Press A", nullptr, true, &kDanger) == 2) {
+      profile_delete_ = true;
+      row_focus_ = 1;
+    }
+    if (OptionRow("close", "Close", "Press A", nullptr) == 2) close = true;
+    ImGui::Dummy(ImVec2(0, 4 * scale_));
+    ImGui::PushFont(din_font_, 17);
+    ImGui::TextColored(kMuted, "NAME OF A NEW PROFILE");
+    ImGui::PopFont();
+    ImGui::SetNextItemWidth(-1);
+    if (ImGui::InputTextWithHint("##name", "Profile <n> when empty", &new_name_, ImGuiInputTextFlags_EnterReturnsTrue))
+      save();
+  } else {
+    if (OptionRow("confirm", "Delete", "Press A", nullptr, true, &kDanger) == 2) {
+      std::erase_if(settings_.profiles, [&](const Profile& profile) { return profile.name == settings_.active; });
+      settings_.active = settings_.profiles.front().name;
+      profile_delete_ = false;
+      row_focus_ = 0;
+    }
+    if (OptionRow("cancel", "Cancel", "Press A", nullptr) == 2) profile_delete_ = false;
+  }
+  // B or Escape steps back, as Back does in a game's menus.
+  if (!ImGui::GetIO().WantTextInput &&
+      (ImGui::IsKeyPressed(ImGuiKey_GamepadFaceRight, false) || ImGui::IsKeyPressed(ImGuiKey_Escape, false))) {
+    if (profile_delete_) profile_delete_ = false;
+    else close = true;
+  }
+  row_count_ = rows_seen_;
+  row_focus_ = std::max(0, std::min(row_focus_, row_count_ - 1));
+  in_popup_rows_ = false;
+  rows_seen_ = page_rows;
+  std::swap(row_focus_, popup_focus_);
+  std::swap(row_count_, popup_count_);
+  if (close) {
+    profile_delete_ = false;
+    ImGui::CloseCurrentPopup();
+  }
+  ImGui::EndPopup();
 }
 
 int App::MenuMove() {
-  if (ImGui::IsPopupOpen("", ImGuiPopupFlags_AnyPopupId | ImGuiPopupFlags_AnyPopupLevel) || ImGui::GetIO().WantTextInput)
+  if ((!in_popup_rows_ && ImGui::IsPopupOpen("", ImGuiPopupFlags_AnyPopupId | ImGuiPopupFlags_AnyPopupLevel)) ||
+      ImGui::GetIO().WantTextInput)
     return 0;
   for (const ImGuiKey key : {ImGuiKey_GamepadDpadUp, ImGuiKey_GamepadLStickUp, ImGuiKey_UpArrow})
     if (ImGui::IsKeyPressed(key)) return -1;
@@ -2154,7 +2184,8 @@ int App::MenuMove() {
 }
 
 bool App::MenuAccept() {
-  if (ImGui::IsPopupOpen("", ImGuiPopupFlags_AnyPopupId | ImGuiPopupFlags_AnyPopupLevel) || ImGui::GetIO().WantTextInput)
+  if ((!in_popup_rows_ && ImGui::IsPopupOpen("", ImGuiPopupFlags_AnyPopupId | ImGuiPopupFlags_AnyPopupLevel)) ||
+      ImGui::GetIO().WantTextInput)
     return false;
   if (prompt_accept_) return true;
   return ImGui::IsKeyPressed(ImGuiKey_GamepadFaceDown, false) || ImGui::IsKeyPressed(ImGuiKey_Enter, false) ||
@@ -3439,48 +3470,52 @@ void App::AdvancedRows() {
 
 // Who made this possible, in short; CREDITS.txt beside the launcher (outputs/FM4-build/CREDITS.txt,
 // copied by build and export) says it in full, and third-party-notices holds the licenses.
-void App::AboutPage() {
-  ImGui::PushFont(heading_font_, 22);
-  ImGui::TextUnformatted("Motorsport DX");
-  ImGui::PopFont();
-  ImGui::TextWrapped("Runs Forza Motorsport 4 (Xbox 360), recompiled for Windows from your own discs.");
-  ImGui::Dummy(ImVec2(0, 8 * scale_));
-  ImGui::PushFont(heading_font_, 17);
-  ImGui::TextUnformatted("Made possible by");
-  ImGui::PopFont();
-  static const char* const kThanks[][2] = {
-      {"The ReXGlue SDK", "Tom (crack), its founder, and the ReXGlue contributors: the recompiler and runtime"},
-      {"Xenia", "Ben Vanik and the Xenia project contributors: the Xbox 360 emulation it all builds on"},
-      {"Xenia Canary", "its game patches and arithmetic, which parts of the FM4 fixes follow"},
-      {"XenonRecomp", "hedge-dev and contributors: the modern Xbox 360 static recompiler"},
-      {"rexdex's recompiler", "the original Xbox 360 static recompiler"},
-      {"XenosRecomp and Unleashed Recompiled", "hedge-dev: ideas for the shader mods and the native path"},
-      {"The Xbox 360 homebrew, modding and reverse-engineering communities", "their shared research"},
-      {"LLVM and Clang, Python, the Windows SDK and the DirectX compilers", "the tools that build it"},
-      {"Turn 10 Studios", "who made Forza Motorsport 4"},
-  };
-  for (const auto& [name, what] : kThanks) {
-    ImGui::Bullet();
-    ImGui::TextWrapped("%s", name);
-    ImGui::Indent(ImGui::GetStyle().IndentSpacing);
-    Muted(what);
-    ImGui::Unindent(ImGui::GetStyle().IndentSpacing);
-  }
-  ImGui::Dummy(ImVec2(0, 8 * scale_));
-  Muted("Motorsport DX is not affiliated with or endorsed by Microsoft, Xbox Game Studios or Turn 10 "
-        "Studios. Forza Motorsport and Xbox are trademarks of the Microsoft group of companies.");
-  ImGui::Dummy(ImVec2(0, 8 * scale_));
+void App::AboutRows() {
   const fs::path credits = root_ / "CREDITS.txt";
   const fs::path notices = root_ / "third-party-notices";
-  ImGui::BeginDisabled(!fs::exists(credits));
-  if (ImGui::Button("Open credits")) OpenPath(credits);
-  ImGui::EndDisabled();
-  ImGui::SameLine();
-  ImGui::BeginDisabled(!fs::exists(notices));
-  if (ImGui::Button("Open third-party notices")) OpenPath(notices);
-  ImGui::EndDisabled();
-  Muted(fs::exists(notices) ? "The licenses of the libraries in the program files: " + Utf8(notices)
-                            : "Run build (or export) to copy CREDITS.txt and third-party-notices here.");
+  // A short name for the list, the full one and what each gave.
+  static const char* const kThanks[][3] = {
+      {"ReXGlue SDK", "The ReXGlue SDK", "Tom (crack), its founder, and the ReXGlue contributors: the recompiler and runtime."},
+      {"Xenia", "Xenia", "Ben Vanik and the Xenia project contributors: the Xbox 360 emulation it all builds on."},
+      {"Xenia Canary", "Xenia Canary", "Its game patches and arithmetic, which parts of the FM4 fixes follow."},
+      {"XenonRecomp", "XenonRecomp", "hedge-dev and contributors: the modern Xbox 360 static recompiler."},
+      {"rexdex's recompiler", "rexdex's recompiler", "The original Xbox 360 static recompiler."},
+      {"XenosRecomp, Unleashed Recompiled", "XenosRecomp and Unleashed Recompiled",
+       "hedge-dev: ideas for the shader mods and the native path."},
+      {"Xbox 360 communities", "The Xbox 360 homebrew, modding and reverse-engineering communities",
+       "Their shared research."},
+      {"Build tools", "LLVM and Clang, Python, the Windows SDK and the DirectX compilers", "The tools that build it."},
+      {"Turn 10 Studios", "Turn 10 Studios", "Who made Forza Motorsport 4."},
+  };
+  RowsPage({}, [&] {
+    OptionRow("about", "Motorsport DX", build_date_.empty() ? "" : "Build " + build_date_,
+              "Runs Forza Motorsport 4 (Xbox 360), recompiled for Windows from your own discs.\n\nMotorsport DX is not "
+              "affiliated with or endorsed by Microsoft, Xbox Game Studios or Turn 10 Studios. Forza Motorsport and "
+              "Xbox are trademarks of the Microsoft group of companies.");
+    RowsTitle("MADE POSSIBLE BY");
+    for (const auto& [name, full, what] : kThanks) {
+      const std::string help = std::string(full) + ". " + what;
+      OptionRow(name, name, "", help.c_str());
+    }
+    RowsTitle("LICENSES");
+    // A screenshot never opens a file.
+    if (OptionRow("credits", "Open the credits", "Press A",
+                  "CREDITS.txt: the projects that made Motorsport DX possible, in full.", fs::exists(credits)) == 2 &&
+        !shot_)
+      OpenPath(credits);
+    if (OptionRow("notices", "Open the third-party notices", "Press A",
+                  fs::exists(notices) ? "The licenses of the libraries in the program files."
+                                      : "Run build (or export) to copy CREDITS.txt and third-party-notices here.",
+                  fs::exists(notices)) == 2 &&
+        !shot_)
+      OpenPath(notices);
+  }, [&] {
+    if (focus_id_ != "notices" || !fs::exists(notices)) return;
+    ImGui::Dummy(ImVec2(0, 14 * scale_));
+    ImGui::PushTextWrapPos(0);
+    Muted(Utf8(notices));
+    ImGui::PopTextWrapPos();
+  });
 }
 
 }  // namespace
