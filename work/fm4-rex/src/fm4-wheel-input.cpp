@@ -229,6 +229,15 @@ float LoadFloat(uint8_t* base, uint32_t address) {
   return std::bit_cast<float>(Load32(base, address));
 }
 
+// The car's road-wheel lock in degrees (0: not a sane value), published for the wheel's lock.
+double PublishCarLock(uint8_t* base, uint32_t dynamics) {
+  const double radians = LoadFloat(base, dynamics + kRoadLockOffset);
+  if (!std::isfinite(radians) || radians <= 0.05 || radians >= 1.5) return 0.0;
+  const double degrees = radians * 180.0 / 3.14159265358979323846;
+  rex::input::wheel::PublishRoadLock(degrees);
+  return degrees;
+}
+
 double SteadyMs() {
   using namespace std::chrono;
   return duration<double, std::milli>(steady_clock::now().time_since_epoch()).count();
@@ -418,14 +427,7 @@ REX_HOOK_RAW(sub_823651D8) {
   count_user = user;
   count_wheel = wheel;
   // The first player's car sets the wheel's steering lock (stage 5), whoever's steering won.
-  double road_lock = 0.0;
-  if (user == int(kWheelUser)) {
-    const double radians = LoadFloat(base, dynamics + kRoadLockOffset);
-    if (std::isfinite(radians) && radians > 0.05 && radians < 1.5) {
-      road_lock = radians * 180.0 / 3.14159265358979323846;
-      rex::input::wheel::PublishRoadLock(road_lock);
-    }
-  }
+  const double road_lock = user == int(kWheelUser) ? PublishCarLock(base, dynamics) : 0.0;
   if (wheel) {
     const ModeOverride& mode = Mode();
     uint8_t value = kWheelMode;
@@ -588,6 +590,10 @@ thread_local bool effects_fresh = false;
 thread_local double pending_dynamic_scale = 1.0;
 thread_local double pending_dynamic_max = 1.0;
 thread_local double pending_feedback_scale = 1.0;
+// The CCarDynamics whose torque the control step just read for a player's pad. The read comes
+// before the force feedback block's update in the same pass, in the countdown too, where the
+// car's control records do not run yet, so the car's lock is published from it.
+thread_local uint32_t pending_dynamics = 0;
 
 // The first player's car for the physics-rate force, from the control step: its physics
 // object, whether the player drives it, and the force feedback block's scaling of the torque.
@@ -671,9 +677,12 @@ REX_HOOK_RAW(sub_823921F8) {
   const bool driving = ctx.r4.u8 != 0;
   __imp__sub_823921F8(ctx, base);
   if (from != kDrivingSet) return;
-  const uint32_t block = pending_block;
+  const uint32_t block = pending_block, dynamics = pending_dynamics;
   pending_block = 0;
+  pending_dynamics = 0;
   if (!pad || block != pad + kForceBlock || (Load32(base, pad) & 0xFF) != kWheelUser) return;
+  // The car's lock before the sample, so the end stop has it from the race's first frame.
+  const double road_lock = driving && dynamics ? PublishCarLock(base, dynamics) : 0.0;
   rex::input::wheel::ForceSample& sample = pending_sample;
   sample.driving = driving;
   if (effects_fresh) {
@@ -694,7 +703,7 @@ REX_HOOK_RAW(sub_823921F8) {
   if (Trace()) {
     TraceLine("ffb %.2f u=%u drv=%d torque=%.6f speed=%.4f slip=%.4f force=%.6f ffs=%.4f "
               "sscale=%.4f const=%.6f spring=%.4f/%.4f damper=%.4f/%.4f bump=%.4f road=%.4f "
-              "hit=%.3f/%.3f/%.3f impact=%.4f/%.3f/%u y2=%.3f",
+              "hit=%.3f/%.3f/%.3f impact=%.4f/%.3f/%u y2=%.3f lock=%.3f",
               SteadyMs(), fm4_diagnostic_updates.load(std::memory_order_relaxed), driving ? 1 : 0,
               sample.torque, sample.speed, sample.slip, LoadFloat(base, block + kDynamicForce),
               LoadFloat(base, block + kForceFeedbackScale),
@@ -702,14 +711,16 @@ REX_HOOK_RAW(sub_823921F8) {
               sample.spring.coefficient, sample.spring.saturation, sample.damper.coefficient,
               sample.damper.saturation, effects.bumpiness, sample.road, effects.car,
               effects.world, effects.object, sample.impact, sample.impact_s, sample.impacts,
-              effects.table_y2);
+              effects.table_y2, road_lock);
   }
 }
 
-// The reset of the force feedback blocks: a race update without a player's control.
+// The reset of the force feedback blocks: a race update without a player's control. The car's
+// lock is cleared, so the next race never starts with the last car's.
 REX_HOOK_RAW(sub_828C5B18) {
   __imp__sub_828C5B18(ctx, base);
   player_driving.store(false, std::memory_order_relaxed);
+  rex::input::wheel::PublishRoadLock(0.0);
   rex::input::wheel::PublishForces({});
   if (Trace() && !reset_traced.exchange(true, std::memory_order_relaxed)) {
     TraceLine("ffb %.2f u=%u reset", SteadyMs(),
@@ -769,6 +780,7 @@ double EvaluateTorque(PPCContext& ctx, uint8_t* base, uint32_t physics, double e
 REX_HOOK_RAW(sub_828154B0) {
   static const bool watch = std::getenv("FM4_WRITE_WATCH_FILE") != nullptr;
   if (uint32_t(ctx.lr) == kTorqueRead) {
+    pending_dynamics = ctx.r3.u32;
     if (watch) FM4WriteWatch(base, ctx.r3.u32 + kTorqueOffset);
     if (record_user == int(kWheelUser)) {
       player_physics.store(ctx.r3.u32 - kPhysicsFromDynamics, std::memory_order_relaxed);
