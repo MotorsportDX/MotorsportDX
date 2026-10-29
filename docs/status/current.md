@@ -75,6 +75,14 @@ The race phase of `photo` is 30 seconds of racing after 10 seconds of driving, w
 
 BuildRoots on 20 October 2026: `I:\FM4-build-usa` (USA discs, the development base) and `I:\FM4-build-pass` (Japan/Asia discs, for side builds). `I:\FM4-build2`, `I:\FM4-build-iter` and `I:\FM4-build-gtao` were removed that day; the runs, shader dumps, inventories, gate logs, material atlas and shader storage that the docs cite were moved first to `I:\FM4-archive\<BuildRoot>` with the same relative paths, and the docs point there. Results named with a bare BuildRoot of those three describe where a run was made.
 
+### Racing wheel, stage 2, 29 October 2026
+
+- Stage 2 of [native racing wheel support](../analysis/racing-wheels.md#stage-2-done-29-october-2026): the wheel's steering, pedals and shift, clutch and handbrake buttons drive the first player's car at the wheel's resolution, merged with the pad as the game merges two bindings, through the game's 900-degree wheel filters (wheel mode 2) while the wheel steers; `-Wheel` knobs and the launcher's **Racing wheel** section with the pedals' calibration and button assignment from the wheel test ([running.md](../running.md#racing-wheel-in-the-game)); off by default. The anti-cheat threshold is scaled to the frame time for every device (the main session's decision).
+- Build: `I:\FM4-build-usa`, snapshot `whl4` from `9dc64ae` (not dirty); `fm4_wheel_ffb_tests`, `fm4_wheel_mapping_tests`, `fm4_wheel_host_tests` and `fm4_pad_shaping_tests` pass; the launcher built from the same source passes its tests (531 plans).
+- A career at 3/2 and 240 Hz with the defaults (`whl4`): exit 0, race 236.15 fps (p99 5.16 ms), the same four log errors as main's; against `whl2` FAIL on the whole run's frame p99 only (33.19 against 17.08 ms; `whl2`'s value is the outlier, `l1fs32` had 33.08), the race and replay phases unchanged.
+- The same career driven by an SDL virtual wheel's script (`whl4v`): the wheel drove 10,866 records of the player's car, all in wheel mode 2, the steering in steps of one raw unit (0.00003, an 8-bit step is 0.0078), the throttle in steps of 0.000015, each shift press one record. The trace build `whl3` (`4c65e50`) measured the wheel modes (mode 2 linear and a full-lock step in 50 ms, the pad's mode 360 ms) and a `career_finish` at 240 Hz whose rewards were paid (+5,270 CR, driver and Ford affinity level 2), with the AI's steering counted 330 to 440 times a lap: the rule does not withhold a pad player's rewards at 240 Hz ([findings](../analysis/racing-wheels.md#stage-2-done-29-october-2026)).
+- Not covered: a real wheel; the owner's [checklist](../running.md#racing-wheel-test-checklist) steps 9 to 14 cover driving with the MOZA set. No force feedback reaches the wheel yet (stage 3).
+
 ### Racing wheel, stages 0 and 1, 29 October 2026
 
 - Stage 0 of [native racing wheel support](../analysis/racing-wheels.md#stage-0-done-29-october-2026): a wheel host shared by the runtime and the GUI launcher (SDL's joystick and haptic APIs, a 1,000 Hz force thread, the safety governor, stops on crash and exit, a recording backend), `wheel` and `wheel_ffb_*` cvars off by default, the launcher's wheel test without the game, and the owner's [checklist](../running.md#racing-wheel-test-checklist). The runtime's SDL is now built with haptics. Stage 1 traced the title's control path and its anti-cheat rule ([findings](../analysis/racing-wheels.md#stage-1-findings-29-october-2026)); the game gets no wheel input or force yet.
@@ -965,7 +973,7 @@ Everything still open, grouped by area.
 
 ### Settings and input
 
-- The in-game PC settings overlay (saved to TOML) and racing wheels are not done. Keyboard bindings are set in the GUI launcher's Controls page (the runtime's `keybind_*` settings), not in the game. The modern pad options (rumble strength, trigger rumble, the driver choice, the input thread) are checked with a virtual pad and on the ROG Xbox Ally X's built-in pad (no trigger rumble there); the Xbox Series controller is next ([checklist](../running.md#controller-test-checklist)).
+- The in-game PC settings overlay (saved to TOML) and racing wheel force feedback are not done; driving with a racing wheel is new and checked with a virtual wheel only ([stage 2](#racing-wheel-stage-2-29-october-2026)). Keyboard bindings are set in the GUI launcher's Controls page (the runtime's `keybind_*` settings), not in the game. The modern pad options (rumble strength, trigger rumble, the driver choice, the input thread) are checked with a virtual pad and on the ROG Xbox Ally X's built-in pad (no trigger rumble there); the Xbox Series controller is next ([checklist](../running.md#controller-test-checklist)).
 
 ### Stability and runtime
 
