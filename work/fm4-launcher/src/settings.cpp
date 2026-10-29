@@ -117,6 +117,8 @@ Settings Settings::Load(const fs::path& path) {
       if (keys.is_string()) settings.binds.Set(name, keys.get<std::string>());
   if (json.contains("mouse_right_stick") && json.at("mouse_right_stick").is_boolean())
     settings.mouse_right_stick = json.at("mouse_right_stick").get<bool>();
+  if (json.contains("developer") && json.at("developer").is_boolean())
+    settings.developer = json.at("developer").get<bool>();
   if (settings.profiles.empty()) settings.profiles.push_back({"Default", Options{}});
   settings.Active();
   return settings;
@@ -136,6 +138,7 @@ void Settings::Save(const fs::path& path) const {
   json["binds"] = Json::object();
   for (const auto& [name, keys] : binds.Items()) json["binds"][name] = keys;
   json["mouse_right_stick"] = mouse_right_stick;
+  json["developer"] = developer;
   const fs::path temporary = fs::path(path).concat(L".tmp");
   {
     std::ofstream stream(temporary, std::ios::binary | std::ios::trunc);

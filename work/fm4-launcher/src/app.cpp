@@ -7,6 +7,7 @@
 #include <SDL3/SDL.h>
 #include <SDL3/SDL_main.h>
 
+#include <array>
 #include <atomic>
 #include <functional>
 #include <iterator>
@@ -24,7 +25,9 @@
 #include <sstream>
 #include <thread>
 
+#define IMGUI_DEFINE_MATH_OPERATORS
 #include "imgui.h"
+#include "imgui_internal.h"
 #include "imgui_impl_sdl3.h"
 #include "imgui_impl_dx11.h"
 #include "misc/cpp/imgui_stdlib.h"
@@ -46,20 +49,31 @@ namespace {
 namespace fs = std::filesystem;
 using namespace fm4;
 
-// Colors of the dark theme.
-const ImVec4 kBackground = ImVec4(0.110f, 0.110f, 0.102f, 1.0f);
-const ImVec4 kPanel = ImVec4(0.137f, 0.137f, 0.129f, 1.0f);
-const ImVec4 kField = ImVec4(0.165f, 0.165f, 0.153f, 1.0f);
-const ImVec4 kBorder = ImVec4(0.267f, 0.267f, 0.255f, 1.0f);
-const ImVec4 kText = ImVec4(0.910f, 0.902f, 0.875f, 1.0f);
-const ImVec4 kMuted = ImVec4(0.533f, 0.529f, 0.502f, 1.0f);
-const ImVec4 kSecondary = ImVec4(0.663f, 0.655f, 0.624f, 1.0f);
-const ImVec4 kAccent = ImVec4(0.216f, 0.541f, 0.867f, 1.0f);
-const ImVec4 kAccentDark = ImVec4(0.047f, 0.267f, 0.486f, 1.0f);
-const ImVec4 kSuccess = ImVec4(0.592f, 0.769f, 0.349f, 1.0f);
-const ImVec4 kDanger = ImVec4(0.941f, 0.584f, 0.584f, 1.0f);
-const ImVec4 kDangerBackground = ImVec4(0.314f, 0.075f, 0.075f, 1.0f);
-const ImVec4 kWarning = ImVec4(0.937f, 0.624f, 0.153f, 1.0f);
+// Colors of the dark theme: carbon greys and a racing red.
+const ImVec4 kBackground = ImVec4(0.051f, 0.055f, 0.067f, 1.0f);
+const ImVec4 kPanel = ImVec4(0.086f, 0.094f, 0.114f, 1.0f);
+const ImVec4 kField = ImVec4(0.118f, 0.129f, 0.157f, 1.0f);
+const ImVec4 kBorder = ImVec4(0.165f, 0.180f, 0.216f, 1.0f);
+const ImVec4 kText = ImVec4(0.929f, 0.937f, 0.953f, 1.0f);
+const ImVec4 kMuted = ImVec4(0.541f, 0.565f, 0.612f, 1.0f);
+const ImVec4 kSecondary = ImVec4(0.725f, 0.741f, 0.776f, 1.0f);
+const ImVec4 kAccent = ImVec4(0.902f, 0.231f, 0.180f, 1.0f);
+const ImVec4 kAccentBright = ImVec4(1.0f, 0.353f, 0.263f, 1.0f);
+const ImVec4 kAccentDark = ImVec4(0.420f, 0.098f, 0.075f, 1.0f);
+const ImVec4 kSuccess = ImVec4(0.235f, 0.796f, 0.498f, 1.0f);
+const ImVec4 kDanger = ImVec4(1.0f, 0.478f, 0.420f, 1.0f);
+const ImVec4 kDangerBackground = ImVec4(0.314f, 0.075f, 0.063f, 1.0f);
+const ImVec4 kWarning = ImVec4(0.949f, 0.663f, 0.231f, 1.0f);
+
+// Segoe Fluent Icons (Windows 11) or Segoe MDL2 Assets (Windows 10), read from the Windows fonts.
+std::string Icon(char32_t code) {
+  return {static_cast<char>(0xE0 | (code >> 12)), static_cast<char>(0x80 | ((code >> 6) & 0x3F)),
+          static_cast<char>(0x80 | (code & 0x3F))};
+}
+constexpr char32_t kIconHome = 0xE80F, kIconDisplay = 0xE7F4, kIconLook = 0xE790, kIconPad = 0xE7FC,
+                   kIconDisc = 0xE958, kIconShaders = 0xE945, kIconSettings = 0xE713, kIconInfo = 0xE946,
+                   kIconCheck = 0xE73E, kIconWarning = 0xE7BA, kIconLeft = 0xE76B, kIconRight = 0xE76C,
+                   kIconPlay = 0xE768, kIconPackage = 0xE7B8, kIconFolder = 0xE8B7;
 
 struct Knob {
   const char* name;
@@ -247,6 +261,10 @@ std::string FormatKnob(double value, float step) {
   return result;
 }
 
+// The banner after a game that exited with an error: Windows' NTSTATUS codes in hex, with the
+// common ones in words.
+std::string ExitText(unsigned long code, double seconds);
+
 std::string FormatSize(std::uintmax_t bytes) {
   char text[32];
   if (bytes >= (1ull << 30))
@@ -261,6 +279,22 @@ std::string FormatDuration(double seconds) {
   if (total < 60) return std::to_string(total) + " s";
   if (total < 3600) return std::to_string(total / 60) + " min " + std::to_string(total % 60) + " s";
   return std::to_string(total / 3600) + " h " + std::to_string(total / 60 % 60) + " min";
+}
+
+std::string ExitText(unsigned long code, double seconds) {
+  char hex[16];
+  std::snprintf(hex, sizeof(hex), "0x%08lX", code);
+  const std::string after = " after " + FormatDuration(seconds);
+  if (code >= 0xC0000000ul) {
+    const char* what = code == 0xC0000005ul ? "a memory access violation"
+                       : code == 0xC0000409ul ? "a stack buffer check"
+                       : code == 0xC00000FDul ? "a stack overflow"
+                       : code == 0xC0000135ul ? "a missing DLL (install the Visual C++ Redistributable)"
+                                              : nullptr;
+    return "The game crashed" + after + " (" + (what ? std::string(what) + ", " : "") + hex +
+           "). The game log says more.";
+  }
+  return "The game exited with code " + std::to_string(code) + after + ".";
 }
 
 // A look value split into its presets and its knobs (later knobs win).
@@ -296,6 +330,16 @@ struct LookParts {
   }
 };
 
+// The pages, in the navigation's order, with their names and their ids of --screenshot.
+enum Page { kHome, kDisplay, kLook, kControls, kGameData, kShaders, kAdvanced, kAbout, kPageCount };
+const char* const kPageNames[kPageCount] = {"Home",      "Display", "Look",     "Controls",
+                                            "Game data", "Shaders", "Advanced", "About"};
+const char* const kPageIds[kPageCount] = {"home",      "display", "look",     "controls",
+                                          "game-data", "shaders", "advanced", "about"};
+
+// A setup step's state on the Home page and in the navigation.
+enum class Status { kDone, kOptional, kNeeded, kBusy };
+
 enum DialogTarget { kDisc1, kDisc2, kContentFolder, kContentFiles, kTextureReplace, kTextureDump, kUserData };
 
 class App;
@@ -316,10 +360,46 @@ class App {
   void LoadFonts(float scale);
   void ApplyTheme(float scale);
   void Frame();
-  void Header();
   void Banner();
-  void Navigation();
-  void DisplayPage();
+  // The gamepad's shortcuts (LB and RB change the page, Start plays) and the focus ring.
+  void PadShortcuts();
+  // The racing theme's shell: a backdrop (a blurred picture, or a dark gradient), the emblem and
+  // the wordmark, the page's badge and tabs (LB and RB), translucent panels, the red focus,
+  // and the bar of pad prompts, which the mouse and touch also press.
+  void Backdrop();
+  void TopBar();
+  // The page's tabs; returns the bar's height. LB and RB move between them.
+  void TabBar(int& tab, const std::vector<const char*>& tabs);
+  void PromptBar();
+  // The profiles (Y): pick one, save the options under a new name, or delete one.
+  void ProfilePopup();
+  void PadGlyph(ImDrawList* draw, ImVec2 center, const char* label);
+  void Slant(ImDrawList* draw, ImVec2 min, ImVec2 max, ImU32 color, float skew);
+  void Emblem(ImDrawList* draw, ImVec2 origin, float height);
+  void Slashes(ImDrawList* draw, ImVec2 max, float size);
+  void PanelBg(ImVec2 min, ImVec2 max);
+  void Focus(ImDrawList* draw, ImVec2 min, ImVec2 max);
+  // One option as a row: left and right (D-pad, stick, arrow keys, or a click on a chevron)
+  // return -1 and 1, A or a click on the row 2.
+  int OptionRow(const char* id, const char* label, const std::string& value, const char* help,
+                bool enabled = true, const ImVec4* value_color = nullptr);
+  // The detail panel at the right of a list: the focused entry's title and text.
+  void DetailPanel(ImVec2 size, const std::function<void()>& extra);
+  void HomeMenu();
+  void DisplayRows();
+  bool LoadBackdrop(const fs::path& path);
+  void FocusRing();
+  Status DiscStatus() const;
+  Status ContentStatus() const;
+  Status ShaderStatus();
+  bool WheelKnobsOn();
+  bool ShadersReady();
+  // Why Play cannot start yet, or empty.
+  std::string NotReady() const;
+  bool SmallAction(const char* label);
+  // A slider with its value beside it: ImGui writes it over the grab, where the grab hides it.
+  bool ValueSlider(const char* id, float* value, float min, float max, const char* format);
+  void KeyBindings();
   void LookPage();
   void ControlsPage();
   void ControllerSection();
@@ -341,7 +421,6 @@ class App {
   // The Shaders page's task on its own thread: fetching DXC, or the offline pass.
   void StartShaderTask(std::function<std::string()> task);
   void AboutPage();
-  void Footer();
   void Play();
   void Refresh(bool discs);
   std::optional<Plan> CurrentPlan(std::string& error);
@@ -382,13 +461,34 @@ class App {
   IDXGISwapChain* swap_chain_ = nullptr;
   ID3D11RenderTargetView* target_ = nullptr;
   bool CreateDevice(HWND window);
+  void FitWindow(HWND window);
   void CreateTarget();
   void ReleaseTarget();
   Uint32 game_event_ = 0;
   float scale_ = 1;
   ImFont* body_font_ = nullptr;
   ImFont* heading_font_ = nullptr;
-  int page_ = 0;
+  ImFont* din_font_ = nullptr;    // Bahnschrift: tabs, section titles, values
+  ImFont* title_font_ = nullptr;  // Segoe UI Black Italic: the wordmark and the page titles
+  std::string help_;              // the focused option's help, in the detail panel
+  std::string help_title_;
+  int home_focus_ = 0;            // the Home menu's focused entry
+  int tab_ = 0;                   // the page's tab
+  ImVec2 page_size_;              // the page's column, below the bars
+  // The themed pages' own focus, as a game's menus keep it: always on one entry, moved by the
+  // D-pad, the stick, the arrow keys or the mouse. ImGui's navigation serves the other pages.
+  int row_focus_ = 0, rows_seen_ = 0, row_count_ = 0;
+  int MenuMove();      // -1 up, 1 down, 0
+  bool MenuAccept();   // A or Enter, or the A prompt clicked
+  bool prompt_accept_ = false;  // the A prompt was clicked: the next frame's MenuAccept
+  ID3D11ShaderResourceView* backdrop_ = nullptr;
+  ImVec2 backdrop_size_;
+  int page_ = kHome;
+  int controls_tab_ = 0;  // Controller, Racing wheel, Keyboard
+  // Larger targets, drag scrolling and no hover help: on a touch screen (the ROG Xbox Ally X).
+  bool touch_ = false;
+  bool shaders_ready_ = false;  // ShadersReady(), from Refresh and the end of each pass
+  bool shader_was_busy_ = false;
   std::atomic<bool> running_ = false;
   std::thread waiter_;
   // The Shaders page (shaders.h): one task at a time.
@@ -494,7 +594,7 @@ bool App::Init(int argc, char** argv) {
   const HWND hwnd = static_cast<HWND>(
       SDL_GetPointerProperty(SDL_GetWindowProperties(window_), SDL_PROP_WINDOW_WIN32_HWND_POINTER, nullptr));
   if (!CreateDevice(hwnd)) return SDL_SetError("Direct3D 11 is not available"), false;
-  SDL_SetWindowPosition(window_, SDL_WINDOWPOS_CENTERED, SDL_WINDOWPOS_CENTERED);
+  FitWindow(hwnd);
   SDL_ShowWindow(window_);
 
   IMGUI_CHECKVERSION();
@@ -502,10 +602,15 @@ bool App::Init(int argc, char** argv) {
   ImGuiIO& io = ImGui::GetIO();
   io.ConfigFlags |= ImGuiConfigFlags_NavEnableKeyboard | ImGuiConfigFlags_NavEnableGamepad;
   io.IniFilename = nullptr;
+  int touch_devices = 0;
+  SDL_free(SDL_GetTouchDevices(&touch_devices));
+  touch_ = touch_devices > 0;
   ApplyTheme(scale_);
   LoadFonts(scale_);
   ImGui_ImplSDL3_InitForD3D(window_);
   ImGui_ImplDX11_Init(device_, context_);
+  for (const wchar_t* name : {L"launcher-backdrop.jpg", L"launcher-backdrop.png"})
+    if (!backdrop_ && fs::exists(root_ / name)) LoadBackdrop(root_ / name);
   if (load_error_.empty()) Refresh(true);
   // --play: press Play at start with the active profile, for a desktop shortcut.
   bool play = false;
@@ -516,34 +621,31 @@ bool App::Init(int argc, char** argv) {
     if (std::string(argv[i]) == "--wheel-test") wheel_test = true;
   }
   if (wheel_test) {
-    page_ = 2;
+    page_ = kControls;
+    controls_tab_ = 1;
     StartWheelTest();
   } else if (play) {
     Play();
-  } else if (load_error_.empty() && fs::exists(root_ / "game-build" / "fm4_rex.exe")) {
-    // The shader pass once after an install or an update (the owner's answer 5 of 19.10).
-    std::ifstream marker(root_ / "logs" / "shader-pass.done", std::ios::binary);
-    std::string done((std::istreambuf_iterator<char>(marker)), std::istreambuf_iterator<char>());
-    if (done != ShaderPassMarker()) {
-      page_ = 5;
-      CompileShaders();
-    }
+  } else if (load_error_.empty() && disc1_.error.empty() && !ShadersReady()) {
+    // The shader pass once after an install or an update (the owner's answer 5 of 19.10), once
+    // Disc 1 is set; the Home page shows its progress.
+    CompileShaders();
   }
   return true;
 }
 
 int App::Screenshot() {
-  static const char* const kPages[] = {"display", "look", "controls", "game-data", "advanced", "shaders", "about"};
   page_ = -1;
-  for (int i = 0; i < static_cast<int>(std::size(kPages)); ++i)
-    if (shot_->page == kPages[i]) page_ = i;
+  for (int i = 0; i < kPageCount; ++i)
+    if (shot_->page == kPageIds[i]) page_ = i;
+  touch_ = shot_->touch;
   if (page_ < 0) return std::fprintf(stderr, "Unknown page: %s\n", shot_->page.c_str()), 2;
   if (shot_->state == "error-banner") {
-    banner_ = "The game exited with code 3221225477 after 2 min 14 s.";
+    banner_ = ExitText(0xC0000005, 134);
     banner_error_ = true;
   } else if (shot_->state == "load-error") {
     load_error_ = "No game-build\\fm4_rex.exe beside the launcher. Keep MotorsportDX.exe in its export folder.";
-  } else if (!shot_->state.empty() && shot_->state != "first-run") {
+  } else if (!shot_->state.empty() && shot_->state != "first-run" && shot_->state != "developer") {
     return std::fprintf(stderr, "Unknown state: %s\n", shot_->state.c_str()), 2;
   }
   // WARP: the screenshot never touches the GPU, which may be running the game.
@@ -568,6 +670,7 @@ int App::Screenshot() {
   device_->CreateTexture2D(&desc, nullptr, &staging);
 
   scale_ = shot_->scale;
+  if (shot_->state == "developer") settings_.developer = true;
   IMGUI_CHECKVERSION();
   ImGui::CreateContext();
   ImGuiIO& io = ImGui::GetIO();
@@ -577,6 +680,7 @@ int App::Screenshot() {
   ApplyTheme(scale_);
   LoadFonts(scale_);
   ImGui_ImplDX11_Init(device_, context_);
+  if (!shot_->backdrop.empty()) LoadBackdrop(shot_->backdrop);
   if (load_error_.empty()) Refresh(true);
   static const std::map<std::string, ImGuiKey> kPadKeys = {
       {"up", ImGuiKey_GamepadDpadUp},       {"down", ImGuiKey_GamepadDpadDown}, {"left", ImGuiKey_GamepadDpadLeft},
@@ -624,6 +728,23 @@ int App::Screenshot() {
   return 0;
 }
 
+void App::FitWindow(HWND window) {
+  // The window and its frame inside the monitor's work area, centred there: on the ROG Xbox Ally X
+  // at 150% (1280x720 points) the taskbar would otherwise cover the bar of pad prompts.
+  MONITORINFO info{sizeof(info)};
+  RECT outer{}, client{};
+  if (!GetMonitorInfoW(MonitorFromWindow(window, MONITOR_DEFAULTTOPRIMARY), &info) || !GetWindowRect(window, &outer) ||
+      !GetClientRect(window, &client))
+    return;
+  const RECT& work = info.rcWork;
+  const int frame_w = (outer.right - outer.left) - client.right, frame_h = (outer.bottom - outer.top) - client.bottom;
+  const int width = std::min<int>(client.right, work.right - work.left - frame_w);
+  const int height = std::min<int>(client.bottom, work.bottom - work.top - frame_h);
+  SetWindowPos(window, nullptr, work.left + (work.right - work.left - width - frame_w) / 2,
+               work.top + (work.bottom - work.top - height - frame_h) / 2, width + frame_w, height + frame_h,
+               SWP_NOZORDER | SWP_NOACTIVATE);
+}
+
 bool App::CreateDevice(HWND window) {
   DXGI_SWAP_CHAIN_DESC desc{};
   desc.BufferCount = 2;
@@ -668,10 +789,18 @@ void App::LoadFonts(float scale) {
     return io.Fonts->AddFontFromFileTTF(Utf8(path).c_str(), size);
   };
   body_font_ = load(L"segoeui.ttf", 17);
-  heading_font_ = load(L"seguisb.ttf", 17);
   if (!body_font_) body_font_ = io.Fonts->AddFontDefault();
+  // The icons merged into the body font.
+  ImFontConfig icons;
+  icons.MergeMode = true;
+  const wchar_t* icon_file = fs::exists(fonts / L"SegoeIcons.ttf") ? L"SegoeIcons.ttf" : L"segmdl2.ttf";
+  if (fs::exists(fonts / icon_file)) io.Fonts->AddFontFromFileTTF(Utf8(fonts / icon_file).c_str(), 17, &icons);
+  heading_font_ = load(L"seguisb.ttf", 17);
+  din_font_ = load(L"bahnschrift.ttf", 17);
+  title_font_ = load(L"seguibli.ttf", 17);
   if (!heading_font_) heading_font_ = body_font_;
-  io.FontDefault = body_font_;
+  if (!din_font_) din_font_ = heading_font_;
+  if (!title_font_) title_font_ = heading_font_;  io.FontDefault = body_font_;
   ImGui::GetStyle().FontScaleDpi = scale;
 }
 
@@ -690,6 +819,14 @@ void App::ApplyTheme(float scale) {
   style.PopupRounding = 8;
   style.GrabRounding = 6;
   style.ScrollbarRounding = 6;
+  style.SelectableTextAlign = ImVec2(0, 0.5f);
+  if (touch_) {
+    // Targets of about 9 mm on the ROG Xbox Ally X's 7-inch 1080p screen at 150%.
+    style.FramePadding = ImVec2(14, 12);
+    style.ItemSpacing = ImVec2(12, 12);
+    style.ScrollbarSize = 22;
+    style.GrabMinSize = 28;
+  }
   style.TabRounding = 6;
   style.WindowBorderSize = 0;
   style.ChildBorderSize = 1;
@@ -740,8 +877,7 @@ void App::Run() {
           if (waiter_.joinable()) waiter_.join();
           running_ = false;
           if (code != 0) {
-            banner_ = "The game exited with code " + std::to_string(code) + " after " +
-                      FormatDuration(seconds) + ".";
+            banner_ = ExitText(code, seconds);
             banner_error_ = true;
           } else {
             banner_.clear();
@@ -828,6 +964,7 @@ void App::Refresh(bool discs) {
   content_ = disc2_.error.empty() ? CheckContent(data_, settings_.disc2, settings_.content) : ContentCheck{};
   imported_.clear();
   for (const auto& package : content_.packages) imported_.push_back(Imported(package));
+  shaders_ready_ = ShadersReady();
 }
 
 fs::path App::UserData() const {
@@ -908,12 +1045,12 @@ void App::Play() {
     banner_ = message;
     banner_error_ = true;
   };
-  if (!disc1_.error.empty()) return fail(disc1_.error), void(page_ = 3);
-  if (!disc2_.error.empty()) return fail(disc2_.error), void(page_ = 3);
-  if (!content_.error.empty()) return fail(content_.error), void(page_ = 3);
+  if (!disc1_.error.empty()) return fail(disc1_.error), void(page_ = kGameData);
+  if (!disc2_.error.empty()) return fail(disc2_.error), void(page_ = kGameData);
+  if (!content_.error.empty()) return fail(content_.error), void(page_ = kGameData);
   for (const auto& bind : kBinds) {
     const std::string error = BindError(BindValue(bind));
-    if (!error.empty()) return fail(std::string(bind.label) + ": " + error + "."), void(page_ = 2);
+    if (!error.empty()) return fail(std::string(bind.label) + ": " + error + "."), void(page_ = kControls);
   }
   std::string error;
   const auto plan = CurrentPlan(error);
@@ -1087,55 +1224,875 @@ void App::Frame() {
     ImGui::End();
     return;
   }
-  Header();
+  // The pad navigates from the first frame on; ImGui's navigation only on the pages not themed.
+  if (ImGui::GetFrameCount() < 3) ImGui::SetWindowFocus();
+  ImGuiIO& io = ImGui::GetIO();
+  // A popup takes ImGui's navigation on every page.
+  const bool themed = (page_ == kHome || page_ == kDisplay) &&
+                      !ImGui::IsPopupOpen("", ImGuiPopupFlags_AnyPopupId | ImGuiPopupFlags_AnyPopupLevel);
+  if (themed) io.ConfigFlags &= ~(ImGuiConfigFlags_NavEnableGamepad | ImGuiConfigFlags_NavEnableKeyboard);
+  else io.ConfigFlags |= ImGuiConfigFlags_NavEnableGamepad | ImGuiConfigFlags_NavEnableKeyboard;
+  PadShortcuts();
+  Backdrop();
+  TopBar();
   Banner();
-  const float footer = ImGui::GetFrameHeight() + 28 * scale_;
-  const float body = ImGui::GetContentRegionAvail().y - footer;
-  ImGui::PushStyleColor(ImGuiCol_ChildBg, kPanel);
-  ImGui::BeginChild("navigation", ImVec2(180 * scale_, body), ImGuiChildFlags_AlwaysUseWindowPadding);
-  Navigation();
-  ImGui::EndChild();
-  ImGui::PopStyleColor();
-  ImGui::SameLine(0, 0);
-  ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, ImVec2(22 * scale_, 16 * scale_));
-  ImGui::BeginChild("page", ImVec2(0, body), ImGuiChildFlags_AlwaysUseWindowPadding);
+  help_.clear();
+  help_title_.clear();
+  const float prompts = 58 * scale_;
+  const float body = ImGui::GetContentRegionAvail().y - prompts;
+  // The page in a centred column: lists stay readable on a wide screen.
+  const float width = ImGui::GetContentRegionAvail().x;
+  const float column = std::min(width - 48 * scale_, 1500 * scale_);
+  // No child window for the page: ImGui's flattened navigation crosses one level of child windows,
+  // and the pages' lists are children of their own.
+  const ImVec2 page_origin(ImGui::GetCursorScreenPos().x + (width - column) / 2, ImGui::GetCursorScreenPos().y);
+  ImGui::SetCursorScreenPos(page_origin);
+  ImGui::PushClipRect(page_origin, page_origin + ImVec2(column, body), true);
+  page_size_ = ImVec2(column, body);
+  ImGui::BeginGroup();
   switch (page_) {
-    case 0: DisplayPage(); break;
-    case 1: LookPage(); break;
-    case 2: ControlsPage(); break;
-    case 3: GameDataPage(); break;
-    case 4: AdvancedPage(); break;
-    case 5: ShadersPage(); break;
-    default: AboutPage(); break;
+    case kHome: HomeMenu(); break;
+    case kDisplay: DisplayRows(); break;
+    default: {
+      // The pages not yet in the theme, on a panel.
+      ImGui::PushStyleColor(ImGuiCol_ChildBg, ImVec4(0.11f, 0.12f, 0.14f, 0.92f));
+      ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, ImVec2(26 * scale_, 18 * scale_));
+      ImGui::BeginChild("legacy", page_size_, ImGuiChildFlags_AlwaysUseWindowPadding | ImGuiChildFlags_NavFlattened);
+      switch (page_) {
+        case kLook: LookPage(); break;
+        case kControls: ControlsPage(); break;
+        case kGameData: GameDataPage(); break;
+        case kShaders: ShadersPage(); break;
+        case kAdvanced: AdvancedPage(); break;
+        default: AboutPage(); break;
+      }
+      if (touch_ && ImGui::IsWindowHovered(ImGuiHoveredFlags_ChildWindows) && !ImGui::IsAnyItemActive() &&
+          ImGui::IsMouseDragging(ImGuiMouseButton_Left))
+        ImGui::SetScrollY(ImGui::GetScrollY() - ImGui::GetIO().MouseDelta.y);
+      ImGui::EndChild();
+      ImGui::PopStyleVar();
+      ImGui::PopStyleColor();
+    }
   }
-  ImGui::EndChild();
-  ImGui::PopStyleVar();
-  Footer();
+  ImGui::EndGroup();
+  ImGui::PopClipRect();
+  PromptBar();
+  ProfilePopup();
+  FocusRing();
   ImGui::End();
 }
+// The pad's focus in the wordmark's red (the owner's choice of 29 October 2026), and the
+// translucent panels over the backdrop.
+const ImVec4 kFocusColor = kAccentBright;
+const ImVec4 kGlass = ImVec4(0.180f, 0.192f, 0.212f, 0.86f);
+const ImVec4 kGlassLight = ImVec4(0.282f, 0.298f, 0.322f, 0.90f);
 
-void App::Header() {
+void App::Slant(ImDrawList* draw, ImVec2 min, ImVec2 max, ImU32 color, float skew) {
+  draw->AddQuadFilled(ImVec2(min.x + skew, min.y), ImVec2(max.x, min.y), ImVec2(max.x - skew, max.y),
+                      ImVec2(min.x, max.y), color);
+}
+
+// The project's own emblem: three bars leaning into the wind, red and two silvers, rising to the
+// right. Drawn, so it needs no image file.
+void App::Emblem(ImDrawList* draw, ImVec2 origin, float height) {
+  const float skew = height * 0.5f, bar = height * 0.42f, gap = height * 0.12f;
+  const ImU32 red = ImGui::GetColorU32(kAccent), red_dark = ImGui::GetColorU32(ImVec4(0.62f, 0.07f, 0.05f, 1));
+  const ImU32 silver = ImGui::GetColorU32(ImVec4(0.86f, 0.87f, 0.89f, 1));
+  const ImU32 steel = ImGui::GetColorU32(ImVec4(0.42f, 0.44f, 0.47f, 1));
+  for (int i = 0; i < 3; ++i) {
+    const float h = height * (0.55f + 0.225f * i);
+    const float x = origin.x + i * (bar + gap) - (height - h) * 0.5f;
+    const ImVec2 min(x + (height - h) * 0.5f, origin.y + height - h), max(x + bar + skew * h / height, origin.y + height);
+    const float s = skew * h / height;
+    const ImU32 top = i == 0 ? red : silver, bottom = i == 0 ? red_dark : steel;
+    // A lit upper half and a darker lower half, like brushed metal.
+    const float mid = (min.y + max.y) / 2;
+    draw->AddQuadFilled(ImVec2(min.x + s, min.y), ImVec2(max.x, min.y), ImVec2(max.x - s / 2, mid),
+                        ImVec2(min.x + s / 2, mid), top);
+    draw->AddQuadFilled(ImVec2(min.x + s / 2, mid), ImVec2(max.x - s / 2, mid), ImVec2(max.x - s, max.y),
+                        ImVec2(min.x, max.y), bottom);
+  }
+}
+
+// Red slashes in a corner, the theme's motif.
+void App::Slashes(ImDrawList* draw, ImVec2 max, float size) {
+  for (int i = 0; i < 3; ++i) {
+    const float w = size * (0.10f - 0.025f * i), x = max.x - size * (0.18f + 0.22f * i);
+    const ImU32 color = ImGui::GetColorU32(ImVec4(kAccent.x, kAccent.y, kAccent.z, 0.85f - 0.25f * i));
+    Slant(draw, ImVec2(x - size * 0.5f, max.y - size * (0.9f - 0.2f * i)), ImVec2(x + w, max.y), color, size * 0.5f);
+  }
+}
+
+void App::PanelBg(ImVec2 min, ImVec2 max) {
+  ImGui::GetWindowDrawList()->AddRectFilled(min, max, ImGui::GetColorU32(kGlass), 3 * scale_);
+}
+
+// The red frame of the focused entry, with its corner notch.
+void App::Focus(ImDrawList* draw, ImVec2 min, ImVec2 max) {
+  const ImU32 color = ImGui::GetColorU32(kFocusColor);
+  draw->AddRect(min, max, color, 2 * scale_, 0, 2.5f * scale_);
+  const float notch = 11 * scale_;
+  draw->AddTriangleFilled(ImVec2(max.x - notch, min.y), ImVec2(max.x, min.y), ImVec2(max.x, min.y + notch), color);
+}
+
+bool App::LoadBackdrop(const fs::path& path) {
+  std::vector<uint8_t> pixels;
+  int width = 0, height = 0;
+  if (!ReadImage(path, 640, pixels, width, height)) return false;
+  // A soft blur, as a camera's depth of field: box passes on the small picture; the GPU's filter
+  // upscales it.
+  std::vector<uint8_t> work(pixels.size());
+  for (int pass = 0; pass < 4; ++pass) {
+    const bool horizontal = pass % 2 == 0;
+    for (int y = 0; y < height; ++y)
+      for (int x = 0; x < width; ++x)
+        for (int c = 0; c < 4; ++c) {
+          int sum = 0, count = 0;
+          for (int k = -2; k <= 2; ++k) {
+            const int sx = horizontal ? std::clamp(x + k, 0, width - 1) : x;
+            const int sy = horizontal ? y : std::clamp(y + k, 0, height - 1);
+            sum += pixels[(static_cast<size_t>(sy) * width + sx) * 4 + c];
+            ++count;
+          }
+          work[(static_cast<size_t>(y) * width + x) * 4 + c] = static_cast<uint8_t>(sum / count);
+        }
+    pixels.swap(work);
+  }
+  D3D11_TEXTURE2D_DESC desc{};
+  desc.Width = static_cast<UINT>(width);
+  desc.Height = static_cast<UINT>(height);
+  desc.MipLevels = desc.ArraySize = 1;
+  desc.Format = DXGI_FORMAT_R8G8B8A8_UNORM;
+  desc.SampleDesc.Count = 1;
+  desc.Usage = D3D11_USAGE_IMMUTABLE;
+  desc.BindFlags = D3D11_BIND_SHADER_RESOURCE;
+  const D3D11_SUBRESOURCE_DATA data{pixels.data(), static_cast<UINT>(width * 4), 0};
+  ID3D11Texture2D* texture = nullptr;
+  if (device_->CreateTexture2D(&desc, &data, &texture) != S_OK) return false;
+  device_->CreateShaderResourceView(texture, nullptr, &backdrop_);
+  texture->Release();
+  backdrop_size_ = ImVec2(static_cast<float>(width), static_cast<float>(height));
+  return backdrop_ != nullptr;
+}
+
+void App::Backdrop() {
+  ImDrawList* draw = ImGui::GetWindowDrawList();
+  const ImVec2 min = ImGui::GetWindowPos(), size = ImGui::GetWindowSize(), max = min + size;
+  if (backdrop_) {
+    // Cover the window, cropped to keep the picture's aspect.
+    const float scale = std::max(size.x / backdrop_size_.x, size.y / backdrop_size_.y);
+    const ImVec2 shown = backdrop_size_ * scale, offset = (size - shown) * 0.5f;
+    draw->AddImage(ImTextureRef(reinterpret_cast<ImTextureID>(backdrop_)), min + offset, min + offset + shown);
+    draw->AddRectFilled(min, max, ImGui::GetColorU32(ImVec4(0.04f, 0.045f, 0.05f, 0.30f)));
+  } else {
+    draw->AddRectFilledMultiColor(min, max, ImGui::GetColorU32(ImVec4(0.17f, 0.18f, 0.20f, 1)),
+                                  ImGui::GetColorU32(ImVec4(0.10f, 0.105f, 0.12f, 1)),
+                                  ImGui::GetColorU32(ImVec4(0.035f, 0.04f, 0.045f, 1)),
+                                  ImGui::GetColorU32(ImVec4(0.06f, 0.065f, 0.075f, 1)));
+    // Light streaks across the dark, as from a garage's ceiling lights.
+    for (int i = 0; i < 5; ++i) {
+      const float x = min.x + size.x * (0.35f + 0.14f * i);
+      Slant(draw, ImVec2(x, min.y), ImVec2(x + size.x * 0.05f, max.y),
+            ImGui::GetColorU32(ImVec4(1, 1, 1, 0.018f + 0.006f * (i % 3))), -size.y * 0.35f);
+    }
+  }
+  // Darker at the top and the bottom, where the bars sit.
+  draw->AddRectFilledMultiColor(min, ImVec2(max.x, min.y + 150 * scale_), ImGui::GetColorU32(ImVec4(0, 0, 0, 0.55f)),
+                                ImGui::GetColorU32(ImVec4(0, 0, 0, 0.55f)), ImGui::GetColorU32(ImVec4(0, 0, 0, 0)),
+                                ImGui::GetColorU32(ImVec4(0, 0, 0, 0)));
+  draw->AddRectFilledMultiColor(ImVec2(min.x, max.y - 120 * scale_), max, ImGui::GetColorU32(ImVec4(0, 0, 0, 0)),
+                                ImGui::GetColorU32(ImVec4(0, 0, 0, 0)), ImGui::GetColorU32(ImVec4(0, 0, 0, 0.6f)),
+                                ImGui::GetColorU32(ImVec4(0, 0, 0, 0.6f)));
+}
+
+void App::TopBar() {
   ImDrawList* draw = ImGui::GetWindowDrawList();
   const ImVec2 origin = ImGui::GetCursorScreenPos();
-  const float height = 52 * scale_;
-  const float width = ImGui::GetContentRegionAvail().x;
-  draw->AddRectFilled(origin, ImVec2(origin.x + width, origin.y + height), ImGui::GetColorU32(kPanel));
-  draw->AddLine(ImVec2(origin.x, origin.y + height - 1), ImVec2(origin.x + width, origin.y + height - 1),
-                ImGui::GetColorU32(kBorder));
-  ImGui::SetCursorScreenPos(ImVec2(origin.x + 18 * scale_, origin.y + (height - ImGui::GetFontSize() * 1.3f) / 2));
-  ImGui::PushFont(heading_font_, 22);
-  ImGui::TextUnformatted("Motorsport DX");
+  const float width = ImGui::GetContentRegionAvail().x, height = 86 * scale_;
+  const float left = origin.x + 28 * scale_, middle = origin.y + height / 2;
+  Emblem(draw, ImVec2(left, middle - 17 * scale_), 34 * scale_);
+  ImGui::PushFont(din_font_, 30);
+  const float word_x = left + 74 * scale_;
+  const float text_y = middle - ImGui::GetFontSize() / 2;
+  // Drawn twice a pixel apart: Bahnschrift's regular weight, made heavier.
+  for (const float dx : {0.0f, 0.9f * scale_}) draw->AddText(ImVec2(word_x + dx, text_y), ImGui::GetColorU32(kText), "MOTORSPORT");
+  const float word = ImGui::CalcTextSize("MOTORSPORT ").x;
+  for (const float dx : {0.0f, 0.9f * scale_}) draw->AddText(ImVec2(word_x + word + dx, text_y), ImGui::GetColorU32(kAccent), "DX");
+  const float brand_end = word_x + word + ImGui::CalcTextSize("DX").x;
   ImGui::PopFont();
-  ImGui::SameLine();
-  ImGui::SetCursorPosY(ImGui::GetCursorPosY() + 3 * scale_);
-  std::string subtitle = disc1_.release.empty() ? "Forza Motorsport 4" : disc1_.release + " release";
-  if (!build_date_.empty()) subtitle += "  \xC2\xB7  build " + build_date_;
-  ImGui::TextColored(kMuted, "%s", subtitle.c_str());
-  const std::string status = disc1_.error.empty() ? "Disc 1 found" : "Disc 1 needed";
-  const float status_width = ImGui::CalcTextSize(status.c_str()).x;
-  ImGui::SameLine(width - status_width - 18 * scale_);
-  ImGui::TextColored(disc1_.error.empty() ? kSuccess : kWarning, "%s", status.c_str());
+  // The page's badge, as a game names the menu it is in.
+  if (page_ != kHome) {
+    static const char32_t kIcons[kPageCount] = {kIconHome, kIconDisplay, kIconLook, kIconPad,
+                                                kIconDisc, kIconShaders, kIconSettings, kIconInfo};
+    ImGui::PushFont(din_font_, 22);
+    std::string name = kPageNames[page_];
+    for (auto& c : name) c = static_cast<char>(std::toupper(static_cast<unsigned char>(c)));
+    const std::string icon = Icon(kIcons[page_]);
+    const float w = ImGui::CalcTextSize(name.c_str()).x + 74 * scale_, h = 42 * scale_;
+    const ImVec2 min(brand_end + 34 * scale_, middle - h / 2);
+    draw->AddRectFilled(min, min + ImVec2(w, h), ImGui::GetColorU32(ImVec4(0.10f, 0.11f, 0.12f, 0.85f)), h / 2);
+    draw->AddRect(min, min + ImVec2(w, h), ImGui::GetColorU32(ImVec4(1, 1, 1, 0.35f)), h / 2, 0, 1.5f * scale_);
+    draw->AddText(body_font_, ImGui::GetFontSize() * 0.9f, min + ImVec2(16 * scale_, (h - ImGui::GetFontSize() * 0.9f) / 2),
+                  ImGui::GetColorU32(kText), icon.c_str());
+    draw->AddText(min + ImVec2(50 * scale_, (h - ImGui::GetFontSize()) / 2), ImGui::GetColorU32(kText), name.c_str());
+    ImGui::PopFont();
+  }
+  // The profile and the build, as a game's player card.
+  const std::string release = (disc1_.release.empty() ? std::string("Disc 1 needed") : disc1_.release + " release") +
+                              (build_date_.empty() ? "" : "  \xC2\xB7  build " + build_date_);
+  ImGui::PushFont(din_font_, 19);
+  const float card_w = std::max(ImGui::CalcTextSize(settings_.active.c_str()).x, ImGui::CalcTextSize(release.c_str()).x * 0.8f) +
+                       90 * scale_;
+  const float card_h = 50 * scale_;
+  const ImVec2 card(origin.x + width - 28 * scale_ - card_w, middle - card_h / 2);
+  draw->AddRectFilled(card, card + ImVec2(card_w, card_h), ImGui::GetColorU32(ImVec4(0.10f, 0.11f, 0.12f, 0.85f)), 3 * scale_);
+  draw->AddRectFilled(card, card + ImVec2(card_h, card_h), ImGui::GetColorU32(ImVec4(0.24f, 0.25f, 0.27f, 0.95f)), 3 * scale_);
+  const std::string pad = Icon(kIconPad);
+  draw->AddText(body_font_, 22 * scale_, card + ImVec2((card_h - 22 * scale_) / 2, (card_h - 22 * scale_) / 2),
+                ImGui::GetColorU32(kText), pad.c_str());
+  draw->AddText(card + ImVec2(card_h + 14 * scale_, 5 * scale_), ImGui::GetColorU32(kText), settings_.active.c_str());
+  draw->AddText(body_font_, 14 * scale_, card + ImVec2(card_h + 14 * scale_, 28 * scale_),
+                ImGui::GetColorU32(disc1_.error.empty() ? kSecondary : kWarning), release.c_str());
+  ImGui::PopFont();
   ImGui::SetCursorScreenPos(ImVec2(origin.x, origin.y + height));
+  ImGui::Dummy(ImVec2(0, 0));
+}
+
+void App::TabBar(int& tab, const std::vector<const char*>& tabs) {
+  const int count = static_cast<int>(tabs.size());
+  if (!ImGui::IsPopupOpen("", ImGuiPopupFlags_AnyPopupId | ImGuiPopupFlags_AnyPopupLevel)) {
+    if (ImGui::IsKeyPressed(ImGuiKey_GamepadL1, false)) tab = (tab + count - 1) % count, row_focus_ = 0;
+    if (ImGui::IsKeyPressed(ImGuiKey_GamepadR1, false)) tab = (tab + 1) % count, row_focus_ = 0;
+  }
+  ImDrawList* draw = ImGui::GetWindowDrawList();
+  const ImVec2 origin = ImGui::GetCursorScreenPos();
+  const float width = page_size_.x, height = 46 * scale_;
+  draw->AddRectFilled(origin, origin + ImVec2(width, height), ImGui::GetColorU32(ImVec4(0.12f, 0.13f, 0.14f, 0.88f)));
+  ImGui::PushFont(din_font_, 19);
+  const float y = origin.y + (height - ImGui::GetFontSize()) / 2;
+  draw->AddText(ImVec2(origin.x + 18 * scale_, y), ImGui::GetColorU32(kMuted), "< LB");
+  const float rb = ImGui::CalcTextSize("RB >").x;
+  draw->AddText(ImVec2(origin.x + width - 18 * scale_ - rb, y), ImGui::GetColorU32(kMuted), "RB >");
+  const float inner = origin.x + 90 * scale_, span = width - 180 * scale_, slot = span / count;
+  for (int i = 0; i < count; ++i) {
+    const float w = ImGui::CalcTextSize(tabs[i]).x, x = inner + slot * i + (slot - w) / 2;
+    const bool selected = i == tab;
+    draw->AddText(ImVec2(x, y), ImGui::GetColorU32(selected ? kFocusColor : kSecondary), tabs[i]);
+    if (selected)
+      draw->AddRectFilled(ImVec2(x - 6 * scale_, origin.y + height - 3 * scale_), ImVec2(x + w + 6 * scale_, origin.y + height),
+                          ImGui::GetColorU32(kFocusColor));
+    ImGui::SetCursorScreenPos(ImVec2(inner + slot * i, origin.y));
+    ImGui::PushID(i);
+    ImGui::PushItemFlag(ImGuiItemFlags_NoNav, true);
+    if (ImGui::InvisibleButton("tab", ImVec2(slot, height))) tab = i, row_focus_ = 0;
+    ImGui::PopItemFlag();
+    ImGui::PopID();
+  }
+  ImGui::PopFont();
+  ImGui::SetCursorScreenPos(ImVec2(origin.x, origin.y + height + 10 * scale_));
+  ImGui::Dummy(ImVec2(0, 0));
+}
+
+void App::PadGlyph(ImDrawList* draw, ImVec2 center, const char* label) {
+  const float radius = 13 * scale_;
+  draw->AddCircle(center, radius, ImGui::GetColorU32(kText), 0, 1.6f * scale_);
+  // The Menu button's glyph is an icon; the letters are Bahnschrift.
+  const bool icon = static_cast<unsigned char>(label[0]) >= 0xE0;
+  ImGui::PushFont(icon ? body_font_ : din_font_, icon ? 12 : 15);
+  const ImVec2 size = ImGui::CalcTextSize(label);
+  draw->AddText(center - size * 0.5f, ImGui::GetColorU32(kText), label);
+  ImGui::PopFont();
+}
+
+void App::PromptBar() {
+  // The A prompt clicked in the last frame was taken by this frame's page.
+  prompt_accept_ = false;
+  ImDrawList* draw = ImGui::GetWindowDrawList();
+  const ImVec2 window = ImGui::GetWindowPos(), size = ImGui::GetWindowSize();
+  const float bar = 58 * scale_, y = window.y + size.y - 30 * scale_;
+  enum Action { kPlay, kProfile, kBack, kSelect };
+  struct Prompt {
+    const char* glyph;
+    const char* text;
+    Action action;
+  };
+  std::vector<Prompt> prompts;
+  const std::string not_ready = NotReady();
+  const std::string menu = Icon(0xE700);
+  const bool themed = page_ == kHome || page_ == kDisplay;
+  if (not_ready.empty()) prompts.push_back({menu.c_str(), "Play", kPlay});
+  prompts.push_back({"Y", "Profile", kProfile});
+  if (page_ != kHome) prompts.push_back({"B", "Back", kBack});
+  prompts.push_back({"A", "Select", kSelect});
+  ImGui::PushFont(din_font_, 18);
+  float x = window.x + size.x - 32 * scale_;
+  for (auto it = prompts.rbegin(); it != prompts.rend(); ++it) {
+    const float w = ImGui::CalcTextSize(it->text).x;
+    const float right = x + 12 * scale_;
+    x -= w;
+    const float text_x = x;
+    x -= 22 * scale_;
+    const float glyph_x = x;
+    // The mouse and touch press a prompt as the pad presses its button: the glyph, the word and a
+    // margin. On the pages not yet themed, A is ImGui's own activation, which a click already is.
+    const ImVec2 min(glyph_x - 26 * scale_, window.y + size.y - bar), max(right, window.y + size.y);
+    bool hovered = false;
+    if (it->action != kSelect || themed) {
+      ImGui::SetCursorScreenPos(min);
+      ImGui::PushID(it->text);
+      ImGui::PushItemFlag(ImGuiItemFlags_NoNav, true);
+      const bool pressed = ImGui::InvisibleButton("prompt", max - min);
+      hovered = ImGui::IsItemHovered();
+      ImGui::PopItemFlag();
+      ImGui::PopID();
+      if (hovered)
+        draw->AddRectFilled(min + ImVec2(0, 8 * scale_), max - ImVec2(0, 8 * scale_),
+                            ImGui::GetColorU32(ImVec4(1, 1, 1, 0.10f)), 3 * scale_);
+      if (pressed) {
+        switch (it->action) {
+          case kPlay:
+            if (!shot_) Play();
+            break;
+          case kProfile: ImGui::OpenPopup("Profiles"); break;
+          case kBack:
+            page_ = kHome;
+            tab_ = 0;
+            break;
+          case kSelect: prompt_accept_ = true; break;
+        }
+      }
+    }
+    draw->AddText(ImVec2(text_x, y - ImGui::GetFontSize() / 2), ImGui::GetColorU32(hovered ? kFocusColor : kText),
+                  it->text);
+    PadGlyph(draw, ImVec2(glyph_x, y), it->glyph);
+    x -= 40 * scale_;
+  }
+  // Why Play waits, at the left.
+  if (!not_ready.empty()) {
+    const std::string text = Icon(kIconWarning) + "  " + not_ready;
+    draw->AddText(body_font_, 17 * scale_, ImVec2(window.x + 32 * scale_, y - 9 * scale_), ImGui::GetColorU32(kWarning),
+                  text.c_str());
+  }
+  ImGui::PopFont();
+}
+
+int App::OptionRow(const char* id, const char* label, const std::string& value, const char* help, bool enabled,
+                   const ImVec4* value_color) {
+  const float width = ImGui::GetContentRegionAvail().x, height = 50 * scale_;
+  const ImVec2 min = ImGui::GetCursorScreenPos(), max = min + ImVec2(width, height);
+  ImGui::PushID(id);
+  const int index = rows_seen_++;
+  ImGui::PushItemFlag(ImGuiItemFlags_NoNav, true);
+  const bool pressed = ImGui::InvisibleButton("row", ImVec2(width, height)) && enabled;
+  const bool hovered = ImGui::IsItemHovered();
+  ImGui::PopItemFlag();
+  if (hovered && (ImGui::GetIO().MouseDelta.x != 0 || ImGui::GetIO().MouseDelta.y != 0)) row_focus_ = index;
+  const bool focused = index == row_focus_;
+  ImDrawList* draw = ImGui::GetWindowDrawList();
+  draw->AddRectFilled(min, max, ImGui::GetColorU32(focused || hovered ? kGlassLight : kGlass), 2 * scale_);
+  if (focused) Focus(draw, min, max);
+  const ImVec4 text = enabled ? kText : kMuted;
+  draw->AddText(body_font_, 18 * scale_, ImVec2(min.x + 18 * scale_, min.y + (height - 18 * scale_) / 2),
+                ImGui::GetColorU32(text), label);
+  // The value at the right, between chevrons while the row is focused.
+  ImGui::PushFont(din_font_, 19);
+  const ImVec2 value_size = ImGui::CalcTextSize(value.c_str());
+  const float chevron = 26 * scale_;
+  const float value_x = max.x - 18 * scale_ - chevron - value_size.x;
+  draw->AddText(ImVec2(value_x, min.y + (height - value_size.y) / 2),
+                ImGui::GetColorU32(value_color ? *value_color : enabled ? (focused ? kFocusColor : kText) : kMuted),
+                value.c_str());
+  ImGui::PopFont();
+  int result = 0;
+  if (enabled && (focused || hovered)) {
+    const std::string left = Icon(kIconLeft), right = Icon(kIconRight);
+    const float icon = 14 * scale_;
+    draw->AddText(body_font_, icon, ImVec2(value_x - chevron, min.y + (height - icon) / 2), ImGui::GetColorU32(kSecondary),
+                  left.c_str());
+    draw->AddText(body_font_, icon, ImVec2(max.x - 18 * scale_ - icon, min.y + (height - icon) / 2),
+                  ImGui::GetColorU32(kSecondary), right.c_str());
+  }
+  if (enabled) {
+    if (focused && MenuAccept()) result = 2;
+    if (focused) {
+      if (ImGui::IsKeyPressed(ImGuiKey_GamepadDpadLeft) || ImGui::IsKeyPressed(ImGuiKey_GamepadLStickLeft) ||
+          ImGui::IsKeyPressed(ImGuiKey_LeftArrow))
+        result = -1;
+      if (ImGui::IsKeyPressed(ImGuiKey_GamepadDpadRight) || ImGui::IsKeyPressed(ImGuiKey_GamepadLStickRight) ||
+          ImGui::IsKeyPressed(ImGuiKey_RightArrow))
+        result = 1;
+    }
+    if (pressed) {
+      // A click on the left chevron steps back; anywhere else steps on, as A does.
+      const float mouse = ImGui::GetIO().MousePos.x;
+      result = ImGui::IsItemDeactivated() && hovered && mouse < value_x && mouse > value_x - chevron * 1.5f ? -1 : 2;
+    }
+  }
+  // The focused or hovered row, else the first, explains itself in the detail panel.
+  if (focused) {
+    help_title_ = label;
+    help_ = help ? help : "";
+  }
+  ImGui::SetCursorScreenPos(ImVec2(min.x, max.y + 6 * scale_));
+  ImGui::Dummy(ImVec2(0, 0));
+  ImGui::PopID();
+  return result;
+}
+
+void App::DetailPanel(ImVec2 size, const std::function<void()>& extra) {
+  ImGui::PushStyleColor(ImGuiCol_ChildBg, kGlass);
+  ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, ImVec2(26 * scale_, 22 * scale_));
+  ImGui::BeginChild("detail", size, ImGuiChildFlags_AlwaysUseWindowPadding | ImGuiChildFlags_NavFlattened);
+  ImDrawList* draw = ImGui::GetWindowDrawList();
+  const ImVec2 min = ImGui::GetWindowPos(), max = min + ImGui::GetWindowSize();
+  Slashes(draw, max, std::min(ImGui::GetWindowSize().y * 0.45f, 220 * scale_));
+  std::string title = help_title_;
+  for (auto& c : title) c = static_cast<char>(std::toupper(static_cast<unsigned char>(c)));
+  ImGui::PushFont(din_font_, 28);
+  ImGui::TextUnformatted(title.c_str());
+  ImGui::PopFont();
+  draw->AddRectFilled(ImVec2(min.x, ImGui::GetCursorScreenPos().y), ImVec2(min.x + 4 * scale_, ImGui::GetCursorScreenPos().y + 0),
+                      ImGui::GetColorU32(kAccent));
+  ImGui::Dummy(ImVec2(0, 4 * scale_));
+  ImGui::PushTextWrapPos(ImGui::GetContentRegionAvail().x * 0.92f);
+  ImGui::PushStyleColor(ImGuiCol_Text, kSecondary);
+  ImGui::TextWrapped("%s", help_.c_str());
+  ImGui::PopStyleColor();
+  ImGui::PopTextWrapPos();
+  if (extra) extra();
+  ImGui::EndChild();
+  ImGui::PopStyleVar();
+  ImGui::PopStyleColor();
+}
+
+void App::HomeMenu() {
+  struct Entry {
+    char32_t icon;
+    const char* label;
+    int page;  // -1: Play
+  };
+  static const Entry kEntries[] = {{kIconPlay, "Play", -1},          {kIconDisplay, "Display", kDisplay},
+                                   {kIconLook, "Look", kLook},       {kIconPad, "Controls", kControls},
+                                   {kIconDisc, "Game data", kGameData}, {kIconShaders, "Shaders", kShaders},
+                                   {kIconSettings, "Advanced", kAdvanced}, {kIconInfo, "About", kAbout}};
+  const float height = page_size_.y;
+  const float list_w = std::min(420 * scale_, page_size_.x * 0.36f);
+  const std::string not_ready = NotReady();
+  const Status disc = DiscStatus(), shaders = ShaderStatus();
+  const int entries = static_cast<int>(std::size(kEntries));
+  home_focus_ = (home_focus_ + MenuMove() + entries) % entries;
+  const bool accept = MenuAccept();
+
+  // The menu: an icon rail and the entries.
+  ImGui::PushStyleColor(ImGuiCol_ChildBg, kGlass);
+  ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, ImVec2(0, 10 * scale_));
+  ImGui::BeginChild("menu", ImVec2(list_w, height), ImGuiChildFlags_AlwaysUseWindowPadding | ImGuiChildFlags_NavFlattened);
+  ImDrawList* draw = ImGui::GetWindowDrawList();
+  const float rail = 58 * scale_;
+  draw->AddRectFilled(ImGui::GetWindowPos(), ImGui::GetWindowPos() + ImVec2(rail, ImGui::GetWindowHeight()),
+                      ImGui::GetColorU32(ImVec4(0.10f, 0.11f, 0.12f, 0.6f)));
+  for (int i = 0; i < static_cast<int>(std::size(kEntries)); ++i) {
+    const Entry& entry = kEntries[i];
+    const float row = 54 * scale_;
+    const ImVec2 min = ImGui::GetCursorScreenPos() + ImVec2(rail + 8 * scale_, 0);
+    const ImVec2 max(ImGui::GetWindowPos().x + list_w - 12 * scale_, min.y + row);
+    ImGui::SetCursorScreenPos(min);
+    ImGui::PushID(i);
+    ImGui::PushItemFlag(ImGuiItemFlags_NoNav, true);
+    bool pressed = ImGui::InvisibleButton("entry", max - min);
+    const bool hovered = ImGui::IsItemHovered();
+    ImGui::PopItemFlag();
+    if (hovered && (ImGui::GetIO().MouseDelta.x != 0 || ImGui::GetIO().MouseDelta.y != 0)) home_focus_ = i;
+    const bool current = home_focus_ == i;
+    if (current && accept) pressed = true;
+    if (current) {
+      draw->AddRectFilled(min, max, ImGui::GetColorU32(kGlassLight), 2 * scale_);
+      Focus(draw, min, max);
+    }
+    const std::string icon = Icon(entry.icon);
+    draw->AddText(body_font_, 20 * scale_, ImVec2(ImGui::GetWindowPos().x + (rail - 20 * scale_) / 2, min.y + (row - 20 * scale_) / 2),
+                  ImGui::GetColorU32(current ? kFocusColor : kMuted), icon.c_str());
+    std::string label = entry.page < 0 && !disc1_.error.empty() ? "Choose Disc 1" : entry.label;
+    for (auto& c : label) c = static_cast<char>(std::toupper(static_cast<unsigned char>(c)));
+    ImGui::PushFont(din_font_, 21);
+    const bool disabled = entry.page < 0 && !not_ready.empty() && disc1_.error.empty();
+    draw->AddText(ImVec2(min.x + 16 * scale_, min.y + (row - ImGui::GetFontSize()) / 2),
+                  ImGui::GetColorU32(disabled ? kMuted : current ? kText : kSecondary), label.c_str());
+    ImGui::PopFont();
+    const Status status = entry.page == kGameData ? disc : entry.page == kShaders ? shaders : Status::kDone;
+    if (status == Status::kNeeded || status == Status::kBusy) {
+      const std::string mark = Icon(status == Status::kNeeded ? kIconWarning : kIconShaders);
+      draw->AddText(body_font_, 17 * scale_, ImVec2(max.x - 32 * scale_, min.y + (row - 17 * scale_) / 2),
+                    ImGui::GetColorU32(status == Status::kNeeded ? kWarning : kFocusColor), mark.c_str());
+    }
+    if (pressed) {
+      if (entry.page >= 0) {
+        page_ = entry.page;
+        tab_ = 0;
+        row_focus_ = 0;
+      } else if (not_ready.empty() && !shot_) {
+        Play();
+      } else if (!disc1_.error.empty()) {
+        OpenDialog(kDisc1, true);
+      }
+    }
+    ImGui::PopID();
+    ImGui::SetCursorScreenPos(ImVec2(ImGui::GetWindowPos().x, max.y + 4 * scale_));
+  }
+  ImGui::Dummy(ImVec2(0, 0));
+  ImGui::EndChild();
+  ImGui::PopStyleVar();
+  ImGui::PopStyleColor();
+  ImGui::SameLine(0, 18 * scale_);
+
+  // The detail of the focused entry.
+  const Entry& entry = kEntries[home_focus_];
+  std::string summary;
+  std::string error;
+  const auto plan = CurrentPlan(error);
+  const Options& o = settings_.Active().options;
+  if (plan) {
+    static const char* const kQualities[] = {"Low", "Medium", "High", "Extra High", "Ultra"};
+    static const char* const kQualityIds[] = {"low", "medium", "high", "extrahigh", "ultra"};
+    std::string quality = "High";
+    for (int i = 0; i < 5; ++i)
+      if (o.quality == kQualityIds[i] || (i == 1 && o.quality == "xbox")) quality = kQualities[i];
+    summary = "Render " + RenderScaleText(plan->cvars) + "  \xC2\xB7  " + quality + " quality  \xC2\xB7  " +
+              std::to_string(o.frame_rate ? o.frame_rate : 60) + " fps races";
+  }
+  switch (entry.page) {
+    case -1:
+      help_title_ = not_ready.empty() ? "Ready to race" : "Almost ready";
+      help_ = not_ready.empty() ? "Everything the game needs is in place. Press A, or Start from any page, to race with "
+                                  "the profile " + settings_.active + "."
+                                : "Point the launcher at your extracted Disc 1 once; A opens the folder picker. Disc 2 "
+                                  "and downloadable content are optional.";
+      break;
+    case kDisplay:
+      help_title_ = "Display";
+      help_ = "The screen, the render scale and the upscaler, the race frame rate and the race quality.";
+      break;
+    case kLook:
+      help_title_ = "Look";
+      help_ = "How the races look: a preset, the tone curve, the anti-aliasing and fine adjustments of the picture, "
+              "the lighting, the cars, the sky and the road.";
+      break;
+    case kControls:
+      help_title_ = "Controls";
+      help_ = "The controller's rumble and sticks, the racing wheel and its test, the keyboard and its keys.";
+      break;
+    case kGameData:
+      help_title_ = "Game data";
+      help_ = "Your extracted discs, the downloadable content and a texture pack.";
+      break;
+    case kShaders:
+      help_title_ = "Shaders";
+      help_ = "Compiles the game's shaders before you race, once a build, so races do not stutter while they compile.";
+      break;
+    case kAdvanced:
+      help_title_ = "Advanced";
+      help_ = "Where your profile, saves and logs are kept, and the developer options.";
+      break;
+    default:
+      help_title_ = "About";
+      help_ = "Who made Motorsport DX possible, and the licences of the code it uses.";
+      break;
+  }
+  DetailPanel(ImVec2(page_size_.x - list_w - 18 * scale_, height), [&] {
+    ImGui::Dummy(ImVec2(0, 14 * scale_));
+    const auto line = [&](Status status, const std::string& text) {
+      const ImVec4 color = status == Status::kDone ? kSuccess : status == Status::kNeeded ? kWarning
+                           : status == Status::kBusy ? kFocusColor : kMuted;
+      const std::string icon = Icon(status == Status::kDone ? kIconCheck : status == Status::kNeeded ? kIconWarning
+                                    : status == Status::kBusy ? kIconShaders : kIconInfo);
+      ImGui::TextColored(color, "%s", icon.c_str());
+      ImGui::SameLine(0, 12 * scale_);
+      ImGui::TextUnformatted(text.c_str());
+    };
+    if (entry.page == -1 || entry.page == kGameData) {
+      line(disc, disc1_.error.empty() ? "Disc 1: " + disc1_.release + " release, verified" : "Disc 1: " + disc1_.error);
+      const Status content = ContentStatus();
+      line(content, content == Status::kOptional ? "Disc 2 and downloadable content: optional"
+                    : content == Status::kDone ? "Disc 2 and content: " + std::to_string(content_.packages.size()) + " packages"
+                                               : "Disc 2 and content: " + (disc2_.error.empty() ? content_.error : disc2_.error));
+    }
+    if (entry.page == -1 || entry.page == kShaders)
+      line(shaders, shaders == Status::kDone ? "Shaders compiled for this build"
+                    : shaders == Status::kBusy ? "Shaders compiling" : "Shaders not compiled yet (they also compile while you play)");
+    if (entry.page == -1 || entry.page == kControls) {
+      int count = 0;
+      SDL_JoystickID* pads = SDL_GetGamepads(&count);
+      std::string name = count > 0 && SDL_GetGamepadNameForID(pads[0]) ? SDL_GetGamepadNameForID(pads[0]) : "";
+      SDL_free(pads);
+      line(count > 0 ? Status::kDone : Status::kOptional, count > 0 ? name + " connected" : "No controller: the keyboard drives");
+    }
+    if ((entry.page == -1 || entry.page == kDisplay) && !summary.empty()) line(Status::kOptional, summary);
+  });
+}
+
+void App::DisplayRows() {
+  Options& o = settings_.Active().options;
+  const float top = ImGui::GetCursorScreenPos().y;
+  TabBar(tab_, {"SCREEN", "PERFORMANCE", "EXTRAS"});
+  const float height = page_size_.y - (ImGui::GetCursorScreenPos().y - top);
+  const float list_w = page_size_.x * 0.56f;
+  const auto step = [](int value, int delta, int count) { return (value + (delta == 2 ? 1 : delta) + count) % count; };
+  if (row_count_ > 0) row_focus_ = std::clamp(row_focus_ + MenuMove(), 0, row_count_ - 1);
+  rows_seen_ = 0;
+  ImGui::BeginChild("rows", ImVec2(list_w, height), ImGuiChildFlags_NavFlattened);
+  if (tab_ == 0) {
+    static const char* const kDisplays[] = {"native", "720p", "1080p", "1440p", "4k"};
+    int display = 0;
+    for (int i = 0; i < 5; ++i)
+      if (o.display == kDisplays[i]) display = i;
+    const std::string native = "Native, " + std::to_string(monitor_.width) + "x" + std::to_string(monitor_.height);
+    const std::string screens[] = {native, "1280x720 window", "1920x1080 window", "2560x1440 window", "3840x2160 window"};
+    if (const int d = OptionRow("screen", "Screen", screens[display],
+                                "Native fills the screen, borderless, at its own resolution. A window size runs in a "
+                                "window of that size, or fullscreen with the option below."))
+      o.display = (display = step(display, d, 5)) ? kDisplays[display] : "";
+    if (const int d = OptionRow("fullscreen", "Fullscreen", display == 0 || o.fullscreen ? "On" : "Off",
+                                "A window size shown fullscreen. Native is always fullscreen.", display != 0))
+      o.fullscreen = !o.fullscreen;
+    std::string auto_text = "1x", unused;
+    Options automatic = o;
+    automatic.resolution_scale = 0;
+    if (const auto plan = PlanOf(automatic, unused)) auto_text = RenderScaleText(plan->cvars);
+    const std::string scales[] = {"Auto (" + auto_text + ")", "Screen's own", "1x (1280x720)", "2x (2560x1440)",
+                                  "3x (3840x2160)", "4x (5120x2880)"};
+    int item = o.resolution_scale == kPanelScale ? 1 : o.resolution_scale ? o.resolution_scale + 1 : 0;
+    if (const int d = OptionRow("scale", "Render scale", scales[item],
+                                "How sharp the picture is. Auto covers the screen; the screen's own resolution renders "
+                                "the largest 16:9 picture that fits; 1x to 4x render at that multiple of 1280x720.")) {
+      item = step(item, d, 6);
+      o.resolution_scale = item == 1 ? kPanelScale : item ? item - 1 : 0;
+    }
+    if (OptionRow("supersample", "Supersample", o.supersample ? "On" : "Off",
+                  "Renders one scale above the screen, then averages it down: the smoothest edges, for a strong GPU.",
+                  o.resolution_scale == 0))
+      o.supersample = !o.supersample;
+  } else if (tab_ == 1) {
+    static const char* const kUpscales[] = {"native", "quality", "balanced", "performance"};
+    static const char* const kUpscaleNames[] = {"Off", "Quality", "Balanced", "Performance"};
+    int upscale = 0;
+    for (int i = 1; i < 4; ++i)
+      if (o.upscale == kUpscales[i]) upscale = i;
+    if (const int d = OptionRow("upscale", "Upscaler", kUpscaleNames[upscale],
+                                "FSR 3.1 or TAAU renders the race at fewer lines and rebuilds the picture: more frames "
+                                "for a little sharpness. Quality 1.5x, Balanced 1.7x, Performance 2x fewer lines.")) {
+      upscale = step(upscale, d, 4);
+      o.upscale = upscale ? kUpscales[upscale] : "";
+    }
+    const std::string look = o.look.empty() ? data_.Look().at("default").get<std::string>() : o.look;
+    std::string aa = "taa";
+    try {
+      aa = LookKnobs(data_, look).Get("aa", "taa");
+    } catch (const std::exception&) {
+    }
+    if (upscale && aa != "fsr" && aa != "taau") {
+      if (OptionRow("use_fsr", "Use FSR 3.1 for the upscaler", "Press A", "The upscaler needs FSR 3.1 or TAAU as the "
+                    "look's anti-aliasing; this sets FSR 3.1 in the look.", true, &kWarning)) {
+        LookParts parts = LookParts::Parse(look);
+        parts.knobs.Set("aa", "fsr");
+        parts.knobs.Set("taa", "1");
+        o.look = parts.Value();
+      }
+    }
+    // Steps, not a slider of single frames (the owner's choice of 29 October 2026). A rate saved
+    // before keeps showing until it is changed, then moves to its neighbour in the list.
+    static const int kRates[] = {30, 60, 90, 120, 144, 240};
+    constexpr int kRateCount = static_cast<int>(std::size(kRates));
+    const int rate = o.frame_rate ? o.frame_rate : 60;
+    int below = 0, above = kRateCount - 1;
+    for (int i = 0; i < kRateCount; ++i) {
+      if (kRates[i] <= rate) below = i;
+      if (kRates[kRateCount - 1 - i] >= rate) above = kRateCount - 1 - i;
+    }
+    if (const int d = OptionRow("rate", "Race frame rate", std::to_string(rate) + " fps",
+                                "Races, replays and the countdown. Menus, post-race and photo mode keep their own timing. "
+                                "Pick the screen's refresh rate or a rate that divides it.")) {
+      const int index = d == 2 ? (above == below ? below + 1 : above) % kRateCount
+                        : d < 0 ? (above == below ? std::max(below - 1, 0) : below)
+                                : (above == below ? std::min(above + 1, kRateCount - 1) : above);
+      o.frame_rate = kRates[index] == 60 ? 0 : kRates[index];
+    }
+    static const char* const kVsyncs[] = {"auto", "on", "off"};
+    static const char* const kVsyncNames[] = {"Auto", "On", "Off"};
+    int vsync = o.vsync == "on" ? 1 : o.vsync == "off" ? 2 : 0;
+    if (const int d = OptionRow("vsync", "VSync", kVsyncNames[vsync],
+                                "Auto: on a variable refresh rate screen, frames as they come but at most one a refresh; "
+                                "otherwise On. On: no tearing. Off: at once, tearing allowed.")) {
+      vsync = step(vsync, d, 3);
+      o.vsync = vsync ? kVsyncs[vsync] : "";
+    }
+    static const char* const kQualities[] = {"low", "medium", "high", "extrahigh", "ultra"};
+    static const char* const kQualityNames[] = {"Low", "Medium", "High", "Extra High", "Ultra"};
+    static const char* const kQualityHelp[] = {
+        "The game's own, fewer cars in the mirror, lighter ambient occlusion.",
+        "The game's own race settings with soft particles.",
+        "Object shadows, full detail wheels, car detail twice as far.",
+        "High, every car at top detail, finer ambient occlusion.",
+        "Extra High, the mirror every frame, 4x MSAA where the scale allows."};
+    int quality = 2;
+    for (int i = 0; i < 5; ++i)
+      if (o.quality == kQualities[i] || (i == 1 && o.quality == "xbox")) quality = i;
+    const std::string quality_help = std::string("Race detail. ") + kQualityHelp[quality] +
+                                     " The render scale and the upscaler change the GPU time far more.";
+    if (const int d = OptionRow("quality", "Race quality", kQualityNames[quality], quality_help.c_str())) {
+      quality = d == 2 ? (quality + 1) % 5 : std::clamp(quality + d, 0, 4);
+      o.quality = quality == 2 ? "" : kQualities[quality];
+    }
+  } else {
+    if (OptionRow("mirror", "Rear-view mirror every frame", o.full_rate_mirror ? "On" : "Off",
+                  "The mirror at the race's frame rate instead of every other frame."))
+      o.full_rate_mirror = !o.full_rate_mirror;
+    if (OptionRow("overlay", "Settings overlay at start", o.info ? "On" : "Off",
+                  "Shows the run's settings over the game when it starts; F2 shows and hides it in the game."))
+      o.info = !o.info;
+    bool entry0 = o.entry0 != "k";
+    if (OptionRow("menus", "Menus at the render scale", entry0 ? "On" : "Off",
+                  "The menus and photo mode at the render scale with 4x MSAA. Off: at the whole scale below it, "
+                  "for less GPU time."))
+      o.entry0 = entry0 ? "k" : "";
+    // A developer option (Advanced): the RTV path's MSAA tiles instead of the native path's one
+    // pass, for comparisons.
+    if (settings_.developer) {
+      bool taa = true;
+      try {
+        taa = TaaEnabled(LookKnobs(data_, o.look.empty() ? data_.Look().at("default").get<std::string>() : o.look));
+      } catch (const std::exception&) {
+      }
+      if (OptionRow("tiles", "Race rendering", o.msaa ? "MSAA tiles" : "One tile with TAA",
+                    "Developer option. One tile: TAA anti-aliases the races. MSAA tiles: the tiles and MSAA of the "
+                    "quality, on the RTV path. Needs a look with TAA.",
+                    taa))
+        o.msaa = !o.msaa;
+    }
+  }
+  row_count_ = rows_seen_;
+  row_focus_ = std::min(row_focus_, row_count_ - 1);
+  ImGui::EndChild();
+  ImGui::SameLine(0, 18 * scale_);
+  DetailPanel(ImVec2(page_size_.x - list_w - 18 * scale_, height), [&] {
+    std::string error;
+    ImGui::Dummy(ImVec2(0, 14 * scale_));
+    if (const auto plan = CurrentPlan(error)) {
+      ImGui::PushFont(din_font_, 17);
+      ImGui::TextColored(kMuted, "THIS PROFILE");
+      ImGui::PopFont();
+      ImGui::TextUnformatted(("Render " + RenderScaleText(plan->cvars)).c_str());
+      const std::string upscale = UpscaleText(plan->cvars);
+      if (!upscale.empty()) ImGui::TextUnformatted(("Upscaled " + upscale).c_str());
+      // The developer options show the whole plan.
+      if (settings_.developer) {
+        ImGui::Dummy(ImVec2(0, 10 * scale_));
+        ImGui::PushTextWrapPos(0);
+        Muted(plan->description + ".");
+        ImGui::PopTextWrapPos();
+      }
+    } else {
+      Colored(kDanger, error);
+    }
+  });
+}
+
+void App::ProfilePopup() {
+  ImGui::SetNextWindowPos(ImGui::GetMainViewport()->GetCenter(), ImGuiCond_Appearing, ImVec2(0.5f, 0.5f));
+  ImGui::SetNextWindowSizeConstraints(ImVec2(420 * scale_, 0), ImVec2(FLT_MAX, FLT_MAX));
+  if (ImGui::BeginPopupModal("Profiles", nullptr, ImGuiWindowFlags_AlwaysAutoResize)) {
+    Muted("A profile is one set of run options; the Discs, content, looks and keys are shared.");
+    ImGui::Dummy(ImVec2(0, 4 * scale_));
+    for (const auto& profile : settings_.profiles) {
+      if (ImGui::Selectable(profile.name.c_str(), profile.name == settings_.active, 0, ImVec2(0, ImGui::GetFrameHeight()))) {
+        settings_.active = profile.name;
+        ImGui::CloseCurrentPopup();
+      }
+      if (profile.name == settings_.active && ImGui::IsWindowAppearing()) ImGui::SetItemDefaultFocus();
+    }
+    ImGui::Dummy(ImVec2(0, 4 * scale_));
+    ImGui::Separator();
+    ImGui::TextColored(kMuted, "Save the options as a new profile");
+    ImGui::SetNextItemWidth(260 * scale_);
+    const bool enter = ImGui::InputTextWithHint("##name", "Name", &new_name_, ImGuiInputTextFlags_EnterReturnsTrue);
+    ImGui::SameLine();
+    if ((ImGui::Button("Save") || enter) && !new_name_.empty()) {
+      const Options options = settings_.Active().options;
+      std::erase_if(settings_.profiles, [&](const Profile& p) { return p.name == new_name_; });
+      settings_.profiles.push_back({new_name_, options});
+      settings_.active = new_name_;
+      new_name_.clear();
+    }
+    if (settings_.profiles.size() > 1) {
+      ImGui::Dummy(ImVec2(0, 4 * scale_));
+      if (ImGui::Button(("Delete " + settings_.active).c_str())) ImGui::OpenPopup("Delete profile");
+    }
+    if (ImGui::BeginPopupModal("Delete profile", nullptr, ImGuiWindowFlags_AlwaysAutoResize)) {
+      ImGui::Text("Delete the profile %s?", settings_.active.c_str());
+      Muted("Its options go; the Discs, content, looks and key bindings stay.");
+      if (ImGui::Button("Delete")) {
+        std::erase_if(settings_.profiles, [&](const Profile& p) { return p.name == settings_.active; });
+        settings_.active = settings_.profiles.front().name;
+        ImGui::CloseCurrentPopup();
+      }
+      ImGui::SameLine();
+      if (ImGui::Button("Cancel") || ImGui::IsKeyPressed(ImGuiKey_GamepadFaceRight, false) ||
+          ImGui::IsKeyPressed(ImGuiKey_Escape, false))
+        ImGui::CloseCurrentPopup();
+      ImGui::EndPopup();
+    } else if (ImGui::IsKeyPressed(ImGuiKey_GamepadFaceRight, false) || ImGui::IsKeyPressed(ImGuiKey_Escape, false)) {
+      // B or Escape closes the list, as Back does in a game's menus.
+      ImGui::CloseCurrentPopup();
+    }
+    ImGui::Dummy(ImVec2(0, 4 * scale_));
+    if (ImGui::Button("Close")) ImGui::CloseCurrentPopup();
+    ImGui::EndPopup();
+  }
+}
+
+int App::MenuMove() {
+  if (ImGui::IsPopupOpen("", ImGuiPopupFlags_AnyPopupId | ImGuiPopupFlags_AnyPopupLevel)) return 0;
+  for (const ImGuiKey key : {ImGuiKey_GamepadDpadUp, ImGuiKey_GamepadLStickUp, ImGuiKey_UpArrow})
+    if (ImGui::IsKeyPressed(key)) return -1;
+  for (const ImGuiKey key : {ImGuiKey_GamepadDpadDown, ImGuiKey_GamepadLStickDown, ImGuiKey_DownArrow})
+    if (ImGui::IsKeyPressed(key)) return 1;
+  return 0;
+}
+
+bool App::MenuAccept() {
+  if (ImGui::IsPopupOpen("", ImGuiPopupFlags_AnyPopupId | ImGuiPopupFlags_AnyPopupLevel)) return false;
+  if (prompt_accept_) return true;
+  return ImGui::IsKeyPressed(ImGuiKey_GamepadFaceDown, false) || ImGui::IsKeyPressed(ImGuiKey_Enter, false) ||
+         ImGui::IsKeyPressed(ImGuiKey_KeypadEnter, false);
+}
+
+void App::PadShortcuts() {
+  // Not while a popup or a combo is open, nor while a text field takes the keys.
+  if (ImGui::IsPopupOpen("", ImGuiPopupFlags_AnyPopupId | ImGuiPopupFlags_AnyPopupLevel) ||
+      ImGui::GetIO().WantTextInput)
+    return;
+  // B goes back to Home, as in a game's menus.
+  if (page_ != kHome && ImGui::IsKeyPressed(ImGuiKey_GamepadFaceRight, false)) {
+    page_ = kHome;
+    tab_ = 0;
+  }
+  if (ImGui::IsKeyPressed(ImGuiKey_GamepadFaceUp, false)) ImGui::OpenPopup("Profiles");
+  // A screenshot never starts the game.
+  if (ImGui::IsKeyPressed(ImGuiKey_GamepadStart, false) && NotReady().empty() && !shot_) Play();
+}
+
+// ImGui's own focus ring is 2 pixels at every scale: a thicker one in the accent colour, so the
+// pad's focus shows from arm's length on the handheld.
+void App::FocusRing() {
+  ImGuiContext& g = *ImGui::GetCurrentContext();
+  if (!g.NavCursorVisible || !g.NavWindow || !g.NavId || !g.IO.NavActive) return;
+  ImRect rect = ImGui::WindowRectRelToAbs(g.NavWindow, g.NavWindow->NavRectRel[g.NavLayer]);
+  const float gap = 3 * scale_;
+  rect.Expand(gap);
+  ImDrawList* draw = ImGui::GetForegroundDrawList();
+  draw->PushClipRect(g.NavWindow->InnerClipRect.Min - ImVec2(gap, gap), g.NavWindow->InnerClipRect.Max + ImVec2(gap, gap));
+  draw->AddRect(rect.Min, rect.Max, ImGui::GetColorU32(kAccent), ImGui::GetStyle().FrameRounding + gap, 0,
+                2.5f * scale_);
+  draw->PopClipRect();
 }
 
 void App::Banner() {
@@ -1162,156 +2119,47 @@ void App::Banner() {
   ImGui::SetCursorScreenPos(ImVec2(origin.x, origin.y + height));
 }
 
-void App::Navigation() {
-  static const char* pages[] = {"Display", "Look", "Controls", "Game data", "Advanced", "Shaders", "About"};
-  ImGui::Dummy(ImVec2(0, 2 * scale_));
-  for (int i = 0; i < static_cast<int>(IM_ARRAYSIZE(pages)); ++i) {
-    const bool selected = page_ == i;
-    ImGui::PushStyleColor(ImGuiCol_Text, selected ? ImVec4(0.902f, 0.945f, 0.984f, 1) : kSecondary);
-    if (ImGui::Selectable(pages[i], selected, 0, ImVec2(0, ImGui::GetFrameHeight()))) page_ = i;
-    ImGui::PopStyleColor();
+Status App::DiscStatus() const { return disc1_.error.empty() ? Status::kDone : Status::kNeeded; }
+
+bool App::WheelKnobsOn() {
+  try {
+    const Pairs knobs = WheelKnobs(data_, settings_.Active().options.wheel);
+    return knobs.Get("on", "0") == "1";
+  } catch (const std::exception&) {
+    return false;
   }
 }
 
-void App::DisplayPage() {
-  Options& o = settings_.Active().options;
-  const char* displays[] = {"native", "720p", "1080p", "1440p", "4k"};
-  const std::string native = "Native (borderless, " + std::to_string(monitor_.width) + "x" +
-                             std::to_string(monitor_.height) + ")";
-  const char* labels[] = {native.c_str(), "1280x720 window", "1920x1080 window", "2560x1440 window",
-                          "3840x2160 window"};
-  int display = 0;
-  for (int i = 0; i < 5; ++i)
-    if (o.display == displays[i]) display = i;
-  Label("Screen");
-  ImGui::SetNextItemWidth(320 * scale_);
-  if (ImGui::Combo("##screen", &display, labels, 5)) o.display = display ? displays[display] : "";
-  Label("Fullscreen", "A window size shown fullscreen, with its render scale. Native is always fullscreen.");
-  ImGui::BeginDisabled(display == 0);
-  ImGui::Checkbox("##fullscreen", &o.fullscreen);
-  ImGui::EndDisabled();
+Status App::ContentStatus() const {
+  if (settings_.disc2.empty() && settings_.content.empty()) return Status::kOptional;
+  if (!disc2_.error.empty() || !content_.error.empty()) return Status::kNeeded;
+  return Status::kDone;
+}
 
-  // The automatic render scale of this screen and the screen's own, as display_settings picks
-  // them for these options (the native path in one pass renders at the screen's own scale).
-  std::string auto_text = "1x, 1280x720", panel_text = "native path in one pass only", unused;
-  Options automatic = o;
-  automatic.resolution_scale = 0;
-  if (const auto plan = PlanOf(automatic, unused)) auto_text = RenderScaleText(plan->cvars);
-  automatic.resolution_scale = kPanelScale;
-  if (const auto plan = PlanOf(automatic, unused)) panel_text = RenderScaleText(plan->cvars);
-  const std::string auto_label = "Auto (" + auto_text + ")";
-  const std::string panel_label = "Screen's own resolution (" + panel_text + ")";
-  const char* scales[] = {auto_label.c_str(), panel_label.c_str(), "1x (1280x720)",
-                          "2x (2560x1440)", "3x (3840x2160)", "4x (5120x2880)"};
-  // Combo items: Auto (0), the screen's own (kPanelScale), then 1x to 4x.
-  int scale_item =
-      o.resolution_scale == kPanelScale ? 1 : o.resolution_scale ? o.resolution_scale + 1 : 0;
-  Label("Render scale",
-        "Auto covers the screen; on the native path in one pass it is the screen's own resolution "
-        "(1080p renders 1920x1080), except with integrated GPUs (1x). The screen's own resolution "
-        "renders the largest 16:9 picture that fits the screen, letterboxed on 16:10 until the "
-        "aspect work; 1x to 4x render at that multiple of 1280x720.");
-  ImGui::SetNextItemWidth(320 * scale_);
-  if (ImGui::Combo("##scale", &scale_item, scales, 6))
-    o.resolution_scale = scale_item == 1 ? kPanelScale : scale_item ? scale_item - 1 : 0;
-  Label("Supersample", "Render one scale above the screen (up to 4x), then average it down.");
-  ImGui::BeginDisabled(o.resolution_scale != 0);
-  ImGui::Checkbox("##supersample", &o.supersample);
-  ImGui::EndDisabled();
+Status App::ShaderStatus() {
+  if (shader_busy_) return Status::kBusy;
+  if (shader_was_busy_) shaders_ready_ = ShadersReady();
+  shader_was_busy_ = false;
+  return shaders_ready_ ? Status::kDone : Status::kOptional;
+}
 
-  // -Upscale: native (the default), quality, balanced or performance; a ratio typed for
-  // Build.ps1 shows as native here until one of these is picked.
-  const char* upscales[] = {"native", "quality", "balanced", "performance"};
-  int upscale = 0;
-  for (int i = 1; i < 4; ++i)
-    if (o.upscale == upscales[i]) upscale = i;
-  Label("Upscale",
-        "FSR 3.1 or TAAU renders the scene at fewer lines and upscales it to the render scale: "
-        "Quality 1.5x, Balanced 1.7x, Performance 2x fewer, at least 720p. Needs the native path "
-        "in one pass and FSR 3.1 or TAAU as the look's anti-aliasing method.");
-  if (Segment("upscale", upscale, {"Native", "Quality", "Balanced", "Performance"}))
-    o.upscale = upscale == 0 ? "" : upscales[upscale];
-  if (upscale) {
-    std::string upscale_error;
-    ImGui::SameLine();
-    if (const auto plan = PlanOf(o, upscale_error)) {
-      const std::string text = UpscaleText(plan->cvars);
-      ImGui::TextColored(kMuted, "%s",
-                         !text.empty() ? text.c_str()
-                         : plan->description.find("clamped to 720p") != std::string::npos
-                             ? "clamped to 720p: renders at the render scale"
-                             : "renders at the render scale");
-    } else {
-      ImGui::TextColored(kMuted, "%s", upscale_error.c_str());
-    }
-  }
+std::string App::NotReady() const {
+  if (!disc1_.error.empty()) return "Choose Disc 1 first";
+  if (!disc2_.error.empty() || !content_.error.empty()) return "Check Disc 2 and the content on Game data";
+  if (running_) return "The game is running";
+  return {};
+}
 
-  // -Entry0: the menus and photo mode at the render scale (s, the default) or at the whole
-  // scale below it (k).
-  bool entry0 = o.entry0 != "k";
-  Label("Menus at the render scale",
-        "The native path renders the menus and photo mode at the render scale with 4x MSAA. "
-        "Off: at the whole scale below it, scaled to the screen (less GPU time).");
-  if (ImGui::Checkbox("##entry0", &entry0)) o.entry0 = entry0 ? "" : "k";
+bool App::SmallAction(const char* label) { return touch_ ? ImGui::Button(label) : ImGui::SmallButton(label); }
 
-  int rate = o.frame_rate ? o.frame_rate : 60;
-  Label("Race frame rate", "Races, replays and the countdown. Menus, post-race and photo mode keep their own timing.");
-  ImGui::SetNextItemWidth(320 * scale_);
-  if (ImGui::SliderInt("##rate", &rate, 30, 240, "%d fps")) o.frame_rate = rate == 60 ? 0 : rate;
-
-  // -VSync: auto (the default), on or off.
-  const char* vsyncs[] = {"auto", "on", "off"};
-  int vsync = o.vsync == "on" ? 1 : o.vsync == "off" ? 2 : 0;
-  Label("VSync", "Auto: on a variable refresh rate screen, frames as they come but at most one a refresh, "
-                 "races just under the refresh; otherwise On. On: on the screen's refresh, no tearing. "
-                 "Off: at once, tearing allowed.");
-  if (Segment("vsync", vsync, {"Auto", "On", "Off"})) o.vsync = vsync == 0 ? "" : vsyncs[vsync];
-
-  // -Quality: five tiers of race detail (pipeline.py QUALITY_PRESETS); xbox, the name of Medium
-  // until 26 October 2026, is its alias.
-  const char* qualities[] = {"low", "medium", "high", "extrahigh", "ultra"};
-  int quality = 2;
-  for (int i = 0; i < 5; ++i)
-    if (o.quality == qualities[i] || (i == 1 && o.quality == "xbox")) quality = i;
-  Label("Race quality", "Race detail only: the render scale and the upscaler change the GPU time far more.");
-  if (Segment("quality", quality, {"Low", "Medium", "High", "Extra High", "Ultra"}))
-    o.quality = quality == 2 ? "" : qualities[quality];
+bool App::ValueSlider(const char* id, float* value, float min, float max, const char* format) {
+  ImGui::SetNextItemWidth(ImGui::CalcItemWidth() - 70 * scale_);
+  const bool changed = ImGui::SliderFloat(id, value, min, max, "", ImGuiSliderFlags_None);
   ImGui::SameLine();
-  static const char* quality_help[] = {
-      "The game's own, fewer cars in the mirror, lighter ambient occlusion.",
-      "The game's own race settings with soft particles.",
-      "Object shadows, full detail wheels, car detail twice as far.",
-      "High, every car at top detail, finer ambient occlusion.",
-      "Extra High, the mirror every frame, 4x MSAA where the scale allows."};
-  ImGui::TextColored(kMuted, "%s", quality_help[quality]);
-
-  bool taa = true;
-  try {
-    taa = TaaEnabled(LookKnobs(data_, o.look.empty() ? data_.Look().at("default").get<std::string>() : o.look));
-  } catch (const std::exception&) {
-  }
-  int tiles = o.msaa ? 1 : 0;
-  Label("Race rendering", "One tile: TAA anti-aliases the races. MSAA tiles: the tiles and MSAA of the quality.");
-  ImGui::BeginDisabled(!taa);
-  if (Segment("tiles", tiles, {"One tile with TAA", "MSAA tiles"})) o.msaa = tiles == 1;
-  ImGui::EndDisabled();
-  if (!taa) {
-    ImGui::SameLine();
-    ImGui::TextColored(kMuted, "The look has no TAA.");
-  }
-
-  ImGui::Dummy(ImVec2(0, 6 * scale_));
-  ImGui::TextColored(kMuted, "Options");
-  ImGui::Checkbox("Rear-view mirror every frame", &o.full_rate_mirror);
-  ImGui::Checkbox("Show the settings overlay at start (F2 in game)", &o.info);
-
-  ImGui::Dummy(ImVec2(0, 10 * scale_));
-  ImGui::Separator();
-  std::string error;
-  if (const auto plan = CurrentPlan(error))
-    Muted(plan->description + ".");
-  else
-    Colored(kDanger, error);
+  ImGui::AlignTextToFramePadding();
+  if (std::strchr(format, '%')) ImGui::Text(format, *value);
+  else ImGui::TextUnformatted(format);
+  return changed;
 }
 
 void App::LookPage() {
@@ -1412,7 +2260,7 @@ void App::LookPage() {
     if (!parts.knobs.Has(name)) return;
     ImGui::SameLine();
     ImGui::PushID(name.c_str());
-    if (ImGui::SmallButton("Reset")) {
+    if (SmallAction("Reset")) {
       parts.knobs.Erase(name);
       const std::string value_text = parts.Value();
       o.look = value_text == "aces" ? "" : value_text;
@@ -1490,20 +2338,22 @@ void App::LookPage() {
       ImGui::PushID(knob.name);
       ImGui::SetNextItemWidth(300 * scale_);
       const char* format = !text ? "game" : knob.step >= 1 ? "%.0f" : "%.2f";
-      if (ImGui::SliderFloat("##value", &value, knob.min, knob.max, format)) set_knob(knob.name, FormatKnob(value, knob.step));
+      if (ValueSlider("##value", &value, knob.min, knob.max, format)) set_knob(knob.name, FormatKnob(value, knob.step));
       ImGui::PopID();
       reset_button(knob.name);
     }
   }
   ImGui::Dummy(ImVec2(0, 8 * scale_));
   ImGui::Separator();
-  ImGui::TextColored(kMuted, "Look value (Build.ps1 -Look)");
-  // The field keeps its own text while it is edited and applies it when it is left.
-  if (!look_editing_) look_edit_ = look;
-  ImGui::SetNextItemWidth(-1);
-  ImGui::InputText("##value", &look_edit_);
-  look_editing_ = ImGui::IsItemActive();
-  if (ImGui::IsItemDeactivatedAfterEdit()) o.look = look_edit_ == "aces" ? "" : look_edit_;
+  if (settings_.developer) {
+    ImGui::TextColored(kMuted, "Look value (Build.ps1 -Look)");
+    // The field keeps its own text while it is edited and applies it when it is left.
+    if (!look_editing_) look_edit_ = look;
+    ImGui::SetNextItemWidth(-1);
+    ImGui::InputText("##value", &look_edit_);
+    look_editing_ = ImGui::IsItemActive();
+    if (ImGui::IsItemDeactivatedAfterEdit()) o.look = look_edit_ == "aces" ? "" : look_edit_;
+  }
   try {
     Pairs knobs = LookKnobs(data_, look);
     LookDefines(data_, knobs);
@@ -1555,13 +2405,13 @@ void App::ControllerSection() {
     ImGui::PushID(name);
     ImGui::SetNextItemWidth(300 * scale_);
     const Json& knob = table.at(name);
-    if (ImGui::SliderFloat("##value", &value, knob.at("min").get<float>(), knob.at("max").get<float>(), "%.2f")) {
+    if (ValueSlider("##value", &value, knob.at("min").get<float>(), knob.at("max").get<float>(), "%.2f")) {
       const std::string text = FormatKnob(value, 0.01f);
       set_knob(name, PyFloat(text) == PyFloat(fallback(name)) ? fallback(name) : text);
     }
     if (knobs.Has(name)) {
       ImGui::SameLine();
-      if (ImGui::SmallButton("Reset")) set_knob(name, fallback(name));
+      if (SmallAction("Reset")) set_knob(name, fallback(name));
     }
     ImGui::PopID();
   };
@@ -1639,12 +2489,14 @@ void App::ControllerSection() {
           "to other buttons. These apply to PlayStation and other pads that report them.");
   }
   ImGui::PopStyleColor();
-  ImGui::TextColored(kMuted, "Controller value (Build.ps1 -Pad)");
-  if (!pad_editing_) pad_edit_ = o.pad;
-  ImGui::SetNextItemWidth(-1);
-  ImGui::InputText("##pad", &pad_edit_);
-  pad_editing_ = ImGui::IsItemActive();
-  if (ImGui::IsItemDeactivatedAfterEdit()) o.pad = pad_edit_;
+  if (settings_.developer) {
+    ImGui::TextColored(kMuted, "Controller value (Build.ps1 -Pad)");
+    if (!pad_editing_) pad_edit_ = o.pad;
+    ImGui::SetNextItemWidth(-1);
+    ImGui::InputText("##pad", &pad_edit_);
+    pad_editing_ = ImGui::IsItemActive();
+    if (ImGui::IsItemDeactivatedAfterEdit()) o.pad = pad_edit_;
+  }
   if (!error.empty()) Colored(kDanger, error);
   ImGui::Dummy(ImVec2(0, 6 * scale_));
   ImGui::Separator();
@@ -1689,13 +2541,13 @@ void App::KeyboardSection() {
     ImGui::PushID(name);
     ImGui::SetNextItemWidth(300 * scale_);
     const Json& knob = table.at(name);
-    if (ImGui::SliderFloat("##value", &value, knob.at("min").get<float>(), knob.at("max").get<float>(), "%.2f")) {
+    if (ValueSlider("##value", &value, knob.at("min").get<float>(), knob.at("max").get<float>(), "%.2f")) {
       const std::string text = FormatKnob(value, 0.01f);
       set_knob(name, PyFloat(text) == PyFloat(fallback(name)) ? fallback(name) : text);
     }
     if (knobs.Has(name)) {
       ImGui::SameLine();
-      if (ImGui::SmallButton("Reset")) set_knob(name, fallback(name));
+      if (SmallAction("Reset")) set_knob(name, fallback(name));
     }
     ImGui::PopID();
   };
@@ -1733,12 +2585,14 @@ void App::KeyboardSection() {
            "Off: the keys' values go to the game as they are, and its deadzones apply on top (for comparisons).");
   }
   ImGui::PopStyleColor();
-  ImGui::TextColored(kMuted, "Keyboard value (Build.ps1 -Keyboard)");
-  if (!keyboard_editing_) keyboard_edit_ = o.keyboard;
-  ImGui::SetNextItemWidth(-1);
-  ImGui::InputText("##keyboard", &keyboard_edit_);
-  keyboard_editing_ = ImGui::IsItemActive();
-  if (ImGui::IsItemDeactivatedAfterEdit()) o.keyboard = keyboard_edit_;
+  if (settings_.developer) {
+    ImGui::TextColored(kMuted, "Keyboard value (Build.ps1 -Keyboard)");
+    if (!keyboard_editing_) keyboard_edit_ = o.keyboard;
+    ImGui::SetNextItemWidth(-1);
+    ImGui::InputText("##keyboard", &keyboard_edit_);
+    keyboard_editing_ = ImGui::IsItemActive();
+    if (ImGui::IsItemDeactivatedAfterEdit()) o.keyboard = keyboard_edit_;
+  }
   if (!error.empty()) Colored(kDanger, error);
   ImGui::Dummy(ImVec2(0, 4 * scale_));
 }
@@ -1827,11 +2681,11 @@ void App::WheelGameSection() {
     float value = static_cast<float>(number(name));
     ImGui::PushID(name);
     ImGui::SetNextItemWidth(300 * scale_);
-    if (ImGui::SliderFloat("##value", &value, knob.at("min").get<float>(), knob.at("max").get<float>(), format))
+    if (ValueSlider("##value", &value, knob.at("min").get<float>(), knob.at("max").get<float>(), format))
       set_knob(name, FormatKnob(value, step));
     if (knobs.Has(name)) {
       ImGui::SameLine();
-      if (ImGui::SmallButton("Reset")) set_knob(name, fallback(name));
+      if (SmallAction("Reset")) set_knob(name, fallback(name));
     }
     ImGui::PopID();
   };
@@ -1916,13 +2770,13 @@ void App::WheelGameSection() {
       ImGui::Text("%.0f .. %.0f", number(rest.c_str()), number(pressed.c_str()));
       ImGui::SameLine();
       ImGui::BeginDisabled(!has_raw);
-      if (ImGui::SmallButton("Set rest")) set_knob(rest.c_str(), std::to_string(raw));
+      if (SmallAction("Set rest")) set_knob(rest.c_str(), std::to_string(raw));
       ImGui::SameLine();
-      if (ImGui::SmallButton("Set pressed")) set_knob(pressed.c_str(), std::to_string(raw));
+      if (SmallAction("Set pressed")) set_knob(pressed.c_str(), std::to_string(raw));
       ImGui::EndDisabled();
       if (knobs.Has(rest) || knobs.Has(pressed)) {
         ImGui::SameLine();
-        if (ImGui::SmallButton("Reset")) {
+        if (SmallAction("Reset")) {
           set_knob(rest.c_str(), fallback(rest.c_str()));
           set_knob(pressed.c_str(), fallback(pressed.c_str()));
         }
@@ -1971,7 +2825,7 @@ void App::WheelGameSection() {
         ImGui::PushID(button.name);
         ImGui::BeginDisabled(!snap.connected);
         const bool assigning = wheel_assign_ == button.name;
-        if (ImGui::SmallButton(assigning ? "Press a wheel button..." : "Assign")) {
+        if (SmallAction(assigning ? "Press a wheel button..." : "Assign")) {
           wheel_assign_ = assigning ? "" : button.name;
           wheel_assign_buttons_ = snap.buttons;
         }
@@ -2004,12 +2858,14 @@ void App::WheelGameSection() {
     ImGui::PopStyleColor();
     if (!live) Muted("Start the wheel test below to see the values and to set the pedals and buttons from the wheel.");
   }
-  ImGui::TextColored(kMuted, "Wheel value (Build.ps1 -Wheel)");
-  if (!wheel_editing_) wheel_edit_ = o.wheel;
-  ImGui::SetNextItemWidth(-1);
-  ImGui::InputText("##wheel", &wheel_edit_);
-  wheel_editing_ = ImGui::IsItemActive();
-  if (ImGui::IsItemDeactivatedAfterEdit()) o.wheel = wheel_edit_;
+  if (settings_.developer) {
+    ImGui::TextColored(kMuted, "Wheel value (Build.ps1 -Wheel)");
+    if (!wheel_editing_) wheel_edit_ = o.wheel;
+    ImGui::SetNextItemWidth(-1);
+    ImGui::InputText("##wheel", &wheel_edit_);
+    wheel_editing_ = ImGui::IsItemActive();
+    if (ImGui::IsItemDeactivatedAfterEdit()) o.wheel = wheel_edit_;
+  }
   if (!error.empty()) Colored(kDanger, error);
   ImGui::Dummy(ImVec2(0, 4 * scale_));
 }
@@ -2030,7 +2886,7 @@ void App::WheelSection() {
   if (!wheel_) {
     Label("Force cap", "The hard upper limit of every test force, a fraction of the wheel's full force.");
     ImGui::SetNextItemWidth(300 * scale_);
-    ImGui::SliderFloat("##wheel_cap", &wheel_cap_, 0.05f, 0.5f, "%.2f");
+    ValueSlider("##wheel_cap", &wheel_cap_, 0.05f, 0.5f, "%.2f");
     Label("Invert force", "Flip the force's direction, if the direction pulse turns the wheel to the left.");
     ImGui::Checkbox("##wheel_invert", &wheel_invert_);
     Label("Record forces", "Write every force sent to logs\\wheel-test-forces.csv.");
@@ -2109,10 +2965,21 @@ void App::WheelSection() {
 }
 
 void App::ControlsPage() {
-  ControllerSection();
-  WheelGameSection();
-  WheelSection();
-  KeyboardSection();
+  // One tab a device; the racing wheel's tab holds its game options and its test.
+  Segment("controls", controls_tab_, {"Controller", "Racing wheel", "Keyboard"});
+  ImGui::Dummy(ImVec2(0, 6 * scale_));
+  if (controls_tab_ == 0) ControllerSection();
+  if (controls_tab_ == 1) {
+    WheelGameSection();
+    WheelSection();
+  }
+  if (controls_tab_ == 2) {
+    KeyboardSection();
+    KeyBindings();
+  }
+}
+
+void App::KeyBindings() {
   Muted("Keyboard bindings, by their function in the game's DEFAULT LAYOUT 1 (the pad input in brackets). "
         "Several keys are separated by commas, modifiers are written as Shift+Up. Ctrl is the precision key "
         "and also works while the other keys are held.");
@@ -2188,7 +3055,7 @@ void App::GameDataPage() {
     ImGui::AlignTextToFramePadding();
     ImGui::TextUnformatted(settings_.content[i].c_str());
     ImGui::SameLine();
-    if (ImGui::SmallButton("Remove")) {
+    if (SmallAction("Remove")) {
       settings_.content.erase(settings_.content.begin() + static_cast<long>(i));
       Refresh(false);
       ImGui::PopID();
@@ -2230,7 +3097,7 @@ void App::GameDataPage() {
         ImGui::AlignTextToFramePadding();
         ImGui::TextColored(kSuccess, "Imported");
         ImGui::SameLine();
-        if (ImGui::SmallButton("Remove import")) {
+        if (SmallAction("Remove import")) {
           remove_candidate_ = package;
           ImGui::OpenPopup("Remove import");
         }
@@ -2277,6 +3144,29 @@ void App::GameDataPage() {
 
 void App::AdvancedPage() {
   Options& o = settings_.Active().options;
+  if (PathRow("User data", "userdata", settings_.user_data, kUserData, true)) Refresh(false);
+  ImGui::SetCursorPosX(ImGui::GetCursorPosX() + 190 * scale_);
+  ImGui::TextColored(kMuted, "%s", settings_.user_data.empty()
+                                       ? ("Default: " + Utf8(root_ / "user-data")).c_str()
+                                       : "Profile, saves and imported content. Moving it does not move them.");
+  ImGui::Dummy(ImVec2(0, 6 * scale_));
+  if (ImGui::Button("Open logs folder")) {
+    fs::create_directories(root_ / "logs");
+    OpenPath(root_ / "logs");
+  }
+  ImGui::SameLine();
+  if (ImGui::Button("Open user data")) {
+    fs::create_directories(UserData());
+    OpenPath(UserData());
+  }
+  ImGui::Dummy(ImVec2(0, 10 * scale_));
+  ImGui::Separator();
+  ImGui::Dummy(ImVec2(0, 4 * scale_));
+  ImGui::Checkbox("Show developer options", &settings_.developer);
+  Muted("The render paths, test switches and raw option values, on this page and the others: for "
+        "comparisons and bug reports.");
+  if (!settings_.developer) return;
+  ImGui::Dummy(ImVec2(0, 6 * scale_));
   ImGui::Checkbox("Fixed 60 Hz vblank (hold every swap to the vblank grid)", &o.fixed_vblank);
   ImGui::Checkbox("Shadow workaround (shadow map only with the cockpit camera)", &o.shadow_workaround);
   ImGui::Checkbox("One tile without MSAA also with a look without TAA (then FXAA)", &o.single_tile);
@@ -2310,22 +3200,7 @@ void App::AdvancedPage() {
   PathRow("Texture dump", "dump", o.texture_dump, kTextureDump, true);
   ImGui::SetCursorPosX(ImGui::GetCursorPosX() + 190 * scale_);
   ImGui::TextColored(kMuted, "Writes each new game texture once as <hash>.dds");
-  if (PathRow("User data", "userdata", settings_.user_data, kUserData, true)) Refresh(false);
-  ImGui::SetCursorPosX(ImGui::GetCursorPosX() + 190 * scale_);
-  ImGui::TextColored(kMuted, "%s", settings_.user_data.empty()
-                                       ? ("Default: " + Utf8(root_ / "user-data")).c_str()
-                                       : "Profile, saves and imported content. Moving it does not move them.");
-  ImGui::Dummy(ImVec2(0, 10 * scale_));
-  if (ImGui::Button("Open logs folder")) {
-    fs::create_directories(root_ / "logs");
-    OpenPath(root_ / "logs");
-  }
-  ImGui::SameLine();
-  if (ImGui::Button("Open user data")) {
-    fs::create_directories(UserData());
-    OpenPath(UserData());
-  }
-  ImGui::SameLine();
+  ImGui::Dummy(ImVec2(0, 6 * scale_));
   if (ImGui::Button("Copy command line")) {
     std::string error;
     if (const auto plan = CurrentPlan(error)) {
@@ -2335,6 +3210,13 @@ void App::AdvancedPage() {
       SDL_SetClipboardText(text.c_str());
     }
   }
+}
+
+bool App::ShadersReady() {
+  if (!fs::exists(root_ / "game-build" / "fm4_rex.exe")) return false;
+  std::ifstream marker(root_ / "logs" / "shader-pass.done", std::ios::binary);
+  std::string done((std::istreambuf_iterator<char>(marker)), std::istreambuf_iterator<char>());
+  return done == ShaderPassMarker();
 }
 
 // The build the pass last finished for: the game's executable as build-result.json names it,
@@ -2506,67 +3388,6 @@ void App::AboutPage() {
   ImGui::EndDisabled();
   Muted(fs::exists(notices) ? "The licenses of the libraries in the program files: " + Utf8(notices)
                             : "Run build (or export) to copy CREDITS.txt and third-party-notices here.");
-}
-
-void App::Footer() {
-  ImDrawList* draw = ImGui::GetWindowDrawList();
-  const ImVec2 origin = ImGui::GetCursorScreenPos();
-  const float width = ImGui::GetContentRegionAvail().x;
-  const float height = ImGui::GetContentRegionAvail().y;
-  draw->AddRectFilled(origin, ImVec2(origin.x + width, origin.y + height), ImGui::GetColorU32(kPanel));
-  draw->AddLine(origin, ImVec2(origin.x + width, origin.y), ImGui::GetColorU32(kBorder));
-  ImGui::SetCursorScreenPos(ImVec2(origin.x + 18 * scale_, origin.y + (height - ImGui::GetFrameHeight()) / 2));
-  ImGui::AlignTextToFramePadding();
-  ImGui::TextColored(kSecondary, "Profile");
-  ImGui::SameLine();
-  ImGui::SetNextItemWidth(180 * scale_);
-  if (ImGui::BeginCombo("##profile", settings_.active.c_str())) {
-    for (const auto& profile : settings_.profiles)
-      if (ImGui::Selectable(profile.name.c_str(), profile.name == settings_.active)) settings_.active = profile.name;
-    ImGui::EndCombo();
-  }
-  ImGui::SameLine();
-  if (ImGui::Button("Save as")) {
-    new_name_.clear();
-    ImGui::OpenPopup("Save profile");
-  }
-  if (settings_.profiles.size() > 1) {
-    ImGui::SameLine();
-    if (ImGui::Button("Delete")) {
-      std::erase_if(settings_.profiles, [&](const Profile& p) { return p.name == settings_.active; });
-      settings_.active = settings_.profiles.front().name;
-    }
-  }
-  if (ImGui::BeginPopupModal("Save profile", nullptr, ImGuiWindowFlags_AlwaysAutoResize)) {
-    ImGui::TextUnformatted("Name");
-    ImGui::SetNextItemWidth(280 * scale_);
-    if (ImGui::IsWindowAppearing()) ImGui::SetKeyboardFocusHere();
-    const bool enter = ImGui::InputText("##name", &new_name_, ImGuiInputTextFlags_EnterReturnsTrue);
-    if ((ImGui::Button("Save") || enter) && !new_name_.empty()) {
-      const Options options = settings_.Active().options;
-      std::erase_if(settings_.profiles, [&](const Profile& p) { return p.name == new_name_; });
-      settings_.profiles.push_back({new_name_, options});
-      settings_.active = new_name_;
-      ImGui::CloseCurrentPopup();
-    }
-    ImGui::SameLine();
-    if (ImGui::Button("Cancel")) ImGui::CloseCurrentPopup();
-    ImGui::EndPopup();
-  }
-  ImGui::SameLine();
-  ImGui::TextColored(kMuted, "Saved on Play. The launcher hides while the game runs.");
-  const char* play = "  Play  ";
-  const float play_width = ImGui::CalcTextSize(play).x + ImGui::GetStyle().FramePadding.x * 4;
-  ImGui::SameLine(width - play_width - 18 * scale_);
-  ImGui::PushStyleColor(ImGuiCol_Button, kAccent);
-  ImGui::PushStyleColor(ImGuiCol_ButtonHovered, ImVec4(0.30f, 0.62f, 0.93f, 1));
-  ImGui::PushStyleColor(ImGuiCol_ButtonActive, ImVec4(0.17f, 0.46f, 0.76f, 1));
-  ImGui::PushStyleColor(ImGuiCol_Text, ImVec4(1, 1, 1, 1));
-  ImGui::PushStyleColor(ImGuiCol_Border, ImVec4(0, 0, 0, 0));
-  ImGui::PushFont(heading_font_, 0);
-  if (ImGui::Button(play, ImVec2(play_width, 0))) Play();
-  ImGui::PopFont();
-  ImGui::PopStyleColor(5);
 }
 
 }  // namespace

@@ -48,51 +48,61 @@ needs neither Python nor Visual Studio nor the repository, so it also runs from 
 `MotorsportDX.exe`. `MotorsportDX.exe --play` presses Play at once with the active
 profile, for a desktop shortcut.
 
-For reviews of the launcher's layout, `MotorsportDX.exe --screenshot <page> <width>x<height>
-<scale> <out.png>` renders one page without a window and exits. The pages are `display`,
-`look`, `controls`, `game-data`, `advanced`, `shaders` and `about`; the scale is the DPI
-scale (1 for a 100% screen, 1.5 for the ROG Xbox Ally X's default). It renders with WARP, the
-CPU's Direct3D 11, so it never touches the GPU, and it neither reads nor writes
-`launcher-settings.json`: it starts from the default settings and the Discs of `local.json`.
-Options:
-- `--settings <file>` reads that `launcher-settings.json` instead.
-- `--state first-run` starts without Discs and content; `--state error-banner` shows the banner
-  of a game that exited with an error; `--state load-error` shows the error of a launcher
-  without its game.
-- `--pad <button>,<button>...` presses gamepad buttons one after another before the capture
-  (`up`, `down`, `left`, `right`, `a`, `b`, `x`, `y`, `lb`, `rb`, `start`, `back`), to check
-  the pad navigation.
+The launcher looks like a racing game's menus and works with a gamepad, a mouse, a keyboard or
+touch ([launcher UX](analysis/launcher-ux.md)):
+- **The frame.** A backdrop picture, blurred, behind translucent panels; the MOTORSPORT DX
+  wordmark and the page's name at the top left; the active profile and the Disc 1 release with
+  the build date at the top right; and a bar of pad prompts at the bottom right: Menu
+  **Play**, Y **Profile**, B **Back** and A **Select**. The mouse and touch press a prompt as
+  the pad presses its button. While Play cannot start, the bar's left end says why ("Choose
+  Disc 1 first").
+- **The focus** is a red frame. On the Home and Display pages the D-pad, the left stick or the
+  arrow keys move it, A or Enter selects, and on an option row left and right change the value
+  (a click on the row steps it on, a click on its left chevron steps it back). The focused
+  option explains itself in the panel at the right. The other pages use Dear ImGui's own
+  navigation with a thicker focus ring.
+- **The buttons.** LB and RB change the page's tab, B goes back to Home, Start plays from any
+  page, and Y opens the profiles: pick one, save the options under a new name, or delete one
+  after a confirmation. B or Escape closes them.
+- **The window** opens at 980x700 times the screen's scale, made smaller when that does not fit
+  the monitor's work area, and centred in it: on the ROG Xbox Ally X at 150% the taskbar never
+  covers the prompts. On a touch screen the buttons are larger and a finger dragged over a page
+  scrolls it.
 
-The launcher was `fm4_launcher.exe` until 26 October 2026. `build` and `export` now remove that
-old file from `game-build` and from an earlier export, so a shortcut to it stops working
-instead of starting a launcher older than its game: point the shortcut at `MotorsportDX.exe`
-in the same folder. The settings stay, because the launcher finds `launcher.json` and
-`launcher-settings.json` by its folder, not by its name.
-
-The launch rules stay in [pipeline.py](../outputs/FM4-build/pipeline.py): `build`
-writes their tables (the runtime settings, the look presets and knobs, the quality
-presets, the releases and the content package checks) into `BuildRoot\launcher.json`,
-and the launcher's code ([work/fm4-launcher](../work/fm4-launcher)) is a port of
-`launch_plan`. Every `build` compares the two: the launcher tests compute the cvars,
-the environment and the display description of sixteen sets of options (RTV, `-Rov` and
-`-Native`) on four monitor sizes with both, and check the Discs and content packages of
-`local.json` with both. A difference fails the build.
+**The backdrop** is `launcher-backdrop.jpg` (or `.png`) beside `launcher.json`, in the BuildRoot
+or the export folder. It is a local file, not part of the source: the repository carries no
+picture. Without it the launcher draws a dark gradient. Any picture of your own replaces it;
+the launcher scales and blurs it. `export` copies the BuildRoot's backdrop into an export folder
+that has none ([distribution](sources-and-licensing.md#distribution)).
 
 | Page | Contents |
 | --- | --- |
-| Display | Screen (`-Display`), fullscreen, render scale, supersample, upscale (`-Upscale`, with the input and output lines beside it), race frame rate, race quality, one tile with TAA or the MSAA tiles (`-Msaa`), the full-rate mirror and the settings overlay. The display and render scale that the options give are shown below them. |
-| Look | The preset (`aces`, `gt`, `neutral`, `original`, `original` without TAA, or a saved look), the tone curve, TAA, the exposure speed of 60 fps (`adaptation`), and a slider for each [look knob](#look) in five groups: picture, lighting, car, sky and foliage, road. A changed knob is marked and has a Reset button. **Save as look** keeps the current value under a name. The `-Look` value is shown and can be edited. |
-| Controls | The Controller section: the options of `-Pad` (the pad driver, rumble strength, trigger rumble, the steering anti-deadzone and the input thread; stick and trigger shaping and the extra buttons folded), with the `-Pad` value shown and editable; see [Controller](#controller). Then the Keyboard section: the options of `-Keyboard` (smooth steering and pedals, their rates and the precision share; mouse steering folded), with the `-Keyboard` value; see [Keyboard](#keyboard). Below it the keyboard bindings, by their function in the game's DEFAULT LAYOUT 1 (the runtime's `keybind_*` settings). **Set** waits for a key; several keys are separated by commas, modifiers are written as `Shift+Up`. Unknown key names are marked and block Play. A connected controller needs no setup. |
+| Home | The first page. A menu (Play, then the pages) and a panel with the focused entry's detail: whether Disc 1 checks out, Disc 2 and the content, the shaders, the connected controller, and the profile's render scale, quality and frame rate. While Disc 1 is missing, Play reads "Choose Disc 1" and opens the folder picker; Game data and Shaders carry a mark while they need attention or work. |
+| Display | Three tabs of option rows. **Screen:** the screen (`-Display`), fullscreen, the render scale and supersample. **Performance:** the upscaler (`-Upscale`), the race frame rate in steps of 30, 60, 90, 120, 144 and 240 fps (a rate saved before keeps showing until it is changed), VSync and the race quality. With the upscaler on and a look whose anti-aliasing is TAA, a row "Use FSR 3.1 for the upscaler" sets `aa=fsr` in the profile's look. **Extras:** the rear-view mirror every frame, the settings overlay at start and the menus at the render scale. The right panel shows the render scale and the upscaler's lines that the options give. |
+| Look | The preset (`aces`, `gt`, `neutral`, `original`, `original` without TAA, or a saved look), the tone curve, TAA, the exposure speed of 60 fps (`adaptation`), and a slider for each [look knob](#look) in five groups: picture, lighting, car, sky and foliage, road. A changed knob is marked and has a Reset button. **Save as look** keeps the current value under a name. |
+| Controls | Three tabs. **Controller:** the options of `-Pad` (the pad driver, rumble strength, trigger rumble, the steering anti-deadzone and the input thread; stick and trigger shaping and the extra buttons folded); see [Controller](#controller). **Racing wheel:** the wheel in the game (`-Wheel`, its axes, pedals, buttons and force feedback) and the [wheel test](#racing-wheel-test). **Keyboard:** the options of `-Keyboard` (smooth steering and pedals, their rates and the precision share; mouse steering folded), see [Keyboard](#keyboard), and the keyboard bindings, by their function in the game's DEFAULT LAYOUT 1 (the runtime's `keybind_*` settings). **Set** waits for a key; several keys are separated by commas, modifiers are written as `Shift+Up`. Unknown key names are marked and block Play. A connected controller needs no setup. |
 | Game data | Disc 1 and Disc 2, checked as `generate` checks them, the downloadable content folders and files, and the content packages found, with their import state. **Remove import** deletes an imported package from the user data (see [Data directories](#data-directories)). The texture pack is the `-TextureReplace` folder. |
-| Advanced | Fixed vblank, the shadow workaround, `-SingleTile`, `--ao`, `-Rov`, the render path (automatic, which is the native path; RTV, `-Rtv`; or the native path, `-Native`) and the native path's MSAA (one pass with 2x, the default, one pass with 4x as `-MsaaSamples 4`, or one tile without MSAA as `-MsaaSamples 0`), the performance trace, extra cvars, the texture dump folder, the user data folder, and buttons that open the logs and the user data and copy the command line. |
+| Shaders | The offline shader pass; see [Shaders page](#shaders-page). |
+| Advanced | The user data folder, buttons that open the logs and the user data, and **Show developer options**. |
 | About | Who made Motorsport DX possible (the ReXGlue SDK, Xenia, XenonRecomp and the other projects of [CREDITS.txt](../outputs/FM4-build/CREDITS.txt)), the non-affiliation line, and buttons that open `CREDITS.txt` and the `third-party-notices` folder beside the launcher. |
+
+**Show developer options** (Advanced, saved in `launcher-settings.json`, never part of a launch
+plan) adds the options for comparisons and bug reports:
+- on Display's Extras tab, the race rendering (one tile with TAA, or the MSAA tiles of `-Msaa`),
+  and the launch plan's description in the right panel;
+- on Look and Controls, the `-Look`, `-Pad`, `-Keyboard` and `-Wheel` values, shown and editable;
+- on Advanced: fixed vblank, the shadow workaround, `-SingleTile`, `--ao`, `-Rov`, the render
+  path (automatic, which is the native path; RTV, `-Rtv`; or the native path, `-Native`), the
+  native path's MSAA (one pass with 2x, the default, one pass with 4x as `-MsaaSamples 4`, or one
+  tile without MSAA as `-MsaaSamples 0`), the performance trace, extra cvars, the texture dump
+  folder, and a button that copies the command line.
 
 A **profile** is one set of run options; the Discs, content, saved looks and key
 bindings are shared by all profiles. The launcher saves its settings in
 `launcher-settings.json` beside `launcher.json` when Play is pressed and when it closes.
 In a BuildRoot it starts with the Disc and content paths of `local.json`.
 
-Two options of the Advanced page apply at Play, outside the launch plan:
+Two developer options of the Advanced page apply at Play, outside the launch plan:
 - **Performance trace** writes the perf trace (one JSON line a second, [traces](e2e/traces.md#performance-trace-rex_perf_trace_file)) to `logs\perf-<profile>-<time>.jsonl`. It carries the process's CPU time and its threads' (`process_cpu`), so a run without the e2e harness still shows where the CPU goes.
 - **Extra cvars** are runtime settings written as `--name=value`, separated by spaces, and applied after all the others: for A/B runs such as `--guest_ring_wait_sleep=false`.
 
@@ -100,14 +110,49 @@ When Play is pressed, the launcher checks the Discs and content, the key binding
 the options, compares the build artifacts with `build-result.json` once per session,
 writes `content-packages.txt`, and starts `game-build\fm4_rex.exe` with the logs in
 `logs\play.log` and `logs\runtime.log`, as `run` does. It hides while the game runs
-and shows again when the game exits. If the game exits with an error, a banner shows
-the exit code and the time it ran, with buttons that open both logs.
+and shows again when the game exits. If the game exits with an error, a banner says what
+happened in words ("The game crashed after 2 min 14 s (a memory access violation,
+0xC0000005)"), with buttons that open both logs.
 
 Not in the launcher: `-ShaderDev`, `warmcache`, the build flavors and the e2e
 harness, which need the repository. The look mods and post passes that the launcher
 uses are the copies in `BuildRoot\look` and `BuildRoot\passes` that `build` makes;
 after editing `work/fm4-rex/look` or `work/fm4-rex/passes`, run `build` or use
 `Build.ps1 -Action run`.
+
+The launch rules stay in [pipeline.py](../outputs/FM4-build/pipeline.py): `build`
+writes their tables (the runtime settings, the look presets and knobs, the quality
+presets, the releases and the content package checks) into `BuildRoot\launcher.json`,
+and the launcher's code ([work/fm4-launcher](../work/fm4-launcher)) is a port of
+`launch_plan`. Every `build` compares the two: the launcher tests compute the cvars,
+the environment and the display description of 59 sets of options (RTV, `-Rov` and
+`-Native`) on nine monitors with both (531 plans), and check the Discs and content packages
+of `local.json` with both. A difference fails the build.
+
+The launcher was `fm4_launcher.exe` until 26 October 2026. `build` and `export` now remove that
+old file from `game-build` and from an earlier export, so a shortcut to it stops working
+instead of starting a launcher older than its game: point the shortcut at `MotorsportDX.exe`
+in the same folder. The settings stay, because the launcher finds `launcher.json` and
+`launcher-settings.json` by its folder, not by its name.
+
+### Launcher screenshots
+
+For reviews of the launcher's layout, `MotorsportDX.exe --screenshot <page> <width>x<height>
+<scale> <out.png>` renders one page without a window and exits. The pages are `home`,
+`display`, `look`, `controls`, `game-data`, `shaders`, `advanced` and `about`; the scale is the
+DPI scale (1 for a 100% screen, 1.5 for the ROG Xbox Ally X's default). It renders with WARP,
+the CPU's Direct3D 11, so it never touches the GPU, and it neither reads nor writes
+`launcher-settings.json`: it starts from the default settings and the Discs of `local.json`.
+It draws no backdrop unless one is given. Options:
+- `--settings <file>` reads that `launcher-settings.json` instead.
+- `--state first-run` starts without Discs and content; `--state error-banner` shows the banner
+  of a game that exited with an error; `--state load-error` shows the error of a launcher
+  without its game; `--state developer` turns on the developer options.
+- `--pad <button>,<button>...` presses gamepad buttons one after another before the capture
+  (`up`, `down`, `left`, `right`, `a`, `b`, `x`, `y`, `lb`, `rb`, `start`, `back`), to check
+  the pad navigation.
+- `--touch` uses the touch screen's layout.
+- `--backdrop <picture>` draws that picture behind the pages.
 
 ### Shaders page
 
@@ -135,7 +180,7 @@ during a race.
 
 ### Ally X run set
 
-The runs of stage N4 on the ROG Xbox Ally X ([D3D-level HLE, 17.19](analysis/d3d-hle-n4.md)), from an export, with the GUI launcher. Make one profile per run, all with **Performance trace** on, the default look, the race frame rate the screen allows (120 on the Ally X's panel), and otherwise the defaults.
+The runs of stage N4 on the ROG Xbox Ally X ([D3D-level HLE, 17.19](analysis/d3d-hle-n4.md)), from an export, with the GUI launcher. Turn on **Show developer options** on the Advanced page first: the performance trace, extra cvars, the render path and the native path's MSAA are among them. Make one profile per run, all with **Performance trace** on, the default look, the race frame rate the screen allows (120 on the Ally X's panel), and otherwise the defaults.
 
 Runs 1 to 6 use render scale 1x (Display page). On the Ally X's 1080p panel the launcher of `de4e9bd` picked 2x, and its GPU then takes about 21 ms a race frame (about 47 fps, N1's estimate), which would hide what the CPU A/B runs measure; later launchers pick 1x there (integrated GPUs only, [-Display](#-display-and-render-scale)):
 
@@ -165,8 +210,9 @@ repository:
 The folder holds `MotorsportDX.exe`, `game-build` (the executable, the two modules and
 the runtime DLLs of `build-result.json`), `look`, `passes`, the shader cache (`cache`),
 `launcher.json`, `build-result.json`, `CREDITS.txt` (the projects that made it possible), the
-license notices of the third-party code in the binaries (`third-party-notices`), and a first
-`launcher-settings.json` with the
+license notices of the third-party code in the binaries (`third-party-notices`), the
+launcher's backdrop when the BuildRoot has one and the folder has none (a local picture, see
+[GUI launcher](#gui-launcher)), and a first `launcher-settings.json` with the
 Disc and content paths of `local.json`. It does not hold `user-data`: profiles, saves
 and imported content stay on the build computer. `export` checks the artifact hashes
 first, and refuses a folder that is not empty unless it is an earlier export, which it

@@ -2364,7 +2364,8 @@ def launcher_tests(root):
 def export(root,out,jobs):
     """A folder that runs the game with MotorsportDX.exe alone (docs/running.md#export): the
     launcher, game-build's executable, modules and runtime, the look mods, the post passes, the
-    shader cache, launcher.json, CREDITS.txt and the third-party notices. Not user-data: the
+    shader cache, launcher.json, CREDITS.txt, the third-party notices, and the launcher's
+    backdrop when the BuildRoot has one and the folder does not. Not user-data: the
     profile, saves and imported content stay, and the launcher of the folder imports Disc 2 and
     the content packages on its first run.
     The Disc and content paths of local.json become the launcher's first settings."""
@@ -2392,6 +2393,12 @@ def export(root,out,jobs):
     shutil.copyfile(root/'build-result.json',out/'build-result.json')
     # With CREDITS.txt and third-party-notices, the licenses of the third-party code in the binaries.
     stage_launcher_files(out)
+    # The launcher's backdrop is a local picture, not part of the source (docs/running.md#gui-launcher):
+    # copied when the BuildRoot has one, never over the export's own.
+    for name in ('launcher-backdrop.jpg','launcher-backdrop.png'):
+        if (root/name).is_file() and not any((out/other).is_file()
+                                             for other in ('launcher-backdrop.jpg','launcher-backdrop.png')):
+            shutil.copyfile(root/name,out/name)
     if (root/'cache').is_dir():
         shutil.copytree(root/'cache',out/'cache',dirs_exist_ok=True)
     settings=out/'launcher-settings.json'

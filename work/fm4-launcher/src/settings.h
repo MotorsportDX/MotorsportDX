@@ -26,6 +26,7 @@ struct Settings {
   std::vector<std::pair<std::string, std::string>> looks;  // name, look value
   Pairs binds;                                              // keybind_* cvars the player changed
   bool mouse_right_stick = false;
+  bool developer = false;  // the developer options on every page (never part of a plan)
 
   static Settings Load(const std::filesystem::path& path);
   void Save(const std::filesystem::path& path) const;
