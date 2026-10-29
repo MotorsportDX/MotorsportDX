@@ -588,7 +588,24 @@ Delivers:
 
   As in stage 5, the rows where the output did not push back came during the fast turns back to the lock, where the end stop's damper takes its push away and the title's force or the slew limit remains.
 
-**Found by the gate, present since stage 5.** The car's road-wheel lock is published with the car's control records (the hook of `CCarDynamics` slot 14), and they start with the race after the countdown. During the countdown (about 9.6 s in these runs, and in stage 5's `whl10vk`) the first race of a session has the wheel's whole rotation as its lock and no end stop; a later race has the previous car's lock until its first record. The force is still governed throughout, and the car's lock arrives with the race. Possible fixes for the next wheel session: read the lock where the force feedback sample is published (the control step runs in the countdown), or assume a 42-degree car until a lock is published and clear it when a race ends.
+**Found by the gate, present since stage 5, fixed the same day.** The car's road-wheel lock was published with the car's control records (the hook of `CCarDynamics` slot 14), and they start with the race after the countdown. During the countdown (about 9.6 s in these runs, and in stage 5's `whl10vk`) the first race of a session had the wheel's whole rotation as its lock and no end stop; a later race had the previous car's lock until its first record. The force was still governed throughout.
+
+The fix (`ef60ace`, the main session's decision to fix it before the R9 export): in every frame the player drives, the countdown included, the control step reads the player's `CCarDynamics` for its steering torque (return `0x826D6754`) before the force feedback block's update in the same pass. The integration keeps that car and publishes its lock just before the frame's force sample (the hook of `sub_823921F8`), so the host has the car's lock before the first driven sample. The reset of the force feedback blocks (`sub_828C5B18`, a race update without the player's control: the menus, the replays) clears the lock, so a race never starts with the last car's. The trace's `ffb` lines carry the lock published (`lock=`).
+
+Verified (snapshot `whl14` from `ef60ace`, not dirty, native 3/2, 240 Hz; the unit tests pass):
+- **Two races in one process** (`whl14w2`: the career's race, its replay, then the same race again; the virtual wheel swept lock to lock every 8 seconds on a 1080-degree wheel, 90 degrees past the lock both ways):
+
+  | | First race | Second race |
+  |---|---|---|
+  | driven rows, all with the lock 900 | 26,855 | 32,566 |
+  | the countdown's first 9 s: rows 2 or more degrees past the lock | 904 | 1,200 |
+  | of them, the end stop back towards the lock | 753 | 970 |
+  | the force back towards the lock, 6 or more degrees past it | 830 of 865 rows | 1,112 of 1,168 rows |
+  | driven samples before the car's first control record (the countdown), all with the lock 42 degrees | 1,622 | 1,969 |
+
+  Every one of the 21,428 driven samples carried the lock; both resets came before a race, and the first driven sample after each had the lock 42 degrees. Over the run: the steering the angle over half the lock to within 0.000012, all 6,625 records past the lock at full steering, the sum at most 0.250016, no rise above the slew limit, zero in all 9,689 rows outside a driven race.
+- **The landing check** (`whl14`, the career with the defaults, beside the wheel cell): exit 0, main's log errors, a sane capture. Against `whl13s32` (alone) it fails on the frame rate (race 136.94 against 232.41 fps), as a cell beside another does; against stage 5's `whl10`, which also ran beside a wheel cell (race 137.24 fps), WARN only on two waits (`frame_latency`, `wait_reg_mem`).
+- Every car the e2e scenarios reach has a 42-degree lock, so a second race with a different lock was not run; the reset clearing the lock between the races, and the new lock published before the first driven sample, cover the change of car.
 
 **Evidence lost.** The raw files of the runs `whl0` to `whl9` (stages 0 to 4: captures, logs, summaries) were overwritten by a mistaken archive move on 29 October 2026; only one run's files remain, in `D:\FM4-archive\e2e\whl0-whl9v-merged-by-mistake`. Their results above stay as recorded.
 

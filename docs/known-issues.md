@@ -64,9 +64,7 @@ above.
   stop's firmness and whether it oscillates on a direct-drive base are untested. Keep the
   force cap at its default 0.25 until then. The menus still need the controller or the
   keyboard. The cockpit's drawn steering wheel follows the wheel up to the car's lock, but
-  past about 90 degrees the driver's hands keep one pose. During a race's countdown the
-  steering lock and the end stop are not yet the car's own (in the first race the wheel turns
-  to its full rotation); they apply from the start. Only cars with the most common
+  past about 90 degrees the driver's hands keep one pose. Only cars with the most common
   steering lock have been driven in the checks; GT racing cars and prototypes have a smaller
   lock, covered by unit tests only.
 - **Keyboard:** the smooth steering and pedals are new and tested with injected keys only;
