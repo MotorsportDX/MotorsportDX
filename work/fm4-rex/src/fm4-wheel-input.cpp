@@ -166,11 +166,12 @@ constexpr uint32_t kTorqueRead = 0x826D6754;
 constexpr uint32_t kTorqueOffset = 0x30;
 // ... from the rumble update (sub_8239C970: the pad, the frame's step, the rumble inputs).
 constexpr uint32_t kRumbleUpdate = 0x826D66F4;
-// The pad's rumble object and its <Wheel> table (ControllerRumble.xml; +1792 is the
-// <Controller> table, which the pad class uses). A table holds a left and a right curve per
-// effect, 64 bytes each: three points (x, y) at +0, +16 and +32.
+// The pad's rumble object and its <Wheel> table (ControllerRumble.xml; +32 is the <Controller>
+// table, which the pad class uses: its surface curve ends at 0.25, the wheel's at 0.8, traced on
+// 29 October 2026). A table holds a left and a right curve per effect, 64 bytes each: three
+// points (x, y) at +0, +16 and +32.
 constexpr uint32_t kRumbleObject = 688;
-constexpr uint32_t kWheelTable = 32;
+constexpr uint32_t kWheelTable = 1792;
 constexpr uint32_t kCurveRight = 64;
 constexpr uint32_t kCarCollisionCurve = 256;
 constexpr uint32_t kCarCollisionTimeCurve = 384;
