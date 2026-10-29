@@ -152,5 +152,7 @@ The references' sky (GT7, cmp-05 and gt7-13): hue 216 and 217 degrees, saturatio
 - **Artefacts**, at 1:1 crops of both tracks: no halo around the cable cars, the pylon or the cables against the hazy sky (the haze is per pixel from the scene depth); the car at chase distance shows no haze (it is nearer than `HAZE_START`, 30 m); the sky stretched six times in contrast shows smooth gradients, no bands, in `fm2023` and `gt7`; beside Maple Valley's low sun the car looks as with `aces` (no `bloom_width` in the preset).
 - **GPU time alone**, the frozen frame's median at 2x, one run at a time on an exclusive queue slot: `aces` 5.10 and 5.24 ms, `gt7` 5.50 and 5.10 ms, `fm2023` 5.36 and 5.15 ms (Maple Valley, the Bernese Alps); with the second round's runs `aces` spans 5.02 to 5.24 ms over four runs, so neither preset costs more than the runs' spread of about 0.3 ms.
 
+The round's short check on `c737653` (snapshot `lkc3`): the build's tests pass, `fm4_look_tonemap_tests` among them, and a career at 3/2 per preset ends with exit 0, main's four log errors and no FXC error.
+
 Decision (the main session's): pending.
 
