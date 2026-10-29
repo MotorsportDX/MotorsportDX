@@ -1263,8 +1263,9 @@ and the damper together, 0.25 of the wheel's full force by default; the spring a
 take at most half of it), `ffb_gain` (multiplies all three before the cap), `ffb_min_force`
 (lifts small forces above a wheel's own friction; 0 for a direct-drive base),
 `ffb_smoothing`, `ffb_spring` and `ffb_damper` (1: as the game scales them, 0: off), and
-`ffb_invert`. The launcher's **Force feedback** section has **Force cap**, **Force gain** and
-**Invert force**; the other knobs go in its **Wheel value** field until the section gets them. The force is zero at once outside a race you
+`ffb_invert`. The launcher's **Force feedback** section has a control for each: **Force
+cap**, **Force gain**, **Minimum force**, **Smoothing (ms)**, **Centring spring**, **Damper**
+and **Invert force**. The force is zero at once outside a race you
 drive: in the menus, at the race's end, in replays, when the AI drives your car, and when the
 window loses focus. When the game stops updating the race (pause, photo mode, the rewind,
 loading), the force falls to zero within about 0.1 seconds. After every such stop it ramps in
@@ -1371,15 +1372,15 @@ Stage 3, the game's force feedback (keep **Force cap** at 0.25 until these are d
     towards the centre more the harder the car turns, and go light when the front or the
     rear slides. Note any knocks, buzzing or notches, and whether the wheel oscillates when
     you let go of it on a straight.
-16. Repeat with **Force gain** 0.5, then try `ffb_smoothing=0` and `ffb_smoothing=20` in
-    the **Wheel value** field, and note which feels best.
+16. Repeat with **Force gain** 0.5, then try **Smoothing (ms)** 0 and 20, and note which
+    feels best.
 17. Spin the car once: the force must not jump when the car comes to rest or drives off.
 18. Pause during a corner: the force must stop within a fraction of a second, and ramp in
     again over about 1.5 seconds after RESUME. The same for photo mode and the rewind.
 19. Alt+Tab during a corner: the force must stop at once.
 20. Finish the race: at the finish line, when the AI takes over the car, and in the results
     and the replay the force must be zero.
-21. Rate the centre feel (the game's spring: try `ffb_spring=0` and `ffb_spring=1`) and the loss of
+21. Rate the centre feel (the game's spring: try **Centring spring** 0 and 1) and the loss of
     grip at the limit, and note the Pit House settings you used; say which **Force cap**
     still felt safe.
 

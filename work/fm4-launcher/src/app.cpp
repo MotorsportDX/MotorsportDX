@@ -1985,8 +1985,21 @@ void App::WheelGameSection() {
       slider("ffb_cap", "Force cap", "The hard upper limit of every force, a fraction of the wheel's full force.",
              0.01f, "%.2f");
       slider("ffb_gain", "Force gain", "Multiplies the game's force before the cap.", 0.01f, "%.2f");
+      slider("ffb_min_force", "Minimum force",
+             "The smallest force sent while the game asks for any, a fraction of the wheel's full force: "
+             "lifts small forces above the wheel's own friction. 0 for a direct-drive base.",
+             0.01f, "%.2f");
+      slider("ffb_smoothing", "Smoothing (ms)",
+             "Smooths the game's force, which changes once a frame. 0: none; more is softer and later.", 1.0f,
+             "%.0f");
+      slider("ffb_spring", "Centring spring",
+             "The game's centring spring, which grows with speed and fades when the rear slides. "
+             "1: as the game scales it; 0: off.",
+             0.01f, "%.2f");
+      slider("ffb_damper", "Damper", "The game's damper. 1: as the game scales it; 0: off.", 0.01f, "%.2f");
       toggle("ffb_invert", "Invert force", "If the wheel test's direction pulse turns the wheel to the left.");
-      Muted("The game sends no force yet; these apply once it does.");
+      Muted("The force comes from the game's steering torque in a race you drive, and is zero everywhere "
+            "else. The spring and the damper take at most half of the cap.");
     }
     ImGui::PopStyleColor();
     if (!live) Muted("Start the wheel test below to see the values and to set the pedals and buttons from the wheel.");
