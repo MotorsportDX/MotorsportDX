@@ -55,7 +55,7 @@ FM2023's grade is not documented, so its preset is tuned against the references 
 - **`bloom_width`, a wide bloom:** the bloom input (already blurred by the game) tapped on two rings of 8, 3% and 6% of the screen's width out, the mean of their linear energy added to the bloom times the knob.
 - **`ao`** stays the GTAO pass's strength; the preset raises it toward FM2023's richer occlusion.
 
-The preset `fm2023` is `tonemap=aces` on the mods of the other presets with `saturation=1.05`, `ao=0.9`, `haze=0.3`, `temperature=0.35` and `bloom_width=0.5` (section 5).
+The preset `fm2023` is `tonemap=aces` on the mods of the other presets with `saturation=1.05`, `ao=0.9`, `haze=0.3` and `temperature=0.35` (sections 5 and 6; `bloom_width=0.5` until section 6).
 
 ## 5. Tuning, 29 October 2026
 
@@ -98,4 +98,23 @@ The project owner asked on 29 October 2026 that the look tests run in the chase 
 Against the board's Supra pair (FM2023 against GT7: spread 0.90 times, p95 0.737 against 0.795, saturation 0.86 times, R/B 1.26 times), `fm2023` against `gt7` has a spread 0.95 times as wide, a p95 of 0.808 against 0.852, 0.91 times the saturation and 1.21 times the R/B: every measure moves the way the references do, by a little less. `gt7` against `aces` widens the range (0.831 against 0.794, p95 0.852 against 0.806) and deepens the sky (saturation 0.275 against 0.205, a bluer R/B). In the 1:1 crops the distant mountains fade toward a pale, warm sky with `fm2023` and stand out against a deep blue one with `gt7`.
 
 Next, with the owner's verdict on taste: a low sun for the bloom width and a sunlit car side for the occlusion, and one of FM4's tracks that the references show (Laguna Seca, Suzuka, Road America, Sebring) where the career or a Quick Race can reach it.
+
+## 6. Second round: a low sun on Maple Valley, the GPU cost, 29 October 2026
+
+`e2e.py --location "Maple Valley"` ([race location](../e2e/README.md#race-location)) puts the frozen Quick Race grid on Maple Valley Raceway, one of the tracks of the references, in the chase camera: a low sun from the left behind the camera, a glare on the asphalt and long shadows. Snapshot `lkc1`, 2x on the native path. The measures add the clipped share: pixels whose brightest channel is 250 or more of 255.
+
+| Look | mean | p05 | p50 | p95 | spread | sat | R/B | clipped |
+| --- | --- | --- | --- | --- | --- | --- | --- | --- |
+| `aces` | 0.572 | 0.017 | 0.704 | 0.911 | 0.894 | 0.185 | 1.101 | 0.4% |
+| `gt7` (exposure 0) | 0.599 | 0.026 | 0.707 | 0.990 | 0.964 | 0.186 | 1.006 | 9.2% |
+| `gt7,exposure=-0.3` | 0.551 | 0.020 | 0.642 | 0.957 | 0.937 | 0.193 | 1.005 | 4.4% |
+| `gt7,exposure=-0.5` | 0.519 | 0.016 | 0.597 | 0.922 | 0.906 | 0.197 | 1.004 | 1.7% |
+| `gt7,exposure=-0.6` | 0.502 | 0.015 | 0.576 | 0.903 | 0.888 | 0.199 | 1.002 | 0.9% |
+| `fm2023` (`bloom_width=0.5`) | 0.573 | 0.016 | 0.708 | 0.912 | 0.896 | 0.188 | 1.214 | 0.7% |
+| `fm2023,bloom_width=0` | 0.573 | 0.017 | 0.706 | 0.911 | 0.894 | 0.188 | 1.215 | 0.7% |
+
+- **`gt7` clipped the low sun.** Its curve reaches white at 1.47 in the units where middle gray is 0.18, 3 stops above it (section 2), where ACES only approaches white. With the game's exposure, 9.2% of the Maple Valley frame (the sunlit wall, the glare on the asphalt) and 2.1% of the Bernese Alps frame were white, against the references' highlights that rarely clip. The preset takes `exposure=-0.5`: 1.7% on Maple Valley and 0.1% on the Bernese Alps. The price is a darker picture than `aces` (mean 0.519 against 0.572 on Maple Valley, 0.295 against 0.339 on the Bernese Alps) with a p95 below `aces`' on the Bernese Alps (0.747 against 0.806); the deeper blue sky stays (sky saturation 0.292 against 0.205 there). Whether the owner prefers the brighter picture with clipped highlights is a question of taste: `-Look "gt7,exposure=0"` is the first version.
+- **The wide bloom showed nothing.** With `bloom_width` 0.5 or 1 the frame measures the same as without it, and the 1:1 crops of the sky and the buildings near the sun's side show no difference: the game's bloom texture is faint where the sun is not in view.
+- **GPU cost alone** (one cell at a time under an exclusive queue slot, the frozen frame's median GPU time, 2x): `aces` 5.02 and 5.24 ms in two runs, `gt7` 5.27 ms, `fm2023` with `bloom_width=0.5` 5.76 and 5.58 ms, without it 4.91 ms. The GT7 operator costs within the runs' spread of about 0.2 ms, the haze pass 0.02 ms, and the wide bloom's 16 taps about 0.66 ms. The preset `fm2023` therefore leaves `bloom_width` out until a frame with the sun in view shows what it adds; the knob stays.
+- Ambient occlusion (`ao=0.9` in `fm2023` against 0.6): the 1:1 crops of the car show no difference that can be told from the run's own changes; the car's rear faces away from the low sun, in shade, where the final combine's occlusion weighs most, so a frame with the sun on the car's side is still to be judged.
 

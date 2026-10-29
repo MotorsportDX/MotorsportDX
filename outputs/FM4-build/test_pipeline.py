@@ -163,19 +163,21 @@ class PipelineTests(unittest.TestCase):
             self.assertEqual(mods['aces'],mods['neutral'])
             self.assertEqual([pipeline.look_knobs(look)['tonemap'] for look in ('aces','gt','neutral')],
                              ['aces','gt','neutral'])
-            # gt7: the same mods with the GT7 operator (tone curve 4) and a deeper sky.
+            # gt7: the same mods with the GT7 operator (tone curve 4), a deeper sky and half a stop
+            # less exposure.
             gt7=pipeline.look_knobs('gt7')
-            self.assertEqual({k:v for k,v in gt7.items() if not k.startswith('sky_') and k!='tonemap'},
+            self.assertEqual({k:v for k,v in gt7.items()
+                              if not k.startswith('sky_') and k not in ('tonemap','exposure')},
                              mods['aces'])
-            self.assertEqual(gt7['tonemap'],'gt7')
+            self.assertEqual((gt7['tonemap'],gt7['exposure']),('gt7','-0.5'))
             defines=dict(define.split('=',1) for define in
                          pipeline.look_cvars(root,'gt7')['shader_mod_defines'].split(';'))
             self.assertEqual(defines['FM4_LOOK_TONEMAP'],'4.0')
-            # fm2023: the aces curve on the same mods, warmer, hazier, with more occlusion and a
-            # wide bloom; the haze turns on the haze pass (HAZE).
+            # fm2023: the aces curve on the same mods, warmer, hazier, with more occlusion; the
+            # haze turns on the haze pass (HAZE).
             fm2023=pipeline.look_knobs('fm2023')
             self.assertEqual(fm2023['tonemap'],'aces')
-            for knob in ('haze','temperature','bloom_width'):
+            for knob in ('haze','temperature'):
                 self.assertGreater(float(fm2023[knob]),0,knob)
             defines=dict(define.split('=',1) for define in
                          pipeline.look_cvars(root,'fm2023')['shader_mod_defines'].split(';'))

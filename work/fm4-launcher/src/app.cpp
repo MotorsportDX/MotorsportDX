@@ -2369,8 +2369,7 @@ void App::LookRows() {
       if (const int d = OptionRow("preset", "Look", preview,
                                   "The preset. aces, gt and neutral share the look mods with their own tone curve; "
                                   "GT7 style adds Gran Turismo 7's tone mapping and a deeper sky; FM2023 style, "
-                                  "after Forza Motorsport (2023), is warmer and hazier, with richer shadows and a "
-                                  "wider bloom. "
+                                  "after Forza Motorsport (2023), is warmer and hazier, with richer shadows. "
                                   "original is the game's own picture with TAA, and without TAA unchanged. Your saved "
                                   "looks follow them.\n\nChanging the preset drops the changes: Save as look keeps "
                                   "them.")) {

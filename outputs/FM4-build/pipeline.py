@@ -1014,15 +1014,15 @@ LOOK_TRACK_KNOBS={'road_gloss':('RoadSpecular.RoadSpecular','RoadSpecular.RoadSp
 # render one tile without MSAA with them (auto_single_tile).
 # gt7 (since 29 October 2026) is the look of Gran Turismo 7: its published tone mapping
 # (tonemap=gt7, Polyphony Digital's GT7 operator) on the same mods, with a deeper, more
-# contrasted sky (docs/analysis/look-presets-gt7-fm2023.md).
+# contrasted sky, and half a stop less exposure, since its curve reaches white 3 stops above
+# middle gray and clipped the low sun's highlights (docs/analysis/look-presets-gt7-fm2023.md).
 _LOOK_MODS=('saturation=1.1,bloom=0.7,sharpen=0.4,clearcoat=1,clearcoat_glint=1,ao=0.6,sun=2,sky=0.7,'
             'taa=1,cockpit_fill=1,windshield=1,road_specular=0,road_sheen=0.4,glass=1,chrome=1,rims=1,'
             'adaptation=1')
 LOOK_PRESETS={'aces':'tonemap=aces,'+_LOOK_MODS,'gt':'tonemap=gt,'+_LOOK_MODS,
               'neutral':'tonemap=neutral,'+_LOOK_MODS,
-              'gt7':'tonemap=gt7,'+_LOOK_MODS+',sky_saturation=1.15,sky_contrast=0.3',
-              'fm2023':'tonemap=aces,'+_LOOK_MODS+',saturation=1.05,ao=0.9,haze=0.3,temperature=0.35,'
-                       'bloom_width=0.5',
+              'gt7':'tonemap=gt7,'+_LOOK_MODS+',sky_saturation=1.15,sky_contrast=0.3,exposure=-0.5',
+              'fm2023':'tonemap=aces,'+_LOOK_MODS+',saturation=1.05,ao=0.9,haze=0.3,temperature=0.35',
               'original':'taa=1'}
 LOOK_ALIASES={'pc':'aces'}
 DEFAULT_LOOK='aces'
