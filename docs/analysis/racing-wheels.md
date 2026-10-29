@@ -1,6 +1,6 @@
 # Native racing wheel support
 
-Status: research and design of 27 October 2026; stage 0 (the device and safety shell), stage 1 (the control path) and stage 2 (native input) done on 29 October 2026 ([stage 0](#stage-0-done-29-october-2026), [stage 1](#stage-1-findings-29-october-2026), [stage 2](#stage-2-done-29-october-2026)). The project runs the base Disc 1 executable without a title update, so every address below is from the recompiled base `default.xex` (USA; Japan/Asia share the code).
+Status: research and design of 27 October 2026; stage 0 (the device and safety shell), stage 1 (the control path), stage 2 (native input) and stage 3 (force feedback from the title's torque) done on 29 October 2026 ([stage 0](#stage-0-done-29-october-2026), [stage 1](#stage-1-findings-29-october-2026), [stage 2](#stage-2-done-29-october-2026), [stage 3](#stage-3-done-29-october-2026)). The project runs the base Disc 1 executable without a title update, so every address below is from the recompiled base `default.xex` (USA; Japan/Asia share the code).
 
 The goal is native PC wheel support, not gamepad emulation:
 
@@ -139,7 +139,7 @@ The tyre model has aligning torque curves (`AffectCurveLoadAffectAlignTorqueID`,
    - a load-weighted rear tyre slip from the per-tyre slots `+0x2B0`, `+0xCC` and `+0x268`.
 
    It zeroes the torque when the car's flag at +0x38F8 is clear and `sub_822B7130` returns false. It passes the three floats to `sub_8239E600`.
-2. **Scale and clamp.** `sub_8239E600` calls `sub_828C3330` on the parameter block at +0x1090. The dynamic force is `clamp(DynFFBScale × torque, ±min(DynFFBMaxForce, 1))`, stored at +0x538. The spring scale is the speed curve × the rear slip curve, stored at +0x540.
+2. **Scale and clamp.** `sub_8239E600` calls `sub_828C3330` on the parameter block at +0x1090. The dynamic force is `clamp(DynFFBScale × torque, ±min(DynFFBMaxForce, 1))`, stored at +0x538. The spring scale is the speed curve × the rear slip curve, stored at +0x540. Then `sub_823921F8` stores at the block's +5 whether the player drives the car (the same condition that keeps the torque); without it the device update sends a zero force and the spring at full strength (the menus' centring).
 3. **Setup, a state machine in `sub_823A3F58`.** The device must be a wheel (`SubType == 2`) with `Flags` bit 0, and `XInputdFFGetDeviceInfo` must report at least 5 effects. Then:
    - `XInputdFFDeviceControl` resets the device;
    - `sub_828C34E0` builds five 0x74-byte effects (types 1 to 5) from the ini values × `ForceFeedbackScale` (+0x53C);
@@ -205,7 +205,7 @@ On a direct-drive base, safety is a requirement, not a setting. A governor sits 
 
 - **Zero force** on: pause, menus, loading, replays, photo mode, a non-human car, window focus loss, exit, a guest crash and a runtime crash. The title already zeroes its torque by the condition in `sub_826D5E78`. The host does not rely on that: it also checks focus and the runtime's state, and runs a watchdog that ramps to zero when no new value arrives within 50 ms.
 - **Ramp-in** over 1 to 2 s on every start and after every zero state.
-- **Torque cap:** a hard upper limit in the runtime, independent of the gain, default well below the R9's peak, plus a slew-rate limit.
+- **Torque cap:** a hard upper limit in the runtime, independent of the gain, default well below the R9's peak, plus a slew-rate limit. It bounds the constant force and the firmware's spring and damper together (stage 3).
 - **Bad values:** NaN, infinity and out-of-range values become zero. A step larger than the slew limit is clamped, so no single frame produces a full-force spike.
 - **Exit and crash:** the effects stop in the normal shutdown, in an `atexit` handler and in the crash handler ([fm4-crash-diagnostics.cpp](../../work/fm4-rex/src/fm4-crash-diagnostics.cpp)). Stage 0 also checks what the base does when the process is killed (DirectInput releases a process's effects; the R9's behaviour is confirmed in the owner's test).
 
@@ -393,6 +393,39 @@ Owner's script:
 3. Pause during a corner: the force stops.
 4. Alt-tab: the force stops.
 5. Rate the centre feel and the loss of grip at the limit.
+
+#### Stage 3 done, 29 October 2026
+
+**The source.** `sub_8239E600` is a tail call: `sub_828C3330(pad + 0x1090, &{torque, speed, rear slip})`, its only caller the control step `sub_826D5E78`, once per frame for each car with a player's pad. The block (pad + 0x1090) holds `ControllerFFB.ini` as `sub_828C2CD8` loads it, three floats per effect (scale, maximum force, deadband) from +0x08: inertia, friction, damper (+0x20), spring (+0x2C); then `DynFFBScale` (+0x38), `DynFFBMaxForce` (+0x3C), the speed curve (+0x40 to +0x4C) and the rear slip curve (+0x50 to +0x5C). `ForceFeedbackScale` (+0x53C) scales every effect when `sub_828C34E0` builds them (coefficient = scale × it, saturation = maximum force × it); the device update `sub_823A42A0` sends the dynamic force × full scale and sets the spring effect's gain to the spring scale (+0x540). The torque is zeroed unless the player drives the car (`+0x38F8` clear and `sub_822B7130` false: not the AI, not a replay), and the same flag goes to the block's +5 (`sub_823921F8`, return address `0x826D6788`). A race update that skips the control step, or whose control step finds no player's pad, resets every block (`sub_828C5B18`, from `0x826DD040` and `0x826D6A54`).
+
+**The integration** ([fm4-wheel-input.cpp](../../work/fm4-rex/src/fm4-wheel-input.cpp)):
+- the hook of `sub_828C3330` reads the block's results after the title's code: the constant force is +0x538 × `ForceFeedbackScale`, the spring's coefficient and saturation are `SpringScale` and `SpringMaxForce` × `ForceFeedbackScale` × the spring scale (+0x540, as the title's effect gain), the damper's are `DamperScale` and `DamperMaxForce` × `ForceFeedbackScale`; inertia and friction are 0 in the ini and left out;
+- the hook of `sub_823921F8` at the control step's call publishes that sample with the flag, for the first player's pad (user 0) only, so the 8 cars of the race never drive the force;
+- the hook of `sub_828C5B18` publishes a sample outside a driven race.
+
+So the force is zero at once whenever the title itself would send none (the AI drives, the race ended, a replay, a race update without the player's control), and the title's menu spring is not reproduced: outside a driven race the wheel is free. When the race update stops altogether (pause, photo mode, the rewind, loading, the menus), nothing is published and the governor's watchdog takes the force to zero.
+
+**The host.** The force thread polls the latest sample each tick through `HostOptions::force_source` (the store in [wheel_controls.h](../../work/runtime/include/rex/input/wheel/wheel_controls.h); the launcher's test has none). A sample outside a driven race sets the pause block. The host runs a damper effect beside the constant force and the spring, and records the title's sample (whether it drives, its sequence number, the torque, the speed and the rear slip) with every force.
+
+**The governor** ([ffb_governor.h](../../work/runtime/include/rex/input/wheel/ffb_governor.h)) now takes the spring and the damper with the constant force:
+- the cap bounds their sum (the constant force plus both saturations, the most the firmware can apply at once); the conditions take at most half of the cap (`condition_share`), both scaled by one factor beyond it, and the constant force is clipped to what they leave;
+- a condition's level moves at the slew limit, and is passed on only in steps of at least 0.002 while it moves (exactly once it settles), so the device gets few condition updates and the bound holds for the levels the device actually has;
+- a minimum force (`min_force`; linear below 2% of full scale, so continuous through zero) and a low-pass smoothing of the constant force (`smoothing_s`, 10 ms in the runtime; it starts from zero after every zero state).
+
+With the title's defaults (`ForceFeedbackScale` 1, so the spring at 0.5, the damper at 0.1 and the force up to 1) and the default cap of 0.25 at gain 1, the spring and damper together take 0.125 at speed and the constant force gets 0.125 to 0.25.
+
+**Options** (cvars and `-Wheel` knobs, [running.md](../running.md#racing-wheel-force-feedback); the launcher's sliders for them are a separate change): `ffb_min_force` (0), `ffb_smoothing` (10 ms), `ffb_spring` and `ffb_damper` (1, the title's scale), with `ffb_gain` and `ffb_cap` from stage 0. With the recording backend (`wheel_ffb_sink=record`) the window's focus does not block the force, since none reaches a device, so an e2e run records the forces without focus.
+
+**Verified without hardware** (snapshot `whl6`, `129989b`, at 3/2 and 240 Hz on the native path; the force recordings with the virtual wheel's 16-second script: a straight, a steering sine of Â±0.15 and held steps of Â±0.2 at a part throttle):
+- **The unit tests:** `fm4_wheel_ffb_tests` (the conditions ramped, scaled, zeroed by a block and the watchdog, bad values; the title's mix at full scale within a cap of 0.25 with the conditions at half of it in their proportion; the sum within the cap while the mix changes; a moving condition passed on in steps of at least 0.002; the minimum force; the smoothing's 63% after one time constant, no overshoot, a restart from zero after a block) and `fm4_wheel_host_tests` (a 240 Hz title source with a spring and a damper: within the cap, the force's sign following the torque, zero at once outside a driven race, the watchdog when the samples stop).
+- **The title's values:** `ForceFeedbackScale` is 1 with the BuildRoot's profile and the pad class, so the force equals the torque (`DynFFBScale` 1); the spring scale runs from 0 at rest to 1 at speed and fades with the rear slip, its effect up to 0.5 and the damper 0.1 before the governor; the torque reached -0.90 to 0.33 in these runs. At speed the torque opposes the steering (correlation -0.46): with the wheel's positive force to the right (the launcher's direction pulse), the force centres the wheel, so `ffb_invert` stays off by default.
+- **Career, the virtual wheel drives** (`whl6v`): 18,898 samples, 9,826 of them driven. The constant force plus both saturations never exceeded 0.250015 (the cap and one 16-bit step), no step exceeded the slew limit, the force's sign matched the torque's in 11,874 of 11,889 rows with a torque above 0.05 (correlation 0.81; unclipped, the force was 0.996 of its target), and the cap clipped 58% of the driven rows (the spring and damper hold up to 0.125 at speed). The pause menu (QUIT RACE) stopped the samples and the force reached zero 50 ms after the last one; the quit, the replay and the menus published samples outside a driven race, with zero force, spring and damper in all 9,072 rows.
+- **Photo mode and the rewind** (`whl6p`, `whl6r`, the fast route): after driving, the pause menu (photo mode follows it) and the rewind stopped the samples; the force reached zero 50 and 81 ms after the last one, at the slew limit from -0.125 in the rewind, and stayed there. Within the cap, no step above the slew limit, the sign matched the torque's in every row above 0.05.
+- **The AI's car** (`whl5a`, the first build `e7432a7`, whose game-side code is the same): a fast career with `engageaionstart` and the wheel on published 9,973 samples, none driven, so the force stays zero while the AI drives the player's car.
+- **The landing check** (`whl6`): the career at 3/2 and 240 Hz with the defaults, exit 0, main's four log errors, a sane capture (it ran beside a second cell, so its frame rate is not comparable).
+- **A fix found on the way:** the e2e game window has no focus, so the first runs recorded zero force throughout (the focus block); with the recording backend the window's focus no longer blocks.
+
+**Not verified:** a real wheel (the owner's checklist steps 15 to 21), a race the player finishes (not run; the end of a race was covered by QUIT RACE), the force at 60 fps, and how often DirectInput accepts the constant force's updates (one per tick while it changes; the conditions change rarely).
 
 ### Stage 4: physics-rate force feedback and effects
 

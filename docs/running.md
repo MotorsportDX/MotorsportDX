@@ -1181,10 +1181,10 @@ The lines contain the pads' names and device paths, not the Windows user name.
 ## Racing wheel
 
 Native racing wheel support is in development ([racing wheels](analysis/racing-wheels.md)).
-Stages 0 to 2 are done: the runtime and the GUI launcher read a wheel through SDL's joystick
+Stages 0 to 3 are done: the runtime and the GUI launcher read a wheel through SDL's joystick
 API, its steering, pedals and buttons drive the car at the wheel's full resolution beside
-the controller, and a force feedback host with a safety governor is ready, but the game
-sends no force yet. A wheel that SDL maps as a gamepad also reaches the game as a pad, as
+the controller, and the game's steering torque drives the wheel's force feedback through a
+safety governor. A wheel that SDL maps as a gamepad also reaches the game as a pad, as
 before.
 
 ```powershell
@@ -1235,11 +1235,41 @@ driven with the controller or the keyboard. Every value is a knob of `-Wheel` (t
 | `ffb_cap` | 0.25 | `wheel_ffb_cap` |
 | `ffb_gain` | 1 | `wheel_ffb_gain` |
 | `ffb_invert` | 0 | `wheel_ffb_invert` |
+| `ffb_min_force` | 0 | `wheel_ffb_min_force` (0 to 0.5) |
+| `ffb_smoothing` | 10 | `wheel_ffb_smoothing` (milliseconds, 0 to 200) |
+| `ffb_spring` | 1 | `wheel_ffb_spring` (0 to 2) |
+| `ffb_damper` | 1 | `wheel_ffb_damper` (0 to 2) |
 
 The game's anti-cheat rule withholds a race's credits and experience when a lap has fewer
 than 10 frames with a fast steering change. Its threshold is a change per frame, so at a high
 frame rate smooth steering could miss it; the threshold is scaled to the frame's time so that
 it means what it means at 60 fps, for every device ([stage 2](analysis/racing-wheels.md#stage-2-done-29-october-2026)).
+
+### Racing wheel force feedback
+
+In a race you drive, the wheel gets the game's own force feedback
+([stage 3](analysis/racing-wheels.md#stage-3-done-29-october-2026)), as the game made it for
+the Xbox 360 wheel, but sent from a thread of its own at 1,000 Hz:
+
+- a constant force from the game's steering torque, which the game updates once a frame;
+  **Smoothing** (10 ms by default) evens out its steps between frames;
+- a centring spring, which the wheel's firmware runs: the game fades it in between 1 and
+  10 m/s and out when the rear slides (the rear slip between 0.25 and 0.5), so the wheel
+  goes light when the car oversteers;
+- a light damper, also in the firmware.
+
+The `-Wheel` knobs set them: `ffb_cap` (the hard limit of the constant force, the spring
+and the damper together, 0.25 of the wheel's full force by default; the spring and the damper
+take at most half of it), `ffb_gain` (multiplies all three before the cap), `ffb_min_force`
+(lifts small forces above a wheel's own friction; 0 for a direct-drive base),
+`ffb_smoothing`, `ffb_spring` and `ffb_damper` (1: as the game scales them, 0: off), and
+`ffb_invert`. The launcher's **Force feedback** section has **Force cap**, **Force gain** and
+**Invert force**; the other knobs go in its **Wheel value** field until the section gets them. The force is zero at once outside a race you
+drive: in the menus, at the race's end, in replays, when the AI drives your car, and when the
+window loses focus. When the game stops updating the race (pause, photo mode, the rewind,
+loading), the force falls to zero within about 0.1 seconds. After every such stop it ramps in
+again over 1.5 seconds. Pit House's own settings (force feedback strength, road sensitivity,
+damper, friction, inertia) apply on top of the game's.
 
 ### Racing wheel test
 
@@ -1264,18 +1294,23 @@ stops. The launcher writes the test's lines to `logs\wheel-test.log` and, with *
 forces**, every force sent to `logs\wheel-test-forces.csv`. Pressing Play stops the test.
 
 The runtime has the same host behind cvars (the `-Wheel` knobs above, or the Advanced page's
-Extra cvars); with `--wheel=true` the game opens the wheel and logs a `Wheel report:` line and
-a `Wheel: input` line with its mapping, but sends no force yet:
+Extra cvars); with `--wheel=true` the game opens the wheel and logs a `Wheel report:` line, a
+`Wheel: input` line with its mapping and a `Wheel: force feedback host started` line with the
+force settings:
 
 | Cvar | Default | Description |
 | --- | --- | --- |
-| `wheel` | `false` | Opens the wheel, drives the car with it (`wheel_input`) and runs its force feedback host (always zero force so far). Needs the SDL input backend (the default). |
+| `wheel` | `false` | Opens the wheel, drives the car with it (`wheel_input`) and runs its force feedback from the game's steering torque. Needs the SDL input backend (the default). |
 | `wheel_name` | empty | Only a joystick whose name contains this. |
 | `wheel_ffb_cap` | 0.25 | The hard upper limit of the force, a fraction of the wheel's full force, independent of the gain. |
 | `wheel_ffb_gain` | 1 | Multiplies the game's force before the cap. |
 | `wheel_ffb_invert` | `false` | Flips the force's direction. |
-| `wheel_ffb_sink` | `device` | `record` sends no force to any device and only records it (with `wheel_ffb_record`). |
-| `wheel_ffb_record` | empty | A CSV file of every force sent. |
+| `wheel_ffb_min_force` | 0 | The smallest constant force sent while the game asks for any, a fraction of the wheel's full force. |
+| `wheel_ffb_smoothing` | 10 | The time constant, in milliseconds, of a low-pass on the game's force (0: none). |
+| `wheel_ffb_spring` | 1 | Multiplies the game's centring spring (0: off). |
+| `wheel_ffb_damper` | 1 | Multiplies the game's damper (0: off). |
+| `wheel_ffb_sink` | `device` | `record` sends no force to any device and only records it (with `wheel_ffb_record`); the window's focus then does not stop the force, so a check without focus records it. |
+| `wheel_ffb_record` | empty | A CSV file of every force sent: the time, the target and the force sent, the spring's and the damper's saturation and coefficient, the ramp, the block reasons and the governor's flags, the device update's cost, and the game's sample (whether you drive, its sequence number, the steering torque, the speed and the rear slip). |
 | `wheel_virtual` | empty | For checks without hardware: an SDL virtual wheel driven by a CSV script (`time_s,steer,throttle,brake,buttons`, raw axis values interpolated between rows and a mask of buttons held; it repeats), and pads read without window focus. |
 
 The force stops on focus loss, at exit (closing the game window stops and releases the wheel
@@ -1307,7 +1342,7 @@ Stage 0, the device and the forces without the game:
 8. With a force running, end `MotorsportDX.exe` in Task Manager: note whether the force stops,
    and how quickly.
 
-Stage 2, driving with the wheel (no force yet):
+Stage 2, driving with the wheel:
 
 9. Start the launcher again, **Start wheel test**, and in **Racing wheel** tick **Use a racing
    wheel**. Set the steering axis and **Wheel rotation** to Pit House's maximum angle, leave
@@ -1329,11 +1364,32 @@ Stage 2, driving with the wheel (no force yet):
 14. Note the steering feel: anything that looks rate limited, smoothed or exaggerated at
     speed (the game's STEERING assist setting changes it; try Simulation).
 
+Stage 3, the game's force feedback (keep **Force cap** at 0.25 until these are done):
+
+15. In the launcher's **Force feedback** section, set **Force gain** to 0.25. Start a Quick
+    Race and drive a lap: on the straight the wheel must centre; in corners it must pull
+    towards the centre more the harder the car turns, and go light when the front or the
+    rear slides. Note any knocks, buzzing or notches, and whether the wheel oscillates when
+    you let go of it on a straight.
+16. Repeat with **Force gain** 0.5, then try `ffb_smoothing=0` and `ffb_smoothing=20` in
+    the **Wheel value** field, and note which feels best.
+17. Spin the car once: the force must not jump when the car comes to rest or drives off.
+18. Pause during a corner: the force must stop within a fraction of a second, and ramp in
+    again over about 1.5 seconds after RESUME. The same for photo mode and the rewind.
+19. Alt+Tab during a corner: the force must stop at once.
+20. Finish the race: at the finish line, when the AI takes over the car, and in the results
+    and the replay the force must be zero.
+21. Rate the centre feel (the game's spring: try `ffb_spring=0` and `ffb_spring=1`) and the loss of
+    grip at the limit, and note the Pit House settings you used; say which **Force cap**
+    still felt safe.
+
 What to send back: the launcher folder's `logs\wheel-test.log` (its `Wheel report:` line names
 the wheel's axes, buttons and force feedback effects) and `logs\wheel-test-forces.csv`, the
 `-Wheel` value of the launcher's **Wheel value** field, the lines of the game's
-`logsuntime.log` that contain `Wheel` (`Select-String -Path logsuntime.log -Pattern
-'Wheel' | ForEach-Object Line`), plus the notes of steps 3 to 14.
+`logs\runtime.log` that contain `Wheel` (`Select-String -Path logs\runtime.log -Pattern
+'Wheel' | ForEach-Object Line`), plus the notes of steps 3 to 21. For stage 3, add `--wheel_ffb_record=<the launcher folder>\logs\wheel-forces.csv` (a
+full path) to the Advanced page's Extra cvars before the race of steps 15 to 20 and send that
+file too.
 
 ## Keyboard
 

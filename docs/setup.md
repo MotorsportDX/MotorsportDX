@@ -389,7 +389,8 @@ FM4-build/
 ├── user-data/        # Profiles, saves, imported Disc 2 and DLC content
 ├── cache/            # Game and shader cache (shader-overrides/: compiled look mods)
 ├── logs/             # Logs for setup, generate, build and startup
-├── launcher-build/   # GUI launcher build and its test cases
+├── launcher-build/   # GUI launcher build and its test cases (launcher-build-<folder> for a
+│                     #   second checkout, such as a worktree, building into the same root)
 ├── look/  passes/    # Look mods and post passes the launchers run
 ├── e2e/              # e2e run output (captures, logs, summary.json)
 ├── snapshots/        # game-build copies used by the matrix.py gates
