@@ -56,8 +56,8 @@ touch ([launcher UX](analysis/launcher-ux.md)):
   **Play**, Y **Profile**, B **Back** and A **Select**. The mouse and touch press a prompt as
   the pad presses its button. While Play cannot start, the bar's left end says why ("Choose
   Disc 1 first").
-- **The focus** is a red frame. On the Home, Display, Look, Controls and Game data pages the D-pad,
-  the left stick or the arrow keys move it, A or Enter selects, and on an option row left and right change the
+- **The focus** is a red frame. On every page but About the D-pad, the left stick or the arrow keys
+  move it, A or Enter selects, and on an option row left and right change the
   value (a click on the row steps it on, a click on a chevron steps it back or on). A slider row
   has a bar that the mouse or a finger drags. A changed row has a red edge and a red label, and
   X, Delete or the X **Reset** prompt resets it. The focused option explains itself in the panel
@@ -83,8 +83,8 @@ that has none ([distribution](sources-and-licensing.md#distribution)).
 | Look | Six tabs of option rows. **Preset:** the preset (`aces`, `gt`, `neutral`, `original`, `original` without TAA, or a saved look; changing it drops the knob changes), the tone curve, temporal anti-aliasing and its method (TAA, FSR 3.1 or TAAU, `aa`), the exposure speed of 60 fps (`adaptation`), **Save as look**, which keeps the current value under a name, **Delete this look** for a saved look, after a confirmation, and **Reset all changes**. **Picture, Lighting, Car, Sky & foliage and Road:** a slider row for each [look knob](#look) of that group, which left and right step by about a fortieth of its range; the right panel says what the knob does and the preset's value. |
 | Controls | Five tabs of option rows. **Controller:** the options of `-Pad` (the pad driver, rumble strength, trigger rumble and its strength, the steering anti-deadzone, the input thread, then the stick and trigger shaping and the extra buttons); see [Controller](#controller). **Racing wheel:** the wheel in the game (`-Wheel`: steering, the three pedals, the buttons and force feedback), with the steering's or the focused pedal's value at the right while the wheel test runs; see [Racing wheel in the game](#racing-wheel-in-the-game). **Wheel test:** the [wheel test](#racing-wheel-test), with the device and its axes, buttons and force at the right. **Keyboard:** the options of `-Keyboard` (smooth steering and pedals, their rates and the precision share, then the mouse and the deadzones); see [Keyboard](#keyboard). **Key bindings:** the keyboard bindings, by their function in the game's DEFAULT LAYOUT 1 (the runtime's `keybind_*` settings). A waits for a key, which replaces the keys; several keys are typed in the field at the right, separated by commas, with modifiers written as `Shift+Up`. Unknown key names are marked and block Play. A connected controller needs no setup. |
 | Game data | Two tabs. **Discs:** Disc 1 and Disc 2, checked as `generate` checks them, and the texture pack (the `-TextureReplace` folder). A opens the folder picker, X clears Disc 2 or the texture pack, and the right panel shows the check's result and a field to type the folder. **Content:** rows that add downloadable content folders and files, the folders and files searched (A removes one from the list), and the content packages found, with their import state; A on an imported package removes the import from the user data after a confirmation (see [Data directories](#data-directories)). The right panel shows the package's path and size and what the next Play imports. |
-| Shaders | The offline shader pass; see [Shaders page](#shaders-page). |
-| Advanced | The user data folder, buttons that open the logs and the user data, and **Show developer options**. |
+| Shaders | Rows for the shader pass's state, **Compile shaders**, **Skip** and the DirectX Shader Compiler (A fetches it when it is not beside the game), with the pass's progress at the right; see [Shaders page](#shaders-page). |
+| Advanced | The **General** tab: the user data folder (A opens the folder picker, X goes back to the default), rows that open the logs and the user data, and **Show developer options**, which adds a **Developer** tab. |
 | About | Who made Motorsport DX possible (the ReXGlue SDK, Xenia, XenonRecomp and the other projects of [CREDITS.txt](../outputs/FM4-build/CREDITS.txt)), the non-affiliation line, and buttons that open `CREDITS.txt` and the `third-party-notices` folder beside the launcher. |
 
 **Show developer options** (Advanced, saved in `launcher-settings.json`, never part of a launch
@@ -92,7 +92,7 @@ plan) adds the options for comparisons and bug reports:
 - on Display's Extras tab, the race rendering (one tile with TAA, or the MSAA tiles of `-Msaa`),
   and the launch plan's description in the right panel;
 - on Look and Controls, the `-Look`, `-Pad`, `-Keyboard` and `-Wheel` values, shown and editable;
-- on Advanced: fixed vblank, the shadow workaround, `-SingleTile`, `--ao`, `-Rov`, the render
+- on Advanced's Developer tab: fixed vblank, the shadow workaround, `-SingleTile`, `--ao`, `-Rov`, the render
   path (automatic, which is the native path; RTV, `-Rtv`; or the native path, `-Native`), the
   native path's MSAA (one pass with 2x, the default, one pass with 4x as `-MsaaSamples 4`, or one
   tile without MSAA as `-MsaaSamples 0`), the performance trace, extra cvars, the texture dump
@@ -174,7 +174,7 @@ during a race.
   own look until each shader's mod is ready.
 - **Progress:** in `logs\shader-pass.jsonl`; the pass's log is in `logs\shader-pass.log`.
 - **The DirectX Shader Compiler:** when `dxcompiler.dll` and `dxil.dll` are not beside the game,
-  the page fetches Microsoft's release v1.9.2609 from GitHub (`FM4_DXC_MIRROR`: a local copy of
+  A on the page's **DirectX Shader Compiler** row fetches Microsoft's release v1.9.2609 from GitHub (`FM4_DXC_MIRROR`: a local copy of
   the zip, or another URL) and checks its pinned SHA-256. It keeps the zip in `downloads\dxc` and
   puts the two DLLs and the release's license files beside the game. Without them the shaders
   compile with FXC.

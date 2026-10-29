@@ -438,7 +438,7 @@ class App {
                 const std::function<void()>& extra);
   // The pages in the theme: the launcher's own focus, not ImGui's navigation.
   bool Themed() const {
-    return page_ == kHome || page_ == kDisplay || page_ == kLook || page_ == kControls || page_ == kGameData;
+    return page_ != kAbout;
   }
   // The detail panel at the right of a list: the focused entry's title and text.
   void DetailPanel(ImVec2 size, const std::function<void()>& extra);
@@ -454,7 +454,6 @@ class App {
   bool ShadersReady();
   // Why Play cannot start yet, or empty.
   std::string NotReady() const;
-  bool SmallAction(const char* label);
   // The Controls page: the controller (-Pad), the racing wheel in the game (-Wheel, with its
   // calibration from the wheel test), the wheel test without the game
   // (docs/running.md#racing-wheel-test), the keyboard (-Keyboard) and its key bindings.
@@ -480,8 +479,10 @@ class App {
   bool PathField(std::string& value);
   // The end of a path that fits the width in the current font.
   std::string ShortPath(const std::string& path, float width);
-  void AdvancedPage();
-  void ShadersPage();
+  // The Advanced page: the user data and the developer switch, and the developer options.
+  void AdvancedRows();
+  // The Shaders page: the shader pass and the DirectX Shader Compiler.
+  void ShadersRows();
   // The offline pass with the current plan, the DXC release fetched first when it is missing
   // (19.10's route); automatic once a build: marker() is what it last finished for.
   void CompileShaders();
@@ -502,9 +503,6 @@ class App {
   static void DialogDone(void* userdata, const char* const* files, int filter);
   void ApplyDialogs();
   std::string BindValue(const Bind& bind) const;
-  bool PathRow(const char* label, const char* id, std::string& value, DialogTarget target,
-               bool clearable);
-  void Label(const char* text, const char* help = nullptr);
   void Muted(const std::string& text);
   void Colored(const ImVec4& color, const std::string& text);
 
@@ -1219,13 +1217,6 @@ void App::ApplyDialogs() {
   }
 }
 
-void App::Label(const char* text, const char* help) {
-  ImGui::AlignTextToFramePadding();
-  ImGui::TextColored(kSecondary, "%s", text);
-  if (help && ImGui::IsItemHovered()) ImGui::SetTooltip("%s", help);
-  ImGui::SameLine(190 * scale_);
-}
-
 void App::Muted(const std::string& text) {
   ImGui::PushStyleColor(ImGuiCol_Text, kMuted);
   ImGui::TextWrapped("%s", text.c_str());
@@ -1236,29 +1227,6 @@ void App::Colored(const ImVec4& color, const std::string& text) {
   ImGui::PushStyleColor(ImGuiCol_Text, color);
   ImGui::TextWrapped("%s", text.c_str());
   ImGui::PopStyleColor();
-}
-
-bool App::PathRow(const char* label, const char* id, std::string& value, DialogTarget target,
-                  bool clearable) {
-  Label(label);
-  ImGui::PushID(id);
-  const float buttons = (clearable ? 2 : 1) * (ImGui::CalcTextSize("Browse").x + ImGui::GetStyle().FramePadding.x * 2 +
-                                              ImGui::GetStyle().ItemSpacing.x);
-  ImGui::SetNextItemWidth(-buttons);
-  ImGui::InputText("##path", &value);
-  const bool changed = ImGui::IsItemDeactivatedAfterEdit();
-  ImGui::SameLine();
-  if (ImGui::Button("Browse")) OpenDialog(target, true);
-  bool cleared = false;
-  if (clearable) {
-    ImGui::SameLine();
-    if (ImGui::Button("Clear")) {
-      value.clear();
-      cleared = true;
-    }
-  }
-  ImGui::PopID();
-  return changed || cleared;
 }
 
 void App::Frame() {
@@ -1313,14 +1281,14 @@ void App::Frame() {
     case kLook: LookRows(); break;
     case kControls: ControlsRows(); break;
     case kGameData: GameDataRows(); break;
+    case kShaders: ShadersRows(); break;
+    case kAdvanced: AdvancedRows(); break;
     default: {
       // The pages not yet in the theme, on a panel.
       ImGui::PushStyleColor(ImGuiCol_ChildBg, ImVec4(0.11f, 0.12f, 0.14f, 0.92f));
       ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, ImVec2(26 * scale_, 18 * scale_));
       ImGui::BeginChild("legacy", page_size_, ImGuiChildFlags_AlwaysUseWindowPadding | ImGuiChildFlags_NavFlattened);
       switch (page_) {
-        case kShaders: ShadersPage(); break;
-        case kAdvanced: AdvancedPage(); break;
         default: AboutPage(); break;
       }
       if (touch_ && ImGui::IsWindowHovered(ImGuiHoveredFlags_ChildWindows) && !ImGui::IsAnyItemActive() &&
@@ -1783,7 +1751,9 @@ void App::DetailPanel(ImVec2 size, const std::function<void()>& extra) {
   std::string title = help_title_;
   for (auto& c : title) c = static_cast<char>(std::toupper(static_cast<unsigned char>(c)));
   ImGui::PushFont(din_font_, 28);
+  ImGui::PushTextWrapPos(0);
   ImGui::TextUnformatted(title.c_str());
+  ImGui::PopTextWrapPos();
   ImGui::PopFont();
   draw->AddRectFilled(ImVec2(min.x, ImGui::GetCursorScreenPos().y), ImVec2(min.x + 4 * scale_, ImGui::GetCursorScreenPos().y + 0),
                       ImGui::GetColorU32(kAccent));
@@ -2279,8 +2249,6 @@ std::string App::NotReady() const {
   if (running_) return "The game is running";
   return {};
 }
-
-bool App::SmallAction(const char* label) { return touch_ ? ImGui::Button(label) : ImGui::SmallButton(label); }
 
 void App::LookRows() {
   Options& o = settings_.Active().options;
@@ -3227,76 +3195,6 @@ void App::GameDataRows() {
   });
 }
 
-void App::AdvancedPage() {
-  Options& o = settings_.Active().options;
-  if (PathRow("User data", "userdata", settings_.user_data, kUserData, true)) Refresh(false);
-  ImGui::SetCursorPosX(ImGui::GetCursorPosX() + 190 * scale_);
-  ImGui::TextColored(kMuted, "%s", settings_.user_data.empty()
-                                       ? ("Default: " + Utf8(root_ / "user-data")).c_str()
-                                       : "Profile, saves and imported content. Moving it does not move them.");
-  ImGui::Dummy(ImVec2(0, 6 * scale_));
-  if (ImGui::Button("Open logs folder")) {
-    fs::create_directories(root_ / "logs");
-    OpenPath(root_ / "logs");
-  }
-  ImGui::SameLine();
-  if (ImGui::Button("Open user data")) {
-    fs::create_directories(UserData());
-    OpenPath(UserData());
-  }
-  ImGui::Dummy(ImVec2(0, 10 * scale_));
-  ImGui::Separator();
-  ImGui::Dummy(ImVec2(0, 4 * scale_));
-  ImGui::Checkbox("Show developer options", &settings_.developer);
-  Muted("The render paths, test switches and raw option values, on this page and the others: for "
-        "comparisons and bug reports.");
-  if (!settings_.developer) return;
-  ImGui::Dummy(ImVec2(0, 6 * scale_));
-  ImGui::Checkbox("Fixed 60 Hz vblank (hold every swap to the vblank grid)", &o.fixed_vblank);
-  ImGui::Checkbox("Shadow workaround (shadow map only with the cockpit camera)", &o.shadow_workaround);
-  ImGui::Checkbox("One tile without MSAA also with a look without TAA (then FXAA)", &o.single_tile);
-  ImGui::Checkbox("Ambient occlusion pass also without the look's ao knob", &o.ao);
-  ImGui::Checkbox("ROV render path (the uncorrected reference, slower)", &o.rov);
-  // The render path: -1 automatic (the native path unless ROV or the MSAA tiles), 0 RTV (-Rtv),
-  // 1 the native path (-Native).
-  const char* path_labels[] = {"Automatic (the native path)",
-                               "RTV (the PM4 path on host render targets)",
-                               "Native path (races in one pass with MSAA, the native port's stages)"};
-  int path_choice = o.native < 0 ? 0 : o.native == 0 ? 1 : 2;
-  ImGui::SetNextItemWidth(420 * scale_);
-  if (ImGui::Combo("Render path", &path_choice, path_labels, IM_ARRAYSIZE(path_labels)))
-    o.native = path_choice == 0 ? -1 : path_choice == 1 ? 0 : 1;
-  const bool native = o.native < 0 ? !o.rov && !o.msaa : o.native == 1;
-  ImGui::BeginDisabled(!native);
-  // -MsaaSamples: -1 (unset) is one pass with 2x, the default.
-  const char* msaa_labels[] = {"One pass with 2x MSAA (default)", "One pass with 4x MSAA",
-                               "One tile without MSAA"};
-  int msaa_choice = o.msaa_samples == 4 ? 1 : o.msaa_samples == 0 ? 2 : 0;
-  ImGui::SetNextItemWidth(320 * scale_);
-  if (ImGui::Combo("Native MSAA", &msaa_choice, msaa_labels, IM_ARRAYSIZE(msaa_labels)))
-    o.msaa_samples = msaa_choice == 1 ? 4 : msaa_choice == 2 ? 0 : -1;
-  ImGui::EndDisabled();
-  ImGui::Checkbox("Performance trace (logs\\perf-<profile>-<time>.jsonl)", &o.perf_trace);
-  ImGui::SetNextItemWidth(420 * scale_);
-  ImGui::InputTextWithHint("Extra cvars", "--name=value --name=value", &o.extra_cvars);
-  ImGui::SetCursorPosX(ImGui::GetCursorPosX() + 190 * scale_);
-  ImGui::TextColored(kMuted, "Applied last, for A/B runs (docs/running.md, Ally X run set)");
-  ImGui::Dummy(ImVec2(0, 6 * scale_));
-  PathRow("Texture dump", "dump", o.texture_dump, kTextureDump, true);
-  ImGui::SetCursorPosX(ImGui::GetCursorPosX() + 190 * scale_);
-  ImGui::TextColored(kMuted, "Writes each new game texture once as <hash>.dds");
-  ImGui::Dummy(ImVec2(0, 6 * scale_));
-  if (ImGui::Button("Copy command line")) {
-    std::string error;
-    if (const auto plan = CurrentPlan(error)) {
-      std::string text;
-      for (const auto& [name, value] : plan->env.Items()) text += "set \"" + name + "=" + value + "\"\r\n";
-      text += CommandLine(GameArgs(*plan)) + "\r\n";
-      SDL_SetClipboardText(text.c_str());
-    }
-  }
-}
-
 bool App::ShadersReady() {
   if (!fs::exists(root_ / "game-build" / "fm4_rex.exe")) return false;
   std::ifstream marker(root_ / "logs" / "shader-pass.done", std::ios::binary);
@@ -3385,48 +3283,158 @@ void App::StartShaderTask(std::function<std::string()> task) {
 // exits before the title runs, so the shaders are not compiled while the game plays. With
 // native_shader_dxil it compiles with the DirectX Shader Compiler, which this page fetches from
 // Microsoft's release on this computer (never shipped with the launcher).
-void App::ShadersPage() {
+void App::ShadersRows() {
   const fs::path game = root_ / "game-build";
-  const fs::path progress_file = root_ / "logs" / "shader-pass.jsonl";
   const bool busy = shader_busy_;
-  ImGui::TextWrapped("The shader pass compiles the game's shaders for the current settings before "
-                     "you play, so they are not compiled during a race. It runs once after an "
-                     "install or an update; Skip stops it, and what is left compiles while you play.");
-  ImGui::Dummy(ImVec2(0, 8 * scale_));
   const bool dxc = DxcPresent(game);
-  ImGui::Text("DirectX Shader Compiler: %s", dxc ? "beside the game" : "not fetched (the shaders compile with FXC)");
-  ImGui::BeginDisabled(busy || dxc);
-  if (ImGui::Button("Fetch the DirectX Shader Compiler")) {
-    StartShaderTask([this, game] {
-      const std::string error = FetchDxc(game, root_ / "downloads" / "dxc");
-      return error.empty() ? std::string("The DirectX Shader Compiler is beside the game.") : error;
-    });
-  }
-  ImGui::EndDisabled();
-  ImGui::TextColored(kMuted, "Microsoft's release v1.9.2609 from GitHub, checked by its SHA-256 (or FM4_DXC_MIRROR)");
-  ImGui::Dummy(ImVec2(0, 8 * scale_));
-  ImGui::BeginDisabled(busy);
-  if (ImGui::Button("Compile shaders")) CompileShaders();
-  ImGui::EndDisabled();
-  ImGui::SameLine();
-  ImGui::BeginDisabled(!busy);
-  if (ImGui::Button("Skip")) {
+  const Status status = ShaderStatus();
+  RowsPage({}, [&] {
+    OptionRow("state", "Shaders", status == Status::kDone ? "Compiled" : status == Status::kBusy ? "Compiling" : "Not compiled",
+              "The shader pass compiles the game's shaders for the current settings before you play, so they are not "
+              "compiled during a race. It runs once after an install or an update; Skip stops it, and what is left "
+              "compiles while you play.",
+              true, status == Status::kDone ? &kSuccess : status == Status::kBusy ? &kFocusColor : &kMuted);
+    // A screenshot never starts a task.
+    if (OptionRow("compile", "Compile shaders", "Press A",
+                  "Runs the shader pass now with the active profile's settings: the game starts without a window, "
+                  "compiles and exits.",
+                  !busy) == 2 &&
+        !shot_)
+      CompileShaders();
+    if (OptionRow("skip", "Skip", "Press A", "Stops the pass; what is left compiles while you play.", busy) == 2) {
+      std::lock_guard<std::mutex> lock(shader_mutex_);
+      if (shader_process_) TerminateProcess(shader_process_, 1);
+    }
+    if (OptionRow("dxc", "DirectX Shader Compiler", dxc ? "Beside the game" : "Not fetched",
+                  "Microsoft's compiler for the native path's shaders. A fetches its release v1.9.2609 from GitHub, "
+                  "checked by its SHA-256 (or from FM4_DXC_MIRROR), and puts its two DLLs and license files beside the "
+                  "game. Without it the shaders compile with FXC.",
+                  !busy && !dxc, dxc ? &kSuccess : nullptr) == 2 &&
+        !shot_) {
+      StartShaderTask([this, game] {
+        const std::string error = FetchDxc(game, root_ / "downloads" / "dxc");
+        return error.empty() ? std::string("The DirectX Shader Compiler is beside the game.") : error;
+      });
+    }
+  }, [&] {
+    ImGui::Dummy(ImVec2(0, 14 * scale_));
+    PassProgress progress;
+    if (busy && ReadPassProgress(root_ / "logs" / "shader-pass.jsonl", progress) && progress.total > 0) {
+      ImGui::ProgressBar(static_cast<float>(progress.done) / static_cast<float>(progress.total), ImVec2(-1, 0),
+                         (progress.stage + ": " + std::to_string(progress.done) + " of " + std::to_string(progress.total))
+                             .c_str());
+    } else if (busy) {
+      Muted("Working...");
+    }
     std::lock_guard<std::mutex> lock(shader_mutex_);
-    if (shader_process_) TerminateProcess(shader_process_, 1);
-  }
-  ImGui::EndDisabled();
-  PassProgress progress;
-  if (busy && ReadPassProgress(progress_file, progress) && progress.total > 0) {
-    ImGui::ProgressBar(static_cast<float>(progress.done) / static_cast<float>(progress.total),
-                       ImVec2(420 * scale_, 0),
-                       (progress.stage + ": " + std::to_string(progress.done) + " of " +
-                        std::to_string(progress.total))
-                           .c_str());
-  } else if (busy) {
-    ImGui::TextColored(kMuted, "Working...");
-  }
-  std::lock_guard<std::mutex> lock(shader_mutex_);
-  if (!shader_message_.empty()) ImGui::TextWrapped("%s", shader_message_.c_str());
+    ImGui::PushTextWrapPos(0);
+    if (!shader_message_.empty()) ImGui::TextWrapped("%s", shader_message_.c_str());
+    ImGui::PopTextWrapPos();
+  });
+}
+
+void App::AdvancedRows() {
+  Options& o = settings_.Active().options;
+  std::vector<const char*> tabs = {"GENERAL"};
+  if (settings_.developer) tabs.push_back("DEVELOPER");
+  if (tab_ >= static_cast<int>(tabs.size())) tab_ = 0;
+  const auto toggle = [&](const char* id, const char* label, bool& value, const char* help) {
+    if (const int d = OptionRow(id, label, value ? "On" : "Off", help, true, nullptr, nullptr, value))
+      value = d == 4 ? false : !value;
+  };
+  RowsPage(tabs, [&] {
+    if (tab_ == 0) {
+      const std::string fallback = Utf8(root_ / "user-data");
+      if (PathOptionRow("userdata", "User data", settings_.user_data, kUserData,
+                        "The folder of the profile, the saves and the imported content. Not set: user-data beside the "
+                        "game. Moving it does not move them. X goes back to the default.",
+                        true, nullptr))
+        Refresh(false);
+      // A screenshot never opens a folder.
+      if (OptionRow("logs", "Open the logs folder", "Press A", "The game's and the launcher's logs.") == 2 && !shot_) {
+        fs::create_directories(root_ / "logs");
+        OpenPath(root_ / "logs");
+      }
+      if (OptionRow("open_userdata", "Open the user data", "Press A", "The profile, the saves and the imported content.") ==
+              2 &&
+          !shot_) {
+        fs::create_directories(UserData());
+        OpenPath(UserData());
+      }
+      toggle("developer", "Show developer options", settings_.developer,
+             "The render paths, test switches and raw option values, on this page's Developer tab and on the others: "
+             "for comparisons and bug reports.");
+      return;
+    }
+    toggle("vblank", "Fixed 60 Hz vblank", o.fixed_vblank, "Holds every swap to the vblank grid.");
+    toggle("shadow", "Shadow workaround", o.shadow_workaround, "The shadow map only with the cockpit camera.");
+    toggle("single_tile", "One tile without MSAA without TAA", o.single_tile,
+           "Races in one tile without MSAA also with a look without TAA (then FXAA): -SingleTile.");
+    toggle("ao", "Ambient occlusion without the knob", o.ao, "The ambient occlusion pass also without the look's ao knob.");
+    toggle("rov", "ROV render path", o.rov, "The uncorrected reference of the EDRAM emulation, slower: -Rov.");
+    // The render path: -1 automatic (the native path unless ROV or the MSAA tiles), 0 RTV (-Rtv),
+    // 1 the native path (-Native).
+    static const char* const kPaths[] = {"Automatic", "RTV", "Native path"};
+    const int path = o.native < 0 ? 0 : o.native == 0 ? 1 : 2;
+    if (const int d = OptionRow("path", "Render path", kPaths[path],
+                                "Automatic is the native path unless ROV or the MSAA tiles are on. RTV: the PM4 path on "
+                                "host render targets (-Rtv). Native path: races in one pass with MSAA, the native port's "
+                                "stages (-Native).",
+                                true, nullptr, nullptr, o.native >= 0)) {
+      const int next = d == 4 ? 0 : (path + (d < 0 ? -1 : 1) + 3) % 3;
+      o.native = next == 0 ? -1 : next == 1 ? 0 : 1;
+    }
+    const bool native = o.native < 0 ? !o.rov && !o.msaa : o.native == 1;
+    // -MsaaSamples: -1 (unset) is one pass with 2x, the default.
+    static const char* const kMsaa[] = {"One pass, 2x", "One pass, 4x", "One tile, none"};
+    const int msaa = o.msaa_samples == 4 ? 1 : o.msaa_samples == 0 ? 2 : 0;
+    if (const int d = OptionRow("msaa", "Native MSAA", kMsaa[msaa],
+                                "The native path's races: one pass with 2x MSAA (the default), one pass with 4x "
+                                "(-MsaaSamples 4), or one tile without MSAA (-MsaaSamples 0).",
+                                native, nullptr, nullptr, o.msaa_samples >= 0)) {
+      const int next = d == 4 ? 0 : (msaa + (d < 0 ? -1 : 1) + 3) % 3;
+      o.msaa_samples = next == 1 ? 4 : next == 2 ? 0 : -1;
+    }
+    toggle("perf", "Performance trace", o.perf_trace,
+           "Writes the perf trace, one JSON line a second, to logs\\perf-<profile>-<time>.jsonl.");
+    if (OptionRow("cvars", "Extra cvars", o.extra_cvars.empty() ? "None" : "Set",
+                  "Runtime settings written as --name=value, separated by spaces, applied after all the others: for "
+                  "A/B runs (docs/running.md, Ally X run set). Type them in the field at the right.",
+                  true, nullptr, nullptr, !o.extra_cvars.empty()) == 4)
+      o.extra_cvars.clear();
+    PathOptionRow("dump", "Texture dump", o.texture_dump, kTextureDump,
+                  "Writes each new game texture once as <hash>.dds into this folder. A opens the folder picker, X "
+                  "clears it.",
+                  true, nullptr);
+    if (OptionRow("command", "Copy the command line", "Press A",
+                  "Copies the environment and the game's command line of the active profile, for a run without the "
+                  "launcher.") == 2) {
+      std::string error;
+      if (const auto plan = CurrentPlan(error)) {
+        std::string text;
+        for (const auto& [name, value] : plan->env.Items()) text += "set \"" + name + "=" + value + "\"\r\n";
+        text += CommandLine(GameArgs(*plan)) + "\r\n";
+        if (!shot_) SDL_SetClipboardText(text.c_str());
+      }
+    }
+  }, [&] {
+    ImGui::Dummy(ImVec2(0, 14 * scale_));
+    ImGui::PushTextWrapPos(0);
+    if (focus_id_ == "userdata") {
+      Muted(settings_.user_data.empty() ? "Default: " + Utf8(root_ / "user-data") : "Now: " + settings_.user_data);
+      ImGui::Dummy(ImVec2(0, 6 * scale_));
+      if (PathField(settings_.user_data)) Refresh(false);
+    } else if (focus_id_ == "dump") {
+      PathField(o.texture_dump);
+    } else if (focus_id_ == "cvars") {
+      ImGui::PushFont(din_font_, 17);
+      ImGui::TextColored(kMuted, "EXTRA CVARS");
+      ImGui::PopFont();
+      ImGui::SetNextItemWidth(-1);
+      ImGui::InputTextWithHint("##cvars", "--name=value --name=value", &o.extra_cvars);
+    }
+    ImGui::PopTextWrapPos();
+  });
 }
 
 // Who made this possible, in short; CREDITS.txt beside the launcher (outputs/FM4-build/CREDITS.txt,
