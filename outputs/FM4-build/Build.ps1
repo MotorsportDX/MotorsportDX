@@ -31,6 +31,7 @@ param(
     [ValidateSet('s','k')][string]$Entry0,
     [string]$Pad,
     [string]$Keyboard,
+    [string]$Wheel,
     [string]$Look,
     [switch]$ShaderDev,
     [string]$TextureDump,
@@ -75,6 +76,7 @@ if ($Upscale) { $arguments += @('--upscale', $Upscale) }
 if ($Entry0) { $arguments += @('--entry0', $Entry0) }
 if ($Pad) { $arguments += @('--pad', $Pad) }
 if ($Keyboard) { $arguments += @('--keyboard', $Keyboard) }
+if ($Wheel) { $arguments += @('--wheel', $Wheel) }
 if ($Look) { $arguments += @('--look', $Look) }
 if ($ShaderDev) { $arguments += @('--shader-dev') }
 if ($TextureDump) { $arguments += @('--texture-dump', $TextureDump) }

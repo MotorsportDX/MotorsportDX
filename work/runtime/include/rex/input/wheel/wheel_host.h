@@ -28,11 +28,15 @@
 #include <vector>
 
 #include <rex/input/wheel/ffb_governor.h>
+#include <rex/input/wheel/wheel_mapping.h>
 
 namespace rex::input::wheel {
 
 enum class LogLevel { kInfo, kWarning, kError };
 using LogFunction = std::function<void(LogLevel, std::string_view)>;
+// The driving controls, from the force thread at its rate (stage 2); `connected` is false while
+// no wheel is open.
+using ControlsFunction = std::function<void(const Controls&)>;
 
 enum class Sink {
   // SDL's haptic device of the wheel (DirectInput on Windows), and the recording
@@ -67,6 +71,10 @@ struct HostOptions {
   int rate_hz = 1000;
   // Only joysticks whose name contains this (case-insensitive); empty: any.
   std::string name_filter;
+  // The axes and buttons of the driving controls.
+  MappingConfig mapping;
+  // Called with the mapped controls every tick while a wheel is open, and once when it closes.
+  ControlsFunction on_controls;
 };
 
 struct Snapshot {
@@ -80,6 +88,8 @@ struct Snapshot {
   std::vector<int16_t> axes;
   std::vector<uint8_t> buttons;
   std::vector<uint8_t> hats;
+  // The mapped driving controls.
+  Controls controls;
   // The governor's last tick.
   double target = 0.0;
   double output = 0.0;
@@ -132,6 +142,7 @@ class WheelHost {
   void ZeroDevice();
   void Record(double now_s, double constant, double spring, double send_us);
   void EmergencyStop();
+  void UpdateControls();
 
   HostOptions options_;
   LogFunction log_;
@@ -155,6 +166,9 @@ class WheelHost {
   double last_sent_spring_ = 0.0;
   uint32_t last_recorded_flags_ = ~0u;
   uint32_t last_recorded_blocked_ = ~0u;
+  Controls controls_;
+  std::vector<int16_t> axes_;
+  std::vector<uint8_t> buttons_;
   uint64_t send_count_ = 0;
   double send_us_sum_ = 0.0;
   double send_us_max_ = 0.0;

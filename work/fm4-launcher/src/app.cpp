@@ -320,6 +320,8 @@ class App {
   void ControlsPage();
   void ControllerSection();
   void KeyboardSection();
+  // The racing wheel in the game (-Wheel), with its calibration from the wheel test.
+  void WheelGameSection();
   // The racing wheel's test mode, without the game (docs/running.md#racing-wheel-test).
   void WheelSection();
   void StartWheelTest();
@@ -412,6 +414,12 @@ class App {
   bool wheel_record_ = true;
   std::mutex wheel_log_mutex_;
   std::deque<std::string> wheel_log_;  // wheel_log_mutex_: the host's last lines
+  std::string wheel_edit_;
+  bool wheel_editing_ = false;
+  // The knob that the next wheel button pressed is assigned to, and the buttons held when the
+  // assignment started.
+  std::string wheel_assign_;
+  std::vector<uint8_t> wheel_assign_buttons_;
 };
 
 bool App::Init(int argc, char** argv) {
@@ -1671,12 +1679,225 @@ void App::StopWheelTest() {
   wheel_.reset();
 }
 
+void App::WheelGameSection() {
+  namespace wheel = rex::input::wheel;
+  Options& o = settings_.Active().options;
+  const Json& table = data_.json.at("wheel").at("knobs");
+  Pairs knobs;
+  std::string error;
+  try {
+    knobs = WheelKnobs(data_, o.wheel);
+    WheelCvars(data_, o.wheel);
+  } catch (const std::exception& exception) {
+    error = exception.what();
+  }
+  const auto fallback = [&](const char* name) { return table.at(name).at("default").get<std::string>(); };
+  const auto value_of = [&](const char* name) {
+    const std::string* value = knobs.Find(name);
+    return value ? *value : fallback(name);
+  };
+  const auto set_knob = [&](const char* name, const std::string& value) {
+    if (PyFloat(value) == PyFloat(fallback(name)))
+      knobs.Erase(name);
+    else
+      knobs.Set(name, value);
+    std::string joined;
+    for (const auto& [knob, text] : knobs.Items()) joined += (joined.empty() ? "" : ",") + knob + "=" + text;
+    o.wheel = joined;
+  };
+  const auto number = [&](const char* name) {
+    try {
+      return PyFloat(value_of(name));
+    } catch (const std::exception&) {
+      return PyFloat(fallback(name));
+    }
+  };
+  const auto slider = [&](const char* name, const char* label, const char* help, float step, const char* format) {
+    Label(label, help);
+    const Json& knob = table.at(name);
+    float value = static_cast<float>(number(name));
+    ImGui::PushID(name);
+    ImGui::SetNextItemWidth(300 * scale_);
+    if (ImGui::SliderFloat("##value", &value, knob.at("min").get<float>(), knob.at("max").get<float>(), format))
+      set_knob(name, FormatKnob(value, step));
+    if (knobs.Has(name)) {
+      ImGui::SameLine();
+      if (ImGui::SmallButton("Reset")) set_knob(name, fallback(name));
+    }
+    ImGui::PopID();
+  };
+  const auto whole = [&](const char* name, const char* label, const char* help) {
+    Label(label, help);
+    const Json& knob = table.at(name);
+    int value = static_cast<int>(number(name));
+    ImGui::PushID(name);
+    ImGui::SetNextItemWidth(120 * scale_);
+    if (ImGui::InputInt("##value", &value)) {
+      value = std::clamp(value, knob.at("min").get<int>(), knob.at("max").get<int>());
+      set_knob(name, std::to_string(value));
+    }
+    ImGui::PopID();
+  };
+  const auto toggle = [&](const char* name, const char* label, const char* help) {
+    Label(label, help);
+    bool on = value_of(name) == "1";
+    ImGui::PushID(name);
+    if (ImGui::Checkbox("##on", &on)) set_knob(name, on ? "1" : "0");
+    ImGui::PopID();
+  };
+
+  ImGui::TextColored(kSecondary, "Racing wheel");
+  Muted("A racing wheel drives the car beside the controller: its steering and pedals at the wheel's full "
+        "resolution, its buttons for the shifts, the clutch and the handbrake. Find the axis and button numbers "
+        "with the wheel test below, then set the pedals' rest and pressed values from it. The game sends no "
+        "force feedback yet. Set the wheel's rotation to what Pit House (or the wheel's own software) uses.");
+  ImGui::Dummy(ImVec2(0, 2 * scale_));
+  toggle("on", "Use a racing wheel", "Reads the wheel in the game (the runtime's wheel cvar).");
+  if (value_of("on") == "1") {
+    // The test's live values, when it runs: raw axes for the pedals' calibration, buttons to assign.
+    const bool live = wheel_ != nullptr;
+    const wheel::Snapshot snap = live ? wheel_->GetSnapshot() : wheel::Snapshot{};
+    const auto raw_axis = [&](int axis, int16_t* out) {
+      if (!snap.connected || axis < 0 || static_cast<size_t>(axis) >= snap.axes.size()) return false;
+      *out = snap.axes[static_cast<size_t>(axis)];
+      return true;
+    };
+    toggle("input", "Drive with the wheel", "Off: the wheel is only opened (for force feedback later).");
+    ImGui::PushStyleColor(ImGuiCol_Header, kField);
+    if (ImGui::CollapsingHeader("Steering", ImGuiTreeNodeFlags_DefaultOpen)) {
+      whole("steer_axis", "Steering axis", "The axis number the wheel test shows moving when you turn the wheel.");
+      toggle("steer_invert", "Invert steering", "If turning right steers left.");
+      slider("steer_range", "Wheel rotation",
+             "The wheel's rotation lock to lock, as set in Pit House: the wheel reports it over its whole axis.",
+             10.0f, "%.0f degrees");
+      slider("steer_lock", "Steering lock",
+             "The rotation that gives the car's full steering, lock to lock. 0: the wheel's rotation, so the "
+             "car steers 1:1 with the wheel.",
+             10.0f, "%.0f degrees");
+      int16_t raw = 0;
+      if (raw_axis(static_cast<int>(number("steer_axis")), &raw)) {
+        wheel::SteeringMap map;
+        map.invert = value_of("steer_invert") == "1";
+        map.range_deg = number("steer_range");
+        map.lock_deg = number("steer_lock");
+        const double steering = wheel::MapSteering(map, raw);
+        char text[48];
+        std::snprintf(text, sizeof(text), "%+.4f", steering);
+        Label("Steering now", "The value the car gets, -1 full left to 1 full right.");
+        ImGui::ProgressBar(static_cast<float>(steering * 0.5 + 0.5), ImVec2(300 * scale_, 0), text);
+      }
+    }
+    struct Pedal {
+      const char* prefix;
+      const char* title;
+    };
+    static const Pedal pedals[] = {{"throttle", "Throttle pedal"}, {"brake", "Brake pedal"}, {"clutch", "Clutch pedal"}};
+    for (const auto& pedal : pedals) {
+      const std::string prefix = pedal.prefix;
+      const std::string axis_name = prefix + "_axis", rest = prefix + "_rest", pressed = prefix + "_pressed";
+      const std::string deadzone = prefix + "_deadzone", gamma = prefix + "_gamma";
+      if (!ImGui::CollapsingHeader(pedal.title, prefix == "clutch" ? 0 : ImGuiTreeNodeFlags_DefaultOpen)) continue;
+      ImGui::PushID(pedal.prefix);
+      whole(axis_name.c_str(), "Axis", "The axis number the wheel test shows moving with this pedal; -1: none.");
+      const int axis = static_cast<int>(number(axis_name.c_str()));
+      int16_t raw = 0;
+      const bool has_raw = raw_axis(axis, &raw);
+      Label("Rest and pressed", "The raw axis values with the pedal released and fully pressed. Set them with "
+                                "the pedal at each end while the wheel test runs.");
+      ImGui::Text("%.0f .. %.0f", number(rest.c_str()), number(pressed.c_str()));
+      ImGui::SameLine();
+      ImGui::BeginDisabled(!has_raw);
+      if (ImGui::SmallButton("Set rest")) set_knob(rest.c_str(), std::to_string(raw));
+      ImGui::SameLine();
+      if (ImGui::SmallButton("Set pressed")) set_knob(pressed.c_str(), std::to_string(raw));
+      ImGui::EndDisabled();
+      if (knobs.Has(rest) || knobs.Has(pressed)) {
+        ImGui::SameLine();
+        if (ImGui::SmallButton("Reset")) {
+          set_knob(rest.c_str(), fallback(rest.c_str()));
+          set_knob(pressed.c_str(), fallback(pressed.c_str()));
+        }
+      }
+      slider(deadzone.c_str(), "Deadzone", "The share of the travel from rest that still reads 0.", 0.01f, "%.2f");
+      slider(gamma.c_str(), "Response curve", "1 is linear; above 1 finer at the start of the travel.", 0.01f, "%.2f");
+      if (has_raw) {
+        wheel::PedalMap map;
+        map.axis = axis;
+        map.released = number(rest.c_str());
+        map.pressed = number(pressed.c_str());
+        map.deadzone = number(deadzone.c_str());
+        map.gamma = number(gamma.c_str());
+        const double value = wheel::MapPedal(map, raw);
+        char text[48];
+        std::snprintf(text, sizeof(text), "%.4f (raw %d)", value, raw);
+        Label("Now", "The value the car gets, 0 to 1.");
+        ImGui::ProgressBar(static_cast<float>(value), ImVec2(300 * scale_, 0), text);
+      }
+      ImGui::PopID();
+    }
+    if (ImGui::CollapsingHeader("Buttons", ImGuiTreeNodeFlags_DefaultOpen)) {
+      struct Button {
+        const char* name;
+        const char* label;
+      };
+      static const Button buttons[] = {{"shift_up", "Shift up"},
+                                       {"shift_down", "Shift down"},
+                                       {"clutch_button", "Clutch, held"},
+                                       {"handbrake_button", "Handbrake, held"}};
+      // Assign: the next button pressed after the click, while the test runs.
+      if (!wheel_assign_.empty() && snap.connected) {
+        for (size_t i = 0; i < snap.buttons.size(); ++i) {
+          const bool was = i < wheel_assign_buttons_.size() && wheel_assign_buttons_[i];
+          if (snap.buttons[i] && !was) {
+            set_knob(wheel_assign_.c_str(), std::to_string(i));
+            wheel_assign_.clear();
+            break;
+          }
+        }
+        wheel_assign_buttons_ = snap.buttons;
+      }
+      for (const auto& button : buttons) {
+        whole(button.name, button.label, "The button number the wheel test shows; -1: none.");
+        ImGui::SameLine();
+        ImGui::PushID(button.name);
+        ImGui::BeginDisabled(!snap.connected);
+        const bool assigning = wheel_assign_ == button.name;
+        if (ImGui::SmallButton(assigning ? "Press a wheel button..." : "Assign")) {
+          wheel_assign_ = assigning ? "" : button.name;
+          wheel_assign_buttons_ = snap.buttons;
+        }
+        ImGui::EndDisabled();
+        ImGui::PopID();
+      }
+      Muted("The shifts are sequential (the game's manual gearbox); the clutch button is for its manual with "
+            "clutch. Menus are still driven with the controller or the keyboard.");
+    }
+    if (ImGui::CollapsingHeader("Force feedback")) {
+      slider("ffb_cap", "Force cap", "The hard upper limit of every force, a fraction of the wheel's full force.",
+             0.01f, "%.2f");
+      slider("ffb_gain", "Force gain", "Multiplies the game's force before the cap.", 0.01f, "%.2f");
+      toggle("ffb_invert", "Invert force", "If the wheel test's direction pulse turns the wheel to the left.");
+      Muted("The game sends no force yet; these apply once it does.");
+    }
+    ImGui::PopStyleColor();
+    if (!live) Muted("Start the wheel test below to see the values and to set the pedals and buttons from the wheel.");
+  }
+  ImGui::TextColored(kMuted, "Wheel value (Build.ps1 -Wheel)");
+  if (!wheel_editing_) wheel_edit_ = o.wheel;
+  ImGui::SetNextItemWidth(-1);
+  ImGui::InputText("##wheel", &wheel_edit_);
+  wheel_editing_ = ImGui::IsItemActive();
+  if (ImGui::IsItemDeactivatedAfterEdit()) o.wheel = wheel_edit_;
+  if (!error.empty()) Colored(kDanger, error);
+  ImGui::Dummy(ImVec2(0, 4 * scale_));
+}
+
 void App::WheelSection() {
   namespace wheel = rex::input::wheel;
   ImGui::Dummy(ImVec2(0, 6 * scale_));
   ImGui::TextColored(kSecondary, "Racing wheel test");
   Muted("Reads a racing wheel and sends test forces to it, without the game: the device, its axes and buttons, the "
-        "force's direction, a centring spring and a slow sine. The game does not use the wheel yet. Every force goes "
+        "force's direction, a centring spring and a slow sine. Every force goes "
         "through the safety limits: it stops when this window loses focus, ramps in over 1.5 s and never exceeds the "
         "force cap. Start with the wheel centred and your hands on it.");
   ImGui::Dummy(ImVec2(0, 2 * scale_));
@@ -1767,6 +1988,7 @@ void App::WheelSection() {
 
 void App::ControlsPage() {
   ControllerSection();
+  WheelGameSection();
   WheelSection();
   KeyboardSection();
   Muted("Keyboard bindings, by their function in the game's DEFAULT LAYOUT 1 (the pad input in brackets). "

@@ -13,6 +13,7 @@
 #include <cstdio>
 #include <filesystem>
 #include <fstream>
+#include <mutex>
 #include <sstream>
 #include <string>
 #include <thread>
@@ -124,6 +125,18 @@ int main(int argc, char** argv) {
     options.record_path = record.string();
     options.governor.cap = 0.15;
     options.governor.ramp_s = 0.5;
+    // The driving controls (stage 2): pedal 2 rests at +32767, shift up on button 17.
+    options.mapping.brake.released = 32767.0;
+    options.mapping.brake.pressed = -32768.0;
+    options.mapping.shift_up_button = 17;
+    std::mutex controls_mutex;
+    wheel::Controls published;
+    uint64_t publications = 0;
+    options.on_controls = [&](const wheel::Controls& controls) {
+      std::lock_guard lock(controls_mutex);
+      published = controls;
+      ++publications;
+    };
     wheel::WheelHost host(options, Printer());
     host.SetFocus(true);
     host.Start();
@@ -147,6 +160,17 @@ int main(int argc, char** argv) {
     Check(input.buttons.size() == 24 && input.buttons[17] == 1 && input.buttons[16] == 0,
           "the buttons arrive");
     Check(input.hats.size() == 1 && input.hats[0] == SDL_HAT_RIGHT, "the hat arrives");
+    {
+      std::lock_guard lock(controls_mutex);
+      Check(published.connected && publications > 10, "the controls are published every tick");
+      Check(std::fabs(published.steering - 12345.0 / 32767.0) < 1e-12,
+            "the steering is published at full resolution");
+      Check(published.throttle == 0.0 && std::fabs(published.brake - 32766.0 / 65535.0) < 1e-12,
+            "the pedals are published with their calibration");
+      Check(published.shift_up && published.shift_up_presses == 1, "a shift press is counted");
+      Check(std::fabs(input.controls.steering - published.steering) < 1e-12,
+            "the snapshot shows the controls");
+    }
 
     host.SetTest(wheel::TestEffect::kSine, 0.4);
     Sleep(1200);

@@ -72,6 +72,7 @@ struct Options {
   std::string texture_replace;  // empty: off
   std::string pad;              // -Pad knobs; empty: the controller's defaults
   std::string keyboard;         // -Keyboard knobs; empty: the launchers' keyboard defaults
+  std::string wheel;            // -Wheel knobs; empty: no racing wheel
   // Applied at Play, outside the launch plan (pipeline.py has no counterpart): the performance
   // trace into logs\perf-<profile>-<time>.jsonl, and cvars given as --name=value, applied last.
   bool perf_trace = false;
@@ -134,6 +135,9 @@ Pairs PadCvars(const LauncherData& data, const std::string& pad);
 // keyboard_cvars of pipeline.py: the same for a -Keyboard value (launcher.json "keyboard").
 Pairs KeyboardKnobs(const LauncherData& data, const std::string& keyboard);
 Pairs KeyboardCvars(const LauncherData& data, const std::string& keyboard);
+// wheel_cvars of pipeline.py: the same for a -Wheel value (launcher.json "wheel").
+Pairs WheelKnobs(const LauncherData& data, const std::string& wheel);
+Pairs WheelCvars(const LauncherData& data, const std::string& wheel);
 
 // screen_scale of pipeline.py: the largest 16:9 picture that fits the screen, as a reduced
 // fraction of 1280x720.

@@ -43,12 +43,17 @@ above.
   not the default. On the ROG Xbox Ally X it costs about four times as much GPU time as TAA.
 - **Controllers:** the ROG Xbox Ally X's built-in pad works and rumbles (the owner's runs; it
   has no trigger rumble). The other pad options were checked with a virtual pad only; an Xbox
-  Series controller, PlayStation pads and racing wheels have not been tested, and the
+  Series controller and PlayStation pads have not been tested, and the
   `gameinput` pad driver starts but has not run a pad yet. The game's STEERING AXIS DEADZONE
   INSIDE cannot go below about 24 in practice: to steer from the first stick movement, use the
   runtime's steering anti-deadzone (`-Pad 'anti_deadzone=1,stick_deadzone=0.05'`, see
   [the game's steering deadzone](running.md#the-games-steering-deadzone)) and leave the game's
   setting at 24.
+- **Racing wheels** are new and off by default (`-Wheel 'on=1'`, or the launcher's Controls
+  page): the steering, pedals and shift buttons drive the car, checked with a virtual wheel
+  only; no real wheel has been tested yet. The game sends no force feedback to the wheel yet,
+  the menus still need the controller or the keyboard, and the cockpit's drawn steering wheel
+  turns at most 90 degrees either way.
 - **Keyboard:** the smooth steering and pedals are new and tested with injected keys only;
   the game's D-PAD STEERING and mouse steering are untested.
 - **The first press in some menus is ignored** by the game after several screens open; press

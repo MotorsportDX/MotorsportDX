@@ -1,6 +1,6 @@
 # Native racing wheel support
 
-Status: research and design of 27 October 2026; stage 0 (the device and safety shell) and stage 1 (the control path) done on 29 October 2026 ([stage 0](#stage-0-done-29-october-2026), [stage 1](#stage-1-findings-29-october-2026)). The project runs the base Disc 1 executable without a title update, so every address below is from the recompiled base `default.xex` (USA; Japan/Asia share the code).
+Status: research and design of 27 October 2026; stage 0 (the device and safety shell), stage 1 (the control path) and stage 2 (native input) done on 29 October 2026 ([stage 0](#stage-0-done-29-october-2026), [stage 1](#stage-1-findings-29-october-2026), [stage 2](#stage-2-done-29-october-2026)). The project runs the base Disc 1 executable without a title update, so every address below is from the recompiled base `default.xex` (USA; Japan/Asia share the code).
 
 The goal is native PC wheel support, not gamepad emulation:
 
@@ -27,7 +27,7 @@ There is no H-shifter. An analog clutch and an H-shifter stay out of scope and a
 
 - **The title has a complete wheel path.** It detects an Xbox 360 wheel per poll, and a 900-degree wheel through a capabilities field. It has its own wheel layouts, options and rumble table. Its physics computes a steering torque for force feedback. It drives five force feedback effects through the Xbox 360 kernel force feedback API (`XInputdFF*`), with parameters from `Media/ControllerFFB.ini`.
 - **The runtime stubs all of it.** `XInputdFFGetDeviceInfo` through `XInputdFFSetRumble` and `XamInputRawState` are `REX_EXPORT_STUB`s ([xboxkrnl_hid.cpp](../../work/runtime/src/kernel/xboxkrnl/xboxkrnl_hid.cpp), [xam_input.cpp](../../work/runtime/src/kernel/xam/xam_input.cpp)). The SDL driver reports every device as a gamepad (subtype 1), so the title never enters its wheel path.
-- **The base build carries the wheel bugs that title update 2 fixed:** the zero credit bug, the anti-cheat rule that smooth wheel input triggered, and countersteering that treated 900 degrees as 270. Entering the title's wheel path as it is would bring those bugs with it. Smooth, high-resolution steering could also trip the anti-cheat rule through the pad path. Stage 1 found the rule: it counts frames with a fast steering change and withholds a race's rewards when there are fewer than 10 per completed lap; it does not depend on the device class, and an integration fix keeps it from firing for the wheel ([stage 1](#stage-1-findings-29-october-2026)).
+- **The base build carries the wheel bugs that title update 2 fixed:** the zero credit bug, the anti-cheat rule that smooth wheel input triggered, and countersteering that treated 900 degrees as 270. Entering the title's wheel path as it is would bring those bugs with it. Smooth, high-resolution steering could also trip the anti-cheat rule through the pad path. Stage 1 found the rule: it counts frames with a fast steering change and withholds a race's rewards when there are fewer than 10 per completed lap; it does not depend on the device class. Stage 2 scales its threshold to the frame time for every device, so it counts as at 60 fps ([stage 2](#stage-2-done-29-october-2026)).
 - **The title's force feedback source is usable.** The steering torque is a float in `CCarDynamics`. The title reads it once per frame, together with the speed and the rear tyre slip. A hook at that point gives a native force feedback thread its input without the title's effect objects. The car physics runs at 359 Hz (`CarPhysicsUpdateHz`), so a later stage can sample the tyres at physics rate.
 - **Recommendation:**
   - Read the wheel with SDL3's joystick and haptic API, which the runtime already ships (SDL 3.5.0). On Windows its haptic backend is DirectInput.
@@ -270,7 +270,7 @@ Method:
 
 Static analysis of the base `default.xex` (the catalog, Ghidra's `Export.java` and the recompiler's generated code); no game run was needed for the findings below. Addresses are guest addresses.
 
-**The control path.** `sub_826D5E78`, once per frame from the race update `sub_826DCFB8` (its first call, before the lap logic `sub_823446C0`), loops over the human cars. For each it reads the player's pad object and builds a 28-byte control record on the stack:
+**The control path.** `sub_826D5E78`, once per frame from the race update `sub_826DCFB8` (its first call, before the lap logic `sub_823446C0`), loops over the race's cars (all 8 in stage 2's trace). For a player's car it reads the player's pad object and builds a 28-byte control record on the stack:
 
 | Offset | Field | Source |
 |---|---|---|
@@ -300,7 +300,7 @@ So the floats are floats from the pad object onwards: the 8-bit limit of the tri
 | `MinInputsPerLap` | +0x14 | 10 | not set |
 | `FrameAnalogInputThreshold` | +0x18 | 0.0075 | not set |
 
-- **Counting**, `sub_823B1560`, from `sub_826D5E78` once per frame for each human car that the AI does not drive (+0x38F8 clear) and that is not a replay (`sub_823623E0`): a frame whose steering (record +0x08) differs from the car's previous steering by more than 0.0075 counts as one input (+0x3938), capped at `MinInputsPerLap` times the laps begun.
+- **Counting**, `sub_823B1560`, from `sub_826D5E78` once per frame for each car whose flag +0x38F8 is clear (all 8 cars, the AI's opponents too, in stage 2's trace) and that is not a replay (`sub_823623E0`): a frame whose steering (record +0x08) differs from the car's previous steering by more than 0.0075 counts as one input (+0x3938), capped at `MinInputsPerLap` times the laps begun.
 - **The check**, `sub_823B1648`, in the lap logic `sub_823446C0` when a lap completes: fewer than `MinInputsPerLap` times the completed laps sets the car's sticky flag +0x393C.
 - **The consequence**, `CRaceRewardsComponent` `sub_8249BAB0`: with the flag set, the race's rewards block is skipped: no credits and no experience for that race (unless the mode flag `get_u8_338` is set). The same function also ends without rewards when the world collisions per lap reach 900.
 
@@ -328,6 +328,50 @@ Verified:
 - the career credits are correct after a race.
 
 Owner's script: a lap in a known car, in cockpit view, checking that the drawn wheel matches the R9's angle, plus the pedals, the paddles and the buttons.
+
+#### Stage 2 done, 29 October 2026
+
+**The input path.**
+- **The host** maps the wheel on its 1,000 Hz thread ([wheel_mapping.h](../../work/runtime/include/rex/input/wheel/wheel_mapping.h), header only, so the CPU tests check the same code):
+  - the steering axis to -1..1 of the lock: the wheel's rotation (`wheel_steer_range`, Pit House's maximum angle) over the steering lock (`wheel_steer_lock`, 0 for 1:1), with an inversion;
+  - each pedal from its raw values at rest and fully pressed (either order) through a deadzone at the rest end and a gamma;
+  - the buttons to the shifts, the clutch and the handbrake, the shifts as press counters, so a press shorter than a guest frame still shifts once.
+- **The runtime** publishes the controls through a store with its own lock ([wheel_controls.h](../../work/runtime/include/rex/input/wheel/wheel_controls.h)), never the SDL driver's.
+- **The integration** ([fm4-wheel-input.cpp](../../work/fm4-rex/src/fm4-wheel-input.cpp)) hooks the three action readers that `sub_826D5E78` calls for the record and acts only on its own call sites (return addresses `0x826D61AC` throttle, `0x826D61C8` brake, `0x826D61DC` steering, `0x826D6248` clutch, `0x826D625C` handbrake, `0x826D62C0` and `0x826D62D8` the shifts), for the pad whose user index (the pad object's first word, low byte) is 0. It merges the wheel as the title merges two bindings of an action: the larger pedal, the steering of larger magnitude, a shift on a new press. So the title's layouts, menus, pause, rewind, replays and AI driving are untouched, the pad and the keyboard still drive, and the anti-cheat count, which runs after the record is handed over and reads it from the stack, sees the wheel's steering.
+- **The launcher and `-Wheel`.** Every mapping value is a knob of `-Wheel` (`WHEEL_KNOBS` in `pipeline.py`, launcher.json's `wheel`, the launcher's port in `plan.cpp`; integer knobs for the axis and button numbers). The Controls page's **Racing wheel** section sets them; with the wheel test running, it shows the steering and each pedal's value as the car will get it, takes a pedal's rest and pressed values from the live axis, and assigns a button by pressing it ([running.md](../running.md#racing-wheel-in-the-game)).
+- **A virtual wheel for checks.** `wheel_virtual=<script>` attaches an SDL virtual wheel that a CSV script drives (raw axis values interpolated between rows, a button mask; it repeats), and lets SDL read joysticks without window focus, so an e2e run can drive the car through the whole runtime path.
+
+**Verified without hardware** (snapshot `whl3`, `4c65e50`, at 3/2 and 240 Hz on the native path; the runs `whl3f` and `whl3v`):
+- **The values reach the car at the wheel's resolution.** A career race driven by the virtual wheel's 12-second script (steps of 0.25, a 0.5 Hz sine, a ramp of single raw steps, full lock both ways, pedals, shift presses), traced at the hand-over to `CCarDynamics`: 10,821 records driven by the wheel, the steering in steps down to 0.00003 (one raw step of the 16-bit axis; an 8-bit step would be 0.0078), 303 distinct steering values within the first 0.01 of the ramp, the throttle in steps down to 0.000015 (the pad's 8-bit triggers: 0.0039), the brake at 0.5000, each shift press one record with the shift bit set, and only the first player's record driven (user 0; every other car's record untouched).
+- **The steering filters per wheel mode.** The record's wheel mode byte (+0x17) was cycled through 0, 1 and 2 every 12 seconds of session time, and the first 8 KB of the car's `CCarDynamics` was dumped each frame. Two fields follow the input: +0x24, a steering target, at once and at 0.733 of the input at full lock (probably the Ford Ka's road-wheel lock; no other car was traced), and +0x04, the steering itself, which follows the target:
+
+  | Mode | Target (+0x24) against the input | Steering (+0x04): a full-lock step to 90% | A 0.25 step | Slow input (the sine): steering minus target |
+  |---|---|---|---|---|
+  | 0, the pad's | linear | 360 ms | 90 ms | up to ±0.005 |
+  | 1, the 270-degree wheel's | a curve: 0.25 gives 0.18 of the lock | 50 ms | 9 to 16 ms | 0 |
+  | 2, the 900-degree wheel's | linear | 50 ms | 12 ms | 0 |
+
+  In mode 2 the steering equals the target in every steady frame and during the whole sine, and the target is 0.733 times the input in every frame (1,750 frames with an input above 0.05), full lock and slides included: no countersteer deviation showed in this run.
+- **The drawn steering wheel** (`SetSteeringWheelAngle`, `sub_822E6B30`, one call per frame for the cockpit car): in mode 2 it turns about 7.6 radians per unit of input, close to 2.5π (450 degrees each way, a 900-degree wheel), and stops at ±π/2 (90 degrees); in mode 0 it turns 0.39 radians at 0.25, in mode 1 0.50 radians. So in mode 2 the cockpit's wheel matches a wheel set to 900 degrees 1:1 up to 90 degrees either way, and holds there beyond. Whether the limit is the title's animation or a per-car value is open; only the Ford Ka was traced.
+- **Unit tests** (`pipeline.py build`): `fm4_wheel_mapping_tests` (the steering's resolution and lock, the pedals' calibration in either order, deadzone, gamma, missing axes and buttons, the press counters) and `fm4_wheel_host_tests` (the mapped controls published every tick from an SDL virtual wheel: the steering at full resolution, a pedal calibrated in reverse, a shift press counted once).
+- **The career's rewards**: see the anti-cheat rule below.
+
+**The device class (stage 2's choice).** The pad class stays, and the record of a frame whose steering the wheel won gets wheel mode 2, the title's 900-degree wheel filters: linear and fast (the table above). Mode 0 rate-limits the steering, which a wheel must not have; mode 1 bends the response for a 270-degree wheel. The wheel class itself (reporting `XINPUT_DEVSUBTYPE_WHEEL`) is not needed for these filters, since the mode reaches the car only as the record's byte, and it would bring the title's wheel layouts and menus and its frame-rate force feedback with the title update 2 bugs. A frame whose steering the pad wins keeps mode 0, so a pad player keeps the pad's filters while a wheel is connected. No player-facing trade-off between the classes was found, so the choice is the main session's to review, not the owner's.
+
+**The anti-cheat rule: the main session's decision of 29 October 2026.** The threshold is scaled to the frame time, so it counts as it would at 60 fps: a frame counts when its steering change exceeds `FrameAnalogInputThreshold` × (dt × 60), dt being the session time the title advanced in that frame (the session update `sub_8240DB08` runs the race update inside it, after adding its step; `fm4-race-clock.cpp` publishes the session and its time before the update). The hook of the count (`sub_823B1560`) divides the frame's change by dt × 60 (clamped to 0.05..4) before the title compares it, so the title's own rule, cap and lap check run unchanged. It applies to every device, pads included; `FM4_INPUT_THRESHOLD_UNSCALED=1` keeps the title's rule for comparisons. `MinInputsPerLap` 0, the fallback, was not needed.
+
+**Does a pad already lose its rewards at 240 Hz?** No, as far as a run without a person can show. The e2e harness cannot drive a career race with the pad and finish it, so the measurement used the AI driver, whose steering is smoother than a pad's stick (`whl3f`, `career_finish` at 240 Hz, the count's trace raw and scaled):
+- The count runs for all 8 cars of the race each frame, the player's car among them (its flag +0x38F8 is 0 for every car, so it is not an AI flag).
+- Each car changed its steering by more than 0.0075 in one frame 330 to 440 times a lap at 240 Hz (with the scaled threshold, 700 to 1,140 times); the title's count reached its cap of 10 a lap and no lap check failed.
+- The race paid its rewards: race winnings +3,000 CR, difficulty +750 CR, race feats +1,520 CR, the driver and Ford affinity level 2 with its 2,000 CR bonus, EVENT COMPLETE.
+
+A pad player's stick changes faster than the AI's steering, so the rule does not withhold a pad player's rewards at 240 Hz, and there was no live player bug to land first. A wheel turned slowly and smoothly is the case the scaling is for: unscaled at 240 Hz a counted frame needs the wheel to move 810 degrees a second on a 900-degree wheel, scaled 203, as at 60 fps.
+
+**Open:**
+- The readers of the wheel mode byte and the `WheelMapping` sets are still not found statically; the modes were measured instead. Whether mode 2 uses the 270-degree countersteer scale (the title update 2 bug) somewhere this run did not reach (a held countersteer in a long slide) is not known; nothing in the trace showed it.
+- The per-car drawn steering angle: one car traced (±90 degrees at most in mode 2). Stage 5's soft lock needs the road-wheel lock per car (+0x24's 0.733 for the Ford Ka) and the drawn limit per car.
+- The menus are not driven by the wheel's buttons (the controller or the keyboard drive them).
+- A real wheel: the owner's checklist ([running.md](../running.md#racing-wheel-test-checklist), steps 9 to 14).
 
 ### Stage 3: force feedback from the title's torque
 
@@ -382,8 +426,8 @@ Delivers:
 
 ## Risks
 
-- **Title update 2 bugs in the base build.** Settled by stage 1: the anti-cheat rule is input-based (steering changes per frame), with no rewards as its consequence, in any device class. The wheel needs an integration fix of the rule while it drives (`MinInputsPerLap` 0, or a threshold scaled to the frame time). The countersteer bug of the 900-degree set remains a reason to measure the wheel modes' filters before choosing one.
-- **The filters per wheel mode are not known yet.** No reader of the control record's wheel-mode byte was found statically; stage 2 measures the modes' steering response with a traced run.
+- **Title update 2 bugs in the base build.** The anti-cheat rule (stage 1) is input-based, with no rewards as its consequence, in any device class; stage 2 scales its threshold to the frame time for every device (the main session's decision of 29 October 2026). The countersteer bug of the 900-degree set, whose filters (wheel mode 2) the wheel now uses, did not show in stage 2's trace, but a long held slide was not traced.
+- **The filters per wheel mode** were measured in stage 2 (mode 2: linear, a full-lock step in 50 ms); their readers are still not found statically.
 - **Frame-rate torque.** The title's torque changes at frame rate; interpolation adds up to a frame of latency until stage 4.
 - **MOZA SDK terms are unknown.** Without them, soft lock falls back to a force feedback end stop, and no LEDs.
 - **Pit House interaction.** The base's own angle limit, damper and filters can mask or double what the game sends.

@@ -13,6 +13,8 @@
 #include <array>
 #include <chrono>
 #include <filesystem>
+#include <fstream>
+#include <sstream>
 #include <string>
 #include <thread>
 #include <tuple>
@@ -23,6 +25,7 @@
 #include <rex/input/flags.h>
 #include <rex/input/pad_settings.h>
 #include <rex/input/sdl/sdl_input_driver.h>
+#include <rex/input/wheel/wheel_controls.h>
 #include <rex/input/wheel/wheel_host.h>
 #include <rex/logging.h>
 #include <rex/platform.h>
@@ -82,9 +85,86 @@ REXCVAR_DEFINE_STRING(pad_left_paddle2, "a", "Input",
               "right", "guide", "none"})
     .lifecycle(rex::cvar::Lifecycle::kRequiresRestart);
 REXCVAR_DEFINE_BOOL(wheel, false, "Input",
-                    "Racing wheel (stage 0 of docs/analysis/racing-wheels.md): read a wheel "
-                    "through SDL's joystick API and run its force feedback host; the game gets no "
-                    "wheel input or force yet, so the force stays zero");
+                    "Racing wheel (docs/analysis/racing-wheels.md): read a wheel through SDL's "
+                    "joystick API, drive the car with it (wheel_input) and run its force "
+                    "feedback host; the game sends no force yet, so the force stays zero");
+REXCVAR_DEFINE_BOOL(wheel_input, true, "Input",
+                    "Racing wheel: its steering, pedals and buttons drive the car of the first "
+                    "player, beside the pad");
+REXCVAR_DEFINE_INT32(wheel_steer_axis, 0, "Input", "Racing wheel: the steering axis")
+    .range(0, 15);
+REXCVAR_DEFINE_BOOL(wheel_steer_invert, false, "Input",
+                    "Racing wheel: flip the steering axis");
+REXCVAR_DEFINE_DOUBLE(wheel_steer_range, 900.0, "Input",
+                      "Racing wheel: the rotation the wheel reports over its whole axis, lock to "
+                      "lock, in degrees (the base's own angle setting, such as Pit House's)")
+    .range(90.0, 3600.0);
+REXCVAR_DEFINE_DOUBLE(wheel_steer_lock, 0.0, "Input",
+                      "Racing wheel: the rotation that gives the car's full steering, lock to "
+                      "lock, in degrees (0: wheel_steer_range, 1:1 with the wheel)")
+    .range(0.0, 3600.0);
+REXCVAR_DEFINE_INT32(wheel_throttle_axis, 1, "Input",
+                     "Racing wheel: the throttle pedal axis (-1: none)")
+    .range(-1, 15);
+REXCVAR_DEFINE_DOUBLE(wheel_throttle_rest, -32768.0, "Input",
+                      "Racing wheel: the throttle pedal's raw axis value at rest")
+    .range(-32768.0, 32767.0);
+REXCVAR_DEFINE_DOUBLE(wheel_throttle_pressed, 32767.0, "Input",
+                      "Racing wheel: the throttle pedal's raw axis value fully pressed")
+    .range(-32768.0, 32767.0);
+REXCVAR_DEFINE_DOUBLE(wheel_throttle_deadzone, 0.0, "Input",
+                      "Racing wheel: the share of the throttle pedal's travel from rest that reads 0")
+    .range(0.0, 0.9);
+REXCVAR_DEFINE_DOUBLE(wheel_throttle_gamma, 1.0, "Input",
+                      "Racing wheel: the throttle pedal's response curve (above 1: finer at the top)")
+    .range(0.2, 5.0);
+REXCVAR_DEFINE_INT32(wheel_brake_axis, 2, "Input",
+                     "Racing wheel: the brake pedal axis (-1: none)")
+    .range(-1, 15);
+REXCVAR_DEFINE_DOUBLE(wheel_brake_rest, -32768.0, "Input",
+                      "Racing wheel: the brake pedal's raw axis value at rest")
+    .range(-32768.0, 32767.0);
+REXCVAR_DEFINE_DOUBLE(wheel_brake_pressed, 32767.0, "Input",
+                      "Racing wheel: the brake pedal's raw axis value fully pressed")
+    .range(-32768.0, 32767.0);
+REXCVAR_DEFINE_DOUBLE(wheel_brake_deadzone, 0.0, "Input",
+                      "Racing wheel: the share of the brake pedal's travel from rest that reads 0")
+    .range(0.0, 0.9);
+REXCVAR_DEFINE_DOUBLE(wheel_brake_gamma, 1.0, "Input",
+                      "Racing wheel: the brake pedal's response curve (above 1: finer at the top)")
+    .range(0.2, 5.0);
+REXCVAR_DEFINE_INT32(wheel_clutch_axis, -1, "Input",
+                     "Racing wheel: the clutch pedal axis (-1: none)")
+    .range(-1, 15);
+REXCVAR_DEFINE_DOUBLE(wheel_clutch_rest, -32768.0, "Input",
+                      "Racing wheel: the clutch pedal's raw axis value at rest")
+    .range(-32768.0, 32767.0);
+REXCVAR_DEFINE_DOUBLE(wheel_clutch_pressed, 32767.0, "Input",
+                      "Racing wheel: the clutch pedal's raw axis value fully pressed")
+    .range(-32768.0, 32767.0);
+REXCVAR_DEFINE_DOUBLE(wheel_clutch_deadzone, 0.0, "Input",
+                      "Racing wheel: the share of the clutch pedal's travel from rest that reads 0")
+    .range(0.0, 0.9);
+REXCVAR_DEFINE_DOUBLE(wheel_clutch_gamma, 1.0, "Input",
+                      "Racing wheel: the clutch pedal's response curve (above 1: finer at the top)")
+    .range(0.2, 5.0);
+REXCVAR_DEFINE_INT32(wheel_shift_up_button, -1, "Input",
+                     "Racing wheel: the button of a sequential shift up (-1: none)")
+    .range(-1, 127);
+REXCVAR_DEFINE_INT32(wheel_shift_down_button, -1, "Input",
+                     "Racing wheel: the button of a sequential shift down (-1: none)")
+    .range(-1, 127);
+REXCVAR_DEFINE_INT32(wheel_clutch_button, -1, "Input",
+                     "Racing wheel: the button held for the clutch (-1: none)")
+    .range(-1, 127);
+REXCVAR_DEFINE_INT32(wheel_handbrake_button, -1, "Input",
+                     "Racing wheel: the button held for the handbrake (-1: none)")
+    .range(-1, 127);
+REXCVAR_DEFINE_STRING(wheel_virtual, "", "Input",
+                      "Racing wheel test without hardware: attach an SDL virtual wheel driven by "
+                      "this CSV script (time_s,steer,throttle,brake,buttons: raw axis values, "
+                      "interpolated, and a button mask; it repeats), and read pads without "
+                      "window focus");
 REXCVAR_DEFINE_STRING(wheel_name, "", "Input",
                       "Racing wheel: only a joystick whose name contains this (empty: SDL's "
                       "first wheel, else the first joystick that is not a gamepad)");
@@ -310,6 +390,22 @@ struct SDLInputDriver::LatencyProbe {
   }
 };
 
+// The script's rows: the time in seconds from the attach, the steering, throttle and brake
+// axes' raw values (linear between rows) and a mask of the buttons held (0..31). The last row's
+// time is the script's period; it then starts over.
+struct SDLInputDriver::VirtualWheel {
+  struct Row {
+    double t = 0.0;
+    double axes[3] = {};
+    uint32_t buttons = 0;
+  };
+  std::vector<Row> rows;
+  SDL_JoystickID id = 0;
+  SDL_Joystick* joystick = nullptr;
+  std::thread thread;
+  std::atomic<bool> stop{false};
+};
+
 SDLInputDriver::SDLInputDriver(rex::ui::Window* window, size_t window_z_order)
     : InputDriver(window, window_z_order),
       sdl_events_initialized_(false),
@@ -423,7 +519,8 @@ void SDLInputDriver::OnWindowAvailable(rex::ui::Window* window) {
 
       // SDL drops pad events while none of its windows has keyboard focus, and a game
       // started by the e2e harness need not have it.
-      if (REXCVAR_GET(input_latency_probe)) {
+      if (REXCVAR_GET(input_latency_probe) ||
+          (REXCVAR_GET(wheel) && !REXCVAR_GET(wheel_virtual).empty())) {
         SDL_SetHint(SDL_HINT_JOYSTICK_ALLOW_BACKGROUND_EVENTS, "1");
         background_events_ = true;
       }
@@ -585,6 +682,36 @@ void SDLInputDriver::StartWheel() {
                                                           : wheel::Sink::kDevice;
   options.record_path = REXCVAR_GET(wheel_ffb_record);
   options.name_filter = REXCVAR_GET(wheel_name);
+  wheel::MappingConfig& mapping = options.mapping;
+  mapping.steering.axis = REXCVAR_GET(wheel_steer_axis);
+  mapping.steering.invert = REXCVAR_GET(wheel_steer_invert);
+  mapping.steering.range_deg = REXCVAR_GET(wheel_steer_range);
+  mapping.steering.lock_deg = REXCVAR_GET(wheel_steer_lock);
+#define REX_WHEEL_PEDAL(name)                                       mapping.name.axis = REXCVAR_GET(wheel_##name##_axis);             mapping.name.released = REXCVAR_GET(wheel_##name##_rest);         mapping.name.pressed = REXCVAR_GET(wheel_##name##_pressed);       mapping.name.deadzone = REXCVAR_GET(wheel_##name##_deadzone);     mapping.name.gamma = REXCVAR_GET(wheel_##name##_gamma);
+  REX_WHEEL_PEDAL(throttle)
+  REX_WHEEL_PEDAL(brake)
+  REX_WHEEL_PEDAL(clutch)
+#undef REX_WHEEL_PEDAL
+  mapping.shift_up_button = REXCVAR_GET(wheel_shift_up_button);
+  mapping.shift_down_button = REXCVAR_GET(wheel_shift_down_button);
+  mapping.clutch_button = REXCVAR_GET(wheel_clutch_button);
+  mapping.handbrake_button = REXCVAR_GET(wheel_handbrake_button);
+  if (REXCVAR_GET(wheel_input)) {
+    options.on_controls = [](const wheel::Controls& controls) {
+      wheel::PublishControls(controls);
+    };
+  }
+  REXLOG_INFO(
+      "Wheel: input {} (steering axis {}{}, {} degrees, lock {}; throttle axis {}, brake axis {}, "
+      "clutch axis {}; buttons up {}, down {}, clutch {}, handbrake {})",
+      REXCVAR_GET(wheel_input) ? "on" : "off", mapping.steering.axis,
+      mapping.steering.invert ? " inverted" : "", mapping.steering.range_deg,
+      mapping.steering.lock_deg > 0.0 ? mapping.steering.lock_deg : mapping.steering.range_deg,
+      mapping.throttle.axis, mapping.brake.axis, mapping.clutch.axis, mapping.shift_up_button,
+      mapping.shift_down_button, mapping.clutch_button, mapping.handbrake_button);
+  if (!REXCVAR_GET(wheel_virtual).empty()) {
+    StartVirtualWheel();
+  }
   wheel_ = std::make_unique<wheel::WheelHost>(
       options, [](wheel::LogLevel level, std::string_view text) {
         switch (level) {
@@ -602,10 +729,99 @@ void SDLInputDriver::StopWheel() {
     wheel_->Stop();
     wheel_.reset();
   }
+  StopVirtualWheel();
   if (wheel_subsystems_) {
     SDL_QuitSubSystem(wheel_subsystems_);
     wheel_subsystems_ = 0;
   }
+}
+
+void SDLInputDriver::StartVirtualWheel() {
+  auto wheel = std::make_unique<VirtualWheel>();
+  const std::string path = REXCVAR_GET(wheel_virtual);
+  std::ifstream file(std::filesystem::u8path(path));
+  std::string line;
+  while (std::getline(file, line)) {
+    if (line.empty() || !(std::isdigit(uint8_t(line[0])) || line[0] == '.')) {
+      continue;
+    }
+    std::replace(line.begin(), line.end(), ',', ' ');
+    std::istringstream fields(line);
+    VirtualWheel::Row row;
+    if (fields >> row.t >> row.axes[0] >> row.axes[1] >> row.axes[2]) {
+      fields >> row.buttons;
+      if (wheel->rows.empty() || row.t > wheel->rows.back().t) {
+        wheel->rows.push_back(row);
+      }
+    }
+  }
+  if (wheel->rows.size() < 2) {
+    REXLOG_ERROR("Wheel: the virtual wheel's script '{}' has fewer than two rows", path);
+    return;
+  }
+  SDL_VirtualJoystickDesc desc;
+  SDL_INIT_INTERFACE(&desc);
+  desc.type = SDL_JOYSTICK_TYPE_WHEEL;
+  desc.naxes = 3;
+  desc.nbuttons = 32;
+  desc.nhats = 1;
+  desc.name = "FM4 virtual wheel";
+  wheel->id = SDL_AttachVirtualJoystick(&desc);
+  wheel->joystick = wheel->id ? SDL_OpenJoystick(wheel->id) : nullptr;
+  if (!wheel->joystick) {
+    REXLOG_ERROR("Wheel: cannot attach the virtual wheel: {}", SDL_GetError());
+    if (wheel->id) {
+      SDL_DetachVirtualJoystick(wheel->id);
+    }
+    return;
+  }
+  auto* raw = wheel.get();
+  wheel->thread = std::thread([raw]() {
+    const uint64_t start_ns = SDL_GetTicksNS();
+    const double period = raw->rows.back().t;
+    size_t row = 0;
+    uint32_t buttons = ~0u;
+    while (!raw->stop.load(std::memory_order_relaxed)) {
+      const double t = std::fmod(double(SDL_GetTicksNS() - start_ns) * 1e-9, period);
+      if (t < raw->rows[row].t) {
+        row = 0;
+      }
+      while (row + 2 < raw->rows.size() && raw->rows[row + 1].t <= t) {
+        ++row;
+      }
+      const auto& a = raw->rows[row];
+      const auto& b = raw->rows[row + 1];
+      const double f = std::clamp((t - a.t) / (b.t - a.t), 0.0, 1.0);
+      for (int axis = 0; axis < 3; ++axis) {
+        const double value = a.axes[axis] + (b.axes[axis] - a.axes[axis]) * f;
+        SDL_SetJoystickVirtualAxis(raw->joystick, axis,
+                                   int16_t(std::clamp(std::lround(value), -32768l, 32767l)));
+      }
+      if (a.buttons != buttons) {
+        buttons = a.buttons;
+        for (int button = 0; button < 32; ++button) {
+          SDL_SetJoystickVirtualButton(raw->joystick, button, ((buttons >> button) & 1) != 0);
+        }
+      }
+      SDL_DelayNS(1'000'000);
+    }
+  });
+  REXLOG_INFO("Wheel: virtual wheel attached, {} script rows over {:.3f} s from '{}'",
+              wheel->rows.size(), wheel->rows.back().t, path);
+  virtual_wheel_ = std::move(wheel);
+}
+
+void SDLInputDriver::StopVirtualWheel() {
+  if (!virtual_wheel_) {
+    return;
+  }
+  virtual_wheel_->stop = true;
+  if (virtual_wheel_->thread.joinable()) {
+    virtual_wheel_->thread.join();
+  }
+  SDL_CloseJoystick(virtual_wheel_->joystick);
+  SDL_DetachVirtualJoystick(virtual_wheel_->id);
+  virtual_wheel_.reset();
 }
 
 void SDLInputDriver::StopTriggerRumbleLocked() {

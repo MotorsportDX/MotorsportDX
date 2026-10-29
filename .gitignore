@@ -295,6 +295,7 @@
 !/work/fm4-rex/src/fm4-streaming-fixes.cpp
 !/work/fm4-rex/src/fm4-test-events.cpp
 !/work/fm4-rex/src/fm4-vblank-rate.cpp
+!/work/fm4-rex/src/fm4-wheel-input.cpp
 !/work/fm4-rex/src/fm4-vector-fixes.h
 !/work/fm4-rex/src/fm4_rex_app.h
 !/work/fm4-rex/src/instruction-tests.cpp
@@ -306,6 +307,7 @@
 !/work/fm4-rex/tests/pad-shaping-tests.cpp
 !/work/fm4-rex/tests/wheel-ffb-tests.cpp
 !/work/fm4-rex/tests/wheel-host-tests.cpp
+!/work/fm4-rex/tests/wheel-mapping-tests.cpp
 !/work/fm4-rex/tests/keyboard-model-tests.cpp
 !/work/fm4-rex/tests/native-shader-contract-tests.cpp
 !/work/fm4-rex/tests/post-pass-camera-tests.cpp

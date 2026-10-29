@@ -9,6 +9,7 @@ add_library(rexinput OBJECT
     title_input_ranges.cpp
     mnk/mnk_input_driver.cpp
     nop/nop_input_driver.cpp
+    wheel/wheel_controls.cpp
     wheel/wheel_host.cpp
 )
 add_library(rex::input ALIAS rexinput)

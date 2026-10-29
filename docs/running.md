@@ -1166,9 +1166,65 @@ The lines contain the pads' names and device paths, not the Windows user name.
 ## Racing wheel
 
 Native racing wheel support is in development ([racing wheels](analysis/racing-wheels.md)).
-Stage 0 is done: the runtime and the GUI launcher can read a wheel through SDL's joystick API
-and send it force feedback through a safety governor, but the game does not use the wheel
-yet. A wheel that SDL maps as a gamepad still reaches the game as a pad, as before.
+Stages 0 to 2 are done: the runtime and the GUI launcher read a wheel through SDL's joystick
+API, its steering, pedals and buttons drive the car at the wheel's full resolution beside
+the controller, and a force feedback host with a safety governor is ready, but the game
+sends no force yet. A wheel that SDL maps as a gamepad also reaches the game as a pad, as
+before.
+
+```powershell
+.\outputs\FM4-build\Build.ps1 -Action run @common -Wheel 'on=1,shift_up=4,shift_down=5'
+```
+
+### Racing wheel in the game
+
+The GUI launcher's Controls page has a **Racing wheel** section above the wheel test. **Use a
+racing wheel** opens the wheel in the game. The wheel then drives the car of the first player:
+
+- **Steering:** the axis, an inversion, the wheel's rotation lock to lock (set it to Pit
+  House's maximum angle: the wheel reports that rotation over its whole axis) and the steering
+  lock, the rotation that gives the car's full steering (0: the wheel's rotation, so the car
+  steers 1:1 with the wheel). The game's steering deadzones and the pad's steering rate
+  limit do not apply: while the wheel steers, the car gets the game's own filters for a
+  900-degree wheel, which follow the wheel linearly. The cockpit's drawn steering wheel then
+  turns as a 900-degree wheel, up to 90 degrees either way; for it to match the wheel, set
+  Pit House to 900 degrees and leave the steering lock at 0.
+- **Pedals:** throttle, brake and clutch, each an axis (-1: none), its raw values at rest and
+  fully pressed (**Set rest** and **Set pressed** take them from the wheel test while it
+  runs; the order may be either way round), a deadzone at the rest end and a response curve
+  (gamma; above 1 is finer at the start of the travel). The values reach the car as floats,
+  not as the pad's 8-bit triggers.
+- **Buttons:** shift up and down (sequential shifts in the game's manual gearbox), the clutch
+  and the handbrake while held. **Assign** takes the next button pressed while the wheel
+  test runs.
+
+The wheel merges with the controller as the game merges two bindings of one action: the
+larger pedal, the steering of larger magnitude, a shift from either. The menus are still
+driven with the controller or the keyboard. Every value is a knob of `-Wheel` (the launcher's
+**Wheel value** field shows the profile's):
+
+| Knob | Default | Runtime cvar |
+| --- | --- | --- |
+| `on` | 0 | `wheel` |
+| `input` | 1 | `wheel_input` |
+| `steer_axis` | 0 | `wheel_steer_axis` |
+| `steer_invert` | 0 | `wheel_steer_invert` |
+| `steer_range` | 900 | `wheel_steer_range` (degrees) |
+| `steer_lock` | 0 | `wheel_steer_lock` (degrees; 0: the range) |
+| `throttle_axis`, `brake_axis`, `clutch_axis` | 1, 2, -1 | `wheel_throttle_axis`, ... |
+| `throttle_rest`, `brake_rest`, `clutch_rest` | -32768 | `wheel_throttle_rest`, ... |
+| `throttle_pressed`, `brake_pressed`, `clutch_pressed` | 32767 | `wheel_throttle_pressed`, ... |
+| `throttle_deadzone`, `brake_deadzone`, `clutch_deadzone` | 0 | `wheel_throttle_deadzone`, ... (0 to 0.9) |
+| `throttle_gamma`, `brake_gamma`, `clutch_gamma` | 1 | `wheel_throttle_gamma`, ... (0.2 to 5) |
+| `shift_up`, `shift_down`, `clutch_button`, `handbrake_button` | -1 | `wheel_shift_up_button`, ... (-1: none) |
+| `ffb_cap` | 0.25 | `wheel_ffb_cap` |
+| `ffb_gain` | 1 | `wheel_ffb_gain` |
+| `ffb_invert` | 0 | `wheel_ffb_invert` |
+
+The game's anti-cheat rule withholds a race's credits and experience when a lap has fewer
+than 10 frames with a fast steering change. Its threshold is a change per frame, so at a high
+frame rate smooth steering could miss it; the threshold is scaled to the frame's time so that
+it means what it means at 60 fps, for every device ([stage 2](analysis/racing-wheels.md#stage-2-done-29-october-2026)).
 
 ### Racing wheel test
 
@@ -1192,18 +1248,20 @@ would jump, and drops to zero at once when the launcher's window loses focus or 
 stops. The launcher writes the test's lines to `logs\wheel-test.log` and, with **Record
 forces**, every force sent to `logs\wheel-test-forces.csv`. Pressing Play stops the test.
 
-The runtime has the same host behind cvars (Advanced page, Extra cvars); with `--wheel=true`
-the game opens the wheel and logs a `Wheel report:` line, but sends no force yet:
+The runtime has the same host behind cvars (the `-Wheel` knobs above, or the Advanced page's
+Extra cvars); with `--wheel=true` the game opens the wheel and logs a `Wheel report:` line and
+a `Wheel: input` line with its mapping, but sends no force yet:
 
 | Cvar | Default | Description |
 | --- | --- | --- |
-| `wheel` | `false` | Opens the wheel and runs its force feedback host (stage 0: always zero force). Needs the SDL input backend (the default). |
+| `wheel` | `false` | Opens the wheel, drives the car with it (`wheel_input`) and runs its force feedback host (always zero force so far). Needs the SDL input backend (the default). |
 | `wheel_name` | empty | Only a joystick whose name contains this. |
 | `wheel_ffb_cap` | 0.25 | The hard upper limit of the force, a fraction of the wheel's full force, independent of the gain. |
 | `wheel_ffb_gain` | 1 | Multiplies the game's force before the cap. |
 | `wheel_ffb_invert` | `false` | Flips the force's direction. |
 | `wheel_ffb_sink` | `device` | `record` sends no force to any device and only records it (with `wheel_ffb_record`). |
 | `wheel_ffb_record` | empty | A CSV file of every force sent. |
+| `wheel_virtual` | empty | For checks without hardware: an SDL virtual wheel driven by a CSV script (`time_s,steer,throttle,brake,buttons`, raw axis values interpolated between rows and a mask of buttons held; it repeats), and pads read without window focus. |
 
 The force stops on focus loss, at exit (closing the game window stops and releases the wheel
 before the process ends) and on a crash (an unhandled exception filter and a SIGABRT handler
@@ -1216,6 +1274,8 @@ For the owner's MOZA R9 with the ESX wheel and the SR-P pedals, from an
 [export](#export-to-another-computer). Keep one Pit House profile for every test and note its
 settings (maximum angle, force feedback strength, road sensitivity, damper, friction,
 inertia).
+
+Stage 0, the device and the forces without the game:
 
 1. Open Pit House with that profile, then the GUI launcher, Controls page, **Wheel test**.
    Leave **Force cap** at 0.25, then **Start wheel test**.
@@ -1232,9 +1292,33 @@ inertia).
 8. With a force running, end `MotorsportDX.exe` in Task Manager: note whether the force stops,
    and how quickly.
 
+Stage 2, driving with the wheel (no force yet):
+
+9. Start the launcher again, **Start wheel test**, and in **Racing wheel** tick **Use a racing
+   wheel**. Set the steering axis and **Wheel rotation** to Pit House's maximum angle, leave
+   **Steering lock** at 0. Turn the wheel: **Steering now** must read -1 at full left, 0 in the
+   centre and 1 at full right (else tick **Invert steering**).
+10. For the throttle and the brake: set each axis, then **Set rest** with the pedal released
+    and **Set pressed** with it pressed fully; **Now** must go from 0 to 1 over the travel.
+    Set the clutch pedal's axis to -1 (the SR-P has none).
+11. **Assign** shift up and shift down to the paddles, the clutch to a button and the
+    handbrake to another. **Stop wheel test**, then Play.
+12. In the game's options, set the transmission to manual (and once to manual with clutch).
+    Drive a lap of a known car and track in the cockpit view: the drawn steering wheel must
+    follow the R9 1:1 at every angle without lag; the car must respond to the smallest
+    steering movement; the throttle and brake must be smooth from the first millimetre to
+    the end of the travel; each paddle press must shift exactly one gear; the clutch button
+    must disengage while held (manual with clutch), the handbrake button lock the rear wheels.
+13. Finish a career race: the race result must show its credits and experience (the
+    anti-cheat rule must not withhold them).
+14. Note the steering feel: anything that looks rate limited, smoothed or exaggerated at
+    speed (the game's STEERING assist setting changes it; try Simulation).
+
 What to send back: the launcher folder's `logs\wheel-test.log` (its `Wheel report:` line names
-the wheel's axes, buttons and force feedback effects) and `logs\wheel-test-forces.csv`, plus
-the notes of steps 3 to 8.
+the wheel's axes, buttons and force feedback effects) and `logs\wheel-test-forces.csv`, the
+`-Wheel` value of the launcher's **Wheel value** field, the lines of the game's
+`logsuntime.log` that contain `Wheel` (`Select-String -Path logsuntime.log -Pattern
+'Wheel' | ForEach-Object Line`), plus the notes of steps 3 to 14.
 
 ## Keyboard
 

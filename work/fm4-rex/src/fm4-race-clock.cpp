@@ -82,9 +82,16 @@ std::atomic<uint32_t> countdown_placed{0};
 REX_EXTERN(__imp__sub_8240DB08);
 REX_HOOK_RAW(sub_8240DB08) {
   const uint32_t session = ctx.r3.u32;
+  const double before =
+      std::bit_cast<double>(rex::memory::load_and_swap<uint64_t>(base + session + 0x18));
+  fm4_session_time_before.store(before, std::memory_order_relaxed);
+  fm4_session_updating.store(session, std::memory_order_relaxed);
   __imp__sub_8240DB08(ctx, base);
-  const uint64_t time = rex::memory::load_and_swap<uint64_t>(base + session + 0x18);
-  fm4_diagnostic_session_time.store(std::bit_cast<double>(time), std::memory_order_relaxed);
+  fm4_session_updating.store(0, std::memory_order_relaxed);
+  const double time =
+      std::bit_cast<double>(rex::memory::load_and_swap<uint64_t>(base + session + 0x18));
+  fm4_session_last_step.store(time - before, std::memory_order_relaxed);
+  fm4_diagnostic_session_time.store(time, std::memory_order_relaxed);
   fm4_diagnostic_updates.fetch_add(1, std::memory_order_relaxed);
 }
 

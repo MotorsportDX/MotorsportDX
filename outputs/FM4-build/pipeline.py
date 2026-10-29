@@ -815,7 +815,8 @@ def post_pass_tests(root,jobs):
     stick and trigger shaping (docs/analysis/modern-gamepads.md), the keyboard's steering and
     pedal model (docs/analysis/keyboard-controls.md), the native shader contract's manifest
     and pass classes (docs/analysis/shader-contract.md), and the racing wheel's force feedback
-    governor and host with an SDL virtual wheel and no force device (docs/analysis/racing-wheels.md).
+    governor, its driving controls' mapping and its host with an SDL virtual wheel and no force
+    device (docs/analysis/racing-wheels.md).
     work/fm4-rex/tests, synced here like the runtime, built against the installed runtime headers. The WARP scene's checks were set with a GTAO radius of 1 m."""
     source,build=root/'project/tests',root/'tests-build'
     inventory=json.loads((REPO/'outputs/FM4-source-control/tracked-files.json').read_text())
@@ -837,7 +838,7 @@ def post_pass_tests(root,jobs):
          'fm4_post_pass_shader_tests','fm4_shader_mod_tests','fm4_track_settings_tests',
          'fm4_texture_replacement_tests','fm4_draw_scale_tests','fm4_pad_shaping_tests',
          'fm4_keyboard_model_tests','fm4_native_shader_contract_tests','fm4_wheel_ffb_tests',
-         'fm4_wheel_host_tests'],
+         'fm4_wheel_mapping_tests','fm4_wheel_host_tests'],
         log=root/'logs/tests-build.log')
     run([build/'fm4_track_settings_tests.exe'],cwd=build,log=root/'logs/track-settings-tests.log')
     run([build/'fm4_texture_replacement_tests.exe'],cwd=build,
@@ -847,6 +848,7 @@ def post_pass_tests(root,jobs):
     run([build/'fm4_pad_shaping_tests.exe'],cwd=build,log=root/'logs/pad-shaping-tests.log')
     run([build/'fm4_keyboard_model_tests.exe'],cwd=build,log=root/'logs/keyboard-model-tests.log')
     run([build/'fm4_wheel_ffb_tests.exe'],cwd=build,log=root/'logs/wheel-ffb-tests.log')
+    run([build/'fm4_wheel_mapping_tests.exe'],cwd=build,log=root/'logs/wheel-mapping-tests.log')
     run([build/'fm4_wheel_host_tests.exe',build],cwd=build,log=root/'logs/wheel-host-tests.log')
     run([build/'fm4_native_shader_contract_tests.exe',LOOK_DIRECTORY/'shaders.toml'],cwd=build,
         log=root/'logs/native-shader-contract-tests.log')
@@ -1695,8 +1697,44 @@ KEYBOARD_KNOBS={
     'mouse_steer_centering':{'cvar':'mnk_mouse_steer_centering','default':'1','min':0.0,'max':5.0},
 }
 
+# -Wheel: the racing wheel (docs/running.md#racing-wheel, docs/analysis/racing-wheels.md), as -Pad.
+# 'integer' knobs are whole numbers (axis and button numbers, -1 for none). The pedals' rest and
+# pressed values are raw axis values (-32768 to 32767), set from the launcher's wheel test.
+def wheel_pedal_knobs(pedal,axis):
+    return {f'{pedal}_axis':{'cvar':f'wheel_{pedal}_axis','default':str(axis),'min':-1,'max':15,
+                             'integer':True},
+            f'{pedal}_rest':{'cvar':f'wheel_{pedal}_rest','default':'-32768','min':-32768,
+                             'max':32767},
+            f'{pedal}_pressed':{'cvar':f'wheel_{pedal}_pressed','default':'32767','min':-32768,
+                                'max':32767},
+            f'{pedal}_deadzone':{'cvar':f'wheel_{pedal}_deadzone','default':'0','min':0.0,
+                                 'max':0.9},
+            f'{pedal}_gamma':{'cvar':f'wheel_{pedal}_gamma','default':'1','min':0.2,'max':5.0}}
+
+WHEEL_KNOBS={
+    'on':{'cvar':'wheel','default':'0','choices':['0','1']},
+    'input':{'cvar':'wheel_input','default':'1','choices':['0','1']},
+    'steer_axis':{'cvar':'wheel_steer_axis','default':'0','min':0,'max':15,'integer':True},
+    'steer_invert':{'cvar':'wheel_steer_invert','default':'0','choices':['0','1']},
+    'steer_range':{'cvar':'wheel_steer_range','default':'900','min':90.0,'max':3600.0},
+    'steer_lock':{'cvar':'wheel_steer_lock','default':'0','min':0.0,'max':3600.0},
+    **wheel_pedal_knobs('throttle',1),
+    **wheel_pedal_knobs('brake',2),
+    **wheel_pedal_knobs('clutch',-1),
+    'shift_up':{'cvar':'wheel_shift_up_button','default':'-1','min':-1,'max':127,'integer':True},
+    'shift_down':{'cvar':'wheel_shift_down_button','default':'-1','min':-1,'max':127,
+                  'integer':True},
+    'clutch_button':{'cvar':'wheel_clutch_button','default':'-1','min':-1,'max':127,
+                     'integer':True},
+    'handbrake_button':{'cvar':'wheel_handbrake_button','default':'-1','min':-1,'max':127,
+                        'integer':True},
+    'ffb_cap':{'cvar':'wheel_ffb_cap','default':'0.25','min':0.0,'max':1.0},
+    'ffb_gain':{'cvar':'wheel_ffb_gain','default':'1','min':0.0,'max':4.0},
+    'ffb_invert':{'cvar':'wheel_ffb_invert','default':'0','choices':['0','1']},
+}
+
 def option_knobs(text,table,option):
-    """The knobs of a -Pad or -Keyboard value, 'name=value,...' (later items win)."""
+    """The knobs of a -Pad, -Keyboard or -Wheel value, 'name=value,...' (later items win)."""
     knobs={}
     for item in filter(None,(part.strip() for part in (text or '').split(','))):
         name,equals,value=item.partition('=')
@@ -1729,12 +1767,12 @@ def option_cvars(text,table,option):
                 number=float(value)
             except ValueError:
                 number=float('nan')
-            if not knob['min']<=number<=knob['max']:
-                raise ValueError(f"{option} {name} is a number from {knob['min']:g} to "
-                                 f"{knob['max']:g}, not {value!r}.")
+            if not knob['min']<=number<=knob['max'] or knob.get('integer') and number%1:
+                raise ValueError(f"{option} {name} is {'a whole' if knob.get('integer') else 'a'} "
+                                 f"number from {knob['min']:g} to {knob['max']:g}, not {value!r}.")
             if number==float(base):
                 continue
-            text=repr(number)
+            text=str(int(number)) if knob.get('integer') else repr(number)
         cvars[knob['cvar']]=text
     return cvars
 
@@ -1752,6 +1790,11 @@ def keyboard_cvars(keyboard):
     """The runtime cvars of a -Keyboard value, 'steer_attack=0.4,precision=0.6': the knobs that
     differ from the launchers' defaults."""
     return option_cvars(keyboard,KEYBOARD_KNOBS,'-Keyboard')
+
+def wheel_cvars(wheel):
+    """The runtime cvars of a -Wheel value, 'on=1,throttle_rest=-30000,shift_up=4': the knobs that
+    differ from the runtime's defaults."""
+    return option_cvars(wheel,WHEEL_KNOBS,'-Wheel')
 
 def present_settings(vsync,frame_rate,monitor):
     """Cvars, the race frame rate and a description of -VSync (docs/analysis/d3d-hle-n4.md 17.23).
@@ -1932,7 +1975,7 @@ def launch(root,single_tile=False,fixed_vblank=False,frame_rate=None,rov=False,
            quality=None,display=DEFAULT_DISPLAY,fullscreen=False,supersample=False,info=False,
            ao=False,shader_dev=False,texture_dump=None,texture_replace=None,msaa=False,
            native=None,msaa_samples=None,vsync=DEFAULT_VSYNC,pad=None,upscale=DEFAULT_UPSCALE,
-           keyboard=None,entry0=None):
+           keyboard=None,entry0=None,wheel=None):
     state = json.loads((root/'local.json').read_text())
     disc1,disc2 = validate_discs(state['disc1'],state['disc2'])
     report=json.loads((root/'build-result.json').read_text())
@@ -1951,7 +1994,7 @@ def launch(root,single_tile=False,fixed_vblank=False,frame_rate=None,rov=False,
         supersample=supersample,info=info,ao=ao,shader_dev=shader_dev,texture_dump=texture_dump,
         texture_replace=texture_replace,msaa=msaa,content_manifest=manifest,native=native,
         msaa_samples=msaa_samples,vsync=vsync,pad=pad,upscale=upscale,keyboard=keyboard,
-        entry0=entry0)
+        entry0=entry0,wheel=wheel)
     print(description)
     if texture_dump:
         print(f'Texture dump: {cvars["texture_dump_path"]}')
@@ -1967,7 +2010,8 @@ def launch_plan(root,disc1,single_tile=False,fixed_vblank=False,frame_rate=None,
                 quality=None,display=DEFAULT_DISPLAY,fullscreen=False,supersample=False,info=False,
                 ao=False,shader_dev=False,texture_dump=None,texture_replace=None,msaa=False,
                 content_manifest=None,monitor=None,native=None,msaa_samples=None,
-                vsync=DEFAULT_VSYNC,pad=None,upscale=DEFAULT_UPSCALE,keyboard=None,entry0=None):
+                vsync=DEFAULT_VSYNC,pad=None,upscale=DEFAULT_UPSCALE,keyboard=None,entry0=None,
+                wheel=None):
     """The cvars, the FM4_ environment and the display description of a run of the options of
     launch. The GUI launcher (work/fm4-launcher, plan.cpp) ports this function; launcher_tests
     compares the two. monitor: the primary monitor's (width, height, DPI scale, refresh Hz, VRR
@@ -1976,7 +2020,7 @@ def launch_plan(root,disc1,single_tile=False,fixed_vblank=False,frame_rate=None,
     GPUs only since 24 October 2026, d3d-hle-n4.md 17.25; on every computer by the main
     session's decision of 26 October 2026, docs/analysis/native-default.md). pad:
     the -Pad value (PAD_KNOBS). upscale: the -Upscale mode (upscale_settings). keyboard: the
-    -Keyboard value (KEYBOARD_KNOBS)."""
+    -Keyboard value (KEYBOARD_KNOBS). wheel: the -Wheel value (WHEEL_KNOBS)."""
     monitor=monitor or primary_monitor()
     if native is None:
         native=not rov and not msaa
@@ -2083,9 +2127,10 @@ def launch_plan(root,disc1,single_tile=False,fixed_vblank=False,frame_rate=None,
         cvars['texture_replace_path']=Path(texture_replace).resolve()
     if content_manifest:
         env['FM4_CONTENT_MANIFEST']=str(content_manifest)
-    # The physical controller's options, and the keyboard's.
+    # The physical controller's options, the keyboard's and the racing wheel's.
     cvars.update(pad_cvars(pad))
     cvars.update(keyboard_cvars(keyboard))
+    cvars.update(wheel_cvars(wheel))
     # The settings overlay: F2 in game, shown at start with -Info.
     env['FM4_INFO']=info_overlay(cvars,env,look,quality,description)
     if info:
@@ -2123,6 +2168,7 @@ def launcher_data():
             'vsync':{'modes':list(VSYNC_MODES),'default':DEFAULT_VSYNC},
             'upscale':{'modes':UPSCALE_MODES,'default':DEFAULT_UPSCALE},
             'pad':{'knobs':PAD_KNOBS},'keyboard':{'knobs':KEYBOARD_KNOBS},
+            'wheel':{'knobs':WHEEL_KNOBS},
             'gtao':passes_settings(PASSES_DIRECTORY,{}),
             'releases':{name:{'media_id':info['media_id'],'executables':info['executables']}
                         for name,info in RELEASES.items()},
@@ -2216,6 +2262,13 @@ def launcher_test_options(root):
                         'precision=0.6,title_deadzones=0','frame_rate':240},
             {'keyboard':'mouse_steering=1,mouse_steer_sensitivity=2.5,mouse_steer_centering=0,'
                         'smooth=1,steer_attack=0.3','pad':'rumble=1.5'},
+            {'wheel':'on=1'},
+            {'wheel':'on=1,steer_axis=0,steer_range=1080,steer_lock=540,steer_invert=1,'
+                     'throttle_axis=2,throttle_rest=32767,throttle_pressed=-31000,'
+                     'throttle_deadzone=0.03,throttle_gamma=1.5,brake_axis=-1,clutch_axis=3,'
+                     'shift_up=4,shift_down=5,clutch_button=-1,handbrake_button=12,ffb_cap=0.4,'
+                     'ffb_gain=1.25,ffb_invert=1','frame_rate':240},
+            {'wheel':'on=0,input=0,brake_axis=2,ffb_cap=0.25','pad':'rumble=1.5'},
             {'native':True,'frame_rate':240,'vsync':'off'},
             {'native':False},
             {'msaa':True},
@@ -2435,6 +2488,9 @@ def main():
     parser.add_argument('--keyboard',
                         help="run: the keyboard's steering and pedal model as knobs, for example "
                              "'steer_attack=0.4,precision=0.6' (KEYBOARD_KNOBS)")
+    parser.add_argument('--wheel',
+                        help="run: the racing wheel as knobs, for example "
+                             "'on=1,throttle_rest=-30000,shift_up=4' (WHEEL_KNOBS)")
     parser.add_argument('--vsync',choices=VSYNC_MODES,default=DEFAULT_VSYNC,
                         help='run: auto (default: on a VRR display, tearing presents held a refresh '
                              'apart and races under the refresh; else on), on (the refresh, no '
@@ -2524,7 +2580,7 @@ def main():
                                      args.fullscreen,args.supersample,args.info,args.ao,
                                      args.shader_dev,args.texture_dump,args.texture_replace,args.msaa,
                                      args.native,args.msaa_samples,args.vsync,args.pad,
-                                     args.upscale,args.keyboard,args.entry0)
+                                     args.upscale,args.keyboard,args.entry0,args.wheel)
     if args.action=='warmcache': warm_cache(root)
     if args.action=='profbuild': build_profiling(root,fxc,args.jobs)
     if args.action=='export':

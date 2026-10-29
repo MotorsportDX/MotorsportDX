@@ -17,6 +17,7 @@ Json OptionsToJson(const Options& o) {
               {"entry0", o.entry0},
               {"pad", o.pad},
               {"keyboard", o.keyboard},
+              {"wheel", o.wheel},
               {"quality", o.quality},
               {"look", o.look},
               {"msaa", o.msaa},
@@ -59,6 +60,7 @@ Options OptionsFromJson(const Json& json) {
   get("entry0", o.entry0);
   get("pad", o.pad);
   get("keyboard", o.keyboard);
+  get("wheel", o.wheel);
   get("quality", o.quality);
   get("look", o.look);
   get("msaa", o.msaa);

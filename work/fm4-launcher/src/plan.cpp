@@ -574,16 +574,18 @@ Pairs OptionCvars(const Json& table, const std::string& text, const std::string&
       text = boolean ? (value == "1" ? "true" : "false") : value;
     } else {
       const double low = knob.at("min").get<double>(), high = knob.at("max").get<double>();
+      const bool integer = knob.contains("integer") && knob.at("integer").get<bool>();
       double number = std::nan("");
       try {
         number = PyFloat(value);
       } catch (const PlanError&) {
       }
-      if (!(low <= number && number <= high))
-        throw PlanError(option + " " + name + " is a number from " + PyG(low) + " to " +
-                        PyG(high) + ", not '" + value + "'.");
+      if (!(low <= number && number <= high) || (integer && std::fmod(number, 1.0) != 0.0))
+        throw PlanError(option + " " + name + " is " + (integer ? "a whole" : "a") +
+                        " number from " + PyG(low) + " to " + PyG(high) + ", not '" + value +
+                        "'.");
       if (number == PyFloat(fallback)) continue;
-      text = PyRepr(number);
+      text = integer ? std::to_string(static_cast<long long>(number)) : PyRepr(number);
     }
     cvars.Set(cvar, text);
   }
@@ -606,6 +608,14 @@ Pairs KeyboardKnobs(const LauncherData& data, const std::string& keyboard) {
 
 Pairs KeyboardCvars(const LauncherData& data, const std::string& keyboard) {
   return OptionCvars(data.json.at("keyboard").at("knobs"), keyboard, "-Keyboard");
+}
+
+Pairs WheelKnobs(const LauncherData& data, const std::string& wheel) {
+  return OptionKnobs(data.json.at("wheel").at("knobs"), wheel, "-Wheel");
+}
+
+Pairs WheelCvars(const LauncherData& data, const std::string& wheel) {
+  return OptionCvars(data.json.at("wheel").at("knobs"), wheel, "-Wheel");
 }
 
 bool TaaEnabled(const Pairs& knobs) {
@@ -1088,9 +1098,10 @@ Plan LaunchPlan(const LauncherData& data, const std::string& root, const std::st
     cvars.Set("texture_replace_path", ResolvePath(options.texture_replace));
   }
   if (!content_manifest.empty()) env.Set("FM4_CONTENT_MANIFEST", content_manifest);
-  // The physical controller's options, and the keyboard's.
+  // The physical controller's options, the keyboard's and the racing wheel's.
   Update(cvars, PadCvars(data, options.pad));
   Update(cvars, KeyboardCvars(data, options.keyboard));
+  Update(cvars, WheelCvars(data, options.wheel));
   env.Set("FM4_INFO", InfoOverlay(data, cvars, env, look, quality, plan.description));
   if (options.info) env.Set("FM4_INFO_SHOW", "1");
   return plan;

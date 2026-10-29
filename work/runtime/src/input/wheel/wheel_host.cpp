@@ -540,6 +540,35 @@ void WheelHost::SendForces(double now_s, double constant, double spring) {
   }
 }
 
+void WheelHost::UpdateControls() {
+  if (!device_) {
+    if (controls_.connected) {
+      // The press counters stay, so a reconnect does not shift.
+      Controls closed;
+      closed.shift_up_presses = controls_.shift_up_presses;
+      closed.shift_down_presses = controls_.shift_down_presses;
+      controls_ = closed;
+      if (options_.on_controls) {
+        options_.on_controls(controls_);
+      }
+    }
+    return;
+  }
+  SDL_Joystick* joystick = device_->joystick;
+  axes_.resize(size_t(std::max(0, SDL_GetNumJoystickAxes(joystick))));
+  for (size_t i = 0; i < axes_.size(); ++i) {
+    axes_[i] = SDL_GetJoystickAxis(joystick, int(i));
+  }
+  buttons_.resize(size_t(std::max(0, SDL_GetNumJoystickButtons(joystick))));
+  for (size_t i = 0; i < buttons_.size(); ++i) {
+    buttons_[i] = SDL_GetJoystickButton(joystick, int(i)) ? 1 : 0;
+  }
+  controls_ = MapControls(options_.mapping, axes_, buttons_, controls_);
+  if (options_.on_controls) {
+    options_.on_controls(controls_);
+  }
+}
+
 void WheelHost::Run() {
 #if defined(_WIN32)
   // DirectInput's effect calls are COM calls.
@@ -634,6 +663,8 @@ void WheelHost::Run() {
       }
     }
 
+    UpdateControls();
+
     const double constant = governor_.Step(now_s);
     const double spring = governor_.ConditionLevel(spring_request);
     SendForces(now_s, constant, spring);
@@ -659,6 +690,7 @@ void WheelHost::Run() {
       snapshot_.send_us_max = send_us_max_;
       snapshot_.tick_ms_mean = ticks ? tick_sum_ms / double(ticks) : 0.0;
       snapshot_.tick_ms_max = tick_max_ms;
+      snapshot_.controls = controls_;
       if (device_) {
         SDL_Joystick* joystick = device_->joystick;
         snapshot_.axes.resize(size_t(std::max(0, SDL_GetNumJoystickAxes(joystick))));
@@ -690,6 +722,7 @@ void WheelHost::Run() {
   governor_.Step(Seconds(SDL_GetTicksNS()));
   SendForces(Seconds(SDL_GetTicksNS()), 0.0, 0.0);
   CloseDevice();
+  UpdateControls();
   {
     std::lock_guard lock(snapshot_mutex_);
     snapshot_.output = 0.0;

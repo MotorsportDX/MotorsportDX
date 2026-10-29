@@ -131,6 +131,10 @@ class SDLInputDriver final : public InputDriver, public rex::ui::WindowListener 
   // wheel: the racing wheel's host (rex/input/wheel/wheel_host.h), on the UI thread.
   void StartWheel();
   void StopWheel();
+  // wheel_virtual: an SDL virtual wheel driven by a script, for checks without hardware.
+  struct VirtualWheel;
+  void StartVirtualWheel();
+  void StopVirtualWheel();
 
   rex::ui::Window* attached_window_ = nullptr;
   bool sdl_events_initialized_;
@@ -164,6 +168,7 @@ class SDLInputDriver final : public InputDriver, public rex::ui::WindowListener 
   std::unique_ptr<rex::input::wheel::WheelHost> wheel_;
   // The SDL subsystems StartWheel started (SDL_INIT_JOYSTICK, SDL_INIT_HAPTIC).
   SDL_InitFlags wheel_subsystems_ = 0;
+  std::unique_ptr<VirtualWheel> virtual_wheel_;
 };
 
 }  // namespace rex::input::sdl
