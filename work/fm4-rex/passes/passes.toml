@@ -290,10 +290,11 @@ format = "R8G8_UNORM"
 slot = 2
 clear = true
 
-# The aerial haze's amount at each scene pixel, 0 to 1 (haze.hlsl), in the
-# scene's layout; the final combine reads it (fm4_post_haze).
+# The aerial haze's amount at each scene pixel, 0 to 1, and the near field's
+# weight for the look's white balance (haze.hlsl), in the scene's layout; the
+# final combine reads it (fm4_post_haze).
 [textures.haze_amount]
-format = "R8_UNORM"
+format = "R8G8_UNORM"
 slot = 3
 clear = true
 

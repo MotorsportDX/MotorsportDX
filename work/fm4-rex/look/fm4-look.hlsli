@@ -31,8 +31,10 @@
 //                                param is the strength; 0: off)
 //   FM4_LOOK_HAZE_BRIGHTNESS >= 0 the haze's brightness in units of 2 stops above the
 //                                game's middle gray (1)
-//   FM4_LOOK_TEMPERATURE  -1...1 white balance of the final image: above 0 warmer, below 0
-//                                cooler; 1 raises red over blue by about 1.27 (0: original)
+//   FM4_LOOK_TEMPERATURE  -1...1 white balance: above 0 warmer, below 0 cooler; 1 raises red
+//                                over blue by about 1.27 (0: original). Of the final image, or
+//                                with FM4_LOOK_HAZE of the scene's near field before the haze
+//                                mix, so the distance and the sky keep the haze's color
 //   FM4_LOOK_BLOOM_WIDTH  >= 0   a wide halo of the bloom texture (two rings of taps 3% and
 //                                6% of the screen's width out) added to the bloom, in units of
 //                                its own energy (0: off)
@@ -214,29 +216,43 @@ float3 fm4_filmic_inverse(float3 y, float4 ab, float4 cdef) {
   return max(x, 0.0);
 }
 
-// The post passes' haze amount at a scene coordinate, 0 (none) to 1 (haze.hlsl): by its name
-// for a native shader contract entry that declares it, else by its slot.
-float fm4_post_haze(float2 uv) {
+// The post passes' haze at a scene coordinate (haze.hlsl): x the amount, 0 (none) to 1, y the
+// near field's weight, 1 near and 0 on the sky; by its name for a native shader contract entry
+// that declares it, else by its slot.
+float2 fm4_post_haze(float2 uv) {
 #ifdef XE_SRV_HAZE_AMOUNT
-  return xe_srv_haze_amount(uv).x;
+  return xe_srv_haze_amount(uv).xy;
 #else
-  return xe_post_texture(3u, uv).x;
+  return xe_post_texture(3u, uv).xy;
 #endif
+}
+
+// FM4_LOOK_TEMPERATURE on linear color: red up and blue down by 12% at 1, the luminance kept.
+float3 fm4_white_balance(float3 linear_color) {
+  float t = clamp(FM4_LOOK_TEMPERATURE, -1.0, 1.0) * 0.12;
+  float3 balanced = linear_color * float3(1.0 + t, 1.0, 1.0 - t);
+  float3 weights = float3(0.2126, 0.7152, 0.0722);
+  return balanced * (dot(linear_color, weights) / max(dot(balanced, weights), 1.0e-6));
 }
 
 // FM4_LOOK_HAZE: the scene (gamma 2) at the pixel mixed in linear terms toward the haze, a pale
 // blue-gray with the luminance of FM4_LOOK_HAZE_BRIGHTNESS times 2 stops above the game's
-// middle gray after the exposure, by the post passes' haze amount. ab and cdef are the shader's
+// middle gray after the exposure, by the post passes' haze amount; before it the white balance
+// (FM4_LOOK_TEMPERATURE) warms the near field by its weight. ab and cdef are the shader's
 // filmic constants (the game's middle gray).
 float4 fm4_haze(float4 scene, float2 uv, float4 ab, float4 cdef) {
   if (FM4_LOOK_HAZE <= 0.0) {
     return scene;
   }
-  float amount = fm4_post_haze(uv);
+  float2 post = fm4_post_haze(uv);
   float gray = fm4_filmic_inverse((0.18 * fm4_white_filmic).xxx, ab, cdef).x;
   float3 haze = float3(0.80, 0.87, 1.0) / 0.8645 *
                 (4.0 * max(FM4_LOOK_HAZE_BRIGHTNESS, 0.0) * gray / max(fm4_exposure_scale, 1.0e-6));
-  return float4(sqrt(lerp(scene.rgb * scene.rgb, haze, amount)), scene.a);
+  float3 linear_scene = scene.rgb * scene.rgb;
+  if (FM4_LOOK_TEMPERATURE != 0.0) {
+    linear_scene = lerp(linear_scene, fm4_white_balance(linear_scene), post.y);
+  }
+  return float4(sqrt(lerp(linear_scene, haze, post.x)), scene.a);
 }
 
 // GT tone curve (Hajime Uchimura, CEDEC 2017): a power toe, a linear middle and
@@ -394,14 +410,9 @@ float3 fm4_hdr_probe() {
 // White balance, saturation and contrast of the final image (gamma 2, 0...1).
 void fm4_grade(inout XePixel p) {
   float3 color = p.color[0].rgb;
-  if (FM4_LOOK_TEMPERATURE != 0.0) {
-    // Red up and blue down by 12% at 1, the luminance kept.
-    float3 linear_color = color * color;
-    float t = clamp(FM4_LOOK_TEMPERATURE, -1.0, 1.0) * 0.12;
-    float3 balanced = linear_color * float3(1.0 + t, 1.0, 1.0 - t);
-    float3 weights = float3(0.2126, 0.7152, 0.0722);
-    balanced *= dot(linear_color, weights) / max(dot(balanced, weights), 1.0e-6);
-    color = sqrt(saturate(balanced));
+  if (FM4_LOOK_TEMPERATURE != 0.0 && FM4_LOOK_HAZE <= 0.0) {
+    // With the haze, fm4_haze applies it to the scene's near field instead.
+    color = sqrt(saturate(fm4_white_balance(color * color)));
   }
   if (FM4_LOOK_SATURATION != 1.0) {
     float3 linear_color = color * color;

@@ -168,5 +168,25 @@ The references' sky (GT7, cmp-05 and gt7-13): hue 216 and 217 degrees, saturatio
 
 The round's short check on `c737653` (snapshot `lkc3`): the build's tests pass, `fm4_look_tonemap_tests` among them, and a career at 3/2 per preset ends with exit 0, main's four log errors and no FXC error.
 
-Decision (the main session's): pending.
+Decision (the main session's, 29 October 2026): the GT7 operator and its port are accepted as they are. The clipping of `gt7` is accepted: its exposure stays -0.2 with `contrast=0.15`, the sun's specular reflections (the sheen on the asphalt and the glints) count as the sun, as GT7 itself leaves sunny scenes bright, and the 0.18% elsewhere is under the rule; `exposure=-0.5` is not to come back. No artefact was found, and the GPU cost of both presets is within the runs' spread. One final round with two changes, then both presets lock: a deeper sky for `gt7`, and the warmth of `fm2023` on the sunlit near field rather than the sky and the haze (section 8).
+
+## 8. Final round: the GT7 sky and the FM2023 warmth, 29 October 2026
+
+- **The GT7 sky.** The references' sky is a clearly deeper blue than `gt7`'s of round 3 (a saturation of 0.46 against 0.288), the most visible GT7 trait on the board. The sky knob of the look (`sky_saturation`, on the sky dome's texture, `fm4-nature.hlsli`) goes from 1.15 to 1.5, aiming at 0.35 or more on the Bernese Alps with the hue between 210 and 220 degrees. 1.8 reached 0.416 just as cleanly, but tints the clouds more.
+- **The FM2023 warmth.** Round 3 applied `temperature` to the final image, the sky included, so `fm2023`'s sky on Maple Valley read cream (a hue of 98.5 degrees, R/B 1.01), while the references' FM2023 sky is a pale blue (cmp-04, fm23-02). The haze pass now writes a second channel, the near field's weight exp(-max(d - 30 m, 0) / 800 m), 0 on the sky, and with `haze` above 0 the white balance warms the scene by that weight before the haze mix, so the distance and the sky keep the haze's pale blue-gray. A look with `temperature` and no haze keeps the white balance of the final image. With the sky no longer carrying warmth, the near field takes more: `temperature` 0.45 to 0.7, and `saturation` 0.95 to 1.05 against the deeper `gt7` sky.
+
+Runs `lk14` to `lk18` (snapshot `lkc3`, chase camera, 2x), the same regions as section 7:
+
+| Track | Look | spread | sat | R/B | sky hue | sky sat | far RMS |
+| --- | --- | --- | --- | --- | --- | --- | --- |
+| Bernese Alps | `aces` | 0.797 | 0.341 | 0.939 | 209.7 | 0.194 | 0.314 |
+| | `gt7` (`sky_saturation=1.5`) | 0.810 | 0.354 | 0.785 | 214.2 | 0.355 | 0.351 |
+| | `fm2023` | 0.749 | 0.275 | 1.006 | 211.3 | 0.176 | 0.258 |
+| Maple Valley | `aces` | 0.893 | 0.185 | 1.101 | 196.0 | 0.075 | 0.360 |
+| | `gt7` | 0.955 | 0.206 | 0.963 | 212.8 | 0.232 | 0.465 |
+| | `fm2023` | 0.871 | 0.197 | 1.166 | 199.9 | 0.069 | 0.221 |
+
+- **`gt7`**: the sky's saturation is 0.355 on the Bernese Alps (0.288 before; `sky_saturation=1.8` gave 0.416) and 0.232 on Maple Valley (0.169), its hue 214.2 and 212.8 degrees, no cyan shift; with a contrast stretch of six times the sky shows no bands. A cloud region (x 0.385 to 0.42, y 0.07 to 0.11) keeps its brightness (a mean of 0.815 against 0.814) and takes a faint blue: a saturation of 0.102 against 0.080 (`aces` 0.044, 1.8 gives 0.121). The rest of the frame is unchanged (spread 0.810 and 0.955, clipped as in section 7).
+- **`fm2023`** against `gt7`, the mean of the two tracks (the Bernese Alps, Maple Valley): R/B 1.246 (1.282, 1.211; target 1.26, -1.1%), saturation 0.867 (0.777, 0.956; target 0.86, +0.8%), spread 0.919 (0.925, 0.912; target 0.90, +2.1%). The sky on Maple Valley is a pale blue-gray (hue 199.9 degrees, R/B 0.887; cream before), on the Bernese Alps a pale blue (211.3 degrees); the far field's RMS contrast is 18% and 39% below `aces`'. Other candidates: `saturation=1.1,temperature=0.7` made the saturation 0.896 (+4.2%), `saturation=1.02,temperature=0.8` the Bernese R/B 1.297.
+- Both presets lock with these values (the main session's decision).
 
