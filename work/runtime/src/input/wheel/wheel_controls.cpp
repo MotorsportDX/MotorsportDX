@@ -1,6 +1,6 @@
 /**
  * @file        input/wheel/wheel_controls.cpp
- * @brief       The racing wheel's driving controls, published for a title integration
+ * @brief       The racing wheel's exchange with a title integration
  */
 #include <rex/input/wheel/wheel_controls.h>
 
@@ -13,6 +13,8 @@ namespace {
 struct Store {
   std::mutex mutex;
   Controls controls;
+  ForceSample forces;
+  uint64_t forces_sequence = 0;
 };
 
 Store& GetStore() {
@@ -33,6 +35,20 @@ bool GetControls(Controls* out) {
   std::lock_guard lock(store.mutex);
   *out = store.controls;
   return out->connected;
+}
+
+void PublishForces(const ForceSample& sample) {
+  Store& store = GetStore();
+  std::lock_guard lock(store.mutex);
+  store.forces = sample;
+  ++store.forces_sequence;
+}
+
+uint64_t GetForces(ForceSample* out) {
+  Store& store = GetStore();
+  std::lock_guard lock(store.mutex);
+  *out = store.forces;
+  return store.forces_sequence;
 }
 
 }  // namespace rex::input::wheel

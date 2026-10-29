@@ -48,6 +48,31 @@
 // FM4_WHEEL_MODE=<0|1|2> sets the record's wheel mode byte (+0x17) when the wheel's steering
 // drives it (otherwise 2), and cycle:<s> steps it through 0, 1 and 2 every s seconds of session
 // time: for the traced runs that compare the title's steering filters per mode.
+//
+// Force feedback (stage 3). For each player's car the control step reads the steering torque
+// (CCarDynamics slot 254), the speed and a load-weighted rear slip, zeroes the torque unless the
+// player drives the car (the car's +0x38F8 clear and sub_822B7130 false: not the AI, not a
+// replay), and hands the three to the pad's force feedback block (pad + 0x1090) through
+// sub_8239E600, a tail call of sub_828C3330. sub_828C3330 stores the dynamic force,
+// clamp(DynFFBScale x torque, +-min(DynFFBMaxForce, 1)), at +0x538, and the spring's scale, a
+// speed curve times a rear slip curve, at +0x540. The control step then stores whether the
+// player drives (sub_823921F8, the block's +5) for the title's own device update, which sends
+// no force without it. The block also holds ControllerFFB.ini (sub_828C2CD8: the damper at
+// +0x20, the spring at +0x2C, scale then maximum force) and ForceFeedbackScale at +0x53C, which
+// scales every effect (sub_828C34E0). Here the hook of sub_828C3330 takes the block's results and
+// the hook of the flag's store publishes them for the first player's pad, scaled as the title
+// scales its effects: the constant force +0x538 x ForceFeedbackScale, the spring's coefficient
+// and saturation SpringScale and SpringMaxForce x ForceFeedbackScale x the spring's scale, the
+// damper's DamperScale and DamperMaxForce x ForceFeedbackScale. A race update whose control step
+// finds no player's pad, or that skips the control step, resets the force feedback blocks
+// (sub_828C5B18): that publishes a sample outside a driven race, which zeroes the force at once.
+// A race update that stops (pause, menus, loading) publishes nothing, and the host's watchdog
+// takes the force to zero.
+//
+// FM4_WHEEL_TRACE_FILE also gets, per sample:
+//   ffb <ms> u=<updates> drv=<0|1> torque=<t> speed=<v> slip=<s> force=<+0x538> ffs=<+0x53C>
+//       sscale=<+0x540> const=<c> spring=<coefficient>/<saturation> damper=<c>/<s>
+//   ffb <ms> u=<updates> reset   a reset of the blocks (once per run of resets)
 #include <rex/hook.h>
 #include <rex/input/wheel/wheel_controls.h>
 #include <rex/memory.h>
@@ -74,6 +99,9 @@ REX_EXTERN(__imp__sub_823651D8);
 REX_EXTERN(__imp__sub_823B1560);
 REX_EXTERN(__imp__sub_823B1648);
 REX_EXTERN(__imp__sub_822E6B30);
+REX_EXTERN(__imp__sub_828C3330);
+REX_EXTERN(__imp__sub_823921F8);
+REX_EXTERN(__imp__sub_828C5B18);
 
 namespace {
 
@@ -94,6 +122,18 @@ constexpr uint8_t kWheelMode = 2;
 // GameSettings' CheatDetection object (stage 1 findings): FrameAnalogInputThreshold at +0x18.
 constexpr uint32_t kCheatSettings = 0x82DC372C;
 constexpr double kTitleFrameRate = 60.0;
+// The pad's force feedback block and its fields (stage 3).
+constexpr uint32_t kForceBlock = 0x1090;
+constexpr uint32_t kDamperScale = 0x20;
+constexpr uint32_t kDamperMaxForce = 0x24;
+constexpr uint32_t kSpringScale = 0x2C;
+constexpr uint32_t kSpringMaxForce = 0x30;
+constexpr uint32_t kDynamicForce = 0x538;
+constexpr uint32_t kForceFeedbackScale = 0x53C;
+constexpr uint32_t kSpringSpeedSlipScale = 0x540;
+// sub_826D5E78's return address from storing whether the player drives (sub_823921F8), right
+// after the force feedback block's update.
+constexpr uint32_t kDrivingSet = 0x826D6788;
 
 uint32_t Load32(uint8_t* base, uint32_t address) {
   return rex::memory::load_and_swap<uint32_t>(base + address);
@@ -345,4 +385,70 @@ REX_HOOK_RAW(sub_822E6B30) {
               ctx.f2.f64);
   }
   __imp__sub_822E6B30(ctx, base);
+}
+
+namespace {
+
+// The force feedback block's results of this car, until the flag's store publishes them.
+thread_local uint32_t pending_block = 0;
+thread_local rex::input::wheel::ForceSample pending_sample;
+std::atomic<bool> reset_traced{false};
+
+double Unit(double value) { return std::isfinite(value) ? std::clamp(value, 0.0, 1.0) : 0.0; }
+
+}  // namespace
+
+// The force feedback block's update (r3 = the block, r4 = torque, speed and rear slip).
+REX_HOOK_RAW(sub_828C3330) {
+  const uint32_t block = ctx.r3.u32, in = ctx.r4.u32;
+  __imp__sub_828C3330(ctx, base);
+  rex::input::wheel::ForceSample& sample = pending_sample;
+  const double scale = Unit(LoadFloat(base, block + kForceFeedbackScale));
+  const double spring_scale = Unit(LoadFloat(base, block + kSpringSpeedSlipScale));
+  const double force = LoadFloat(base, block + kDynamicForce);
+  sample.constant = std::isfinite(force) ? std::clamp(force, -1.0, 1.0) * scale : 0.0;
+  sample.spring = {Unit(LoadFloat(base, block + kSpringScale) * scale) * spring_scale,
+                   Unit(LoadFloat(base, block + kSpringMaxForce) * scale) * spring_scale};
+  sample.damper = {Unit(LoadFloat(base, block + kDamperScale) * scale),
+                   Unit(LoadFloat(base, block + kDamperMaxForce) * scale)};
+  sample.torque = LoadFloat(base, in);
+  sample.speed = LoadFloat(base, in + 4);
+  sample.slip = LoadFloat(base, in + 8);
+  pending_block = block;
+}
+
+// The store of whether the player drives the car (r3 = the pad, r4 = the flag).
+REX_HOOK_RAW(sub_823921F8) {
+  const uint32_t from = uint32_t(ctx.lr);
+  const uint32_t pad = ctx.r3.u32;
+  const bool driving = ctx.r4.u8 != 0;
+  __imp__sub_823921F8(ctx, base);
+  if (from != kDrivingSet) return;
+  const uint32_t block = pending_block;
+  pending_block = 0;
+  if (!pad || block != pad + kForceBlock || (Load32(base, pad) & 0xFF) != kWheelUser) return;
+  rex::input::wheel::ForceSample& sample = pending_sample;
+  sample.driving = driving;
+  rex::input::wheel::PublishForces(sample);
+  reset_traced.store(false, std::memory_order_relaxed);
+  if (Trace()) {
+    TraceLine("ffb %.2f u=%u drv=%d torque=%.6f speed=%.4f slip=%.4f force=%.6f ffs=%.4f "
+              "sscale=%.4f const=%.6f spring=%.4f/%.4f damper=%.4f/%.4f",
+              SteadyMs(), fm4_diagnostic_updates.load(std::memory_order_relaxed), driving ? 1 : 0,
+              sample.torque, sample.speed, sample.slip, LoadFloat(base, block + kDynamicForce),
+              LoadFloat(base, block + kForceFeedbackScale),
+              LoadFloat(base, block + kSpringSpeedSlipScale), sample.constant,
+              sample.spring.coefficient, sample.spring.saturation, sample.damper.coefficient,
+              sample.damper.saturation);
+  }
+}
+
+// The reset of the force feedback blocks: a race update without a player's control.
+REX_HOOK_RAW(sub_828C5B18) {
+  __imp__sub_828C5B18(ctx, base);
+  rex::input::wheel::PublishForces({});
+  if (Trace() && !reset_traced.exchange(true, std::memory_order_relaxed)) {
+    TraceLine("ffb %.2f u=%u reset", SteadyMs(),
+              fm4_diagnostic_updates.load(std::memory_order_relaxed));
+  }
 }

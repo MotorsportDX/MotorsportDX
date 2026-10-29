@@ -9,6 +9,16 @@
  *
  * Forces are fractions of the device's full scale, -1..1 (SDL's constant
  * force level / 32767). Time is in seconds on any monotonic clock.
+ *
+ * A source submits a constant force and, optionally, two condition effects
+ * that the firmware runs (a centring spring and a damper). The cap bounds
+ * their sum: the constant force plus the conditions' saturations, the most
+ * force the firmware can apply at once. The conditions take at most a share of
+ * the cap (both shrink by the same factor beyond it), and the constant force
+ * gets the rest. While a condition's level moves, it is passed on only in
+ * steps of at least 0.002 (and exactly once it settles), so a device update
+ * follows only a real change, and the bound holds for the levels the device
+ * actually has.
  */
 
 #pragma once
@@ -37,6 +47,24 @@ struct GovernorConfig {
   // The longest tick the slew limit accounts for, so a stalled force thread
   // cannot jump on its next tick.
   double max_tick_s = 0.01;
+  // The smallest constant force sent while the source asks for any, a fraction of full scale
+  // after the gain: lifts small forces above a wheel's own friction. Below 2% of full scale the
+  // force rises linearly to it, so the force stays continuous through zero.
+  double min_force = 0.0;
+  // The time constant of a low-pass on the source's constant force (0: none): smooths the steps
+  // of a source that changes once a frame.
+  double smoothing_s = 0.0;
+  // The largest share of the cap the condition effects take together; the constant force has
+  // at least the rest.
+  double condition_share = 0.5;
+};
+
+// A condition effect the firmware runs, as fractions of full scale: the coefficient (force per
+// unit of position for a spring, of velocity for a damper) and the saturation (the most force
+// the effect applies).
+struct Condition {
+  double coefficient = 0.0;
+  double saturation = 0.0;
 };
 
 // The reasons the output is held at zero at once (no slew). Any set bit zeroes it.
@@ -66,11 +94,15 @@ class Governor {
   void Configure(const GovernorConfig& config) { config_ = Sanitize(config); }
   const GovernorConfig& config() const { return config_; }
 
-  // A new value from the force source. NaN, infinities and values outside
-  // -1..1 become zero (the title clamps its own torque to -1..1).
-  void Submit(double force, double now_s) {
+  // A new value from the force source: the constant force and the condition effects. NaN,
+  // infinities and values outside -1..1 (0..1 for the conditions) become zero (the title clamps
+  // its own torque to -1..1).
+  void Submit(double force, double now_s, const Condition& spring = {},
+              const Condition& damper = {}) {
     bad_value_ = !std::isfinite(force) || std::fabs(force) > 1.0;
     target_ = bad_value_ ? 0.0 : force;
+    spring_target_ = CleanCondition(spring);
+    damper_target_ = CleanCondition(damper);
     last_submit_s_ = now_s;
     has_submit_ = true;
   }
@@ -80,7 +112,7 @@ class Governor {
   }
   uint32_t blocked() const { return blocked_; }
 
-  // The output for this tick.
+  // The output for this tick: the constant force; spring() and damper() hold the conditions'.
   double Step(double now_s) {
     const double dt = has_tick_ ? std::clamp(now_s - last_tick_s_, 0.0, config_.max_tick_s) : 0.0;
     last_tick_s_ = now_s;
@@ -91,55 +123,73 @@ class Governor {
       // Removing force is always safe: zero at once, and ramp in again later.
       output_ = 0.0;
       envelope_ = 0.0;
+      filtered_ = 0.0;
+      spring_ = {};
+      damper_ = {};
       flags_ |= kFlagBlocked;
       return output_;
     }
 
     const bool stale = !has_submit_ || now_s - last_submit_s_ > config_.watchdog_s;
-    double wanted;
+    double wanted = 0.0;
+    Condition spring, damper;
     if (stale) {
       flags_ |= kFlagWatchdog;
-      wanted = 0.0;
       // The ramp starts over once values return.
       envelope_ = 0.0;
+      filtered_ = 0.0;
     } else {
       envelope_ = config_.ramp_s > 0.0 ? std::min(1.0, envelope_ + dt / config_.ramp_s) : 1.0;
       if (envelope_ < 1.0) {
         flags_ |= kFlagRamping;
       }
-      wanted = target_ * config_.gain * envelope_;
+      // The low-pass starts from zero after every zero state, as the force does.
+      if (config_.smoothing_s > 0.0) {
+        filtered_ += (target_ - filtered_) * (1.0 - std::exp(-dt / config_.smoothing_s));
+      } else {
+        filtered_ = target_;
+      }
+      wanted = MinForce(filtered_ * config_.gain) * envelope_;
+      spring = Scaled(spring_target_);
+      damper = Scaled(damper_target_);
     }
 
-    if (std::fabs(wanted) > config_.cap) {
-      wanted = std::copysign(config_.cap, wanted);
+    const double step = config_.slew_per_s * dt;
+    // The conditions first, within their share of the cap; they change at the slew limit, and
+    // only by a real step.
+    const double share = config_.cap * config_.condition_share;
+    const double conditions = spring.saturation + damper.saturation;
+    if (conditions > share) {
+      const double k = conditions > 0.0 ? share / conditions : 0.0;
+      spring = {spring.coefficient * k, spring.saturation * k};
+      damper = {damper.coefficient * k, damper.saturation * k};
       flags_ |= kFlagCapped;
     }
-    const double step = config_.slew_per_s * dt;
-    const double delta = wanted - output_;
-    if (std::fabs(delta) > step) {
-      output_ += std::copysign(step, delta);
-      flags_ |= kFlagSlewLimited;
-    } else {
-      output_ = wanted;
+    spring_ = Hold(spring_, spring, spring_wanted_, step);
+    damper_ = Hold(damper_, damper, damper_wanted_, step);
+    // The constant force gets what the conditions leave of the cap.
+    const double room = std::max(0.0, config_.cap - spring_.saturation - damper_.saturation);
+    if (std::fabs(wanted) > room) {
+      wanted = std::copysign(room, wanted);
+      flags_ |= kFlagCapped;
+    }
+    output_ = Slew(output_, wanted, step);
+    // Growing conditions leave less room at once: the force gives way by at most their step.
+    if (std::fabs(output_) > room) {
+      output_ = std::copysign(room, output_);
     }
     return output_;
   }
 
-  // The fraction of the ramp-in done, 0..1 (0 while blocked or stale). Condition
-  // effects that the firmware runs (spring, damper) scale by it too.
+  // The fraction of the ramp-in done, 0..1 (0 while blocked or stale).
   double envelope() const { return envelope_; }
   double output() const { return output_; }
   double target() const { return target_; }
+  // The condition effects for this tick: zero while blocked or stale, ramped in, scaled by the
+  // gain, inside the cap together with the constant force.
+  const Condition& spring() const { return spring_; }
+  const Condition& damper() const { return damper_; }
   uint32_t flags() const { return flags_; }
-
-  // A level for a condition effect (a spring's or damper's coefficient), bounded
-  // like the constant force: zero while blocked, ramped in, and capped.
-  double ConditionLevel(double requested) const {
-    if (blocked_ != kBlockNone || !std::isfinite(requested)) {
-      return 0.0;
-    }
-    return std::clamp(requested * config_.gain, 0.0, config_.cap) * envelope_;
-  }
 
   static GovernorConfig Sanitize(GovernorConfig config) {
     const auto finite_or = [](double value, double fallback) {
@@ -151,13 +201,82 @@ class Governor {
     config.ramp_s = std::clamp(finite_or(config.ramp_s, 1.5), 0.0, 10.0);
     config.watchdog_s = std::clamp(finite_or(config.watchdog_s, 0.05), 0.005, 1.0);
     config.max_tick_s = std::clamp(finite_or(config.max_tick_s, 0.01), 0.0001, 0.1);
+    config.min_force = std::clamp(finite_or(config.min_force, 0.0), 0.0, 0.5);
+    config.smoothing_s = std::clamp(finite_or(config.smoothing_s, 0.0), 0.0, 0.2);
+    config.condition_share = std::clamp(finite_or(config.condition_share, 0.5), 0.0, 1.0);
     return config;
   }
 
  private:
+  static constexpr double kMinForceKnee = 0.02;
+  // The smallest change of a condition's level that is passed on.
+  static constexpr double kConditionStep = 0.002;
+
+  Condition CleanCondition(const Condition& condition) {
+    const auto clean = [this](double value) {
+      if (!std::isfinite(value) || value < 0.0 || value > 1.0) {
+        bad_value_ = true;
+        return 0.0;
+      }
+      return value;
+    };
+    return {clean(condition.coefficient), clean(condition.saturation)};
+  }
+
+  Condition Scaled(const Condition& condition) const {
+    return {std::clamp(condition.coefficient * config_.gain, 0.0, 1.0) * envelope_,
+            std::clamp(condition.saturation * config_.gain, 0.0, 1.0) * envelope_};
+  }
+
+  double MinForce(double force) const {
+    const double m = config_.min_force;
+    const double magnitude = std::fabs(force);
+    if (m <= 0.0 || magnitude == 0.0) {
+      return force;
+    }
+    const double lifted = magnitude >= kMinForceKnee
+                              ? m + (1.0 - m) * magnitude
+                              : magnitude / kMinForceKnee * (m + (1.0 - m) * kMinForceKnee);
+    return std::copysign(lifted, force);
+  }
+
+  // The condition's next level: towards `wanted` at the slew limit; while `wanted` moves, only by
+  // a step of at least kConditionStep, and exactly once it holds still (`last` is the last tick's
+  // wanted level).
+  Condition Hold(const Condition& current, const Condition& wanted, Condition& last, double step) {
+    const bool still = wanted.coefficient == last.coefficient &&
+                       wanted.saturation == last.saturation;
+    last = wanted;
+    const Condition next{wanted.coefficient, Slew(current.saturation, wanted.saturation, step)};
+    if (next.coefficient == 0.0 || next.saturation == 0.0) {
+      return {};
+    }
+    if (still || std::fabs(next.coefficient - current.coefficient) >= kConditionStep ||
+        std::fabs(next.saturation - current.saturation) >= kConditionStep) {
+      return next;
+    }
+    return current;
+  }
+
+  double Slew(double from, double to, double step) {
+    const double delta = to - from;
+    if (std::fabs(delta) > step) {
+      flags_ |= kFlagSlewLimited;
+      return from + std::copysign(step, delta);
+    }
+    return to;
+  }
+
   GovernorConfig config_;
   double target_ = 0.0;
+  double filtered_ = 0.0;
+  Condition spring_target_;
+  Condition damper_target_;
   double output_ = 0.0;
+  Condition spring_;
+  Condition damper_;
+  Condition spring_wanted_;
+  Condition damper_wanted_;
   double envelope_ = 0.0;
   double last_submit_s_ = 0.0;
   double last_tick_s_ = 0.0;

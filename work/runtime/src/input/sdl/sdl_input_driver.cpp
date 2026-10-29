@@ -87,7 +87,7 @@ REXCVAR_DEFINE_STRING(pad_left_paddle2, "a", "Input",
 REXCVAR_DEFINE_BOOL(wheel, false, "Input",
                     "Racing wheel (docs/analysis/racing-wheels.md): read a wheel through SDL's "
                     "joystick API, drive the car with it (wheel_input) and run its force "
-                    "feedback host; the game sends no force yet, so the force stays zero");
+                    "feedback from the game's steering torque");
 REXCVAR_DEFINE_BOOL(wheel_input, true, "Input",
                     "Racing wheel: its steering, pedals and buttons drive the car of the first "
                     "player, beside the pad");
@@ -170,7 +170,8 @@ REXCVAR_DEFINE_STRING(wheel_name, "", "Input",
                       "first wheel, else the first joystick that is not a gamepad)");
 REXCVAR_DEFINE_STRING(wheel_ffb_sink, "device", "Input",
                       "Racing wheel force feedback: device (the wheel, through SDL's haptic API) "
-                      "or record (no force reaches any device; with wheel_ffb_record)");
+                      "or record (no force reaches any device, so the window's focus does not "
+                      "stop it; with wheel_ffb_record)");
 REXCVAR_DEFINE_STRING(wheel_ffb_record, "", "Input",
                       "Racing wheel force feedback: a CSV file of every force sent (empty: none)");
 REXCVAR_DEFINE_DOUBLE(wheel_ffb_cap, 0.25, "Input",
@@ -182,6 +183,24 @@ REXCVAR_DEFINE_DOUBLE(wheel_ffb_gain, 1.0, "Input",
     .range(0.0, 4.0);
 REXCVAR_DEFINE_BOOL(wheel_ffb_invert, false, "Input",
                     "Racing wheel force feedback: flip the force's direction");
+REXCVAR_DEFINE_DOUBLE(wheel_ffb_min_force, 0.0, "Input",
+                      "Racing wheel force feedback: the smallest force sent while the game asks "
+                      "for any, a fraction of the wheel's full force (lifts small forces above "
+                      "the wheel's own friction)")
+    .range(0.0, 0.5);
+REXCVAR_DEFINE_DOUBLE(wheel_ffb_smoothing, 10.0, "Input",
+                      "Racing wheel force feedback: smooths the game's force, which changes "
+                      "once a frame, over this time constant in milliseconds (0: none)")
+    .range(0.0, 200.0);
+REXCVAR_DEFINE_DOUBLE(wheel_ffb_spring, 1.0, "Input",
+                      "Racing wheel force feedback: the game's centring spring, which grows "
+                      "with speed and fades when the rear slides (1: as the game scales it, 0: "
+                      "off)")
+    .range(0.0, 2.0);
+REXCVAR_DEFINE_DOUBLE(wheel_ffb_damper, 1.0, "Input",
+                      "Racing wheel force feedback: the game's damper (1: as the game scales "
+                      "it, 0: off)")
+    .range(0.0, 2.0);
 REXCVAR_DEFINE_STRING(pad_touchpad, "guide", "Input",
                       "Guest button of the touchpad click (PlayStation pads)")
     .allowed({"a", "b", "x", "y", "lb", "rb", "back", "start", "ls", "rs", "up", "down", "left",
@@ -606,7 +625,7 @@ void SDLInputDriver::OnClosing(rex::ui::UIEvent&) {
 void SDLInputDriver::OnLostFocus(rex::ui::UISetupEvent&) {
   has_focus_ = false;
   if (wheel_) {
-    wheel_->SetFocus(false);
+    wheel_->SetFocus(WheelFocus());
   }
   if (background_events_) {
     REXLOG_INFO("SDL input: the window lost focus; pads are still read");
@@ -622,7 +641,7 @@ void SDLInputDriver::OnLostFocus(rex::ui::UISetupEvent&) {
 void SDLInputDriver::OnGotFocus(rex::ui::UISetupEvent&) {
   has_focus_ = true;
   if (wheel_) {
-    wheel_->SetFocus(true);
+    wheel_->SetFocus(WheelFocus());
   }
   REXLOG_INFO("SDL input: the window has focus");
 }
@@ -661,6 +680,12 @@ void SDLInputDriver::StopVibration() {
   }
 }
 
+bool SDLInputDriver::WheelFocus() const {
+  // The recording backend sends no force to any device, so a check without the window's focus
+  // (an e2e run) still records the game's forces.
+  return has_focus_ || REXCVAR_GET(wheel_ffb_sink) == "record";
+}
+
 void SDLInputDriver::StartWheel() {
   namespace wheel = rex::input::wheel;
   if (!SDL_InitSubSystem(SDL_INIT_JOYSTICK)) {
@@ -677,7 +702,12 @@ void SDLInputDriver::StartWheel() {
   wheel::HostOptions options;
   options.governor.cap = REXCVAR_GET(wheel_ffb_cap);
   options.governor.gain = REXCVAR_GET(wheel_ffb_gain);
+  options.governor.min_force = REXCVAR_GET(wheel_ffb_min_force);
+  options.governor.smoothing_s = REXCVAR_GET(wheel_ffb_smoothing) * 0.001;
   options.invert = REXCVAR_GET(wheel_ffb_invert);
+  options.spring_scale = REXCVAR_GET(wheel_ffb_spring);
+  options.damper_scale = REXCVAR_GET(wheel_ffb_damper);
+  options.force_source = [](wheel::ForceSample* sample) { return wheel::GetForces(sample); };
   options.sink = REXCVAR_GET(wheel_ffb_sink) == "record" ? wheel::Sink::kRecord
                                                           : wheel::Sink::kDevice;
   options.record_path = REXCVAR_GET(wheel_ffb_record);
@@ -720,7 +750,7 @@ void SDLInputDriver::StartWheel() {
           case wheel::LogLevel::kError: REXLOG_ERROR("{}", text); break;
         }
       });
-  wheel_->SetFocus(has_focus_);
+  wheel_->SetFocus(WheelFocus());
   wheel_->Start();
 }
 

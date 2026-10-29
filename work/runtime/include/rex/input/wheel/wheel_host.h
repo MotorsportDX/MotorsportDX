@@ -7,7 +7,7 @@
  * SDL's haptic API from a thread of its own, through the safety governor
  * (ffb_governor.h). Free of runtime dependencies: the runtime's SDL input
  * driver and the GUI launcher's wheel test both use it, with their own log.
- * See docs/analysis/racing-wheels.md, stage 0.
+ * See docs/analysis/racing-wheels.md, stages 0 and 3.
  *
  * The caller initialises SDL's joystick and haptic subsystems before Start
  * and pumps SDL's events (which update the joysticks). All haptic calls run
@@ -28,6 +28,7 @@
 #include <vector>
 
 #include <rex/input/wheel/ffb_governor.h>
+#include <rex/input/wheel/wheel_controls.h>
 #include <rex/input/wheel/wheel_mapping.h>
 
 namespace rex::input::wheel {
@@ -37,6 +38,9 @@ using LogFunction = std::function<void(LogLevel, std::string_view)>;
 // The driving controls, from the force thread at its rate (stage 2); `connected` is false while
 // no wheel is open.
 using ControlsFunction = std::function<void(const Controls&)>;
+// The title's force feedback (stage 3), polled by the force thread every tick: fills the latest
+// sample and returns its sequence number (0: none yet). See wheel_controls.h.
+using ForceSourceFunction = std::function<uint64_t(ForceSample*)>;
 
 enum class Sink {
   // SDL's haptic device of the wheel (DirectInput on Windows), and the recording
@@ -75,6 +79,11 @@ struct HostOptions {
   MappingConfig mapping;
   // Called with the mapped controls every tick while a wheel is open, and once when it closes.
   ControlsFunction on_controls;
+  // The title's forces; without it only SubmitForce and the test forces drive the wheel.
+  ForceSourceFunction force_source;
+  // Multiply the title's spring and damper before the gain (1: as the title scales them).
+  double spring_scale = 1.0;
+  double damper_scale = 1.0;
 };
 
 struct Snapshot {
@@ -94,10 +103,14 @@ struct Snapshot {
   double target = 0.0;
   double output = 0.0;
   double spring_level = 0.0;
+  double damper_level = 0.0;
   double envelope = 0.0;
   uint32_t blocked = 0;
   uint32_t flags = 0;
   TestEffect test = TestEffect::kNone;
+  // The title's last sample: whether it drives, and how many samples arrived.
+  bool title_driving = false;
+  uint64_t title_samples = 0;
   // Device updates sent, and their cost (SDL_UpdateHapticEffect), in microseconds.
   uint64_t sends = 0;
   double send_us_mean = 0.0;
@@ -138,9 +151,10 @@ class WheelHost {
   void Log(LogLevel level, std::string_view text) const;
   void Scan(double now_s);
   void CloseDevice();
-  void SendForces(double now_s, double constant, double spring);
+  void SendForces(double now_s, double constant, const Condition& spring,
+                  const Condition& damper, bool new_sample);
   void ZeroDevice();
-  void Record(double now_s, double constant, double spring, double send_us);
+  void Record(double now_s, double send_us);
   void EmergencyStop();
   void UpdateControls();
 
@@ -163,7 +177,10 @@ class WheelHost {
   std::atomic<uint64_t> test_started_ns_{0};
   // The force thread's own state.
   int16_t last_sent_level_ = 0;
-  double last_sent_spring_ = 0.0;
+  Condition last_sent_spring_;
+  Condition last_sent_damper_;
+  ForceSample title_sample_;
+  uint64_t title_sequence_ = 0;
   uint32_t last_recorded_flags_ = ~0u;
   uint32_t last_recorded_blocked_ = ~0u;
   Controls controls_;

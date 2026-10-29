@@ -1731,6 +1731,10 @@ WHEEL_KNOBS={
     'ffb_cap':{'cvar':'wheel_ffb_cap','default':'0.25','min':0.0,'max':1.0},
     'ffb_gain':{'cvar':'wheel_ffb_gain','default':'1','min':0.0,'max':4.0},
     'ffb_invert':{'cvar':'wheel_ffb_invert','default':'0','choices':['0','1']},
+    'ffb_min_force':{'cvar':'wheel_ffb_min_force','default':'0','min':0.0,'max':0.5},
+    'ffb_smoothing':{'cvar':'wheel_ffb_smoothing','default':'10','min':0.0,'max':200.0},
+    'ffb_spring':{'cvar':'wheel_ffb_spring','default':'1','min':0.0,'max':2.0},
+    'ffb_damper':{'cvar':'wheel_ffb_damper','default':'1','min':0.0,'max':2.0},
 }
 
 def option_knobs(text,table,option):
@@ -2213,10 +2217,23 @@ def stage_launcher_files(directory):
         for path in files:
             shutil.copyfile(path,directory/name/path.name)
 
+def launcher_build_directory(root):
+    """root/launcher-build, unless its CMake cache belongs to another checkout of the repository
+    (the main checkout and a worktree build into the same BuildRoot): then
+    root/launcher-build-<this checkout's folder name>, so neither reconfigures the other's."""
+    build=root/'launcher-build'
+    cache=build/'CMakeCache.txt'
+    if cache.exists():
+        match=re.search(r'^CMAKE_HOME_DIRECTORY:INTERNAL=(.*)$',
+                        cache.read_text(encoding='utf-8',errors='replace'),re.M)
+        if match and Path(match.group(1).strip()).resolve()!=LAUNCHER_DIRECTORY.resolve():
+            return root/f'launcher-build-{REPO.name}'
+    return build
+
 def build_launcher(root,jobs):
     """MotorsportDX.exe (work/fm4-launcher) against the installed runtime's SDL3 and the runtime
     source's Dear ImGui and JSON header, into game-build; its files into the BuildRoot."""
-    build=root/'launcher-build'
+    build=launcher_build_directory(root)
     run(['cmake','-S',LAUNCHER_DIRECTORY,'-B',build,'-G','Ninja','-DCMAKE_BUILD_TYPE=Release',
          '-DCMAKE_CXX_COMPILER=clang++','-DCMAKE_C_COMPILER=clang',
          '-DCMAKE_CXX_FLAGS=-march=x86-64-v2','-DCMAKE_C_FLAGS=-march=x86-64-v2',
@@ -2267,7 +2284,8 @@ def launcher_test_options(root):
                      'throttle_axis=2,throttle_rest=32767,throttle_pressed=-31000,'
                      'throttle_deadzone=0.03,throttle_gamma=1.5,brake_axis=-1,clutch_axis=3,'
                      'shift_up=4,shift_down=5,clutch_button=-1,handbrake_button=12,ffb_cap=0.4,'
-                     'ffb_gain=1.25,ffb_invert=1','frame_rate':240},
+                     'ffb_gain=1.25,ffb_invert=1,ffb_min_force=0.05,ffb_smoothing=0,'
+                     'ffb_spring=0,ffb_damper=0.5','frame_rate':240},
             {'wheel':'on=0,input=0,brake_axis=2,ffb_cap=0.25','pad':'rumble=1.5'},
             {'native':True,'frame_rate':240,'vsync':'off'},
             {'native':False},

@@ -130,6 +130,8 @@ class SDLInputDriver final : public InputDriver, public rex::ui::WindowListener 
   void ObserveProbeReadLocked(ControllerState& controller);
   // wheel: the racing wheel's host (rex/input/wheel/wheel_host.h), on the UI thread.
   void StartWheel();
+  // The focus the wheel host gets: the window's, or always with the recording backend.
+  bool WheelFocus() const;
   void StopWheel();
   // wheel_virtual: an SDL virtual wheel driven by a script, for checks without hardware.
   struct VirtualWheel;

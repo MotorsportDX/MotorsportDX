@@ -5,8 +5,11 @@
 // reaches a device connected to the computer. Checks that the host finds the
 // virtual wheel, reads its axes at full 16-bit resolution with its buttons and
 // hat, that every recorded force stays within the cap, ramps in, is zero while
-// the window has no focus and after an emergency stop, and that a disconnect is
-// noticed. Argument: a directory for the recordings. Returns 1 on failure.
+// the window has no focus and after an emergency stop, that the title's forces
+// (stage 3) arrive with their spring and damper inside the cap and stop at once
+// outside a driven race and through the watchdog when they stop coming, and
+// that a disconnect is noticed. Argument: a directory for the recordings.
+// Returns 1 on failure.
 
 #include <chrono>
 #include <cmath>
@@ -46,6 +49,11 @@ struct Row {
   double envelope = 0.0;
   uint32_t blocked = 0;
   uint32_t flags = 0;
+  double send_us = 0.0;
+  double damper = 0.0;
+  double spring_coeff = 0.0;
+  double damper_coeff = 0.0;
+  int driving = -1;
 };
 
 std::vector<Row> ReadRecording(const std::filesystem::path& path) {
@@ -60,6 +68,8 @@ std::vector<Row> ReadRecording(const std::filesystem::path& path) {
     stream >> row.time >> comma >> row.target >> comma >> row.output >> comma >> row.spring >>
         comma >> row.envelope >> comma >> row.blocked >> comma >> row.flags;
     if (stream) {
+      stream >> comma >> row.send_us >> comma >> row.damper >> comma >> row.spring_coeff >>
+          comma >> row.damper_coeff >> comma >> row.driving;
       rows.push_back(row);
     }
   }
@@ -231,6 +241,87 @@ int main(int argc, char** argv) {
     Check(!rows.empty() && rows.back().output == 0.0 &&
               (rows.back().blocked & wheel::kBlockExit) != 0,
           "the emergency stop ends at zero");
+  }
+
+  // The title's forces (stage 3): a frame-rate source with a spring and a damper.
+  {
+    const auto record = directory / "wheel-host-test-title.csv";
+    std::mutex source_mutex;
+    wheel::ForceSample source;
+    uint64_t sequence = 0;
+    const auto publish = [&](const wheel::ForceSample& sample) {
+      std::lock_guard lock(source_mutex);
+      source = sample;
+      ++sequence;
+    };
+    wheel::HostOptions options;
+    options.sink = wheel::Sink::kRecord;
+    options.record_path = record.string();
+    options.governor.cap = 0.25;
+    options.governor.ramp_s = 0.2;
+    options.governor.smoothing_s = 0.01;
+    options.force_source = [&](wheel::ForceSample* out) {
+      std::lock_guard lock(source_mutex);
+      *out = source;
+      return sequence;
+    };
+    wheel::WheelHost host(options, Printer());
+    host.SetFocus(true);
+    host.Start();
+    Check(WaitFor(host, true, 2000), "the fourth host finds the virtual wheel");
+    // About 240 samples a second: the title's mix at full scale, a sine of the torque.
+    const auto drive = [&](bool driving, int ms) {
+      for (int elapsed = 0; elapsed < ms; elapsed += 4) {
+        wheel::ForceSample sample;
+        sample.driving = driving;
+        sample.torque = std::sin(elapsed * 0.004);
+        sample.constant = driving ? sample.torque : 0.0;
+        sample.spring = {0.5, 0.5};
+        sample.damper = {0.1, 0.1};
+        publish(sample);
+        Sleep(4);
+      }
+    };
+    drive(true, 1200);
+    const wheel::Snapshot driving = host.GetSnapshot();
+    Check(driving.title_driving && driving.title_samples > 100, "the title's samples arrive");
+    Check(driving.spring_level > 0.0 && driving.damper_level > 0.0,
+          "the spring and the damper run");
+    drive(false, 200);
+    const wheel::Snapshot stopped = host.GetSnapshot();
+    Check(stopped.output == 0.0 && stopped.spring_level == 0.0 &&
+              (stopped.blocked & wheel::kBlockPaused) != 0,
+          "outside a driven race every force is zero");
+    drive(true, 600);
+    Sleep(300);  // no samples: the watchdog
+    Check(host.GetSnapshot().output == 0.0 && host.GetSnapshot().spring_level == 0.0,
+          "the watchdog zeroes the forces when the samples stop");
+    host.Stop();
+
+    const std::vector<Row> rows = ReadRecording(record);
+    double worst_sum = 0.0;
+    bool zero_when_stopped = true;
+    bool saw_stopped = false;
+    bool followed_sign = true;
+    int driven_rows = 0;
+    for (const Row& row : rows) {
+      worst_sum = std::fmax(worst_sum, std::fabs(row.output) + row.spring + row.damper);
+      if (row.driving == 0) {
+        saw_stopped = true;
+        zero_when_stopped = zero_when_stopped && row.output == 0.0 && row.spring == 0.0 &&
+                            row.damper == 0.0;
+      }
+      if (row.driving == 1 && row.envelope >= 1.0 && std::fabs(row.target) > 0.3) {
+        ++driven_rows;
+        followed_sign = followed_sign && (row.output > 0.0) == (row.target > 0.0);
+      }
+    }
+    Check(rows.size() > 300, "the title's forces are recorded");
+    Check(worst_sum <= 0.25 + 2.0 / 32767.0, "the force, spring and damper stay within the cap");
+    Check(saw_stopped && zero_when_stopped, "the recording is zero outside a driven race");
+    Check(driven_rows > 50 && followed_sign, "the force follows the torque's sign");
+    Check(!rows.empty() && rows.back().output == 0.0 && rows.back().spring == 0.0,
+          "the recording ends at zero");
   }
 
   // A disconnect is noticed.

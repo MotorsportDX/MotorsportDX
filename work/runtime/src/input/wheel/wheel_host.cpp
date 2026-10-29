@@ -2,7 +2,7 @@
  * @file        input/wheel/wheel_host.cpp
  * @brief       The racing wheel's device and force feedback host
  *
- * See wheel_host.h and docs/analysis/racing-wheels.md (stage 0).
+ * See wheel_host.h and docs/analysis/racing-wheels.md (stages 0 and 3).
  */
 
 #include <rex/input/wheel/wheel_host.h>
@@ -134,20 +134,31 @@ SDL_HapticEffect ConstantEffect(int16_t level) {
   return effect;
 }
 
-SDL_HapticEffect SpringEffect(double level) {
+// A spring (SDL_HAPTIC_SPRING) or a damper (SDL_HAPTIC_DAMPER) on the first axis. The
+// saturation bounds the effect's force, so the governor's cap holds whatever the wheel's position
+// and speed.
+SDL_HapticEffect ConditionEffect(uint16_t type, const Condition& condition) {
   SDL_HapticEffect effect{};
-  effect.type = SDL_HAPTIC_SPRING;
+  effect.type = type;
   effect.condition.direction.type = SDL_HAPTIC_CARTESIAN;
   effect.condition.direction.dir[0] = 1;
   effect.condition.length = SDL_HAPTIC_INFINITY;
-  // The first axis only. The saturation bounds the spring's force to the level, so the cap
-  // holds whatever the wheel's position.
-  const double clamped = std::clamp(level, 0.0, 1.0);
-  effect.condition.right_sat[0] = uint16_t(std::lround(clamped * 65535.0));
+  const double saturation = std::clamp(condition.saturation, 0.0, 1.0);
+  const double coefficient = std::clamp(condition.coefficient, 0.0, 1.0);
+  effect.condition.right_sat[0] = uint16_t(std::lround(saturation * 65535.0));
   effect.condition.left_sat[0] = effect.condition.right_sat[0];
-  effect.condition.right_coeff[0] = int16_t(std::lround(clamped * 32767.0));
+  effect.condition.right_coeff[0] = int16_t(std::lround(coefficient * 32767.0));
   effect.condition.left_coeff[0] = effect.condition.right_coeff[0];
   return effect;
+}
+
+bool IsZero(const Condition& condition) {
+  return condition.coefficient == 0.0 || condition.saturation == 0.0;
+}
+
+// The governor passes a condition's level on only in real steps, so every change is sent.
+bool Differs(const Condition& a, const Condition& b) {
+  return a.coefficient != b.coefficient || a.saturation != b.saturation;
 }
 
 }  // namespace
@@ -159,10 +170,11 @@ struct WheelHost::Device {
   uint32_t features = 0;
   SDL_HapticEffectID constant = -1;
   SDL_HapticEffectID spring = -1;
+  SDL_HapticEffectID damper = -1;
   bool constant_running = false;
   bool spring_running = false;
+  bool damper_running = false;
   int16_t constant_level = 0;
-  double spring_level = 0.0;
 };
 
 WheelHost::WheelHost(HostOptions options, LogFunction log)
@@ -204,7 +216,9 @@ void WheelHost::Start() {
     record_ = std::fopen(options_.record_path.c_str(), "w");
 #endif
     if (record_) {
-      std::fputs("time_s,target,output,spring,envelope,blocked,flags,send_us\n", record_);
+      std::fputs("time_s,target,output,spring,envelope,blocked,flags,send_us,damper,"
+                 "spring_coeff,damper_coeff,driving,sequence,torque,speed,slip\n",
+                 record_);
     } else {
       Log(LogLevel::kWarning,
           std::format("Wheel: cannot write the force recording '{}'", options_.record_path));
@@ -213,11 +227,14 @@ void WheelHost::Start() {
   const auto& g = governor_.config();
   Log(LogLevel::kInfo,
       std::format("Wheel: force feedback host started (sink={}, cap={:.2f}, gain={:.2f}, "
-                  "slew={:.1f}/s, ramp={:.1f} s, watchdog={:.0f} ms, rate={} Hz, invert={}{}{})",
+                  "min_force={:.2f}, smoothing={:.0f} ms, slew={:.1f}/s, ramp={:.1f} s, "
+                  "watchdog={:.0f} ms, rate={} Hz, invert={}, title={}, spring={:.2f}, "
+                  "damper={:.2f}{}{})",
                   options_.sink == Sink::kDevice ? "device" : "record", g.cap, g.gain,
-                  g.slew_per_s, g.ramp_s, g.watchdog_s * 1000.0, options_.rate_hz,
-                  options_.invert ? 1 : 0, record_ ? ", recording to " : "",
-                  record_ ? options_.record_path : ""));
+                  g.min_force, g.smoothing_s * 1000.0, g.slew_per_s, g.ramp_s,
+                  g.watchdog_s * 1000.0, options_.rate_hz, options_.invert ? 1 : 0,
+                  options_.force_source ? 1 : 0, options_.spring_scale, options_.damper_scale,
+                  record_ ? ", recording to " : "", record_ ? options_.record_path : ""));
   stop_ = false;
   thread_ = std::thread([this]() { Run(); });
 }
@@ -369,8 +386,12 @@ void WheelHost::Scan(double now_s) {
         }
       }
       if (device_->features & SDL_HAPTIC_SPRING) {
-        SDL_HapticEffect effect = SpringEffect(0.0);
+        SDL_HapticEffect effect = ConditionEffect(SDL_HAPTIC_SPRING, {});
         device_->spring = SDL_CreateHapticEffect(haptic, &effect);
+      }
+      if (device_->features & SDL_HAPTIC_DAMPER) {
+        SDL_HapticEffect effect = ConditionEffect(SDL_HAPTIC_DAMPER, {});
+        device_->damper = SDL_CreateHapticEffect(haptic, &effect);
       }
       haptic_published_.store(haptic);
       haptic_text = std::format(
@@ -418,10 +439,13 @@ void WheelHost::ZeroDevice() {
   if (device_->spring >= 0 && device_->spring_running) {
     SDL_StopHapticEffect(device_->haptic, device_->spring);
   }
+  if (device_->damper >= 0 && device_->damper_running) {
+    SDL_StopHapticEffect(device_->haptic, device_->damper);
+  }
   device_->constant_running = false;
   device_->spring_running = false;
+  device_->damper_running = false;
   device_->constant_level = 0;
-  device_->spring_level = 0.0;
 }
 
 void WheelHost::CloseDevice() {
@@ -438,6 +462,9 @@ void WheelHost::CloseDevice() {
     if (device_->spring >= 0) {
       SDL_DestroyHapticEffect(device_->haptic, device_->spring);
     }
+    if (device_->damper >= 0) {
+      SDL_DestroyHapticEffect(device_->haptic, device_->damper);
+    }
     SDL_CloseHaptic(device_->haptic);
   }
   SDL_CloseJoystick(device_->joystick);
@@ -451,16 +478,24 @@ void WheelHost::CloseDevice() {
   snapshot_.hats.clear();
 }
 
-void WheelHost::Record(double now_s, double constant, double spring, double send_us) {
+void WheelHost::Record(double now_s, double send_us) {
   if (!record_) {
     return;
   }
-  std::fprintf(record_, "%.6f,%.6f,%.6f,%.6f,%.4f,%u,%u,%.1f\n", now_s, governor_.target(),
-               constant, spring, governor_.envelope(), governor_.blocked(), governor_.flags(),
-               send_us);
+  const ForceSample& title = title_sample_;
+  std::fprintf(record_,
+               "%.6f,%.6f,%.6f,%.6f,%.4f,%u,%u,%.1f,%.6f,%.6f,%.6f,%d,%llu,%.6f,%.4f,%.4f\n",
+               now_s, governor_.target(), double(last_sent_level_) / 32767.0,
+               last_sent_spring_.saturation, governor_.envelope(), governor_.blocked(),
+               governor_.flags(), send_us, last_sent_damper_.saturation,
+               last_sent_spring_.coefficient, last_sent_damper_.coefficient,
+               title_sequence_ ? (title.driving ? 1 : 0) : -1,
+               static_cast<unsigned long long>(title_sequence_), title.torque, title.speed,
+               title.slip);
 }
 
-void WheelHost::SendForces(double now_s, double constant, double spring) {
+void WheelHost::SendForces(double now_s, double constant, const Condition& spring,
+                           const Condition& damper, bool new_sample) {
   const int16_t level = int16_t(std::lround(std::clamp(constant, -1.0, 1.0) * 32767.0));
   const bool blocked = governor_.blocked() != kBlockNone;
   const bool device = options_.sink == Sink::kDevice && device_ && device_->haptic;
@@ -479,17 +514,42 @@ void WheelHost::SendForces(double now_s, double constant, double spring) {
     cost_sum += us;
     cost_max = std::max(cost_max, us);
   };
+  // A condition effect's update, start or stop, only when it changed.
+  const auto condition = [&](uint16_t type, SDL_HapticEffectID Device::*id,
+                             bool Device::*running, const Condition& wanted, Condition& last) {
+    if (!Differs(wanted, last)) {
+      return;
+    }
+    if (device && device_.get()->*id >= 0) {
+      timed([&]() {
+        SDL_HapticEffect effect = ConditionEffect(type, wanted);
+        SDL_UpdateHapticEffect(device_->haptic, device_.get()->*id, &effect);
+        bool& on = device_.get()->*running;
+        if (!IsZero(wanted) && !on) {
+          SDL_RunHapticEffect(device_->haptic, device_.get()->*id, 1);
+          on = true;
+        } else if (IsZero(wanted) && on) {
+          SDL_StopHapticEffect(device_->haptic, device_.get()->*id);
+          on = false;
+        }
+      });
+    }
+    last = wanted;
+    sent = true;
+  };
 
   if (blocked) {
     if (device && (device_->constant_running || device_->spring_running ||
-                   device_->constant_level != 0)) {
+                   device_->damper_running || device_->constant_level != 0)) {
       timed([&]() { ZeroDevice(); });
       sent = true;
-    } else if (!device && (last_sent_level_ != 0 || last_sent_spring_ != 0.0)) {
+    } else if (!device && (last_sent_level_ != 0 || !IsZero(last_sent_spring_) ||
+                           !IsZero(last_sent_damper_))) {
       sent = true;
     }
     last_sent_level_ = 0;
-    last_sent_spring_ = 0.0;
+    last_sent_spring_ = {};
+    last_sent_damper_ = {};
   } else {
     if (level != last_sent_level_) {
       if (device && device_->constant >= 0) {
@@ -506,30 +566,17 @@ void WheelHost::SendForces(double now_s, double constant, double spring) {
       last_sent_level_ = level;
       sent = true;
     }
-    // The spring's level changes only during its ramp and when it starts or stops.
-    if (std::fabs(spring - last_sent_spring_) >= 0.002 || (spring == 0.0) != (last_sent_spring_ == 0.0)) {
-      if (device && device_->spring >= 0) {
-        timed([&]() {
-          SDL_HapticEffect effect = SpringEffect(spring);
-          SDL_UpdateHapticEffect(device_->haptic, device_->spring, &effect);
-          if (spring > 0.0 && !device_->spring_running) {
-            SDL_RunHapticEffect(device_->haptic, device_->spring, 1);
-            device_->spring_running = true;
-          } else if (spring == 0.0 && device_->spring_running) {
-            SDL_StopHapticEffect(device_->haptic, device_->spring);
-            device_->spring_running = false;
-          }
-        });
-        device_->spring_level = spring;
-      }
-      last_sent_spring_ = spring;
-      sent = true;
-    }
+    // The conditions change with the title's speed and slip, during their ramp, and when they
+    // start or stop.
+    condition(SDL_HAPTIC_SPRING, &Device::spring, &Device::spring_running, spring,
+              last_sent_spring_);
+    condition(SDL_HAPTIC_DAMPER, &Device::damper, &Device::damper_running, damper,
+              last_sent_damper_);
   }
 
-  if (sent || governor_.flags() != last_recorded_flags_ ||
+  if (sent || new_sample || governor_.flags() != last_recorded_flags_ ||
       governor_.blocked() != last_recorded_blocked_) {
-    Record(now_s, double(last_sent_level_) / 32767.0, last_sent_spring_, send_us);
+    Record(now_s, send_us);
     last_recorded_flags_ = governor_.flags();
     last_recorded_blocked_ = governor_.blocked();
   }
@@ -601,7 +648,7 @@ void WheelHost::Run() {
     if (emergency_.load()) {
       governor_.SetBlocked(kBlockExit, true);
       governor_.Step(now_s);
-      SendForces(now_s, 0.0, 0.0);
+      SendForces(now_s, 0.0, {}, {}, false);
       if (record_) {
         std::fflush(record_);
       }
@@ -623,19 +670,33 @@ void WheelHost::Run() {
       last_scan_ns = now_ns;
     }
 
+    // The title's latest sample, unless a test force runs. A sample outside a driven race
+    // zeroes the force at once, as a pause does.
+    const auto test = TestEffect(test_.load());
+    bool new_sample = false;
+    if (options_.force_source && test == TestEffect::kNone) {
+      ForceSample sample;
+      const uint64_t sequence = options_.force_source(&sample);
+      if (sequence != title_sequence_) {
+        title_sequence_ = sequence;
+        title_sample_ = sample;
+        new_sample = true;
+      }
+    }
+    const bool title_stopped = title_sequence_ != 0 && !title_sample_.driving;
+
     const bool has_target =
         options_.sink == Sink::kRecord || (device_ && device_->haptic);
     governor_.SetBlocked(kBlockNoDevice, !has_target);
-    const uint32_t external = blocked_.load();
+    const uint32_t external = blocked_.load() | (title_stopped ? kBlockPaused : kBlockNone);
     for (uint32_t reason : {kBlockFocus, kBlockPaused, kBlockExit, kBlockUser}) {
       governor_.SetBlocked(reason, (external & reason) != 0);
     }
 
-    // The source: a test force, refreshed every tick, or the latest submitted value.
-    const auto test = TestEffect(test_.load());
+    // The source: a test force, refreshed every tick, the title's sample, or the latest
+    // submitted value.
     const double amplitude = std::bit_cast<double>(test_amplitude_bits_.load());
     const double test_s = Seconds(now_ns - std::min(now_ns, test_started_ns_.load()));
-    double spring_request = 0.0;
     switch (test) {
       case TestEffect::kPulse:
         if (test_s < 1.0) {
@@ -646,13 +707,20 @@ void WheelHost::Run() {
         }
         break;
       case TestEffect::kSpring:
-        governor_.Submit(0.0, now_s);
-        spring_request = amplitude;
+        governor_.Submit(0.0, now_s, {amplitude, amplitude});
         break;
       case TestEffect::kSine:
         governor_.Submit(amplitude * std::sin(2.0 * std::numbers::pi * test_s), now_s);
         break;
       case TestEffect::kNone: {
+        if (new_sample && title_sample_.driving) {
+          const auto scaled = [](const Condition& condition, double scale) {
+            return Condition{condition.coefficient * scale, condition.saturation * scale};
+          };
+          governor_.Submit(title_sample_.constant, now_s,
+                           scaled(title_sample_.spring, options_.spring_scale),
+                           scaled(title_sample_.damper, options_.damper_scale));
+        }
         const uint64_t source_ns = source_ns_.load(std::memory_order_acquire);
         if (source_ns != last_source_ns) {
           last_source_ns = source_ns;
@@ -666,8 +734,7 @@ void WheelHost::Run() {
     UpdateControls();
 
     const double constant = governor_.Step(now_s);
-    const double spring = governor_.ConditionLevel(spring_request);
-    SendForces(now_s, constant, spring);
+    SendForces(now_s, constant, governor_.spring(), governor_.damper(), new_sample);
 
     // A process that is killed keeps what was flushed (the e2e harness ends the game that way).
     if (record_ && now_ns - last_flush_ns >= 250'000'000ull) {
@@ -680,7 +747,10 @@ void WheelHost::Run() {
       std::lock_guard lock(snapshot_mutex_);
       snapshot_.target = governor_.target();
       snapshot_.output = constant;
-      snapshot_.spring_level = spring;
+      snapshot_.spring_level = governor_.spring().saturation;
+      snapshot_.damper_level = governor_.damper().saturation;
+      snapshot_.title_driving = title_sequence_ != 0 && title_sample_.driving;
+      snapshot_.title_samples = title_sequence_;
       snapshot_.envelope = governor_.envelope();
       snapshot_.blocked = governor_.blocked();
       snapshot_.flags = governor_.flags();
@@ -720,13 +790,14 @@ void WheelHost::Run() {
 
   governor_.SetBlocked(kBlockExit, true);
   governor_.Step(Seconds(SDL_GetTicksNS()));
-  SendForces(Seconds(SDL_GetTicksNS()), 0.0, 0.0);
+  SendForces(Seconds(SDL_GetTicksNS()), 0.0, {}, {}, false);
   CloseDevice();
   UpdateControls();
   {
     std::lock_guard lock(snapshot_mutex_);
     snapshot_.output = 0.0;
     snapshot_.spring_level = 0.0;
+    snapshot_.damper_level = 0.0;
     snapshot_.blocked = governor_.blocked();
     snapshot_.sends = send_count_;
     snapshot_.send_us_mean = send_count_ ? send_us_sum_ / double(send_count_) : 0.0;
