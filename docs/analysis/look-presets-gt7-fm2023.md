@@ -170,6 +170,8 @@ The round's short check on `c737653` (snapshot `lkc3`): the build's tests pass, 
 
 Decision (the main session's, 29 October 2026): the GT7 operator and its port are accepted as they are. The clipping of `gt7` is accepted: its exposure stays -0.2 with `contrast=0.15`, the sun's specular reflections (the sheen on the asphalt and the glints) count as the sun, as GT7 itself leaves sunny scenes bright, and the 0.18% elsewhere is under the rule; `exposure=-0.5` is not to come back. No artefact was found, and the GPU cost of both presets is within the runs' spread. One final round with two changes, then both presets lock: a deeper sky for `gt7`, and the warmth of `fm2023` on the sunlit near field rather than the sky and the haze (section 8).
 
+On the sun in view (Sedona), the main session's decisions of the same day: `gt7`'s 3.16% clipped there is the sun's disc and glow and 0.17% elsewhere, accepted, the sun counting as the sun. `bloom_width` stays out of `fm2023` for its hard-edged disc and its 0.66 ms, so FM2023's wide bloom at a low sun is not reproduced: a known gap of the preset, not a bug. `fm2023` dimming the sun's glow is accepted for now. The stepped rings around the sun are the game's own picture (`aces` has them too) and out of scope.
+
 ## 8. Final round: the GT7 sky and the FM2023 warmth, 29 October 2026
 
 - **The GT7 sky.** The references' sky is a clearly deeper blue than `gt7`'s of round 3 (a saturation of 0.46 against 0.288), the most visible GT7 trait on the board. The sky knob of the look (`sky_saturation`, on the sky dome's texture, `fm4-nature.hlsli`) goes from 1.15 to 1.5, aiming at 0.35 or more on the Bernese Alps with the hue between 210 and 220 degrees. 1.8 reached 0.416 just as cleanly, but tints the clouds more.
