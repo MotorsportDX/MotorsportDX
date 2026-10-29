@@ -71,6 +71,7 @@ Without network access (Jev unreachable), `--scenario quickrace` drives the same
 | `--quality` | launcher's (`high`) | race render quality as `Build.ps1 -Quality`: `low`, `medium` (also `xbox`), `high`, `extrahigh` or `ultra`: its race settings and GTAO quality, and with `--native` `ultra`'s one pass with 4x MSAA unless `--msaa-samples`, a tiling `--env` or an `--arg` with a fractional scale, a logical size or upscaling says otherwise |
 | `--ao` | off | the runtime's ambient occlusion pass (the GTAO post pass, `post_pass_path`), as `pipeline.py --ao` |
 | `--race-seconds` | none | measure the race phase this long instead of the scenario's (30 s in `race`): the wait right after `phase:race`. For [in-run perf A/Bs](experiments.md#in-run-perf-ab), where the boot, menus and loading of a run cost the same whatever the race's length |
+| `--camera` | the profile's (the cockpit) | the race camera: `hood`, `bumper`, `chase` or `chase_far`, by Back presses once the race runs ([race camera](#race-camera)); `chase` for every look test. `matrix.py --camera` passes it to every cell |
 | `--tail` | 10 | seconds to keep running after the last step |
 | `--keep-ppm` | off | keep the full-resolution PPM captures next to the PNG files |
 | `--info` | off | show the settings overlay from the start (`FM4_INFO_SHOW=1`); it moves the host presents to the UI thread |
@@ -118,6 +119,10 @@ e2e.py ... --out <BuildRoot>\e2e\dlc --scenario dlc --profile copy
 Every scenario except `boot` starts with one A per splash video read on screen (Microsoft Studios, Dolby), which skips it: the main menu shows after about 30 s instead of 47. A at a fixed rate is not used, because it also skips the short title screen and selects PLAY CAREER in the main menu.
 
 `e2e.py` runs the game with `headless=true`: XAM prompts such as the keyboard for a photo name answer with their default text (nobody can type into the host dialog). Rendering is not affected.
+
+### Race camera
+
+The BuildRoot profile races in the cockpit camera. `--camera` presses Back once the race runs, which cycles the title's race cameras in its order: cockpit, hood (1 press), bumper (2), chase near (`chase`, 3) and chase far (`chase_far`, 4). The presses go before the race phase (`phase:race`), holding the throttle where the scenario holds it, and in `freeze` before the rewind's Y, 12 s after START RACE (the menu route) or after the countdown's placement (the fast route), in the race's first seconds, so the frozen frame shows that camera. The project owner asked on 29 October 2026 that the look tests run in the chase camera, not the cockpit: the look board's reference pairs are chase camera frames too, and the cockpit's dark interior and its windows weigh on every measure of a look. A look A/B is therefore `--scenario freeze --camera chase --look <look>` at 2x (the freeze pin), one run per look ([look presets](../analysis/look-presets-gt7-fm2023.md)).
 
 ### Race check
 

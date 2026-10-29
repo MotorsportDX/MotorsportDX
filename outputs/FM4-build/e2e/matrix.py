@@ -137,6 +137,7 @@ def main():
     parser.add_argument('--arg', action='append', default=[], help='extra --cvar=value for every cell')
     parser.add_argument('--look', help="look of every cell as Build.ps1 -Look (default: the launcher's, aces), "
                                        'for example "aces,taa=0"')
+    parser.add_argument('--camera', help='race camera of every cell as e2e.py --camera (chase for look tests)')
     parser.add_argument('--msaa', action='store_true',
                         help='every cell keeps the tiles and MSAA of the quality with a look that has TAA '
                              '(Build.ps1 -Msaa)')
@@ -183,6 +184,8 @@ def main():
     extra = [f'--env={e}' for e in env] + [f'--arg={a}' for a in options.arg]
     if options.look:
         extra += ['--look', options.look]
+    if options.camera:
+        extra += ['--camera', options.camera]
     if options.msaa:
         extra += ['--msaa']
     if options.quality:

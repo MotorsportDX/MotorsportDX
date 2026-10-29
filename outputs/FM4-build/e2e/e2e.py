@@ -1387,6 +1387,8 @@ def run_once(options, out):
         steps = without_driving_input(steps)
     if options.race_seconds:
         steps = with_race_seconds(steps, options.race_seconds)
+    if options.camera:
+        steps = with_camera(steps, options.camera)
     check_actions(steps)
 
     n0_trace = env.get('FM4_N0_TRACE') and str(root / env['FM4_N0_TRACE'])
@@ -1780,6 +1782,32 @@ def shader_work_line(stats):
             f"longest {stats['longest_frame_ms']:.0f} ms")
 
 
+# --camera: the race camera of a run, as Back presses from the profile's own camera (the cockpit
+# in the BuildRoot profile), in the title's order: cockpit, hood, bumper, chase (near), chase_far.
+# The look tests run in the chase camera (the project owner's request of 29 October 2026), as the
+# look board's reference pairs do (docs/e2e/README.md, "Race camera").
+CAMERA_PRESSES = {'cockpit': 0, 'hood': 1, 'bumper': 2, 'chase': 3, 'chase_far': 4}
+
+
+def with_camera(steps, camera):
+    """The steps with Back pressed CAMERA_PRESSES[camera] times once the race runs: before the
+    freeze scenario's rewind ('~y@<frame>'), after a 12 s wait from START RACE that puts the
+    presses into the race's first seconds, so the frozen frame shows that camera; or before the
+    race phase ('phase:race'). Where the steps hold the throttle, each press keeps it."""
+    presses = CAMERA_PRESSES[camera]
+    if not presses:
+        return steps
+    for index, step in enumerate(steps):
+        if step[1].startswith('~y@') or step[1] == 'phase:race':
+            break
+    else:
+        raise SystemExit(f'--camera {camera}: the steps have no rewind or race phase to press Back before')
+    driving = any(step[1].startswith('rt=') for step in steps[:index])
+    press = [[1, 'rt=255+back', 0.15], [0.2, 'rt=255', 0]] if driving else [[1, 'back', 0.15]]
+    lead = [[12, 'wait', 0]] if steps[index][1].startswith('~y@') else []
+    return steps[:index] + lead + press * presses + steps[index:]
+
+
 def with_race_seconds(steps, seconds):
     """The steps with the wait right after 'phase:race' set to seconds (a longer measured race,
     for in-run perf A/Bs: docs/e2e/experiments.md)."""
@@ -2013,6 +2041,9 @@ def main():
     parser.add_argument('--race-seconds', type=float,
                         help="measure the race phase this long instead of the scenario's (30 s in "
                              'race), for in-run perf A/Bs (docs/e2e/experiments.md)')
+    parser.add_argument('--camera', choices=list(CAMERA_PRESSES),
+                        help="the race camera, by Back presses from the profile's (the cockpit) once "
+                             'the race runs: chase for the look tests (docs/e2e/README.md, "Race camera")')
     parser.add_argument('--tail', type=float, default=10, help='seconds to keep running after the last step')
     parser.add_argument('--keep-ppm', action='store_true', help='keep full-resolution captures')
     parser.add_argument('--info', action='store_true',
