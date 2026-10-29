@@ -45,8 +45,11 @@
 //       whether the change exceeds the threshold unscaled and scaled, `in` whether the session
 //       update was in progress (else dt is the last update's)
 //   lap <ms> car=<car> count=<c> few=<0|1> the lap check (sub_823B1648); few=1 marks the race
-//   draw <ms> obj=<presentation> angle=<a> b=<f2> from=<return address> the drawn steering
-//       wheel (sub_822E6B30), every car, with FM4_WHEEL_TRACE_DRAWN=1
+//   draw <ms> obj=<presentation> angle=<a> b=<f2> from=<return address> car=<r31>
+//       title=<the title's angle> follow=<0|1> scale=<s> the drawn steering wheel (sub_822E6B30),
+//       every car, with FM4_WHEEL_TRACE_DRAWN=1; follow=1 when the wheel's angle replaced the
+//       title's, scale the model's scale it was divided by (0 unless follow=1)
+// FM4_WHEEL_DRAWN=title keeps the title's drawn steering wheel for the wheel's car too.
 // FM4_WHEEL_DUMP_FILE=<path>: per record of the wheel's car, a u32 update count, a float of
 // the session time and the first 0x2000 bytes of its CCarDynamics, big-endian as in the guest.
 // FM4_WHEEL_MODE=<0|1|2> sets the record's wheel mode byte (+0x17) when the wheel's steering
@@ -152,6 +155,18 @@ constexpr uint32_t kWheelUser = 0;
 // 30 degrees); in wheel mode 2 the steering target (+0x24) is the record's steering times it
 // (stage 5, from the stage 2 dump).
 constexpr uint32_t kRoadLockOffset = 0x54;
+// The lap logic's call of the drawn steering wheel (sub_823446C0 calls the car's presentation,
+// car +11604, slot 32 with f1 = car +15024 + car +15032, f2 = car +15124; r31 is the car). In
+// wheel mode 2 the title draws the record's steering as a 900-degree wheel, input x 2.5 pi
+// radians, held at +-pi/2 (stage 5 trace, 29 October 2026).
+constexpr uint32_t kDrawnWheelCall = 0x82344A20;
+constexpr uint32_t kCarPresentation = 11604;
+constexpr uint32_t kCarDrawnAngle = 15024;
+// The presentation turns the wheel's model by this global times the angle it gets
+// (Presentation_Unified::CCarPresentation, sub_823143F8; 2.5 in the image). The model's turn
+// measured in the stage 5 captures was 0.75 of the angle (GlobalCarAttribs'
+// SteeringWheelAngleScale), so the angle passed is the wheel's divided by the global.
+constexpr uint32_t kDrawnModelScale = 0x82D92B44;
 // The record's wheel mode for the wheel's steering: the title's 900-degree wheel filters.
 constexpr uint8_t kWheelMode = 2;
 // GameSettings' CheatDetection object (stage 1 findings): FrameAnalogInputThreshold at +0x18.
@@ -294,6 +309,23 @@ thread_local int record_user = -1;
 // The wheel's angle and lock at the steering read, for the trace.
 thread_local double record_wheel_deg = 0.0;
 thread_local double record_lock_deg = 0.0;
+// The record just handed over, until its anti-cheat count names the car: whose pad it was, and
+// whether the wheel's steering won.
+thread_local int count_user = -1;
+thread_local bool count_wheel = false;
+// The first player's car (the object the count and the lap logic take), and whether the wheel
+// steered its last record: its drawn steering wheel then follows the wheel (stage 5).
+std::atomic<uint32_t> player_car{0};
+std::atomic<bool> player_wheel_steers{false};
+
+// FM4_WHEEL_DRAWN=title keeps the title's drawn steering wheel, for comparisons.
+bool DrawnFollows() {
+  static const bool follows = []() {
+    const char* value = std::getenv("FM4_WHEEL_DRAWN");
+    return !value || std::strcmp(value, "title") != 0;
+  }();
+  return follows;
+}
 thread_local uint32_t shift_up_seen = 0;
 thread_local uint32_t shift_down_seen = 0;
 thread_local bool shift_seen_valid = false;
@@ -383,6 +415,8 @@ REX_HOOK_RAW(sub_823651D8) {
   const int user = record_user;
   wheel_drove_record = false;
   record_user = -1;
+  count_user = user;
+  count_wheel = wheel;
   // The first player's car sets the wheel's steering lock (stage 5), whoever's steering won.
   double road_lock = 0.0;
   if (user == int(kWheelUser)) {
@@ -430,6 +464,11 @@ REX_HOOK_RAW(sub_823651D8) {
 REX_HOOK_RAW(sub_823B1560) {
   const uint32_t car = ctx.r3.u32;
   const double previous = ctx.f1.f64, steering = ctx.f2.f64;
+  if (count_user == int(kWheelUser)) {
+    player_car.store(car, std::memory_order_relaxed);
+    player_wheel_steers.store(count_wheel, std::memory_order_relaxed);
+  }
+  count_user = -1;
   bool in_update = false;
   double dt = 0.0;
   if (const uint32_t session = fm4_session_updating.load(std::memory_order_relaxed)) {
@@ -464,12 +503,40 @@ REX_HOOK_RAW(sub_823B1648) {
             ctx.r3.u32 & 0xFF);
 }
 
-// CCarPresentationDeferred::SetSteeringWheelAngle (f1 = angle, f2, r3 = presentation).
+// CCarPresentationDeferred::SetSteeringWheelAngle (f1 = angle, f2, r3 = presentation). For the
+// first player's car while the wheel steers, the drawn wheel turns by the wheel's own angle up
+// to the car's lock (stage 5), in place of the title's 900-degree mapping held at +-pi/2: the
+// angle passed is the wheel's over the model's scale, so the model turns 1:1 with the wheel;
+// the title's other term (car +15032) is kept.
 REX_HOOK_RAW(sub_822E6B30) {
   static const bool drawn = std::getenv("FM4_WHEEL_TRACE_DRAWN") != nullptr;
+  const uint32_t car = ctx.r31.u32;
+  const double title = ctx.f1.f64;
+  bool follow = false;
+  double model_scale = 0.0;
+  if (uint32_t(ctx.lr) == kDrawnWheelCall && car &&
+      car == player_car.load(std::memory_order_relaxed) &&
+      player_wheel_steers.load(std::memory_order_relaxed) && DrawnFollows() &&
+      Load32(base, car + kCarPresentation) == ctx.r3.u32) {
+    rex::input::wheel::Controls controls;
+    if (rex::input::wheel::GetControls(&controls) && controls.lock_deg > 0.0) {
+      const double half = controls.lock_deg * 0.5;
+      const double angle = std::clamp(controls.wheel_deg, -half, half) * 3.14159265358979323846 /
+                           180.0;
+      model_scale = LoadFloat(base, kDrawnModelScale);
+      const double scale = std::isfinite(model_scale) && model_scale > 0.1 && model_scale < 10.0
+                               ? model_scale
+                               : 1.0;
+      const double other = title - double(LoadFloat(base, car + kCarDrawnAngle));
+      ctx.f1.f64 = angle / scale + (std::isfinite(other) ? other : 0.0);
+      follow = true;
+    }
+  }
   if (drawn && Trace()) {
-    TraceLine("draw %.2f obj=%08x angle=%.6f b=%.6f from=%08x", SteadyMs(), ctx.r3.u32,
-              ctx.f1.f64, ctx.f2.f64, uint32_t(ctx.lr));
+    TraceLine("draw %.2f obj=%08x angle=%.6f b=%.6f from=%08x car=%08x title=%.6f follow=%d "
+              "scale=%.4f",
+              SteadyMs(), ctx.r3.u32, ctx.f1.f64, ctx.f2.f64, uint32_t(ctx.lr), car, title,
+              follow ? 1 : 0, model_scale);
   }
   __imp__sub_822E6B30(ctx, base);
 }
