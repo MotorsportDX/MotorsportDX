@@ -59,6 +59,24 @@ error `ResolvePath(update:\media.zip) failed - device not found` (no title updat
 the `STUB` warnings of Xbox services the game calls but does not need; in the console of
 `Build.ps1`, `'vswhere.exe' is not recognized`.
 
+## Racing wheel
+
+No wheel has been tested yet ([known issues](known-issues.md#tested-hardware)), so every wheel
+report helps. Besides the files above, send:
+
+| File or value | Where | What it holds |
+| --- | --- | --- |
+| `wheel-test.log` | the launcher folder's `logs` | the launcher's wheel test, with the device line `Wheel report:`: the wheel's name, vendor and product ID, axes, buttons, hats and force feedback effects |
+| `wheel-test-forces.csv` | the launcher folder's `logs`, with **Record forces** on in the wheel test | every test force sent |
+| the game's force recording | the file named by `--wheel_ffb_record=<full path>` in the Advanced page's **Extra cvars**, for example `<the launcher folder>\logs\wheel-forces.csv` | every force the game sent, with the game's torque, the wheel's angle, the lock and the end stop |
+| the `Wheel` lines of `runtime.log` | `Select-String -Path logs\runtime.log -Pattern 'Wheel' \| ForEach-Object Line` | the device line, the mapping and the force settings the game ran with |
+| the `-Wheel` value | the launcher's **Wheel value** field on the Racing wheel tab | every wheel setting |
+| the wheel software's profile | Pit House (or the wheel's own software) | its maximum angle, force feedback strength, road sensitivity, damper, friction and inertia |
+
+Name the wheel, the base and the pedals, and say which [checklist](running.md#racing-wheel-test-checklist)
+step shows the problem. The game replaces its recording at every run, like the logs, so copy it
+right after the run.
+
 ## Privacy
 
 - The logs name the folders of the BuildRoot, the export and your discs, which can contain

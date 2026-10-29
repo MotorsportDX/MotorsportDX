@@ -17,6 +17,12 @@ desktop, no Windows 10 computer and no lower-end processor has been tried. A sec
 has not yet built the game from a clean clone; on 25 October 2026 a clean clone built and ran
 on the development laptop.
 
+Racing wheels: **none tested yet**. The planned test set is the project owner's MOZA Racing R9
+base (direct drive) with the ESX steering wheel and the SR-P pedals (two pedals, no clutch
+pedal), run from an export with the [wheel checklist](running.md#racing-wheel-test-checklist).
+Every wheel result so far comes from a virtual wheel and recorded forces on the development
+laptop.
+
 ## What works
 
 On the latest build the automated tests reach the intro and the menus, Quick
@@ -50,13 +56,17 @@ above.
   [the game's steering deadzone](running.md#the-games-steering-deadzone)) and leave the game's
   setting at 24.
 - **Racing wheels** are new and off by default (`-Wheel 'on=1'`, or the launcher's Controls
-  page): the steering, pedals and shift buttons drive the car with each car's own steering
-  lock and an end stop past it, and the game's steering torque drives the force feedback,
-  with kerb, grass and impact vibrations, checked with a virtual wheel and recorded forces
-  only; no real wheel has been tested yet, so the force's feel and strength and the end
-  stop's firmness are untested (keep the force cap at its default 0.25 until then). The menus
-  still need the controller or the keyboard. The cockpit's drawn steering wheel follows the
-  wheel up to the car's lock, but past about 90 degrees the driver's hands keep one pose.
+  page, [racing wheel](running.md#racing-wheel)): the steering, pedals and shift buttons drive
+  the car with each car's own steering lock and an end stop past it, and the game's steering
+  torque drives the force feedback, with kerb, grass and impact vibrations. They were checked
+  with a virtual wheel and recorded forces only; no real wheel has been tested yet (see
+  [Tested hardware](#tested-hardware)), so the force's direction, feel and strength, the end
+  stop's firmness and whether it oscillates on a direct-drive base are untested. Keep the
+  force cap at its default 0.25 until then. The menus still need the controller or the
+  keyboard. The cockpit's drawn steering wheel follows the wheel up to the car's lock, but
+  past about 90 degrees the driver's hands keep one pose. Only cars with the most common
+  steering lock have been driven in the checks; GT racing cars and prototypes have a smaller
+  lock, covered by unit tests only.
 - **Keyboard:** the smooth steering and pedals are new and tested with injected keys only;
   the game's D-PAD STEERING and mouse steering are untested.
 - **The first press in some menus is ignored** by the game after several screens open; press

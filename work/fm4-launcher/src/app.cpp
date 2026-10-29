@@ -2722,8 +2722,9 @@ void App::ControlsRows() {
       KnobRow(wheel_knobs, o.wheel, wheel_table, "on", "Use a racing wheel",
               "A racing wheel drives the car beside the controller: its steering and pedals at the wheel's full "
               "resolution, its buttons for the shifts, the clutch and the handbrake, and force feedback from the "
-              "game's steering torque. Find the axis and button numbers on the Wheel test tab. Set the wheel's "
-              "rotation to what Pit House (or the wheel's own software) uses.",
+              "game's steering torque. Off by default: no real wheel has been tested yet. Run the Wheel test tab "
+              "first to find the axis and button numbers and the force's direction, and set the wheel's rotation "
+              "to what Pit House (or the wheel's own software) uses.",
               KnobKind::kToggle);
       if (wheel_number("on") != 1) return;
       KnobRow(wheel_knobs, o.wheel, wheel_table, "input", "Drive with the wheel",
@@ -2795,7 +2796,10 @@ void App::ControlsRows() {
       section_end("buttons");
       section("FORCE FEEDBACK");
       KnobRow(wheel_knobs, o.wheel, wheel_table, "ffb_cap", "Force cap",
-              "The hard upper limit of every force, a fraction of the wheel's full force.", KnobKind::kSlider);
+              "The hard upper limit of every force together (the game's force, the spring, the damper, the "
+              "vibrations and the end stop), a fraction of the wheel's full force, whatever the gain. 0.25 by "
+              "default: raise it only once the forces feel right and safe on your wheel.",
+              KnobKind::kSlider);
       KnobRow(wheel_knobs, o.wheel, wheel_table, "ffb_gain", "Force gain", "Multiplies the game's force before the cap.",
               KnobKind::kSlider);
       KnobRow(wheel_knobs, o.wheel, wheel_table, "ffb_min_force", "Minimum force",
@@ -2803,7 +2807,7 @@ void App::ControlsRows() {
               "forces above the wheel's own friction. 0 for a direct-drive base.",
               KnobKind::kSlider);
       KnobRow(wheel_knobs, o.wheel, wheel_table, "ffb_smoothing", "Smoothing",
-              "Smooths the game's force. 0: none; more is softer and later.",
+              "Smooths the game's force. 10 ms by default; 0: none; more is softer and later.",
               KnobKind::kSlider, 1, " ms");
       KnobRow(wheel_knobs, o.wheel, wheel_table, "ffb_spring", "Centring spring",
               "The game's centring spring, which grows with speed and fades when the rear slides. 1: as the game "
