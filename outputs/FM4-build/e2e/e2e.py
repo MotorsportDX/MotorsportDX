@@ -1387,6 +1387,8 @@ def run_once(options, out):
         steps = without_driving_input(steps)
     if options.race_seconds:
         steps = with_race_seconds(steps, options.race_seconds)
+    if options.location:
+        steps = with_location(steps, options.location)
     if options.camera:
         steps = with_camera(steps, options.camera)
     check_actions(steps)
@@ -1808,6 +1810,20 @@ def with_camera(steps, camera):
     return steps[:index] + lead + press * presses + steps[index:]
 
 
+def with_location(steps, location):
+    """The fast route's Quick Race steps with Right pressed on the location select screen until
+    OCR reads the location (case-insensitive, part of a line), before its A opens the track
+    select, whose first layout the race takes: for look tests on the tracks of the look
+    references (docs/e2e/README.md, "Race location")."""
+    for index, step in enumerate(steps):
+        if len(step) > 3 and '122_F_TRK_LOCSELECT' in step[3]:
+            break
+    else:
+        raise SystemExit('--location: the steps have no location select (use a Quick Race scenario '
+                         'with --fast-route)')
+    return steps[:index + 1] + [[2, 'wait', 0], [120, '?right', 0.12, location, 2.5]] + steps[index + 1:]
+
+
 def with_race_seconds(steps, seconds):
     """The steps with the wait right after 'phase:race' set to seconds (a longer measured race,
     for in-run perf A/Bs: docs/e2e/experiments.md)."""
@@ -2041,6 +2057,9 @@ def main():
     parser.add_argument('--race-seconds', type=float,
                         help="measure the race phase this long instead of the scenario's (30 s in "
                              'race), for in-run perf A/Bs (docs/e2e/experiments.md)')
+    parser.add_argument('--location',
+                        help='with --fast-route, the Quick Race location by its name on the location '
+                             'select screen, for example "Maple Valley" (docs/e2e/README.md, "Race location")')
     parser.add_argument('--camera', choices=list(CAMERA_PRESSES),
                         help="the race camera, by Back presses from the profile's (the cockpit) once "
                              'the race runs: chase for the look tests (docs/e2e/README.md, "Race camera")')
