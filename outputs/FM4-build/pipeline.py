@@ -1735,6 +1735,9 @@ WHEEL_KNOBS={
     'ffb_smoothing':{'cvar':'wheel_ffb_smoothing','default':'10','min':0.0,'max':200.0},
     'ffb_spring':{'cvar':'wheel_ffb_spring','default':'1','min':0.0,'max':2.0},
     'ffb_damper':{'cvar':'wheel_ffb_damper','default':'1','min':0.0,'max':2.0},
+    'ffb_road':{'cvar':'wheel_ffb_road','default':'0.25','min':0.0,'max':1.0},
+    'ffb_impact':{'cvar':'wheel_ffb_impact','default':'0.5','min':0.0,'max':1.0},
+    'ffb_physics':{'cvar':'wheel_ffb_physics','default':'1','choices':['0','1']},
 }
 
 def option_knobs(text,table,option):
@@ -2285,7 +2288,8 @@ def launcher_test_options(root):
                      'throttle_deadzone=0.03,throttle_gamma=1.5,brake_axis=-1,clutch_axis=3,'
                      'shift_up=4,shift_down=5,clutch_button=-1,handbrake_button=12,ffb_cap=0.4,'
                      'ffb_gain=1.25,ffb_invert=1,ffb_min_force=0.05,ffb_smoothing=0,'
-                     'ffb_spring=0,ffb_damper=0.5','frame_rate':240},
+                     'ffb_spring=0,ffb_damper=0.5,ffb_road=0.4,ffb_impact=0,ffb_physics=0',
+             'frame_rate':240},
             {'wheel':'on=0,input=0,brake_axis=2,ffb_cap=0.25','pad':'rumble=1.5'},
             {'native':True,'frame_rate':240,'vsync':'off'},
             {'native':False},

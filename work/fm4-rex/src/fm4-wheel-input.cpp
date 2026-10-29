@@ -73,6 +73,24 @@
 //   ffb <ms> u=<updates> drv=<0|1> torque=<t> speed=<v> slip=<s> force=<+0x538> ffs=<+0x53C>
 //       sscale=<+0x540> const=<c> spring=<coefficient>/<saturation> damper=<c>/<s>
 //   ffb <ms> u=<updates> reset   a reset of the blocks (once per run of resets)
+//
+// The force at the physics rate (stage 4). The torque at CCarDynamics +0x30 is written once
+// per car step, not per physics step: a write watch (fm4-write-watch.cpp, 29 October 2026)
+// found one writer, sub_823021F0 (the steering torque model), called from sub_82302A18 at the
+// end of the car's step sub_82822BD0, once per frame at 60 and at 240 fps. The car step first
+// integrates its physics in m steps of dt/m (sub_82304E80, sub_82307448, sub_823071B0,
+// sub_82304ED8; m from the frame's dt and the physics rate), and the torque model then reads
+// the front tyres' state the last step left. Here, after each physics step of the first
+// player's car, the title's own torque model is evaluated on that step's state, with the time
+// since the car step began, and the bytes it writes are put back (its smoothing and steering
+// rate state at the car's +2440 to +2484, and the front tyres' +800 to +832): so the title's
+// state is unchanged, and the last step's value is the title's own torque. Each value goes to
+// the host as a point at its physics time (rex/input/wheel/wheel_controls.h), scaled as the
+// force feedback block scales the frame's torque. FM4_WHEEL_PHYSICS=0 publishes no points.
+//
+// FM4_WHEEL_TRACE_FILE also gets, per car step of that car:
+//   phys <ms> u=<updates> steps=<m> dt=<s> last=<the last step's value> title=<the title's
+//       torque after the step>; the two are equal when the evaluation reproduces the title
 #include <rex/hook.h>
 #include <rex/input/wheel/wheel_controls.h>
 #include <rex/memory.h>
@@ -103,6 +121,11 @@ REX_EXTERN(__imp__sub_828C3330);
 REX_EXTERN(__imp__sub_823921F8);
 REX_EXTERN(__imp__sub_828C5B18);
 REX_EXTERN(__imp__sub_828154B0);
+REX_EXTERN(__imp__sub_8239C970);
+REX_EXTERN(__imp__sub_82822BD0);
+REX_EXTERN(__imp__sub_82304E80);
+REX_EXTERN(__imp__sub_82304ED8);
+REX_EXTERN(__imp__sub_823021F0);
 
 // fm4-write-watch.cpp.
 void FM4WriteWatch(uint8_t* base, uint32_t address);
@@ -141,6 +164,39 @@ constexpr uint32_t kDrivingSet = 0x826D6788;
 // ... from reading the steering torque (CCarDynamics slot 254, sub_828154B0).
 constexpr uint32_t kTorqueRead = 0x826D6754;
 constexpr uint32_t kTorqueOffset = 0x30;
+// ... from the rumble update (sub_8239C970: the pad, the frame's step, the rumble inputs).
+constexpr uint32_t kRumbleUpdate = 0x826D66F4;
+// The pad's rumble object and its <Wheel> table (ControllerRumble.xml; +1792 is the
+// <Controller> table, which the pad class uses). A table holds a left and a right curve per
+// effect, 64 bytes each: three points (x, y) at +0, +16 and +32.
+constexpr uint32_t kRumbleObject = 688;
+constexpr uint32_t kWheelTable = 32;
+constexpr uint32_t kCurveRight = 64;
+constexpr uint32_t kCarCollisionCurve = 256;
+constexpr uint32_t kCarCollisionTimeCurve = 384;
+constexpr uint32_t kWorldCollisionCurve = 528;
+constexpr uint32_t kWorldCollisionTimeCurve = 656;
+constexpr uint32_t kObjectCollisionCurve = 800;
+constexpr uint32_t kObjectCollisionTimeCurve = 928;
+constexpr uint32_t kSurfaceBumpinessCurve = 1584;
+// The rumble inputs (r5): the collision impulses with cars, the world and objects, and the
+// surface bumpiness, among the engine speed and the tyres' traction.
+constexpr uint32_t kCarCollisionInput = 8;
+constexpr uint32_t kWorldCollisionInput = 12;
+constexpr uint32_t kObjectCollisionInput = 16;
+constexpr uint32_t kSurfaceBumpinessInput = 36;
+// The car's physics object is CCarDynamics - 0x960; the torque model's state in it, and the
+// front tyres (index 0 and 1, 1056 bytes each from +6160) with the state the model writes.
+constexpr uint32_t kPhysicsFromDynamics = 0x960;
+constexpr uint32_t kTorqueStateBegin = 2440;
+constexpr uint32_t kTorqueStateEnd = 2484;
+constexpr uint32_t kTyres = 6160;
+constexpr uint32_t kTyreSize = 1056;
+constexpr uint32_t kTyreStateBegin = 800;
+constexpr uint32_t kTyreStateEnd = 832;
+// The block's dynamic force settings (ControllerFFB.ini): DynFFBScale and DynFFBMaxForce.
+constexpr uint32_t kDynamicScale = 0x38;
+constexpr uint32_t kDynamicMaxForce = 0x3C;
 
 uint32_t Load32(uint8_t* base, uint32_t address) {
   return rex::memory::load_and_swap<uint32_t>(base + address);
@@ -403,6 +459,53 @@ std::atomic<bool> reset_traced{false};
 
 double Unit(double value) { return std::isfinite(value) ? std::clamp(value, 0.0, 1.0) : 0.0; }
 
+// A rumble curve at x, as the title evaluates it (sub_828C42A8): its first point's y below the
+// first x, its last point's above the last x, linear between.
+double Curve(uint8_t* base, uint32_t curve, double x) {
+  const double x0 = LoadFloat(base, curve), y0 = LoadFloat(base, curve + 4);
+  const double x1 = LoadFloat(base, curve + 16), y1 = LoadFloat(base, curve + 20);
+  const double x2 = LoadFloat(base, curve + 32), y2 = LoadFloat(base, curve + 36);
+  if (!std::isfinite(x)) return 0.0;
+  if (x <= x0) return y0;
+  if (x >= x2) return y2;
+  if (x <= x1) return x1 > x0 ? y0 + (y1 - y0) * (x - x0) / (x1 - x0) : y1;
+  return x2 > x1 ? y1 + (y2 - y1) * (x - x1) / (x2 - x1) : y2;
+}
+
+// The stronger motor's level of an effect in the <Wheel> table.
+double WheelLevel(uint8_t* base, uint32_t table, uint32_t curve, double x) {
+  return Unit(std::max(Curve(base, table + curve, x), Curve(base, table + curve + kCurveRight, x)));
+}
+
+// The road and impact effects of the wheel's pad, from its rumble inputs (stage 4). An impact
+// starts when a collision's level exceeds what is left of the last one (the title fades a
+// collision's rumble over its time curve), so a scrape along a wall does not restart it every
+// frame.
+struct Effects {
+  double road = 0.0;
+  double impact = 0.0;
+  double impact_s = 0.0;
+  uint32_t impacts = 0;
+  double impact_start = 0.0;
+  // The inputs, for the trace, and the <Wheel> table's surface level at its last point.
+  double bumpiness = 0.0;
+  double car = 0.0, world = 0.0, object = 0.0;
+  double table_y2 = 0.0;
+};
+thread_local Effects effects;
+thread_local bool effects_fresh = false;
+thread_local double pending_dynamic_scale = 1.0;
+thread_local double pending_dynamic_max = 1.0;
+thread_local double pending_feedback_scale = 1.0;
+
+// The first player's car for the physics-rate force, from the control step: its physics
+// object, whether the player drives it, and the force feedback block's scaling of the torque.
+std::atomic<uint32_t> player_physics{0};
+std::atomic<bool> player_driving{false};
+std::atomic<double> dynamic_scale{1.0};
+std::atomic<double> dynamic_max{1.0};
+std::atomic<double> feedback_scale{1.0};
+
 }  // namespace
 
 // The force feedback block's update (r3 = the block, r4 = torque, speed and rear slip).
@@ -422,6 +525,52 @@ REX_HOOK_RAW(sub_828C3330) {
   sample.speed = LoadFloat(base, in + 4);
   sample.slip = LoadFloat(base, in + 8);
   pending_block = block;
+  const double dyn_scale = LoadFloat(base, block + kDynamicScale);
+  const double dyn_max = LoadFloat(base, block + kDynamicMaxForce);
+  pending_dynamic_scale = std::isfinite(dyn_scale) ? dyn_scale : 0.0;
+  pending_dynamic_max = std::isfinite(dyn_max) ? std::max(dyn_max, 0.0) : 0.0;
+  pending_feedback_scale = scale;
+}
+
+// The rumble update (r3 = the pad, f1 = the frame's step, r5 = the rumble inputs): the road's
+// vibration and the impacts for the wheel's pad.
+REX_HOOK_RAW(sub_8239C970) {
+  const uint32_t from = uint32_t(ctx.lr);
+  const uint32_t pad = ctx.r3.u32, in = ctx.r5.u32;
+  __imp__sub_8239C970(ctx, base);
+  if (from != kRumbleUpdate || !pad || !in || (Load32(base, pad) & 0xFF) != kWheelUser) return;
+  const uint32_t table = pad + kRumbleObject + kWheelTable;
+  Effects& e = effects;
+  e.bumpiness = LoadFloat(base, in + kSurfaceBumpinessInput);
+  e.car = LoadFloat(base, in + kCarCollisionInput);
+  e.world = LoadFloat(base, in + kWorldCollisionInput);
+  e.object = LoadFloat(base, in + kObjectCollisionInput);
+  e.table_y2 = LoadFloat(base, table + kSurfaceBumpinessCurve + 36);
+  e.road = e.bumpiness > 0.0 ? WheelLevel(base, table, kSurfaceBumpinessCurve, e.bumpiness) : 0.0;
+  double level = 0.0, length = 0.0;
+  const auto collision = [&](double x, uint32_t curve, uint32_t time_curve) {
+    if (!(x > 0.0)) return;
+    const double l = WheelLevel(base, table, curve, x);
+    if (l > level) {
+      level = l;
+      length = std::clamp(Curve(base, table + time_curve, x), 0.02, 1.0);
+    }
+  };
+  collision(e.car, kCarCollisionCurve, kCarCollisionTimeCurve);
+  collision(e.world, kWorldCollisionCurve, kWorldCollisionTimeCurve);
+  collision(e.object, kObjectCollisionCurve, kObjectCollisionTimeCurve);
+  const double now = fm4_diagnostic_session_time.load(std::memory_order_relaxed);
+  const double elapsed = now - e.impact_start;
+  const double left = e.impact_s > 0.0 && elapsed >= 0.0 && elapsed < e.impact_s
+                          ? e.impact * (1.0 - elapsed / e.impact_s)
+                          : 0.0;
+  if (level > 0.0 && level > left * 1.25) {
+    e.impact = level;
+    e.impact_s = length;
+    e.impact_start = now;
+    ++e.impacts;
+  }
+  effects_fresh = true;
 }
 
 // The store of whether the player drives the car (r3 = the pad, r4 = the flag).
@@ -436,23 +585,40 @@ REX_HOOK_RAW(sub_823921F8) {
   if (!pad || block != pad + kForceBlock || (Load32(base, pad) & 0xFF) != kWheelUser) return;
   rex::input::wheel::ForceSample& sample = pending_sample;
   sample.driving = driving;
+  if (effects_fresh) {
+    effects_fresh = false;
+    sample.road = effects.road;
+    sample.impact = effects.impact;
+    sample.impact_s = effects.impact_s;
+    sample.impacts = effects.impacts;
+  } else {
+    sample.road = 0.0;
+  }
+  dynamic_scale.store(pending_dynamic_scale, std::memory_order_relaxed);
+  dynamic_max.store(pending_dynamic_max, std::memory_order_relaxed);
+  feedback_scale.store(pending_feedback_scale, std::memory_order_relaxed);
+  player_driving.store(driving, std::memory_order_relaxed);
   rex::input::wheel::PublishForces(sample);
   reset_traced.store(false, std::memory_order_relaxed);
   if (Trace()) {
     TraceLine("ffb %.2f u=%u drv=%d torque=%.6f speed=%.4f slip=%.4f force=%.6f ffs=%.4f "
-              "sscale=%.4f const=%.6f spring=%.4f/%.4f damper=%.4f/%.4f",
+              "sscale=%.4f const=%.6f spring=%.4f/%.4f damper=%.4f/%.4f bump=%.4f road=%.4f "
+              "hit=%.3f/%.3f/%.3f impact=%.4f/%.3f/%u y2=%.3f",
               SteadyMs(), fm4_diagnostic_updates.load(std::memory_order_relaxed), driving ? 1 : 0,
               sample.torque, sample.speed, sample.slip, LoadFloat(base, block + kDynamicForce),
               LoadFloat(base, block + kForceFeedbackScale),
               LoadFloat(base, block + kSpringSpeedSlipScale), sample.constant,
               sample.spring.coefficient, sample.spring.saturation, sample.damper.coefficient,
-              sample.damper.saturation);
+              sample.damper.saturation, effects.bumpiness, sample.road, effects.car,
+              effects.world, effects.object, sample.impact, sample.impact_s, sample.impacts,
+              effects.table_y2);
   }
 }
 
 // The reset of the force feedback blocks: a race update without a player's control.
 REX_HOOK_RAW(sub_828C5B18) {
   __imp__sub_828C5B18(ctx, base);
+  player_driving.store(false, std::memory_order_relaxed);
   rex::input::wheel::PublishForces({});
   if (Trace() && !reset_traced.exchange(true, std::memory_order_relaxed)) {
     TraceLine("ffb %.2f u=%u reset", SteadyMs(),
@@ -460,10 +626,112 @@ REX_HOOK_RAW(sub_828C5B18) {
   }
 }
 
-// The steering torque's getter (r3 = the car's CCarDynamics): with FM4_WRITE_WATCH_FILE, the
-// control step's read arms the write watch on the torque, to find its writer and its rate.
+namespace {
+
+bool PhysicsOn() {
+  static const bool on = []() {
+    const char* value = std::getenv("FM4_WHEEL_PHYSICS");
+    return !value || std::strcmp(value, "0") != 0;
+  }();
+  return on;
+}
+
+// The car step of the player's car on this thread: its physics object, the physics steps run,
+// the time since the step began, and the physics clock of the points.
+thread_local uint32_t step_physics = 0;
+thread_local int step_count = 0;
+thread_local double step_elapsed = 0.0;
+thread_local double step_dt = 0.0;
+thread_local double step_last = 0.0;
+std::atomic<double> physics_clock{0.0};
+
+// The title's torque model on the state of the step just run, with its writes put back.
+double EvaluateTorque(PPCContext& ctx, uint8_t* base, uint32_t physics, double elapsed) {
+  uint8_t state[kTorqueStateEnd - kTorqueStateBegin];
+  uint8_t tyres[2][kTyreStateEnd - kTyreStateBegin];
+  std::memcpy(state, base + physics + kTorqueStateBegin, sizeof(state));
+  for (uint32_t i = 0; i < 2; ++i) {
+    std::memcpy(tyres[i], base + physics + kTyres + i * kTyreSize + kTyreStateBegin,
+                sizeof(tyres[i]));
+  }
+  const uint32_t torque_offset = kPhysicsFromDynamics + kTorqueOffset;
+  const uint32_t title = Load32(base, physics + torque_offset);
+  PPCContext eval = ctx;
+  eval.r3.u64 = physics;
+  eval.f1.f64 = elapsed;
+  __imp__sub_823021F0(eval, base);
+  const double torque = LoadFloat(base, physics + torque_offset);
+  std::memcpy(base + physics + kTorqueStateBegin, state, sizeof(state));
+  for (uint32_t i = 0; i < 2; ++i) {
+    std::memcpy(base + physics + kTyres + i * kTyreSize + kTyreStateBegin, tyres[i],
+                sizeof(tyres[i]));
+  }
+  rex::memory::store_and_swap<uint32_t>(base + physics + torque_offset, title);
+  return torque;
+}
+
+}  // namespace
+
+// The steering torque's getter (r3 = the car's CCarDynamics): the control step's read names
+// the car whose physics steps give the physics-rate force. With FM4_WRITE_WATCH_FILE it arms
+// the write watch on the torque, which found its writer.
 REX_HOOK_RAW(sub_828154B0) {
   static const bool watch = std::getenv("FM4_WRITE_WATCH_FILE") != nullptr;
-  if (watch && uint32_t(ctx.lr) == kTorqueRead) FM4WriteWatch(base, ctx.r3.u32 + kTorqueOffset);
+  if (uint32_t(ctx.lr) == kTorqueRead) {
+    if (watch) FM4WriteWatch(base, ctx.r3.u32 + kTorqueOffset);
+    if (record_user == int(kWheelUser)) {
+      player_physics.store(ctx.r3.u32 - kPhysicsFromDynamics, std::memory_order_relaxed);
+    }
+  }
   __imp__sub_828154B0(ctx, base);
+}
+
+// A car's step (r3 = its physics object, f1 = the frame's time step): its physics steps, then
+// the torque model.
+REX_HOOK_RAW(sub_82822BD0) {
+  const uint32_t physics = ctx.r3.u32;
+  const bool player = PhysicsOn() && physics &&
+                      physics == player_physics.load(std::memory_order_relaxed) &&
+                      player_driving.load(std::memory_order_relaxed);
+  if (!player) {
+    __imp__sub_82822BD0(ctx, base);
+    return;
+  }
+  step_physics = physics;
+  step_count = 0;
+  step_elapsed = 0.0;
+  step_last = 0.0;
+  __imp__sub_82822BD0(ctx, base);
+  step_physics = 0;
+  if (Trace()) {
+    TraceLine("phys %.2f u=%u steps=%d dt=%.6f last=%.6f title=%.6f", SteadyMs(),
+              fm4_diagnostic_updates.load(std::memory_order_relaxed), step_count, step_elapsed,
+              step_last, LoadFloat(base, physics + kPhysicsFromDynamics + kTorqueOffset));
+  }
+}
+
+// The first part of a physics step (r3 = the physics object, f1 = the step's time).
+REX_HOOK_RAW(sub_82304E80) {
+  if (step_physics && ctx.r3.u32 == step_physics) step_dt = std::fabs(ctx.f1.f64);
+  __imp__sub_82304E80(ctx, base);
+}
+
+// The last part of a physics step (r3 = the physics object): the torque on its state.
+REX_HOOK_RAW(sub_82304ED8) {
+  const uint32_t physics = ctx.r3.u32;
+  __imp__sub_82304ED8(ctx, base);
+  if (!step_physics || physics != step_physics) return;
+  ++step_count;
+  step_elapsed += step_dt;
+  const double torque = EvaluateTorque(ctx, base, physics, step_elapsed);
+  step_last = torque;
+  const double clock = physics_clock.load(std::memory_order_relaxed) + step_dt;
+  physics_clock.store(clock, std::memory_order_relaxed);
+  // As sub_828C3330 scales the frame's torque: clamp(DynFFBScale x torque, +-min(DynFFBMaxForce,
+  // 1)), then ForceFeedbackScale.
+  const double limit = std::min(dynamic_max.load(std::memory_order_relaxed), 1.0);
+  double force = std::isfinite(torque) ? dynamic_scale.load(std::memory_order_relaxed) * torque
+                                       : 0.0;
+  force = std::clamp(force, -limit, limit) * feedback_scale.load(std::memory_order_relaxed);
+  rex::input::wheel::PublishForcePoint({clock, std::clamp(force, -1.0, 1.0), torque});
 }

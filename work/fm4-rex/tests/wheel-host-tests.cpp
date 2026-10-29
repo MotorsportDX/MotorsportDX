@@ -7,8 +7,10 @@
 // hat, that every recorded force stays within the cap, ramps in, is zero while
 // the window has no focus and after an emergency stop, that the title's forces
 // (stage 3) arrive with their spring and damper inside the cap and stop at once
-// outside a driven race and through the watchdog when they stop coming, and
-// that a disconnect is noticed. Argument: a directory for the recordings.
+// outside a driven race and through the watchdog when they stop coming, that
+// the physics-rate points and the road and impact effects (stage 4) drive the
+// force inside the cap and stop with it, and that a disconnect is noticed.
+// Argument: a directory for the recordings.
 // Returns 1 on failure.
 
 #include <chrono>
@@ -54,6 +56,10 @@ struct Row {
   double spring_coeff = 0.0;
   double damper_coeff = 0.0;
   int driving = -1;
+  // Stage 4's columns: the effects' levels, and whether the physics-rate points drive the force.
+  double road = 0.0;
+  double impact = 0.0;
+  int physics = 0;
 };
 
 std::vector<Row> ReadRecording(const std::filesystem::path& path) {
@@ -70,6 +76,12 @@ std::vector<Row> ReadRecording(const std::filesystem::path& path) {
     if (stream) {
       stream >> comma >> row.send_us >> comma >> row.damper >> comma >> row.spring_coeff >>
           comma >> row.damper_coeff >> comma >> row.driving;
+      // sequence, torque, speed, slip, then road and impact; impacts, title_road, title_impact,
+      // frame_force, then physics.
+      double skip = 0.0;
+      stream >> comma >> skip >> comma >> skip >> comma >> skip >> comma >> skip >> comma >>
+          row.road >> comma >> row.impact >> comma >> skip >> comma >> skip >> comma >> skip >>
+          comma >> skip >> comma >> row.physics;
       rows.push_back(row);
     }
   }
@@ -322,6 +334,101 @@ int main(int argc, char** argv) {
     Check(driven_rows > 50 && followed_sign, "the force follows the torque's sign");
     Check(!rows.empty() && rows.back().output == 0.0 && rows.back().spring == 0.0,
           "the recording ends at zero");
+  }
+
+  // Stage 4: the physics-rate points in bursts of a 240 Hz frame, with the road's vibration
+  // and an impact from the frame samples.
+  {
+    const auto record = directory / "wheel-host-test-physics.csv";
+    std::mutex source_mutex;
+    wheel::ForceSample source;
+    uint64_t sequence = 0;
+    std::vector<wheel::ForcePoint> points;
+    wheel::HostOptions options;
+    options.sink = wheel::Sink::kRecord;
+    options.record_path = record.string();
+    options.governor.cap = 0.25;
+    options.governor.ramp_s = 0.2;
+    options.road_scale = 1.0;
+    options.impact_scale = 1.0;
+    options.force_source = [&](wheel::ForceSample* out) {
+      std::lock_guard lock(source_mutex);
+      *out = source;
+      return sequence;
+    };
+    options.force_points = [&](uint64_t after, wheel::ForcePoint* out, size_t max, size_t* got) {
+      std::lock_guard lock(source_mutex);
+      size_t n = 0;
+      for (uint64_t i = after; i < points.size() && n < max; ++i) out[n++] = points[size_t(i)];
+      *got = n;
+      return uint64_t(after + n);
+    };
+    wheel::WheelHost host(options, Printer());
+    host.SetFocus(true);
+    host.Start();
+    Check(WaitFor(host, true, 2000), "the physics host finds the virtual wheel");
+    double sim = 0.0, frame_clock = 0.0;
+    uint32_t impacts = 0;
+    const auto drive = [&](bool driving, bool with_points, int ms, double road, bool hit) {
+      for (int elapsed = 0; elapsed < ms; elapsed += 4) {
+        std::unique_lock lock(source_mutex);
+        wheel::ForceSample sample;
+        sample.driving = driving;
+        sample.constant = 0.1;
+        sample.spring = {0.5, 0.5};
+        sample.damper = {0.1, 0.1};
+        sample.road = road;
+        if (hit && elapsed == 0) ++impacts;
+        sample.impact = 0.6;
+        sample.impact_s = 0.2;
+        sample.impacts = impacts;
+        source = sample;
+        ++sequence;
+        // The physics steps this frame's time covers, at 359 Hz.
+        frame_clock += 0.004;
+        while (with_points && sim + 1.0 / 359.0 <= frame_clock) {
+          sim += 1.0 / 359.0;
+          points.push_back({sim, 0.8 * std::sin(sim * 20.0), 0.0});
+        }
+        if (!with_points) sim = frame_clock;
+        lock.unlock();
+        Sleep(4);
+      }
+    };
+    drive(true, true, 1500, 0.0, false);
+    const wheel::Snapshot physics = host.GetSnapshot();
+    Check(physics.physics_rate && physics.title_points > 300, "the physics-rate points drive the force");
+    Check(physics.stream_delay_ms > 0.0 && physics.stream_delay_ms <= 50.0, "the playback runs behind them");
+    drive(true, true, 300, 1.0, true);
+    const wheel::Snapshot effects = host.GetSnapshot();
+    Check(effects.road_level > 0.0, "the road's vibration runs");
+    drive(true, false, 300, 0.0, false);
+    Check(!host.GetSnapshot().physics_rate, "without points the frame's force drives it again");
+    drive(false, true, 200, 1.0, true);
+    const wheel::Snapshot stopped = host.GetSnapshot();
+    Check(stopped.output == 0.0 && stopped.road_level == 0.0 && stopped.impact_level == 0.0 &&
+              !stopped.physics_rate,
+          "outside a driven race the effects and the points stop too");
+    host.Stop();
+
+    const std::vector<Row> rows = ReadRecording(record);
+    double worst_sum = 0.0;
+    int physics_rows = 0, impact_rows = 0;
+    bool zero_when_stopped = true;
+    for (const Row& row : rows) {
+      worst_sum = std::fmax(worst_sum, std::fabs(row.output) + row.spring + row.damper + row.road +
+                                           row.impact);
+      physics_rows += row.physics;
+      impact_rows += row.impact > 0.0 ? 1 : 0;
+      if (row.driving == 0) {
+        zero_when_stopped = zero_when_stopped && row.output == 0.0 && row.road == 0.0 &&
+                            row.impact == 0.0;
+      }
+    }
+    Check(worst_sum <= 0.25 + 2.0 / 32767.0, "the force, conditions and effects stay within the cap");
+    Check(physics_rows > 300, "the recording marks the physics-rate rows");
+    Check(impact_rows > 0, "the impact is recorded");
+    Check(zero_when_stopped, "the recording's effects are zero outside a driven race");
   }
 
   // A disconnect is noticed.

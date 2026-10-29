@@ -2793,7 +2793,7 @@ void App::ControlsRows() {
               "forces above the wheel's own friction. 0 for a direct-drive base.",
               KnobKind::kSlider);
       KnobRow(wheel_knobs, o.wheel, wheel_table, "ffb_smoothing", "Smoothing",
-              "Smooths the game's force, which changes once a frame. 0: none; more is softer and later.",
+              "Smooths the game's force. 0: none; more is softer and later.",
               KnobKind::kSlider, 1, " ms");
       KnobRow(wheel_knobs, o.wheel, wheel_table, "ffb_spring", "Centring spring",
               "The game's centring spring, which grows with speed and fades when the rear slides. 1: as the game "
@@ -2803,6 +2803,18 @@ void App::ControlsRows() {
               "The game's damper. 1: as the game scales it; 0: off. The spring and the damper take at most half of the "
               "cap.",
               KnobKind::kSlider);
+      KnobRow(wheel_knobs, o.wheel, wheel_table, "ffb_road", "Kerbs and surface",
+              "The vibration of kerbs, rumble strips, grass and gravel, a fraction of the wheel's full force at the "
+              "game's strongest surface rumble. 0: off. The kerbs and impacts take at most a quarter of the cap.",
+              KnobKind::kSlider);
+      KnobRow(wheel_knobs, o.wheel, wheel_table, "ffb_impact", "Impacts",
+              "The jolt of hitting walls, cars and objects, a fraction of the wheel's full force at the game's "
+              "strongest impact. 0: off. The kerbs and impacts take at most a quarter of the cap.",
+              KnobKind::kSlider);
+      KnobRow(wheel_knobs, o.wheel, wheel_table, "ffb_physics", "Physics-rate force",
+              "Follow the game's steering torque at its physics rate (about 360 times a second) rather than once a "
+              "frame.",
+              KnobKind::kToggle);
       KnobRow(wheel_knobs, o.wheel, wheel_table, "ffb_invert", "Invert force",
               "If the wheel test's direction pulse turns the wheel to the left.", KnobKind::kToggle);
     } else if (tab_ == 2) {

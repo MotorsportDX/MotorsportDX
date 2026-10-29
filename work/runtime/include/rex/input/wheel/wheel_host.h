@@ -7,7 +7,7 @@
  * SDL's haptic API from a thread of its own, through the safety governor
  * (ffb_governor.h). Free of runtime dependencies: the runtime's SDL input
  * driver and the GUI launcher's wheel test both use it, with their own log.
- * See docs/analysis/racing-wheels.md, stages 0 and 3.
+ * See docs/analysis/racing-wheels.md, stages 0, 3 and 4.
  *
  * The caller initialises SDL's joystick and haptic subsystems before Start
  * and pumps SDL's events (which update the joysticks). All haptic calls run
@@ -28,6 +28,7 @@
 #include <vector>
 
 #include <rex/input/wheel/ffb_governor.h>
+#include <rex/input/wheel/ffb_stream.h>
 #include <rex/input/wheel/wheel_controls.h>
 #include <rex/input/wheel/wheel_mapping.h>
 
@@ -41,6 +42,10 @@ using ControlsFunction = std::function<void(const Controls&)>;
 // The title's force feedback (stage 3), polled by the force thread every tick: fills the latest
 // sample and returns its sequence number (0: none yet). See wheel_controls.h.
 using ForceSourceFunction = std::function<uint64_t(ForceSample*)>;
+// The title's force at its physics rate (stage 4), polled every tick: copies the points after
+// the first `after` into `out` (at most `max`), sets `got`, and returns the count published.
+using ForcePointsFunction =
+    std::function<uint64_t(uint64_t after, ForcePoint* out, size_t max, size_t* got)>;
 
 enum class Sink {
   // SDL's haptic device of the wheel (DirectInput on Windows), and the recording
@@ -81,9 +86,16 @@ struct HostOptions {
   ControlsFunction on_controls;
   // The title's forces; without it only SubmitForce and the test forces drive the wheel.
   ForceSourceFunction force_source;
+  // The title's force at its physics rate; while its points arrive it replaces the frame
+  // sample's constant force (which stays the fallback), played back by a ForceStream.
+  ForcePointsFunction force_points;
   // Multiply the title's spring and damper before the gain (1: as the title scales them).
   double spring_scale = 1.0;
   double damper_scale = 1.0;
+  // Multiply the title's road vibration and impacts (0..1 levels) into periodic effects'
+  // magnitudes before the gain (0: off).
+  double road_scale = 0.25;
+  double impact_scale = 0.5;
 };
 
 struct Snapshot {
@@ -104,6 +116,8 @@ struct Snapshot {
   double output = 0.0;
   double spring_level = 0.0;
   double damper_level = 0.0;
+  double road_level = 0.0;
+  double impact_level = 0.0;
   double envelope = 0.0;
   uint32_t blocked = 0;
   uint32_t flags = 0;
@@ -111,6 +125,11 @@ struct Snapshot {
   // The title's last sample: whether it drives, and how many samples arrived.
   bool title_driving = false;
   uint64_t title_samples = 0;
+  // The physics-rate points that arrived, whether they drive the force now, and the playback's
+  // delay behind them in milliseconds.
+  uint64_t title_points = 0;
+  bool physics_rate = false;
+  double stream_delay_ms = 0.0;
   // Device updates sent, and their cost (SDL_UpdateHapticEffect), in microseconds.
   uint64_t sends = 0;
   double send_us_mean = 0.0;
@@ -179,8 +198,19 @@ class WheelHost {
   int16_t last_sent_level_ = 0;
   Condition last_sent_spring_;
   Condition last_sent_damper_;
+  double last_sent_road_ = 0.0;
+  double last_sent_impact_ = 0.0;
+  uint64_t last_sent_impacts_ = 0;
+  uint32_t title_impacts_ = 0;
+  bool title_impacts_started_ = false;
   ForceSample title_sample_;
   uint64_t title_sequence_ = 0;
+  ForceStream stream_;
+  uint64_t points_seen_ = 0;
+  // The physics-rate value submitted on this tick, and whether it drives the force.
+  double stream_value_ = 0.0;
+  bool stream_live_ = false;
+  double last_torque_ = 0.0;
   uint32_t last_recorded_flags_ = ~0u;
   uint32_t last_recorded_blocked_ = ~0u;
   Controls controls_;

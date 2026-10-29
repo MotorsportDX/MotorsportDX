@@ -19,6 +19,12 @@
  * steps of at least 0.002 (and exactly once it settles), so a device update
  * follows only a real change, and the bound holds for the levels the device
  * actually has.
+ *
+ * Two periodic effects that the firmware runs count in the same sum by their
+ * magnitude (stage 4): the road's vibration, a level held like a condition's,
+ * and impacts, bursts of a fixed magnitude and length. They take at most their
+ * own share of the cap; an impact keeps its magnitude for its length and the
+ * road's vibration gets what it leaves.
  */
 
 #pragma once
@@ -57,6 +63,9 @@ struct GovernorConfig {
   // The largest share of the cap the condition effects take together; the constant force has
   // at least the rest.
   double condition_share = 0.5;
+  // The largest share of the cap the periodic effects (the road's vibration and impacts) take
+  // together.
+  double effect_share = 0.25;
 };
 
 // A condition effect the firmware runs, as fractions of full scale: the coefficient (force per
@@ -107,6 +116,19 @@ class Governor {
     has_submit_ = true;
   }
 
+  // The road's vibration, a periodic effect's magnitude 0..1 before the gain, held until the
+  // next value (the watchdog of Submit applies).
+  void SubmitRoad(double level) { road_target_ = CleanLevel(level); }
+
+  // An impact: a burst of `level` (0..1 before the gain) for `length_s` from now. A new impact
+  // replaces the one that plays.
+  void Impact(double level, double length_s, double now_s) {
+    impact_wanted_ = CleanLevel(level);
+    impact_length_s_ = std::isfinite(length_s) ? std::clamp(length_s, 0.0, 2.0) : 0.0;
+    impact_start_s_ = now_s;
+    impact_pending_ = impact_wanted_ > 0.0 && impact_length_s_ > 0.0;
+  }
+
   void SetBlocked(uint32_t reason, bool blocked) {
     blocked_ = blocked ? (blocked_ | reason) : (blocked_ & ~reason);
   }
@@ -126,6 +148,8 @@ class Governor {
       filtered_ = 0.0;
       spring_ = {};
       damper_ = {};
+      road_ = 0.0;
+      StopImpact();
       flags_ |= kFlagBlocked;
       return output_;
     }
@@ -133,6 +157,7 @@ class Governor {
     const bool stale = !has_submit_ || now_s - last_submit_s_ > config_.watchdog_s;
     double wanted = 0.0;
     Condition spring, damper;
+    double road = 0.0;
     if (stale) {
       flags_ |= kFlagWatchdog;
       // The ramp starts over once values return.
@@ -152,6 +177,7 @@ class Governor {
       wanted = MinForce(filtered_ * config_.gain) * envelope_;
       spring = Scaled(spring_target_);
       damper = Scaled(damper_target_);
+      road = std::clamp(road_target_ * config_.gain, 0.0, 1.0) * envelope_;
     }
 
     const double step = config_.slew_per_s * dt;
@@ -167,8 +193,31 @@ class Governor {
     }
     spring_ = Hold(spring_, spring, spring_wanted_, step);
     damper_ = Hold(damper_, damper, damper_wanted_, step);
-    // The constant force gets what the conditions leave of the cap.
-    const double room = std::max(0.0, config_.cap - spring_.saturation - damper_.saturation);
+    // The periodic effects within their share: an impact at its start, for its whole length
+    // (none while stale); the road's vibration in what it leaves, held like a condition's level
+    // and cut at once when an impact needs its room.
+    const double effects = config_.cap * config_.effect_share;
+    if (stale) {
+      StopImpact();
+    } else if (impact_pending_) {
+      impact_pending_ = false;
+      const double level = std::clamp(impact_wanted_ * config_.gain, 0.0, 1.0) * envelope_;
+      impact_ = std::min(level, effects);
+      if (impact_ < level) flags_ |= kFlagCapped;
+      if (impact_ > 0.0) ++impacts_;
+    }
+    if (impact_ > 0.0 && now_s - impact_start_s_ >= impact_length_s_) {
+      impact_ = 0.0;
+    }
+    const double road_room = std::max(0.0, effects - impact_);
+    if (road > road_room) {
+      road = road_room;
+      flags_ |= kFlagCapped;
+    }
+    road_ = std::min(HoldLevel(road_, road, road_wanted_, step), road_room);
+    // The constant force gets what the conditions and the periodic effects leave of the cap.
+    const double room = std::max(
+        0.0, config_.cap - spring_.saturation - damper_.saturation - road_ - impact_);
     if (std::fabs(wanted) > room) {
       wanted = std::copysign(room, wanted);
       flags_ |= kFlagCapped;
@@ -189,6 +238,16 @@ class Governor {
   // gain, inside the cap together with the constant force.
   const Condition& spring() const { return spring_; }
   const Condition& damper() const { return damper_; }
+  // The periodic effects' magnitudes for this tick, inside the cap with the rest: the road's
+  // vibration, and the impact that plays (zero once its length has passed). impacts() counts
+  // the impacts started, so a sink starts a burst when it changes; impact_left_s() is what is
+  // left of its length.
+  double road() const { return road_; }
+  double impact() const { return impact_; }
+  uint64_t impacts() const { return impacts_; }
+  double impact_left_s(double now_s) const {
+    return impact_ > 0.0 ? std::max(0.0, impact_length_s_ - (now_s - impact_start_s_)) : 0.0;
+  }
   uint32_t flags() const { return flags_; }
 
   static GovernorConfig Sanitize(GovernorConfig config) {
@@ -204,6 +263,8 @@ class Governor {
     config.min_force = std::clamp(finite_or(config.min_force, 0.0), 0.0, 0.5);
     config.smoothing_s = std::clamp(finite_or(config.smoothing_s, 0.0), 0.0, 0.2);
     config.condition_share = std::clamp(finite_or(config.condition_share, 0.5), 0.0, 1.0);
+    config.effect_share = std::clamp(finite_or(config.effect_share, 0.25), 0.0,
+                                     1.0 - config.condition_share);
     return config;
   }
 
@@ -221,6 +282,30 @@ class Governor {
       return value;
     };
     return {clean(condition.coefficient), clean(condition.saturation)};
+  }
+
+  double CleanLevel(double level) {
+    if (!std::isfinite(level) || level < 0.0 || level > 1.0) {
+      bad_value_ = true;
+      return 0.0;
+    }
+    return level;
+  }
+
+  void StopImpact() {
+    impact_ = 0.0;
+    impact_pending_ = false;
+  }
+
+  // A periodic effect's next magnitude, as Hold moves a condition's saturation.
+  double HoldLevel(double current, double wanted, double& last, double step) {
+    const bool still = wanted == last;
+    last = wanted;
+    const double next = Slew(current, wanted, step);
+    if (next == 0.0) {
+      return 0.0;
+    }
+    return still || std::fabs(next - current) >= kConditionStep ? next : current;
   }
 
   Condition Scaled(const Condition& condition) const {
@@ -277,6 +362,15 @@ class Governor {
   Condition damper_;
   Condition spring_wanted_;
   Condition damper_wanted_;
+  double road_target_ = 0.0;
+  double road_ = 0.0;
+  double road_wanted_ = 0.0;
+  double impact_wanted_ = 0.0;
+  double impact_length_s_ = 0.0;
+  double impact_start_s_ = 0.0;
+  bool impact_pending_ = false;
+  double impact_ = 0.0;
+  uint64_t impacts_ = 0;
   double envelope_ = 0.0;
   double last_submit_s_ = 0.0;
   double last_tick_s_ = 0.0;

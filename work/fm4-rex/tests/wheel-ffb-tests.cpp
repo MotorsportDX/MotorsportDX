@@ -4,13 +4,18 @@
 // infinities and out-of-range values, spikes against the slew limit, focus
 // loss and the other zero states, the watchdog, a stalled force thread, the
 // condition effects inside the cap together with the constant force, the
-// minimum force and the smoothing. Returns 1 on failure.
+// periodic effects (the road's vibration and impacts) inside their share of
+// it, the minimum force, the smoothing, and the playback of a force that
+// arrives in bursts at the physics rate (ffb_stream.h). Returns 1 on failure.
 
+#include <algorithm>
 #include <cmath>
 #include <cstdio>
 #include <limits>
+#include <vector>
 
 #include <rex/input/wheel/ffb_governor.h>
+#include <rex/input/wheel/ffb_stream.h>
 
 namespace {
 
@@ -317,6 +322,89 @@ int main() {
           "below the cap the mix is unchanged");
   }
 
+  // The periodic effects: within their share of the cap, with the constant force and the
+  // conditions in the same sum; an impact for its length, the road's vibration in what it leaves.
+  {
+    GovernorConfig config = Fast();
+    config.cap = 0.25;
+    config.ramp_s = 0.0;
+    config.slew_per_s = 4.0;
+    Governor governor(config);
+    double t = 0.0;
+    double worst = 0.0;
+    uint64_t impacts = 0;
+    const auto feed = [&](double force, double road, double seconds) {
+      for (int i = 0; i < int(std::lround(seconds / kTick)); ++i) {
+        t += kTick;
+        governor.Submit(force, t, {0.5, 0.5}, {0.1, 0.1});
+        governor.SubmitRoad(road);
+        const double out = governor.Step(t);
+        worst = std::fmax(worst, std::fabs(out) + governor.spring().saturation +
+                                     governor.damper().saturation + governor.road() +
+                                     governor.impact());
+      }
+    };
+    feed(1.0, 0.0, 0.5);
+    Check(governor.road() == 0.0 && governor.impact() == 0.0, "no effects without a source");
+    // A kerb: the road's vibration rises at the slew limit to its share of the cap.
+    feed(1.0, 0.8, 0.005);
+    Check(governor.road() > 0.0 && governor.road() <= 4.0 * 0.005 + 1e-9,
+          "the road's vibration rises at the slew limit");
+    feed(1.0, 0.8, 0.5);
+    Check(std::fabs(governor.road() - 0.25 * 0.25) < 1e-9, "the road's vibration takes its share");
+    Check(std::fabs(governor.output() - (0.25 - 0.125 - 0.0625)) < 1e-9,
+          "the constant force gets what the conditions and effects leave");
+    // An impact during the kerb: its own magnitude at once, the road's vibration gives way.
+    governor.Impact(0.04, 0.2, t);
+    feed(1.0, 0.8, 0.001);
+    Check(std::fabs(governor.impact() - 0.04) < 1e-9, "an impact starts at its level");
+    Check(governor.impacts() == ++impacts, "an impact is counted");
+    Check(std::fabs(governor.road() - (0.0625 - 0.04)) < 1e-9,
+          "the road's vibration gives way to the impact");
+    Check(std::fabs(governor.impact_left_s(t) - 0.2) < 0.002, "the impact's length is left");
+    feed(1.0, 0.8, 0.25);
+    Check(governor.impact() == 0.0, "an impact ends after its length");
+    Check(std::fabs(governor.road() - 0.0625) < 1e-9, "the road's vibration takes its room back");
+    // An impact beyond the share is cut to it, and the gain scales it.
+    GovernorConfig loud = config;
+    loud.gain = 2.0;
+    governor.Configure(loud);
+    governor.Impact(1.0, 0.1, t);
+    feed(1.0, 0.0, 0.002);
+    Check(std::fabs(governor.impact() - 0.0625) < 1e-9, "an impact is cut to the share");
+    Check(worst <= 0.25 + 1e-9, "the sum with the effects stays within the cap");
+    // Every zero state stops the effects at once.
+    governor.Configure(config);
+    feed(1.0, 0.8, 0.5);
+    governor.Impact(0.04, 0.2, t);
+    feed(1.0, 0.8, 0.001);
+    governor.SetBlocked(wheel::kBlockPaused, true);
+    governor.Step(t += kTick);
+    Check(governor.road() == 0.0 && governor.impact() == 0.0, "a block stops the effects");
+    governor.SetBlocked(wheel::kBlockPaused, false);
+    feed(1.0, 0.8, 0.5);
+    governor.Impact(0.04, 0.2, t);
+    feed(1.0, 0.8, 0.001);
+    Idle(governor, t, 0.06);
+    Check(governor.road() == 0.0 && governor.impact() == 0.0, "the watchdog stops the effects");
+    // An impact submitted while the source is stale does not start later.
+    governor.Impact(0.04, 0.2, t);
+    Idle(governor, t, 0.01);
+    feed(1.0, 0.0, 0.01);
+    Check(governor.impact() == 0.0, "a stale impact never starts");
+    // Bad levels become zero.
+    governor.SubmitRoad(std::numeric_limits<double>::quiet_NaN());
+    feed(1.0, -1.0, 0.01);
+    Check(governor.road() == 0.0 && (governor.flags() & wheel::kFlagBadValue) != 0,
+          "a bad road level is zero");
+    // The share is sanitized against the conditions'.
+    GovernorConfig shares;
+    shares.condition_share = 0.9;
+    shares.effect_share = 0.5;
+    Check(std::fabs(Governor::Sanitize(shares).effect_share - 0.1) < 1e-12,
+          "the shares never exceed the cap together");
+  }
+
   // The minimum force: lifts small forces, keeps the sign, continuous through zero.
   {
     GovernorConfig config = Fast();
@@ -353,6 +441,66 @@ int main() {
     Idle(governor, t, 0.01);
     governor.SetBlocked(wheel::kBlockPaused, false);
     Check(Run(governor, t, 0.5, 0.001) < 0.1, "the smoothing starts over after a block");
+  }
+
+  // The physics-rate stream: a 359 Hz sine computed in bursts, one burst per frame, played back
+  // on the force thread's clock. At 60, 120 and 240 frames a second the playback follows the
+  // sine at one lag (about a frame) to within 0.03, a millisecond of its steepest slope; holding
+  // each frame's newest step instead would be off by up to 0.42 at 60 fps and 0.1 at 240.
+  for (const double fps : {60.0, 120.0, 240.0}) {
+    wheel::ForceStream stream;
+    constexpr double kStep = 1.0 / 359.0;
+    const auto force = [](double s) { return 0.5 * std::sin(2.0 * 3.14159265358979 * 8.0 * s); };
+    double sim = 0.0;
+    double next_frame = 0.0;
+    double delay = 0.0;
+    int checked = 0;
+    // The largest error against the sine at one fixed lag, for each lag: the playback follows
+    // the physics when one lag fits every sample.
+    std::vector<double> errors(301, 0.0);
+    const double host_origin = 100.0;
+    for (double now = 0.0; now < 2.0; now += kTick) {
+      // A frame at its time runs the steps up to it, all at once, 1 ms after the frame starts.
+      if (now >= next_frame + 0.001) {
+        while (sim + kStep <= next_frame) {
+          sim += kStep;
+          stream.Add(sim, force(sim), host_origin + now);
+        }
+        next_frame += 1.0 / fps;
+      }
+      double value = 0.0;
+      if (!stream.Sample(host_origin + now, &value) || now < 0.6) continue;
+      delay = stream.delay_s();
+      for (size_t lag = 0; lag < errors.size(); ++lag) {
+        errors[lag] = std::fmax(errors[lag], std::fabs(value - force(now - lag * 0.0002)));
+      }
+      ++checked;
+    }
+    char what[96];
+    std::snprintf(what, sizeof(what), "at %.0f fps the playback follows the physics", fps);
+    Check(checked > 1000 && *std::min_element(errors.begin(), errors.end()) < 0.03, what);
+    std::snprintf(what, sizeof(what), "at %.0f fps the delay is about a frame", fps);
+    Check(delay > 0.5 / fps && delay < 1.0 / fps + kStep + 0.002, what);
+  }
+  // Late points, a rewind and an empty stream.
+  {
+    wheel::ForceStream stream;
+    double value = 1.0;
+    Check(!stream.Sample(0.0, &value), "an empty stream has no value");
+    stream.Add(1.0, 0.2, 10.0);
+    stream.Add(1.01, 0.4, 10.0);
+    Check(stream.Sample(10.5, &value) && value == 0.4, "playback ahead holds the newest value");
+    stream.Add(0.5, -0.3, 10.6);
+    Check(stream.Sample(10.6, &value) && value == -0.3, "a point back in time starts over");
+    stream.Add(0.6, std::numeric_limits<double>::quiet_NaN(), 10.7);
+    Check(stream.Sample(10.7, &value) && value == -0.3, "a bad point is dropped");
+    Check(stream.last_arrival_s() == 10.6, "the newest arrival is kept for the watchdog");
+    // A hitch: a burst far later than the window allows is held, then played.
+    wheel::ForceStream hitch;
+    for (int i = 0; i < 200; ++i) hitch.Add(i * 0.005, 0.1, 1.0 + i * 0.005);
+    for (int i = 200; i < 240; ++i) hitch.Add(i * 0.005, 0.2, 2.2);
+    hitch.Sample(2.2, &value);
+    Check(hitch.delay_s() <= 0.05 + 1e-12, "the delay never exceeds its limit");
   }
 
   // The configuration is sanitized.

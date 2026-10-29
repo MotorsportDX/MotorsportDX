@@ -201,6 +201,19 @@ REXCVAR_DEFINE_DOUBLE(wheel_ffb_damper, 1.0, "Input",
                       "Racing wheel force feedback: the game's damper (1: as the game scales "
                       "it, 0: off)")
     .range(0.0, 2.0);
+REXCVAR_DEFINE_DOUBLE(wheel_ffb_road, 0.25, "Input",
+                      "Racing wheel force feedback: the vibration of kerbs, rumble strips, grass "
+                      "and gravel, a fraction of the wheel's full force at the game's strongest "
+                      "surface rumble (0: off)")
+    .range(0.0, 1.0);
+REXCVAR_DEFINE_DOUBLE(wheel_ffb_impact, 0.5, "Input",
+                      "Racing wheel force feedback: the jolt of hitting walls, cars and objects, "
+                      "a fraction of the wheel's full force at the game's strongest impact (0: "
+                      "off)")
+    .range(0.0, 1.0);
+REXCVAR_DEFINE_BOOL(wheel_ffb_physics, true, "Input",
+                    "Racing wheel force feedback: follow the game's steering torque at its "
+                    "physics rate (about 360 times a second) rather than once a frame");
 REXCVAR_DEFINE_STRING(pad_touchpad, "guide", "Input",
                       "Guest button of the touchpad click (PlayStation pads)")
     .allowed({"a", "b", "x", "y", "lb", "rb", "back", "start", "ls", "rs", "up", "down", "left",
@@ -707,7 +720,14 @@ void SDLInputDriver::StartWheel() {
   options.invert = REXCVAR_GET(wheel_ffb_invert);
   options.spring_scale = REXCVAR_GET(wheel_ffb_spring);
   options.damper_scale = REXCVAR_GET(wheel_ffb_damper);
+  options.road_scale = REXCVAR_GET(wheel_ffb_road);
+  options.impact_scale = REXCVAR_GET(wheel_ffb_impact);
   options.force_source = [](wheel::ForceSample* sample) { return wheel::GetForces(sample); };
+  if (REXCVAR_GET(wheel_ffb_physics)) {
+    options.force_points = [](uint64_t after, wheel::ForcePoint* out, size_t max, size_t* got) {
+      return wheel::GetForcePoints(after, out, max, got);
+    };
+  }
   options.sink = REXCVAR_GET(wheel_ffb_sink) == "record" ? wheel::Sink::kRecord
                                                           : wheel::Sink::kDevice;
   options.record_path = REXCVAR_GET(wheel_ffb_record);

@@ -2,7 +2,7 @@
  * @file        input/wheel/wheel_host.cpp
  * @brief       The racing wheel's device and force feedback host
  *
- * See wheel_host.h and docs/analysis/racing-wheels.md (stages 0 and 3).
+ * See wheel_host.h and docs/analysis/racing-wheels.md (stages 0, 3 and 4).
  */
 
 #include <rex/input/wheel/wheel_host.h>
@@ -152,6 +152,25 @@ SDL_HapticEffect ConditionEffect(uint16_t type, const Condition& condition) {
   return effect;
 }
 
+// The periodic effects (stage 4): the road's vibration, a 40 Hz sine for as long as it runs,
+// and an impact, a 17 Hz sine that fades out over its length.
+constexpr uint16_t kRoadPeriodMs = 25;
+constexpr uint16_t kImpactPeriodMs = 60;
+constexpr uint16_t kImpactAttackMs = 5;
+
+SDL_HapticEffect PeriodicEffect(double magnitude, uint16_t period_ms, uint32_t length_ms,
+                                uint16_t attack_ms, uint16_t fade_ms) {
+  SDL_HapticEffect effect{};
+  effect.type = SDL_HAPTIC_SINE;
+  effect.periodic.direction.type = SDL_HAPTIC_STEERING_AXIS;
+  effect.periodic.length = length_ms;
+  effect.periodic.period = period_ms;
+  effect.periodic.magnitude = int16_t(std::lround(std::clamp(magnitude, 0.0, 1.0) * 32767.0));
+  effect.periodic.attack_length = attack_ms;
+  effect.periodic.fade_length = fade_ms;
+  return effect;
+}
+
 bool IsZero(const Condition& condition) {
   return condition.coefficient == 0.0 || condition.saturation == 0.0;
 }
@@ -171,9 +190,13 @@ struct WheelHost::Device {
   SDL_HapticEffectID constant = -1;
   SDL_HapticEffectID spring = -1;
   SDL_HapticEffectID damper = -1;
+  SDL_HapticEffectID road = -1;
+  SDL_HapticEffectID impact = -1;
   bool constant_running = false;
   bool spring_running = false;
   bool damper_running = false;
+  bool road_running = false;
+  bool impact_running = false;
   int16_t constant_level = 0;
 };
 
@@ -217,7 +240,9 @@ void WheelHost::Start() {
 #endif
     if (record_) {
       std::fputs("time_s,target,output,spring,envelope,blocked,flags,send_us,damper,"
-                 "spring_coeff,damper_coeff,driving,sequence,torque,speed,slip\n",
+                 "spring_coeff,damper_coeff,driving,sequence,torque,speed,slip,road,impact,"
+                 "impacts,title_road,title_impact,frame_force,physics,physics_force,"
+                 "physics_torque,delay_ms,points\n",
                  record_);
     } else {
       Log(LogLevel::kWarning,
@@ -229,11 +254,12 @@ void WheelHost::Start() {
       std::format("Wheel: force feedback host started (sink={}, cap={:.2f}, gain={:.2f}, "
                   "min_force={:.2f}, smoothing={:.0f} ms, slew={:.1f}/s, ramp={:.1f} s, "
                   "watchdog={:.0f} ms, rate={} Hz, invert={}, title={}, spring={:.2f}, "
-                  "damper={:.2f}{}{})",
+                  "damper={:.2f}, road={:.2f}, impact={:.2f}, effect_share={:.2f}{}{})",
                   options_.sink == Sink::kDevice ? "device" : "record", g.cap, g.gain,
                   g.min_force, g.smoothing_s * 1000.0, g.slew_per_s, g.ramp_s,
                   g.watchdog_s * 1000.0, options_.rate_hz, options_.invert ? 1 : 0,
                   options_.force_source ? 1 : 0, options_.spring_scale, options_.damper_scale,
+                  options_.road_scale, options_.impact_scale, g.effect_share,
                   record_ ? ", recording to " : "", record_ ? options_.record_path : ""));
   stop_ = false;
   thread_ = std::thread([this]() { Run(); });
@@ -393,6 +419,14 @@ void WheelHost::Scan(double now_s) {
         SDL_HapticEffect effect = ConditionEffect(SDL_HAPTIC_DAMPER, {});
         device_->damper = SDL_CreateHapticEffect(haptic, &effect);
       }
+      if (device_->features & SDL_HAPTIC_SINE) {
+        SDL_HapticEffect road = PeriodicEffect(0.0, kRoadPeriodMs, SDL_HAPTIC_INFINITY, 0, 0);
+        device_->road = SDL_CreateHapticEffect(haptic, &road);
+        SDL_HapticEffect impact = PeriodicEffect(0.0, kImpactPeriodMs, 100, kImpactAttackMs, 95);
+        device_->impact = SDL_CreateHapticEffect(haptic, &impact);
+      } else {
+        Log(LogLevel::kInfo, "Wheel: the wheel has no sine effect; no road or impact effects");
+      }
       haptic_published_.store(haptic);
       haptic_text = std::format(
           "haptic=1 haptic_axes={} max_effects={} max_playing={} features={}",
@@ -442,9 +476,17 @@ void WheelHost::ZeroDevice() {
   if (device_->damper >= 0 && device_->damper_running) {
     SDL_StopHapticEffect(device_->haptic, device_->damper);
   }
+  if (device_->road >= 0 && device_->road_running) {
+    SDL_StopHapticEffect(device_->haptic, device_->road);
+  }
+  if (device_->impact >= 0 && device_->impact_running) {
+    SDL_StopHapticEffect(device_->haptic, device_->impact);
+  }
   device_->constant_running = false;
   device_->spring_running = false;
   device_->damper_running = false;
+  device_->road_running = false;
+  device_->impact_running = false;
   device_->constant_level = 0;
 }
 
@@ -465,6 +507,11 @@ void WheelHost::CloseDevice() {
     if (device_->damper >= 0) {
       SDL_DestroyHapticEffect(device_->haptic, device_->damper);
     }
+    for (SDL_HapticEffectID id : {device_->road, device_->impact}) {
+      if (id >= 0) {
+        SDL_DestroyHapticEffect(device_->haptic, id);
+      }
+    }
     SDL_CloseHaptic(device_->haptic);
   }
   SDL_CloseJoystick(device_->joystick);
@@ -484,14 +531,18 @@ void WheelHost::Record(double now_s, double send_us) {
   }
   const ForceSample& title = title_sample_;
   std::fprintf(record_,
-               "%.6f,%.6f,%.6f,%.6f,%.4f,%u,%u,%.1f,%.6f,%.6f,%.6f,%d,%llu,%.6f,%.4f,%.4f\n",
+               "%.6f,%.6f,%.6f,%.6f,%.4f,%u,%u,%.1f,%.6f,%.6f,%.6f,%d,%llu,%.6f,%.4f,%.4f,%.6f,"
+               "%.6f,%llu,%.4f,%.4f,%.6f,%d,%.6f,%.6f,%.2f,%llu\n",
                now_s, governor_.target(), double(last_sent_level_) / 32767.0,
                last_sent_spring_.saturation, governor_.envelope(), governor_.blocked(),
                governor_.flags(), send_us, last_sent_damper_.saturation,
                last_sent_spring_.coefficient, last_sent_damper_.coefficient,
                title_sequence_ ? (title.driving ? 1 : 0) : -1,
                static_cast<unsigned long long>(title_sequence_), title.torque, title.speed,
-               title.slip);
+               title.slip, last_sent_road_, last_sent_impact_,
+               static_cast<unsigned long long>(last_sent_impacts_), title.road, title.impact,
+               title.constant, stream_live_ ? 1 : 0, stream_value_, last_torque_,
+               stream_.delay_s() * 1000.0, static_cast<unsigned long long>(points_seen_));
 }
 
 void WheelHost::SendForces(double now_s, double constant, const Condition& spring,
@@ -540,16 +591,20 @@ void WheelHost::SendForces(double now_s, double constant, const Condition& sprin
 
   if (blocked) {
     if (device && (device_->constant_running || device_->spring_running ||
-                   device_->damper_running || device_->constant_level != 0)) {
+                   device_->damper_running || device_->road_running ||
+                   device_->impact_running || device_->constant_level != 0)) {
       timed([&]() { ZeroDevice(); });
       sent = true;
     } else if (!device && (last_sent_level_ != 0 || !IsZero(last_sent_spring_) ||
-                           !IsZero(last_sent_damper_))) {
+                           !IsZero(last_sent_damper_) || last_sent_road_ != 0.0 ||
+                           last_sent_impact_ != 0.0)) {
       sent = true;
     }
     last_sent_level_ = 0;
     last_sent_spring_ = {};
     last_sent_damper_ = {};
+    last_sent_road_ = 0.0;
+    last_sent_impact_ = 0.0;
   } else {
     if (level != last_sent_level_) {
       if (device && device_->constant >= 0) {
@@ -572,6 +627,53 @@ void WheelHost::SendForces(double now_s, double constant, const Condition& sprin
               last_sent_spring_);
     condition(SDL_HAPTIC_DAMPER, &Device::damper, &Device::damper_running, damper,
               last_sent_damper_);
+    // The road's vibration: its magnitude whenever the governor passes on a new level.
+    const double road = governor_.road();
+    if (road != last_sent_road_) {
+      if (device && device_->road >= 0) {
+        timed([&]() {
+          SDL_HapticEffect effect = PeriodicEffect(road, kRoadPeriodMs, SDL_HAPTIC_INFINITY, 0, 0);
+          SDL_UpdateHapticEffect(device_->haptic, device_->road, &effect);
+          if (road > 0.0 && !device_->road_running) {
+            SDL_RunHapticEffect(device_->haptic, device_->road, 1);
+            device_->road_running = true;
+          } else if (road == 0.0 && device_->road_running) {
+            SDL_StopHapticEffect(device_->haptic, device_->road);
+            device_->road_running = false;
+          }
+        });
+      }
+      last_sent_road_ = road;
+      sent = true;
+    }
+    // An impact: a burst for what is left of its length, faded out by the firmware; stopped
+    // when the governor ends it early.
+    const double impact = governor_.impact();
+    if (governor_.impacts() != last_sent_impacts_ && impact > 0.0) {
+      last_sent_impacts_ = governor_.impacts();
+      const uint32_t length_ms =
+          uint32_t(std::max(1L, std::lround(governor_.impact_left_s(now_s) * 1000.0)));
+      if (device && device_->impact >= 0) {
+        timed([&]() {
+          const uint16_t attack = uint16_t(std::min<uint32_t>(kImpactAttackMs, length_ms / 2));
+          SDL_HapticEffect effect = PeriodicEffect(impact, kImpactPeriodMs, length_ms, attack,
+                                                   uint16_t(std::min<uint32_t>(
+                                                       length_ms - attack, 0xFFFF)));
+          SDL_UpdateHapticEffect(device_->haptic, device_->impact, &effect);
+          SDL_RunHapticEffect(device_->haptic, device_->impact, 1);
+          device_->impact_running = true;
+        });
+      }
+      last_sent_impact_ = impact;
+      sent = true;
+    } else if (impact == 0.0 && last_sent_impact_ != 0.0) {
+      if (device && device_->impact >= 0 && device_->impact_running) {
+        timed([&]() { SDL_StopHapticEffect(device_->haptic, device_->impact); });
+        device_->impact_running = false;
+      }
+      last_sent_impact_ = 0.0;
+      sent = true;
+    }
   }
 
   if (sent || new_sample || governor_.flags() != last_recorded_flags_ ||
@@ -713,13 +815,60 @@ void WheelHost::Run() {
         governor_.Submit(amplitude * std::sin(2.0 * std::numbers::pi * test_s), now_s);
         break;
       case TestEffect::kNone: {
-        if (new_sample && title_sample_.driving) {
+        // The physics-rate points: played back while they keep coming and the player drives;
+        // a pause or a block starts the stream over.
+        stream_live_ = false;
+        if (options_.force_points) {
+          std::array<ForcePoint, 64> points;
+          size_t got = 0;
+          const uint64_t count = options_.force_points(points_seen_, points.data(), points.size(),
+                                                       &got);
+          points_seen_ = count;
+          for (size_t i = 0; i < got; ++i) {
+            stream_.Add(points[i].sim_s, points[i].constant, now_s);
+            last_torque_ = points[i].torque;
+          }
+          const bool fresh = !stream_.empty() &&
+                             now_s - stream_.last_arrival_s() <= options_.governor.watchdog_s;
+          if (!fresh || title_stopped || governor_.blocked() != kBlockNone) {
+            stream_.Reset();
+          } else if (title_sequence_ != 0 && title_sample_.driving &&
+                     stream_.Sample(now_s, &stream_value_)) {
+            stream_live_ = true;
+          }
+        }
+        if (stream_live_) {
+          const auto scaled = [](const Condition& condition, double scale) {
+            return Condition{condition.coefficient * scale, condition.saturation * scale};
+          };
+          // Its time is the newest point's arrival, so the watchdog still sees the points stop.
+          governor_.Submit(stream_value_, stream_.last_arrival_s(),
+                           scaled(title_sample_.spring, options_.spring_scale),
+                           scaled(title_sample_.damper, options_.damper_scale));
+        } else if (new_sample && title_sample_.driving) {
           const auto scaled = [](const Condition& condition, double scale) {
             return Condition{condition.coefficient * scale, condition.saturation * scale};
           };
           governor_.Submit(title_sample_.constant, now_s,
                            scaled(title_sample_.spring, options_.spring_scale),
                            scaled(title_sample_.damper, options_.damper_scale));
+        }
+        if (new_sample && title_sample_.driving) {
+          const auto level = [](double value, double scale) {
+            return std::isfinite(value) ? std::clamp(value * scale, 0.0, 1.0) : value;
+          };
+          governor_.SubmitRoad(level(title_sample_.road, options_.road_scale));
+          // A new count starts an impact; the first sample only takes the count.
+          if (title_sample_.impacts != title_impacts_) {
+            if (title_impacts_started_) {
+              governor_.Impact(level(title_sample_.impact, options_.impact_scale),
+                               title_sample_.impact_s, now_s);
+            }
+          }
+        }
+        if (new_sample) {
+          title_impacts_ = title_sample_.impacts;
+          title_impacts_started_ = true;
         }
         const uint64_t source_ns = source_ns_.load(std::memory_order_acquire);
         if (source_ns != last_source_ns) {
@@ -749,8 +898,13 @@ void WheelHost::Run() {
       snapshot_.output = constant;
       snapshot_.spring_level = governor_.spring().saturation;
       snapshot_.damper_level = governor_.damper().saturation;
+      snapshot_.road_level = governor_.road();
+      snapshot_.impact_level = governor_.impact();
       snapshot_.title_driving = title_sequence_ != 0 && title_sample_.driving;
       snapshot_.title_samples = title_sequence_;
+      snapshot_.title_points = points_seen_;
+      snapshot_.physics_rate = stream_live_;
+      snapshot_.stream_delay_ms = stream_.delay_s() * 1000.0;
       snapshot_.envelope = governor_.envelope();
       snapshot_.blocked = governor_.blocked();
       snapshot_.flags = governor_.flags();
@@ -798,6 +952,8 @@ void WheelHost::Run() {
     snapshot_.output = 0.0;
     snapshot_.spring_level = 0.0;
     snapshot_.damper_level = 0.0;
+    snapshot_.road_level = 0.0;
+    snapshot_.impact_level = 0.0;
     snapshot_.blocked = governor_.blocked();
     snapshot_.sends = send_count_;
     snapshot_.send_us_mean = send_count_ ? send_us_sum_ / double(send_count_) : 0.0;
