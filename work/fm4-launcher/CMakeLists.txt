@@ -25,6 +25,7 @@ add_executable(fm4_launcher WIN32
     src/discs.cpp
     src/plan.cpp
     src/runner.cpp
+    src/screenshot.cpp
     src/settings.cpp
     src/shaders.cpp
     src/tests.cpp
@@ -47,5 +48,5 @@ target_include_directories(fm4_launcher PRIVATE
 # Only rex/input/wheel of the runtime's headers, which need nothing else of the runtime.
 target_include_directories(fm4_launcher PRIVATE ${FM4_RUNTIME_SOURCE}/include)
 target_compile_definitions(fm4_launcher PRIVATE UNICODE _UNICODE NOMINMAX WIN32_LEAN_AND_MEAN)
-target_link_libraries(fm4_launcher PRIVATE SDL3::SDL3-static d3d11 dxgi d3dcompiler bcrypt shcore shell32 advapi32 user32 urlmon ole32)
+target_link_libraries(fm4_launcher PRIVATE SDL3::SDL3-static d3d11 dxgi d3dcompiler bcrypt shcore shell32 advapi32 user32 urlmon ole32 windowscodecs)
 set_target_properties(fm4_launcher PROPERTIES OUTPUT_NAME MotorsportDX)

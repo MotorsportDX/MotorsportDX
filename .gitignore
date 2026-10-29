@@ -108,6 +108,8 @@
 !/work/fm4-launcher/src/plan.h
 !/work/fm4-launcher/src/runner.cpp
 !/work/fm4-launcher/src/runner.h
+!/work/fm4-launcher/src/screenshot.cpp
+!/work/fm4-launcher/src/screenshot.h
 !/work/fm4-launcher/src/settings.cpp
 !/work/fm4-launcher/src/settings.h
 !/work/fm4-launcher/src/shaders.cpp

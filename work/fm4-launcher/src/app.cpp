@@ -33,6 +33,7 @@
 
 #include "discs.h"
 #include "runner.h"
+#include "screenshot.h"
 #include "shaders.h"
 #include "settings.h"
 
@@ -307,6 +308,9 @@ class App {
  public:
   bool Init(int argc, char** argv);
   void Run();
+  // --screenshot (screenshot.h): Init read the request; renders the page and returns the exit code.
+  bool Headless() const { return shot_.has_value(); }
+  int Screenshot();
 
  private:
   void LoadFonts(float scale);
@@ -359,6 +363,7 @@ class App {
   void Colored(const ImVec4& color, const std::string& text);
 
   fs::path root_;
+  std::optional<ScreenshotRequest> shot_;
   LauncherData data_;
   Settings settings_;
   fs::path settings_path_;
@@ -431,6 +436,12 @@ bool App::Init(int argc, char** argv) {
   if (argc >= 4 && std::string(argv[1]) == "--test") {
     std::exit(RunTests(PathFromUtf8(argv[2]), PathFromUtf8(argv[3])));
   }
+  try {
+    shot_ = ParseScreenshot(argc, argv);
+  } catch (const std::exception& error) {
+    std::fprintf(stderr, "%s\n", error.what());
+    std::exit(2);
+  }
   SetProcessDpiAwarenessContext(DPI_AWARENESS_CONTEXT_PER_MONITOR_AWARE_V2);
   monitor_ = PrimaryMonitor();
   try {
@@ -440,9 +451,14 @@ bool App::Init(int argc, char** argv) {
   }
   if (!fs::exists(root_ / "game-build" / "fm4_rex.exe"))
     load_error_ = "No game-build\\fm4_rex.exe beside the launcher. Keep MotorsportDX.exe in its export folder.";
-  settings_path_ = root_ / "launcher-settings.json";
+  // A screenshot reads its own settings (the defaults without --settings) and never saves them.
+  settings_path_ = shot_ ? shot_->settings : root_ / "launcher-settings.json";
   settings_ = Settings::Load(settings_path_);
-  if (settings_.disc1.empty() && fs::exists(root_ / "local.json")) {
+  if (shot_ && shot_->state == "first-run") {
+    settings_.disc1.clear();
+    settings_.disc2.clear();
+    settings_.content.clear();
+  } else if (settings_.disc1.empty() && fs::exists(root_ / "local.json")) {
     // A BuildRoot: the Discs and content that generate saved.
     try {
       std::ifstream stream(root_ / "local.json", std::ios::binary);
@@ -465,6 +481,7 @@ bool App::Init(int argc, char** argv) {
     std::strftime(text, sizeof(text), "%d %B %Y", &local);
     build_date_ = text[0] == '0' ? text + 1 : text;
   }
+  if (shot_) return true;
 
   if (!SDL_Init(SDL_INIT_VIDEO | SDL_INIT_GAMEPAD)) return false;
   game_event_ = SDL_RegisterEvents(1);
@@ -513,6 +530,98 @@ bool App::Init(int argc, char** argv) {
     }
   }
   return true;
+}
+
+int App::Screenshot() {
+  static const char* const kPages[] = {"display", "look", "controls", "game-data", "advanced", "shaders", "about"};
+  page_ = -1;
+  for (int i = 0; i < static_cast<int>(std::size(kPages)); ++i)
+    if (shot_->page == kPages[i]) page_ = i;
+  if (page_ < 0) return std::fprintf(stderr, "Unknown page: %s\n", shot_->page.c_str()), 2;
+  if (shot_->state == "error-banner") {
+    banner_ = "The game exited with code 3221225477 after 2 min 14 s.";
+    banner_error_ = true;
+  } else if (shot_->state == "load-error") {
+    load_error_ = "No game-build\\fm4_rex.exe beside the launcher. Keep MotorsportDX.exe in its export folder.";
+  } else if (!shot_->state.empty() && shot_->state != "first-run") {
+    return std::fprintf(stderr, "Unknown state: %s\n", shot_->state.c_str()), 2;
+  }
+  // WARP: the screenshot never touches the GPU, which may be running the game.
+  const D3D_FEATURE_LEVEL levels[] = {D3D_FEATURE_LEVEL_11_0};
+  if (D3D11CreateDevice(nullptr, D3D_DRIVER_TYPE_WARP, nullptr, 0, levels, 1, D3D11_SDK_VERSION, &device_, nullptr,
+                        &context_) != S_OK)
+    return std::fprintf(stderr, "No WARP device\n"), 1;
+  D3D11_TEXTURE2D_DESC desc{};
+  desc.Width = static_cast<UINT>(shot_->width);
+  desc.Height = static_cast<UINT>(shot_->height);
+  desc.MipLevels = desc.ArraySize = 1;
+  desc.Format = DXGI_FORMAT_R8G8B8A8_UNORM;
+  desc.SampleDesc.Count = 1;
+  desc.BindFlags = D3D11_BIND_RENDER_TARGET;
+  ID3D11Texture2D* texture = nullptr;
+  device_->CreateTexture2D(&desc, nullptr, &texture);
+  device_->CreateRenderTargetView(texture, nullptr, &target_);
+  desc.BindFlags = 0;
+  desc.Usage = D3D11_USAGE_STAGING;
+  desc.CPUAccessFlags = D3D11_CPU_ACCESS_READ;
+  ID3D11Texture2D* staging = nullptr;
+  device_->CreateTexture2D(&desc, nullptr, &staging);
+
+  scale_ = shot_->scale;
+  IMGUI_CHECKVERSION();
+  ImGui::CreateContext();
+  ImGuiIO& io = ImGui::GetIO();
+  io.IniFilename = nullptr;
+  io.DisplaySize = ImVec2(static_cast<float>(shot_->width), static_cast<float>(shot_->height));
+  io.DeltaTime = 1.0f / 60;
+  ApplyTheme(scale_);
+  LoadFonts(scale_);
+  ImGui_ImplDX11_Init(device_, context_);
+  if (load_error_.empty()) Refresh(true);
+  static const std::map<std::string, ImGuiKey> kPadKeys = {
+      {"up", ImGuiKey_GamepadDpadUp},       {"down", ImGuiKey_GamepadDpadDown}, {"left", ImGuiKey_GamepadDpadLeft},
+      {"right", ImGuiKey_GamepadDpadRight}, {"a", ImGuiKey_GamepadFaceDown},    {"b", ImGuiKey_GamepadFaceRight},
+      {"x", ImGuiKey_GamepadFaceLeft},      {"y", ImGuiKey_GamepadFaceUp},      {"lb", ImGuiKey_GamepadL1},
+      {"rb", ImGuiKey_GamepadR1},           {"start", ImGuiKey_GamepadStart},   {"back", ImGuiKey_GamepadBack}};
+  for (const auto& button : shot_->pad)
+    if (!kPadKeys.contains(button)) return std::fprintf(stderr, "Unknown pad button: %s\n", button.c_str()), 2;
+  if (!shot_->pad.empty()) {
+    io.ConfigFlags |= ImGuiConfigFlags_NavEnableGamepad;
+    io.BackendFlags |= ImGuiBackendFlags_HasGamepad;
+  }
+  // A few frames, so that the layout settles (combo widths, collapsing headers, wrapped text);
+  // then each pad button is pressed for one frame and released for three.
+  const int frames = 4 + 4 * static_cast<int>(shot_->pad.size()) + 4;
+  for (int frame = 0; frame < frames; ++frame) {
+    const int step = frame - 4;
+    if (step >= 0 && step / 4 < static_cast<int>(shot_->pad.size()) && step % 4 < 2)
+      io.AddKeyEvent(kPadKeys.at(shot_->pad[step / 4]), step % 4 == 0);
+    ImGui_ImplDX11_NewFrame();
+    ImGui::NewFrame();
+    Frame();
+    ImGui::Render();
+    const float clear[4] = {kBackground.x, kBackground.y, kBackground.z, 1};
+    context_->OMSetRenderTargets(1, &target_, nullptr);
+    context_->ClearRenderTargetView(target_, clear);
+    ImGui_ImplDX11_RenderDrawData(ImGui::GetDrawData());
+  }
+  context_->CopyResource(staging, texture);
+  D3D11_MAPPED_SUBRESOURCE mapped{};
+  bool written = false;
+  if (context_->Map(staging, 0, D3D11_MAP_READ, 0, &mapped) == S_OK) {
+    written = WritePng(shot_->out, shot_->width, shot_->height, static_cast<const uint8_t*>(mapped.pData),
+                       static_cast<int>(mapped.RowPitch));
+    context_->Unmap(staging, 0);
+  }
+  ImGui_ImplDX11_Shutdown();
+  ImGui::DestroyContext();
+  ReleaseTarget();
+  staging->Release();
+  texture->Release();
+  context_->Release();
+  device_->Release();
+  if (!written) return std::fprintf(stderr, "Could not write %s\n", Utf8(shot_->out).c_str()), 1;
+  return 0;
 }
 
 bool App::CreateDevice(HWND window) {
@@ -2455,6 +2564,7 @@ int main(int argc, char** argv) {
     SDL_ShowSimpleMessageBox(SDL_MESSAGEBOX_ERROR, "Motorsport DX", SDL_GetError(), nullptr);
     return 1;
   }
+  if (app.Headless()) return app.Screenshot();
   app.Run();
   return 0;
 }

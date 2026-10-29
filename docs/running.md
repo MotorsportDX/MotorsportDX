@@ -48,6 +48,21 @@ needs neither Python nor Visual Studio nor the repository, so it also runs from 
 `MotorsportDX.exe`. `MotorsportDX.exe --play` presses Play at once with the active
 profile, for a desktop shortcut.
 
+For reviews of the launcher's layout, `MotorsportDX.exe --screenshot <page> <width>x<height>
+<scale> <out.png>` renders one page without a window and exits. The pages are `display`,
+`look`, `controls`, `game-data`, `advanced`, `shaders` and `about`; the scale is the DPI
+scale (1 for a 100% screen, 1.5 for the ROG Xbox Ally X's default). It renders with WARP, the
+CPU's Direct3D 11, so it never touches the GPU, and it neither reads nor writes
+`launcher-settings.json`: it starts from the default settings and the Discs of `local.json`.
+Options:
+- `--settings <file>` reads that `launcher-settings.json` instead.
+- `--state first-run` starts without Discs and content; `--state error-banner` shows the banner
+  of a game that exited with an error; `--state load-error` shows the error of a launcher
+  without its game.
+- `--pad <button>,<button>...` presses gamepad buttons one after another before the capture
+  (`up`, `down`, `left`, `right`, `a`, `b`, `x`, `y`, `lb`, `rb`, `start`, `back`), to check
+  the pad navigation.
+
 The launcher was `fm4_launcher.exe` until 26 October 2026. `build` and `export` now remove that
 old file from `game-build` and from an earlier export, so a shortcut to it stops working
 instead of starting a launcher older than its game: point the shortcut at `MotorsportDX.exe`
