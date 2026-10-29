@@ -52,6 +52,11 @@ The two machines the launcher has to serve:
   focused row has a lighter fill, a red frame with a notch in its top right corner, and chevrons
   around its value, which turns red. Left and right step the value; A, or a click on the row,
   steps it on; a click on the left chevron steps it back.
+- A slider row (a look knob) has a bar between the label and the value, which the mouse or a
+  finger drags; left and right step it by a round number near a fortieth of its range (0.05 for
+  most knobs). A on a slider does nothing.
+- A changed row has a red edge and a red label; X, Delete, Backspace or the X **Reset** prompt,
+  which shows while such a row has the focus, resets it.
 - LB and RB change the page's tab, B goes back to Home, Start plays, Y opens the profiles.
 
 **The detail panel** at the right of a list shows the focused entry: its title in capitals in
@@ -98,8 +103,8 @@ calendar time.
 | Increment | Contents | Effort |
 | --- | --- | --- |
 | T0 | The headless screenshot mode (`--screenshot`, `--state`, `--pad`) | Done |
-| T1 | The frame (backdrop, top bar, prompt bar pressed by the pad, the mouse and touch, the window inside the work area), Home, Display (Screen, Performance and Extras tabs; the frame rate in steps; **Use FSR 3.1** for the upscaler), the profiles on Y, the developer switch, Controls in three tabs, the touch layout, the crash banner in words | This change |
-| T2 | Look: the preset as a row, the knob groups (picture, lighting, car, sky and foliage, road) as tabs, each knob a row whose value steps; a changed knob marked, Reset on X; **Save as look** and the saved looks | 2 h |
+| T1 | The frame (backdrop, top bar, prompt bar pressed by the pad, the mouse and touch, the window inside the work area), Home, Display (Screen, Performance and Extras tabs; the frame rate in steps; **Use FSR 3.1** for the upscaler), the profiles on Y, the developer switch, Controls in three tabs, the touch layout, the crash banner in words | Done |
+| T2 | Look: the preset as a row, the knob groups (picture, lighting, car, sky and foliage, road) as tabs, each knob a slider row whose value steps by about a fortieth of its range and whose bar the mouse drags; a changed knob marked, Reset on X; **Save as look** and the saved looks, a delete after a confirmation | Done |
 | T3 | Controls: Controller, Racing wheel and Keyboard as LB/RB tabs of rows; the key bindings as rows that wait for a key on A; the wheel test as its own panel. The racing wheel's controls and plan keys stay as the wheel's stages define them | 2.5 h |
 | T4 | Game data: Disc 1, Disc 2 and the content folders as rows that open the folder picker on A, their checks in the detail panel; the content packages as a list with their import state; the texture pack | 1.5 h |
 | T5 | Shaders and Advanced: the shader pass's progress as a panel with Skip and Compile on the prompts; Advanced as rows, the developer options as a tab of their own | 1.5 h |

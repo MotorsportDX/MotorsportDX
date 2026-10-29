@@ -80,57 +80,85 @@ struct Knob {
   const char* label;
   float min, max;
   float step;
+  const char* help;  // the detail panel's text on the Look page
 };
 
 struct KnobGroup {
   const char* title;
+  const char* tab;  // the Look page's tab
   std::vector<Knob> knobs;
 };
 
 const std::vector<KnobGroup> kKnobGroups = {
     {"Picture",
-     {{"exposure", "Exposure", -2, 2, 0.01f},
-      {"contrast", "Contrast", -1, 1, 0.01f},
-      {"saturation", "Saturation", 0, 2, 0.01f},
-      {"bloom", "Bloom", 0, 2, 0.01f},
-      {"sharpen", "Sharpen", 0, 1.5f, 0.01f},
-      {"vignette", "Vignette", 0, 2, 0.01f},
-      {"motion_blur", "Motion blur", 0, 2, 0.01f}}},
+     "PICTURE",
+     {{"exposure", "Exposure", -2, 2, 0.01f, "Brighter above 0, darker below, on top of the game's auto exposure."},
+      {"contrast", "Contrast", -1, 1, 0.01f, "Contrast of the whole picture: deeper shadows and brighter highlights above 0."},
+      {"saturation", "Saturation", 0, 2, 0.01f, "Colour strength of the whole picture: 1 keeps it, 0 is grey."},
+      {"bloom", "Bloom", 0, 2, 0.01f, "The glow around bright lights and sunlit surfaces."},
+      {"sharpen", "Sharpen", 0, 1.5f, 0.01f,
+       "Sharpening of the final picture, after the anti-aliasing. With FSR 3.1 it is FSR's own sharpening."},
+      {"vignette", "Vignette", 0, 2, 0.01f, "Darker corners of the picture."},
+      {"motion_blur", "Motion blur", 0, 2, 0.01f,
+       "The game's motion blur in races and replays. Photo mode's blur, which you set there, changes only when this "
+       "is set."}}},
     {"Lighting",
-     {{"sun", "Sun glare", 0, 4, 0.01f},
-      {"sky", "Sky brightness", 0, 2, 0.01f},
-      {"ao", "Ambient occlusion", 0, 1.5f, 0.01f},
-      {"cockpit_fill", "Cockpit fill", 0, 2, 0.01f},
-      {"cockpit_light", "Cockpit sun floor", 0, 1, 0.01f},
-      {"windshield", "Cockpit glass", 0, 2, 0.01f}}},
+     "LIGHTING",
+     {{"sun", "Sun glare", 0, 4, 0.01f, "The glare around the sun. 0 turns it off."},
+      {"sky", "Sky brightness", 0, 2, 0.01f, "Brightness of the sky; the Sky & foliage tab changes its colour."},
+      {"ao", "Ambient occlusion", 0, 1.5f, 0.01f,
+       "Soft shadows in corners and under the cars (screen-space ambient occlusion). 0 turns it off."},
+      {"cockpit_fill", "Cockpit fill", 0, 2, 0.01f,
+       "Light from the sky in the shaded cockpit, lessened in tunnels and under stands, so the dashboard is not "
+       "near black in the sun."},
+      {"cockpit_light", "Cockpit sun floor", 0, 1, 0.01f,
+       "The least share of sunlight the cockpit and the driver keep in the car's own shadow. It follows the sun's "
+       "direction, so the cockpit can swing between bright and dark; Cockpit fill is the steadier choice."},
+      {"windshield", "Cockpit glass", 0, 2, 0.01f,
+       "Glass in the cockpit camera's windshield and side windows: a light tint, a faint reflection of the "
+       "dashboard, and glare and dust toward bright light. 0 leaves them open, as the game does."}}},
     {"Car",
-     {{"clearcoat", "Clear coat", 0, 2, 0.01f},
-      {"clearcoat_roughness", "Clear coat roughness", 0.02f, 1, 0.01f},
-      {"clearcoat_glint", "Highlight limit", 0, 8, 0.01f},
-      {"flakes", "Paint flakes", 0, 2, 0.01f},
-      {"flake_scale", "Flake scale", 100, 4000, 10},
-      {"glass", "Glass", 0, 2, 0.01f},
-      {"glass_roughness", "Glass roughness", 0.01f, 0.5f, 0.01f},
-      {"chrome", "Chrome", 0, 2, 0.01f},
-      {"chrome_roughness", "Chrome roughness", 0.01f, 0.5f, 0.01f},
-      {"rims", "Rims", 0, 2, 0.01f},
-      {"rims_roughness", "Rim roughness", 0.02f, 1, 0.01f}}},
+     "CAR",
+     {{"clearcoat", "Clear coat", 0, 2, 0.01f, "The clear coat over the body paint: reflections and a sun highlight."},
+      {"clearcoat_roughness", "Clear coat roughness", 0.02f, 1, 0.01f,
+       "Roughness of the clear coat: lower is a sharper, smaller highlight."},
+      {"clearcoat_glint", "Highlight limit", 0, 8, 0.01f,
+       "Soft limit of the sun highlight on paint, glass, chrome and rims. At 4 a hood toward the sun turns into a "
+       "white blob; at 1 the highlight keeps its shape."},
+      {"flakes", "Paint flakes", 0, 2, 0.01f, "Metallic flakes in the car paint."},
+      {"flake_scale", "Flake scale", 100, 4000, 10, "The size of the paint flakes: higher is finer."},
+      {"glass", "Glass", 0, 2, 0.01f,
+       "Windows and lamp covers: the reflection at grazing angles and a sharp sun highlight."},
+      {"glass_roughness", "Glass roughness", 0.01f, 0.5f, 0.01f, "Roughness of the glass highlight."},
+      {"chrome", "Chrome", 0, 2, 0.01f, "Chrome trim and chrome rims: a sun highlight and more reflection at grazing angles."},
+      {"chrome_roughness", "Chrome roughness", 0.01f, 0.5f, 0.01f, "Roughness of the chrome highlight."},
+      {"rims", "Rims", 0, 2, 0.01f, "Painted and alloy rims: a clear lacquer over the game's metal."},
+      {"rims_roughness", "Rim roughness", 0.02f, 1, 0.01f, "Roughness of the rim lacquer."}}},
     {"Sky and foliage",
-     {{"sky_saturation", "Sky saturation", 0, 2, 0.01f},
-      {"sky_contrast", "Sky contrast", 0, 1, 0.01f},
-      {"sky_warmth", "Sky warmth", -1, 1, 0.01f},
-      {"sky_horizon", "Sky horizon", 0, 1, 0.01f},
-      {"foliage_hue", "Foliage hue", -90, 90, 1},
-      {"foliage_saturation", "Foliage saturation", 0, 2, 0.01f},
-      {"foliage_brightness", "Foliage brightness", 0, 2, 0.01f}}},
+     "SKY & FOLIAGE",
+     {{"sky_saturation", "Sky saturation", 0, 2, 0.01f, "Colour strength of the sky over the tracks."},
+      {"sky_contrast", "Sky contrast", 0, 1, 0.01f, "Clouds stand out more against the sky."},
+      {"sky_warmth", "Sky warmth", -1, 1, 0.01f, "White balance of the sky: bluer below 0, warmer above."},
+      {"sky_horizon", "Sky horizon", 0, 1, 0.01f, "A paler, brighter horizon and a deeper sky overhead."},
+      {"foliage_hue", "Foliage hue", -90, 90, 1,
+       "The green of trees, bushes and grass: below 0 toward yellow and orange (-30 dry, -60 autumn), above 0 toward "
+       "blue green."},
+      {"foliage_saturation", "Foliage saturation", 0, 2, 0.01f, "Colour strength of that green."},
+      {"foliage_brightness", "Foliage brightness", 0, 2, 0.01f, "Brightness of that green."}}},
     {"Road",
-     {{"road_brightness", "Road brightness", 0, 2, 0.01f},
-      {"road_contrast", "Road contrast", -1, 1, 0.01f},
-      {"road_specular", "Game highlight", 0, 2, 0.01f},
-      {"road_sheen", "Sheen", 0, 1, 0.01f},
-      {"road_roughness", "Sheen roughness", 0.05f, 1, 0.01f},
-      {"road_sheen_grain", "Sheen grain", 0, 3, 0.01f},
-      {"road_gloss", "Road gloss", 0, 2, 0.01f}}},
+     "ROAD",
+     {{"road_brightness", "Road brightness", 0, 2, 0.01f, "Brightness of the asphalt and the road edges."},
+      {"road_contrast", "Road contrast", -1, 1, 0.01f,
+       "Light stones lighter and the binder darker in the asphalt, with the overall tone kept."},
+      {"road_specular", "Game highlight", 0, 2, 0.01f,
+       "The game's own sun highlight on the road. 0 removes it, and with it the bright sheet on sunlit asphalt "
+       "toward the sun."},
+      {"road_sheen", "Sheen", 0, 1, 0.01f,
+       "A sun highlight that glints with the asphalt's stones; with the game highlight at 0 it replaces it."},
+      {"road_roughness", "Sheen roughness", 0.05f, 1, 0.01f, "Roughness of the sheen: lower is a smaller, brighter glare."},
+      {"road_sheen_grain", "Sheen grain", 0, 3, 0.01f,
+       "How much the sheen follows the stones and the skid marks. 0 gives an even sheen."},
+      {"road_gloss", "Road gloss", 0, 2, 0.01f, "Shine of the road surface."}}},
 };
 
 // The defaults of the knobs that are not shader defines (launcher.json has the others).
@@ -245,6 +273,15 @@ std::string ScancodeName(SDL_Scancode code) {
       {SDL_SCANCODE_LALT, "Alt"}, {SDL_SCANCODE_RALT, "Alt"}};
   const auto found = names.find(code);
   return found == names.end() ? "" : found->second;
+}
+
+// The step of a knob's row: about 40 presses across its range, a round number, never finer
+// than the knob's own step.
+float PadStep(const Knob& knob) {
+  const float target = (knob.max - knob.min) / 40;
+  for (const float step : {0.01f, 0.02f, 0.05f, 0.1f, 0.2f, 0.5f, 1.0f, 2.0f, 5.0f, 10.0f, 20.0f, 50.0f, 100.0f})
+    if (step >= target && step >= knob.step) return step;
+  return 100;
 }
 
 std::string FormatKnob(double value, float step) {
@@ -380,13 +417,22 @@ class App {
   void PanelBg(ImVec2 min, ImVec2 max);
   void Focus(ImDrawList* draw, ImVec2 min, ImVec2 max);
   // One option as a row: left and right (D-pad, stick, arrow keys, or a click on a chevron)
-  // return -1 and 1, A or a click on the row 2.
+  // return -1 and 1, A or a click on the row 2. With a fraction (0 to 1) the row is a slider: a
+  // bar shows it, a click or a drag on the bar sets it and returns 3, and A does nothing. A
+  // changed row is marked; X, Delete or the X prompt on it returns 4, to reset it.
   int OptionRow(const char* id, const char* label, const std::string& value, const char* help,
-                bool enabled = true, const ImVec4* value_color = nullptr);
+                bool enabled = true, const ImVec4* value_color = nullptr, float* fraction = nullptr,
+                bool changed = false);
+  // A themed page: its tabs (LB and RB), a list of option rows and the detail panel.
+  void RowsPage(const std::vector<const char*>& tabs, const std::function<void()>& rows,
+                const std::function<void()>& extra);
+  // The pages in the theme: the launcher's own focus, not ImGui's navigation.
+  bool Themed() const { return page_ == kHome || page_ == kDisplay || page_ == kLook; }
   // The detail panel at the right of a list: the focused entry's title and text.
   void DetailPanel(ImVec2 size, const std::function<void()>& extra);
   void HomeMenu();
   void DisplayRows();
+  void LookRows();
   bool LoadBackdrop(const fs::path& path);
   void FocusRing();
   Status DiscStatus() const;
@@ -400,7 +446,6 @@ class App {
   // A slider with its value beside it: ImGui writes it over the grab, where the grab hides it.
   bool ValueSlider(const char* id, float* value, float min, float max, const char* format);
   void KeyBindings();
-  void LookPage();
   void ControlsPage();
   void ControllerSection();
   void KeyboardSection();
@@ -481,6 +526,10 @@ class App {
   int MenuMove();      // -1 up, 1 down, 0
   bool MenuAccept();   // A or Enter, or the A prompt clicked
   bool prompt_accept_ = false;  // the A prompt was clicked: the next frame's MenuAccept
+  bool prompt_reset_ = false;   // the X prompt was clicked: the next frame's reset
+  bool focus_changed_ = false;  // the focused row is a changed one: the X prompt shows
+  bool row_moved_ = false;      // the focus moved by the pad or the keys: the list scrolls to it
+  int row_dragging_ = -1;       // the slider row whose bar the mouse drags
   ID3D11ShaderResourceView* backdrop_ = nullptr;
   ImVec2 backdrop_size_;
   int page_ = kHome;
@@ -1228,7 +1277,7 @@ void App::Frame() {
   if (ImGui::GetFrameCount() < 3) ImGui::SetWindowFocus();
   ImGuiIO& io = ImGui::GetIO();
   // A popup takes ImGui's navigation on every page.
-  const bool themed = (page_ == kHome || page_ == kDisplay) &&
+  const bool themed = Themed() &&
                       !ImGui::IsPopupOpen("", ImGuiPopupFlags_AnyPopupId | ImGuiPopupFlags_AnyPopupLevel);
   if (themed) io.ConfigFlags &= ~(ImGuiConfigFlags_NavEnableGamepad | ImGuiConfigFlags_NavEnableKeyboard);
   else io.ConfigFlags |= ImGuiConfigFlags_NavEnableGamepad | ImGuiConfigFlags_NavEnableKeyboard;
@@ -1238,6 +1287,7 @@ void App::Frame() {
   Banner();
   help_.clear();
   help_title_.clear();
+  focus_changed_ = false;
   const float prompts = 58 * scale_;
   const float body = ImGui::GetContentRegionAvail().y - prompts;
   // The page in a centred column: lists stay readable on a wide screen.
@@ -1253,13 +1303,13 @@ void App::Frame() {
   switch (page_) {
     case kHome: HomeMenu(); break;
     case kDisplay: DisplayRows(); break;
+    case kLook: LookRows(); break;
     default: {
       // The pages not yet in the theme, on a panel.
       ImGui::PushStyleColor(ImGuiCol_ChildBg, ImVec4(0.11f, 0.12f, 0.14f, 0.92f));
       ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, ImVec2(26 * scale_, 18 * scale_));
       ImGui::BeginChild("legacy", page_size_, ImGuiChildFlags_AlwaysUseWindowPadding | ImGuiChildFlags_NavFlattened);
       switch (page_) {
-        case kLook: LookPage(); break;
         case kControls: ControlsPage(); break;
         case kGameData: GameDataPage(); break;
         case kShaders: ShadersPage(); break;
@@ -1473,20 +1523,31 @@ void App::TabBar(int& tab, const std::vector<const char*>& tabs) {
   draw->AddText(ImVec2(origin.x + 18 * scale_, y), ImGui::GetColorU32(kMuted), "< LB");
   const float rb = ImGui::CalcTextSize("RB >").x;
   draw->AddText(ImVec2(origin.x + width - 18 * scale_ - rb, y), ImGui::GetColorU32(kMuted), "RB >");
-  const float inner = origin.x + 90 * scale_, span = width - 180 * scale_, slot = span / count;
+  const float inner = origin.x + 90 * scale_, span = width - 180 * scale_;
+  // Equal slots, or slots by the labels' widths when a label would not fit its equal slot.
+  float widest = 0, total = 0;
+  for (const char* label : tabs) {
+    widest = std::max(widest, ImGui::CalcTextSize(label).x);
+    total += ImGui::CalcTextSize(label).x;
+  }
+  const bool equal = widest + 24 * scale_ <= span / count;
+  float slot_x = inner;
   for (int i = 0; i < count; ++i) {
-    const float w = ImGui::CalcTextSize(tabs[i]).x, x = inner + slot * i + (slot - w) / 2;
+    const float w = ImGui::CalcTextSize(tabs[i]).x;
+    const float slot = equal ? span / count : w + (span - total) / count;
+    const float x = slot_x + (slot - w) / 2;
     const bool selected = i == tab;
     draw->AddText(ImVec2(x, y), ImGui::GetColorU32(selected ? kFocusColor : kSecondary), tabs[i]);
     if (selected)
       draw->AddRectFilled(ImVec2(x - 6 * scale_, origin.y + height - 3 * scale_), ImVec2(x + w + 6 * scale_, origin.y + height),
                           ImGui::GetColorU32(kFocusColor));
-    ImGui::SetCursorScreenPos(ImVec2(inner + slot * i, origin.y));
+    ImGui::SetCursorScreenPos(ImVec2(slot_x, origin.y));
     ImGui::PushID(i);
     ImGui::PushItemFlag(ImGuiItemFlags_NoNav, true);
     if (ImGui::InvisibleButton("tab", ImVec2(slot, height))) tab = i, row_focus_ = 0;
     ImGui::PopItemFlag();
     ImGui::PopID();
+    slot_x += slot;
   }
   ImGui::PopFont();
   ImGui::SetCursorScreenPos(ImVec2(origin.x, origin.y + height + 10 * scale_));
@@ -1505,12 +1566,12 @@ void App::PadGlyph(ImDrawList* draw, ImVec2 center, const char* label) {
 }
 
 void App::PromptBar() {
-  // The A prompt clicked in the last frame was taken by this frame's page.
-  prompt_accept_ = false;
+  // The A and X prompts clicked in the last frame were taken by this frame's page.
+  prompt_accept_ = prompt_reset_ = false;
   ImDrawList* draw = ImGui::GetWindowDrawList();
   const ImVec2 window = ImGui::GetWindowPos(), size = ImGui::GetWindowSize();
   const float bar = 58 * scale_, y = window.y + size.y - 30 * scale_;
-  enum Action { kPlay, kProfile, kBack, kSelect };
+  enum Action { kPlay, kProfile, kReset, kBack, kSelect };
   struct Prompt {
     const char* glyph;
     const char* text;
@@ -1519,9 +1580,10 @@ void App::PromptBar() {
   std::vector<Prompt> prompts;
   const std::string not_ready = NotReady();
   const std::string menu = Icon(0xE700);
-  const bool themed = page_ == kHome || page_ == kDisplay;
+  const bool themed = Themed();
   if (not_ready.empty()) prompts.push_back({menu.c_str(), "Play", kPlay});
   prompts.push_back({"Y", "Profile", kProfile});
+  if (focus_changed_) prompts.push_back({"X", "Reset", kReset});
   if (page_ != kHome) prompts.push_back({"B", "Back", kBack});
   prompts.push_back({"A", "Select", kSelect});
   ImGui::PushFont(din_font_, 18);
@@ -1554,6 +1616,7 @@ void App::PromptBar() {
             if (!shot_) Play();
             break;
           case kProfile: ImGui::OpenPopup("Profiles"); break;
+          case kReset: prompt_reset_ = true; break;
           case kBack:
             page_ = kHome;
             tab_ = 0;
@@ -1577,7 +1640,7 @@ void App::PromptBar() {
 }
 
 int App::OptionRow(const char* id, const char* label, const std::string& value, const char* help, bool enabled,
-                   const ImVec4* value_color) {
+                   const ImVec4* value_color, float* fraction, bool changed) {
   const float width = ImGui::GetContentRegionAvail().x, height = 50 * scale_;
   const ImVec2 min = ImGui::GetCursorScreenPos(), max = min + ImVec2(width, height);
   ImGui::PushID(id);
@@ -1585,13 +1648,16 @@ int App::OptionRow(const char* id, const char* label, const std::string& value, 
   ImGui::PushItemFlag(ImGuiItemFlags_NoNav, true);
   const bool pressed = ImGui::InvisibleButton("row", ImVec2(width, height)) && enabled;
   const bool hovered = ImGui::IsItemHovered();
+  const bool active = ImGui::IsItemActive(), activated = ImGui::IsItemActivated();
   ImGui::PopItemFlag();
   if (hovered && (ImGui::GetIO().MouseDelta.x != 0 || ImGui::GetIO().MouseDelta.y != 0)) row_focus_ = index;
   const bool focused = index == row_focus_;
   ImDrawList* draw = ImGui::GetWindowDrawList();
   draw->AddRectFilled(min, max, ImGui::GetColorU32(focused || hovered ? kGlassLight : kGlass), 2 * scale_);
+  // A changed value: a red edge at the left, and the label in red.
+  if (changed) draw->AddRectFilled(min, ImVec2(min.x + 4 * scale_, max.y), ImGui::GetColorU32(kAccent));
   if (focused) Focus(draw, min, max);
-  const ImVec4 text = enabled ? kText : kMuted;
+  const ImVec4 text = !enabled ? kMuted : changed ? kAccentBright : kText;
   draw->AddText(body_font_, 18 * scale_, ImVec2(min.x + 18 * scale_, min.y + (height - 18 * scale_) / 2),
                 ImGui::GetColorU32(text), label);
   // The value at the right, between chevrons while the row is focused.
@@ -1602,6 +1668,18 @@ int App::OptionRow(const char* id, const char* label, const std::string& value, 
   draw->AddText(ImVec2(value_x, min.y + (height - value_size.y) / 2),
                 ImGui::GetColorU32(value_color ? *value_color : enabled ? (focused ? kFocusColor : kText) : kMuted),
                 value.c_str());
+  // A slider's bar between the label and the value, at a fixed place whatever the value's width.
+  const float bar_min = min.x + width * 0.42f, bar_max = max.x - 18 * scale_ - chevron * 2 - 64 * scale_;
+  const bool bar = fraction && bar_max - bar_min > 40 * scale_;
+  if (bar) {
+    const float f = std::clamp(*fraction, 0.0f, 1.0f), y = min.y + height / 2, h = 4 * scale_;
+    draw->AddRectFilled(ImVec2(bar_min, y - h / 2), ImVec2(bar_max, y + h / 2), ImGui::GetColorU32(ImVec4(1, 1, 1, 0.16f)),
+                        h / 2);
+    const float x = bar_min + (bar_max - bar_min) * f;
+    draw->AddRectFilled(ImVec2(bar_min, y - h / 2), ImVec2(x, y + h / 2),
+                        ImGui::GetColorU32(focused ? kFocusColor : ImVec4(kText.x, kText.y, kText.z, 0.75f)), h / 2);
+    if (focused || hovered) draw->AddCircleFilled(ImVec2(x, y), 7 * scale_, ImGui::GetColorU32(focused ? kFocusColor : kText));
+  }
   ImGui::PopFont();
   int result = 0;
   if (enabled && (focused || hovered)) {
@@ -1613,7 +1691,17 @@ int App::OptionRow(const char* id, const char* label, const std::string& value, 
                   ImGui::GetColorU32(kSecondary), right.c_str());
   }
   if (enabled) {
-    if (focused && MenuAccept()) result = 2;
+    const float mouse = ImGui::GetIO().MousePos.x;
+    if (bar && activated && mouse >= bar_min - 8 * scale_ && mouse <= bar_max + 8 * scale_) row_dragging_ = index;
+    if (row_dragging_ == index) {
+      if (!active) {
+        row_dragging_ = -1;
+      } else {
+        const float f = std::clamp((mouse - bar_min) / (bar_max - bar_min), 0.0f, 1.0f);
+        if (f != *fraction) *fraction = f, result = 3;
+      }
+    }
+    if (focused && !fraction && MenuAccept()) result = 2;
     if (focused) {
       if (ImGui::IsKeyPressed(ImGuiKey_GamepadDpadLeft) || ImGui::IsKeyPressed(ImGuiKey_GamepadLStickLeft) ||
           ImGui::IsKeyPressed(ImGuiKey_LeftArrow))
@@ -1621,22 +1709,59 @@ int App::OptionRow(const char* id, const char* label, const std::string& value, 
       if (ImGui::IsKeyPressed(ImGuiKey_GamepadDpadRight) || ImGui::IsKeyPressed(ImGuiKey_GamepadLStickRight) ||
           ImGui::IsKeyPressed(ImGuiKey_RightArrow))
         result = 1;
+      if (changed && (prompt_reset_ || ImGui::IsKeyPressed(ImGuiKey_GamepadFaceLeft, false) ||
+                      ImGui::IsKeyPressed(ImGuiKey_Delete, false) || ImGui::IsKeyPressed(ImGuiKey_Backspace, false)))
+        result = 4;
     }
-    if (pressed) {
-      // A click on the left chevron steps back; anywhere else steps on, as A does.
-      const float mouse = ImGui::GetIO().MousePos.x;
-      result = ImGui::IsItemDeactivated() && hovered && mouse < value_x && mouse > value_x - chevron * 1.5f ? -1 : 2;
+    if (pressed && row_dragging_ < 0 && result != 3) {
+      // A click on the left chevron steps back, on the right one steps on; anywhere else on a
+      // row that is not a slider steps on, as A does.
+      if (hovered && mouse < value_x && mouse > value_x - chevron * 1.5f) result = -1;
+      else if (hovered && mouse > max.x - 18 * scale_ - chevron) result = 1;
+      else if (!fraction) result = 2;
     }
   }
-  // The focused or hovered row, else the first, explains itself in the detail panel.
+  // The focused row explains itself in the detail panel.
   if (focused) {
     help_title_ = label;
     help_ = help ? help : "";
+    focus_changed_ = changed && enabled;
+    // The pad or the keys moved the focus here: keep the row in the list's view.
+    if (row_moved_) {
+      const float top = ImGui::GetWindowPos().y, bottom = top + ImGui::GetWindowHeight();
+      if (min.y < top) ImGui::SetScrollFromPosY(min.y - top, 0);
+      else if (max.y > bottom) ImGui::SetScrollFromPosY(max.y - top, 1);
+    }
   }
   ImGui::SetCursorScreenPos(ImVec2(min.x, max.y + 6 * scale_));
   ImGui::Dummy(ImVec2(0, 0));
   ImGui::PopID();
   return result;
+}
+
+void App::RowsPage(const std::vector<const char*>& tabs, const std::function<void()>& rows,
+                   const std::function<void()>& extra) {
+  const float top = ImGui::GetCursorScreenPos().y;
+  const int tab = tab_;
+  if (!tabs.empty()) TabBar(tab_, tabs);
+  const float height = page_size_.y - (ImGui::GetCursorScreenPos().y - top);
+  const float list_w = page_size_.x * 0.56f;
+  const int move = row_count_ > 0 ? MenuMove() : 0;
+  row_moved_ = move != 0 || tab != tab_;
+  if (row_count_ > 0) row_focus_ = std::clamp(row_focus_ + move, 0, row_count_ - 1);
+  rows_seen_ = 0;
+  // A list a tab, so each keeps its own scroll.
+  ImGui::PushID(tab_);
+  ImGui::BeginChild("rows", ImVec2(list_w, height), ImGuiChildFlags_NavFlattened);
+  rows();
+  if (touch_ && ImGui::IsWindowHovered() && row_dragging_ < 0 && ImGui::IsMouseDragging(ImGuiMouseButton_Left))
+    ImGui::SetScrollY(ImGui::GetScrollY() - ImGui::GetIO().MouseDelta.y);
+  row_count_ = rows_seen_;
+  row_focus_ = std::max(0, std::min(row_focus_, row_count_ - 1));
+  ImGui::EndChild();
+  ImGui::PopID();
+  ImGui::SameLine(0, 18 * scale_);
+  DetailPanel(ImVec2(page_size_.x - list_w - 18 * scale_, height), extra);
 }
 
 void App::DetailPanel(ImVec2 size, const std::function<void()>& extra) {
@@ -1832,148 +1957,138 @@ void App::HomeMenu() {
 
 void App::DisplayRows() {
   Options& o = settings_.Active().options;
-  const float top = ImGui::GetCursorScreenPos().y;
-  TabBar(tab_, {"SCREEN", "PERFORMANCE", "EXTRAS"});
-  const float height = page_size_.y - (ImGui::GetCursorScreenPos().y - top);
-  const float list_w = page_size_.x * 0.56f;
   const auto step = [](int value, int delta, int count) { return (value + (delta == 2 ? 1 : delta) + count) % count; };
-  if (row_count_ > 0) row_focus_ = std::clamp(row_focus_ + MenuMove(), 0, row_count_ - 1);
-  rows_seen_ = 0;
-  ImGui::BeginChild("rows", ImVec2(list_w, height), ImGuiChildFlags_NavFlattened);
-  if (tab_ == 0) {
-    static const char* const kDisplays[] = {"native", "720p", "1080p", "1440p", "4k"};
-    int display = 0;
-    for (int i = 0; i < 5; ++i)
-      if (o.display == kDisplays[i]) display = i;
-    const std::string native = "Native, " + std::to_string(monitor_.width) + "x" + std::to_string(monitor_.height);
-    const std::string screens[] = {native, "1280x720 window", "1920x1080 window", "2560x1440 window", "3840x2160 window"};
-    if (const int d = OptionRow("screen", "Screen", screens[display],
-                                "Native fills the screen, borderless, at its own resolution. A window size runs in a "
-                                "window of that size, or fullscreen with the option below."))
-      o.display = (display = step(display, d, 5)) ? kDisplays[display] : "";
-    if (const int d = OptionRow("fullscreen", "Fullscreen", display == 0 || o.fullscreen ? "On" : "Off",
-                                "A window size shown fullscreen. Native is always fullscreen.", display != 0))
-      o.fullscreen = !o.fullscreen;
-    std::string auto_text = "1x", unused;
-    Options automatic = o;
-    automatic.resolution_scale = 0;
-    if (const auto plan = PlanOf(automatic, unused)) auto_text = RenderScaleText(plan->cvars);
-    const std::string scales[] = {"Auto (" + auto_text + ")", "Screen's own", "1x (1280x720)", "2x (2560x1440)",
-                                  "3x (3840x2160)", "4x (5120x2880)"};
-    int item = o.resolution_scale == kPanelScale ? 1 : o.resolution_scale ? o.resolution_scale + 1 : 0;
-    if (const int d = OptionRow("scale", "Render scale", scales[item],
-                                "How sharp the picture is. Auto covers the screen; the screen's own resolution renders "
-                                "the largest 16:9 picture that fits; 1x to 4x render at that multiple of 1280x720.")) {
-      item = step(item, d, 6);
-      o.resolution_scale = item == 1 ? kPanelScale : item ? item - 1 : 0;
-    }
-    if (OptionRow("supersample", "Supersample", o.supersample ? "On" : "Off",
-                  "Renders one scale above the screen, then averages it down: the smoothest edges, for a strong GPU.",
-                  o.resolution_scale == 0))
-      o.supersample = !o.supersample;
-  } else if (tab_ == 1) {
-    static const char* const kUpscales[] = {"native", "quality", "balanced", "performance"};
-    static const char* const kUpscaleNames[] = {"Off", "Quality", "Balanced", "Performance"};
-    int upscale = 0;
-    for (int i = 1; i < 4; ++i)
-      if (o.upscale == kUpscales[i]) upscale = i;
-    if (const int d = OptionRow("upscale", "Upscaler", kUpscaleNames[upscale],
-                                "FSR 3.1 or TAAU renders the race at fewer lines and rebuilds the picture: more frames "
-                                "for a little sharpness. Quality 1.5x, Balanced 1.7x, Performance 2x fewer lines.")) {
-      upscale = step(upscale, d, 4);
-      o.upscale = upscale ? kUpscales[upscale] : "";
-    }
-    const std::string look = o.look.empty() ? data_.Look().at("default").get<std::string>() : o.look;
-    std::string aa = "taa";
-    try {
-      aa = LookKnobs(data_, look).Get("aa", "taa");
-    } catch (const std::exception&) {
-    }
-    if (upscale && aa != "fsr" && aa != "taau") {
-      if (OptionRow("use_fsr", "Use FSR 3.1 for the upscaler", "Press A", "The upscaler needs FSR 3.1 or TAAU as the "
-                    "look's anti-aliasing; this sets FSR 3.1 in the look.", true, &kWarning)) {
-        LookParts parts = LookParts::Parse(look);
-        parts.knobs.Set("aa", "fsr");
-        parts.knobs.Set("taa", "1");
-        o.look = parts.Value();
+  RowsPage({"SCREEN", "PERFORMANCE", "EXTRAS"}, [&] {
+    if (tab_ == 0) {
+      static const char* const kDisplays[] = {"native", "720p", "1080p", "1440p", "4k"};
+      int display = 0;
+      for (int i = 0; i < 5; ++i)
+        if (o.display == kDisplays[i]) display = i;
+      const std::string native = "Native, " + std::to_string(monitor_.width) + "x" + std::to_string(monitor_.height);
+      const std::string screens[] = {native, "1280x720 window", "1920x1080 window", "2560x1440 window", "3840x2160 window"};
+      if (const int d = OptionRow("screen", "Screen", screens[display],
+                                  "Native fills the screen, borderless, at its own resolution. A window size runs in a "
+                                  "window of that size, or fullscreen with the option below."))
+        o.display = (display = step(display, d, 5)) ? kDisplays[display] : "";
+      if (const int d = OptionRow("fullscreen", "Fullscreen", display == 0 || o.fullscreen ? "On" : "Off",
+                                  "A window size shown fullscreen. Native is always fullscreen.", display != 0))
+        o.fullscreen = !o.fullscreen;
+      std::string auto_text = "1x", unused;
+      Options automatic = o;
+      automatic.resolution_scale = 0;
+      if (const auto plan = PlanOf(automatic, unused)) auto_text = RenderScaleText(plan->cvars);
+      const std::string scales[] = {"Auto (" + auto_text + ")", "Screen's own", "1x (1280x720)", "2x (2560x1440)",
+                                    "3x (3840x2160)", "4x (5120x2880)"};
+      int item = o.resolution_scale == kPanelScale ? 1 : o.resolution_scale ? o.resolution_scale + 1 : 0;
+      if (const int d = OptionRow("scale", "Render scale", scales[item],
+                                  "How sharp the picture is. Auto covers the screen; the screen's own resolution renders "
+                                  "the largest 16:9 picture that fits; 1x to 4x render at that multiple of 1280x720.")) {
+        item = step(item, d, 6);
+        o.resolution_scale = item == 1 ? kPanelScale : item ? item - 1 : 0;
       }
-    }
-    // Steps, not a slider of single frames (the owner's choice of 29 October 2026). A rate saved
-    // before keeps showing until it is changed, then moves to its neighbour in the list.
-    static const int kRates[] = {30, 60, 90, 120, 144, 240};
-    constexpr int kRateCount = static_cast<int>(std::size(kRates));
-    const int rate = o.frame_rate ? o.frame_rate : 60;
-    int below = 0, above = kRateCount - 1;
-    for (int i = 0; i < kRateCount; ++i) {
-      if (kRates[i] <= rate) below = i;
-      if (kRates[kRateCount - 1 - i] >= rate) above = kRateCount - 1 - i;
-    }
-    if (const int d = OptionRow("rate", "Race frame rate", std::to_string(rate) + " fps",
-                                "Races, replays and the countdown. Menus, post-race and photo mode keep their own timing. "
-                                "Pick the screen's refresh rate or a rate that divides it.")) {
-      const int index = d == 2 ? (above == below ? below + 1 : above) % kRateCount
-                        : d < 0 ? (above == below ? std::max(below - 1, 0) : below)
-                                : (above == below ? std::min(above + 1, kRateCount - 1) : above);
-      o.frame_rate = kRates[index] == 60 ? 0 : kRates[index];
-    }
-    static const char* const kVsyncs[] = {"auto", "on", "off"};
-    static const char* const kVsyncNames[] = {"Auto", "On", "Off"};
-    int vsync = o.vsync == "on" ? 1 : o.vsync == "off" ? 2 : 0;
-    if (const int d = OptionRow("vsync", "VSync", kVsyncNames[vsync],
-                                "Auto: on a variable refresh rate screen, frames as they come but at most one a refresh; "
-                                "otherwise On. On: no tearing. Off: at once, tearing allowed.")) {
-      vsync = step(vsync, d, 3);
-      o.vsync = vsync ? kVsyncs[vsync] : "";
-    }
-    static const char* const kQualities[] = {"low", "medium", "high", "extrahigh", "ultra"};
-    static const char* const kQualityNames[] = {"Low", "Medium", "High", "Extra High", "Ultra"};
-    static const char* const kQualityHelp[] = {
-        "The game's own, fewer cars in the mirror, lighter ambient occlusion.",
-        "The game's own race settings with soft particles.",
-        "Object shadows, full detail wheels, car detail twice as far.",
-        "High, every car at top detail, finer ambient occlusion.",
-        "Extra High, the mirror every frame, 4x MSAA where the scale allows."};
-    int quality = 2;
-    for (int i = 0; i < 5; ++i)
-      if (o.quality == kQualities[i] || (i == 1 && o.quality == "xbox")) quality = i;
-    const std::string quality_help = std::string("Race detail. ") + kQualityHelp[quality] +
-                                     " The render scale and the upscaler change the GPU time far more.";
-    if (const int d = OptionRow("quality", "Race quality", kQualityNames[quality], quality_help.c_str())) {
-      quality = d == 2 ? (quality + 1) % 5 : std::clamp(quality + d, 0, 4);
-      o.quality = quality == 2 ? "" : kQualities[quality];
-    }
-  } else {
-    if (OptionRow("mirror", "Rear-view mirror every frame", o.full_rate_mirror ? "On" : "Off",
-                  "The mirror at the race's frame rate instead of every other frame."))
-      o.full_rate_mirror = !o.full_rate_mirror;
-    if (OptionRow("overlay", "Settings overlay at start", o.info ? "On" : "Off",
-                  "Shows the run's settings over the game when it starts; F2 shows and hides it in the game."))
-      o.info = !o.info;
-    bool entry0 = o.entry0 != "k";
-    if (OptionRow("menus", "Menus at the render scale", entry0 ? "On" : "Off",
-                  "The menus and photo mode at the render scale with 4x MSAA. Off: at the whole scale below it, "
-                  "for less GPU time."))
-      o.entry0 = entry0 ? "k" : "";
-    // A developer option (Advanced): the RTV path's MSAA tiles instead of the native path's one
-    // pass, for comparisons.
-    if (settings_.developer) {
-      bool taa = true;
+      if (OptionRow("supersample", "Supersample", o.supersample ? "On" : "Off",
+                    "Renders one scale above the screen, then averages it down: the smoothest edges, for a strong GPU.",
+                    o.resolution_scale == 0))
+        o.supersample = !o.supersample;
+    } else if (tab_ == 1) {
+      static const char* const kUpscales[] = {"native", "quality", "balanced", "performance"};
+      static const char* const kUpscaleNames[] = {"Off", "Quality", "Balanced", "Performance"};
+      int upscale = 0;
+      for (int i = 1; i < 4; ++i)
+        if (o.upscale == kUpscales[i]) upscale = i;
+      if (const int d = OptionRow("upscale", "Upscaler", kUpscaleNames[upscale],
+                                  "FSR 3.1 or TAAU renders the race at fewer lines and rebuilds the picture: more frames "
+                                  "for a little sharpness. Quality 1.5x, Balanced 1.7x, Performance 2x fewer lines.")) {
+        upscale = step(upscale, d, 4);
+        o.upscale = upscale ? kUpscales[upscale] : "";
+      }
+      const std::string look = o.look.empty() ? data_.Look().at("default").get<std::string>() : o.look;
+      std::string aa = "taa";
       try {
-        taa = TaaEnabled(LookKnobs(data_, o.look.empty() ? data_.Look().at("default").get<std::string>() : o.look));
+        aa = LookKnobs(data_, look).Get("aa", "taa");
       } catch (const std::exception&) {
       }
-      if (OptionRow("tiles", "Race rendering", o.msaa ? "MSAA tiles" : "One tile with TAA",
-                    "Developer option. One tile: TAA anti-aliases the races. MSAA tiles: the tiles and MSAA of the "
-                    "quality, on the RTV path. Needs a look with TAA.",
-                    taa))
-        o.msaa = !o.msaa;
+      if (upscale && aa != "fsr" && aa != "taau") {
+        if (OptionRow("use_fsr", "Use FSR 3.1 for the upscaler", "Press A", "The upscaler needs FSR 3.1 or TAAU as the "
+                      "look's anti-aliasing; this sets FSR 3.1 in the look.", true, &kWarning)) {
+          LookParts parts = LookParts::Parse(look);
+          parts.knobs.Set("aa", "fsr");
+          parts.knobs.Set("taa", "1");
+          o.look = parts.Value();
+        }
+      }
+      // Steps, not a slider of single frames (the owner's choice of 29 October 2026). A rate saved
+      // before keeps showing until it is changed, then moves to its neighbour in the list.
+      static const int kRates[] = {30, 60, 90, 120, 144, 240};
+      constexpr int kRateCount = static_cast<int>(std::size(kRates));
+      const int rate = o.frame_rate ? o.frame_rate : 60;
+      int below = 0, above = kRateCount - 1;
+      for (int i = 0; i < kRateCount; ++i) {
+        if (kRates[i] <= rate) below = i;
+        if (kRates[kRateCount - 1 - i] >= rate) above = kRateCount - 1 - i;
+      }
+      if (const int d = OptionRow("rate", "Race frame rate", std::to_string(rate) + " fps",
+                                  "Races, replays and the countdown. Menus, post-race and photo mode keep their own timing. "
+                                  "Pick the screen's refresh rate or a rate that divides it.")) {
+        const int index = d == 2 ? (above == below ? below + 1 : above) % kRateCount
+                          : d < 0 ? (above == below ? std::max(below - 1, 0) : below)
+                                  : (above == below ? std::min(above + 1, kRateCount - 1) : above);
+        o.frame_rate = kRates[index] == 60 ? 0 : kRates[index];
+      }
+      static const char* const kVsyncs[] = {"auto", "on", "off"};
+      static const char* const kVsyncNames[] = {"Auto", "On", "Off"};
+      int vsync = o.vsync == "on" ? 1 : o.vsync == "off" ? 2 : 0;
+      if (const int d = OptionRow("vsync", "VSync", kVsyncNames[vsync],
+                                  "Auto: on a variable refresh rate screen, frames as they come but at most one a refresh; "
+                                  "otherwise On. On: no tearing. Off: at once, tearing allowed.")) {
+        vsync = step(vsync, d, 3);
+        o.vsync = vsync ? kVsyncs[vsync] : "";
+      }
+      static const char* const kQualities[] = {"low", "medium", "high", "extrahigh", "ultra"};
+      static const char* const kQualityNames[] = {"Low", "Medium", "High", "Extra High", "Ultra"};
+      static const char* const kQualityHelp[] = {
+          "The game's own, fewer cars in the mirror, lighter ambient occlusion.",
+          "The game's own race settings with soft particles.",
+          "Object shadows, full detail wheels, car detail twice as far.",
+          "High, every car at top detail, finer ambient occlusion.",
+          "Extra High, the mirror every frame, 4x MSAA where the scale allows."};
+      int quality = 2;
+      for (int i = 0; i < 5; ++i)
+        if (o.quality == kQualities[i] || (i == 1 && o.quality == "xbox")) quality = i;
+      const std::string quality_help = std::string("Race detail. ") + kQualityHelp[quality] +
+                                       " The render scale and the upscaler change the GPU time far more.";
+      if (const int d = OptionRow("quality", "Race quality", kQualityNames[quality], quality_help.c_str())) {
+        quality = d == 2 ? (quality + 1) % 5 : std::clamp(quality + d, 0, 4);
+        o.quality = quality == 2 ? "" : kQualities[quality];
+      }
+    } else {
+      if (OptionRow("mirror", "Rear-view mirror every frame", o.full_rate_mirror ? "On" : "Off",
+                    "The mirror at the race's frame rate instead of every other frame."))
+        o.full_rate_mirror = !o.full_rate_mirror;
+      if (OptionRow("overlay", "Settings overlay at start", o.info ? "On" : "Off",
+                    "Shows the run's settings over the game when it starts; F2 shows and hides it in the game."))
+        o.info = !o.info;
+      bool entry0 = o.entry0 != "k";
+      if (OptionRow("menus", "Menus at the render scale", entry0 ? "On" : "Off",
+                    "The menus and photo mode at the render scale with 4x MSAA. Off: at the whole scale below it, "
+                    "for less GPU time."))
+        o.entry0 = entry0 ? "k" : "";
+      // A developer option (Advanced): the RTV path's MSAA tiles instead of the native path's one
+      // pass, for comparisons.
+      if (settings_.developer) {
+        bool taa = true;
+        try {
+          taa = TaaEnabled(LookKnobs(data_, o.look.empty() ? data_.Look().at("default").get<std::string>() : o.look));
+        } catch (const std::exception&) {
+        }
+        if (OptionRow("tiles", "Race rendering", o.msaa ? "MSAA tiles" : "One tile with TAA",
+                      "Developer option. One tile: TAA anti-aliases the races. MSAA tiles: the tiles and MSAA of the "
+                      "quality, on the RTV path. Needs a look with TAA.",
+                      taa))
+          o.msaa = !o.msaa;
+      }
     }
-  }
-  row_count_ = rows_seen_;
-  row_focus_ = std::min(row_focus_, row_count_ - 1);
-  ImGui::EndChild();
-  ImGui::SameLine(0, 18 * scale_);
-  DetailPanel(ImVec2(page_size_.x - list_w - 18 * scale_, height), [&] {
+  }, [&] {
     std::string error;
     ImGui::Dummy(ImVec2(0, 14 * scale_));
     if (const auto plan = CurrentPlan(error)) {
@@ -2162,7 +2277,7 @@ bool App::ValueSlider(const char* id, float* value, float min, float max, const 
   return changed;
 }
 
-void App::LookPage() {
+void App::LookRows() {
   Options& o = settings_.Active().options;
   const std::string look = o.look.empty() ? data_.Look().at("default").get<std::string>() : o.look;
   LookParts parts = LookParts::Parse(look);
@@ -2179,49 +2294,6 @@ void App::LookPage() {
   int current = -1;
   for (size_t i = 0; i < entries.size(); ++i)
     if (entries[i].value == look) current = static_cast<int>(i);
-  std::string preview = current >= 0 ? entries[current].label
-                                     : (parts.base.empty() ? "custom" : parts.base) + " (changed)";
-  Label("Look");
-  ImGui::SetNextItemWidth(260 * scale_);
-  if (ImGui::BeginCombo("##look", preview.c_str())) {
-    for (size_t i = 0; i < entries.size(); ++i) {
-      if (i == 5 && entries.size() > 5) ImGui::Separator();
-      if (ImGui::Selectable(entries[i].label.c_str(), current == static_cast<int>(i)))
-        o.look = entries[i].value == "aces" ? "" : entries[i].value;
-    }
-    ImGui::EndCombo();
-  }
-  ImGui::SameLine();
-  if (ImGui::Button("Save as look")) {
-    new_name_.clear();
-    ImGui::OpenPopup("Save look");
-  }
-  if (current >= 5) {
-    ImGui::SameLine();
-    if (ImGui::Button("Delete look")) {
-      std::erase_if(settings_.looks, [&](const auto& item) { return item.first == entries[current].label; });
-      o.look = "";
-    }
-  }
-  if (!parts.knobs.Empty() && current < 0) {
-    ImGui::SameLine();
-    if (ImGui::Button("Reset changes")) o.look = parts.base == "aces" ? "" : parts.base;
-  }
-  if (ImGui::BeginPopupModal("Save look", nullptr, ImGuiWindowFlags_AlwaysAutoResize)) {
-    ImGui::TextUnformatted("Name");
-    ImGui::SetNextItemWidth(280 * scale_);
-    if (ImGui::IsWindowAppearing()) ImGui::SetKeyboardFocusHere();
-    const bool enter = ImGui::InputText("##name", &new_name_, ImGuiInputTextFlags_EnterReturnsTrue);
-    if ((ImGui::Button("Save") || enter) && !new_name_.empty()) {
-      std::erase_if(settings_.looks, [&](const auto& item) { return item.first == new_name_; });
-      settings_.looks.emplace_back(new_name_, look);
-      o.look = look;
-      ImGui::CloseCurrentPopup();
-    }
-    ImGui::SameLine();
-    if (ImGui::Button("Cancel")) ImGui::CloseCurrentPopup();
-    ImGui::EndPopup();
-  }
 
   Pairs base;
   try {
@@ -2234,6 +2306,10 @@ void App::LookPage() {
     if (defaults.contains(name)) return defaults.at(name).get<std::string>();
     if (kOtherKnobDefaults.contains(name)) return kOtherKnobDefaults.at(name);
     return std::nullopt;
+  };
+  const auto apply = [&] {
+    const std::string value_text = parts.Value();
+    o.look = value_text == "aces" ? "" : value_text;
   };
   const auto set_knob = [&](const std::string& name, const std::string& value) {
     const auto original = base_value(name);
@@ -2248,83 +2324,140 @@ void App::LookPage() {
       parts.knobs.Erase(name);
     else
       parts.knobs.Set(name, value);
-    const std::string value_text = parts.Value();
-    o.look = value_text == "aces" ? "" : value_text;
+    apply();
   };
-  const auto changed_label = [&](const std::string& name, const char* label) {
-    ImGui::AlignTextToFramePadding();
-    ImGui::TextColored(parts.knobs.Has(name) ? kAccent : kSecondary, "%s", label);
-    ImGui::SameLine(190 * scale_);
-  };
-  const auto reset_button = [&](const std::string& name) {
-    if (!parts.knobs.Has(name)) return;
-    ImGui::SameLine();
-    ImGui::PushID(name.c_str());
-    if (SmallAction("Reset")) {
-      parts.knobs.Erase(name);
-      const std::string value_text = parts.Value();
-      o.look = value_text == "aces" ? "" : value_text;
-    }
-    ImGui::PopID();
+  const auto reset = [&](const std::string& name) {
+    parts.knobs.Erase(name);
+    apply();
   };
   const auto effective = [&](const std::string& name) -> std::optional<std::string> {
     if (const std::string* value = parts.knobs.Find(name)) return *value;
     return base_value(name);
   };
+  // The help of a knob's row, with the preset's value.
+  const auto knob_help = [&](const char* help, const std::string& name) {
+    const auto original = base_value(name);
+    return std::string(help) + (original ? "\n\nThe preset's value: " + *original + "." : "\n\nNot set: the game's own.");
+  };
+  const auto on_off = [&](const std::string& name) {
+    try {
+      return PyFloat(effective(name).value_or("0")) > 0;
+    } catch (const std::exception&) {
+      return false;
+    }
+  };
 
-  ImGui::Dummy(ImVec2(0, 4 * scale_));
-  // Tone curve and TAA, then the sliders of each group.
-  {
-    const Json& tonemaps = data_.Look().at("names").at("tonemap");
-    std::vector<std::string> names;
-    for (const auto& [name, number] : tonemaps.items()) names.push_back(name);
-    int tonemap = 0;
-    const std::string value = effective("tonemap").value_or("filmic");
-    for (size_t i = 0; i < names.size(); ++i)
-      if (names[i] == value || PyRepr(tonemaps.at(names[i]).get<double>()) == value) tonemap = static_cast<int>(i);
-    changed_label("tonemap", "Tone curve");
-    std::vector<const char*> labels;
-    for (const auto& name : names) labels.push_back(name.c_str());
-    if (Segment("tonemap", tonemap, labels)) set_knob("tonemap", names[tonemap]);
-    reset_button("tonemap");
-    bool taa = false;
-    try {
-      taa = PyFloat(effective("taa").value_or("0")) > 0;
-    } catch (const std::exception&) {
+  std::vector<const char*> tabs = {"PRESET"};
+  for (const auto& group : kKnobGroups) tabs.push_back(group.tab);
+  RowsPage(tabs, [&] {
+    if (tab_ == 0) {
+      const std::string preview =
+          current >= 0 ? entries[current].label : (parts.base.empty() ? "custom" : parts.base) + " (changed)";
+      if (const int d = OptionRow("preset", "Look", preview,
+                                  "The preset. aces, gt and neutral share the look mods with their own tone curve; "
+                                  "original is the game's own picture with TAA, and without TAA unchanged. Your saved "
+                                  "looks follow them.\n\nChanging the preset drops the changes: Save as look keeps "
+                                  "them.")) {
+        const int count = static_cast<int>(entries.size());
+        int from = current;
+        for (int i = 0; from < 0 && i < count; ++i)
+          if (entries[i].value == parts.base) from = i;
+        const int next = from < 0 ? 0 : (from + (d < 0 ? -1 : 1) + count) % count;
+        o.look = entries[next].value == "aces" ? "" : entries[next].value;
+      }
+      const Json& tonemaps = data_.Look().at("names").at("tonemap");
+      std::vector<std::string> names;
+      for (const auto& [name, number] : tonemaps.items()) names.push_back(name);
+      int tonemap = 0;
+      const std::string value = effective("tonemap").value_or("filmic");
+      for (size_t i = 0; i < names.size(); ++i)
+        if (names[i] == value || PyRepr(tonemaps.at(names[i]).get<double>()) == value) tonemap = static_cast<int>(i);
+      const int count = static_cast<int>(names.size());
+      if (const int d = OptionRow("tonemap", "Tone curve", names[tonemap],
+                                  "How the picture's light is mapped to the screen. filmic is the game's own; aces, gt "
+                                  "and neutral are the presets' curves (gt keeps midtone colours closest to the game's, "
+                                  "neutral compresses only the brightest channel).",
+                                  true, nullptr, nullptr, parts.knobs.Has("tonemap"))) {
+        if (d == 4) reset("tonemap");
+        else set_knob("tonemap", names[(tonemap + (d < 0 ? -1 : 1) + count) % count]);
+      }
+      const bool taa = on_off("taa");
+      if (const int d = OptionRow("taa", "Temporal anti-aliasing", taa ? "On" : "Off",
+                                  "Smooths the edges from frame to frame, with the scene jittered, and keeps a still "
+                                  "camera's picture still. Races then render one tile without MSAA.",
+                                  true, nullptr, nullptr, parts.knobs.Has("taa"))) {
+        if (d == 4) reset("taa");
+        else set_knob("taa", taa ? "0" : "1");
+      }
+      // TAA, FSR 3.1's native anti-aliasing (aa=fsr) or TAA as the upscaler (aa=taau).
+      if (taa) {
+        static const char* const kMethods[] = {"taa", "fsr", "taau"};
+        static const char* const kMethodNames[] = {"TAA", "FSR 3.1", "TAAU"};
+        const std::string method_text = effective("aa").value_or("taa");
+        const int method = method_text == "fsr" ? 1 : method_text == "taau" ? 2 : 0;
+        if (const int d = OptionRow("aa", "Anti-aliasing method", kMethodNames[method],
+                                    "TAA before the HUD; FSR 3.1, AMD's anti-aliasing, earlier in the frame with the "
+                                    "look's sharpening as its own; TAAU, TAA earlier in the frame. FSR 3.1 and TAAU are "
+                                    "also what the upscaler on the Display page needs.",
+                                    true, nullptr, nullptr, parts.knobs.Has("aa"))) {
+          if (d == 4) reset("aa");
+          else set_knob("aa", kMethods[(method + (d < 0 ? -1 : 1) + 3) % 3]);
+        }
+      }
+      const bool adaptation = on_off("adaptation");
+      if (const int d = OptionRow("adaptation", "60 fps exposure speed", adaptation ? "On" : "Off",
+                                  "The auto exposure adapts as fast as the game's does at 60 fps, at every frame rate. "
+                                  "Off: it adapts by a share a frame, so faster at higher frame rates.",
+                                  true, nullptr, nullptr, parts.knobs.Has("adaptation"))) {
+        if (d == 4) reset("adaptation");
+        else set_knob("adaptation", adaptation ? "0" : "1");
+      }
+      if (OptionRow("save", "Save as look", "Press A", "Keeps this look under a name, in the Look list of every profile.") ==
+          2) {
+        new_name_.clear();
+        ImGui::OpenPopup("Save look");
+      }
+      if (current >= 5 && OptionRow("delete", "Delete this look", "Press A",
+                                    "Removes this saved look from the list; profiles that use it go back to the "
+                                    "default look.") == 2)
+        ImGui::OpenPopup("Delete look");
+      if (current < 0 && !parts.knobs.Empty() &&
+          OptionRow("reset", "Reset all changes", "Press A", "Back to the preset's own values.") == 2) {
+        o.look = parts.base == "aces" ? "" : parts.base;
+      }
+      ImGui::SetNextWindowPos(ImGui::GetMainViewport()->GetCenter(), ImGuiCond_Appearing, ImVec2(0.5f, 0.5f));
+      if (ImGui::BeginPopupModal("Save look", nullptr, ImGuiWindowFlags_AlwaysAutoResize)) {
+        ImGui::TextUnformatted("Name");
+        ImGui::SetNextItemWidth(280 * scale_);
+        if (ImGui::IsWindowAppearing()) ImGui::SetKeyboardFocusHere();
+        const bool enter = ImGui::InputText("##name", &new_name_, ImGuiInputTextFlags_EnterReturnsTrue);
+        if ((ImGui::Button("Save") || enter) && !new_name_.empty()) {
+          std::erase_if(settings_.looks, [&](const auto& item) { return item.first == new_name_; });
+          settings_.looks.emplace_back(new_name_, look);
+          o.look = look;
+          ImGui::CloseCurrentPopup();
+        }
+        ImGui::SameLine();
+        if (ImGui::Button("Cancel") || ImGui::IsKeyPressed(ImGuiKey_GamepadFaceRight, false)) ImGui::CloseCurrentPopup();
+        ImGui::EndPopup();
+      }
+      ImGui::SetNextWindowPos(ImGui::GetMainViewport()->GetCenter(), ImGuiCond_Appearing, ImVec2(0.5f, 0.5f));
+      if (ImGui::BeginPopupModal("Delete look", nullptr, ImGuiWindowFlags_AlwaysAutoResize)) {
+        ImGui::Text("Delete the look %s?", current >= 5 ? entries[current].label.c_str() : "");
+        if (ImGui::Button("Delete") && current >= 5) {
+          std::erase_if(settings_.looks, [&](const auto& item) { return item.first == entries[current].label; });
+          o.look = "";
+          ImGui::CloseCurrentPopup();
+        }
+        ImGui::SameLine();
+        if (ImGui::Button("Cancel") || ImGui::IsKeyPressed(ImGuiKey_GamepadFaceRight, false) ||
+            ImGui::IsKeyPressed(ImGuiKey_Escape, false))
+          ImGui::CloseCurrentPopup();
+        ImGui::EndPopup();
+      }
+      return;
     }
-    changed_label("taa", "Temporal AA");
-    if (ImGui::Checkbox("##taa", &taa)) set_knob("taa", taa ? "1" : "0");
-    reset_button("taa");
-    // TAA, FSR 3.1's native anti-aliasing (aa=fsr, TAA in a runtime without FSR) or TAA as the
-    // upscaler (aa=taau, TAA at the scene_color point without -Upscale).
-    if (taa) {
-      static const char* const kMethods[] = {"taa", "fsr", "taau"};
-      const std::string current = effective("aa").value_or("taa");
-      int method = current == "fsr" ? 1 : current == "taau" ? 2 : 0;
-      changed_label("aa", "Method");
-      if (Segment("aa", method, {"TAA", "FSR 3.1", "TAAU"})) set_knob("aa", kMethods[method]);
-      reset_button("aa");
-    }
-    // The auto exposure at the game's speed above 60 fps (adaptation).
-    bool adaptation = false;
-    try {
-      adaptation = PyFloat(effective("adaptation").value_or("0")) > 0;
-    } catch (const std::exception&) {
-    }
-    changed_label("adaptation", "60 fps exposure speed");
-    if (ImGui::Checkbox("##adaptation", &adaptation)) set_knob("adaptation", adaptation ? "1" : "0");
-    reset_button("adaptation");
-  }
-  for (const auto& group : kKnobGroups) {
-    ImGui::Dummy(ImVec2(0, 2 * scale_));
-    ImGui::PushStyleColor(ImGuiCol_Header, kField);
-    ImGui::PushStyleColor(ImGuiCol_HeaderHovered, ImVec4(0.22f, 0.22f, 0.2f, 1));
-    ImGui::PushStyleColor(ImGuiCol_HeaderActive, ImVec4(0.25f, 0.25f, 0.24f, 1));
-    const bool open = ImGui::CollapsingHeader(
-        group.title, group.title == kKnobGroups.front().title ? ImGuiTreeNodeFlags_DefaultOpen : 0);
-    ImGui::PopStyleColor(3);
-    if (!open) continue;
-    for (const auto& knob : group.knobs) {
+    for (const auto& knob : kKnobGroups[tab_ - 1].knobs) {
       if (!data_.Look().at("knobs").contains(knob.name) && !data_.Look().at("track_knobs").contains(knob.name) &&
           !kOtherKnobDefaults.contains(knob.name) && std::string(knob.name) != "sun")
         continue;
@@ -2334,33 +2467,46 @@ void App::LookPage() {
         if (text) value = static_cast<float>(PyFloat(*text));
       } catch (const std::exception&) {
       }
-      changed_label(knob.name, knob.label);
-      ImGui::PushID(knob.name);
-      ImGui::SetNextItemWidth(300 * scale_);
-      const char* format = !text ? "game" : knob.step >= 1 ? "%.0f" : "%.2f";
-      if (ValueSlider("##value", &value, knob.min, knob.max, format)) set_knob(knob.name, FormatKnob(value, knob.step));
-      ImGui::PopID();
-      reset_button(knob.name);
+      float fraction = (value - knob.min) / (knob.max - knob.min);
+      char shown[32];
+      std::snprintf(shown, sizeof(shown), knob.step >= 1 ? "%.0f" : "%.2f", value);
+      const std::string help = knob_help(knob.help, knob.name);
+      const int d = OptionRow(knob.name, knob.label, text ? shown : "Game", help.c_str(), true, nullptr, &fraction,
+                              parts.knobs.Has(knob.name));
+      if (d == 4) {
+        reset(knob.name);
+      } else if (d == 3) {
+        set_knob(knob.name, FormatKnob(knob.min + fraction * (knob.max - knob.min), knob.step));
+      } else if (d == 1 || d == -1) {
+        const float step = PadStep(knob);
+        const float next = std::clamp(std::round((value + d * step) / step) * step, knob.min, knob.max);
+        set_knob(knob.name, FormatKnob(next, knob.step));
+      }
     }
-  }
-  ImGui::Dummy(ImVec2(0, 8 * scale_));
-  ImGui::Separator();
-  if (settings_.developer) {
-    ImGui::TextColored(kMuted, "Look value (Build.ps1 -Look)");
-    // The field keeps its own text while it is edited and applies it when it is left.
-    if (!look_editing_) look_edit_ = look;
-    ImGui::SetNextItemWidth(-1);
-    ImGui::InputText("##value", &look_edit_);
-    look_editing_ = ImGui::IsItemActive();
-    if (ImGui::IsItemDeactivatedAfterEdit()) o.look = look_edit_ == "aces" ? "" : look_edit_;
-  }
-  try {
-    Pairs knobs = LookKnobs(data_, look);
-    LookDefines(data_, knobs);
-  } catch (const std::exception& error) {
-    Colored(kDanger, error.what());
-  }
-  Muted("Changes apply when the game starts: the look mods are compiled then.");
+  }, [&] {
+    ImGui::Dummy(ImVec2(0, 14 * scale_));
+    try {
+      Pairs knobs = LookKnobs(data_, look);
+      LookDefines(data_, knobs);
+    } catch (const std::exception& error) {
+      Colored(kDanger, error.what());
+    }
+    ImGui::PushTextWrapPos(0);
+    Muted("Changes apply when the game starts: the look mods are compiled then.");
+    ImGui::PopTextWrapPos();
+    if (settings_.developer) {
+      // The field keeps its own text while it is edited and applies it when it is left.
+      ImGui::Dummy(ImVec2(0, 8 * scale_));
+      ImGui::PushFont(din_font_, 17);
+      ImGui::TextColored(kMuted, "LOOK VALUE (BUILD.PS1 -LOOK)");
+      ImGui::PopFont();
+      if (!look_editing_) look_edit_ = look;
+      ImGui::SetNextItemWidth(-1);
+      ImGui::InputText("##value", &look_edit_);
+      look_editing_ = ImGui::IsItemActive();
+      if (ImGui::IsItemDeactivatedAfterEdit()) o.look = look_edit_ == "aces" ? "" : look_edit_;
+    }
+  });
 }
 
 // The physical controller's options (-Pad, PAD_KNOBS of pipeline.py, docs/running.md#controller):

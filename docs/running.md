@@ -56,11 +56,12 @@ touch ([launcher UX](analysis/launcher-ux.md)):
   **Play**, Y **Profile**, B **Back** and A **Select**. The mouse and touch press a prompt as
   the pad presses its button. While Play cannot start, the bar's left end says why ("Choose
   Disc 1 first").
-- **The focus** is a red frame. On the Home and Display pages the D-pad, the left stick or the
-  arrow keys move it, A or Enter selects, and on an option row left and right change the value
-  (a click on the row steps it on, a click on its left chevron steps it back). The focused
-  option explains itself in the panel at the right. The other pages use Dear ImGui's own
-  navigation with a thicker focus ring.
+- **The focus** is a red frame. On the Home, Display and Look pages the D-pad, the left stick or
+  the arrow keys move it, A or Enter selects, and on an option row left and right change the
+  value (a click on the row steps it on, a click on a chevron steps it back or on). A slider row
+  has a bar that the mouse or a finger drags. A changed row has a red edge and a red label, and
+  X, Delete or the X **Reset** prompt resets it. The focused option explains itself in the panel
+  at the right. The other pages use Dear ImGui's own navigation with a thicker focus ring.
 - **The buttons.** LB and RB change the page's tab, B goes back to Home, Start plays from any
   page, and Y opens the profiles: pick one, save the options under a new name, or delete one
   after a confirmation. B or Escape closes them.
@@ -79,7 +80,7 @@ that has none ([distribution](sources-and-licensing.md#distribution)).
 | --- | --- |
 | Home | The first page. A menu (Play, then the pages) and a panel with the focused entry's detail: whether Disc 1 checks out, Disc 2 and the content, the shaders, the connected controller, and the profile's render scale, quality and frame rate. While Disc 1 is missing, Play reads "Choose Disc 1" and opens the folder picker; Game data and Shaders carry a mark while they need attention or work. |
 | Display | Three tabs of option rows. **Screen:** the screen (`-Display`), fullscreen, the render scale and supersample. **Performance:** the upscaler (`-Upscale`), the race frame rate in steps of 30, 60, 90, 120, 144 and 240 fps (a rate saved before keeps showing until it is changed), VSync and the race quality. With the upscaler on and a look whose anti-aliasing is TAA, a row "Use FSR 3.1 for the upscaler" sets `aa=fsr` in the profile's look. **Extras:** the rear-view mirror every frame, the settings overlay at start and the menus at the render scale. The right panel shows the render scale and the upscaler's lines that the options give. |
-| Look | The preset (`aces`, `gt`, `neutral`, `original`, `original` without TAA, or a saved look), the tone curve, TAA, the exposure speed of 60 fps (`adaptation`), and a slider for each [look knob](#look) in five groups: picture, lighting, car, sky and foliage, road. A changed knob is marked and has a Reset button. **Save as look** keeps the current value under a name. |
+| Look | Six tabs of option rows. **Preset:** the preset (`aces`, `gt`, `neutral`, `original`, `original` without TAA, or a saved look; changing it drops the knob changes), the tone curve, temporal anti-aliasing and its method (TAA, FSR 3.1 or TAAU, `aa`), the exposure speed of 60 fps (`adaptation`), **Save as look**, which keeps the current value under a name, **Delete this look** for a saved look, after a confirmation, and **Reset all changes**. **Picture, Lighting, Car, Sky & foliage and Road:** a slider row for each [look knob](#look) of that group, which left and right step by about a fortieth of its range; the right panel says what the knob does and the preset's value. |
 | Controls | Three tabs. **Controller:** the options of `-Pad` (the pad driver, rumble strength, trigger rumble, the steering anti-deadzone and the input thread; stick and trigger shaping and the extra buttons folded); see [Controller](#controller). **Racing wheel:** the wheel in the game (`-Wheel`, its axes, pedals, buttons and force feedback) and the [wheel test](#racing-wheel-test). **Keyboard:** the options of `-Keyboard` (smooth steering and pedals, their rates and the precision share; mouse steering folded), see [Keyboard](#keyboard), and the keyboard bindings, by their function in the game's DEFAULT LAYOUT 1 (the runtime's `keybind_*` settings). **Set** waits for a key; several keys are separated by commas, modifiers are written as `Shift+Up`. Unknown key names are marked and block Play. A connected controller needs no setup. |
 | Game data | Disc 1 and Disc 2, checked as `generate` checks them, the downloadable content folders and files, and the content packages found, with their import state. **Remove import** deletes an imported package from the user data (see [Data directories](#data-directories)). The texture pack is the `-TextureReplace` folder. |
 | Shaders | The offline shader pass; see [Shaders page](#shaders-page). |
