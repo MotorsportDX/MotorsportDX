@@ -96,6 +96,9 @@ const std::vector<KnobGroup> kKnobGroups = {
       {"contrast", "Contrast", -1, 1, 0.01f, "Contrast of the whole picture: deeper shadows and brighter highlights above 0."},
       {"saturation", "Saturation", 0, 2, 0.01f, "Colour strength of the whole picture: 1 keeps it, 0 is grey."},
       {"bloom", "Bloom", 0, 2, 0.01f, "The glow around bright lights and sunlit surfaces."},
+      {"bloom_width", "Bloom width", 0, 2, 0.01f,
+       "A wide halo around the bloom, as a low sun spreads its glow. 0 turns it off."},
+      {"temperature", "Warmth", -1, 1, 0.01f, "White balance of the whole picture: warmer above 0, cooler below."},
       {"sharpen", "Sharpen", 0, 1.5f, 0.01f,
        "Sharpening of the final picture, after the anti-aliasing. With FSR 3.1 it is FSR's own sharpening."},
       {"vignette", "Vignette", 0, 2, 0.01f, "Darker corners of the picture."},
@@ -114,6 +117,10 @@ const std::vector<KnobGroup> kKnobGroups = {
       {"cockpit_light", "Cockpit sun floor", 0, 1, 0.01f,
        "The least share of sunlight the cockpit and the driver keep in the car's own shadow. It follows the sun's "
        "direction, so the cockpit can swing between bright and dark; Cockpit fill is the steadier choice."},
+      {"haze", "Haze", 0, 1, 0.01f,
+       "Haze in the air: distant hills and buildings fade toward a pale sky colour, and the sky gets paler. "
+       "0 turns it off."},
+      {"haze_brightness", "Haze brightness", 0, 2, 0.01f, "How bright the haze is."},
       {"windshield", "Cockpit glass", 0, 2, 0.01f,
        "Glass in the cockpit camera's windshield and side windows: a light tint, a faint reflection of the "
        "dashboard, and glare and dust toward bright light. 0 leaves them open, as the game does."}}},
@@ -2292,6 +2299,8 @@ void App::LookRows() {
   std::vector<Entry> entries = {{"aces (default)", "aces", false},
                                 {"gt", "gt", false},
                                 {"neutral", "neutral", false},
+                                {"GT7 style", "gt7", false},
+                                {"FM2023 style", "fm2023", false},
                                 {"original", "original", false},
                                 {"original, no TAA", "original,taa=0", false}};
   for (const auto& [name, value] : settings_.looks) entries.push_back({name, value, true});
@@ -2359,6 +2368,9 @@ void App::LookRows() {
           current >= 0 ? entries[current].label : (parts.base.empty() ? "custom" : parts.base) + " (changed)";
       if (const int d = OptionRow("preset", "Look", preview,
                                   "The preset. aces, gt and neutral share the look mods with their own tone curve; "
+                                  "GT7 style adds Gran Turismo 7's tone mapping and a deeper sky; FM2023 style, "
+                                  "after Forza Motorsport (2023), is warmer and hazier, with richer shadows and a "
+                                  "wider bloom. "
                                   "original is the game's own picture with TAA, and without TAA unchanged. Your saved "
                                   "looks follow them.\n\nChanging the preset drops the changes: Save as look keeps "
                                   "them.")) {
@@ -2380,7 +2392,8 @@ void App::LookRows() {
       if (const int d = OptionRow("tonemap", "Tone curve", names[tonemap],
                                   "How the picture's light is mapped to the screen. filmic is the game's own; aces, gt "
                                   "and neutral are the presets' curves (gt keeps midtone colours closest to the game's, "
-                                  "neutral compresses only the brightest channel).",
+                                  "neutral compresses only the brightest channel); gt7 is Gran Turismo 7's, with a "
+                                  "darker toe and hues kept in the highlights.",
                                   true, nullptr, nullptr, parts.knobs.Has("tonemap"))) {
         if (d == 4) reset("tonemap");
         else set_knob("tonemap", names[(tonemap + (d < 0 ? -1 : 1) + count) % count]);

@@ -136,6 +136,19 @@ AMD FidelityFX SDK, with REX_FSR (Build.ps1 -Fsr on)
     backend (sdk/include/FidelityFX/host/backends/dx12/d3dx12.h, with its license.txt), compiled
     into the backend with REX_FSR.
 
+The look mods (work/fm4-rex/look, copied into every build and export as look)
+  PolyphonyDigital-GT7-tone-mapping-LICENSE.txt
+    The sample implementation of the GT7 tone mapping operator, gt7_tone_mapping.cpp version
+    1.0 (10 August 2025), MIT, "Copyright (c) 2025 Polyphony Digital Inc.", published with
+    Polyphony Digital's talk in the SIGGRAPH 2025 course "Physically Based Shading in Theory
+    and Practice"
+    (https://blog.selfshadow.com/publications/s2025-shading-course/pdi/supplemental/gt7_tone_mapping.cpp).
+    fm4-look.hlsli ports its SDR path to HLSL (fm4_gt7_curve, fm4_pq_encode and fm4_pq_decode,
+    fm4_rgb_to_ictcp and fm4_ictcp_to_rgb, fm4_curve_gt7): the GT tone mapping curve V2 with
+    the sample's parameters, the ICtCp conversion, the chroma fade and the blend of the
+    per-channel and ICtCp results. The look's tone curve gt7 (the preset gt7) runs it; the
+    FXC-compiled shaders of a run hold it, not a binary of the build.
+
 Build-time tools that are not shipped
   The DirectX Shader Compiler of the FidelityFX SDK
     The FidelityFX SDK's shader compiler driver, FidelityFX_SC.exe (part of the SDK), compiles

@@ -87,6 +87,7 @@
 !/outputs/FM4-source-control/third-party-notices/Microsoft-GameInput-LICENSE.txt
 !/outputs/FM4-source-control/third-party-notices/nlohmann-json-LICENSE.txt
 !/outputs/FM4-source-control/third-party-notices/o1heap-LICENSE.txt
+!/outputs/FM4-source-control/third-party-notices/PolyphonyDigital-GT7-tone-mapping-LICENSE.txt
 !/outputs/FM4-source-control/third-party-notices/README.txt
 !/outputs/FM4-source-control/third-party-notices/ReXGlue-LICENSE.txt
 !/outputs/FM4-source-control/third-party-notices/SDL-LICENSE.txt
@@ -267,6 +268,7 @@
 !/work/fm4-rex/passes/fsr.hlsl
 !/work/fm4-rex/passes/scene_pattern.hlsl
 !/work/fm4-rex/passes/windshield.hlsl
+!/work/fm4-rex/passes/haze.hlsl
 !/work/fm4-rex/passes/passes.toml
 !/work/fm4-rex/observe-frame.py
 !/work/fm4-rex/send-input.py

@@ -952,7 +952,14 @@ LOOK_KNOBS={'sharpen':'FM4_LOOK_SHARPEN','bloom':'FM4_LOOK_BLOOM','exposure':'FM
             'cockpit_fill':'FM4_LOOK_COCKPIT_FILL','cockpit_light':'FM4_LOOK_COCKPIT_LIGHT',
             # Ambient occlusion of the GTAO post pass on the scene; above 0 it also turns
             # the post passes on (ao_cvars).
-            'ao':'FM4_LOOK_AO'}
+            'ao':'FM4_LOOK_AO',
+            # Aerial haze: the strength of the post passes' haze amount (work/fm4-rex/passes/
+            # haze.hlsl, its param HAZE, look_defines) and the final combine's mix toward the haze
+            # color (fm4_haze); above 0 it also turns the post passes on. haze_brightness: the
+            # haze's brightness. temperature: the final image's white balance. bloom_width: a
+            # wide halo of the bloom.
+            'haze':'FM4_LOOK_HAZE','haze_brightness':'FM4_LOOK_HAZE_BRIGHTNESS',
+            'temperature':'FM4_LOOK_TEMPERATURE','bloom_width':'FM4_LOOK_BLOOM_WIDTH'}
 # Knobs that set runtime cvars instead of shader defines. sun: the strength of the sun glare
 # on the RTV path. The title reads its sun visibility from an awaited occlusion query, which
 # the host query counts in samples, so the same sun is 1x, 2x and 4x as bright at 1x, 2x and
@@ -983,7 +990,7 @@ SUN_LIMIT=1200
 # 0.4 times the upscale ratio above 1 (fsr_sharpness, docs/analysis/fsr-plan.md 13).
 LOOK_PASS_KNOBS=('taa','taa_point','aa','windshield','fsr_sharpen')
 # Knobs that take a name instead of a number.
-LOOK_NAMES={'tonemap':{'filmic':0,'gt':1,'aces':2,'neutral':3}}
+LOOK_NAMES={'tonemap':{'filmic':0,'gt':1,'aces':2,'neutral':3,'gt7':4}}
 # Knobs that edit the title's per-track lighting files instead of shaders (FM4_TRACK_SETTINGS,
 # work/fm4-rex/src/fm4-track-settings.h): multipliers of each track's own values, 1 the
 # original. road_gloss scales the specular of the road (RoadSpecular and RoadSpecular2 of
@@ -1005,11 +1012,18 @@ LOOK_TRACK_KNOBS={'road_gloss':('RoadSpecular.RoadSpecular','RoadSpecular.RoadSp
 # No preset has the sky_* or foliage_* knobs: their A/B at 2x of 18 October 2026 showed only a
 # slightly deeper sky (docs/analysis/look-mod-coverage.md). Every preset has TAA, so races
 # render one tile without MSAA with them (auto_single_tile).
+# gt7 (since 29 October 2026) is the look of Gran Turismo 7: its published tone mapping
+# (tonemap=gt7, Polyphony Digital's GT7 operator) on the same mods, with a deeper, more
+# contrasted sky (docs/analysis/look-presets-gt7-fm2023.md).
 _LOOK_MODS=('saturation=1.1,bloom=0.7,sharpen=0.4,clearcoat=1,clearcoat_glint=1,ao=0.6,sun=2,sky=0.7,'
             'taa=1,cockpit_fill=1,windshield=1,road_specular=0,road_sheen=0.4,glass=1,chrome=1,rims=1,'
             'adaptation=1')
 LOOK_PRESETS={'aces':'tonemap=aces,'+_LOOK_MODS,'gt':'tonemap=gt,'+_LOOK_MODS,
-              'neutral':'tonemap=neutral,'+_LOOK_MODS,'original':'taa=1'}
+              'neutral':'tonemap=neutral,'+_LOOK_MODS,
+              'gt7':'tonemap=gt7,'+_LOOK_MODS+',sky_saturation=1.15,sky_contrast=0.3',
+              'fm2023':'tonemap=aces,'+_LOOK_MODS+',saturation=1.05,ao=0.9,haze=0.3,temperature=0.35,'
+                       'bloom_width=0.5',
+              'original':'taa=1'}
 LOOK_ALIASES={'pc':'aces'}
 DEFAULT_LOOK='aces'
 
@@ -1156,6 +1170,13 @@ def windshield_strength(knobs):
         raise RuntimeError(f'windshield is a strength from 0 (off) to 2, not {knobs["windshield"]!r}.')
     return value
 
+def haze_strength(knobs):
+    """The haze knob: 0 (off, the default) to 1."""
+    value=float(knobs.get('haze','0'))
+    if not 0<=value<=1:
+        raise RuntimeError(f'haze is a strength from 0 (off) to 1, not {knobs["haze"]!r}.')
+    return value
+
 def fsr_sharpness(knobs,upscale_ratio=1.0):
     """FSR's RCAS strength (FSR_SHARPNESS): the fsr_sharpen knob, or the look's sharpening plus
     0.4 times the upscale ratio above 1 (0.2 more at quality's 1.5, nothing at ratio 1), at most 1."""
@@ -1216,6 +1237,9 @@ def look_defines(knobs,upscale_ratio=1.0):
         defines+=['FM4_LOOK_SHARPEN=0.0','TAA=1',f'TAA_SHARPEN={sharpen!r}']
     if windshield_strength(knobs)>0:
         defines.append(f'WINDSHIELD={windshield_strength(knobs)!r}')
+    if haze_strength(knobs)>0:
+        # The haze pass's strength; the mods' FM4_LOOK_HAZE mixes the scene by its amount.
+        defines.append(f'HAZE={haze_strength(knobs)!r}')
     return defines
 
 def look_track_settings(knobs):
@@ -1269,9 +1293,9 @@ def look_cvars(root,look,shader_dev=False,upscale_ratio=1.0,stage=None):
     cvars.update({'shader_mod_path':directory,'shader_mod_defines':';'.join(defines)})
     if shader_dev:
         cvars.update(shader_mod_hot_reload='true',shader_mod_live_knobs='true')
-    # The ao, taa and windshield knobs need the runtime's post passes.
+    # The ao, taa, windshield and haze knobs need the runtime's post passes.
     cvars.update(ao_cvars(root,float(knobs.get('ao','0'))>0 or taa_enabled(knobs)
-                          or windshield_strength(knobs)>0,shader_dev,stage))
+                          or windshield_strength(knobs)>0 or haze_strength(knobs)>0,shader_dev,stage))
     return cvars
 
 def sun_cvars(strength):
@@ -2271,6 +2295,9 @@ def launcher_test_options(root):
             {'native':True,'single_tile':True,'look':'original,taa=0'},
             {'native':True,'msaa':True},
             {'native':True,'look':'gt','frame_rate':240,'fixed_vblank':True},
+            {'native':True,'look':'gt7','display':'1440p'},
+            {'native':True,'look':'fm2023,haze=0.8,temperature=-0.2'},
+            {'look':'aces,haze=0.3,ao=0','info':True},
             {'native':True,'look':'pc,aa=fsr,sharpen=0.6','info':True},
             {'frame_rate':120,'vsync':'on'},
             {'pad':'driver=rawinput,trigger_rumble=1,rumble=1.5'},

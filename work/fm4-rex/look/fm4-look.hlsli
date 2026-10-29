@@ -14,9 +14,10 @@
 //   FM4_LOOK_SATURATION   >= 0   saturation of the final image (1: original)
 //   FM4_LOOK_VIGNETTE     >= 0   vignette strength (1: original, 0: off)
 //   FM4_LOOK_MOTION_BLUR  0...1  motion blur (1: original, 0: off)
-//   FM4_LOOK_TONEMAP      0...3  tone curve before the color grading LUT: 0 the game's
+//   FM4_LOOK_TONEMAP      0...4  tone curve before the color grading LUT: 0 the game's
 //                                filmic curve, 1 GT (Uchimura), 2 ACES (Narkowicz fit),
-//                                3 neutral (Khronos PBR Neutral)
+//                                3 neutral (Khronos PBR Neutral), 4 GT7 (Polyphony
+//                                Digital's GT7 tone mapping, SDR)
 //   FM4_LOOK_AO           0...1  ambient occlusion of the runtime's post_ao pass on the scene
 //                                (0: off; needs post_ao=true)
 //   FM4_LOOK_AO_DEBUG     0, 1   1: the final combine shaders show the runtime's post_ao
@@ -25,6 +26,16 @@
 //   FM4_LOOK_HDR_PROBE    0, 1   1: the final combine shaders write a diagnostic image of
 //                                the scene's highlight range for the HDR output design
 //                                (docs/analysis/hdr-output.md) instead of the scene (0: off)
+//   FM4_LOOK_HAZE         >= 0   aerial haze: above 0 the scene is mixed toward the haze's
+//                                color by the post passes' haze amount (haze.hlsl, whose HAZE
+//                                param is the strength; 0: off)
+//   FM4_LOOK_HAZE_BRIGHTNESS >= 0 the haze's brightness in units of 2 stops above the
+//                                game's middle gray (1)
+//   FM4_LOOK_TEMPERATURE  -1...1 white balance of the final image: above 0 warmer, below 0
+//                                cooler; 1 raises red over blue by about 1.27 (0: original)
+//   FM4_LOOK_BLOOM_WIDTH  >= 0   a wide halo of the bloom texture (two rings of taps 3% and
+//                                6% of the screen's width out) added to the bloom, in units of
+//                                its own energy (0: off)
 
 #ifndef FM4_LOOK_SHARPEN
 #define FM4_LOOK_SHARPEN 0.0
@@ -58,6 +69,24 @@
 #endif
 #ifndef FM4_LOOK_HDR_PROBE
 #define FM4_LOOK_HDR_PROBE 0.0
+#endif
+#ifndef FM4_LOOK_HAZE
+#define FM4_LOOK_HAZE 0.0
+#endif
+#ifndef FM4_LOOK_HAZE_BRIGHTNESS
+#define FM4_LOOK_HAZE_BRIGHTNESS 1.0
+#endif
+#ifndef FM4_LOOK_TEMPERATURE
+#define FM4_LOOK_TEMPERATURE 0.0
+#endif
+#ifndef FM4_LOOK_BLOOM_WIDTH
+#define FM4_LOOK_BLOOM_WIDTH 0.0
+#endif
+
+// The bloom texture at a coordinate, filtered as the final combine fetches it: the classic
+// mods' fetch 2; a native contract entry defines FM4_BLOOM_TAP before it includes this file.
+#if !defined(FM4_BLOOM_TAP) && defined(XE_TEXTURE2_2D_U)
+#define FM4_BLOOM_TAP(uv) XE_TFETCH2D(2, uv)
 #endif
 
 #ifdef XE_TEXTURE0_2D_U
@@ -95,6 +124,28 @@ void fm4_motion_blur(inout XePixel p, XePixel input) {
 }
 
 #endif  // XE_TEXTURE0_2D_U
+
+// FM4_LOOK_BLOOM_WIDTH: the bloom (gamma 2, as the final combine fetches it) with a wide halo
+// added in linear terms, the mean of 16 taps on two rings around the pixel, 3% and 6% of the
+// screen's width out (the bloom texture is already blurred, so the taps make a smooth ring).
+float4 fm4_bloom_wide(float4 bloom, float2 uv) {
+#ifdef FM4_BLOOM_TAP
+  if (FM4_LOOK_BLOOM_WIDTH <= 0.0) {
+    return bloom;
+  }
+  float3 halo = 0.0;
+  [unroll] for (int i = 0; i < 8; ++i) {
+    float angle = (i + 0.5) * (6.2831853 / 8.0);
+    float2 step = float2(cos(angle) * (9.0 / 16.0), sin(angle)) * 0.03;
+    float3 inner = FM4_BLOOM_TAP(uv + step).rgb;
+    float3 outer = FM4_BLOOM_TAP(uv + 2.0 * step).rgb;
+    halo += inner * inner + outer * outer;
+  }
+  return float4(sqrt(bloom.rgb * bloom.rgb + halo * (FM4_LOOK_BLOOM_WIDTH / 16.0)), bloom.a);
+#else
+  return bloom;
+#endif
+}
 
 // The bloom texture, squared by the final combine shaders before it is added.
 float4 fm4_bloom(float4 bloom) {
@@ -163,6 +214,31 @@ float3 fm4_filmic_inverse(float3 y, float4 ab, float4 cdef) {
   return max(x, 0.0);
 }
 
+// The post passes' haze amount at a scene coordinate, 0 (none) to 1 (haze.hlsl): by its name
+// for a native shader contract entry that declares it, else by its slot.
+float fm4_post_haze(float2 uv) {
+#ifdef XE_SRV_HAZE_AMOUNT
+  return xe_srv_haze_amount(uv).x;
+#else
+  return xe_post_texture(3u, uv).x;
+#endif
+}
+
+// FM4_LOOK_HAZE: the scene (gamma 2) at the pixel mixed in linear terms toward the haze, a pale
+// blue-gray with the luminance of FM4_LOOK_HAZE_BRIGHTNESS times 2 stops above the game's
+// middle gray after the exposure, by the post passes' haze amount. ab and cdef are the shader's
+// filmic constants (the game's middle gray).
+float4 fm4_haze(float4 scene, float2 uv, float4 ab, float4 cdef) {
+  if (FM4_LOOK_HAZE <= 0.0) {
+    return scene;
+  }
+  float amount = fm4_post_haze(uv);
+  float gray = fm4_filmic_inverse((0.18 * fm4_white_filmic).xxx, ab, cdef).x;
+  float3 haze = float3(0.80, 0.87, 1.0) / 0.8645 *
+                (4.0 * max(FM4_LOOK_HAZE_BRIGHTNESS, 0.0) * gray / max(fm4_exposure_scale, 1.0e-6));
+  return float4(sqrt(lerp(scene.rgb * scene.rgb, haze, amount)), scene.a);
+}
+
 // GT tone curve (Hajime Uchimura, CEDEC 2017): a power toe, a linear middle and
 // an exponential shoulder towards 1; P 1, a 1, m 0.22, l 0.4, c 1.33, b 0.
 float3 fm4_curve_gt(float3 x) {
@@ -200,16 +276,95 @@ float3 fm4_curve_neutral(float3 color) {
   return lerp(color, new_peak.xxx, g);
 }
 
+// GT7 tone mapping (Polyphony Digital, SIGGRAPH 2025 course "Physically Based Shading in
+// Theory and Practice"): a port of the SDR path of its sample implementation
+// gt7_tone_mapping.cpp 1.0, Copyright (c) 2025 Polyphony Digital Inc., MIT License (the
+// notice: outputs/FM4-source-control/third-party-notices/PolyphonyDigital-GT7-tone-mapping-
+// LICENSE.txt; docs/sources-and-licensing.md). Frame buffer values: 1 is
+// 100 cd/m^2, and SDR white is the paper white of 250 cd/m^2 (2.5), which the output is
+// divided by. The sample takes linear Rec. 2020; the scene here is Rec. 709, converted.
+static const float FM4_GT7_PAPER_WHITE = 2.5;
+
+// The GT tone mapping curve V2 with the sample's parameters (alpha 0.25, gray point 0.538,
+// linear section 0.444, toe strength 1.28) at the SDR peak: a power toe blended into a
+// linear middle, and from the end of the linear section the convergent shoulder
+// kA + kB exp(x kC), whose slope there is 1. The output is limited to the peak later.
+float3 fm4_gt7_curve(float3 x) {
+  const float alpha = 0.25, mid = 0.538, linear_section = 0.444, toe = 1.28;
+  const float peak = FM4_GT7_PAPER_WHITE;
+  const float k = (linear_section - 1.0) / (alpha - 1.0);
+  const float ka = peak * linear_section + peak * k;
+  const float kb = -peak * k * exp(linear_section / k);
+  const float kc = -1.0 / (k * peak);
+  x = max(x, 0.0);
+  float3 weight_linear = smoothstep(0.0, mid, x);
+  float3 low = (1.0 - weight_linear) * mid * pow(x / mid, toe) + weight_linear * x;
+  float3 shoulder = ka + kb * exp(x * kc);
+  return x < linear_section * peak ? low : shoulder;
+}
+
+// SMPTE ST 2084 (PQ) between frame buffer values and its signal.
+float3 fm4_pq_encode(float3 value) {
+  const float m1 = 0.1593017578125, m2 = 78.84375;
+  const float c1 = 0.8359375, c2 = 18.8515625, c3 = 18.6875;
+  float3 y = pow(max(value, 0.0) * (100.0 / 10000.0), m1);
+  return pow((c1 + c2 * y) / (1.0 + c3 * y), m2);
+}
+
+float3 fm4_pq_decode(float3 signal) {
+  const float m1 = 0.1593017578125, m2 = 78.84375;
+  const float c1 = 0.8359375, c2 = 18.8515625, c3 = 18.6875;
+  float3 p = pow(saturate(signal), 1.0 / m2);
+  return pow(max(p - c1, 0.0) / (c2 - c3 * p), 1.0 / m1) * (10000.0 / 100.0);
+}
+
+// ICtCp (ITU-R BT.2100) of linear Rec. 2020 frame buffer values, and back.
+float3 fm4_rgb_to_ictcp(float3 rgb) {
+  float3 lms = mul(float3x3(1688.0, 2146.0, 262.0, 683.0, 2951.0, 462.0, 99.0, 309.0, 3688.0),
+                   rgb) / 4096.0;
+  float3 pq = fm4_pq_encode(lms);
+  return float3(0.5 * pq.x + 0.5 * pq.y, dot(float3(6610.0, -13613.0, 7003.0), pq) / 4096.0,
+                dot(float3(17933.0, -17390.0, -543.0), pq) / 4096.0);
+}
+
+float3 fm4_ictcp_to_rgb(float3 ictcp) {
+  float3 pq = mul(float3x3(1.0, 0.00860904, 0.11102963, 1.0, -0.00860904, -0.11102963,
+                           1.0, 0.56003134, -0.32062717), ictcp);
+  float3 lms = fm4_pq_decode(pq);
+  return mul(float3x3(3.43660669, -2.50645212, 0.06984542, -0.79132956, 1.98360045, -0.1922709,
+                      -0.0259499, -0.09891371, 1.12486361), lms);
+}
+
+// The GT7 operator on a Rec. 709 scene value whose middle gray (0.18 out) is 0.1806: per
+// channel the curve ("skewed" color); in ICtCp the intensity of that and the chroma of the
+// input, faded out from 0.98 to 1.16 times the intensity of the peak; 0.4 of the first and
+// 0.6 of the second, limited to the peak and scaled to SDR (paper white 1).
+float3 fm4_curve_gt7(float3 x) {
+  float3 rgb = mul(float3x3(0.6274040, 0.3292820, 0.0433136, 0.0690970, 0.9195400, 0.0113612,
+                            0.0163916, 0.0880132, 0.8955950), x) * FM4_GT7_PAPER_WHITE;
+  float3 ucs = fm4_rgb_to_ictcp(rgb);
+  float3 skewed = fm4_gt7_curve(rgb);
+  float3 skewed_ucs = fm4_rgb_to_ictcp(skewed);
+  float peak_i = fm4_pq_encode(FM4_GT7_PAPER_WHITE.xxx).x;
+  float chroma = 1.0 - smoothstep(0.98, 1.16, ucs.x / peak_i);
+  float3 scaled = fm4_ictcp_to_rgb(float3(skewed_ucs.x, ucs.yz * chroma));
+  float3 blended = min(lerp(skewed, scaled, 0.6), FM4_GT7_PAPER_WHITE) / FM4_GT7_PAPER_WHITE;
+  return mul(float3x3(1.6604903, -0.58763911, -0.0728516, -0.12454997, 1.13289992, -0.00834796,
+                      -0.01815112, -0.10057872, 1.11872988), blended);
+}
+
 // The selected curve at the exposed scene color x, scaled so that middle gray
 // stays where the game's curve puts it. ab and cdef are the shader's filmic
 // constants.
 float3 fm4_tonemap_curve(float3 x, float4 ab, float4 cdef) {
   // Each curve's input for 0.18, solved offline.
-  float curve_gray = FM4_LOOK_TONEMAP == 1.0 ? 0.180942 : FM4_LOOK_TONEMAP == 2.0 ? 0.130171 : 0.22;
+  float curve_gray = FM4_LOOK_TONEMAP == 1.0 ? 0.180942 : FM4_LOOK_TONEMAP == 2.0 ? 0.130171 :
+                     FM4_LOOK_TONEMAP == 4.0 ? 0.180599 : 0.22;
   float gray = fm4_filmic_inverse((0.18 * fm4_white_filmic).xxx, ab, cdef).x;
   x *= curve_gray / max(gray, 1.0e-6);
   float3 t = FM4_LOOK_TONEMAP == 1.0 ? fm4_curve_gt(x) :
-             FM4_LOOK_TONEMAP == 2.0 ? fm4_curve_aces(x) : fm4_curve_neutral(x);
+             FM4_LOOK_TONEMAP == 2.0 ? fm4_curve_aces(x) :
+             FM4_LOOK_TONEMAP == 4.0 ? fm4_curve_gt7(x) : fm4_curve_neutral(x);
   return saturate(t);
 }
 
@@ -247,12 +402,13 @@ float4 fm4_combine_fetch(uint fetch, float4 value, float4 coord, float4 filmic_a
       fm4_probe_gray = fm4_filmic_inverse((0.18 * fm4_white_filmic).xxx, filmic_ab, filmic_cdef).x;
       fm4_probe_white = fm4_filmic_inverse(fm4_white_filmic.xxx, filmic_ab, filmic_cdef).x;
     }
-    return fm4_ambient_occlusion(fm4_sharpen_scene(value, coord.xy), coord.xy);
+    return fm4_haze(fm4_ambient_occlusion(fm4_sharpen_scene(value, coord.xy), coord.xy), coord.xy,
+                    filmic_ab, filmic_cdef);
   }
 #endif
   if (fetch == 2u) {
     fm4_probe_bloom = value.rgb;
-    return fm4_bloom(value);
+    return fm4_bloom(fm4_bloom_wide(value, coord.xy));
   }
 #ifdef XE_TEXTURE7_3D_U
   if (fetch == 7u && FM4_LOOK_TONEMAP != 0.0) {
@@ -308,9 +464,18 @@ float3 fm4_hdr_probe() {
   return float3(saturate((stops + 8.0) / 16.0), clipped, white);
 }
 
-// Saturation and contrast of the final image (gamma 2, 0...1).
+// White balance, saturation and contrast of the final image (gamma 2, 0...1).
 void fm4_grade(inout XePixel p) {
   float3 color = p.color[0].rgb;
+  if (FM4_LOOK_TEMPERATURE != 0.0) {
+    // Red up and blue down by 12% at 1, the luminance kept.
+    float3 linear_color = color * color;
+    float t = clamp(FM4_LOOK_TEMPERATURE, -1.0, 1.0) * 0.12;
+    float3 balanced = linear_color * float3(1.0 + t, 1.0, 1.0 - t);
+    float3 weights = float3(0.2126, 0.7152, 0.0722);
+    balanced *= dot(linear_color, weights) / max(dot(balanced, weights), 1.0e-6);
+    color = sqrt(saturate(balanced));
+  }
   if (FM4_LOOK_SATURATION != 1.0) {
     float3 linear_color = color * color;
     float luminance = dot(linear_color, float3(0.2126, 0.7152, 0.0722));

@@ -1,0 +1,83 @@
+# Look presets after GT7 and FM2023
+
+Two look presets beside `aces`, `gt`, `neutral` and `original`: `gt7`, after the look of Gran Turismo 7, and `fm2023`, after Forza Motorsport (2023). The project owner decided on 29 October 2026 to keep the four presets as they are and add these two, judged against the owner's look board of reference images. Both use the look mods and the post passes ([running.md, Look](../running.md#look), [post pass framework](post-pass-framework.md)) on the native path and the RTV path's classic mods alike; they get no work on the PM4 RTV path beyond what the shared mods give, which is frozen ([AGENTS.md](../../AGENTS.md)).
+
+## 1. The references and the measures
+
+The look board of 25 October 2026 holds 26 reference images (GT7 photo mode, press shots and gameplay, FM2023 Steam screenshots) and five split-screen frames of both games in one scene (IGN and Digital Foundry, 1024x576 video captures). The images stay outside the repository, in `<BuildRoot>\reference\look-refs` with their sources in `look-refs-sources.tsv`.
+
+The board measures an image region by:
+
+| Measure | Meaning |
+| --- | --- |
+| mean, p05, p50, p95 | Rec. 709 luma of the sRGB values (0 to 1): the mean and the 5th, 50th and 95th percentiles |
+| spread | p95 - p05, the tonal range |
+| sat | the mean HSV saturation, (max - min) / max per pixel |
+| R/B | the mean linear red over the mean linear blue: the white balance |
+
+The two pairs with the same framing:
+
+| Pair | Side | mean | p05 | p50 | p95 | spread | sat | R/B |
+| --- | --- | --- | --- | --- | --- | --- | --- | --- |
+| Spa, photo mode (cmp-04) | FM2023 | 0.480 | 0.157 | 0.465 | 0.796 | 0.639 | 0.222 | 0.821 |
+| | GT7 | 0.489 | 0.133 | 0.483 | 0.886 | 0.753 | 0.220 | 0.803 |
+| Spa, GR Supra (cmp-05) | FM2023 | 0.408 | 0.109 | 0.359 | 0.737 | 0.628 | 0.361 | 1.275 |
+| | GT7 | 0.418 | 0.097 | 0.369 | 0.795 | 0.698 | 0.419 | 1.014 |
+
+What they show: GT7 has the wider tonal range (darker p05, brighter p95) and the bluer, cleaner sky; FM2023 is hazier, with a paler sky and less contrast in the distance, warmer (R/B 1.28 against 1.01 on the Supra pair) and a little less saturated. The board's notes add FM2023's richer ambient occlusion (its ray-traced AO in the RT and Quality modes) and a wide bloom at a low sun, and GT7's highlights that rarely clip. FM4 has neither Spa nor Watkins Glen, so the presets are judged by these measures on FM4's own tracks, not pixel for pixel.
+
+The same measures of FM4 captures come from the 2560x1440 PPM captures of the e2e harness; a scratch tool (not in the repository) computes them the way the board's page does.
+
+## 2. The GT7 operator
+
+Polyphony Digital published GT7's tone mapping in the SIGGRAPH 2025 course "Physically Based Shading in Theory and Practice", with a sample implementation under the MIT license (`gt7_tone_mapping.cpp` 1.0). Its code was read from the research of 25 October 2026 (the verifiers' copies of the slides and the sample); nothing was downloaded for the port. `fm4-look.hlsli` ports its SDR path as the tone curve `gt7` (`FM4_LOOK_TONEMAP` 4), credited in the [third-party notices](../../outputs/FM4-source-control/third-party-notices/README.txt) and [sources and licensing](../sources-and-licensing.md#third-party-code-gt7-tone-mapping).
+
+- **Units.** Frame buffer values with 1 at 100 cd/m^2. SDR white is a paper white of 250 cd/m^2 (2.5), the curve's peak; the result is divided by 2.5.
+- **The curve, GT tone mapping V2.** With peak P = 2.5 and the sample's parameters alpha 0.25, gray point m 0.538, linear section l 0.444 and toe strength c 1.28: below l P, a power toe m (x / m)^c blended into the line x by smoothstep(0, m, x); from l P on, the convergent shoulder kA + kB exp(x kC), with k = (l - 1) / (alpha - 1), kA = P (l + k), kB = -P k exp(l / k) and kC = -1 / (k P), which meets the line with slope 1 and converges to P (l + k) = 1.185 P. The result is limited to P, so the curve clips at x = 1.472 P.
+- **Hue.** The input and the per-channel result ("skewed") go to ICtCp (BT.2100, PQ). The output takes the skewed intensity I and the input's chroma Ct and Cp, faded out by 1 - smoothstep(0.98, 1.16) of the input's I over the peak's I, so colors above about paper white go to white smoothly. Then 0.4 of the per-channel result and 0.6 of the ICtCp result.
+- **Gamut.** The sample takes linear Rec. 2020. FM4's scene is Rec. 709: the port converts it to Rec. 2020 and the result back.
+- **Middle gray.** As with the other curves of the look, the exposed scene value is scaled so that middle gray (0.18 out) stays where the game's curve puts it, which keeps the game's auto exposure and the track's grading LUT. With the scale 2.5, the normalized operator gives 0.18 at an input of 0.1806, is linear from there to 0.444, and reaches white at 1.472. The input at 0.01 gives 0.0043 (the toe), at 1 gives 0.835.
+
+Compared with the presets' curves, the toe darkens the shadows (a lower p05), the long linear middle keeps the midtones, and ICtCp keeps the hues of bright colors where a per-channel curve skews them toward yellow and white.
+
+## 3. The GT7 preset
+
+`gt7` is `tonemap=gt7` on the mods of the other presets (`aces` without its curve), with `sky_saturation=1.15,sky_contrast=0.3` for the deeper, more contrasted sky of the references (the A/B of 18 October 2026 found these two knobs gave a slightly deeper blue sky; [look mod coverage](look-mod-coverage.md#in-game-checks-sky-and-vegetation-18-october-2026)).
+
+Exposure: GT7's own exposure models the eye's adaptation, so sunny scenes stay bright and night stays dark. FM4 has no night races, and the preset keeps the game's auto exposure through the middle gray anchor above.
+
+## 4. The FM2023 knobs
+
+FM2023's grade is not documented, so its preset is tuned against the references by the measures of section 1. Four knobs are new:
+
+- **`haze`, the aerial haze.** A compute pass of the post pass framework at the scene_depth point, `haze_amount` in [haze.hlsl](../../work/fm4-rex/passes/haze.hlsl), turns each scene pixel's view distance d into an amount 1 - exp(-max(d - `HAZE_START`, 0) / `HAZE_DISTANCE`) (30 m and 800 m), times the strength (the pass param `HAZE`); the sky (W at the far plane) takes `HAZE_SKY` (0.35) of the strength, and the cockpit interior's mask, whose depth reads as the near plane, none. The amount goes into the texture `haze_amount` (slot 3). The final combine mods (`fm4_haze`, the classic fetch 0 hook and the native contract's entry, which declares `post:haze_amount`) mix the scene in linear terms toward a pale blue-gray by it, with a luminance of `haze_brightness` times 2 stops above the game's middle gray after the exposure, so the haze has the same brightness at every exposure. The knob passes the strength to the pass (`HAZE`) and turns the mix on (`FM4_LOOK_HAZE`).
+- **`temperature`, the white balance** of the final image after the grading LUT: red times 1 + 0.12 t and blue times 1 - 0.12 t, the luminance kept, so t = 1 raises R/B by about 1.27, the step between the two games on the Supra pair.
+- **`bloom_width`, a wide bloom:** the bloom input (already blurred by the game) tapped on two rings of 8, 3% and 6% of the screen's width out, the mean of their linear energy added to the bloom times the knob.
+- **`ao`** stays the GTAO pass's strength; the preset raises it toward FM2023's richer occlusion.
+
+The preset `fm2023` is `tonemap=aces` on the mods of the other presets with `saturation=1.05`, `ao=0.9`, `haze=0.3`, `temperature=0.35` and `bloom_width=0.5` (section 5).
+
+## 5. Tuning, 29 October 2026
+
+Frozen frames of the `freeze` scenario (a Quick Race on the Bernese Alps rewound to its oldest frame, the fixed seed, the cockpit camera), on the native path at 2x (2560x1440), on the main build's snapshot `whl9` (the runtime and game code of main `46b1a59`) with the look and post passes of the working tree, each look its own run (`I:\FM4-build-usa\e2e\lk1-*`, `lk2-*`, `lk3-*`). Measures of section 1 on two regions of the 2560x1440 capture: the world through the windshield (x 0.30 to 0.68, y 0.24 to 0.50 of the frame: the stands, the pit building, the mountains and the sky) and the sky alone (x 0.40 to 0.62, y 0.25 to 0.36).
+
+| Look | Region | mean | p05 | p50 | p95 | spread | sat | R/B |
+| --- | --- | --- | --- | --- | --- | --- | --- | --- |
+| `original` (the game's own, with TAA) | world | 0.646 | 0.039 | 0.758 | 0.925 | 0.886 | 0.219 | 0.733 |
+| | sky | 0.853 | 0.772 | 0.881 | 0.931 | 0.159 | 0.126 | 0.759 |
+| `aces` | world | 0.574 | 0.157 | 0.639 | 0.798 | 0.641 | 0.201 | 0.692 |
+| | sky | 0.715 | 0.630 | 0.738 | 0.797 | 0.167 | 0.168 | 0.681 |
+| `gt7` | world | 0.592 | 0.181 | 0.644 | 0.842 | 0.660 | 0.228 | 0.613 |
+| | sky | 0.744 | 0.638 | 0.771 | 0.840 | 0.203 | 0.236 | 0.561 |
+| `fm2023` first try (`haze=0.5,temperature=0.5,saturation=1.0`, sky share 0.5) | world | 0.610 | 0.185 | 0.685 | 0.803 | 0.618 | 0.107 | 0.881 |
+| | sky | 0.739 | 0.687 | 0.755 | 0.801 | 0.113 | 0.074 | 0.860 |
+| `fm2023` (`haze=0.3,temperature=0.35,saturation=1.0`, sky share 0.35) | world | 0.591 | 0.169 | 0.660 | 0.800 | 0.630 | 0.141 | 0.807 |
+| | sky | 0.726 | 0.657 | 0.745 | 0.799 | 0.142 | 0.107 | 0.793 |
+
+The `original` frame's sky reaches 0.93: the presets' `sky=0.7` darkens it.
+
+- **`gt7` against `aces`**: a deeper, more saturated blue sky (sky saturation 0.236 against 0.168) with more contrast in the clouds (sky spread 0.203 against 0.167), brighter highlights that still stay below white (p95 0.842 against 0.798) and a wider range (0.660 against 0.641), with the midtones in place (p50 0.644 against 0.639). The ICtCp blend keeps the sky blue where the per-channel ACES curve turns it toward cyan-white, so the picture is cooler (R/B 0.61 against 0.69). The cockpit interior is darker (the toe). These follow the board's GT7 traits.
+- **`fm2023` against `gt7`**: warmer by R/B 1.32 times (the board's Supra pair: 1.26), a lower range (spread 0.630 against 0.660; the board: 0.628 against 0.698) and lower highlights (p95 0.800 against 0.842), the distant mountains faded and the sky paler. The first try faded the picture too far: the world's saturation fell to 0.107, against 0.228 for `gt7` (the board has FM2023 at 0.86 times GT7's saturation), so the haze went from 0.5 to 0.3, its share on the sky from 0.5 to 0.35 and the warmth from 0.5 to 0.35. At 0.3 the world's saturation is 0.141; most of that region is distant mountains and sky, which the haze is meant to fade. `haze=0.4,saturation=1.05` measured the same (0.139), so the preset takes `saturation=1.05` with `haze=0.3`.
+- Not judged in this frame: the occlusion and the bloom width, which need a sunlit scene and a low sun.
+
+The pass `haze_amount` loaded and ran on the native path (`Post passes: texture haze_amount 2560x1440`); the runs' logs have only main's four errors.

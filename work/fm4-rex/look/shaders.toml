@@ -119,13 +119,13 @@ params = [
 
 # The races' final combine as the project's own tone mapping (fm4-final-combine.ps.hlsli): a
 # replacement that reads the game shader's inputs by name (docs/analysis/b4-shader-research.md,
-# "FinalCombine Formula") and the post passes' ambient occlusion by its name in passes.toml
-# (srv, xe_srv_gtao_occlusion). Its knobs stay defines. Without the switch, and on RTV, its
-# classic mod shader_E97AA211B556A9B3.mod.hlsli applies.
+# "FinalCombine Formula") and the post passes' ambient occlusion and aerial haze by their names
+# in passes.toml (srv, xe_srv_gtao_occlusion, xe_srv_haze_amount). Its knobs stay defines.
+# Without the switch, and on RTV, its classic mod shader_E97AA211B556A9B3.mod.hlsli applies.
 [[pixel]]
 hash = "E97AA211B556A9B3"
 shader = "fm4-final-combine.ps.hlsli"
-srv = ["post:gtao_occlusion"]
+srv = ["post:gtao_occlusion", "post:haze_amount"]
 
 [pixel.inputs]
 scene = "tf0"

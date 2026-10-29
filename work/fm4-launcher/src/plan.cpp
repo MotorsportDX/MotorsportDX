@@ -118,6 +118,14 @@ double WindshieldStrength(const Pairs& knobs) {
   return value;
 }
 
+double HazeStrength(const Pairs& knobs) {
+  const std::string text = knobs.Get("haze", "0");
+  const double value = PyFloat(text);
+  if (!(value >= 0 && value <= 1))
+    throw PlanError("haze is a strength from 0 (off) to 1, not '" + text + "'.");
+  return value;
+}
+
 std::string AaMethod(const Pairs& knobs) {
   const std::string value = knobs.Get("aa", "taa");
   if (value != "taa" && value != "fsr" && value != "taau")
@@ -187,7 +195,7 @@ Pairs LookCvars(const LauncherData& data, const std::string& root, const std::st
   cvars.Set("shader_mod_path", JoinPath(root, "look"));
   cvars.Set("shader_mod_defines", Join(defines, ";"));
   Update(cvars, AoCvars(root, PyFloat(knobs.Get("ao", "0")) > 0 || TaaEnabled(knobs) ||
-                                  WindshieldStrength(knobs) > 0));
+                                  WindshieldStrength(knobs) > 0 || HazeStrength(knobs) > 0));
   return cvars;
 }
 
@@ -683,6 +691,8 @@ std::vector<std::string> LookDefines(const LauncherData& data, const Pairs& knob
   }
   if (WindshieldStrength(knobs) > 0)
     defines.push_back("WINDSHIELD=" + PyRepr(WindshieldStrength(knobs)));
+  // The haze pass's strength; the mods' FM4_LOOK_HAZE mixes the scene by its amount.
+  if (HazeStrength(knobs) > 0) defines.push_back("HAZE=" + PyRepr(HazeStrength(knobs)));
   return defines;
 }
 

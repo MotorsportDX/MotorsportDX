@@ -13,6 +13,8 @@
 // functions of fm4-look.hlsli): exposure, sharpening and occlusion on the scene, bloom energy,
 // saturation and contrast, the debug views. A tone curve of FM4_LOOK_TONEMAP maps x directly,
 // where the classic mod inverts the game's curve from the LUT coordinate first.
+// The bloom's wide halo (FM4_LOOK_BLOOM_WIDTH) taps the bloom input as the classic fetch 2 does.
+#define FM4_BLOOM_TAP(uv) xe_tex_bloom(uv)
 #include "fm4-look.hlsli"
 
 // The game's filmic curve (Hable): A and B in Y and Z of ab, CB, DF, DE and E/F in cdef.
@@ -38,8 +40,9 @@ void xe_replacement(XeInputs inputs, inout XePixel p) {
         fm4_filmic_inverse((0.18 * inputs.white).xxx, inputs.filmic_ab, inputs.filmic_cdef).x;
     fm4_probe_white = fm4_filmic_inverse(inputs.white.xxx, inputs.filmic_ab, inputs.filmic_cdef).x;
   }
-  scene = fm4_ambient_occlusion(fm4_sharpen_scene(scene, inputs.uv), inputs.uv);
-  bloom = fm4_bloom(bloom);
+  scene = fm4_haze(fm4_ambient_occlusion(fm4_sharpen_scene(scene, inputs.uv), inputs.uv), inputs.uv,
+                   inputs.filmic_ab, inputs.filmic_cdef);
+  bloom = fm4_bloom(fm4_bloom_wide(bloom, inputs.uv));
 
   // The exposed scene, the tone curve and the track's grading.
   float3 x = (scene.rgb * scene.rgb + bloom.rgb * bloom.rgb) * fm4_exposure_scale;

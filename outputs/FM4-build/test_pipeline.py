@@ -163,6 +163,28 @@ class PipelineTests(unittest.TestCase):
             self.assertEqual(mods['aces'],mods['neutral'])
             self.assertEqual([pipeline.look_knobs(look)['tonemap'] for look in ('aces','gt','neutral')],
                              ['aces','gt','neutral'])
+            # gt7: the same mods with the GT7 operator (tone curve 4) and a deeper sky.
+            gt7=pipeline.look_knobs('gt7')
+            self.assertEqual({k:v for k,v in gt7.items() if not k.startswith('sky_') and k!='tonemap'},
+                             mods['aces'])
+            self.assertEqual(gt7['tonemap'],'gt7')
+            defines=dict(define.split('=',1) for define in
+                         pipeline.look_cvars(root,'gt7')['shader_mod_defines'].split(';'))
+            self.assertEqual(defines['FM4_LOOK_TONEMAP'],'4.0')
+            # fm2023: the aces curve on the same mods, warmer, hazier, with more occlusion and a
+            # wide bloom; the haze turns on the haze pass (HAZE).
+            fm2023=pipeline.look_knobs('fm2023')
+            self.assertEqual(fm2023['tonemap'],'aces')
+            for knob in ('haze','temperature','bloom_width'):
+                self.assertGreater(float(fm2023[knob]),0,knob)
+            defines=dict(define.split('=',1) for define in
+                         pipeline.look_cvars(root,'fm2023')['shader_mod_defines'].split(';'))
+            self.assertEqual(defines['HAZE'],fm2023['haze'] if '.' in fm2023['haze'] else fm2023['haze']+'.0')
+            self.assertIn('FM4_LOOK_HAZE',defines)
+            self.assertNotIn('HAZE',dict(define.split('=',1) for define in
+                         pipeline.look_cvars(root,'aces')['shader_mod_defines'].split(';')))
+            with self.assertRaises(RuntimeError):
+                pipeline.look_cvars(root,'aces,haze=2')
             with self.assertRaises(RuntimeError):
                 pipeline.look_knobs('filmic')
             cvars=pipeline.look_cvars(root,'pc,sharpen=0.6,taa=0')
@@ -437,7 +459,7 @@ class PipelineTests(unittest.TestCase):
                              'skyScale.value*=0.8')
             # The presets have sky 0.7 (the 2x sweep of 18 October 2026, pc's since then, aces, gt
             # and neutral since 20 October 2026); original keeps the sky.
-            for look in ('pc','aces','gt','neutral'):
+            for look in ('pc','aces','gt','neutral','gt7'):
                 self.assertEqual(pipeline.look_track_settings(pipeline.look_knobs(look)),'skyScale.value*=0.7')
             self.assertEqual(pipeline.look_track_settings(pipeline.look_knobs('original')),'')
             # A knob at 1 edits nothing, so the files are not copied at all.

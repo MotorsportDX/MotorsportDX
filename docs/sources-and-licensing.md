@@ -13,7 +13,7 @@ This repository is source-only. It records reviewed integration code, diagnostic
 - `work/fm4-launcher`: the GUI launcher, original code that ports the launch rules of `pipeline.py`. It is built against the runtime's third-party SDL3, Dear ImGui and JSON header, which are not stored.
 - `outputs/FM4-build`: the setup, generate, build, and run pipeline (`Build.ps1`, `pipeline.py`, and the loader), reviewed integration metadata (function bounds and switch recipes), the e2e harness and gates (`e2e/`), and `verification.json`.
 - `docs/`: project documentation, including the research notes in `docs/analysis/`.
-- The third-party notices in `outputs/FM4-source-control/third-party-notices`: the license text of every third-party component that the build compiles into a binary of the game, the runtime or the GUI launcher (the ReXGlue/Xenia notice, the libraries of [Third-party components](#third-party-components), AMD's FidelityFX SDK license, Microsoft's `d3dx12.h` license and the Microsoft.GameInput package's MIT license), copied from their pinned upstream revisions, and a `README.txt` that says what each covers and which binary holds it.
+- The third-party notices in `outputs/FM4-source-control/third-party-notices`: the license text of every third-party component that the build compiles into a binary of the game, the runtime or the GUI launcher (the ReXGlue/Xenia notice, the libraries of [Third-party components](#third-party-components), AMD's FidelityFX SDK license, Microsoft's `d3dx12.h` license and the Microsoft.GameInput package's MIT license), the MIT license of Polyphony Digital's GT7 tone mapping sample, which the look mods port ([GT7 tone mapping](#third-party-code-gt7-tone-mapping)), copied from their pinned upstream revisions, and a `README.txt` that says what each covers and which binary holds it.
 - `outputs/FM4-build/sdl3-gameinput-v3.patch`: the change to the fetched SDL 3 source for GameInput API v3, applied by setup (it holds context lines of SDL's code, zlib, and marks what it alters; [Microsoft.GameInput](#third-party-code-microsoftgameinput)).
 - `work/runtime/cmake/rex_fsr.cmake`, `work/runtime/cmake/fsr-include`, `work/runtime/include/rex/graphics/d3d12/fsr.h`, `work/runtime/src/graphics/d3d12/fsr.cpp` and `work/fm4-rex/passes/fsr.hlsl`: the integration that builds AMD FSR 3.1 from the FidelityFX SDK source when `REX_FSR` is on and runs it at the scene_color point (original code of this project; it calls the SDK's API and holds none of its code). The SDK itself is not stored ([AMD FidelityFX SDK](#third-party-code-amd-fidelityfx-sdk-fsr-31)).
 
@@ -91,6 +91,7 @@ Reviewed on 25 October 2026 against the build's CMake files, the link map of `fm
 | AMD FidelityFX CAS and FSR 1 (the presenter's shader bytecode, from Xenia) | in `work/runtime/src/ui/shaders/bytecode` | MIT | `rexruntime.dll` | the notice in all copies |
 | ProggyTiny font (Tristan Grimmer, embedded by Xenia's overlay code) | - | MIT | `rexruntime.dll` | the notice in all copies |
 | AMD FidelityFX SDK (FSR 3.1) and Microsoft `d3dx12.h` | v1.1.4 | MIT | `rexgpu-xenos.dll` with `-Fsr on` | the notice in all copies; see [below](#third-party-code-amd-fidelityfx-sdk-fsr-31) |
+| Polyphony Digital's GT7 tone mapping sample (`gt7_tone_mapping.cpp`), ported to HLSL | 1.0 (10 August 2025) | MIT | the look mods (`work/fm4-rex/look/fm4-look.hlsli`), compiled by FXC at run time | the notice in all copies; see [below](#third-party-code-gt7-tone-mapping) |
 | GNU binutils PowerPC disassembler (`thirdparty/disasm`) | the SDK's commit | GPL 2.0 or later | `rexglue.exe` only, never exported | source and license text if `rexglue.exe` were given to others |
 | DirectX Shader Compiler of the FidelityFX SDK | 1.8.2403 | Microsoft's DXC terms | build time only, with `-Fsr on` | not shipped |
 | DirectX Shader Compiler release (N6's increment 1.2) | v1.9.2609 | Microsoft's DXC terms, with LLVM's NCSA license and MIT | the native path's DXIL shaders (`native_shader_dxil`, on by default where the DLLs are beside the game); fetched on the user's computer by setup and the GUI launcher | not shipped; its license files in the notices; see [below](#third-party-code-directx-shader-compiler) |
@@ -154,6 +155,17 @@ Conclusions:
 - FSR 4 is not planned: it would mean redistributing AMD binaries on undocumented terms, and it does not run on the development computer.
 - DLSS (DLAA) needs its own review of NVIDIA's SDK license; not reviewed yet.
 - The plan for adding FSR 3.1 is in [FSR plan](analysis/fsr-plan.md).
+
+## Third-party code: GT7 tone mapping
+
+The look's tone curve `gt7` (the preset `gt7`, [running.md](running.md#look)) is a port to HLSL of the SDR path of Polyphony Digital's sample implementation of the GT7 tone mapping operator, published with its talk in the SIGGRAPH 2025 course "Physically Based Shading in Theory and Practice" ([gt7_tone_mapping.cpp](https://blog.selfshadow.com/publications/s2025-shading-course/pdi/supplemental/gt7_tone_mapping.cpp), version 1.0 of 10 August 2025). No file of the sample is stored in the repository, and nothing was downloaded for the port: its code was read from the research of 25 October 2026 ([look presets](analysis/look-presets-gt7-fm2023.md#2-the-gt7-operator)).
+
+| Item | Details |
+| --- | --- |
+| License | MIT, "Copyright (c) 2025 Polyphony Digital Inc."; [notice](../outputs/FM4-source-control/third-party-notices/PolyphonyDigital-GT7-tone-mapping-LICENSE.txt) |
+| What is ported | `fm4_gt7_curve` (the GT tone mapping curve V2 with the sample's parameters), `fm4_pq_encode` and `fm4_pq_decode` (SMPTE ST 2084), `fm4_rgb_to_ictcp` and `fm4_ictcp_to_rgb`, and `fm4_curve_gt7` (the per-channel and ICtCp results, the chroma fade, the blend, the SDR paper white) in [fm4-look.hlsli](../work/fm4-rex/look/fm4-look.hlsli), which names the sample and its license |
+| Where it ends up | The look directory that `build` and `export` copy; the runtime compiles it with FXC when a look uses it. No binary of the build holds it |
+| Changes | HLSL instead of C++; the Rec. 709 scene converted to Rec. 2020 and back; only the SDR path (paper white 250 cd/m^2); the Jzazbz option left out |
 
 ## Third-party code: Microsoft.GameInput
 

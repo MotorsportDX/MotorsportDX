@@ -701,6 +701,8 @@ preset, knobs, or both. A preset sets only its own knobs. Later items win, so
 | `aces` (default) | `tonemap=aces`, `saturation=1.1`, `bloom=0.7`, `sharpen=0.4`, `clearcoat=1`, `clearcoat_glint=1`, `ao=0.6`, `sun=2`, `sky=0.7`, `taa=1`, `cockpit_fill=1`, `windshield=1`, `road_specular=0`, `road_sheen=0.4`, `glass=1`, `chrome=1`, `rims=1`, `adaptation=1` |
 | `gt` | the same with `tonemap=gt` (Hajime Uchimura's curve: a long linear middle, so midtone colors stay closest to the game's) |
 | `neutral` | the same with `tonemap=neutral` (Khronos PBR Neutral: linear up to 0.76, then only the brightest channel compressed) |
+| `gt7` | after Gran Turismo 7: the same with `tonemap=gt7` (GT7's own tone mapping: a darker toe, a long linear middle, a convergent shoulder, and the hues of bright colors kept), `sky_saturation=1.15` and `sky_contrast=0.3` for a deeper blue sky. Since 29 October 2026; see [look presets](analysis/look-presets-gt7-fm2023.md) |
+| `fm2023` | after Forza Motorsport (2023): the `aces` mods with `saturation=1.05`, `ao=0.9`, `haze=0.3`, `temperature=0.35` and `bloom_width=0.5`: warmer, hazier and a little less saturated than `gt7`, with deeper occlusion and a wider bloom. Since 29 October 2026; see [look presets](analysis/look-presets-gt7-fm2023.md) |
 | `original` | The game's own look with TAA (`taa=1`) and no shader mod. Clears the knobs given before it in the same value. `-Look "original,taa=0"` is the game's picture without any change. |
 | `pc` | The earlier name of `aces`. |
 
@@ -713,9 +715,13 @@ and `-Look original`.
 
 | Knob | Values and default | Effect |
 | --- | --- | --- |
-| `tonemap` | `filmic`, `gt`, `aces`, `neutral` | Tone curve. |
+| `tonemap` | `filmic`, `gt`, `aces`, `neutral`, `gt7` | Tone curve. `gt7` is a port of Polyphony Digital's GT7 tone mapping (SIGGRAPH 2025, MIT; [look presets](analysis/look-presets-gt7-fm2023.md#2-the-gt7-operator)) with an SDR paper white of 250 cd/m^2. |
 | `sharpen` | number | Sharpening. |
 | `bloom` | number | Bloom. |
+| `bloom_width` | number, default 0 | A wide halo around the bloom (two rings of taps 3% and 6% of the screen's width out), in units of the bloom's own energy, as a low sun spreads its glow. |
+| `temperature` | number, -1 to 1, default 0 | White balance of the final image: above 0 warmer, below 0 cooler; 1 raises red over blue by about 1.27, the luminance kept. |
+| `haze` | number, 0 to 1, default 0 | Aerial haze: the post pass `haze_amount` (`work/fm4-rex/passes/haze.hlsl`) turns each pixel's view distance into an amount, 1 - exp(-(d - 30 m) / 800 m) times the knob, and 0.35 times the knob on the sky, and the final combine mixes the scene toward a pale blue-gray by it, so distant hills and buildings fade and the sky gets paler. Above 0 it turns the post passes on. The shape is `HAZE_DISTANCE`, `HAZE_START` and `HAZE_SKY` in [passes.toml](../work/fm4-rex/passes/passes.toml). |
+| `haze_brightness` | number, default 1 | Brightness of the haze, in units of 2 stops above the game's middle gray after the exposure. |
 | `exposure` | number | Exposure. |
 | `adaptation` | 0 or 1, default 0 | 1: the auto exposure adapts as fast as the game's at 60 fps at every frame rate ([below](#exposure-adaptation)); 1 in `aces`, `gt` and `neutral` since 26 October 2026. |
 | `contrast` | number | Contrast. |
@@ -968,8 +974,9 @@ every effect.
 - Every knob of the look files is live. Open the console with the backtick key and type
   `shader_mod_set FM4_LOOK_SHARPEN=0.6 FM4_LOOK_BLOOM=0.8`: the image changes in the next
   frame. `shader_mod_set` alone lists the values. The names are the `FM4_LOOK_*` defines
-  of `fm4-look.hlsli`, `fm4-paint.hlsli`, `fm4-car.hlsli`, `fm4-nature.hlsli` and `fm4-road.hlsli`; `FM4_LOOK_TONEMAP` takes 0 to 3 (`filmic`,
-  `gt`, `aces`, `neutral`).
+  of `fm4-look.hlsli`, `fm4-paint.hlsli`, `fm4-car.hlsli`, `fm4-nature.hlsli` and `fm4-road.hlsli`; `FM4_LOOK_TONEMAP` takes 0 to 4 (`filmic`,
+  `gt`, `aces`, `neutral`, `gt7`). The haze's strength is the pass param `HAZE` (with `FM4_LOOK_HAZE`
+  above 0).
 - `NAME=VALUE` lines in `work/fm4-rex/look/shader_mod_defines.txt` (not tracked by Git)
   apply in the same way whenever the file is saved.
 - The GTAO pass only runs when `ao` is above 0 in `-Look` (or with `pipeline.py --ao`), so
