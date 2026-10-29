@@ -437,7 +437,9 @@ class App {
   void RowsPage(const std::vector<const char*>& tabs, const std::function<void()>& rows,
                 const std::function<void()>& extra);
   // The pages in the theme: the launcher's own focus, not ImGui's navigation.
-  bool Themed() const { return page_ == kHome || page_ == kDisplay || page_ == kLook || page_ == kControls; }
+  bool Themed() const {
+    return page_ == kHome || page_ == kDisplay || page_ == kLook || page_ == kControls || page_ == kGameData;
+  }
   // The detail panel at the right of a list: the focused entry's title and text.
   void DetailPanel(ImVec2 size, const std::function<void()>& extra);
   void HomeMenu();
@@ -468,7 +470,16 @@ class App {
   void StartWheelTest();
   void StopWheelTest();
   void WheelLog(std::string_view text);
-  void GameDataPage();
+  // The Game data page: the Discs and the texture pack, and the content with its packages.
+  void GameDataRows();
+  // A folder as a row: A opens the folder picker, X clears it when it may be empty. Returns true
+  // when it was cleared.
+  bool PathOptionRow(const char* id, const char* label, std::string& value, DialogTarget target, const char* help,
+                     bool clearable, const ImVec4* color);
+  // The focused folder row's path, typed in the detail panel; true when an edit ended.
+  bool PathField(std::string& value);
+  // The end of a path that fits the width in the current font.
+  std::string ShortPath(const std::string& path, float width);
   void AdvancedPage();
   void ShadersPage();
   // The offline pass with the current plan, the DXC release fetched first when it is missing
@@ -528,6 +539,7 @@ class App {
   ImFont* title_font_ = nullptr;  // Segoe UI Black Italic: the wordmark and the page titles
   std::string help_;              // the focused option's help, in the detail panel
   std::string help_title_;
+  std::string focus_id_;          // the focused row's id, for the detail panel
   int home_focus_ = 0;            // the Home menu's focused entry
   int tab_ = 0;                   // the page's tab
   ImVec2 page_size_;              // the page's column, below the bars
@@ -539,6 +551,7 @@ class App {
   bool prompt_accept_ = false;  // the A prompt was clicked: the next frame's MenuAccept
   bool prompt_reset_ = false;   // the X prompt was clicked: the next frame's reset
   bool focus_changed_ = false;  // the focused row is a changed one: the X prompt shows
+  const char* reset_label_ = "Reset";  // the X prompt's word
   bool row_moved_ = false;      // the focus moved by the pad or the keys: the list scrolls to it
   int row_dragging_ = -1;       // the slider row whose bar the mouse drags
   ID3D11ShaderResourceView* backdrop_ = nullptr;
@@ -1279,7 +1292,9 @@ void App::Frame() {
   Banner();
   help_.clear();
   help_title_.clear();
+  focus_id_.clear();
   focus_changed_ = false;
+  reset_label_ = "Reset";
   const float prompts = 58 * scale_;
   const float body = ImGui::GetContentRegionAvail().y - prompts;
   // The page in a centred column: lists stay readable on a wide screen.
@@ -1297,13 +1312,13 @@ void App::Frame() {
     case kDisplay: DisplayRows(); break;
     case kLook: LookRows(); break;
     case kControls: ControlsRows(); break;
+    case kGameData: GameDataRows(); break;
     default: {
       // The pages not yet in the theme, on a panel.
       ImGui::PushStyleColor(ImGuiCol_ChildBg, ImVec4(0.11f, 0.12f, 0.14f, 0.92f));
       ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, ImVec2(26 * scale_, 18 * scale_));
       ImGui::BeginChild("legacy", page_size_, ImGuiChildFlags_AlwaysUseWindowPadding | ImGuiChildFlags_NavFlattened);
       switch (page_) {
-        case kGameData: GameDataPage(); break;
         case kShaders: ShadersPage(); break;
         case kAdvanced: AdvancedPage(); break;
         default: AboutPage(); break;
@@ -1575,7 +1590,7 @@ void App::PromptBar() {
   const bool themed = Themed();
   if (not_ready.empty()) prompts.push_back({menu.c_str(), "Play", kPlay});
   prompts.push_back({"Y", "Profile", kProfile});
-  if (focus_changed_) prompts.push_back({"X", "Reset", kReset});
+  if (focus_changed_) prompts.push_back({"X", reset_label_, kReset});
   if (page_ != kHome) prompts.push_back({"B", "Back", kBack});
   prompts.push_back({"A", "Select", kSelect});
   ImGui::PushFont(din_font_, 18);
@@ -1719,6 +1734,7 @@ int App::OptionRow(const char* id, const char* label, const std::string& value, 
     help_title_ = label;
     help_ = help ? help : "";
     focus_changed_ = changed && enabled;
+    focus_id_ = id;
     // The pad or the keys moved the focus here: keep the row in the list's view.
     if (row_moved_) {
       const float top = ImGui::GetWindowPos().y, bottom = top + ImGui::GetWindowHeight();
@@ -3056,125 +3072,159 @@ void App::StopWheelTest() {
   wheel_.reset();
 }
 
-void App::GameDataPage() {
-  if (PathRow("Disc 1", "disc1", settings_.disc1, kDisc1, false)) Refresh(false);
-  ImGui::SetCursorPosX(ImGui::GetCursorPosX() + 190 * scale_);
-  if (disc1_.error.empty())
-    ImGui::TextColored(kSuccess, "%s release, the three executables verified", disc1_.release.c_str());
-  else {
-    ImGui::PushTextWrapPos(0);
-    ImGui::TextColored(kDanger, "%s", disc1_.error.c_str());
-    ImGui::PopTextWrapPos();
+std::string App::ShortPath(const std::string& path, float width) {
+  if (ImGui::CalcTextSize(path.c_str()).x <= width) return path;
+  // The end of the path, where the folder's own name is.
+  for (size_t start = 1; start < path.size(); ++start) {
+    const std::string text = "..." + path.substr(start);
+    if (ImGui::CalcTextSize(text.c_str()).x <= width) return text;
   }
-  ImGui::Dummy(ImVec2(0, 4 * scale_));
-  if (PathRow("Disc 2", "disc2", settings_.disc2, kDisc2, true)) Refresh(false);
-  ImGui::SetCursorPosX(ImGui::GetCursorPosX() + 190 * scale_);
-  if (settings_.disc2.empty())
-    ImGui::TextColored(kMuted, "Not used: the cars of Disc 2 are not imported");
-  else if (disc2_.error.empty())
-    ImGui::TextColored(kSuccess, "The four content packages found");
-  else {
-    ImGui::PushTextWrapPos(0);
-    ImGui::TextColored(kDanger, "%s", disc2_.error.c_str());
-    ImGui::PopTextWrapPos();
-  }
+  return "...";
+}
 
-  ImGui::Dummy(ImVec2(0, 4 * scale_));
-  Label("Downloadable content", "Content packages or folders searched for them, such as the console's Content folder.");
-  if (ImGui::Button("Add folder")) OpenDialog(kContentFolder, true);
-  ImGui::SameLine();
-  if (ImGui::Button("Add files")) OpenDialog(kContentFiles, false);
-  for (size_t i = 0; i < settings_.content.size(); ++i) {
-    ImGui::PushID(static_cast<int>(i));
-    ImGui::SetCursorPosX(ImGui::GetCursorPosX() + 190 * scale_);
-    ImGui::AlignTextToFramePadding();
-    ImGui::TextUnformatted(settings_.content[i].c_str());
-    ImGui::SameLine();
-    if (SmallAction("Remove")) {
-      settings_.content.erase(settings_.content.begin() + static_cast<long>(i));
-      Refresh(false);
-      ImGui::PopID();
-      break;
-    }
-    ImGui::PopID();
+bool App::PathOptionRow(const char* id, const char* label, std::string& value, DialogTarget target, const char* help,
+                        bool clearable, const ImVec4* color) {
+  ImGui::PushFont(din_font_, 19);
+  const std::string shown = value.empty() ? "Not set" : ShortPath(value, ImGui::GetContentRegionAvail().x * 0.5f);
+  ImGui::PopFont();
+  const int d = OptionRow(id, label, shown, help, true, value.empty() ? &kMuted : color);
+  // A screenshot never opens a dialog.
+  if (d == 2 && !shot_) OpenDialog(target, true);
+  // X clears a folder that may be empty; the row is not marked as changed.
+  if (!clearable || value.empty() || focus_id_ != id) return false;
+  focus_changed_ = true;
+  reset_label_ = "Clear";
+  if (prompt_reset_ || (!ImGui::GetIO().WantTextInput && (ImGui::IsKeyPressed(ImGuiKey_GamepadFaceLeft, false) ||
+                                                          ImGui::IsKeyPressed(ImGuiKey_Delete, false)))) {
+    value.clear();
+    return true;
   }
-  if (!content_.error.empty()) {
-    ImGui::SetCursorPosX(ImGui::GetCursorPosX() + 190 * scale_);
-    ImGui::PushTextWrapPos(0);
-    ImGui::TextColored(kDanger, "%s", content_.error.c_str());
-    ImGui::PopTextWrapPos();
-  }
+  return false;
+}
 
-  ImGui::Dummy(ImVec2(0, 8 * scale_));
-  ImGui::TextColored(kMuted, "Content packages");
+bool App::PathField(std::string& value) {
+  ImGui::PushFont(din_font_, 17);
+  ImGui::TextColored(kMuted, "FOLDER");
+  ImGui::PopFont();
+  ImGui::SetNextItemWidth(-1);
+  ImGui::InputTextWithHint("##path", "Type a folder, or press A to browse", &value);
+  return ImGui::IsItemDeactivatedAfterEdit();
+}
+
+void App::GameDataRows() {
+  Options& o = settings_.Active().options;
   std::uintmax_t pending = 0;
-  if (content_.packages.empty()) {
-    Muted("None. The base game runs without them.");
-  } else if (ImGui::BeginTable("packages", 3, ImGuiTableFlags_RowBg | ImGuiTableFlags_BordersInnerH | ImGuiTableFlags_PadOuterX)) {
-    ImGui::TableSetupColumn("Package", ImGuiTableColumnFlags_WidthStretch);
-    ImGui::TableSetupColumn("Size", ImGuiTableColumnFlags_WidthFixed, 80 * scale_);
-    ImGui::TableSetupColumn("Status", ImGuiTableColumnFlags_WidthFixed, 250 * scale_);
-    ImGui::TableHeadersRow();
-    ImGui::PushStyleColor(ImGuiCol_TableRowBgAlt, ImVec4(1, 1, 1, 0.02f));
+  for (size_t i = 0; i < content_.packages.size(); ++i)
+    if (i >= imported_.size() || !imported_[i]) pending += content_.packages[i].size;
+  RowsPage({"DISCS", "CONTENT"}, [&] {
+    if (tab_ == 0) {
+      if (PathOptionRow("disc1", "Disc 1 (Play Disc)", settings_.disc1, kDisc1,
+                        "The folder of your extracted Disc 1, the one Motorsport DX needs. A opens the folder picker.",
+                        false, disc1_.error.empty() ? &kSuccess : &kDanger))
+        Refresh(false);
+      if (PathOptionRow("disc2", "Disc 2 (Content Disc)", settings_.disc2, kDisc2,
+                        "The folder of your extracted Disc 2: its cars import on the first Play. Optional. A opens the "
+                        "folder picker, X clears it.",
+                        true, disc2_.error.empty() ? &kSuccess : &kDanger))
+        Refresh(false);
+      PathOptionRow("replace", "Texture pack", o.texture_replace, kTextureReplace,
+                    "A folder of <hash>.dds files that replace the game's textures. Optional. A opens the folder "
+                    "picker, X clears it.",
+                    true, nullptr);
+      return;
+    }
+    if (OptionRow("add_folder", "Add a content folder", "Press A",
+                  "A folder searched for content packages, such as the console's Content folder.") == 2 &&
+        !shot_)
+      OpenDialog(kContentFolder, true);
+    if (OptionRow("add_files", "Add content files", "Press A", "Content package files, picked one or several at a time.") ==
+            2 &&
+        !shot_)
+      OpenDialog(kContentFiles, false);
+    if (!settings_.content.empty()) RowsTitle("SEARCHED");
+    for (size_t i = 0; i < settings_.content.size(); ++i) {
+      const std::string id = "content" + std::to_string(i);
+      ImGui::PushFont(din_font_, 19);
+      const std::string name = ShortPath(settings_.content[i], ImGui::GetContentRegionAvail().x * 0.6f);
+      ImGui::PopFont();
+      if (OptionRow(id.c_str(), name.c_str(), "Remove",
+                    "A folder or file searched for content packages. A removes it from the list; the files stay.",
+                    true, &kSecondary) == 2) {
+        settings_.content.erase(settings_.content.begin() + static_cast<long>(i));
+        Refresh(false);
+        break;
+      }
+    }
+    RowsTitle("PACKAGES");
+    if (content_.packages.empty())
+      OptionRow("none", "No content packages", "", "The base game runs without them.", false);
     for (size_t i = 0; i < content_.packages.size(); ++i) {
       const Package& package = content_.packages[i];
-      ImGui::TableNextRow();
-      ImGui::PushID(static_cast<int>(i));
-      ImGui::TableNextColumn();
-      ImGui::AlignTextToFramePadding();
-      ImGui::TextUnformatted(Utf8(package.path.filename()).c_str());
-      if (ImGui::IsItemHovered()) ImGui::SetTooltip("%s", Utf8(package.path).c_str());
-      ImGui::TableNextColumn();
-      ImGui::AlignTextToFramePadding();
-      ImGui::TextColored(kSecondary, "%s", FormatSize(package.size).c_str());
-      ImGui::TableNextColumn();
-      if (i < imported_.size() && imported_[i]) {
-        ImGui::AlignTextToFramePadding();
-        ImGui::TextColored(kSuccess, "Imported");
-        ImGui::SameLine();
-        if (SmallAction("Remove import")) {
-          remove_candidate_ = package;
-          ImGui::OpenPopup("Remove import");
-        }
-      } else {
-        pending += package.size;
-        ImGui::AlignTextToFramePadding();
-        ImGui::TextColored(kWarning, "Imports on the next Play");
+      const bool imported = i < imported_.size() && imported_[i];
+      const std::string id = "package" + std::to_string(i);
+      const std::string help = Utf8(package.path) + "\n\n" + FormatSize(package.size) +
+                               (imported ? ". Imported into the user data: A removes the import; the package file "
+                                           "stays and imports again on the next Play while it is listed."
+                                         : ". Imports into the user data on the next Play.");
+      if (OptionRow(id.c_str(), Utf8(package.path.filename()).c_str(), imported ? "Imported" : "On the next Play",
+                    help.c_str(), true, imported ? &kSuccess : &kWarning) == 2 &&
+          imported) {
+        remove_candidate_ = package;
+        ImGui::OpenPopup("Remove import");
       }
-      if (ImGui::BeginPopupModal("Remove import", nullptr, ImGuiWindowFlags_AlwaysAutoResize)) {
-        ImGui::Text("Remove the imported %s from the user data?", Utf8(remove_candidate_->path.filename()).c_str());
-        Muted("The package file itself stays. It imports again on the next Play while it is listed.");
-        if (ImGui::Button("Remove")) {
-          RemoveImport(*remove_candidate_);
-          ImGui::CloseCurrentPopup();
-        }
-        ImGui::SameLine();
-        if (ImGui::Button("Cancel")) ImGui::CloseCurrentPopup();
-        ImGui::EndPopup();
-      }
-      ImGui::PopID();
     }
-    ImGui::PopStyleColor();
-    ImGui::EndTable();
-  }
-  if (pending) {
-    std::error_code error;
-    fs::path drive = UserData();
-    while (!drive.empty() && !fs::exists(drive)) drive = drive.parent_path();
-    const auto space = fs::space(drive.empty() ? root_ : drive, error);
-    Muted("The first Play imports " + FormatSize(pending) + " into the user data" +
-          (error ? "." : " (" + FormatSize(space.available) + " free)."));
-  }
-  if (!content_.skipped.empty() && ImGui::TreeNode("skipped", "Skipped files (%d)", static_cast<int>(content_.skipped.size()))) {
-    for (const auto& line : content_.skipped) Muted(line);
-    ImGui::TreePop();
-  }
-
-  ImGui::Dummy(ImVec2(0, 8 * scale_));
-  Options& o = settings_.Active().options;
-  PathRow("Texture pack", "replace", o.texture_replace, kTextureReplace, true);
-  ImGui::SetCursorPosX(ImGui::GetCursorPosX() + 190 * scale_);
-  ImGui::TextColored(kMuted, "A folder of <hash>.dds files that replace the game textures");
+    ImGui::SetNextWindowPos(ImGui::GetMainViewport()->GetCenter(), ImGuiCond_Appearing, ImVec2(0.5f, 0.5f));
+    if (ImGui::BeginPopupModal("Remove import", nullptr, ImGuiWindowFlags_AlwaysAutoResize)) {
+      ImGui::Text("Remove the imported %s from the user data?", Utf8(remove_candidate_->path.filename()).c_str());
+      Muted("The package file itself stays. It imports again on the next Play while it is listed.");
+      if (ImGui::Button("Remove")) {
+        RemoveImport(*remove_candidate_);
+        ImGui::CloseCurrentPopup();
+      }
+      ImGui::SameLine();
+      if (ImGui::Button("Cancel") || ImGui::IsKeyPressed(ImGuiKey_GamepadFaceRight, false) ||
+          ImGui::IsKeyPressed(ImGuiKey_Escape, false))
+        ImGui::CloseCurrentPopup();
+      ImGui::EndPopup();
+    }
+  }, [&] {
+    ImGui::Dummy(ImVec2(0, 14 * scale_));
+    ImGui::PushTextWrapPos(0);
+    if (tab_ == 0) {
+      if (focus_id_ == "disc1") {
+        if (disc1_.error.empty()) Colored(kSuccess, disc1_.release + " release, the three executables verified.");
+        else Colored(kDanger, disc1_.error);
+        ImGui::Dummy(ImVec2(0, 6 * scale_));
+        if (PathField(settings_.disc1)) Refresh(false);
+      } else if (focus_id_ == "disc2") {
+        if (settings_.disc2.empty()) Muted("Not used: the cars of Disc 2 are not imported.");
+        else if (disc2_.error.empty()) Colored(kSuccess, "The four content packages found.");
+        else Colored(kDanger, disc2_.error);
+        ImGui::Dummy(ImVec2(0, 6 * scale_));
+        if (PathField(settings_.disc2)) Refresh(false);
+      } else if (focus_id_ == "replace") {
+        PathField(o.texture_replace);
+      }
+    } else {
+      if (!content_.error.empty()) Colored(kDanger, content_.error);
+      if (pending) {
+        std::error_code error;
+        fs::path drive = UserData();
+        while (!drive.empty() && !fs::exists(drive)) drive = drive.parent_path();
+        const auto space = fs::space(drive.empty() ? root_ : drive, error);
+        Muted("The next Play imports " + FormatSize(pending) + " into the user data" +
+              (error ? "." : " (" + FormatSize(space.available) + " free)."));
+      }
+      if (!content_.skipped.empty()) {
+        ImGui::Dummy(ImVec2(0, 6 * scale_));
+        ImGui::PushFont(din_font_, 17);
+        ImGui::TextColored(kMuted, "SKIPPED FILES (%d)", static_cast<int>(content_.skipped.size()));
+        ImGui::PopFont();
+        for (const auto& line : content_.skipped) Muted(line);
+      }
+    }
+    ImGui::PopTextWrapPos();
+  });
 }
 
 void App::AdvancedPage() {
