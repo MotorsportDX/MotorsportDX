@@ -158,6 +158,7 @@ The next validation priorities are a clean setup on a second computer, then audi
 | [docs/analysis/photo-autovista-replay.md](docs/analysis/photo-autovista-replay.md) | How photo mode, Autovista and replays render, what the gates cover, and the plan for them (M5) |
 | [docs/analysis/direct-race-launch.md](docs/analysis/direct-race-launch.md) | How GO RACE starts a Quick Race, what a launch without the menus would need, and an estimate (not built); the e2e fast route through the menus that was built instead |
 | [docs/analysis/preview.md](docs/analysis/preview.md) | What a preview can be (source only; every player builds from their own discs), and the checklist for a closed and a public preview |
+| [docs/analysis/launcher-ux.md](docs/analysis/launcher-ux.md) | The GUI launcher's UX audit on the laptop and the ROG Xbox Ally X, the proposed layout and its increments |
 | [docs/sources-and-licensing.md](docs/sources-and-licensing.md) | Repository contents, the third-party components and their licenses, what may be distributed, the history check, and the pre-commit check |
 
 ## Licensing and attribution
