@@ -56,8 +56,8 @@ touch ([launcher UX](analysis/launcher-ux.md)):
   **Play**, Y **Profile**, B **Back** and A **Select**. The mouse and touch press a prompt as
   the pad presses its button. While Play cannot start, the bar's left end says why ("Choose
   Disc 1 first").
-- **The focus** is a red frame. On the Home, Display and Look pages the D-pad, the left stick or
-  the arrow keys move it, A or Enter selects, and on an option row left and right change the
+- **The focus** is a red frame. On the Home, Display, Look and Controls pages the D-pad, the left
+  stick or the arrow keys move it, A or Enter selects, and on an option row left and right change the
   value (a click on the row steps it on, a click on a chevron steps it back or on). A slider row
   has a bar that the mouse or a finger drags. A changed row has a red edge and a red label, and
   X, Delete or the X **Reset** prompt resets it. The focused option explains itself in the panel
@@ -81,7 +81,7 @@ that has none ([distribution](sources-and-licensing.md#distribution)).
 | Home | The first page. A menu (Play, then the pages) and a panel with the focused entry's detail: whether Disc 1 checks out, Disc 2 and the content, the shaders, the connected controller, and the profile's render scale, quality and frame rate. While Disc 1 is missing, Play reads "Choose Disc 1" and opens the folder picker; Game data and Shaders carry a mark while they need attention or work. |
 | Display | Three tabs of option rows. **Screen:** the screen (`-Display`), fullscreen, the render scale and supersample. **Performance:** the upscaler (`-Upscale`), the race frame rate in steps of 30, 60, 90, 120, 144 and 240 fps (a rate saved before keeps showing until it is changed), VSync and the race quality. With the upscaler on and a look whose anti-aliasing is TAA, a row "Use FSR 3.1 for the upscaler" sets `aa=fsr` in the profile's look. **Extras:** the rear-view mirror every frame, the settings overlay at start and the menus at the render scale. The right panel shows the render scale and the upscaler's lines that the options give. |
 | Look | Six tabs of option rows. **Preset:** the preset (`aces`, `gt`, `neutral`, `original`, `original` without TAA, or a saved look; changing it drops the knob changes), the tone curve, temporal anti-aliasing and its method (TAA, FSR 3.1 or TAAU, `aa`), the exposure speed of 60 fps (`adaptation`), **Save as look**, which keeps the current value under a name, **Delete this look** for a saved look, after a confirmation, and **Reset all changes**. **Picture, Lighting, Car, Sky & foliage and Road:** a slider row for each [look knob](#look) of that group, which left and right step by about a fortieth of its range; the right panel says what the knob does and the preset's value. |
-| Controls | Three tabs. **Controller:** the options of `-Pad` (the pad driver, rumble strength, trigger rumble, the steering anti-deadzone and the input thread; stick and trigger shaping and the extra buttons folded); see [Controller](#controller). **Racing wheel:** the wheel in the game (`-Wheel`, its axes, pedals, buttons and force feedback) and the [wheel test](#racing-wheel-test). **Keyboard:** the options of `-Keyboard` (smooth steering and pedals, their rates and the precision share; mouse steering folded), see [Keyboard](#keyboard), and the keyboard bindings, by their function in the game's DEFAULT LAYOUT 1 (the runtime's `keybind_*` settings). **Set** waits for a key; several keys are separated by commas, modifiers are written as `Shift+Up`. Unknown key names are marked and block Play. A connected controller needs no setup. |
+| Controls | Five tabs of option rows. **Controller:** the options of `-Pad` (the pad driver, rumble strength, trigger rumble and its strength, the steering anti-deadzone, the input thread, then the stick and trigger shaping and the extra buttons); see [Controller](#controller). **Racing wheel:** the wheel in the game (`-Wheel`: steering, the three pedals, the buttons and force feedback), with the steering's or the focused pedal's value at the right while the wheel test runs; see [Racing wheel in the game](#racing-wheel-in-the-game). **Wheel test:** the [wheel test](#racing-wheel-test), with the device and its axes, buttons and force at the right. **Keyboard:** the options of `-Keyboard` (smooth steering and pedals, their rates and the precision share, then the mouse and the deadzones); see [Keyboard](#keyboard). **Key bindings:** the keyboard bindings, by their function in the game's DEFAULT LAYOUT 1 (the runtime's `keybind_*` settings). A waits for a key, which replaces the keys; several keys are typed in the field at the right, separated by commas, with modifiers written as `Shift+Up`. Unknown key names are marked and block Play. A connected controller needs no setup. |
 | Game data | Disc 1 and Disc 2, checked as `generate` checks them, the downloadable content folders and files, and the content packages found, with their import state. **Remove import** deletes an imported package from the user data (see [Data directories](#data-directories)). The texture pack is the `-TextureReplace` folder. |
 | Shaders | The offline shader pass; see [Shaders page](#shaders-page). |
 | Advanced | The user data folder, buttons that open the logs and the user data, and **Show developer options**. |
@@ -1240,8 +1240,8 @@ before.
 
 ### Racing wheel in the game
 
-The GUI launcher's Controls page has a **Racing wheel** section above the wheel test. **Use a
-racing wheel** opens the wheel in the game. The wheel then drives the car of the first player:
+The GUI launcher's Controls page has a **Racing wheel** tab beside the **Wheel test** tab. **Use
+a racing wheel** opens the wheel in the game. The wheel then drives the car of the first player:
 
 - **Steering:** the axis, an inversion, the wheel's rotation lock to lock (set it to Pit
   House's maximum angle: the wheel reports that rotation over its whole axis) and the steering
@@ -1252,13 +1252,13 @@ racing wheel** opens the wheel in the game. The wheel then drives the car of the
   turns as a 900-degree wheel, up to 90 degrees either way; for it to match the wheel, set
   Pit House to 900 degrees and leave the steering lock at 0.
 - **Pedals:** throttle, brake and clutch, each an axis (-1: none), its raw values at rest and
-  fully pressed (**Set rest** and **Set pressed** take them from the wheel test while it
+  fully pressed (A on the **Rest** and **Pressed** rows takes them from the wheel test while it
   runs; the order may be either way round), a deadzone at the rest end and a response curve
   (gamma; above 1 is finer at the start of the travel). The values reach the car as floats,
   not as the pad's 8-bit triggers.
 - **Buttons:** shift up and down (sequential shifts in the game's manual gearbox), the clutch
-  and the handbrake while held. **Assign** takes the next button pressed while the wheel
-  test runs.
+  and the handbrake while held. A on a button's row takes the next button pressed while the
+  wheel test runs.
 
 The wheel merges with the controller as the game merges two bindings of one action: the
 larger pedal, the steering of larger magnitude, a shift from either. The menus are still
@@ -1321,7 +1321,7 @@ damper, friction, inertia) apply on top of the game's.
 
 ### Racing wheel test
 
-The GUI launcher's Controls page has a **Racing wheel test** section, which runs without the
+The GUI launcher's Controls page has a **Wheel test** tab, which runs without the
 game (`MotorsportDX.exe --wheel-test` opens it with the test running). Start it with the
 wheel centred and your hands on the wheel. It shows:
 
@@ -1331,10 +1331,12 @@ wheel centred and your hands on the wheel. It shows:
 - the force sent, the ramp, the reason the force is zero, and how long each update to the
   device took.
 
-The test forces: **Direction pulse 5%** pushes towards positive for one second (to the right;
-if the wheel turns left, stop the test, tick **Invert force** and start it again), **Spring
-10%** and **25%** a centring spring that the wheel's firmware runs, **Sine 10%** and **25%** a
-1 Hz back-and-forth sent as a constant force every millisecond, **Stop force** ends them. Every
+The test forces, on the **Test force** row (left and right pick one, A sends it): **Direction
+pulse 5%** pushes towards positive for one second (to the right; if the wheel turns left, stop
+the test, turn **Invert force** on and start it again), **Spring 10%** and **25%** a centring
+spring that the wheel's firmware runs, **Sine 10%** and **25%** a 1 Hz back-and-forth sent as a
+constant force every millisecond, **Stop force** ends them. The device, its axes and buttons and
+the force sent show in the panel at the right. Every
 force goes through the governor: it ramps in over 1.5 seconds, never exceeds **Force cap**
 (0.25 of the wheel's full force by default, at most 0.5 in the test), is spread out when it
 would jump, and drops to zero at once when the launcher's window loses focus or the test
@@ -1375,13 +1377,13 @@ inertia).
 
 Stage 0, the device and the forces without the game:
 
-1. Open Pit House with that profile, then the GUI launcher, Controls page, **Wheel test**.
-   Leave **Force cap** at 0.25, then **Start wheel test**.
+1. Open Pit House with that profile, then the GUI launcher, Controls page, **Wheel test** tab.
+   Leave **Force cap** at 0.25, then turn **Wheel test** on.
 2. Check the device line: the name, `vendor 346e`, `SDL wheel`, `Force feedback: yes`.
 3. Turn the wheel lock to lock and press each pedal fully: note which axis moves, and its
    values at both ends and at rest. Press each button and both paddles: note their numbers.
 4. **Direction pulse 5%**: the wheel must turn to the right. If it turns left, note it,
-   stop the test, tick **Invert force** and repeat.
+   stop the test, turn **Invert force** on and repeat.
 5. **Spring 10%**, then **Spring 25%**: the wheel must centre gently, ramping in over about
    1.5 seconds. **Stop force**.
 6. **Sine 10%**, then **Sine 25%**: a slow back-and-forth. Note any roughness or clicks.
@@ -1392,15 +1394,17 @@ Stage 0, the device and the forces without the game:
 
 Stage 2, driving with the wheel:
 
-9. Start the launcher again, **Start wheel test**, and in **Racing wheel** tick **Use a racing
-   wheel**. Set the steering axis and **Wheel rotation** to Pit House's maximum angle, leave
-   **Steering lock** at 0. Turn the wheel: **Steering now** must read -1 at full left, 0 in the
-   centre and 1 at full right (else tick **Invert steering**).
-10. For the throttle and the brake: set each axis, then **Set rest** with the pedal released
-    and **Set pressed** with it pressed fully; **Now** must go from 0 to 1 over the travel.
-    Set the clutch pedal's axis to -1 (the SR-P has none).
-11. **Assign** shift up and shift down to the paddles, the clutch to a button and the
-    handbrake to another. **Stop wheel test**, then Play.
+9. Start the launcher again, turn **Wheel test** on, and on the **Racing wheel** tab turn **Use
+   a racing wheel** on. Set the steering axis and **Wheel rotation** to Pit House's maximum
+   angle, leave **Steering lock** at 0. Turn the wheel with a steering row focused: **Steering
+   now** at the right must read -1 at full left, 0 in the centre and 1 at full right (else turn
+   **Invert steering** on).
+10. For the throttle and the brake: set each axis, then press A on **Rest** with the pedal
+    released and on **Pressed** with it pressed fully; with a row of that pedal focused, **The
+    pedal now** must go from 0 to 1 over the travel. Set the clutch pedal's axis to None (the
+    SR-P has none).
+11. Press A on shift up and shift down and then the paddle, the clutch on a button and the
+    handbrake on another. Turn **Wheel test** off, then Play.
 12. In the game's options, set the transmission to manual (and once to manual with clutch).
     Drive a lap of a known car and track in the cockpit view: the drawn steering wheel must
     follow the R9 1:1 at every angle without lag; the car must respond to the smallest
@@ -1493,8 +1497,8 @@ RESET TO DEFAULT on the controller screen), `Z` and `V` are LB and RB, and `Ente
   steer through the game's own handling instead of toggling the telemetry.
 - The game's assists apply on top: STEERING (ASSISTED, NORMAL, SIMULATION), BRAKING,
   STABILITY CONTROL and TRACTION CONTROL on the ASSISTS & DIFFICULTY screen.
-- The GUI launcher's Controls page edits the bindings and keeps the ones you changed; Reset
-  goes back to this layout.
+- The GUI launcher's Controls page edits the bindings on its **Key bindings** tab and keeps the
+  ones you changed; X resets one to this layout.
 
 ### What changed for keyboard players (25 October 2026)
 
@@ -1513,7 +1517,7 @@ RESET TO DEFAULT on the controller screen), `Z` and `V` are LB and RB, and `Ente
 ### -Keyboard knobs
 
 Knobs are `name=value`, separated by commas; a later knob wins. A knob at its default sets
-nothing. The GUI launcher's Controls page has them in its Keyboard section.
+nothing. The GUI launcher's Controls page has them on its Keyboard tab.
 
 | Knob | Values | Default | Description | Runtime setting |
 | --- | --- | --- | --- | --- |
