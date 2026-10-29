@@ -81,3 +81,21 @@ The `original` frame's sky reaches 0.93: the presets' `sky=0.7` darkens it.
 - Not judged in this frame: the occlusion and the bloom width, which need a sunlit scene and a low sun.
 
 The pass `haze_amount` loaded and ran on the native path (`Post passes: texture haze_amount 2560x1440`); the runs' logs have only main's four errors.
+
+### In the chase camera
+
+The project owner asked on 29 October 2026 that the look tests run in the chase camera, not the cockpit; the board's reference pairs are chase camera frames too. `e2e.py --camera chase` ([race camera](../e2e/README.md#race-camera)) gives the same frozen grid frame from behind the player's car, on the build `89c62ea` (snapshot `lkc1`, runs `lkc1c-aces`, `lkc1c-gt7`, `lkc1c-fm2023`, 2x on the native path). The frame is sunny with scattered cloud. Measures of the whole frame above the rewind's hint bar (y below 0.9), and of the sky:
+
+| Look | Region | mean | p05 | p50 | p95 | spread | sat | R/B |
+| --- | --- | --- | --- | --- | --- | --- | --- | --- |
+| `aces` | frame | 0.339 | 0.012 | 0.242 | 0.806 | 0.794 | 0.342 | 0.936 |
+| | sky | 0.704 | 0.632 | 0.713 | 0.792 | 0.160 | 0.205 | 0.626 |
+| `gt7` | frame | 0.360 | 0.021 | 0.266 | 0.852 | 0.831 | 0.319 | 0.868 |
+| | sky | 0.735 | 0.637 | 0.745 | 0.843 | 0.206 | 0.275 | 0.512 |
+| `fm2023` | frame | 0.347 | 0.017 | 0.250 | 0.808 | 0.791 | 0.291 | 1.050 |
+| | sky | 0.723 | 0.661 | 0.730 | 0.796 | 0.135 | 0.125 | 0.764 |
+
+Against the board's Supra pair (FM2023 against GT7: spread 0.90 times, p95 0.737 against 0.795, saturation 0.86 times, R/B 1.26 times), `fm2023` against `gt7` has a spread 0.95 times as wide, a p95 of 0.808 against 0.852, 0.91 times the saturation and 1.21 times the R/B: every measure moves the way the references do, by a little less. `gt7` against `aces` widens the range (0.831 against 0.794, p95 0.852 against 0.806) and deepens the sky (saturation 0.275 against 0.205, a bluer R/B). In the 1:1 crops the distant mountains fade toward a pale, warm sky with `fm2023` and stand out against a deep blue one with `gt7`.
+
+Next, with the owner's verdict on taste: a low sun for the bloom width and a sunlit car side for the occlusion, and one of FM4's tracks that the references show (Laguna Seca, Suzuka, Road America, Sebring) where the career or a Quick Race can reach it.
+
