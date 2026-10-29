@@ -104,10 +104,11 @@ int main(int argc, char** argv) {
   }
   Check(car_entries == 8, "the car materials have entries with their knobs");
   const nsc::PixelEntry* combine = look.FindPixel(0xE97AA211B556A9B3ull);
-  Check(combine && combine->params.empty() && combine->srv.size() == 1 &&
+  Check(combine && combine->params.empty() && combine->srv.size() == 2 &&
             combine->srv[0].kind == nsc::Resource::Kind::kPost &&
-            combine->srv[0].name == "gtao_occlusion",
-        "the final combine reads the ambient occlusion by name");
+            combine->srv[0].name == "gtao_occlusion" &&
+            combine->srv[1].kind == nsc::Resource::Kind::kPost && combine->srv[1].name == "haze_amount",
+        "the final combine reads the ambient occlusion and the aerial haze by name");
   Check(combine && combine->hooks.empty() && combine->shader == "fm4-final-combine.ps.hlsli" &&
             combine->inputs.size() == 13,
         "the final combine is a replacement with its 13 inputs");
