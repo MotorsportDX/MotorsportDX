@@ -57,7 +57,7 @@ Without network access (Jev unreachable), `--scenario quickrace` drives the same
 | `--build-root` | required | BuildRoot used by `Build.ps1` |
 | `--game-build` | `game-build` | build directory under the BuildRoot, for example `game-build-prof` (see [traces.md](traces.md)) or `game-build-thinlto` (`pipeline.py --flavor`) |
 | `--out` | required | result directory, outside the repository |
-| `--scenario` | `boot` | fixed timeline: `boot`, `quickrace`, `photo`, `photo_view`, `career`, `career_finish`, `career_progress`, `dlc`, `freeze`, `menu_race` |
+| `--scenario` | `boot` | fixed timeline: `boot`, `quickrace`, `photo`, `photo_view`, `career`, `career_finish`, `career_progress`, `career_season`, `dlc`, `freeze`, `menu_race` |
 | `--profile` | none | copy a user-data root to `<out>\user-data` and run on it; `copy` means the BuildRoot's `user-data`, otherwise a path |
 | `--fast-route` | off | reach the race of `quickrace`, `race`, `photo`, `freeze` or `career` through the title's screen events instead of fixed delays and OCR ([fast route](#fast-route)) |
 | `--goal` | none | navigate with Jev instead of a timeline (`quickrace`) |
@@ -74,6 +74,11 @@ Without network access (Jev unreachable), `--scenario quickrace` drives the same
 | `--location` | the profile's (Bernese Alps) | with `--fast-route`, the Quick Race location by its name on the location select screen, for example `"Maple Valley"` ([race location](#race-location)) |
 | `--camera` | the profile's (the cockpit) | the race camera: `hood`, `bumper`, `chase` or `chase_far`, by Back presses once the race runs ([race camera](#race-camera)); `chase` for every look test. `matrix.py --camera` passes it to every cell |
 | `--tail` | 10 | seconds to keep running after the last step |
+| `--seasons` | 1 | `career_season`: stop once this many World Tour seasons are complete ([career season](#career-season-and-soak)) |
+| `--min-hours` | 0 | `career_season`: after the seasons, keep playing the next events until the run is this many hours old |
+| `--max-hours` | 3 | `career_season`: the cap; the run stops there, within an event too, and passes when at least one event finished |
+| `--soak` | off | record the soak telemetry (`soak.jsonl`, [career season](#career-season-and-soak)) in any scenario; `career_season` always records it |
+| `--soak-interval` | 30 | seconds between two soak samples |
 | `--keep-ppm` | off | keep the full-resolution PPM captures next to the PNG files |
 | `--info` | off | show the settings overlay from the start (`FM4_INFO_SHOW=1`); it moves the host presents to the UI thread |
 | `--measure` | 0 | summarize only the last N perf seconds |
@@ -99,6 +104,7 @@ Fixed timelines with screen checks, no network access:
 | `photo_view` | a new process opens Career > MY PROFILE > MEDIA > MY PHOTOS and loads the saved photo; checks that it replaces the menus without an error (OCR reads its watermark only sometimes; see `final.png`). |
 | `career` | Career > GO RACE > WORLD TOUR, the profile's next event (Tsukuba Short Circuit with the Ford Ka for the BuildRoot profile), 40 s of driving, QUIT RACE, 30 s of the replay, CONTINUE to the event. |
 | `career_finish` | the same event to the end, driven by the title's AI (`engageaionstart`, needed): it wins the 3 laps in about 3 minutes; CONTINUE, then A every 6 s through YOU PLACED (Total), the driver and Ford affinity level 2 rewards (a gift car: the default) up to EVENT COMPLETE, after the save. |
+| `career_season` | World Tour event after event in one process, driven by screen events and OCR, until `--seasons` seasons are complete and `--min-hours` have passed, at most `--max-hours`; records every event in `season.jsonl` and the soak telemetry in `soak.jsonl` ([career season](#career-season-and-soak)). Needs `engageaionstart`. |
 | `career_progress` | a new process on that profile: WORLD TOUR shows the next event (the TopGear challenge) with the driver at level 2 and credits other than the 8,610 CR before the race. The title opens a CHALLENGE EVENT box over the event's car screen; the scenario waits for it, closes it with A once its CONTINUE shows, and reads the level on the event screen behind it. |
 | `camera_race` | Quick Race, then a race phase that cycles the race cameras (cockpit, hood, bumper, chase near, chase far, back to the cockpit) with Back every 6 s while holding the throttle; for the edges of every camera at a logical size ([D3D-level HLE, 18.24](../analysis/d3d-hle-n5.md#1824-increment-2s-close-gate-25-october-2026)). Has a fast route. |
 | `freeze` | Quick Race, rewound from race frame 720 (session updates; Y pulsed on the guest's pad polls) to the oldest frame the rewind keeps, then 20 s of that frozen frame (phase `freeze`). Pins the look `original,taa=0`, the occlusion reports and 2x, and keeps the PPM captures; see [frozen-frames.md](frozen-frames.md). |
@@ -112,6 +118,7 @@ e2e.py ... --out <BuildRoot>\e2e\view --scenario photo_view --profile <BuildRoot
 e2e.py ... --out <BuildRoot>\e2e\career --scenario career --profile copy
 e2e.py ... --out <BuildRoot>\e2e\finish --scenario career_finish --profile copy --env FM4_GAME_CMDLINE=engageaionstart
 e2e.py ... --out <BuildRoot>\e2e\progress --scenario career_progress --profile <BuildRoot>\e2e\finish\user-data
+e2e.py ... --out <BuildRoot>\e2e\season --scenario career_season --profile copy --env FM4_GAME_CMDLINE=engageaionstart
 e2e.py ... --out <BuildRoot>\e2e\dlc --scenario dlc --profile copy
 ```
 
@@ -166,6 +173,59 @@ A step is `[timeout, action, hold, text(, retry)]`. It repeats the action until 
 - `steps.jsonl` records what each check and select saw.
 
 FM4 menus ignore the first press after some screens open, and the career and GO RACE menus hide after a few idle seconds (the next press only shows them again), so the scenarios press until the expected screen shows rather than counting.
+
+## Career season and soak
+
+`career_season` plays the World Tour in one game process ([`career_season.py`](../../outputs/FM4-build/e2e/career_season.py)). The steps take the boot and the career menus to the World Tour screen (scene `200_WORLD_TOUR`). Then the driver takes over: it reacts to the screen events and reads by OCR only what it must judge.
+
+- **The stop.** At each stop the globe zooms in (about 10 to 17 s), and the title may open a CHALLENGE EVENT box (`201_SPECIAL_EVENT_DIALOG`, closed with A once CONTINUE shows). The stop's events then show in a row. For each event the driver reads the name, track, bonus and RESTRICTIONS box (X opens it, B closes it). It takes the first event whose make and model rules the car meets, and opens it (`204_C_RACE_INFO`). The title judges the performance index and the body rules itself.
+- **The event's screen.** The driver reads the car, the driver level and the credits from the footer. It opens SEASON STATUS (`203_SEASON_STATUS`: the season's name and the state of each event), then starts the race.
+- **The races.** For every race of the event:
+  - the pre-race menu (`4_C_INI_PRERACE`, with its heat);
+  - the race itself (the push and pop of `<cars>_Race`; the title's AI drives);
+  - the post-race menu (`924_POST_RACE`): the driver reads the place and presses CONTINUE at once.
+
+  A championship runs its heats in turn.
+- **After the races.** The earnings (`920`, with the total), the level progress (`909`), the level and affinity rewards (`910`, one page each, with their credits) and a gift car (`108`, `114`, then YES; A keeps the default), up to the next World Tour screen.
+- **The season's end.** A season is complete after the event that SEASON STATUS lists last.
+- **Unknown screens** are recorded in `season-state.json` with their text and a capture. They get an A only where they show CONTINUE, OK or YES.
+- **No car changes.** The driver neither changes nor buys a car yet. A stop where the player's car fits no event ends the run at the title's refusal.
+
+The BuildRoot profile is two events into season 1, the AMATEUR DIVISION, which has five events:
+
+1. Ladera Short (complete).
+2. Road Atlanta Club (complete).
+3. Tsukuba Short: the Class F Asian Tour, with the Inline Four Showcase and the Economy Car Open beside it.
+4. TopGear Loop: two TopGear bowling challenges.
+5. Hockenheim Short: the Class F World Championship, a qualifier and heats.
+
+In the exploration run of 29 October 2026 the AI won the Asian Tour and passed the bowling target. A profile copy therefore plays three events of season 1. `--min-hours` keeps the run going into the next season, for a soak of that length.
+
+Results in `--out`:
+
+| File | Contents |
+| --- | --- |
+| `season.jsonl` | one record per finished event: the stop's events with their restrictions; the event, its track and bonus; the car and the driver level; the credits before (its screen) and after (the next event's screen); SEASON STATUS; every race (place, seconds, earnings total); the rewards and their credits; the gift cars; the start, end and length |
+| `season-state.json` | the driver's state after every step (the event, the phase, the screens noted, a failure or the cap), for a stopped run |
+| `events/` | PNG captures of each event's season status, post-race menu and earnings, of noted screens and of a failure. The run keeps 240 captures (the first 8 minutes, `FM4_CAPTURE_ARCHIVE_LIMIT`), then only the newest |
+| `soak.jsonl` | every 30 s: the process's private bytes, working set, page file use, and handle, thread, GDI and USER object counts; its dedicated, shared and committed GPU memory (the "GPU Process Memory" performance counters of its process id, summed over its adapters); and the driver's phase |
+| `summary.json` `season` | the events, the seasons completed, a failure or the cap, and the credits check: per event, the credits after less those before, against the earnings plus the rewards' credits |
+
+`soak_report.py <run>` analyses the soak:
+
+- Everything up to the end of the first race is the warm-up.
+- For each metric it reports the slope per hour after the warm-up.
+- For each metric it also reports the lowest value of each race cycle, from the end of one race to the end of the next. Memory that rises with every race and never comes back shows as floors that only climb.
+- It gives the frame time percentiles per minute and per race.
+
+Its verdict uses the thresholds proposed for the season soak (29 October 2026):
+
+- private bytes grow by at most 50 MB an hour;
+- the process's dedicated GPU memory grows by at most 25 MB an hour;
+- handles grow by at most 100 and threads by at most 5 an hour;
+- the races' p50 and p99 frame times in the last third of the races are at most 10% above those of the first third.
+
+The season soak holds the GPU queue in class `perf` for its whole length.
 
 ## Fast route
 
@@ -393,6 +453,8 @@ All scripts live in [`outputs/FM4-build/e2e/`](../../outputs/FM4-build/e2e/).
 | `frame_diff.py <a> <b> [--out DIR]` | pixel difference of two frozen frames (captures or runs), with 1:1 crops of the largest differences ([frozen-frames.md](frozen-frames.md)) |
 | `parity.py <baseline> <candidate> [--out DIR]` | FAIL rules of a frozen-frame pair: draws and predicated packets per frame, image difference, new error keys ([frozen-frames.md](frozen-frames.md)) |
 | `coverage.py <run> --functions <BuildRoot>\project\generated\default [--json]` | the PM4 writers of each phase and of the career menus: the `FM4_N0_TRACE` ring allocations by function and the identity check's ranges by writer ([traces.md](traces.md#identity-check-of-the-native-path-fm4_native_check-host_render_check)) |
+| `soak_report.py <run> [--json]` | the soak analysis of a run with `soak.jsonl`: slopes per hour after the first race, the floors per race, frame time percentiles per minute and per race, the verdict against the thresholds, and the kernel and XAM stubs of its `runtime.log`; writes `soak-report.json` ([career season](#career-season-and-soak)) |
+| `test_career_season.py` | offline tests of `career_season.py` (its OCR parsers, and the driver against a simulated World Tour) and of `soak_report.py` |
 | `test_e2e_tools.py` | offline tests of `frame_diff.py`, `parity.py`, `coverage.py`, `perf_ab.py` and the summary fields they read |
 | `race_clock.py <run>` | race timer of the captures against wall time (1.0: real time); needs `--keep-ppm` captures |
 | `cp_profile.py stacks.txt <BuildRoot>\game-build-prof [--function NAME]` | summarize the command-processor stack samples (see [traces.md](traces.md)) |

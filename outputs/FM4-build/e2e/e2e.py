@@ -159,6 +159,16 @@ SCENARIOS.update({
         [40, 'a', 0.12, '!CHALLENGE EVENT', 8],
         [10, 'wait', 0, 'LVL2|LVL 2'], [5, 'wait', 0, '!8,610 CR'],
     ],
+    # World Tour event after event in one process (career_season.py): the career menus to the
+    # World Tour screen (its scene), then the driver until --seasons seasons are complete and
+    # --min-hours have passed, at most --max-hours (the step's time). The races are driven by the
+    # title's AI (engageaionstart). Soak telemetry (soak.py) samples the process meanwhile. Use
+    # --profile copy.
+    'career_season': _TO_CAREER + [
+        [30, 'up,a', 0.12, 'WORLD TOUR|EVENT LIST', 10],
+        [60, 'up,a', 0.12, '@scene \\d+ 200_WORLD_TOUR', 10],
+        [3 * 3600, 'season', 0],
+    ],
 })
 SCENARIOS.update({
     # Downloadable content: Quick Race with a car of the Porsche Expansion Pack (Porsche is not in
@@ -295,7 +305,10 @@ FAST_SCENARIOS['camera_race'] = (FAST_SCENARIOS['quickrace']
 # BuildRoot without Disc 2, 25 October 2026) passed. A run whose timeline ends before the push
 # waits up to RACE_WAIT_S for it (a cold shader cache slows the countdown down).
 RACE_SCENARIOS = {'quickrace', 'race', 'photo', 'menu_race', 'camera_race', 'freeze', 'career',
-                  'career_finish', 'dlc'}
+                  'career_finish', 'career_season', 'dlc'}
+# career_season keeps this many captures (8 minutes at one every 2 s), then only the newest
+# (live-latest.ppm): the driver keeps the captures of each event's end in <out>/events.
+SEASON_CAPTURE_LIMIT = 240
 RACE_EVENT = re.compile(r'^push \S+_Race$')
 RACE_WAIT_S = 60
 # Screens that explain a run stopped short (scene events): the title's Disc 2 prompt, and the
@@ -569,7 +582,7 @@ def check_actions(steps):
     """Parses every input action of the steps, so a bad one fails before the launch."""
     for index, (wait, action, hold, *text) in enumerate(steps):
         action = action[1:] if text and action.startswith('?') else action
-        if action == 'wait' or action.startswith(('phase:', 'select:', 'defines:')):
+        if action in ('wait', 'season') or action.startswith(('phase:', 'select:', 'defines:')):
             continue
         for press in action.split(','):
             try:
@@ -1216,7 +1229,7 @@ def run_once(options, out):
 
     # Same cvars as Build.ps1 -Action run.
     sys.path[:0] = [str(HERE), str(HERE.parent)]
-    import cpu_power, pipeline
+    import career_season, cpu_power, pipeline, soak
     args = {k: str(v) for k, v in pipeline.launch_cvars(root, state['disc1'], out / 'runtime.log').items()}
     # Nobody can type into the host keyboard dialog: XAM prompts answer with their defaults.
     args['headless'] = 'true'
@@ -1276,6 +1289,9 @@ def run_once(options, out):
     env.update(FM4_CAPTURE_DIR=str(capture),
                FM4_TEST_INPUT_FILE=str(input_file), REX_PERF_TRACE_FILE=str(out / 'perf.jsonl'),
                FM4_TEST_EVENTS_FILE=str(events_file))
+    season = options.scenario == 'career_season' and not options.steps and not options.goal
+    if season:
+        env['FM4_CAPTURE_ARCHIVE_LIMIT'] = str(SEASON_CAPTURE_LIMIT)
     # The launcher's race render quality and tiling: one tile when the look has TAA on RTV
     # (--msaa keeps the tiles); --env FM4_TILING_SCENARIO keeps its tiling scenario.
     tiling_given = any(item.startswith('FM4_TILING_SCENARIO=') for item in options.env)
@@ -1403,6 +1419,11 @@ def run_once(options, out):
     # The process's CPU time and the CPU package's power each second, the threads' CPU time per phase.
     sampler = cpu_power.Sampler(process, out / 'cpu_power.jsonl',
                                 int(options.affinity, 0) if options.affinity else None)
+    # The soak telemetry (soak.jsonl): memory, handles, threads, GDI and USER objects and the
+    # process's GPU memory every --soak-interval seconds; career_season always samples.
+    soak_sampler = soak.SoakSampler(process, out / 'soak.jsonl', options.soak_interval) \
+        if options.soak or season else None
+    season_driver = None
     timeline = []
     crashed = None
     goal_reached = None
@@ -1426,6 +1447,16 @@ def run_once(options, out):
             elif action.startswith('select:'):
                 done = select_label(screen, input_file, wait, action[7:])
                 timeline.append([round(time.time() - started, 1), action, done])
+            elif action == 'season':
+                season_driver = career_season.Season(
+                    sys.modules[__name__], screen, input_file, out, time.time() + options.max_hours * 3600,
+                    seasons=options.seasons, min_hours=options.min_hours, sampler=soak_sampler,
+                    started=started)
+                done = season_driver.run()
+                timeline.append([round(time.time() - started, 1), action, done])
+                if not done:
+                    failed_step = f'step {index}: season: {season_driver.failure or "no event finished"}'
+                    break
             else:
                 deadline = time.time() + wait
                 while time.time() < deadline:
@@ -1451,7 +1482,7 @@ def run_once(options, out):
             if not done:
                 failed_step = f'step {index}: {action}' + (f' -> {text[0]!r}' if text else '') + ' timed out'
                 break
-            if text or action.startswith('select:'):
+            if text or action.startswith('select:') or action == 'season':
                 goal_reached = True if goal_reached is None else goal_reached
         if failed_step:
             goal_reached = False
@@ -1478,6 +1509,8 @@ def run_once(options, out):
         screen.close()
         mod_defines.restore()
         sampler.stop()
+        if soak_sampler:
+            soak_sampler.stop()
         if process.poll() is None:
             process.kill()
             process.wait()
@@ -1567,6 +1600,9 @@ def run_once(options, out):
         'clear_gray_final': bool(frames) and frames[-1].stem in clear_gray_frames,
         'washed_out_frames': washed_out_frames,
         'cpu_power': sampler.summary(),
+        # career_season: its events, seasons, credits check and places (season.jsonl has the events).
+        'season': season_driver.summary() if season_driver else None,
+        'soak': {'interval_s': options.soak_interval, 'samples': soak_sampler.samples} if soak_sampler else None,
         'affinity': {'mask': options.affinity, 'sets': sampler.affinity_sets} if options.affinity else None,
         'errors': errors,
         'top_errors': sorted(errors.items(), key=lambda kv: -kv[1])[:10],
@@ -2064,6 +2100,15 @@ def main():
                         help="the race camera, by Back presses from the profile's (the cockpit) once "
                              'the race runs: chase for the look tests (docs/e2e/README.md, "Race camera")')
     parser.add_argument('--tail', type=float, default=10, help='seconds to keep running after the last step')
+    parser.add_argument('--seasons', type=int, default=1,
+                        help='career_season: stop once this many World Tour seasons are complete')
+    parser.add_argument('--min-hours', type=float, default=0.0,
+                        help='career_season: keep playing after the seasons until the run is this old')
+    parser.add_argument('--max-hours', type=float, default=3.0,
+                        help='career_season: the cap; the run stops at it, within an event too')
+    parser.add_argument('--soak', action='store_true',
+                        help='record soak.jsonl (soak.py) in any scenario; career_season always does')
+    parser.add_argument('--soak-interval', type=float, default=30.0, help='seconds between soak samples')
     parser.add_argument('--keep-ppm', action='store_true', help='keep full-resolution captures')
     parser.add_argument('--info', action='store_true',
                         help='show the settings overlay from the start (F2 toggles it); it moves the '

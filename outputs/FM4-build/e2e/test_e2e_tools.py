@@ -659,10 +659,11 @@ class RaceCheckTests(unittest.TestCase):
         for scenario in ('boot', 'photo_view', 'career_progress'):
             self.assertFalse(e2e.race_needed(self.options(scenario)), scenario)
         self.assertFalse(e2e.race_needed(self.options(steps='[[1, "wait", 0]]')))
-        # Every scenario that drives (throttle or a race-frame pulse) is a race scenario.
+        # Every scenario that drives (throttle, a race-frame pulse or the season driver) is a race
+        # scenario.
         for scenarios in (e2e.SCENARIOS, e2e.FAST_SCENARIOS):
             for name, steps in scenarios.items():
-                drives = any(step[1].startswith(('rt=', '~y@')) for step in steps)
+                drives = any(step[1].startswith(('rt=', '~y@')) or step[1] == 'season' for step in steps)
                 self.assertEqual(name in e2e.RACE_SCENARIOS, drives, name)
 
     def test_disc_prompt_fails(self):

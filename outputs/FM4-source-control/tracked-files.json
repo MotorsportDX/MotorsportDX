@@ -249,6 +249,22 @@
       "provenance": "Original test tooling for this project; no game content or original game function bodies"
     },
     {
+      "path": "outputs/FM4-build/e2e/career_season.py",
+      "provenance": "Original test tooling for this project; no game content or original game function bodies"
+    },
+    {
+      "path": "outputs/FM4-build/e2e/soak.py",
+      "provenance": "Original test tooling for this project; no game content or original game function bodies"
+    },
+    {
+      "path": "outputs/FM4-build/e2e/soak_report.py",
+      "provenance": "Original test tooling for this project; no game content or original game function bodies"
+    },
+    {
+      "path": "outputs/FM4-build/e2e/test_career_season.py",
+      "provenance": "Original test tooling for this project; no game content or original game function bodies"
+    },
+    {
       "path": "outputs/FM4-build/e2e/frame_diff.py",
       "provenance": "Original test tooling for this project; no game content or original game function bodies"
     },
