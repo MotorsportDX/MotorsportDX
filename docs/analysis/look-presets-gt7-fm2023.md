@@ -118,3 +118,39 @@ Next, with the owner's verdict on taste: a low sun for the bloom width and a sun
 - **GPU cost alone** (one cell at a time under an exclusive queue slot, the frozen frame's median GPU time, 2x): `aces` 5.02 and 5.24 ms in two runs, `gt7` 5.27 ms, `fm2023` with `bloom_width=0.5` 5.76 and 5.58 ms, without it 4.91 ms. The GT7 operator costs within the runs' spread of about 0.2 ms, the haze pass 0.02 ms, and the wide bloom's 16 taps about 0.66 ms. The preset `fm2023` therefore leaves `bloom_width` out until a frame with the sun in view shows what it adds; the knob stays.
 - Ambient occlusion (`ao=0.9` in `fm2023` against 0.6): the 1:1 crops of the car show no difference that can be told from the run's own changes; the car's rear faces away from the low sun, in shade, where the final combine's occlusion weighs most, so a frame with the sun on the car's side is still to be judged.
 
+## 7. Third round: the main session's criteria, 29 October 2026
+
+The project owner left the presets' taste to the main session ("better you judge and decide, since you have the references"). The main session set the criteria of one tuning round, after which the presets lock until a real need arises:
+
+- **`gt7`**: the port checked against the MIT sample's formulas, a brake light that does not turn orange; in the chase camera at 2x, a sky bluer than `aces`'s (its hue and saturation), a wider spread than `aces`, and under 0.5% of the pixels at 255 outside the sun and the lights.
+- **`fm2023`**: the references' ratios against `gt7` within 3% (R/B 1.26, saturation 0.86, spread 0.90, from the Spa pairs), a far field visibly lower in contrast than the near field, and no single knob pushed into artefacts.
+- **Both**: no haze halo around silhouettes against the sky, no haze on the car at chase distance, no banding in the sky, no low sun's bloom washing out the car, and the GPU cost of each preset alone against `aces`.
+
+### The port against the sample
+
+`fm4-gt7.hlsli` (the port, now in its own file) runs on WARP in `fm4_look_tonemap_tests` ([look-tonemap-tests.cpp](../../work/fm4-rex/tests/look-tonemap-tests.cpp), part of `build`) against a double precision reference written from the sample's formulas: grays from the toe (0.004) through middle gray (0.1806 to 0.18), the linear section (0.3 to 0.3), the shoulder and past the clip point (1.4717), the curve alone at ten points, and six saturated colors, all within 6e-5. The shoulder meets the line with slope 1.
+
+The test found an error of the port's first version. It converted FM4's Rec. 709 scene to Rec. 2020, the sample's input, and back. FM4's reds then sit inside the Rec. 2020 gamut, with a green component that the per-channel curve clips first, so a bright red light turned orange: a hue of 11 degrees at 6 times middle gray's scale, 17 at 8 and 53 at 16, against 5, 5 and 8 without the conversion. GT7 tone maps in its own working space, where its emissive reds sit at the gamut's edge, so the port now takes FM4's Rec. 709 values as they are; the test checks a red light from 1 to 16 times (hue under 10 degrees) and that it catches the conversion's orange.
+
+### Measures
+
+Frozen grids in the chase camera at 2x on the native path (snapshot `lkc1`, the look files of the round), the Bernese Alps (`lkp4-*`) and Maple Valley with its low sun (`lkp3-*`), each look in its own run, alone on the machine. Clipped: pixels whose brightest channel is 255. RMS contrast: the luma's standard deviation over its mean. Regions as fractions of the frame: the whole frame above the rewind's hint bar (y below 0.9); the sky (Bernese x 0.40 to 0.70, y 0.04 to 0.20; Maple x 0.25 to 0.55, y 0.03 to 0.15); the far field (the distant mountains, Bernese x 0.37 to 0.45, y 0.29 to 0.32; the wooded hill, Maple x 0.37 to 0.47, y 0.225 to 0.26); the near field (the pits and the barrier, Bernese x 0 to 0.30, y 0.30 to 0.55; the wall, Maple x 0.62 to 0.95, y 0.30 to 0.55).
+
+| Track | Look | spread | sat | R/B | clipped | sky hue | sky sat | far RMS | near RMS |
+| --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |
+| Bernese Alps | `aces` | 0.797 | 0.341 | 0.939 | 0.00% | 209.7 | 0.194 | 0.314 | 1.210 |
+| | `gt7` | 0.810 | 0.338 | 0.854 | 0.08% | 214.5 | 0.288 | 0.347 | 1.225 |
+| | `fm2023` | 0.751 | 0.270 | 1.060 | 0.01% | 209.2 | 0.110 | 0.264 | 1.293 |
+| Maple Valley | `aces` | 0.893 | 0.185 | 1.101 | 0.05% | 196.0 | 0.075 | 0.360 | 0.258 |
+| | `gt7` | 0.955 | 0.195 | 1.002 | 1.91% | 212.6 | 0.169 | 0.467 | 0.281 |
+| | `fm2023` | 0.869 | 0.181 | 1.211 | 0.02% | 98.5 | 0.051 | 0.221 | 0.279 |
+
+The references' sky (GT7, cmp-05 and gt7-13): hue 216 and 217 degrees, saturation 0.46 and 0.47.
+
+- **`gt7`** (`exposure=-0.2,contrast=0.15`): its sky is bluer than `aces`'s on both tracks (hue 214.5 against 209.7 and 212.6 against 196.0; saturation 0.288 against 0.194 and 0.169 against 0.075), toward the references' 216 degrees and 0.46, which FM4's own sky texture does not reach; its spread is wider (0.810 against 0.797, 0.955 against 0.893). On Maple Valley 1.75% of the frame is at 255 in the sun's reflections (the sheen on the asphalt left of the car and the glints in the building's windows; a map of them in the round's notes) and 0.18% elsewhere (the sunlit white of the barrier); on the Bernese Alps 0.08%. With `exposure=-0.5` (the second round) the Maple frame clipped 0.19%, but the Bernese Alps' spread fell to 0.738 against `aces`' 0.797: no single exposure keeps both under the GT7 curve's hard clip, so the round takes the wider range and counts the sun's reflections as the sun. Its red paint keeps its hue (357.9 against `aces`' 358.4 degrees).
+- **`fm2023`** (`saturation=0.95,haze=0.4,temperature=0.45,exposure=-0.3`) against `gt7`, the mean of the two tracks (the Bernese Alps, Maple Valley): R/B 1.225 (1.241, 1.209; target 1.26, 3% is 1.22), saturation 0.864 (0.799, 0.928; target 0.86), spread 0.919 (0.927, 0.910; target 0.90, 3% is 0.93). The round before measured 1.21, 0.91 and 0.95 on the Bernese Alps against the `gt7` of then. Its far field's RMS contrast is 16% and 39% below `aces`' (0.264 against 0.314, 0.221 against 0.360) and 24% and 53% below `gt7`'s, while the near field's stays within 7% of `aces`'.
+- **Artefacts**, at 1:1 crops of both tracks: no halo around the cable cars, the pylon or the cables against the hazy sky (the haze is per pixel from the scene depth); the car at chase distance shows no haze (it is nearer than `HAZE_START`, 30 m); the sky stretched six times in contrast shows smooth gradients, no bands, in `fm2023` and `gt7`; beside Maple Valley's low sun the car looks as with `aces` (no `bloom_width` in the preset).
+- **GPU time alone**, the frozen frame's median at 2x, one run at a time on an exclusive queue slot: `aces` 5.10 and 5.24 ms, `gt7` 5.50 and 5.10 ms, `fm2023` 5.36 and 5.15 ms (Maple Valley, the Bernese Alps); with the second round's runs `aces` spans 5.02 to 5.24 ms over four runs, so neither preset costs more than the runs' spread of about 0.3 ms.
+
+Decision (the main session's): pending.
+
