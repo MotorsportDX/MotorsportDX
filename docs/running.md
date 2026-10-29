@@ -1230,10 +1230,10 @@ The lines contain the pads' names and device paths, not the Windows user name.
 ## Racing wheel
 
 Native racing wheel support is in development ([racing wheels](analysis/racing-wheels.md)).
-Stages 0 to 3 are done: the runtime and the GUI launcher read a wheel through SDL's joystick
+Stages 0 to 4 are done: the runtime and the GUI launcher read a wheel through SDL's joystick
 API, its steering, pedals and buttons drive the car at the wheel's full resolution beside
-the controller, and the game's steering torque drives the wheel's force feedback through a
-safety governor. A wheel that SDL maps as a gamepad also reaches the game as a pad, as
+the controller, and the game's steering torque, at its physics rate, drives the wheel's force
+feedback through a safety governor, with kerb, surface and impact effects. A wheel that SDL maps as a gamepad also reaches the game as a pad, as
 before.
 
 ```powershell
@@ -1288,6 +1288,9 @@ driven with the controller or the keyboard. Every value is a knob of `-Wheel` (t
 | `ffb_smoothing` | 10 | `wheel_ffb_smoothing` (milliseconds, 0 to 200) |
 | `ffb_spring` | 1 | `wheel_ffb_spring` (0 to 2) |
 | `ffb_damper` | 1 | `wheel_ffb_damper` (0 to 2) |
+| `ffb_road` | 0.25 | `wheel_ffb_road` (0 to 1) |
+| `ffb_impact` | 0.5 | `wheel_ffb_impact` (0 to 1) |
+| `ffb_physics` | 1 | `wheel_ffb_physics` |
 
 The game's anti-cheat rule withholds a race's credits and experience when a lap has fewer
 than 10 frames with a fast steering change. Its threshold is a change per frame, so at a high
@@ -1300,21 +1303,31 @@ In a race you drive, the wheel gets the game's own force feedback
 ([stage 3](analysis/racing-wheels.md#stage-3-done-29-october-2026)), as the game made it for
 the Xbox 360 wheel, but sent from a thread of its own at 1,000 Hz:
 
-- a constant force from the game's steering torque, which the game updates once a frame;
-  **Smoothing** (10 ms by default) evens out its steps between frames;
+- a constant force from the game's steering torque. The game computes it once a frame; the
+  runtime runs the game's own torque model after each of the physics steps (about 360 a
+  second) and plays those values back about a frame behind, so the force has the same detail
+  at 60 fps as at 240 fps ([stage 4](analysis/racing-wheels.md#stage-4-done-29-october-2026);
+  `ffb_physics=0` uses the frame's torque instead). **Smoothing** (10 ms by default) softens
+  it further;
 - a centring spring, which the wheel's firmware runs: the game fades it in between 1 and
   10 m/s and out when the rear slides (the rear slip between 0.25 and 0.5), so the wheel
   goes light when the car oversteers;
-- a light damper, also in the firmware.
+- a light damper, also in the firmware;
+- the vibration of kerbs, rumble strips, grass and gravel, from the game's surface rumble, and
+  a short jolt when the car hits a wall, another car or an object, from its collision rumble,
+  both scaled by the game's wheel rumble table and run by the firmware as vibrations.
 
 The `-Wheel` knobs set them: `ffb_cap` (the hard limit of the constant force, the spring
 and the damper together, 0.25 of the wheel's full force by default; the spring and the damper
 take at most half of it), `ffb_gain` (multiplies all three before the cap), `ffb_min_force`
 (lifts small forces above a wheel's own friction; 0 for a direct-drive base),
-`ffb_smoothing`, `ffb_spring` and `ffb_damper` (1: as the game scales them, 0: off), and
-`ffb_invert`. The launcher's **Force feedback** section has a control for each: **Force
-cap**, **Force gain**, **Minimum force**, **Smoothing (ms)**, **Centring spring**, **Damper**
-and **Invert force**. The force is zero at once outside a race you
+`ffb_smoothing`, `ffb_spring` and `ffb_damper` (1: as the game scales them, 0: off),
+`ffb_road` and `ffb_impact` (the kerbs' and impacts' strength at the game's strongest rumble,
+a fraction of the wheel's full force, 0: off; together they take at most a quarter of the
+cap), `ffb_physics` and `ffb_invert`. The launcher's **Force feedback** section has a control
+for each: **Force cap**, **Force gain**, **Minimum force**, **Smoothing (ms)**, **Centring
+spring**, **Damper**, **Kerbs and surface**, **Impacts**, **Physics-rate force** and **Invert
+force**. The force is zero at once outside a race you
 drive: in the menus, at the race's end, in replays, when the AI drives your car, and when the
 window loses focus. When the game stops updating the race (pause, photo mode, the rewind,
 loading), the force falls to zero within about 0.1 seconds. After every such stop it ramps in
@@ -1361,8 +1374,11 @@ force settings:
 | `wheel_ffb_smoothing` | 10 | The time constant, in milliseconds, of a low-pass on the game's force (0: none). |
 | `wheel_ffb_spring` | 1 | Multiplies the game's centring spring (0: off). |
 | `wheel_ffb_damper` | 1 | Multiplies the game's damper (0: off). |
+| `wheel_ffb_road` | 0.25 | The vibration of kerbs, rumble strips, grass and gravel, a fraction of the wheel's full force at the game's strongest surface rumble (0: off). |
+| `wheel_ffb_impact` | 0.5 | The jolt of hitting walls, cars and objects, a fraction of the wheel's full force at the game's strongest impact (0: off). |
+| `wheel_ffb_physics` | `true` | Follows the game's steering torque at its physics rate (about 360 times a second) rather than once a frame. |
 | `wheel_ffb_sink` | `device` | `record` sends no force to any device and only records it (with `wheel_ffb_record`); the window's focus then does not stop the force, so a check without focus records it. |
-| `wheel_ffb_record` | empty | A CSV file of every force sent: the time, the target and the force sent, the spring's and the damper's saturation and coefficient, the ramp, the block reasons and the governor's flags, the device update's cost, and the game's sample (whether you drive, its sequence number, the steering torque, the speed and the rear slip). |
+| `wheel_ffb_record` | empty | A CSV file of every force sent: the time, the target and the force sent, the spring's and the damper's saturation and coefficient, the ramp, the block reasons and the governor's flags, the device update's cost, and the game's sample (whether you drive, its sequence number, the steering torque, the speed and the rear slip), the road's vibration and the impact sent, the impacts counted, the game's road and impact levels, the frame's force, whether the physics-rate force drives it, that force and its torque, the playback's delay and the points received. |
 | `wheel_virtual` | empty | For checks without hardware: an SDL virtual wheel driven by a CSV script (`time_s,steer,throttle,brake,buttons`, raw axis values interpolated between rows and a mask of buttons held; it repeats), and pads read without window focus. |
 
 The force stops on focus loss, at exit (closing the game window stops and releases the wheel
@@ -1437,12 +1453,26 @@ Stage 3, the game's force feedback (keep **Force cap** at 0.25 until these are d
     grip at the limit, and note the Pit House settings you used; say which **Force cap**
     still felt safe.
 
+Stage 4, the physics-rate force and the effects (still at **Force cap** 0.25):
+
+22. Drive a lap at 60 fps and at 240 fps (Display, race frame rate) with **Force gain** 0.5:
+    the force must feel equally detailed at both, with no buzz on the straight. Then turn
+    **Physics-rate force** off and on and note the difference.
+23. Drive over kerbs and onto the grass: the wheel must vibrate on the kerbs and the grass, not
+    on the track. Try **Kerbs and surface** 0, 0.25 and 0.5.
+24. Brush a wall and hit one, and touch another car: each must give a short jolt; a scrape
+    must not buzz continuously. Try **Impacts** 0, 0.5 and 1.
+25. Pause on a kerb and during a scrape: the vibration must stop with the force.
+26. In a replay and when the AI drives your car: no vibration and no force.
+27. Note any knock when a vibration starts or ends, and which kerb and impact strengths feel
+    right.
+
 What to send back: the launcher folder's `logs\wheel-test.log` (its `Wheel report:` line names
 the wheel's axes, buttons and force feedback effects) and `logs\wheel-test-forces.csv`, the
 `-Wheel` value of the launcher's **Wheel value** field, the lines of the game's
 `logs\runtime.log` that contain `Wheel` (`Select-String -Path logs\runtime.log -Pattern
-'Wheel' | ForEach-Object Line`), plus the notes of steps 3 to 21. For stage 3, add `--wheel_ffb_record=<the launcher folder>\logs\wheel-forces.csv` (a
-full path) to the Advanced page's Extra cvars before the race of steps 15 to 20 and send that
+'Wheel' | ForEach-Object Line`), plus the notes of steps 3 to 27. For stage 3, add `--wheel_ffb_record=<the launcher folder>\logs\wheel-forces.csv` (a
+full path) to the Advanced page's Extra cvars before the races of steps 15 to 20 and 22 to 26 and send that
 file too.
 
 ## Keyboard

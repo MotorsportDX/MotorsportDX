@@ -51,8 +51,9 @@ above.
   setting at 24.
 - **Racing wheels** are new and off by default (`-Wheel 'on=1'`, or the launcher's Controls
   page): the steering, pedals and shift buttons drive the car, and the game's steering torque
-  drives the force feedback, checked with a virtual wheel and recorded forces only; no real
-  wheel has been tested yet, so the force's feel and strength are untested (keep the force cap
+  drives the force feedback, with kerb, grass and impact vibrations, checked with a virtual
+  wheel and recorded forces only; no real wheel has been tested yet, so the force's feel and
+  strength are untested (keep the force cap
   at its default 0.25 until then). The menus still need the controller or the keyboard, and
   the cockpit's drawn steering wheel turns at most 90 degrees either way.
 - **Keyboard:** the smooth steering and pedals are new and tested with injected keys only;
