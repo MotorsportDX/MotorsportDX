@@ -1571,6 +1571,9 @@ def run_once(options, out):
         'binary': {'path': str(exe), 'sha256': pipeline.digest(exe),
                    'mtime': time.strftime('%Y-%m-%d %H:%M:%S', time.localtime(exe.stat().st_mtime)),
                    'source': source},
+        # The launch's time (unix seconds): the origin of the timeline, the events' seconds and,
+        # within about a second, the perf trace's 't' (season_perf.py).
+        'launch_time': round(started, 3),
         'seconds': round(time.time() - started, 1), 'timeline': timeline,
         'route': 'fast' if options.fast_route and not options.steps and not options.goal else 'menus',
         # The title's screen events, in seconds from the launch as the timeline.

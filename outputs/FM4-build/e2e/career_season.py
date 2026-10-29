@@ -156,7 +156,8 @@ class Season:
         self.save_state(phase=text)
 
     def save_state(self, **extra):
-        state = {'t_s': self.now_s(), 'scene': self.scene, 'racing': self.racing,
+        state = {'t_s': self.now_s(), 'launch_time': round(self.started, 3), 'scene': self.scene,
+                 'racing': self.racing,
                  'events_done': len(self.records), 'seasons_done': self.seasons_done,
                  'event': self.event, 'unknown_screens': self.unknown[-20:], 'failure': self.failure,
                  **extra}
@@ -541,6 +542,12 @@ class Season:
         event['earnings_total'] = sum(r.get('earnings_total') or 0 for r in event['races'])
         event['credits_after'] = None  # read on the next event's screen
         rows = (event.get('season') or {}).get('events') or []
+        # A division boundary: the first event of a season other than the previous event's.
+        name = (event.get('season') or {}).get('name')
+        previous = next(((r.get('season') or {}).get('name') for r in reversed(self.records)
+                         if (r.get('season') or {}).get('name')), None)
+        if name and previous and name != previous:
+            event['season_started'] = {'season': name, 'after': previous}
         # The season is complete when this event was its last one.
         if rows and rows[-1][1].startswith('CURRENT'):
             name = event['season'].get('name')

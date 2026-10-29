@@ -10,6 +10,7 @@ HERE = Path(__file__).resolve().parent
 sys.path.insert(0, str(HERE))
 import career_season  # noqa: E402
 import e2e  # noqa: E402
+import season_perf  # noqa: E402
 import soak_report  # noqa: E402
 
 
@@ -387,6 +388,54 @@ class SoakReportTests(unittest.TestCase):
             report = soak_report.analyse(self.write_run(tmp, private_per_race=0, frame_rise=0.5))
             self.assertFalse(report['verdict']['race_frame_p50']['pass'])
             self.assertTrue(report['verdict']['private_bytes']['pass'])
+
+
+class SeasonPerfTests(unittest.TestCase):
+    def test_phases_and_events(self):
+        launch = 1_800_000_000.0
+        # One event: menus 0-20 s, loading 20-30, pre-race 30-35, countdown 35-40, race 40-100,
+        # rewards 100-120, loading 120-125, then the next World Tour screen.
+        timeline = [(20, 'scene 92 19_DYNAMIC_LOADING_WORLDTOUR'), (30, 'scene 208 4_C_INI_PRERACE'),
+                    (34, 'scene 57 947_HUD'), (35, 'countdown placed'), (40, 'push 8-Car_Race'),
+                    (100, 'pop 8-Car_Race'), (100.1, 'scene 207 924_POST_RACE'),
+                    (100.2, 'scene 187 037_I_D_POP_DIALOG'), (105, 'scene 46 920_POST_RACE_EARNINGS'),
+                    (120, 'scene 236 6_C_INI_UNLOADING'), (125, 'scene 245 200_WORLD_TOUR')]
+        spans = season_perf.phase_spans([(launch + t, text) for t, text in timeline], launch)
+        self.assertEqual([(a, b if b != float('inf') else None, p) for a, b, p in spans], [
+            (0.0, 20, 'menus'), (20, 30, 'loading'), (30, 35, 'pre_race'), (35, 40, 'countdown'),
+            (40, 100, 'race'), (100, 120, 'rewards'), (120, 125, 'loading'), (125, None, 'menus')])
+        with tempfile.TemporaryDirectory() as tmp:
+            run = Path(tmp)
+            (run / 'events.txt').write_text(''.join(f'{int((launch + t) * 1000)} 0 {text}\n' for t, text in timeline))
+            perf = []
+            for second in range(1, 131):
+                racing = 40 < second <= 100
+                frames = [4.0] * 240 if racing else [16.0] * 60
+                if second == 70:
+                    frames[10] = 80.0
+                perf.append({'t': second, 'window_ms': 1000, 'fps': len(frames), 'frame_ms': frames,
+                             'gpu': {'frames': len(frames), 'frame_ms': 3.0 if racing else 1.0,
+                                     'passes_ms': {'gtao': 0.5 if racing else 0.1}, 'swap_ms': 0.1,
+                                     'scene_ms': 2.4 if racing else 0.8},
+                             'render_thread_busy_ms': 600, 'submit_thread': {'busy_ms': 300},
+                             'shader_work': {'pipelines': [2, 5.0, 3.0, 0]} if second == 50 else {},
+                             'long_frames': [[80.0, 0, 0, 0]] if second == 70 else []})
+            (run / 'perf.jsonl').write_text(''.join(json.dumps(p) + '\n' for p in perf))
+            (run / 'season.jsonl').write_text(json.dumps({'event': 1, 'name': 'Class F Asian Tour', 'start_s': 0,
+                                                          'end_s': 125, 'season': {'name': 'AMATEUR DIVISION', 'events': [['Tsukuba Short', 'CURRENT EVENT']]}}) + '\n')
+            (run / 'summary.json').write_text(json.dumps({'launch_time': launch}))
+            report, records = season_perf.survey(run)
+            race = report['events'][0]['phases']['race']
+            self.assertEqual(report['events'][0]['track'], 'Tsukuba Short')
+            self.assertEqual(race['over_50ms'], 1)
+            self.assertAlmostEqual(race['gpu_ms_per_frame'], 3.0, places=2)
+            self.assertEqual(race['gpu_parts_ms']['gtao'], 0.5)
+            self.assertEqual(race['shader_work'], {'pipelines': [2, 5.0]})
+            self.assertEqual(report['long_frames'][0]['phase'], 'race')
+            self.assertEqual(report['long_frames'][0]['event'], 1)
+            self.assertIn('loading', report['events'][0]['phases'])
+            self.assertEqual(report['slowest_p99'][0]['phase'], 'menus')
+            self.assertIn('perf', records[0])
 
 
 if __name__ == '__main__':

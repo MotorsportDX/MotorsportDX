@@ -225,6 +225,24 @@ Its verdict uses the thresholds proposed for the season soak (29 October 2026):
 - handles grow by at most 100 and threads by at most 5 an hour;
 - the races' p50 and p99 frame times in the last third of the races are at most 10% above those of the first third.
 
+`season_perf.py <run>` turns the same run into a performance survey. It splits the run into phases by its screen events:
+
+- `menus`;
+- `loading`: the event's loading, the unloading after it, and the loading screens;
+- `pre_race`;
+- `countdown`: from the cars' placement to the race;
+- `race`;
+- `rewards`: from the post-race menu to the gift car.
+
+The driver presses CONTINUE at once, so the run has no replay phase. For each event and phase, the survey summarises the perf trace:
+
+- frame times and hitches;
+- the GPU time a frame, split into the post passes, the swap and the scene;
+- the host render thread's and the submit thread's busy time;
+- the shaders and pipelines made in play.
+
+It lists every frame over 50 ms with its time and phase, and ranks the event and phase pairs by p99 and by frames over 33 ms a minute.
+
 The season soak holds the GPU queue in class `perf` for its whole length.
 
 ## Fast route
@@ -454,7 +472,8 @@ All scripts live in [`outputs/FM4-build/e2e/`](../../outputs/FM4-build/e2e/).
 | `parity.py <baseline> <candidate> [--out DIR]` | FAIL rules of a frozen-frame pair: draws and predicated packets per frame, image difference, new error keys ([frozen-frames.md](frozen-frames.md)) |
 | `coverage.py <run> --functions <BuildRoot>\project\generated\default [--json]` | the PM4 writers of each phase and of the career menus: the `FM4_N0_TRACE` ring allocations by function and the identity check's ranges by writer ([traces.md](traces.md#identity-check-of-the-native-path-fm4_native_check-host_render_check)) |
 | `soak_report.py <run> [--json]` | the soak analysis of a run with `soak.jsonl`: slopes per hour after the first race, the floors per race, frame time percentiles per minute and per race, the verdict against the thresholds, and the kernel and XAM stubs of its `runtime.log`; writes `soak-report.json` ([career season](#career-season-and-soak)) |
-| `test_career_season.py` | offline tests of `career_season.py` (its OCR parsers, and the driver against a simulated World Tour) and of `soak_report.py` |
+| `season_perf.py <run> [--top N] [--json]` | the performance survey of a `career_season` run: per event and phase (menus, loading, pre-race, countdown, race, rewards) the fps, frame time percentiles, frames over 16, 33 and 50 ms, GPU time and its parts, render and submit thread time and the shader work in play; every frame over 50 ms with its time and phase; the slowest pairs ranked; writes `season-perf.json` and each event's `perf` in `season.jsonl` ([career season](#career-season-and-soak)) |
+| `test_career_season.py` | offline tests of `career_season.py` (its OCR parsers, and the driver against a simulated World Tour), `soak_report.py` and `season_perf.py` |
 | `test_e2e_tools.py` | offline tests of `frame_diff.py`, `parity.py`, `coverage.py`, `perf_ab.py` and the summary fields they read |
 | `race_clock.py <run>` | race timer of the captures against wall time (1.0: real time); needs `--keep-ppm` captures |
 | `cp_profile.py stacks.txt <BuildRoot>\game-build-prof [--function NAME]` | summarize the command-processor stack samples (see [traces.md](traces.md)) |
