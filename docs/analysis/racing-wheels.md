@@ -1,6 +1,6 @@
 # Native racing wheel support
 
-Status: research and design of 27 October 2026; stage 0 (the device and safety shell), stage 1 (the control path), stage 2 (native input), stage 3 (force feedback from the title's torque), stage 4 (the physics-rate force and the kerb and impact effects) and stage 5 (each car's steering lock with an end stop, and the drawn wheel) done on 29 October 2026 ([stage 0](#stage-0-done-29-october-2026), [stage 1](#stage-1-findings-29-october-2026), [stage 2](#stage-2-done-29-october-2026), [stage 3](#stage-3-done-29-october-2026), [stage 4](#stage-4-done-29-october-2026), [stage 5](#stage-5-done-29-october-2026)). The project runs the base Disc 1 executable without a title update, so every address below is from the recompiled base `default.xex` (USA; Japan/Asia share the code).
+Status: research and design of 27 October 2026; stage 0 (the device and safety shell), stage 1 (the control path), stage 2 (native input), stage 3 (force feedback from the title's torque), stage 4 (the physics-rate force and the kerb and impact effects) stage 5 (each car's steering lock with an end stop, and the drawn wheel) and stage 6 (options, docs and the close gate) done on 29 October 2026; the work pauses until the owner's MOZA R9 test ([stage 0](#stage-0-done-29-october-2026), [stage 1](#stage-1-findings-29-october-2026), [stage 2](#stage-2-done-29-october-2026), [stage 3](#stage-3-done-29-october-2026), [stage 4](#stage-4-done-29-october-2026), [stage 5](#stage-5-done-29-october-2026), [stage 6](#stage-6-done-29-october-2026)). The project runs the base Disc 1 executable without a title update, so every address below is from the recompiled base `default.xex` (USA; Japan/Asia share the code).
 
 The goal is native PC wheel support, not gamepad emulation:
 
@@ -10,6 +10,17 @@ The goal is native PC wheel support, not gamepad emulation:
 - force feedback is safe on a direct-drive base.
 
 The title's Xbox 360 wheel path is documented here as the reference, not as the target.
+
+## The feature in short
+
+As built in stages 0 to 6, off by default (`-Wheel on=0`) until the owner's hardware test ([running.md](../running.md#racing-wheel)):
+
+- **Device.** SDL3's joystick and haptic APIs in a host shared by the runtime and the launcher, on its own 1,000 Hz thread; the launcher's Wheel test runs it without the game ([stage 0](#stage-0-done-29-october-2026)).
+- **Input.** The wheel's steering, pedals and buttons reach the title's control record at full resolution, merged with the pad's bindings, for the first player's car only; a record the wheel steers gets wheel mode 2, the title's linear 900-degree filters. The anti-cheat rule's threshold is scaled to the frame time for every device, so smooth steering at 240 fps keeps a race's rewards ([stage 1](#stage-1-findings-29-october-2026), [stage 2](#stage-2-done-29-october-2026)).
+- **Force feedback.** The title's own steering torque, scaled as its force feedback block scales it, evaluated after every physics step (about 360 a second) and played back on the host's clock; the title's spring and damper as firmware effects; kerb, surface and impact vibrations from the title's `<Wheel>` rumble table ([stage 3](#stage-3-done-29-october-2026), [stage 4](#stage-4-done-29-october-2026)).
+- **Steering lock.** Each car's lock from its road-wheel lock at one steering ratio (900 degrees for most cars), an end stop past it built from the force feedback, and the cockpit's drawn wheel turned 1:1 ([stage 5](#stage-5-done-29-october-2026)).
+- **Safety.** Every force passes one governor: a hard cap (0.25 by default) on the sum of the constant force, the conditions, the vibrations and the end stop; a slew limit; a ramp-in after every zero state; a 50 ms watchdog; zero at once outside a driven race, on focus loss, at exit and on a crash.
+- **Verified** with SDL's virtual wheel, the recording backend and unit tests only; no real wheel ([stage 6](#stage-6-done-29-october-2026)).
 
 ## Target hardware
 
@@ -550,6 +561,38 @@ Delivers:
 - `docs/known-issues.md` and `docs/bug-reports.md` (tested hardware: the MOZA set);
 - `docs/status/current.md`;
 - the close gate of the increment.
+
+#### Stage 6 done, 29 October 2026
+
+**Options and defaults.** The launcher's Racing wheel and Wheel test tabs were reviewed in the order a player meets them: the wheel test first (the device, its axes and buttons, the force's direction), then the Racing wheel tab's Steering, the three pedals, Buttons and Force feedback sections. No default and no plan key changed: the wheel stays off, the force cap 0.25. Three help texts changed: **Use a racing wheel** says the wheel is off by default until a real wheel is tested and that the wheel test comes first, **Force cap** names everything it bounds and its default, **Smoothing** its 10 ms default. The tab order stays (Racing wheel, then Wheel test), so `--wheel-test` and the screenshots keep their tabs.
+
+**Docs.** [running.md](../running.md#racing-wheel) has one Racing wheel chapter in the player's order: the wheel test, the wheel in the game, its force feedback (a table of the launcher's rows), the options (every `-Wheel` knob with its cvar, then the cvars without a knob) and the owner's checklist, steps 1 to 32, checked against the launcher's rows (step 1 turns **Record forces** on, step 9 carries a test's **Invert force** into the game). [Known issues](../known-issues.md#tested-hardware) list the tested wheels (none) and the planned MOZA set; [bug reports](../bug-reports.md#racing-wheel) list a wheel report's files: `wheel-test.log` with its `Wheel report:` device line, the force recordings, the `Wheel` lines of `runtime.log`, the `-Wheel` value and the Pit House profile.
+
+**The close gate** (one queue acquisition; snapshot `whl13` from `a523e3d`, not dirty; native path at 3/2):
+- **Build:** `fm4_wheel_ffb_tests`, `fm4_wheel_mapping_tests`, `fm4_wheel_host_tests` and `fm4_pad_shaping_tests` pass; the launcher's tests 531 plans, 0 failures (a launcher built from the worktree).
+- **Smoke at 240 Hz with the defaults** (the wheel off), against `l1fs32`, main before the wheel work: photo, photo_view and career exit 0 with main's log errors. WARN only: the photo's capture is at another point of the track (checked by eye, a sane picture), and the race's p99 rose from 4.83 to 6.54 ms (photo) and 5.07 to 6.19 ms (career). The game's source is stage 5's (`whl12`), whose career matched `l1fs32` (race 236.87 against 236.29 fps, p99 5.05 against 5.07 ms), so the WARN is the run's conditions, not this stage.
+- **The rewards** (`career_finish` at 240 Hz with the defaults; the threshold scaling applies to every device): race winnings +3,000 CR, difficulty +750 CR, race feats +1,330 CR, the Ford affinity level 2 bonus of 2,000 CR, EVENT COMPLETE.
+- **The virtual wheel's careers** (`whl13w` at 240 and 60 Hz; the lock-to-lock sweep on a 1080-degree wheel, the car's lock 900, the forces recorded), stages 3 to 5 together:
+
+  | Property | 240 Hz | 60 Hz |
+  |---|---|---|
+  | records driven by the wheel, all in mode 2 | 7,456 | 2,720 |
+  | steering against the angle over half the lock, inside the lock | within 0.000012 | within 0.000011 |
+  | records past the lock, all at full steering | 2,121 | 772 |
+  | the cap: force, spring, damper and vibrations at most | 0.250016 | 0.250015 |
+  | rises above the slew limit | 0 | 0 |
+  | rows outside a driven race with any force or end stop | 0 of 8,897 | 0 of 5,383 |
+  | end stop inside the lock | 0 of 29,313 rows | 0 of 22,159 rows |
+  | output back towards the lock 6 or more degrees past it | 3,554 of 3,707 rows | 1,226 of 1,482 rows |
+  | the drawn wheel's angle | the wheel's over 0.75 up to the lock, held beyond | the same |
+
+  As in stage 5, the rows where the output did not push back came during the fast turns back to the lock, where the end stop's damper takes its push away and the title's force or the slew limit remains.
+
+**Found by the gate, present since stage 5.** The car's road-wheel lock is published with the car's control records (the hook of `CCarDynamics` slot 14), and they start with the race after the countdown. During the countdown (about 9.6 s in these runs, and in stage 5's `whl10vk`) the first race of a session has the wheel's whole rotation as its lock and no end stop; a later race has the previous car's lock until its first record. The force is still governed throughout, and the car's lock arrives with the race. Possible fixes for the next wheel session: read the lock where the force feedback sample is published (the control step runs in the countdown), or assume a 42-degree car until a lock is published and clear it when a race ends.
+
+**Evidence lost.** The raw files of the runs `whl0` to `whl9` (stages 0 to 4: captures, logs, summaries) were overwritten by a mistaken archive move on 29 October 2026; only one run's files remain, in `D:\FM4-archive\e2e\whl0-whl9v-merged-by-mistake`. Their results above stay as recorded.
+
+**Next.** The wheel work pauses until the owner's R9 test ([checklist](../running.md#racing-wheel-test-checklist)): the Pit House profile, the force's direction, the end stop's firmness and whether it oscillates, the torque cap that feels safe, the ESX's buttons, and the decision on the MOZA SDK for a firmware soft lock and the lights.
 
 ### Later options
 

@@ -483,6 +483,63 @@ The [Level 1 final gate](current.md#level-1-final-gate-29-october-2026) retested
 |---|---|---|
 | Look mods on empty shader caches (a fresh install) | No compile where a draw meets a shader on the native path and RTV; the `cold` tier | [No look mod compiles in play](current.md#no-look-mod-compiles-in-play-n6-increments-10-and-11-27-october-2026), 27 October 2026 |
 
+### 29 October 2026: racing wheel stages 0 to 5
+
+Moved from [current](current.md) when the stage 6 close gate replaced them ([racing wheel](current.md#racing-wheel-stages-0-to-6-and-the-close-gate-29-october-2026)).
+
+#### Racing wheel, stage 5
+
+- Stage 5 of [native racing wheel support](../analysis/racing-wheels.md#stage-5-done-29-october-2026):
+  - each car's steering lock comes from its road-wheel lock in the game (`CCarDynamics` +0x54: 42 degrees for most cars, 36 for GT racing cars, 30 for prototypes) at one steering ratio: `wheel_car_lock` 900 for a 42-degree car, so 771 and 643; `wheel_steer_lock` sets one lock for every car (0 now means each car's own) and the lock is never more than the wheel's rotation;
+  - the steering is 1:1 up to the lock;
+  - past the lock an end stop built from the force feedback (`wheel_end_stop`, 1) holds the wheel inside the cap;
+  - the cockpit's drawn steering wheel turns 1:1 with the wheel up to the car's lock (the game's own turns 0.75 of a 900-degree wheel's angle and stops at 67.5 degrees);
+  - new `-Wheel` knobs `car_lock` and `end_stop`, launcher rows Car steering lock, Fixed steering lock and End stop ([running.md](../running.md#racing-wheel-in-the-game)).
+- Build: `I:\FM4-build-usa`, snapshots `whl10` (`04e4680`) and `whl12` (`7946238`), not dirty; `whl11` ran a first version of the drawn wheel, without the model's scale. `fm4_wheel_ffb_tests`, `fm4_wheel_mapping_tests`, `fm4_wheel_host_tests` and `fm4_pad_shaping_tests` pass. The launcher built from the same source passes its tests (531 plans), and `--screenshot` shows the new rows.
+- Landing check: the career at 3/2 and 240 Hz, exit 0, main's four log errors.
+  - `whl11` and `whl12` ran alone and pass against `whl9`;
+  - `whl10` ran beside a wheel cell, and its replay was 17% below `whl9`'s.
+- Virtual wheel sweeps (`whl10vk`, the Ford Ka with the car's 900-degree lock on a 1080-degree wheel; `whl10va`, the 131 Abarth with `car_lock=540`):
+  - the steering equals the wheel's angle over half the lock to within 0.00002, and is full in every record past the lock;
+  - the end stop is zero inside the lock and pushes back past it;
+  - the force, spring, damper and vibrations stay within 0.250016, no rise exceeds the slew limit, and every row outside a driven race is zero.
+- Drawn wheel (`whl12vd`, 2x, held angles up to 420 degrees and -270): the model turns 1:1 (at 360 degrees it matches 0).
+- Not covered:
+  - a real wheel ([checklist](../running.md#racing-wheel-test-checklist) steps 28 to 32), in particular the stop's firmness and whether it oscillates;
+  - a 36- or 30-degree car in the game (the e2e cars all have 42; the unit tests cover them);
+  - the hands in other cars.
+
+#### Racing wheel, stage 4
+
+- Stage 4 of [native racing wheel support](../analysis/racing-wheels.md#stage-4-done-29-october-2026): the game computes its steering torque once a frame (a write watch found its one writer, the torque model, after the car's physics steps); the runtime now runs that model after each physics step of the player's car (about 360 a second), restores its state, and the wheel host plays the values back about a frame behind, so the force has the same detail at 60, 120 and 240 Hz. Kerbs, grass and impacts come from the game's rumble inputs through its `<Wheel>` rumble table as firmware vibrations within a quarter of the cap. New `-Wheel` knobs `ffb_road` (0.25), `ffb_impact` (0.5), `ffb_physics` (1) and their launcher rows ([running.md](../running.md#racing-wheel-force-feedback)).
+- Build: `I:\FM4-build-usa`, snapshots `whl8` (`1b4533d`) and `whl9` (`111adac`, the `<Wheel>` table's offset), not dirty; `fm4_wheel_ffb_tests`, `fm4_wheel_mapping_tests`, `fm4_wheel_host_tests` and `fm4_pad_shaping_tests` pass; the launcher rebased on the racing theme's Controls page passes its tests (531 plans).
+- A career at 3/2 and 240 Hz with the defaults (`whl8`, `whl9`): exit 0, the same four log errors as main's, compare PASS against `whl6` (each beside a second cell).
+- Recorded forces (`whl8v`, the virtual wheel's career with a crash, at 240, 120 and 60 Hz): the last physics step's torque equals the game's own in every car step; 305 to 361 points a second while driven, 90 to 92% of the driven rows driven by them, about 500 distinct force values a second at every rate (the frame force: 58 to 143); the sum of the force, spring, damper and effects within the cap (0.250016), no rise above the slew limit, zero outside a driven race; 83 to 276 impacts at the barrier, the road's vibration on the grass only. With the `<Wheel>` table (`whl9v`): the road's level up to 0.36 off the track, its vibration and the impacts at the share's 0.0625, the same bounds.
+- Not covered: a real wheel (the owner's [checklist](../running.md#racing-wheel-test-checklist) steps 22 to 27), photo mode and the rewind with the points, and the frame rate alone.
+
+#### Racing wheel, stage 3
+
+- Stage 3 of [native racing wheel support](../analysis/racing-wheels.md#stage-3-done-29-october-2026): the game's steering torque, as its own force feedback block scales it (`ForceFeedbackScale` 1, so the force equals the torque), drives a constant force from the wheel host's 1,000 Hz thread, with the game's speed- and slip-dependent spring and its damper as firmware effects; only the first player's car, and only while the player drives it. The cap bounds the three together (the spring and damper take at most half of it). New `-Wheel` knobs `ffb_min_force`, `ffb_smoothing` (10 ms), `ffb_spring`, `ffb_damper` ([running.md](../running.md#racing-wheel-force-feedback)) and the launcher's Force feedback section (its sliders landed after the check: the launcher built from that source passes its tests, 531 plans).
+- Build: `I:\FM4-build-usa`, snapshot `whl6` from `129989b` (not dirty); `fm4_wheel_ffb_tests`, `fm4_wheel_mapping_tests`, `fm4_wheel_host_tests` and `fm4_pad_shaping_tests` pass; the launcher's tests pass (531 plans). The pipeline's launcher step now builds from a worktree (`launcher-build-<folder>`).
+- A career at 3/2 and 240 Hz with the defaults (`whl6`): exit 0, the same four log errors as main's, a sane capture. It ran beside a second cell (the check class), so its frame rate (race 133.04 fps) is not comparable with `whl4`'s 236.15 fps alone, and compare reports FAIL on the frame rate only.
+- Recorded forces (`wheel_ffb_sink=record`, the virtual wheel's 16-second script, 240 Hz, cap 0.25, gain 1): in the career (`whl6v`), the photo scenario (`whl6p`) and the rewind (`whl6r`) the constant force plus the spring's and damper's saturations never exceeded 0.250015 (the cap and one 16-bit step), no step exceeded the slew limit, the force's sign matched the torque's in 14,801 of 14,816 rows with a torque above 0.05 (correlation 0.80 to 1.00, unclipped force/target 0.996 to 1.011), and the torque opposes the steering (correlation -0.46 at speed), so the force centres the wheel. Every row outside a driven race (9,842) has zero force, spring and damper; the pause menu, photo mode and the rewind stop the samples and the force reaches zero 50 to 81 ms after the last one, at the slew limit. A fast career with the AI driving the player's car (`whl5a`, the same game-side code) published 9,973 samples, none of them driven.
+- Not covered: a real wheel (the owner's [checklist](../running.md#racing-wheel-test-checklist) steps 15 to 21: gain, feel, pause, Alt+Tab, the race end, the torque cap), a race finished by the player (the end of a race was covered by QUIT RACE and by the AI's car), and the force at 60 fps (every recording ran at 240 Hz).
+
+#### Racing wheel, stage 2
+
+- Stage 2 of [native racing wheel support](../analysis/racing-wheels.md#stage-2-done-29-october-2026): the wheel's steering, pedals and shift, clutch and handbrake buttons drive the first player's car at the wheel's resolution, merged with the pad as the game merges two bindings, through the game's 900-degree wheel filters (wheel mode 2) while the wheel steers; `-Wheel` knobs and the launcher's **Racing wheel** section with the pedals' calibration and button assignment from the wheel test ([running.md](../running.md#racing-wheel-in-the-game)); off by default. The anti-cheat threshold is scaled to the frame time for every device (the main session's decision).
+- Build: `I:\FM4-build-usa`, snapshot `whl4` from `9dc64ae` (not dirty); `fm4_wheel_ffb_tests`, `fm4_wheel_mapping_tests`, `fm4_wheel_host_tests` and `fm4_pad_shaping_tests` pass; the launcher built from the same source passes its tests (531 plans).
+- A career at 3/2 and 240 Hz with the defaults (`whl4`): exit 0, race 236.15 fps (p99 5.16 ms), the same four log errors as main's; against `whl2` FAIL on the whole run's frame p99 only (33.19 against 17.08 ms; `whl2`'s value is the outlier, `l1fs32` had 33.08), the race and replay phases unchanged.
+- The same career driven by an SDL virtual wheel's script (`whl4v`): the wheel drove 10,866 records of the player's car, all in wheel mode 2, the steering in steps of one raw unit (0.00003, an 8-bit step is 0.0078), the throttle in steps of 0.000015, each shift press one record. The trace build `whl3` (`4c65e50`) measured the wheel modes (mode 2 linear and a full-lock step in 50 ms, the pad's mode 360 ms) and a `career_finish` at 240 Hz whose rewards were paid (+5,270 CR, driver and Ford affinity level 2), with the AI's steering counted 330 to 440 times a lap: the rule does not withhold a pad player's rewards at 240 Hz ([findings](../analysis/racing-wheels.md#stage-2-done-29-october-2026)).
+- Not covered: a real wheel; the owner's [checklist](../running.md#racing-wheel-test-checklist) steps 9 to 14 cover driving with the MOZA set. Force feedback followed in stage 3.
+
+#### Racing wheel, stages 0 and 1
+
+- Stage 0 of [native racing wheel support](../analysis/racing-wheels.md#stage-0-done-29-october-2026): a wheel host shared by the runtime and the GUI launcher (SDL's joystick and haptic APIs, a 1,000 Hz force thread, the safety governor, stops on crash and exit, a recording backend), `wheel` and `wheel_ffb_*` cvars off by default, the launcher's wheel test without the game, and the owner's [checklist](../running.md#racing-wheel-test-checklist). The runtime's SDL is now built with haptics. Stage 1 traced the title's control path and its anti-cheat rule ([findings](../analysis/racing-wheels.md#stage-1-findings-29-october-2026)); the game gets no wheel input or force yet.
+- Build: `I:\FM4-build-usa`, snapshot `whl2` from `782ba03` (not dirty); `fm4_wheel_ffb_tests`, `fm4_wheel_host_tests` (an SDL virtual wheel, no force device) and `fm4_pad_shaping_tests` pass; the launcher built from the same source passes its tests (504 plans).
+- A career at 3/2 and 240 Hz with the defaults: exit 0, race 238.59 fps, the same four log errors as main's; against `l1fs32` WARN on `wait_reg_mem` only (435.40 to 532.20 ms/s), where the same code path at `a787079` (snapshot `whl1`) passed. With `wheel=true` on the recording sink: exit 0, the host started in the game, and the recording held zero force, blocked for focus.
+- Not covered: a real wheel (this PC has none). The owner's checklist covers the device, the forces, focus loss and a killed process.
+
 ## 5. Superseded settings and decisions
 
 Each row gives the date of the change, the setting that was replaced, and what happened later. The current values are in [running](../running.md) and [current status](current.md).
