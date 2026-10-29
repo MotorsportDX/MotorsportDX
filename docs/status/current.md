@@ -956,7 +956,7 @@ Everything still open, grouped by area.
 
 - On RTV at 240 Hz, the race is limited by the command processor (pacing and cost per draw, 1.8-1.9 us per draw at 2,500 draws per frame). The swap no longer waits for the submit thread ([asynchronous swap](#asynchronous-swap-20-october-2026)). At 2x it is limited by the GPU (about 140 fps in the `photo` race at 7.0 ms per frame on 20 October 2026; about 162 fps at 6.09 ms in earlier measurements).
 - The race clock does not run faster above 60 Hz (ratio 1.001). But lap time and handling are not yet compared between 60 and 240 fps.
-- Shader compiles in play with an empty cache, and on the ROG Xbox Ally X the full-screen resolves in the guest's memory layout (4.5 ms of a 15.9 ms race frame at 3/2): planned in stage N6, awaiting the owner's approval ([D3D-level HLE, 19.8](../analysis/d3d-hle-n6.md#198-the-proposed-order)).
+- Level 1 of the native port (no shader or pipeline compiles in play) passed its final gate on this PC, but has not run on the ROG Xbox Ally X yet. The owner's runs of the export of `4a5f02f` will decide whether N6's item 2 (direct D3D12 draws) is taken up, and whether the pipeline library stays on by default ([D3D-level HLE, 19.11](../analysis/d3d-hle-n6.md#1911-the-level-1-final-gate-29-october-2026)).
 
 ### Gameplay coverage
 
