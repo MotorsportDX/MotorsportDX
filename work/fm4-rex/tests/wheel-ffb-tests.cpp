@@ -5,8 +5,9 @@
 // loss and the other zero states, the watchdog, a stalled force thread, the
 // condition effects inside the cap together with the constant force, the
 // periodic effects (the road's vibration and impacts) inside their share of
-// it, the minimum force, the smoothing, and the playback of a force that
-// arrives in bursts at the physics rate (ffb_stream.h). Returns 1 on failure.
+// it, the minimum force, the smoothing, the playback of a force that arrives in
+// bursts at the physics rate (ffb_stream.h), and the soft lock's end stop.
+// Returns 1 on failure.
 
 #include <algorithm>
 #include <cmath>
@@ -501,6 +502,130 @@ int main() {
     for (int i = 200; i < 240; ++i) hitch.Add(i * 0.005, 0.2, 2.2);
     hitch.Sample(2.2, &value);
     Check(hitch.delay_s() <= 0.05 + 1e-12, "the delay never exceeds its limit");
+  }
+
+  // The soft lock's end stop (stage 5): zero inside the lock, a smooth onset past it, its
+  // strength 6 degrees past it, always back towards the lock, damped, never outwards.
+  {
+    wheel::EndStop stop;
+    double t = 0.0;
+    const auto at = [&](double angle) {
+      t += 0.001;
+      return stop.Step(angle, 540.0, t);
+    };
+    // Held still: no speed, the spring alone.
+    const auto still = [&](double angle) {
+      stop.Reset();
+      at(angle);
+      return at(angle);
+    };
+    Check(still(269.9) == 0.0 && still(-200.0) == 0.0, "zero inside the lock");
+    Check(still(270.0) == 0.0, "zero at the lock");
+    const double small = still(270.1);
+    Check(small < 0.0 && small > -0.002, "a smooth onset: tiny just past the lock");
+    Check(std::fabs(still(272.0) - -1.0 / 5.0) < 1e-9, "the knee joins the line");
+    Check(std::fabs(still(276.0) - -1.0) < 1e-9 && std::fabs(still(300.0) - -1.0) < 1e-9,
+          "the strength from 6 degrees past the lock");
+    Check(still(-280.0) > 0.0, "left of the lock it pushes right");
+    double last = 0.0;
+    bool monotonic = true;
+    for (double a = 270.0; a < 280.0; a += 0.05) {
+      const double f = std::fabs(still(a));
+      monotonic = monotonic && f >= last - 1e-12;
+      last = f;
+    }
+    Check(monotonic, "the push grows with the angle past the lock");
+    // Continuous: a 900-degree wheel turned at 100 degrees a second never jumps it.
+    stop.Reset();
+    double jump = 0.0, previous = 0.0;
+    for (double a = 265.0; a < 285.0; a += 0.1) {
+      const double f = at(a);
+      jump = std::max(jump, std::fabs(f - previous));
+      previous = f;
+    }
+    Check(jump < 0.05, "no jump at the onset or the knee");
+    // Turning outwards at 300 degrees a second adds to the push; returning takes from it, never
+    // past zero.
+    const double held = still(274.0);
+    stop.Reset();
+    double f_out = 0.0;
+    for (int i = 0; i <= 10; ++i) f_out = at(271.0 + 0.3 * i);
+    Check(f_out < held, "turning outwards pushes back harder");
+    stop.Reset();
+    double f_in = -1.0;
+    bool never_outwards = true;
+    double f_returning = -1.0;
+    for (int i = 0; i <= 200; ++i) {
+      f_in = at(300.0 - 0.15 * i);
+      never_outwards = never_outwards && f_in <= 0.0;
+      if (i == 60) f_returning = f_in;
+    }
+    Check(never_outwards, "returning never pushes outwards");
+    Check(f_returning > -0.9, "returning takes from the push");
+    // Off, a bad angle and a bad lock give nothing; the strength scales it.
+    wheel::EndStopConfig config;
+    config.strength = 0.0;
+    wheel::EndStop off(config);
+    Check(off.Step(400.0, 540.0, 1.0) == 0.0, "strength 0 is off");
+    Check(stop.Step(std::nan(""), 540.0, t + 0.001) == 0.0, "a NaN angle gives nothing");
+    Check(stop.Step(400.0, std::nan(""), t + 0.002) == 0.0, "a NaN lock gives nothing");
+    config.strength = 0.4;
+    wheel::EndStop weak(config);
+    weak.Step(300.0, 540.0, 1.0);
+    Check(std::fabs(weak.Step(300.0, 540.0, 1.001) - -0.4) < 1e-9, "the strength scales it");
+    config.strength = 7.0;
+    config.travel_deg = 1.0;
+    config.knee_deg = 3.0;
+    const wheel::EndStopConfig clean = wheel::EndStop::Sanitize(config);
+    Check(clean.strength == 1.0 && clean.travel_deg >= clean.knee_deg, "sanitized");
+
+    // Through the governor: within the cap and the slew limit, zero when blocked or stale, and
+    // not scaled by the title's gain.
+    GovernorConfig g;
+    g.cap = 0.25;
+    g.gain = 0.5;
+    g.ramp_s = 0.0;
+    Governor governor(g);
+    double now = 0.0, out = 0.0, worst = 0.0, top = 0.0;
+    bool in_cap = true;
+    for (int i = 0; i < 400; ++i) {
+      now += 0.001;
+      governor.Submit(0.0, now);
+      governor.SubmitEndStop(-1.0);
+      const double next = governor.Step(now);
+      worst = std::max(worst, std::fabs(next - out));
+      in_cap = in_cap && std::fabs(next) <= g.cap + 1e-12;
+      out = next;
+      top = std::max(top, std::fabs(next));
+    }
+    Check(in_cap && std::fabs(top - 0.25) < 1e-9, "the end stop reaches the cap, not past it");
+    Check(worst <= g.slew_per_s * 0.001 + 1e-12, "the end stop rises at the slew limit");
+    Check(governor.end_stop() == -1.0, "the end stop is not scaled by the gain");
+    governor.SetBlocked(wheel::kBlockPaused, true);
+    Check(governor.Step(now + 0.001) == 0.0 && governor.end_stop() == 0.0, "zero when blocked");
+    governor.SetBlocked(wheel::kBlockPaused, false);
+    double stale = 1.0;
+    for (int i = 0; i < 300; ++i) {
+      governor.SubmitEndStop(-1.0);
+      stale = governor.Step(now + 0.2 + i * 0.001);
+    }
+    Check(stale == 0.0 && governor.end_stop() == 0.0,
+          "zero once the title's force stops (the watchdog)");
+    governor.Submit(0.0, now + 0.6);
+    governor.SubmitEndStop(std::nan(""));
+    governor.Step(now + 0.601);
+    Check((governor.flags() & wheel::kFlagBadValue) != 0 && governor.end_stop() == 0.0,
+          "a NaN end stop is a bad value, and zero");
+    // The title's force and the end stop add before the cap.
+    Governor sum(g);
+    double s = 0.0;
+    for (int i = 0; i < 400; ++i) {
+      now += 0.001;
+      sum.Submit(0.2, now);
+      sum.SubmitEndStop(-0.15);
+      s = sum.Step(now);
+    }
+    Check(std::fabs(s - (0.2 * 0.5 - 0.15)) < 1e-9, "the title's force plus the end stop");
   }
 
   // The configuration is sanitized.

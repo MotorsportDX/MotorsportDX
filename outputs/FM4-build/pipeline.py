@@ -1718,6 +1718,7 @@ WHEEL_KNOBS={
     'steer_invert':{'cvar':'wheel_steer_invert','default':'0','choices':['0','1']},
     'steer_range':{'cvar':'wheel_steer_range','default':'900','min':90.0,'max':3600.0},
     'steer_lock':{'cvar':'wheel_steer_lock','default':'0','min':0.0,'max':3600.0},
+    'car_lock':{'cvar':'wheel_car_lock','default':'900','min':90.0,'max':3600.0},
     **wheel_pedal_knobs('throttle',1),
     **wheel_pedal_knobs('brake',2),
     **wheel_pedal_knobs('clutch',-1),
@@ -1738,6 +1739,7 @@ WHEEL_KNOBS={
     'ffb_road':{'cvar':'wheel_ffb_road','default':'0.25','min':0.0,'max':1.0},
     'ffb_impact':{'cvar':'wheel_ffb_impact','default':'0.5','min':0.0,'max':1.0},
     'ffb_physics':{'cvar':'wheel_ffb_physics','default':'1','choices':['0','1']},
+    'end_stop':{'cvar':'wheel_end_stop','default':'1','min':0.0,'max':1.0},
 }
 
 def option_knobs(text,table,option):
@@ -2288,7 +2290,8 @@ def launcher_test_options(root):
                      'throttle_deadzone=0.03,throttle_gamma=1.5,brake_axis=-1,clutch_axis=3,'
                      'shift_up=4,shift_down=5,clutch_button=-1,handbrake_button=12,ffb_cap=0.4,'
                      'ffb_gain=1.25,ffb_invert=1,ffb_min_force=0.05,ffb_smoothing=0,'
-                     'ffb_spring=0,ffb_damper=0.5,ffb_road=0.4,ffb_impact=0,ffb_physics=0',
+                     'ffb_spring=0,ffb_damper=0.5,ffb_road=0.4,ffb_impact=0,ffb_physics=0,'
+                     'car_lock=720,end_stop=0.5',
              'frame_rate':240},
             {'wheel':'on=0,input=0,brake_axis=2,ffb_cap=0.25','pad':'rumble=1.5'},
             {'native':True,'frame_rate':240,'vsync':'off'},

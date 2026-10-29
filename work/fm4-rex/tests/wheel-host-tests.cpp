@@ -9,7 +9,9 @@
 // (stage 3) arrive with their spring and damper inside the cap and stop at once
 // outside a driven race and through the watchdog when they stop coming, that
 // the physics-rate points and the road and impact effects (stage 4) drive the
-// force inside the cap and stop with it, and that a disconnect is noticed.
+// force inside the cap and stop with it, that the car's own steering lock comes
+// from the title's road-wheel lock with an end stop past it (stage 5), and
+// that a disconnect is noticed.
 // Argument: a directory for the recordings.
 // Returns 1 on failure.
 
@@ -429,6 +431,64 @@ int main(int argc, char** argv) {
     Check(physics_rows > 300, "the recording marks the physics-rate rows");
     Check(impact_rows > 0, "the impact is recorded");
     Check(zero_when_stopped, "the recording's effects are zero outside a driven race");
+  }
+
+  // Stage 5: the car's own lock from the title's road-wheel lock, and the end stop past it while
+  // the title drives.
+  {
+    std::mutex source_mutex;
+    wheel::ForceSample source;
+    uint64_t sequence = 0;
+    const auto publish = [&](bool driving) {
+      std::lock_guard lock(source_mutex);
+      source = {};
+      source.driving = driving;
+      ++sequence;
+    };
+    wheel::HostOptions options;
+    options.sink = wheel::Sink::kRecord;
+    options.governor.cap = 0.25;
+    options.governor.ramp_s = 0.0;
+    options.mapping.steering.range_deg = 900.0;
+    // A prototype: a 30-degree road-wheel lock, so 643 degrees lock to lock.
+    options.road_lock = []() { return 30.0; };
+    options.force_source = [&](wheel::ForceSample* out) {
+      std::lock_guard lock(source_mutex);
+      *out = source;
+      return sequence;
+    };
+    wheel::WheelHost host(options, Printer());
+    host.SetFocus(true);
+    host.Start();
+    Check(WaitFor(host, true, 2000), "the stage 5 host finds the virtual wheel");
+    const auto hold = [&](double degrees, bool driving, int ms) {
+      SDL_SetJoystickVirtualAxis(virtual_wheel, 0,
+                                 int16_t(std::lround(degrees / 450.0 * 32767.0)));
+      for (int elapsed = 0; elapsed < ms; elapsed += 4) {
+        SDL_UpdateJoysticks();
+        publish(driving);
+        Sleep(4);
+      }
+      return host.GetSnapshot();
+    };
+    const double lock = 900.0 * 30.0 / 42.0;
+    wheel::Snapshot inside = hold(200.0, true, 300);
+    Check(std::fabs(inside.controls.lock_deg - lock) < 1e-6, "the car's lock from its road lock");
+    Check(std::fabs(inside.controls.steering - 200.0 / (lock * 0.5)) < 1e-3,
+          "the steering maps the car's lock 1:1");
+    Check(inside.end_stop == 0.0 && inside.output == 0.0, "no end stop inside the lock");
+    const wheel::Snapshot right = hold(360.0, true, 300);
+    Check(right.controls.steering == 1.0, "past the lock the steering is full");
+    Check(right.end_stop < 0.0 && right.output < 0.0 && right.output >= -0.25 - 1e-9,
+          "past the right lock the end stop pushes left, within the cap");
+    const wheel::Snapshot left = hold(-360.0, true, 300);
+    Check(left.end_stop > 0.0 && left.output > 0.0 && left.output <= 0.25 + 1e-9,
+          "past the left lock it pushes right");
+    const wheel::Snapshot stopped = hold(-360.0, false, 100);
+    Check(stopped.end_stop == 0.0 && stopped.output == 0.0,
+          "outside a driven race there is no end stop");
+    host.Stop();
+    SDL_SetJoystickVirtualAxis(virtual_wheel, 0, 0);
   }
 
   // A disconnect is noticed.

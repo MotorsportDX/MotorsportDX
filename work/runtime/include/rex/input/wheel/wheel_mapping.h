@@ -7,7 +7,7 @@
  * wheel host runs. The host maps the device's raw axes (SDL's -32768..32767)
  * and buttons to floats at device resolution, and a title integration writes
  * them into the title's own driving controls (FM4: work/fm4-rex/src/
- * fm4-wheel-input.cpp). See docs/analysis/racing-wheels.md, stage 2.
+ * fm4-wheel-input.cpp). See docs/analysis/racing-wheels.md, stages 2 and 5.
  */
 
 #pragma once
@@ -38,8 +38,15 @@ struct SteeringMap {
   // The rotation the device reports over its whole axis, lock to lock (Pit House's maximum
   // angle on a MOZA base).
   double range_deg = 900.0;
-  // The rotation that gives the title's full steering, lock to lock; 0: the device's range.
+  // A fixed rotation that gives the title's full steering, lock to lock; 0: the car's own lock
+  // (stage 5).
   double lock_deg = 0.0;
+  // The car's own lock: the rotation, lock to lock, of a car whose road wheels turn
+  // `reference_road_deg` at full steering; another car's lock scales with its road-wheel lock,
+  // which the title integration publishes (FM4: 42 degrees for 441 of its 503 cars, 36 for GT
+  // and 30 for prototype racing cars).
+  double car_lock_deg = 900.0;
+  double reference_road_deg = 42.0;
 };
 
 struct MappingConfig {
@@ -58,6 +65,10 @@ struct MappingConfig {
 struct Controls {
   bool connected = false;
   double steering = 0.0;  // -1..1 of the lock (right positive)
+  // The wheel's angle from the centre in degrees (right positive, not limited to the lock), and
+  // the lock the steering maps to, lock to lock: for the end stop and the drawn wheel (stage 5).
+  double wheel_deg = 0.0;
+  double lock_deg = 0.0;
   double throttle = 0.0;  // 0..1
   double brake = 0.0;     // 0..1
   double clutch = 0.0;    // 0..1, 1 fully pressed
@@ -75,15 +86,36 @@ inline double NormalizedAxis(int16_t raw) {
   return raw >= 0 ? double(raw) / 32767.0 : double(raw) / 32768.0;
 }
 
-inline double MapSteering(const SteeringMap& map, int16_t raw) {
-  double value = NormalizedAxis(raw);
-  if (map.invert) {
-    value = -value;
+inline double SteeringRangeDeg(const SteeringMap& map) {
+  return std::isfinite(map.range_deg) && map.range_deg > 0.0 ? map.range_deg : 900.0;
+}
+
+// The rotation, lock to lock, that gives the title's full steering: the fixed lock, else the
+// car's own (car_lock_deg scaled by the car's road-wheel lock, 0 while the title has published
+// none), else the device's range; never more than the range, never less than 10 degrees.
+inline double SteeringLockDeg(const SteeringMap& map, double road_lock_deg) {
+  const auto positive = [](double value) { return std::isfinite(value) && value > 0.0; };
+  const double range = SteeringRangeDeg(map);
+  double lock = range;
+  if (positive(map.lock_deg)) {
+    lock = map.lock_deg;
+  } else if (positive(road_lock_deg) && positive(map.car_lock_deg) &&
+             positive(map.reference_road_deg)) {
+    lock = map.car_lock_deg * road_lock_deg / map.reference_road_deg;
   }
-  const double range = std::isfinite(map.range_deg) && map.range_deg > 0.0 ? map.range_deg : 900.0;
-  const double lock =
-      std::isfinite(map.lock_deg) && map.lock_deg > 0.0 ? std::min(map.lock_deg, range) : range;
-  return std::clamp(value * range / lock, -1.0, 1.0);
+  return std::clamp(lock, std::min(10.0, range), range);
+}
+
+// The wheel's angle from the centre in degrees, right positive.
+inline double SteeringAngleDeg(const SteeringMap& map, int16_t raw) {
+  const double value = NormalizedAxis(raw) * SteeringRangeDeg(map) * 0.5;
+  return map.invert ? -value : value;
+}
+
+// The steering, -1..1 of the lock: the car's full steering at half the lock either way.
+inline double MapSteering(const SteeringMap& map, int16_t raw, double road_lock_deg = 0.0) {
+  return std::clamp(SteeringAngleDeg(map, raw) / (SteeringLockDeg(map, road_lock_deg) * 0.5),
+                    -1.0, 1.0);
 }
 
 inline double MapPedal(const PedalMap& map, int16_t raw) {
@@ -99,8 +131,10 @@ inline double MapPedal(const PedalMap& map, int16_t raw) {
 }
 
 // The controls of one device state; the press counters are carried from `previous`.
+// `road_lock_deg` is the car's road-wheel lock the title integration published (0: none).
 inline Controls MapControls(const MappingConfig& config, const std::vector<int16_t>& axes,
-                            const std::vector<uint8_t>& buttons, const Controls& previous) {
+                            const std::vector<uint8_t>& buttons, const Controls& previous,
+                            double road_lock_deg = 0.0) {
   const auto axis = [&](int index, int16_t fallback) {
     return index >= 0 && size_t(index) < axes.size() ? axes[size_t(index)] : fallback;
   };
@@ -112,7 +146,10 @@ inline Controls MapControls(const MappingConfig& config, const std::vector<int16
   };
   Controls out;
   out.connected = true;
-  out.steering = MapSteering(config.steering, axis(config.steering.axis, 0));
+  const int16_t steering = axis(config.steering.axis, 0);
+  out.steering = MapSteering(config.steering, steering, road_lock_deg);
+  out.wheel_deg = SteeringAngleDeg(config.steering, steering);
+  out.lock_deg = SteeringLockDeg(config.steering, road_lock_deg);
   out.throttle = pedal(config.throttle);
   out.brake = pedal(config.brake);
   out.clutch = std::max(pedal(config.clutch), button(config.clutch_button) ? 1.0 : 0.0);

@@ -10,7 +10,7 @@
  * sample; and the force at the title's physics rate, a point per physics step,
  * which the force thread plays back (ffb_stream.h). The locks are the
  * stores' own, never the input driver's, so a guest hook may publish or read
- * from any thread. See docs/analysis/racing-wheels.md, stages 2 to 4.
+ * from any thread. See docs/analysis/racing-wheels.md, stages 2 to 5.
  */
 
 #pragma once
@@ -26,6 +26,11 @@ namespace rex::input::wheel {
 void PublishControls(const Controls& controls);
 // The latest controls; false (and `out` disconnected) while no wheel drives.
 bool GetControls(Controls* out);
+
+// The road-wheel lock of the car the wheel drives, in degrees at the title's full steering, which
+// sets the car's own steering lock (wheel_mapping.h, stage 5); 0: none published yet.
+void PublishRoadLock(double degrees);
+double GetRoadLock();
 
 // The title's force feedback for one frame.
 struct ForceSample {

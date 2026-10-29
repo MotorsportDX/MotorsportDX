@@ -201,7 +201,10 @@ struct WheelHost::Device {
 };
 
 WheelHost::WheelHost(HostOptions options, LogFunction log)
-    : options_(std::move(options)), log_(std::move(log)), governor_(options_.governor) {
+    : options_(std::move(options)),
+      log_(std::move(log)),
+      governor_(options_.governor),
+      end_stop_(options_.end_stop) {
   options_.rate_hz = std::clamp(options_.rate_hz, 100, 2000);
   governor_.SetBlocked(kBlockNoDevice, true);
 }
@@ -242,7 +245,7 @@ void WheelHost::Start() {
       std::fputs("time_s,target,output,spring,envelope,blocked,flags,send_us,damper,"
                  "spring_coeff,damper_coeff,driving,sequence,torque,speed,slip,road,impact,"
                  "impacts,title_road,title_impact,frame_force,physics,physics_force,"
-                 "physics_torque,delay_ms,points\n",
+                 "physics_torque,delay_ms,points,wheel_deg,lock_deg,end_stop\n",
                  record_);
     } else {
       Log(LogLevel::kWarning,
@@ -254,13 +257,15 @@ void WheelHost::Start() {
       std::format("Wheel: force feedback host started (sink={}, cap={:.2f}, gain={:.2f}, "
                   "min_force={:.2f}, smoothing={:.0f} ms, slew={:.1f}/s, ramp={:.1f} s, "
                   "watchdog={:.0f} ms, rate={} Hz, invert={}, title={}, spring={:.2f}, "
-                  "damper={:.2f}, road={:.2f}, impact={:.2f}, effect_share={:.2f}{}{})",
+                  "damper={:.2f}, road={:.2f}, impact={:.2f}, effect_share={:.2f}, "
+                  "end_stop={:.2f}{}{})",
                   options_.sink == Sink::kDevice ? "device" : "record", g.cap, g.gain,
                   g.min_force, g.smoothing_s * 1000.0, g.slew_per_s, g.ramp_s,
                   g.watchdog_s * 1000.0, options_.rate_hz, options_.invert ? 1 : 0,
                   options_.force_source ? 1 : 0, options_.spring_scale, options_.damper_scale,
                   options_.road_scale, options_.impact_scale, g.effect_share,
-                  record_ ? ", recording to " : "", record_ ? options_.record_path : ""));
+                  end_stop_.config().strength, record_ ? ", recording to " : "",
+                  record_ ? options_.record_path : ""));
   stop_ = false;
   thread_ = std::thread([this]() { Run(); });
 }
@@ -532,7 +537,7 @@ void WheelHost::Record(double now_s, double send_us) {
   const ForceSample& title = title_sample_;
   std::fprintf(record_,
                "%.6f,%.6f,%.6f,%.6f,%.4f,%u,%u,%.1f,%.6f,%.6f,%.6f,%d,%llu,%.6f,%.4f,%.4f,%.6f,"
-               "%.6f,%llu,%.4f,%.4f,%.6f,%d,%.6f,%.6f,%.2f,%llu\n",
+               "%.6f,%llu,%.4f,%.4f,%.6f,%d,%.6f,%.6f,%.2f,%llu,%.3f,%.2f,%.6f\n",
                now_s, governor_.target(), double(last_sent_level_) / 32767.0,
                last_sent_spring_.saturation, governor_.envelope(), governor_.blocked(),
                governor_.flags(), send_us, last_sent_damper_.saturation,
@@ -542,7 +547,8 @@ void WheelHost::Record(double now_s, double send_us) {
                title.slip, last_sent_road_, last_sent_impact_,
                static_cast<unsigned long long>(last_sent_impacts_), title.road, title.impact,
                title.constant, stream_live_ ? 1 : 0, stream_value_, last_torque_,
-               stream_.delay_s() * 1000.0, static_cast<unsigned long long>(points_seen_));
+               stream_.delay_s() * 1000.0, static_cast<unsigned long long>(points_seen_),
+               controls_.wheel_deg, controls_.lock_deg, governor_.end_stop());
 }
 
 void WheelHost::SendForces(double now_s, double constant, const Condition& spring,
@@ -712,7 +718,8 @@ void WheelHost::UpdateControls() {
   for (size_t i = 0; i < buttons_.size(); ++i) {
     buttons_[i] = SDL_GetJoystickButton(joystick, int(i)) ? 1 : 0;
   }
-  controls_ = MapControls(options_.mapping, axes_, buttons_, controls_);
+  controls_ = MapControls(options_.mapping, axes_, buttons_, controls_,
+                          options_.road_lock ? options_.road_lock() : 0.0);
   if (options_.on_controls) {
     options_.on_controls(controls_);
   }
@@ -881,6 +888,17 @@ void WheelHost::Run() {
     }
 
     UpdateControls();
+    // The soft lock's end stop (stage 5): beyond the car's lock while the title drives, from the
+    // wheel's angle on this tick.
+    double stop = 0.0;
+    if (controls_.connected) {
+      stop = end_stop_.Step(controls_.wheel_deg, controls_.lock_deg, now_s);
+    } else {
+      end_stop_.Reset();
+    }
+    const bool title_drives =
+        test == TestEffect::kNone && title_sequence_ != 0 && title_sample_.driving;
+    governor_.SubmitEndStop(title_drives ? stop : 0.0);
 
     const double constant = governor_.Step(now_s);
     SendForces(now_s, constant, governor_.spring(), governor_.damper(), new_sample);
@@ -900,6 +918,7 @@ void WheelHost::Run() {
       snapshot_.damper_level = governor_.damper().saturation;
       snapshot_.road_level = governor_.road();
       snapshot_.impact_level = governor_.impact();
+      snapshot_.end_stop = governor_.end_stop();
       snapshot_.title_driving = title_sequence_ != 0 && title_sample_.driving;
       snapshot_.title_samples = title_sequence_;
       snapshot_.title_points = points_seen_;

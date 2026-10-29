@@ -1,6 +1,6 @@
 // CPU tests of the racing wheel's driving controls (rex/input/wheel/wheel_mapping.h,
-// docs/analysis/racing-wheels.md, stage 2): the steering at the device's full resolution and
-// its soft lock, the pedals' calibration (rest and pressed in either order, deadzone, gamma),
+// docs/analysis/racing-wheels.md, stages 2 and 5): the steering at the device's full resolution
+// and its lock, fixed or the car's own, the pedals' calibration (rest and pressed in either order, deadzone, gamma),
 // and the buttons and the shift press counters. Returns 1 on failure.
 
 #include <cmath>
@@ -55,6 +55,44 @@ int main() {
     map.lock_deg = 0.0;
     map.range_deg = std::nan("");
     Check(Near(wheel::MapSteering(map, 32767), 1.0), "a bad range falls back");
+  }
+
+  // The car's own lock (stage 5): 900 degrees for a 42-degree road-wheel lock, scaled per car.
+  {
+    wheel::SteeringMap map;
+    map.range_deg = 900.0;
+    Check(Near(wheel::SteeringLockDeg(map, 0.0), 900.0), "no car yet: the range");
+    Check(Near(wheel::SteeringLockDeg(map, 42.0), 900.0), "a road car: 900");
+    Check(Near(wheel::SteeringLockDeg(map, 36.0), 900.0 * 36.0 / 42.0), "a GT car: 771");
+    Check(Near(wheel::SteeringLockDeg(map, 30.0), 900.0 * 30.0 / 42.0), "a prototype: 643");
+    // A 540-degree car on a 900-degree wheel reaches full steering at 270 degrees.
+    map.car_lock_deg = 540.0;
+    const int16_t at270 = int16_t(std::lround(270.0 / 450.0 * 32767.0));
+    Check(Near(wheel::MapSteering(map, at270, 42.0), 1.0, 1e-4), "full lock at 270 degrees");
+    Check(Near(wheel::MapSteering(map, int16_t(at270 / 2), 42.0), 0.5, 1e-4),
+          "half lock at 135 degrees: linear, 1:1");
+    Check(Near(wheel::SteeringAngleDeg(map, 32767), 450.0), "the angle is the wheel's own");
+    map.invert = true;
+    Check(Near(wheel::SteeringAngleDeg(map, 32767), -450.0), "the angle follows the inversion");
+    map.invert = false;
+    // A fixed lock wins over the car's; a lock past the range is the range.
+    map.lock_deg = 720.0;
+    Check(Near(wheel::SteeringLockDeg(map, 30.0), 720.0), "a fixed lock wins");
+    map.lock_deg = 0.0;
+    map.car_lock_deg = 1800.0;
+    Check(Near(wheel::SteeringLockDeg(map, 42.0), 900.0), "never more than the range");
+    map.car_lock_deg = std::nan("");
+    Check(Near(wheel::SteeringLockDeg(map, 42.0), 900.0), "a bad car lock falls back");
+    map.car_lock_deg = 900.0;
+    Check(Near(wheel::SteeringLockDeg(map, -5.0), 900.0), "a bad road lock falls back");
+    // MapControls carries the angle and the lock.
+    wheel::MappingConfig config;
+    config.steering.range_deg = 900.0;
+    const std::vector<int16_t> axes = {int16_t(std::lround(350.0 / 450.0 * 32767.0)), 0, 0};
+    const wheel::Controls state = wheel::MapControls(config, axes, {}, {}, 30.0);
+    Check(Near(state.lock_deg, 900.0 * 30.0 / 42.0), "the controls carry the lock");
+    Check(Near(state.wheel_deg, 350.0, 0.01), "the controls carry the angle");
+    Check(Near(state.steering, 1.0), "past the lock the steering is full");
   }
 
   // The pedals.

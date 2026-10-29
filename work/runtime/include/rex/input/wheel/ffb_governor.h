@@ -25,6 +25,11 @@
  * and impacts, bursts of a fixed magnitude and length. They take at most their
  * own share of the cap; an impact keeps its magnitude for its length and the
  * road's vibration gets what it leaves.
+ *
+ * The soft lock's end stop (stage 5, EndStop below) is a force the host
+ * computes from the wheel's angle. It joins the constant force after the
+ * title's gain, minimum force and smoothing, with its own strength, and goes
+ * through the same ramp, watchdog, cap and slew limit.
  */
 
 #pragma once
@@ -120,6 +125,14 @@ class Governor {
   // next value (the watchdog of Submit applies).
   void SubmitRoad(double level) { road_target_ = CleanLevel(level); }
 
+  // The end stop's force (EndStop), -1..1, added to the constant force on each tick until the
+  // next value; zero while the source is stale or blocked, like every force.
+  void SubmitEndStop(double force) {
+    const bool bad = !std::isfinite(force) || std::fabs(force) > 1.0;
+    bad_value_ = bad_value_ || bad;
+    end_stop_target_ = bad ? 0.0 : force;
+  }
+
   // An impact: a burst of `level` (0..1 before the gain) for `length_s` from now. A new impact
   // replaces the one that plays.
   void Impact(double level, double length_s, double now_s) {
@@ -146,6 +159,7 @@ class Governor {
       output_ = 0.0;
       envelope_ = 0.0;
       filtered_ = 0.0;
+      end_stop_ = 0.0;
       spring_ = {};
       damper_ = {};
       road_ = 0.0;
@@ -158,6 +172,7 @@ class Governor {
     double wanted = 0.0;
     Condition spring, damper;
     double road = 0.0;
+    end_stop_ = 0.0;
     if (stale) {
       flags_ |= kFlagWatchdog;
       // The ramp starts over once values return.
@@ -175,6 +190,8 @@ class Governor {
         filtered_ = target_;
       }
       wanted = MinForce(filtered_ * config_.gain) * envelope_;
+      end_stop_ = end_stop_target_ * envelope_;
+      wanted += end_stop_;
       spring = Scaled(spring_target_);
       damper = Scaled(damper_target_);
       road = std::clamp(road_target_ * config_.gain, 0.0, 1.0) * envelope_;
@@ -234,6 +251,8 @@ class Governor {
   double envelope() const { return envelope_; }
   double output() const { return output_; }
   double target() const { return target_; }
+  // The end stop's share of this tick's wanted force, ramped in, before the cap.
+  double end_stop() const { return end_stop_; }
   // The condition effects for this tick: zero while blocked or stale, ramped in, scaled by the
   // gain, inside the cap together with the constant force.
   const Condition& spring() const { return spring_; }
@@ -362,6 +381,8 @@ class Governor {
   Condition damper_;
   Condition spring_wanted_;
   Condition damper_wanted_;
+  double end_stop_target_ = 0.0;
+  double end_stop_ = 0.0;
   double road_target_ = 0.0;
   double road_ = 0.0;
   double road_wanted_ = 0.0;
@@ -379,6 +400,102 @@ class Governor {
   bool bad_value_ = false;
   uint32_t blocked_ = kBlockNone;
   uint32_t flags_ = 0;
+};
+
+// The soft lock's end stop (stage 5): beyond the car's lock, a force back towards it, sent as part
+// of the constant force, so the wheel stops turning where the car's steering does. It rises from
+// zero over the first knee_deg past the lock as a parabola (so its slope starts at zero too),
+// grows linearly to its strength travel_deg past the lock, and holds it beyond. Inside the stop a
+// damper on the wheel's speed takes the bounce out of it: it adds to the push back while the wheel
+// turns outwards and takes from it while the wheel returns, but never pushes outwards, and it
+// fades in over the knee as the spring does, so the force stays continuous at the lock.
+struct EndStopConfig {
+  // The force travel_deg past the lock, a fraction of full scale before the cap; 0: off.
+  double strength = 1.0;
+  double travel_deg = 6.0;
+  double knee_deg = 2.0;
+  // The damper: at a speed of v degrees a second outwards it adds what the spring adds over
+  // v x damping_s degrees.
+  double damping_s = 0.02;
+  // The time constant of the low-pass on the wheel's speed.
+  double speed_smoothing_s = 0.01;
+};
+
+class EndStop {
+ public:
+  explicit EndStop(const EndStopConfig& config = {}) : config_(Sanitize(config)) {}
+
+  void Configure(const EndStopConfig& config) { config_ = Sanitize(config); }
+  const EndStopConfig& config() const { return config_; }
+
+  // The force for the wheel's angle (degrees from the centre, right positive) and the car's lock
+  // (lock to lock, degrees); positive is to the right, as the title's force.
+  double Step(double angle_deg, double lock_deg, double now_s) {
+    if (!std::isfinite(angle_deg) || !std::isfinite(now_s)) {
+      Reset();
+      return 0.0;
+    }
+    const double dt = has_angle_ ? now_s - last_s_ : 0.0;
+    if (has_angle_ && dt > 0.0 && dt <= 0.1) {
+      const double speed = (angle_deg - last_angle_) / dt;
+      speed_ += (speed - speed_) * (1.0 - std::exp(-dt / config_.speed_smoothing_s));
+    } else if (!has_angle_ || dt > 0.1 || dt < 0.0) {
+      speed_ = 0.0;
+    }
+    if (!has_angle_ || dt != 0.0) {
+      last_angle_ = angle_deg;
+      last_s_ = now_s;
+      has_angle_ = true;
+    }
+    force_ = 0.0;
+    if (config_.strength <= 0.0 || !std::isfinite(lock_deg) || lock_deg <= 0.0) {
+      return force_;
+    }
+    const double past = std::fabs(angle_deg) - lock_deg * 0.5;
+    if (past <= 0.0) {
+      return force_;
+    }
+    const double knee = config_.knee_deg, travel = config_.travel_deg;
+    const double span = travel - knee * 0.5;
+    const double spring = past < knee     ? past * past / (2.0 * knee * span)
+                          : past < travel ? (past - knee * 0.5) / span
+                                          : 1.0;
+    const double outwards = std::copysign(1.0, angle_deg) * speed_;
+    const double damper = std::min(1.0, past / knee) * outwards * config_.damping_s / span;
+    const double push = std::clamp(spring + damper, 0.0, 1.0) * config_.strength;
+    force_ = -std::copysign(push, angle_deg);
+    return force_;
+  }
+
+  void Reset() {
+    has_angle_ = false;
+    speed_ = 0.0;
+    force_ = 0.0;
+  }
+
+  double force() const { return force_; }
+  // The wheel's smoothed speed, degrees a second.
+  double speed() const { return speed_; }
+
+  static EndStopConfig Sanitize(EndStopConfig config) {
+    const auto finite_or = [](double value, double fallback) {
+      return std::isfinite(value) ? value : fallback;
+    };
+    config.strength = std::clamp(finite_or(config.strength, 0.0), 0.0, 1.0);
+    config.knee_deg = std::clamp(finite_or(config.knee_deg, 2.0), 0.1, 45.0);
+    config.travel_deg = std::clamp(finite_or(config.travel_deg, 6.0), config.knee_deg, 90.0);
+    config.damping_s = std::clamp(finite_or(config.damping_s, 0.02), 0.0, 0.5);
+    config.speed_smoothing_s = std::clamp(finite_or(config.speed_smoothing_s, 0.01), 0.001, 0.2);
+    return config;
+  }
+
+ private:
+  EndStopConfig config_;
+  double last_angle_ = 0.0;
+  double last_s_ = 0.0;
+  bool has_angle_ = false;
+  double speed_ = 0.0;
+  double force_ = 0.0;
 };
 
 }  // namespace rex::input::wheel

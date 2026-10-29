@@ -13,6 +13,7 @@
 #include <array>
 #include <chrono>
 #include <filesystem>
+#include <format>
 #include <fstream>
 #include <sstream>
 #include <string>
@@ -100,9 +101,15 @@ REXCVAR_DEFINE_DOUBLE(wheel_steer_range, 900.0, "Input",
                       "lock, in degrees (the base's own angle setting, such as Pit House's)")
     .range(90.0, 3600.0);
 REXCVAR_DEFINE_DOUBLE(wheel_steer_lock, 0.0, "Input",
-                      "Racing wheel: the rotation that gives the car's full steering, lock to "
-                      "lock, in degrees (0: wheel_steer_range, 1:1 with the wheel)")
+                      "Racing wheel: a fixed rotation that gives every car's full steering, lock "
+                      "to lock, in degrees (0: the car's own lock, wheel_car_lock)")
     .range(0.0, 3600.0);
+REXCVAR_DEFINE_DOUBLE(wheel_car_lock, 900.0, "Input",
+                      "Racing wheel: the steering lock of a car with the common 42-degree "
+                      "road-wheel lock, lock to lock, in degrees; other cars scale with their "
+                      "road-wheel lock (36 degrees: 771, 30 degrees: 643). Never more than "
+                      "wheel_steer_range")
+    .range(90.0, 3600.0);
 REXCVAR_DEFINE_INT32(wheel_throttle_axis, 1, "Input",
                      "Racing wheel: the throttle pedal axis (-1: none)")
     .range(-1, 15);
@@ -214,6 +221,11 @@ REXCVAR_DEFINE_DOUBLE(wheel_ffb_impact, 0.5, "Input",
 REXCVAR_DEFINE_BOOL(wheel_ffb_physics, true, "Input",
                     "Racing wheel force feedback: follow the game's steering torque at its "
                     "physics rate (about 360 times a second) rather than once a frame");
+REXCVAR_DEFINE_DOUBLE(wheel_end_stop, 1.0, "Input",
+                      "Racing wheel force feedback: the end stop beyond the car's steering lock, "
+                      "a fraction of the wheel's full force reached 6 degrees past the lock, "
+                      "within the force cap (0: off)")
+    .range(0.0, 1.0);
 REXCVAR_DEFINE_STRING(pad_touchpad, "guide", "Input",
                       "Guest button of the touchpad click (PlayStation pads)")
     .allowed({"a", "b", "x", "y", "lb", "rb", "back", "start", "ls", "rs", "up", "down", "left",
@@ -722,6 +734,8 @@ void SDLInputDriver::StartWheel() {
   options.damper_scale = REXCVAR_GET(wheel_ffb_damper);
   options.road_scale = REXCVAR_GET(wheel_ffb_road);
   options.impact_scale = REXCVAR_GET(wheel_ffb_impact);
+  options.end_stop.strength = REXCVAR_GET(wheel_end_stop);
+  options.road_lock = []() { return wheel::GetRoadLock(); };
   options.force_source = [](wheel::ForceSample* sample) { return wheel::GetForces(sample); };
   if (REXCVAR_GET(wheel_ffb_physics)) {
     options.force_points = [](uint64_t after, wheel::ForcePoint* out, size_t max, size_t* got) {
@@ -737,6 +751,7 @@ void SDLInputDriver::StartWheel() {
   mapping.steering.invert = REXCVAR_GET(wheel_steer_invert);
   mapping.steering.range_deg = REXCVAR_GET(wheel_steer_range);
   mapping.steering.lock_deg = REXCVAR_GET(wheel_steer_lock);
+  mapping.steering.car_lock_deg = REXCVAR_GET(wheel_car_lock);
 #define REX_WHEEL_PEDAL(name)                                       mapping.name.axis = REXCVAR_GET(wheel_##name##_axis);             mapping.name.released = REXCVAR_GET(wheel_##name##_rest);         mapping.name.pressed = REXCVAR_GET(wheel_##name##_pressed);       mapping.name.deadzone = REXCVAR_GET(wheel_##name##_deadzone);     mapping.name.gamma = REXCVAR_GET(wheel_##name##_gamma);
   REX_WHEEL_PEDAL(throttle)
   REX_WHEEL_PEDAL(brake)
@@ -756,7 +771,9 @@ void SDLInputDriver::StartWheel() {
       "clutch axis {}; buttons up {}, down {}, clutch {}, handbrake {})",
       REXCVAR_GET(wheel_input) ? "on" : "off", mapping.steering.axis,
       mapping.steering.invert ? " inverted" : "", mapping.steering.range_deg,
-      mapping.steering.lock_deg > 0.0 ? mapping.steering.lock_deg : mapping.steering.range_deg,
+      mapping.steering.lock_deg > 0.0
+          ? std::format("{}", mapping.steering.lock_deg)
+          : std::format("the car's ({} at 42 degrees)", mapping.steering.car_lock_deg),
       mapping.throttle.axis, mapping.brake.axis, mapping.clutch.axis, mapping.shift_up_button,
       mapping.shift_down_button, mapping.clutch_button, mapping.handbrake_button);
   if (!REXCVAR_GET(wheel_virtual).empty()) {

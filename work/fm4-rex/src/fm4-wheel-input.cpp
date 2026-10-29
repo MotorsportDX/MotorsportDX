@@ -1,5 +1,6 @@
 // The racing wheel's driving controls in the title, and the frame rate of its anti-cheat rule
-// (docs/analysis/racing-wheels.md, stage 2).
+// (docs/analysis/racing-wheels.md, stage 2); its force feedback (stages 3 and 4) and the car's
+// steering lock (stage 5).
 //
 // Once per frame the race update's control step (sub_826D5E78) hands every car of the race its
 // 28-byte control record; a player's it builds from the player's pad object: throttle, brake, steering, clutch and handbrake
@@ -34,15 +35,18 @@
 // FM4_WHEEL_TRACE_FILE=<path> writes one line per event, nothing without it:
 //   rec <ms> u=<updates> dyn=<dynamics> user=<u> wheel=<0|1> <throttle> <brake>
 //       <steering> <clutch> <handbrake> up=<0|1> down=<0|1> b8=<0|1> mode=<m> gear=<g>
-//       the record as CCarDynamics gets it, every car; user is the pad's whose steering was
-//       read (-1: none, an AI's or a replay's record), wheel=1 when the wheel's steering won
+//       lock=<degrees> wdeg=<degrees> wlock=<degrees> the record as CCarDynamics gets it, every
+//       car; user is the pad's whose steering was read (-1: none, an AI's or a replay's record),
+//       wheel=1 when the wheel's steering won, lock the road-wheel lock published for the first
+//       player's car (0: none), wdeg and wlock the wheel's angle and its lock at the read (stage
+//       5; 0 unless the wheel won)
 //   cnt <ms> car=<car> prev=<p> new=<n> dt=<s> scale=<k> raw=<0|1> scaled=<0|1> count=<c>
 //       flag=<+0x38F8> in=<0|1> the anti-cheat count after the frame; raw and scaled say
 //       whether the change exceeds the threshold unscaled and scaled, `in` whether the session
 //       update was in progress (else dt is the last update's)
 //   lap <ms> car=<car> count=<c> few=<0|1> the lap check (sub_823B1648); few=1 marks the race
-//   draw <ms> obj=<presentation> angle=<a> b=<f2> the drawn steering wheel (sub_822E6B30),
-//       every car, with FM4_WHEEL_TRACE_DRAWN=1
+//   draw <ms> obj=<presentation> angle=<a> b=<f2> from=<return address> the drawn steering
+//       wheel (sub_822E6B30), every car, with FM4_WHEEL_TRACE_DRAWN=1
 // FM4_WHEEL_DUMP_FILE=<path>: per record of the wheel's car, a u32 update count, a float of
 // the session time and the first 0x2000 bytes of its CCarDynamics, big-endian as in the guest.
 // FM4_WHEEL_MODE=<0|1|2> sets the record's wheel mode byte (+0x17) when the wheel's steering
@@ -144,6 +148,10 @@ constexpr uint32_t kShiftDownRead = 0x826D62D8;  // sub_822D0F48, action 5
 constexpr uint32_t kRecordSet = 0x826D69EC;
 // The guest user whose pad the wheel drives (the pad object's first word, low byte).
 constexpr uint32_t kWheelUser = 0;
+// CCarDynamics +0x54: the car's road-wheel lock in radians, Data_Car's SteerMaxAngle (42, 36 or
+// 30 degrees); in wheel mode 2 the steering target (+0x24) is the record's steering times it
+// (stage 5, from the stage 2 dump).
+constexpr uint32_t kRoadLockOffset = 0x54;
 // The record's wheel mode for the wheel's steering: the title's 900-degree wheel filters.
 constexpr uint8_t kWheelMode = 2;
 // GameSettings' CheatDetection object (stage 1 findings): FrameAnalogInputThreshold at +0x18.
@@ -283,6 +291,9 @@ thread_local bool wheel_drove_record = false;
 // The user of the pad whose steering was read for the record (-1: not read, as when the AI
 // drives), for the trace.
 thread_local int record_user = -1;
+// The wheel's angle and lock at the steering read, for the trace.
+thread_local double record_wheel_deg = 0.0;
+thread_local double record_lock_deg = 0.0;
 thread_local uint32_t shift_up_seen = 0;
 thread_local uint32_t shift_down_seen = 0;
 thread_local bool shift_seen_valid = false;
@@ -325,6 +336,8 @@ REX_HOOK_RAW(sub_822B35C0) {
   record_user = pad ? int(Load32(base, pad) & 0xFF) : -1;
   rex::input::wheel::Controls controls;
   if (!WheelControls(base, pad, &controls)) return;
+  record_wheel_deg = controls.wheel_deg;
+  record_lock_deg = controls.lock_deg;
   const double steering = double(float(controls.steering));
   wheel_drove_record = std::fabs(steering) >= std::fabs(ctx.f1.f64);
   if (wheel_drove_record) ctx.f1.f64 = steering;
@@ -370,6 +383,15 @@ REX_HOOK_RAW(sub_823651D8) {
   const int user = record_user;
   wheel_drove_record = false;
   record_user = -1;
+  // The first player's car sets the wheel's steering lock (stage 5), whoever's steering won.
+  double road_lock = 0.0;
+  if (user == int(kWheelUser)) {
+    const double radians = LoadFloat(base, dynamics + kRoadLockOffset);
+    if (std::isfinite(radians) && radians > 0.05 && radians < 1.5) {
+      road_lock = radians * 180.0 / 3.14159265358979323846;
+      rex::input::wheel::PublishRoadLock(road_lock);
+    }
+  }
   if (wheel) {
     const ModeOverride& mode = Mode();
     uint8_t value = kWheelMode;
@@ -383,12 +405,13 @@ REX_HOOK_RAW(sub_823651D8) {
   }
   if (Trace()) {
     TraceLine("rec %.2f u=%u dyn=%08x user=%d wheel=%d %.6f %.6f %.6f %.6f %.6f up=%u down=%u "
-              "b8=%u mode=%u gear=%u",
+              "b8=%u mode=%u gear=%u lock=%.3f wdeg=%.2f wlock=%.1f",
               SteadyMs(), fm4_diagnostic_updates.load(std::memory_order_relaxed), dynamics, user,
               wheel ? 1 : 0, LoadFloat(base, record), LoadFloat(base, record + 4),
               LoadFloat(base, record + 8), LoadFloat(base, record + 12),
               LoadFloat(base, record + 16), base[record + 0x14], base[record + 0x15],
-              base[record + 0x16], base[record + 0x17], base[record + 0x18]);
+              base[record + 0x16], base[record + 0x17], base[record + 0x18], road_lock,
+              wheel ? record_wheel_deg : 0.0, wheel ? record_lock_deg : 0.0);
   }
   if (wheel && Dump()) {
     static std::mutex dump_mutex;
@@ -445,8 +468,8 @@ REX_HOOK_RAW(sub_823B1648) {
 REX_HOOK_RAW(sub_822E6B30) {
   static const bool drawn = std::getenv("FM4_WHEEL_TRACE_DRAWN") != nullptr;
   if (drawn && Trace()) {
-    TraceLine("draw %.2f obj=%08x angle=%.6f b=%.6f", SteadyMs(), ctx.r3.u32, ctx.f1.f64,
-              ctx.f2.f64);
+    TraceLine("draw %.2f obj=%08x angle=%.6f b=%.6f from=%08x", SteadyMs(), ctx.r3.u32,
+              ctx.f1.f64, ctx.f2.f64, uint32_t(ctx.lr));
   }
   __imp__sub_822E6B30(ctx, base);
 }

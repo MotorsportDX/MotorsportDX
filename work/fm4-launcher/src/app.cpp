@@ -2736,10 +2736,20 @@ void App::ControlsRows() {
       KnobRow(wheel_knobs, o.wheel, wheel_table, "steer_range", "Wheel rotation",
               "The wheel's rotation lock to lock, as set in Pit House: the wheel reports it over its whole axis.",
               KnobKind::kSlider, 10, "\xC2\xB0");
-      KnobRow(wheel_knobs, o.wheel, wheel_table, "steer_lock", "Steering lock",
-              "The rotation that gives the car's full steering, lock to lock. 0: the wheel's rotation, so the car "
-              "steers 1:1 with the wheel.",
+      KnobRow(wheel_knobs, o.wheel, wheel_table, "car_lock", "Car steering lock",
+              "Each car's steering lock, lock to lock, comes from its road-wheel lock in the game: this is the lock "
+              "of most road cars (a 42\xC2\xB0 road-wheel lock); GT racing cars get 6/7 of it and prototypes 5/7 "
+              "(at 900: 771 and 643). Past the car's lock the end stop holds the wheel. Never more than the wheel's "
+              "rotation.",
               KnobKind::kSlider, 10, "\xC2\xB0");
+      KnobRow(wheel_knobs, o.wheel, wheel_table, "steer_lock", "Fixed steering lock",
+              "One lock for every car, lock to lock, in place of each car's own. 0: each car's own lock.",
+              KnobKind::kSlider, 10, "\xC2\xB0");
+      KnobRow(wheel_knobs, o.wheel, wheel_table, "end_stop", "End stop",
+              "The force that holds the wheel past the car's steering lock, a fraction of the wheel's full force "
+              "reached 6\xC2\xB0 past the lock; it never exceeds the force cap. 0: off, the wheel turns on to its "
+              "own rotation.",
+              KnobKind::kSlider);
       section_end("steering");
       static const std::pair<const char*, const char*> kPedals[] = {
           {"throttle", "THROTTLE PEDAL"}, {"brake", "BRAKE PEDAL"}, {"clutch", "CLUTCH PEDAL"}};
@@ -2946,7 +2956,9 @@ void App::ControlsRows() {
           map.invert = wheel_number("steer_invert") == 1;
           map.range_deg = wheel_number("steer_range");
           map.lock_deg = wheel_number("steer_lock");
-          const double steering = wheel::MapSteering(map, raw);
+          map.car_lock_deg = wheel_number("car_lock");
+          // A road car's lock: the game sets each car's own.
+          const double steering = wheel::MapSteering(map, raw, map.reference_road_deg);
           char text[48];
           std::snprintf(text, sizeof(text), "%+.4f", steering);
           ImGui::TextColored(kMuted, "Steering now, -1 full left to 1 full right");

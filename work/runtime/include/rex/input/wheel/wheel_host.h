@@ -7,7 +7,7 @@
  * SDL's haptic API from a thread of its own, through the safety governor
  * (ffb_governor.h). Free of runtime dependencies: the runtime's SDL input
  * driver and the GUI launcher's wheel test both use it, with their own log.
- * See docs/analysis/racing-wheels.md, stages 0, 3 and 4.
+ * See docs/analysis/racing-wheels.md, stages 0 and 2 to 5.
  *
  * The caller initialises SDL's joystick and haptic subsystems before Start
  * and pumps SDL's events (which update the joysticks). All haptic calls run
@@ -46,6 +46,9 @@ using ForceSourceFunction = std::function<uint64_t(ForceSample*)>;
 // the first `after` into `out` (at most `max`), sets `got`, and returns the count published.
 using ForcePointsFunction =
     std::function<uint64_t(uint64_t after, ForcePoint* out, size_t max, size_t* got)>;
+// The road-wheel lock of the car the wheel drives (stage 5), in degrees, polled every tick for
+// the car's own steering lock (wheel_mapping.h); 0: none.
+using RoadLockFunction = std::function<double()>;
 
 enum class Sink {
   // SDL's haptic device of the wheel (DirectInput on Windows), and the recording
@@ -96,6 +99,10 @@ struct HostOptions {
   // magnitudes before the gain (0: off).
   double road_scale = 0.25;
   double impact_scale = 0.5;
+  // The car's road-wheel lock; without it the steering lock is the fixed one or the range.
+  RoadLockFunction road_lock;
+  // The soft lock's end stop beyond the car's lock, while the title drives (strength 0: off).
+  EndStopConfig end_stop;
 };
 
 struct Snapshot {
@@ -118,6 +125,8 @@ struct Snapshot {
   double damper_level = 0.0;
   double road_level = 0.0;
   double impact_level = 0.0;
+  // The end stop's share of the wanted force on the last tick.
+  double end_stop = 0.0;
   double envelope = 0.0;
   uint32_t blocked = 0;
   uint32_t flags = 0;
@@ -180,6 +189,7 @@ class WheelHost {
   HostOptions options_;
   LogFunction log_;
   Governor governor_;
+  EndStop end_stop_;
   std::unique_ptr<Device> device_;
   std::thread thread_;
   std::atomic<bool> running_{false};
