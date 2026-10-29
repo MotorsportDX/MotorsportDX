@@ -582,7 +582,11 @@
     },
     {
       "path": "work/fm4-rex/look/fm4-look.hlsli",
-      "provenance": "Original shader mods of this project (HLSL hooks on generated overrides), with an HLSL port of the SDR path of Polyphony Digital's MIT-licensed GT7 tone mapping sample (gt7_tone_mapping.cpp 1.0, credited in the file and in third-party-notices/PolyphonyDigital-GT7-tone-mapping-LICENSE.txt); no game shader code or original game function bodies"
+      "provenance": "Original shader mods of this project (HLSL hooks on generated overrides); includes fm4-gt7.hlsli, the port of Polyphony Digital's MIT-licensed GT7 tone mapping sample; no game shader code or original game function bodies"
+    },
+    {
+      "path": "work/fm4-rex/look/fm4-gt7.hlsli",
+      "provenance": "HLSL port of the SDR path of Polyphony Digital's MIT-licensed GT7 tone mapping sample (gt7_tone_mapping.cpp 1.0), credited in the file and in third-party-notices/PolyphonyDigital-GT7-tone-mapping-LICENSE.txt; no game shader code"
     },
     {
       "path": "work/fm4-rex/look/fm4-paint.hlsli",
@@ -4784,6 +4788,10 @@
     {
       "path": "work/fm4-rex/tests/draw-scale-tests.cpp",
       "provenance": "Synthetic tests/oracle; no game input data"
+    },
+    {
+      "path": "work/fm4-rex/tests/look-tonemap-tests.cpp",
+      "provenance": "Original test of this project: runs the look's GT7 tone curve (fm4-gt7.hlsli) on WARP against a reference written from the published formulas of Polyphony Digital's MIT-licensed sample; no game code or data"
     },
     {
       "path": "work/fm4-rex/tests/pad-shaping-tests.cpp",

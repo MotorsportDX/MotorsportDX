@@ -143,7 +143,7 @@ The look mods (work/fm4-rex/look, copied into every build and export as look)
     Polyphony Digital's talk in the SIGGRAPH 2025 course "Physically Based Shading in Theory
     and Practice"
     (https://blog.selfshadow.com/publications/s2025-shading-course/pdi/supplemental/gt7_tone_mapping.cpp).
-    fm4-look.hlsli ports its SDR path to HLSL (fm4_gt7_curve, fm4_pq_encode and fm4_pq_decode,
+    fm4-gt7.hlsli ports its SDR path to HLSL (fm4_gt7_curve, fm4_pq_encode and fm4_pq_decode,
     fm4_rgb_to_ictcp and fm4_ictcp_to_rgb, fm4_curve_gt7): the GT tone mapping curve V2 with
     the sample's parameters, the ICtCp conversion, the chroma fade and the blend of the
     per-channel and ICtCp results. The look's tone curve gt7 (the preset gt7) runs it; the

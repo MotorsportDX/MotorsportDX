@@ -63,6 +63,11 @@ endif()
 add_executable(fm4_shader_mod_tests shader-mod-tests.cpp)
 target_compile_definitions(fm4_shader_mod_tests PRIVATE NOMINMAX WIN32_LEAN_AND_MEAN)
 target_link_libraries(fm4_shader_mod_tests PRIVATE d3dcompiler)
+# The look's GT7 tone curve (look/fm4-gt7.hlsli) on WARP (CPU Direct3D 11) against the MIT
+# sample's formulas; argument: the look directory.
+add_executable(fm4_look_tonemap_tests look-tonemap-tests.cpp)
+target_compile_definitions(fm4_look_tonemap_tests PRIVATE NOMINMAX WIN32_LEAN_AND_MEAN)
+target_link_libraries(fm4_look_tonemap_tests PRIVATE d3d11 d3dcompiler)
 # The track lighting file edits of FM4_TRACK_SETTINGS (header only).
 add_executable(fm4_track_settings_tests track-settings-tests.cpp)
 target_include_directories(fm4_track_settings_tests PRIVATE ../src)

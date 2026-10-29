@@ -91,7 +91,7 @@ Reviewed on 25 October 2026 against the build's CMake files, the link map of `fm
 | AMD FidelityFX CAS and FSR 1 (the presenter's shader bytecode, from Xenia) | in `work/runtime/src/ui/shaders/bytecode` | MIT | `rexruntime.dll` | the notice in all copies |
 | ProggyTiny font (Tristan Grimmer, embedded by Xenia's overlay code) | - | MIT | `rexruntime.dll` | the notice in all copies |
 | AMD FidelityFX SDK (FSR 3.1) and Microsoft `d3dx12.h` | v1.1.4 | MIT | `rexgpu-xenos.dll` with `-Fsr on` | the notice in all copies; see [below](#third-party-code-amd-fidelityfx-sdk-fsr-31) |
-| Polyphony Digital's GT7 tone mapping sample (`gt7_tone_mapping.cpp`), ported to HLSL | 1.0 (10 August 2025) | MIT | the look mods (`work/fm4-rex/look/fm4-look.hlsli`), compiled by FXC at run time | the notice in all copies; see [below](#third-party-code-gt7-tone-mapping) |
+| Polyphony Digital's GT7 tone mapping sample (`gt7_tone_mapping.cpp`), ported to HLSL | 1.0 (10 August 2025) | MIT | the look mods (`work/fm4-rex/look/fm4-gt7.hlsli`), compiled by FXC at run time | the notice in all copies; see [below](#third-party-code-gt7-tone-mapping) |
 | GNU binutils PowerPC disassembler (`thirdparty/disasm`) | the SDK's commit | GPL 2.0 or later | `rexglue.exe` only, never exported | source and license text if `rexglue.exe` were given to others |
 | DirectX Shader Compiler of the FidelityFX SDK | 1.8.2403 | Microsoft's DXC terms | build time only, with `-Fsr on` | not shipped |
 | DirectX Shader Compiler release (N6's increment 1.2) | v1.9.2609 | Microsoft's DXC terms, with LLVM's NCSA license and MIT | the native path's DXIL shaders (`native_shader_dxil`, on by default where the DLLs are beside the game); fetched on the user's computer by setup and the GUI launcher | not shipped; its license files in the notices; see [below](#third-party-code-directx-shader-compiler) |
@@ -163,9 +163,9 @@ The look's tone curve `gt7` (the preset `gt7`, [running.md](running.md#look)) is
 | Item | Details |
 | --- | --- |
 | License | MIT, "Copyright (c) 2025 Polyphony Digital Inc."; [notice](../outputs/FM4-source-control/third-party-notices/PolyphonyDigital-GT7-tone-mapping-LICENSE.txt) |
-| What is ported | `fm4_gt7_curve` (the GT tone mapping curve V2 with the sample's parameters), `fm4_pq_encode` and `fm4_pq_decode` (SMPTE ST 2084), `fm4_rgb_to_ictcp` and `fm4_ictcp_to_rgb`, and `fm4_curve_gt7` (the per-channel and ICtCp results, the chroma fade, the blend, the SDR paper white) in [fm4-look.hlsli](../work/fm4-rex/look/fm4-look.hlsli), which names the sample and its license |
+| What is ported | `fm4_gt7_curve` (the GT tone mapping curve V2 with the sample's parameters), `fm4_pq_encode` and `fm4_pq_decode` (SMPTE ST 2084), `fm4_rgb_to_ictcp` and `fm4_ictcp_to_rgb`, and `fm4_curve_gt7` (the per-channel and ICtCp results, the chroma fade, the blend, the SDR paper white) in [fm4-gt7.hlsli](../work/fm4-rex/look/fm4-gt7.hlsli), which names the sample and its license; `fm4_look_tonemap_tests` ([look-tonemap-tests.cpp](../work/fm4-rex/tests/look-tonemap-tests.cpp)) checks it on WARP against a reference written from the sample's formulas |
 | Where it ends up | The look directory that `build` and `export` copy; the runtime compiles it with FXC when a look uses it. No binary of the build holds it |
-| Changes | HLSL instead of C++; the Rec. 709 scene converted to Rec. 2020 and back; only the SDR path (paper white 250 cd/m^2); the Jzazbz option left out |
+| Changes | HLSL instead of C++; FM4's Rec. 709 working space in place of GT7's Rec. 2020 (a conversion turned bright reds orange); only the SDR path (paper white 250 cd/m^2); the Jzazbz option left out |
 
 ## Third-party code: Microsoft.GameInput
 
