@@ -152,6 +152,20 @@ The references' sky (GT7, cmp-05 and gt7-13): hue 216 and 217 degrees, saturatio
 - **Artefacts**, at 1:1 crops of both tracks: no halo around the cable cars, the pylon or the cables against the hazy sky (the haze is per pixel from the scene depth); the car at chase distance shows no haze (it is nearer than `HAZE_START`, 30 m); the sky stretched six times in contrast shows smooth gradients, no bands, in `fm2023` and `gt7`; beside Maple Valley's low sun the car looks as with `aces` (no `bloom_width` in the preset).
 - **GPU time alone**, the frozen frame's median at 2x, one run at a time on an exclusive queue slot: `aces` 5.10 and 5.24 ms, `gt7` 5.50 and 5.10 ms, `fm2023` 5.36 and 5.15 ms (Maple Valley, the Bernese Alps); with the second round's runs `aces` spans 5.02 to 5.24 ms over four runs, so neither preset costs more than the runs' spread of about 0.3 ms.
 
+**The sun in view.** Of Fujimi Kaido, Sedona Raceway Park and Camino Viejo de Montserrat (`--location`), Sedona's grid faces a low sun (`lks2-1` with `aces`, `lks4-*` with the presets, snapshot `lkc3`, chase camera, 2x):
+
+| Look | frame spread | clipped | clipped outside the sun | sky around the sun, mean and p95 | the car, mean |
+| --- | --- | --- | --- | --- | --- |
+| `aces` | 0.875 | 0.01% | 0.01% | 0.828, 0.955 | 0.133 |
+| `gt7` | 0.939 | 3.16% | about 0.17% | 0.881, 0.999 | 0.125 |
+| `fm2023` | 0.807 | 0.00% | 0.00% | 0.766, 0.847 | 0.113 |
+| `fm2023,bloom_width=0.5` | 0.830 | 0.00% | 0.00% | 0.795, 0.930 | 0.116 |
+
+- `gt7` clips the sun's disc and glow (a quarter of the sky region around it) and about 0.17% of the frame elsewhere; the car keeps its look.
+- The sky around the sun shows steps of brightness (contour rings) in `aces` as well as in the presets: the game's own picture there, which the presets do not add. In `gt7` the flat white around the sun is larger.
+- `fm2023` dims the sun's glow (its exposure and the haze on the sky), so the sun barely shows; the car is not washed out.
+- With `bloom_width=0.5` the wide bloom shows here: a bright disc around the sun, flat and hard edged where it reaches white, a visible artefact, and about 0.66 ms of GPU a frame at 2x. The preset keeps it out.
+
 The round's short check on `c737653` (snapshot `lkc3`): the build's tests pass, `fm4_look_tonemap_tests` among them, and a career at 3/2 per preset ends with exit 0, main's four log errors and no FXC error.
 
 Decision (the main session's): pending.
