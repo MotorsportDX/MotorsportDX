@@ -286,13 +286,36 @@ class Loop:
             return False
         return self.press_until_event('a', r'^scene \d+ 115_C_BUY_MFRSELECT$', 20, retry=5)
 
+    def current_name(self, timeout=8):
+        """The select screen's name, once OCR reads one."""
+        until = time.time() + timeout
+        while time.time() < until:
+            name = title_line(self.read())
+            if name:
+                return name
+        return None
+
     def step_and_read(self, presses):
-        """Right `presses` times, then the name on the select screen."""
+        """Right `presses` times, each until the name read changes (a select can drop a press
+        while it settles: the soak of 30 October 2026 kept one pair for five), then the name."""
+        name = self.current_name()
         for _ in range(presses):
-            self.press('right')
-            time.sleep(0.7)
-        time.sleep(1.2)
-        return title_line(self.read())
+            for _attempt in range(4):
+                self.press('right')
+                until = time.time() + 4
+                changed = None
+                while time.time() < until:
+                    now = title_line(self.read(2))
+                    if now and not same_name(now, name):
+                        changed = now
+                        break
+                if changed:
+                    name = changed
+                    break
+            else:
+                return None
+        time.sleep(1)
+        return self.current_name() or name
 
     def seek(self, name, limit=80):
         """Right until the select screen shows `name` (both selects wrap round)."""

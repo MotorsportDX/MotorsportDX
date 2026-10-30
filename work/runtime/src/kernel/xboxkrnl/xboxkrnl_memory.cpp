@@ -19,8 +19,10 @@
 #include <cstring>
 #include <fstream>
 #include <iomanip>
+#include <mutex>
 #include <string>
 #include <thread>
+#include <utility>
 
 #include <rex/assert.h>
 #include <rex/kernel/xboxkrnl/private.h>
@@ -29,10 +31,14 @@
 #include <rex/hook.h>
 #include <rex/types.h>
 #include <rex/system/kernel_state.h>
+#include <rex/system/xthread.h>
 #include <rex/system/xtypes.h>
 
 namespace rex::kernel::xboxkrnl {
 using namespace rex::system;
+
+// The guest memory trace (REX_GUEST_MEM_TRACE, below): a physical allocation or free.
+void NoteGuestPhysical(bool allocation, uint32_t address, uint32_t size, uint32_t page_size);
 
 uint32_t ToXdkProtectFlags(uint32_t protect) {
   uint32_t result = 0;
@@ -411,6 +417,7 @@ u32 MmAllocatePhysicalMemoryEx_entry(u32 flags, u32 region_size, u32 protect_bit
     return 0;
   }
   REXKRNL_IMPORT_RESULT("MmAllocatePhysicalMemoryEx", "addr={:#x}", base_address);
+  NoteGuestPhysical(true, base_address, adjusted_size, page_size);
 
   return base_address;
 }
@@ -426,7 +433,9 @@ void MmFreePhysicalMemory_entry(u32 type, u32 base_address) {
   assert_true((base_address & 0x1F) == 0);
 
   auto heap = REX_KERNEL_MEMORY()->LookupHeap(base_address);
-  heap->Release(base_address);
+  uint32_t region_size = 0;
+  heap->Release(base_address, &region_size);
+  NoteGuestPhysical(false, base_address, region_size, heap->page_size());
 }
 
 u32 MmQueryAddressProtect_entry(u32 base_address) {
@@ -528,34 +537,89 @@ void WriteHeap(std::ostream& output, const char* name, const HeapUse& use) {
          << ",\"unreserved\":" << use.unreserved << '}';
 }
 
+struct GuestMemTrace {
+  std::mutex mutex;
+  std::ofstream output;
+  std::chrono::steady_clock::time_point start = std::chrono::steady_clock::now();
+  uint64_t small_allocations = 0, small_bytes = 0;
+
+  void Times() {
+    const double unix_s =
+        std::chrono::duration<double>(std::chrono::system_clock::now().time_since_epoch()).count();
+    const double uptime_s =
+        std::chrono::duration<double>(std::chrono::steady_clock::now() - start).count();
+    output << std::fixed << std::setprecision(1) << "{\"unix\":" << unix_s
+           << ",\"uptime_s\":" << uptime_s;
+  }
+};
+
+GuestMemTrace* guest_mem_trace = nullptr;
+
+// The guest's return address of the kernel call, and one frame further up: the saved LR of
+// the caller's frame (the back chain at r1; best effort, a leaf wrapper has no frame).
+std::pair<uint32_t, uint32_t> GuestCallers() {
+  auto* thread = XThread::GetCurrentThread();
+  if (!thread || !thread->thread_state() || !thread->thread_state()->context()) return {0, 0};
+  const auto* ctx = thread->thread_state()->context();
+  const uint32_t lr = uint32_t(ctx->lr);
+  auto* memory = REX_KERNEL_MEMORY();
+  const uint32_t sp = uint32_t(ctx->r1.u32);
+  if (!memory || sp < 0x10000 || sp >= 0xE0000000u) return {lr, 0};
+  const uint32_t back_chain = memory::load_and_swap<uint32_t>(memory->TranslateVirtual(sp));
+  if (back_chain < 0x10000 || back_chain >= 0xE0000000u) return {lr, 0};
+  return {lr, memory::load_and_swap<uint32_t>(memory->TranslateVirtual(back_chain - 8))};
+}
+
 }  // namespace
+
+// Physical allocations of 1 MB or more and every physical free, at the time they happen, in
+// the guest memory trace; smaller allocations are only counted.
+void NoteGuestPhysical(bool allocation, uint32_t address, uint32_t size, uint32_t page_size) {
+  GuestMemTrace* trace = guest_mem_trace;
+  if (!trace) return;
+  std::lock_guard<std::mutex> lock(trace->mutex);
+  if (allocation && size < (1u << 20)) {
+    ++trace->small_allocations;
+    trace->small_bytes += size;
+    return;
+  }
+  const auto [lr, lr2] = GuestCallers();
+  trace->Times();
+  trace->output << ",\"event\":\"" << (allocation ? "alloc" : "free") << "\",\"address\":" << address
+                << ",\"size\":" << size << ",\"page_size\":" << page_size << ",\"caller\":" << lr
+                << ",\"caller2\":" << lr2 << "}\n";
+  trace->output.flush();
+}
 
 // REX_GUEST_MEM_TRACE=<file>: every 5 s one JSON line of the guest's memory use (diagnostics,
 // off without the variable): the physical heaps at vA0000000 (64 KB pages), vC0000000 (16 MB)
 // and vE0000000 (4 KB), views of the same 512 MB, and the physical heap under them, with the
 // highest committed bytes of that heap since the start; the virtual heaps v00000000 and
-// v40000000; and the available pages MmQueryStatistics last returned (null when the title has
-// not called it). 'unix' is the wall clock in seconds, as the e2e soak sampler's 't'.
+// v40000000; the available pages MmQueryStatistics last returned (null when the title has not
+// called it); and the count and bytes of the physical allocations under 1 MB. Physical
+// allocations of 1 MB or more and every physical free get a line of their own at the time
+// ("event": "alloc" or "free", with the guest address, size, page size and the guest return
+// addresses of the call and of its caller). 'unix' is the wall clock in seconds, as the e2e soak
+// sampler's 't'.
 void StartGuestMemoryTrace() {
   const char* path = std::getenv("REX_GUEST_MEM_TRACE");
   if (!path || !*path) return;
-  std::thread([output_path = std::string(path)]() {
-    std::ofstream output(output_path, std::ios::app);
+  auto* trace = new GuestMemTrace;
+  trace->output.open(path, std::ios::app);
+  guest_mem_trace = trace;
+  std::thread([trace]() {
+    auto& output = trace->output;
     uint64_t peak_used = 0;
-    const auto start = std::chrono::steady_clock::now();
     for (;;) {
       std::this_thread::sleep_for(std::chrono::seconds(5));
       auto* memory = REX_KERNEL_MEMORY();
       if (!memory) continue;
       const HeapUse physical = MeasureHeap(memory->GetPhysicalHeap());
       peak_used = std::max(peak_used, physical.used);
-      const double unix_s = std::chrono::duration<double>(
-                                std::chrono::system_clock::now().time_since_epoch())
-                                .count();
-      const double uptime_s =
-          std::chrono::duration<double>(std::chrono::steady_clock::now() - start).count();
-      output << std::fixed << std::setprecision(1) << "{\"unix\":" << unix_s
-             << ",\"uptime_s\":" << uptime_s;
+      std::lock_guard<std::mutex> lock(trace->mutex);
+      trace->Times();
+      output << ",\"small_allocations\":" << trace->small_allocations
+             << ",\"small_bytes\":" << trace->small_bytes;
       WriteHeap(output, "physical", physical);
       output << ",\"physical_peak_used\":" << peak_used;
       WriteHeap(output, "vA0000000", MeasureHeap(memory->LookupHeapByType(true, 0x10000)));

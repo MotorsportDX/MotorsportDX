@@ -211,12 +211,63 @@ def handle_type_trend(samples):
             'per_pair': points}
 
 
+def guest_functions(run):
+    """Sorted guest function starts and names from the game's linker map next to its
+    executable (summary.json's binary): the recompiler names each function sub_<address>."""
+    summary = run / 'summary.json'
+    try:
+        exe = Path(json.loads(summary.read_text())['binary']['path'])
+    except (OSError, ValueError, KeyError, TypeError):
+        return [], []
+    starts = set()
+    try:
+        with open(exe.with_suffix('.map'), encoding='utf-8', errors='replace') as handle:
+            for line in handle:
+                match = re.search(r'\ssub_([0-9A-F]{8})\s', line)
+                if match:
+                    starts.add(int(match.group(1), 16))
+    except OSError:
+        return [], []
+    ordered = sorted(starts)
+    return ordered, [f'sub_{s:08X}' for s in ordered]
+
+
+def physical_events(run, events):
+    """The trace's physical allocations of 1 MB or more and its physical frees, with the guest
+    functions they returned to (the call's and its caller's), and the allocations by caller."""
+    if not events:
+        return None
+    starts, names = guest_functions(run)
+
+    def function(address):
+        if not address or not starts:
+            return None
+        index = bisect.bisect_right(starts, address) - 1
+        return names[index] if index >= 0 else None
+    mb = lambda v: round(v / MB, 2)
+    listed = [{'event': e['event'], 'uptime_s': e['uptime_s'], 'address': f"{e['address']:08X}",
+               'size_mb': mb(e['size']), 'page_size': e['page_size'],
+               'caller': function(e['caller']), 'caller2': function(e['caller2'])} for e in events]
+    by_caller = {}
+    for e in listed:
+        if e['event'] == 'alloc':
+            key = f"{e['caller']} <- {e['caller2']}"
+            by_caller[key] = round(by_caller.get(key, 0) + e['size_mb'], 2)
+    allocations = [e for e in listed if e['event'] == 'alloc']
+    return {'allocations': len(allocations), 'allocated_mb': round(sum(e['size_mb'] for e in allocations), 2),
+            'frees': sum(e['event'] == 'free' for e in listed),
+            'last_allocation_s': max((e['uptime_s'] for e in allocations), default=None),
+            'by_caller_mb': dict(sorted(by_caller.items(), key=lambda kv: -kv[1])), 'events': listed}
+
+
 def guest_memory(run, samples):
     """guest-mem.jsonl (REX_GUEST_MEM_TRACE): the guest's physical memory (of 512 MB) and virtual
     heaps: the peak committed physical bytes, when and where it was (the soak label of the
     nearest sample, and the pass's pair from qrloop.jsonl), the last values, and per pass the
     first and last committed physical bytes."""
-    lines = read_jsonl(run / 'guest-mem.jsonl')
+    raw = read_jsonl(run / 'guest-mem.jsonl')
+    lines = [l for l in raw if 'physical' in l]
+    events = [l for l in raw if l.get('event')]
     if not lines:
         return None
     labelled = sorted((s['t'], s.get('label')) for s in samples)
@@ -247,6 +298,7 @@ def guest_memory(run, samples):
                                  for name in ('v00000000', 'v40000000') if name in lines[0]},
         'available_pages_last': lines[-1].get('available_pages'),
     }
+    result['physical_events'] = physical_events(run, events)
     per_pass = {}
     for line in lines:
         match = PASS_LABEL.match(label_at(line['unix']) or '')
@@ -374,6 +426,11 @@ def main():
         print(f"  guest physical memory: peak {guest['peak_physical_used_mb']} of 512 MB at "
               f"{guest['peak_uptime_s']} s ({guest['peak_label']}, {guest['peak_pair']}); "
               f"virtual peaks {guest['peak_virtual_used_mb']}; per pass {guest.get('physical_used_per_pass_mb')}")
+        events = guest.get('physical_events')
+        if events:
+            print(f"  physical allocations of 1 MB or more: {events['allocations']} ({events['allocated_mb']} MB, "
+                  f"the last at {events['last_allocation_s']} s), frees: {events['frees']}; "
+                  f"by caller {events['by_caller_mb']}")
     print(f"  stubs called: {len(report['stubs'])}")
     for entry in report['stubs']:
         print(f"    {entry['count']:>8} {entry['module']} {entry['name']} ({entry['first']} to {entry['last']})")
