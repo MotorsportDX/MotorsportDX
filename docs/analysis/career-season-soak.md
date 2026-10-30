@@ -72,7 +72,7 @@ The private bytes' floors between races (the lowest sample from one race's end t
 Reading:
 
 - Nothing grows without a limit in this run. Every event was on a track and with cars the run had not loaded before, so a cache that holds each new track's or car's data grows the same way. Growth that slows to a fifth while new content still comes fits a cache that fills, not a leak per race.
-- The thresholds still fail, and the run cannot tell a cache from a slow leak. A second soak that repeats events (the same track and car) after the first pass over them would: a cache stays flat on a repeat, a leak keeps its slope.
+- The thresholds still fail, and the run cannot tell a cache from a slow leak. A second soak that repeats events (the same track and car) after the first pass over them would: a cache stays flat on a repeat, a leak keeps its slope. That soak ran on 30 October 2026 ([section 10](#10-the-soak-that-revisits-tracks-and-cars-30-october-2026)).
 - Threads, GDI and USER objects are flat. Handles rise by about 85 a hour in the second half. The race frame times hold within 4% over the run.
 
 ## 4. Performance survey
@@ -136,11 +136,11 @@ The shader and pipeline work in play over the whole run: 7 vertex and 89 pixel s
 Ranked by what a player would notice. The first ranking came from this run's measurements alone; the reward screens' traces of [section 9](#9-the-reward-screen-hitches-30-october-2026) re-ranked it: their hitches are the title's own work, so they moved from the first place to the last.
 
 1. **The race at 2x is GPU-bound below 240 fps.** 194.8 fps with 5.02 ms of GPU a frame; 240 fps needs 4.17 ms. The scene is 3.55 ms, and the look's passes are 1.44 ms, GTAO the largest (0.71 ms, 14% of the frame). Candidates: GTAO at a lower resolution or fewer samples at 2x, and a check of what the scene's 3.55 ms holds at 2x against 3/2 (3.28 ms of GPU a whole frame there in the Level 1 gate). The render thread is busy 3.48 ms of a 4.79 ms frame, so after the GPU it is the next limit.
-2. **The title render thread's pow for the gamma ramp.** Found by the reward screens' traces ([section 9](#9-the-reward-screen-hitches-30-october-2026)): `SetGammaRamp` recomputes its ramp with `pow` every frame, 9.5% of the title render thread's samples in races and a third on the reward screens. A memo of the guest's own results takes it off ([section 11](#11-native-crt-helpers-30-october-2026)).
+2. **The title render thread's frame loop spins.** Found by the reward screens' traces ([section 9](#9-the-reward-screen-hitches-30-october-2026)) and measured in [section 11](#11-the-title-render-threads-gamma-ramp-30-october-2026): between two frames the title's render thread turns its frame loop without waiting, and every turn recomputes the gamma ramp with `pow`, 17 to 92 turns a frame. That takes about 160 ms of CPU a second in races and 270 to 600 ms a second in the menus, loading and reward screens: CPU and power that a handheld such as the ROG Xbox Ally X would get back. A wait for the next frame in place of the spin is proposed; the main session decides.
 3. **Pipelines for a new track at its loading.** One wait of 365 ms at Mugello Club's loading for a pipeline the creation threads were making (the longest early pipeline 369 ms), and 25 waits of 768 ms over the run. These are pipelines that the pipeline library did not hold for a track first seen in this run. Adding the career's tracks to the offline pass, or creating a track's pipelines while its loading screen shows, would take them off the loading's frames.
 4. **The pre-race menu's GPU time and hitches.** It has the highest GPU time a frame (7.80 ms; the scene 6.47 ms, the showroom car at 2x) and the most hitches a minute at Hockenheim (27). Its p99 of 33.6 ms is the menu's own 30 fps transitions. A trace of what the showroom draws at 2x would say whether it needs the race's scale.
 5. **Long frames in the menus (566 ms at event 7) and at boot (733 ms).** The boot's frame is in the window where 32 look mods compiled on the workers (14 s on the workers, 110 pending), so the BuildRoot's mod cache lacked the default look's defines after the look presets' latest change; the menus' 566 ms frame holds no shader work. Both happen once; a trace of the menu frame is the next step.
-6. **Memory growth while new content loads.** Not a frame time cost, but the soak's open question ([section 3](#3-soak)), answered by the soak that revisits tracks ([section 10](#10-the-soak-that-revisits-tracks-and-cars-30-october-2026)).
+6. **Memory growth while new content loads.** Not a frame time cost. The soak that revisits tracks ([section 10](#10-the-soak-that-revisits-tracks-and-cars-30-october-2026)) answered the soak's open question ([section 3](#3-soak)): private bytes and dedicated GPU memory are host caches that fill once for each new track and car and stay level when they come back. What is left is a slow handle leak, about 15 a race, from guest threads that have exited; it is an open runtime item.
 7. **The reward and gift car screens (frames of 150 to 380 ms).** 159 of the run's 256 frames over 50 ms, about 12 an event with a level-up, on the gift car's paint screen and the level screens. They are the title's own CPU work, the synchronous compression of the profile's save and the first draw of a new car, with about 1 to 3% of their time in the runtime ([section 9](#9-the-reward-screen-hitches-30-october-2026)); the main session's decision of 30 October 2026 leaves them. The screens run at the title's 30 fps.
 
 ## 6. What the development runs found
@@ -196,4 +196,112 @@ Inside those frames:
 
 So the hitches are the title's own CPU work: saving the profile and drawing a new car for the first time. On the Xbox 360 the same code runs on a slower in-order core; that it hitches there too is an inference, not a measurement. cs-soak1's `910` frames with a 53 MB upload and the host render queue's 106 to 145 ms record did not recur under the profiler (where a `910` frame reached 375 ms, the queue's longest record was 21 ms), so that pattern stays open as a one-off.
 
-The smallest mitigations were: a native `strstr` (about 4 to 5% of the hitch time), a native zlib for the save's compression (the largest share, but a different byte stream in the saves, a compatibility risk), and a native `pow` for the gamma ramp (every frame's gain, not the hitches'). The main session's decision of 30 October 2026: leave the hitches; take `strstr` and the gamma ramp's `pow` as native helpers ([section 11](#11-native-crt-helpers-30-october-2026)); no native zlib.
+The smallest mitigations were: a native `strstr` (about 4 to 5% of the hitch time), a native zlib for the save's compression (the largest share, but a different byte stream in the saves, a compatibility risk), and a native `pow` for the gamma ramp (every frame's gain, not the hitches'). The main session's decision of 30 October 2026: leave the hitches; try `strstr` and the gamma ramp's `pow` as native helpers; no native zlib. Measured, neither saved anything a player or the power meter would see, and both were taken out again ([section 11](#11-the-title-render-threads-gamma-ramp-30-october-2026)).
+
+## 10. The soak that revisits tracks and cars, 30 October 2026
+
+The question of [section 3](#3-soak): does the memory that grows while new tracks and cars load keep growing when the same tracks and cars come back? The run `qr-soak3` (I:\FM4-build-usa, build `053474b`, at 2x and 240 Hz on the native path, the default look, the BuildRoot's caches, the perf class of the GPU queue) drove Quick Race (`quickrace_loop`, [e2e harness](../e2e/README.md#quick-race-loop)) over the same 11 distinct pairs of manufacturer and track in the same order, three times, with the title's AI driving 180 s of each race on the default 12-car grid:
+
+Abarth on the Bernese Alps' Festival Circuit, AMC at Catalunya, Austin-Healey at Hockenheim, BMW at Indianapolis, Cadillac at Ladera, Citroën at Maple Valley, Devon at Mugello, Ferrari on the Nürburgring Nordschleife (the large track, with the full grid), GMC at Road America, Holden at Sebring and Hyundai at Silverstone.
+
+The run lasted 2.83 h: 33 races, 11 a pass, each pass about 0.94 h, no failure. The pow memo and the native strstr that were being tried then ([section 11](#11-the-title-render-threads-gamma-ramp-30-october-2026)) were off, so the title ran its own functions as on the previous main.
+
+Per pass, the growth a hour inside the pass and the floors (each pair's lowest sample) from the first pair to the last:
+
+| Pass | Private bytes | Dedicated GPU memory | Handles |
+|---|---|---|---|
+| 1 (new pairs) | +1,463 MB/h, floors 2,980 → 6,390 MB (+3,410) | +776 MB/h, 1,328 → 3,047 MB (+1,719) | +220/h, 3,200 → 3,412 |
+| 2 (revisit) | +695 MB/h, 6,445 → 7,058 MB (+613) | +176 MB/h, 3,078 → 3,214 MB (+136) | +178/h, 3,437 → 3,569 |
+| 3 (revisit) | +44 MB/h, 7,083 → 7,130 MB (+47) | +1 MB/h, 3,241 → 3,238 MB (−3) | +163/h, 3,589 → 3,716 |
+
+`soak_report.py` judges a run with passes on its last pass: private bytes PASS (44 against 50 MB a hour), dedicated GPU memory PASS (1 against 25), handles FAIL (163 against 100), threads PASS (81 to 82 live threads). The whole run's slopes, beside them, are 574 MB, 186 MB and 179 a hour. The race frame times rose by 5.4% (p50, 4.68 → 4.93 ms) and 6.7% (p99, 7.60 → 8.11 ms) from the first third of the races to the last, within the 10% threshold.
+
+Reading:
+
+- **Memory and GPU memory are a cache.** They fill on the first pass, grow by a sixth of that on the second and are level on the third. The growth is on the host's side: the guest's physical memory did not move (below), so it is the runtime's caches for each new track's and car's content.
+- **Handles leak, slowly.** By object type, inside each pass: Thread +115, +112 and +108 (about 10 a race), Event +82, +49 and +51; the rest within ±12. With the live threads level, these are the host Thread handles and Events of guest threads that have exited and are never closed. At about 15 a race (500 in 3 h) this is harmless, and it is an open runtime item, left to a runtime session ([current status](../status/current.md)). Semaphores rose from 69 to 1,846 during the boot and the first race and stayed level after.
+- **The guest's memory is fixed.** The guest's physical memory (`REX_GUEST_MEM_TRACE`, [traces](../e2e/traces.md)) held 386.8 of 512 MB committed from 80 s after the launch to the end, the same in every pass: vA0000000 370.7, vC0000000 16.0, vE0000000 0.1 MB. The title made 2 physical allocations of 1 MB or more in the whole run, both 1.3 s after the launch from `sub_82759050` (called from `sub_826CBE80`): 314.7 MB at A89F0000 and 56.0 MB at BC4A0000, both of 64 KB pages. It made one free, 64 KB from `D3DDevice_Swap`. Loading new tracks and cars does not commit guest memory; the title manages these pools itself. The virtual heaps peaked at 50.4 MB (v00000000) and 60.8 MB (v40000000). The title never called `MmQueryStatistics`, so `available_pages` has no sample.
+- **The runtime's error log** has one key, `BaseHeap::Release failed because address is not a region start` (8 times). It is not new: cs-soak1 has it 38 times.
+
+Two development runs found the driver's bugs:
+
+- `qr-soak1` repeated its pairs. The selects open on their first entry each time they are entered from Free Play, so the driver now counts its presses from the first entry.
+- `qr-soak2` stopped at Ladera, where the AI finished the race in 131 s and the driver saw the result's dialog instead of the post-race screen. The driver now looks for the post-race screen among the race's screen events.
+
+## 11. The title render thread's gamma ramp, 30 October 2026
+
+Section 9 found `pow` (`sub_8230FCF0`) under `CD3D9GraphicsDevice::SetGammaRamp` (`sub_82873A30`) in a third of the title render thread's samples on the reward screens and 9.5% in races, and `strstr` (`sub_82C88DA0`) in the first draw of a new car. Two helpers were tried on build `ac1cfbd`, each with a switch:
+
+- **A memo of `pow`** at `SetGammaRamp`'s three call sites: a bounded table (49,152 entries) that returned the guest `pow`'s own earlier result for the same base and exponent bits, on the first thread that called there.
+- **The host's `strstr`** in place of the title's byte loop.
+
+They were measured in nine runs on `I:\FM4-build-usa` (one `check` acquisition, the native path, 240 Hz), each pair on the same binary with both helpers off and on.
+
+**The picture is the same.**
+
+- The parity freeze at 3/2 (`pc-off`, `pc-on`, 2 runs each) passes: the same draws and predication.
+- The frozen frames differ in 26 to 33% of their pixels, but two runs with the helpers off differ in 32% too: the frozen frame moves by a few pixels from run to run. The 1:1 crops show the same colours and tones.
+- The hash of every gamma ramp (`FM4_GAMMA_RAMP_HASH`, [traces](../e2e/traces.md#gamma-ramp-hash-fm4_gamma_ramp_hash)) gave the same set and the same sequence with the memo on and off, at 1x and 2x.
+- A run with the memo's check (`pc-qrchk`) ran the guest `pow` again on 278 million hits: no result differed.
+- The memo held 208 entries and answered 84% of its lookups; the rest had a base of 0, which it does not keep.
+
+**The frame times.** Race frame times at 1x and 2x (Quick Race, two races of 150 s each; `pc-qr1-off`, `-on`, `pc-qr2-off`, `-on`):
+
+| Run | Race p50 | Race p99 | Median fps |
+|---|---|---|---|
+| 1x, off | 4.11 and 4.15 ms | 5.03 and 6.30 ms | 239.0 |
+| 1x, on | 4.16 and 4.13 ms | 5.30 and 5.13 ms | 238.7 |
+| 2x, off | 4.62 and 4.54 ms | 6.96 and 6.84 ms | 206.9 |
+| 2x, on | 4.57 and 4.65 ms | 6.98 and 7.42 ms | 200.1 |
+
+At 1x the race holds the 240 Hz limit, and at 2x the GPU limits it (4.56 and 4.70 ms a frame), so the title render thread is never the limit.
+
+The career runs with the thread profiler (`pc-car-off`, `pc-car-on`) ran at 2x for 16 minutes each: three events of the BuildRoot profile with their reward screens. Each had 21 reward frames over 50 ms, 2,437 and 2,475 ms in all. The native `strstr` took its samples from 92 to 9, about 0.2 s over the run, without shortening those frames.
+
+**The CPU.** The process's CPU time and the package's power per phase (`cpu_power.jsonl`) did not fall with the memo:
+
+| Phase | 1x off / on | 2x off / on | Career off / on |
+|---|---|---|---|
+| Race | 2,966 / 3,105 ms a second, 49.1 / 50.4 W | 3,329 / 3,327, 49.3 / 54.0 W | 3,527 / 3,573, 51.5 / 54.9 W |
+| Menus | 2,239 / 2,177, 35.2 / 34.3 W | 561 / 546, 24.6 / 24.7 W | 847 / 622, 30.0 / 26.2 W |
+| Rewards | 642 / 739, 24.4 / 26.4 W | 856 / 756, 26.2 / 26.7 W | 1,531 / 1,505, 38.3 / 36.9 W |
+
+Only the career's menus fell; the Quick Race menus did not. The reason is that the ramp is not computed once a frame.
+
+**The frame loop spins.** All the title render thread's samples with `SetGammaRamp` on the stack have one call chain:
+
+1. `CRenderThread::ThreadProc` (`sub_822A90B0`) calls `CRenderThread::RunFrame` (`sub_822DB318`) in a loop until the thread is told to stop.
+2. `RunFrame` first calls `CRenderThread::UpdateCombineFade` (`sub_822A71A0`). That reaches `SetGammaRamp` through `sub_8243BB08`, which builds the ramp with `pow`: 128 or 256 entries for three colours.
+3. `RunFrame` then takes the queue's critical section and polls the render thread's deferred command queue (`sub_822C0840`): a look at the queue's list, with no wait. The game's main thread fills that queue with each frame's recorded commands.
+4. Only when a frame is there does `RunFrame` run it (`CDeferredQueue::ExecuteCommands`, `sub_822E56B0`), present it and wait for its fences.
+5. With the queue empty, `RunFrame` returns, and `ThreadProc` calls it again at once.
+
+So between two frames the thread spins, and every turn recomputes the ramp. The trace counts the turns as `SetGammaRamp` calls a second, with the helpers off:
+
+| Phase | 1x | 2x | Turns a frame |
+|---|---|---|---|
+| Race | 4,317 | 5,789 | 18 at 1x (239 fps), 28 at 2x (207 fps) |
+| Menus (59 fps) | 997 | 2,407 | 17 to 41 |
+| Rewards (32 fps) | 1,825 | 2,952 | 57 to 92 |
+| Loading | 2,522 | 1,192 | |
+
+With the memo each turn was cheaper, so the thread turned 2.2 to 2.5 times as often. The time stayed in the spin; the memo only moved it from `pow` to the rest of the turn.
+
+The time the spin takes on the title render thread, from the profile of `pc-car-off` (2x; about 10 to 25 ms a second of it are the hash trace's writes):
+
+| Phase | The thread running | In `UpdateCombineFade`, the spin | In `ExecuteCommands`, the frame |
+|---|---|---|---|
+| Race | 712 ms a second | 158 | 547 |
+| Countdown | 768 | 257 | 501 |
+| Pre-race | 670 | 420 | 230 |
+| Rewards | 698 | 598 | 83 |
+| Loading | 386 | 319 | 58 |
+| Menus | 357 | 271 | 75 |
+
+The spin is the title's own design: on the Xbox 360 the render thread has a hardware thread of its own. On a PC it takes a sixth of a core in races and more than half a core on the reward screens. A handheld such as the ROG Xbox Ally X shares its power budget between those cores and the GPU.
+
+**Decisions.**
+
+- Following the main session's rule (keep a helper only for a measured saving), the memo and the native `strstr` were taken out.
+- The gamma ramp hash stays as a trace, to check a change to the loop.
+- A wait in place of the spin is proposed to the main session, which decides on it.

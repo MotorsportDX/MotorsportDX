@@ -57,7 +57,7 @@ Without network access (Jev unreachable), `--scenario quickrace` drives the same
 | `--build-root` | required | BuildRoot used by `Build.ps1` |
 | `--game-build` | `game-build` | build directory under the BuildRoot, for example `game-build-prof` (see [traces.md](traces.md)) or `game-build-thinlto` (`pipeline.py --flavor`) |
 | `--out` | required | result directory, outside the repository |
-| `--scenario` | `boot` | fixed timeline: `boot`, `quickrace`, `photo`, `photo_view`, `career`, `career_finish`, `career_progress`, `career_season`, `dlc`, `freeze`, `menu_race` |
+| `--scenario` | `boot` | fixed timeline: `boot`, `quickrace`, `photo`, `photo_view`, `career`, `career_finish`, `career_progress`, `career_season`, `quickrace_loop`, `dlc`, `freeze`, `menu_race` |
 | `--profile` | none | copy a user-data root to `<out>\user-data` and run on it; `copy` means the BuildRoot's `user-data`, otherwise a path |
 | `--fast-route` | off | reach the race of `quickrace`, `race`, `photo`, `freeze` or `career` through the title's screen events instead of fixed delays and OCR ([fast route](#fast-route)) |
 | `--goal` | none | navigate with Jev instead of a timeline (`quickrace`) |
@@ -75,9 +75,13 @@ Without network access (Jev unreachable), `--scenario quickrace` drives the same
 | `--camera` | the profile's (the cockpit) | the race camera: `hood`, `bumper`, `chase` or `chase_far`, by Back presses once the race runs ([race camera](#race-camera)); `chase` for every look test. `matrix.py --camera` passes it to every cell |
 | `--tail` | 10 | seconds to keep running after the last step |
 | `--seasons` | 1 | `career_season`: stop once this many World Tour seasons are complete ([career season](#career-season-and-soak)) |
-| `--min-hours` | 0 | `career_season`: after the seasons, keep playing the next events until the run is this many hours old |
-| `--max-hours` | 3 | `career_season`: the cap; the run stops there, within an event too, and passes when at least one event finished |
-| `--soak` | off | record the soak telemetry (`soak.jsonl`, [career season](#career-season-and-soak)) in any scenario; `career_season` always records it |
+| `--min-hours` | 0 | `career_season`: after the seasons, keep playing the next events until the run is this many hours old; `quickrace_loop`: after two passes, start another pass until the run is this old |
+| `--max-hours` | 3 | `career_season` and `quickrace_loop`: the cap; the run stops there, within an event or a race too, and passes when at least one event or race finished |
+| `--qr-pairs` | none | `quickrace_loop`: the pairs as JSON, `[["Acura", "Bernese Alps"], ...]`, found by name; without it the first pass picks them ([Quick Race loop](#quick-race-loop)) |
+| `--qr-count` | 11 | `quickrace_loop`: pairs in a pass |
+| `--qr-step` | 3 | `quickrace_loop`: Right presses between two manufacturers of the first pass (the locations move by 2) |
+| `--qr-race-seconds` | 180 | `quickrace_loop`: seconds of each race before QUIT RACE (a race the AI finishes sooner goes on from its post-race menu) |
+| `--soak` | off | record the soak telemetry (`soak.jsonl` and `guest-mem.jsonl`, [career season](#career-season-and-soak)) in any scenario; `career_season` and `quickrace_loop` always record it |
 | `--soak-interval` | 30 | seconds between two soak samples |
 | `--keep-ppm` | off | keep the full-resolution PPM captures next to the PNG files |
 | `--info` | off | show the settings overlay from the start (`FM4_INFO_SHOW=1`); it moves the host presents to the UI thread |
@@ -105,6 +109,7 @@ Fixed timelines with screen checks, no network access:
 | `career` | Career > GO RACE > WORLD TOUR, the profile's next event (Tsukuba Short Circuit with the Ford Ka for the BuildRoot profile), 40 s of driving, QUIT RACE, 30 s of the replay, CONTINUE to the event. |
 | `career_finish` | the same event to the end, driven by the title's AI (`engageaionstart`, needed): it wins the 3 laps in about 3 minutes; CONTINUE, then A every 6 s through YOU PLACED (Total), the driver and Ford affinity level 2 rewards (a gift car: the default) up to EVENT COMPLETE, after the save. |
 | `career_season` | World Tour event after event in one process, driven by screen events and OCR, until `--seasons` seasons are complete and `--min-hours` have passed, at most `--max-hours`; records every event in `season.jsonl` and the soak telemetry in `soak.jsonl` ([career season](#career-season-and-soak)). Needs `engageaionstart`. |
+| `quickrace_loop` | Quick Race on a fixed list of (manufacturer, location) pairs, pass after pass in one process: the soak that revisits tracks and cars ([Quick Race loop](#quick-race-loop)). Needs `engageaionstart`. |
 | `career_progress` | a new process on that profile: WORLD TOUR shows the next event (the TopGear challenge) with the driver at level 2 and credits other than the 8,610 CR before the race. The title opens a CHALLENGE EVENT box over the event's car screen; the scenario waits for it, closes it with A once its CONTINUE shows, and reads the level on the event screen behind it. |
 | `camera_race` | Quick Race, then a race phase that cycles the race cameras (cockpit, hood, bumper, chase near, chase far, back to the cockpit) with Back every 6 s while holding the throttle; for the edges of every camera at a logical size ([D3D-level HLE, 18.24](../analysis/d3d-hle-n5.md#1824-increment-2s-close-gate-25-october-2026)). Has a fast route. |
 | `freeze` | Quick Race, rewound from race frame 720 (session updates; Y pulsed on the guest's pad polls) to the oldest frame the rewind keeps, then 20 s of that frozen frame (phase `freeze`). Pins the look `original,taa=0`, the occlusion reports and 2x, and keeps the PPM captures; see [frozen-frames.md](frozen-frames.md). |
@@ -217,7 +222,10 @@ Results in `--out`:
 - For each metric it reports the slope per hour after the warm-up.
 - For each metric it also reports the lowest value of each race cycle, from the end of one race to the end of the next. Memory that rises with every race and never comes back shows as floors that only climb.
 - It gives the frame time percentiles per minute and per race.
-- It lists the kernel and XAM stubs called, from `runtime.log` and its rotated parts (`runtime.1.log` to `runtime.4.log`; the runtime rotates at 5 MB).
+- It lists the kernel and XAM stubs called, from `runtime.log` and its rotated parts (`runtime.1.log` and on; the runtime rotates at 5 MB).
+- For a run with passes (`quickrace_loop`), it reports per pass the slope per hour, each pair's floor and the floors' rise, and each pair's floor against the same pair's in the pass before: a cache stays level on a repeat, a leak keeps rising.
+- It counts the process's handles by object type (`soak.jsonl`'s `handle_types`), first sample against last.
+- From `guest-mem.jsonl` ([guest memory](traces.md#guest-memory-rex_guest_mem_trace)), the guest's committed physical memory: its peak, with the driver's phase and pair at that time, its range per pass, the virtual heaps' peaks, and the physical allocations of 1 MB or more by caller.
 
 Its verdict uses the thresholds proposed for the season soak (29 October 2026):
 
@@ -225,6 +233,8 @@ Its verdict uses the thresholds proposed for the season soak (29 October 2026):
 - the process's dedicated GPU memory grows by at most 25 MB an hour;
 - handles grow by at most 100 and threads by at most 5 an hour;
 - the races' p50 and p99 frame times in the last third of the races are at most 10% above those of the first third.
+
+A run with more than one pass is judged on its last pass's slopes, where a cache has stopped filling and a leak still rises; the verdict shows the whole run's slopes beside them (`judged_on`, `whole_run_slope_per_hour`).
 
 `season_perf.py <run>` turns the same run into a performance survey. It splits the run into phases by its screen events:
 
@@ -246,6 +256,24 @@ The driver presses CONTINUE at once, so the run has no replay phase. For each ev
 It lists every frame over 50 ms with its time and phase, and ranks the event and phase pairs by p99 and by hitches a minute.
 
 The season soak holds the GPU queue in class `perf` for its whole length.
+
+## Quick Race loop
+
+`quickrace_loop` ([`quickrace_loop.py`](../../outputs/FM4-build/e2e/quickrace_loop.py)) answers what a career soak cannot: whether memory that grows while new tracks and cars load keeps growing when the same tracks and cars come back. After the boot to the main menu, the driver plays Quick Races on `--qr-count` pairs of manufacturer and location, then the same pairs in the same order again, pass after pass. A cycle, driven by the screen events and OCR:
+
+1. Free Play's QUICK RACE, the manufacturer select (`115_C_BUY_MFRSELECT`) to the pair's manufacturer, its first car (`108`), the paint and the difficulty (`114`, `838`), the location select (`122_F_TRK_LOCSELECT`) to the pair's location, and its first track layout (`123_F_TRK_TRACKSELECT`).
+2. The loading, the pre-race menu, and the race: the title's AI drives it for `--qr-race-seconds` on the title's 12-car grid.
+3. The pause menu's QUIT RACE, its dialog, the post-race menu's CONTINUE (straight to it when the AI finished first), the unloading, then B back to Free Play.
+
+Both selects open on their first entry from Free Play, so the first pass takes pair `i` at `i * --qr-step` Right presses on the manufacturer select and `2 * i` on the location select (every second of the 26 locations, so 11 pairs reach the large tracks), or the names of `--qr-pairs`. It records the names it read; the later passes check them and press on until the name matches. The run stops after at least two passes once it is `--min-hours` old, at `--max-hours` within a race, or on a failure. The soak sampler's label is `pass <p> pair <i>: <phase>`.
+
+| File | Contents |
+| --- | --- |
+| `qrloop.jsonl` | one record per cycle: the pass, the pair's index, the manufacturer, car, location and track read, the race's start, its finish when the AI finished it, and the cycle's end |
+| `qrloop-state.json` | the pairs, the cycle and its phase after every step, and a failure or the cap |
+| `soak.jsonl`, `guest-mem.jsonl` | the soak telemetry and the guest's memory, as in `career_season` |
+
+`soak_report.py <run>` judges the run on its last pass. The first run (30 October 2026, 11 pairs, 2.83 h, 3 passes) is in the [career season soak, section 10](../analysis/career-season-soak.md#10-the-soak-that-revisits-tracks-and-cars-30-october-2026).
 
 ## Fast route
 
@@ -479,6 +507,7 @@ All scripts live in [`outputs/FM4-build/e2e/`](../../outputs/FM4-build/e2e/).
 | `frame_diff.py <a> <b> [--out DIR]` | pixel difference of two frozen frames (captures or runs), with 1:1 crops of the largest differences ([frozen-frames.md](frozen-frames.md)) |
 | `parity.py <baseline> <candidate> [--out DIR]` | FAIL rules of a frozen-frame pair: draws and predicated packets per frame, image difference, new error keys ([frozen-frames.md](frozen-frames.md)) |
 | `coverage.py <run> --functions <BuildRoot>\project\generated\default [--json]` | the PM4 writers of each phase and of the career menus: the `FM4_N0_TRACE` ring allocations by function and the identity check's ranges by writer ([traces.md](traces.md#identity-check-of-the-native-path-fm4_native_check-host_render_check)) |
+| `thread_profile.py <run> <fm4_rex.map> [--phase P] [--min-ms N]` | what each thread does in a run's long frames, from `REX_THREAD_PROFILE` ([thread profiler](traces.md#thread-profiler-rex_thread_profile)) |
 | `soak_report.py <run> [--json]` | the soak analysis of a run with `soak.jsonl`: slopes per hour after the first race, the floors per race, frame time percentiles per minute and per race, the verdict against the thresholds, and the kernel and XAM stubs of its `runtime.log` and the log's rotated parts; writes `soak-report.json` ([career season](#career-season-and-soak)) |
 | `season_perf.py <run> [--top N] [--json]` | the performance survey of a `career_season` run: per event and phase (menus, loading, pre-race, countdown, race, finish, rewards) the fps, frame time percentiles, frames over 16, 33 and 50 ms, GPU time and its parts, render and submit thread time and the shader work in play; every frame over 50 ms with its time and phase; the slowest pairs ranked; writes `season-perf.json` and each event's `perf` in `season.jsonl` ([career season](#career-season-and-soak)) |
 | `test_career_season.py` | offline tests of `career_season.py` (its OCR parsers, and the driver against a simulated World Tour), `soak_report.py` and `season_perf.py` |

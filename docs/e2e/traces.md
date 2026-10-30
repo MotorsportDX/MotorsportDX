@@ -10,6 +10,9 @@ Summary of the variables on this page:
 | --- | --- | --- | --- |
 | `REX_PERF_TRACE_FILE` | one JSON line per second (and `.resolves.json`) | every second | [Performance trace](#performance-trace-rex_perf_trace_file) |
 | `REX_CP_PROFILE` | stack samples of the command-processor thread | about every millisecond | [Command-processor profiler](#command-processor-profiler-rex_cp_profile) |
+| `REX_THREAD_PROFILE` | stack samples of the process's busy threads, on the perf trace's clock | every 2 ms (busy threads), 20 ms (the others) | [Thread profiler](#thread-profiler-rex_thread_profile) |
+| `REX_GUEST_MEM_TRACE` | the guest's heaps, and its physical allocations of 1 MB or more and frees | every 5 seconds; every such call | [Guest memory](#guest-memory-rex_guest_mem_trace) |
+| `FM4_GAMMA_RAMP_HASH` | the hash of every gamma ramp the title's `SetGammaRamp` hands on | every ramp (every turn of the title render thread's loop) | [Gamma ramp hash](#gamma-ramp-hash-fm4_gamma_ramp_hash) |
 | `REX_WAIT_REG_MEM_TRACE` | summary of WAIT_REG_MEM conditions | per run | [WAIT_REG_MEM](#wait_reg_mem-rex_wait_reg_mem_trace) |
 | `REX_GUEST_YIELD_TRACE` | the guest's delays and yields per thread and caller | every 65,536 calls | [Guest yields](#guest-yields-rex_guest_yield_trace) |
 | `REX_OCCLUSION_SEGMENT_TRACE`, `REX_OCCLUSION_DRAW_TRACE`, `REX_DRAW_DEPTH_HIST` | occlusion and depth state | per snapshot or frame | [Occlusion and depth](#occlusion-and-depth) |
@@ -161,6 +164,39 @@ python outputs\FM4-build\e2e\cp_profile.py stacks.txt <BuildRoot>\game-build-pro
 ```
 
 `cp_profile.py` reports per runtime function, or with `--function` per source line of the matching functions. For a Quick Race, `REX_CP_PROFILE_DELAY=156` starts sampling in the race. At 240 Hz (`--arg=--video_mode_refresh_rate=240 --env FM4_FRAME_RATE=240`) the command processor, not the vblank, sets the frame rate.
+
+## Thread profiler (REX_THREAD_PROFILE)
+
+`REX_THREAD_PROFILE=<file>` samples the stacks of the whole process's threads ([`thread_sampler.h`](../../work/runtime/src/graphics/util/thread_sampler.h)), for the question of what a long frame waits on when the host render thread is idle. A thread of its own lists the threads every 2 s and checks every 100 ms which used at least a fifth of a core. It samples those every `REX_THREAD_PROFILE_PERIOD_MS` (default 2) and the other threads ten times less often, so a wait shows where it waits. Each sample suspends the thread and unwinds up to 32 frames. The file has three kinds of line:
+
+- `T <thread id> <name>`: a thread, once;
+- `S <stack id> <module>+0x<offset> ...`: a stack, once, innermost frame first;
+- `<ms> <thread id> <stack id>`: a sample, with `<ms>` on the perf trace's clock (`REX_PERF_TRACE_FILE`'s `t` in ms), so samples match a window's frames.
+
+The sampler starts with the command processor's worker or the host render thread, so it runs on every render target path. It suspends the threads it samples, so compare timing only between runs that both have it, or both not.
+
+`thread_profile.py <run> <BuildRoot>\game-buildm4_rex.map [--phase rewards] [--min-ms 50]` reads `<run>	hread-profile.txt` with the run's `perf.jsonl` and `events.txt`. It takes every frame over `--min-ms` in a phase of `season_perf.py` (`--phase any`: all frames), and counts each thread's samples inside those frames, and outside them in the same phase: by the leaf module, by the innermost game function (the recompiled `sub_<guest address>` names of the linker map; [function catalog](../analysis/function-catalog.md) for the title's names), and by the innermost runtime frame with its game caller. Guest threads show as `XThread<id> (<handle>)`, for example the title's render thread `F8001A74`. The reward screen hitches were found this way ([career season soak, section 9](../analysis/career-season-soak.md#9-the-reward-screen-hitches-30-october-2026)).
+
+## Guest memory (REX_GUEST_MEM_TRACE)
+
+`REX_GUEST_MEM_TRACE=<file>` writes the guest's memory use every 5 s as one JSON line ([`xboxkrnl_memory.cpp`](../../work/runtime/src/kernel/xboxkrnl/xboxkrnl_memory.cpp)). Each line has:
+
+- `unix` (the wall clock in seconds, as the soak sampler's `t`) and `uptime_s`;
+- for each heap, `used` (committed), `reserved` (reserved or committed) and `unreserved` (free), in bytes:
+  - `physical`: the 512 MB of physical memory;
+  - `vA0000000` (64 KB pages), `vC0000000` (16 MB pages) and `vE0000000` (4 KB pages), the views of the same 512 MB;
+  - the virtual heaps `v00000000` and `v40000000`;
+- `physical_peak_used`: the highest committed physical bytes since the start;
+- `available_pages`: what `MmQueryStatistics` last returned to the title, `null` while it has not called it (FM4 never does);
+- `small_allocations` and `small_bytes`: the count and bytes of the physical allocations under 1 MB.
+
+Every physical allocation of 1 MB or more and every physical free get a line of their own when they happen: `event` (`alloc` or `free`), the guest `address`, `size` and `page_size`, and `caller` and `caller2`, the guest return addresses of the call and of its caller.
+
+`e2e.py` sets the variable to `<out>\guest-mem.jsonl` in `career_season`, `quickrace_loop` and any `--soak` run. `soak_report.py` reports the peak with the driver's phase at that time, the use per pass, the virtual heaps' peaks, and the large allocations by caller, named through the game's linker map.
+
+## Gamma ramp hash (FM4_GAMMA_RAMP_HASH)
+
+`FM4_GAMMA_RAMP_HASH=<file>` writes one line for every gamma ramp that the title's `SetGammaRamp` (`sub_82873A30`) hands to its D3D layer ([`fm4-gamma-ramp-trace.cpp`](../../work/fm4-rex/src/fm4-gamma-ramp-trace.cpp)): `<steady clock ms> ramp|pwl <FNV-1a 64 of the 1,536-byte table>`, for the 256-entry ramp (`sub_826E0B88`) and the 128-entry piecewise linear one (`sub_826E0C58`). The title's render thread builds the ramp on every turn of its frame loop, not once a frame ([career season soak, section 11](../analysis/career-season-soak.md#11-the-title-render-threads-gamma-ramp-30-october-2026)), so the line count shows how often the loop turns, and two runs that must give the same picture must give the same hashes in the same order. The file grows by about 0.4 to 0.7 GB an hour, and its writes take the render thread about 10 to 25 ms a second, so it is for short runs.
 
 ## WAIT_REG_MEM (REX_WAIT_REG_MEM_TRACE)
 

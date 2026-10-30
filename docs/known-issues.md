@@ -93,12 +93,14 @@ above.
   checked, nor whether the Xbox shows the same. High and above use the full car shader. Before 26 October 2026 the Xbox race quality also ran races
   without the look's ambient occlusion, anti-aliasing and cockpit glass; the five quality
   presets fixed that.
-- **Memory use grows in a long career session.** Over the first 2-hour session the game's
-  memory rose by about 2.3 GB and its video memory by about 1.2 GB while every event loaded a
-  new track, more slowly each hour. Whether it levels off once tracks repeat is not tested yet.
-  The frame rate did not drop over the session.
+- **Memory use grows while new tracks and cars load, then levels off.** The game keeps what it
+  loaded for each track and car: in a 3-hour test over the same 11 tracks and cars, its memory
+  rose by about 3.4 GB and its video memory by about 1.7 GB on the first round, and stayed level
+  on the third. A small number of system handles is not given back (about 15 a race); that is
+  harmless at this rate and will be fixed. The frame rate did not drop in either test.
 - **Short pauses on the screens after a race:** the gift car's paint screen and the level
-  screens can pause for 0.15 to 0.4 s. Races themselves had no pause over 50 ms in the session.
+  screens can pause for 0.15 to 0.4 s. The game itself does this work there (saving the
+  profile, drawing a new car for the first time). Races themselves had no pause over 50 ms.
 - **Saves:** each build starts with its own profile in the BuildRoot. Saves from other
   builds, other computers or an Xbox are not imported, and moving a profile between builds is
   not guaranteed to work.

@@ -27,7 +27,7 @@ timeline
     22 to 25 October : Native port stages N1 to N5 : First ROG Xbox Ally X runs : FSR 3.1 : Display name Motorsport DX
     26 October : Native path the default on every computer : Five quality presets
     27 to 29 October : Stage N6 and the Level 1 final gate : Racing wheel stages 0 to 6 : Launcher racing theme : Look presets gt7 and fm2023
-    30 October : First 2-hour career season soak
+    30 October : First 2-hour career season soak : Revisit soak (caches, a slow handle leak) and the spinning render thread
 ```
 
 | Date | Milestone |
@@ -49,7 +49,7 @@ timeline
 | 27 October 2026 | The plan of stage N6; no look mod compiles in play; the native shader contract, increments 1 to 4; the project's own code licensed under BSD-3-Clause; RTV out of the gates; the racing wheel design. |
 | 28 October 2026 | The shader contract's increments 5 and 6; the game's pixel shaders from the disc and pipelines created ahead of the replay (N6 1.3 and 1.5); resolves without needless writes; RTV and `-Rov` out of all gates. |
 | 29 October 2026 | The DXIL world by default where DXC is beside the game, and the pipeline library (N6 1.2 and 1.4); the Level 1 final gate; racing wheel stages 0 to 6 with the countdown lock fix; the launcher's racing theme (T1 to T6); the look presets `gt7` and `fm2023`. |
-| 30 October 2026 | The `career_season` scenario and the first 2-hour soak with its performance survey. |
+| 30 October 2026 | The `career_season` scenario and the first 2-hour soak with its performance survey; the reward screen hitches traced to the title; the `quickrace_loop` soak that revisits tracks and cars (caches, a slow handle leak); the title render thread found spinning between frames. |
 
 ## 1. Clean-build verification (13-14 October 2026)
 
@@ -687,3 +687,15 @@ These numbers are baselines, not targets.
 - Current gaps, performance: "On RTV at 240 Hz, the race is limited by the command processor (pacing and cost per draw, 1.8-1.9 us per draw at 2,500 draws per frame). The swap no longer waits for the submit thread ([asynchronous swap](history-results.md#asynchronous-swap-20-october-2026)). At 2x it is limited by the GPU (about 140 fps in the `photo` race at 7.0 ms per frame on 20 October 2026; about 162 fps at 6.09 ms in earlier measurements)."
 - Platform and distribution: "the project's own code has no license yet"; it is licensed under the BSD 3-Clause License since 27 October 2026.
 - Next validation steps: "6. **Re-run the gate tiers after each change.** Use `smoke` for quick checks, `perf` for performance, `full` before committing a stage, and `career` for the rewards path." and "7. **Check TAA in motion with one tile and its history.** One tile is the default since 20 October 2026, and TAA has its history again since the same day. Compare moving races at 2x against `-Msaa` in 1:1 crops and consecutive frames"; the gates follow the tiered rule since 29 October 2026, and the native path renders races in one pass with 2x MSAA.
+
+## 9. Statements replaced by the revisit soak, 30 October 2026
+
+Statements of [current status](current.md) that the soak revisiting tracks and cars and the reward screen traces replaced on 30 October 2026 ([revisit soak](current.md#revisit-soak-and-the-title-render-thread-30-october-2026)):
+
+- Summary, latest result: "the first 2-hour soak, a World Tour run of 19 events in one game process at 2x and 240 Hz on the native path: no failure, flat threads and race frame times, and memory, GPU memory and handles that grow while new tracks load, slower each hour."
+- Status by area, the soak row: "Run once: threads, GDI and USER flat, race frame times within 4%; private bytes, GPU memory and handles grow while new tracks load (the growth slows from +1,362 to +187 MB of private bytes an hour), above the proposed thresholds."
+- Career season soak: "The run cannot tell a filling cache from a slow leak; a soak that revisits tracks can."
+- Career season soak: the reward and gift car frames "head the ranked optimisation candidates".
+- Current gaps, performance: "The reward and gift car screens of the career hold frames of 150 to 381 ms, no shader work; they head the soak's ranked optimisation candidates."
+- Current gaps, stability: "The first 2-hour soak (a World Tour run of 19 events) left private bytes, GPU memory and handles growing while new tracks loaded, slower each hour; whether that is a cache or a leak is open until a soak revisits tracks."
+- Next validation steps: "2. **Run a soak that revisits tracks, and the 60 vs 240 fps handling test.** The first soak's memory growth slowed while every event loaded a new track; repeating events after a first pass tells a cache (flat on the repeat) from a leak. The handling test compares lap times and handling at both rates."
