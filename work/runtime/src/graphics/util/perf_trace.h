@@ -1315,9 +1315,13 @@ inline void OnSwap() {
   {
     const rex::system::gpu_progress::WaitStats idle =
         rex::system::gpu_progress::TakeIdleWaitStats();
+    const rex::system::gpu_progress::IdleBranchStats branch =
+        rex::system::gpu_progress::TakeIdleBranchStats();
     state->output << ",\"render_idle_waits\":{\"waits\":" << idle.waits
                   << ",\"timeouts\":" << idle.timeouts << ",\"ms\":" << idle.ns / 1000000.0
-                  << ",\"queued\":" << idle.publications << '}';
+                  << ",\"queued\":" << idle.publications
+                  << ",\"queue_empty_branch\":" << branch.queue_empty
+                  << ",\"frame_index_branch\":" << branch.frame_index << '}';
   }
   state->output << ",\"wait_ms\":{";
   for (size_t i = 0; i < size_t(Wait::kCount); ++i) {

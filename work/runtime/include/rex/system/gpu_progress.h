@@ -51,5 +51,14 @@ bool WaitFrameQueued(uint32_t seen, uint32_t timeout_us);
 bool RenderThreadIdleWait();
 // The sleeps of WaitFrameQueued and the pushes since the last call.
 WaitStats TakeIdleWaitStats();
+// RunFrame's path without a poll: counts a turn of its queue-empty branch (true)
+// or of its frame-index branch (false), with the switch on or off.
+void NoteRenderIdleBranch(bool queue_empty);
+// The counts of NoteRenderIdleBranch since the last call.
+struct IdleBranchStats {
+  uint32_t queue_empty = 0;
+  uint32_t frame_index = 0;
+};
+IdleBranchStats TakeIdleBranchStats();
 
 }  // namespace rex::system::gpu_progress

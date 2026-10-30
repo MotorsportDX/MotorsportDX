@@ -73,6 +73,7 @@ struct Signal {
 
 Signal read_pointer;
 Signal frame_queue;
+std::atomic<uint32_t> branch_queue_empty{0}, branch_frame_index{0};
 }  // namespace
 
 void PublishReadPointer() { read_pointer.Publish(); }
@@ -91,10 +92,23 @@ void PublishFrameQueued() { frame_queue.Publish(); }
 
 uint32_t FrameQueuePublications() { return frame_queue.Count(); }
 
-bool WaitFrameQueued(uint32_t seen, uint32_t timeout_us) { return frame_queue.Wait(seen, timeout_us); }
+bool WaitFrameQueued(uint32_t seen, uint32_t timeout_us) {
+  return frame_queue.Wait(seen, timeout_us);
+}
 
 bool RenderThreadIdleWait() { return REXCVAR_GET(fm4_render_thread_idle_wait); }
 
 WaitStats TakeIdleWaitStats() { return frame_queue.TakeStats(); }
+
+void NoteRenderIdleBranch(bool queue_empty) {
+  (queue_empty ? branch_queue_empty : branch_frame_index).fetch_add(1, std::memory_order_relaxed);
+}
+
+IdleBranchStats TakeIdleBranchStats() {
+  IdleBranchStats stats;
+  stats.queue_empty = branch_queue_empty.exchange(0, std::memory_order_relaxed);
+  stats.frame_index = branch_frame_index.exchange(0, std::memory_order_relaxed);
+  return stats;
+}
 
 }  // namespace rex::system::gpu_progress
