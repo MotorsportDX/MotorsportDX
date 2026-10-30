@@ -105,10 +105,18 @@ def races(events):
 
 
 def stubs(path):
-    """[{name, module, count, first, last}] of the stubs called in a runtime log, most called first."""
+    """[{name, module, count, first, last}] of the stubs called in a runtime log, most called first.
+    The runtime rotates its log at 5 MB and keeps four (runtime.1.log, the newest, to
+    runtime.4.log): those are read too, oldest first; a long run's oldest lines are gone."""
     found = {}
-    if not path.is_file():
-        return []
+    rotated = sorted(path.parent.glob(f'{path.stem}.[0-9]*{path.suffix}'),
+                     key=lambda p: -int(p.suffixes[0][1:]) if p.suffixes[0][1:].isdigit() else 0)
+    for part in rotated + ([path] if path.is_file() else []):
+        read_stubs(part, found)
+    return sorted(found.values(), key=lambda e: (-e['count'], e['name']))
+
+
+def read_stubs(path, found):
     with open(path, encoding='utf-8', errors='replace') as log:
         for text in log:
             line = LOG_LINE.match(text.rstrip('\n'))
@@ -122,7 +130,6 @@ def stubs(path):
                     entry['count'] += 1
                     entry['last'] = line.group(1)
                     break
-    return sorted(found.values(), key=lambda e: (-e['count'], e['name']))
 
 
 def show(metric, value):

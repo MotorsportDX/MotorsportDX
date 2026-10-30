@@ -179,15 +179,15 @@ FM4 menus ignore the first press after some screens open, and the career and GO 
 `career_season` plays the World Tour in one game process ([`career_season.py`](../../outputs/FM4-build/e2e/career_season.py)). The steps take the boot and the career menus to the World Tour screen (scene `200_WORLD_TOUR`). Then the driver takes over: it reacts to the screen events and reads by OCR only what it must judge.
 
 - **The stop.** At each stop the globe zooms in (about 10 to 17 s), and the title may open a CHALLENGE EVENT box (`201_SPECIAL_EVENT_DIALOG`, closed with A once CONTINUE shows). The stop's events then show in a row. For each event the driver reads the name, track, bonus and RESTRICTIONS box (X opens it, B closes it). It takes the first event whose make and model rules the car meets, and opens it (`204_C_RACE_INFO`). The title judges the performance index and the body rules itself.
-- **The event's screen.** The driver reads the car, the driver level and the credits from the footer. It opens SEASON STATUS (`203_SEASON_STATUS`: the season's name and the state of each event), then starts the race.
+- **The event's screen.** The driver reads the car, the driver level and the credits from the footer. It opens SEASON STATUS (`203_SEASON_STATUS`: the season's name and the state of each event; the box shows five rows), then starts the race. Some event screens have tilted artwork (the Inline Four Showcase's banner), which makes Windows OCR deskew the whole image and misread the menu: when START RACE does not read, the driver presses A on it (the screen opens with it focused) and takes the credits from the World Tour row.
 - **The races.** For every race of the event:
   - the pre-race menu (`4_C_INI_PRERACE`, with its heat);
   - the race itself (the push and pop of `<cars>_Race`; the title's AI drives);
-  - the post-race menu (`924_POST_RACE`): the driver reads the place and presses CONTINUE at once.
+  - the post-race menu (`924_POST_RACE`): the driver presses CONTINUE at once.
 
   A championship runs its heats in turn.
-- **After the races.** The earnings (`920`, with the total), the level progress (`909`), the level and affinity rewards (`910`, one page each, with their credits) and a gift car (`108`, `114`, then YES; A keeps the default), up to the next World Tour screen.
-- **The season's end.** A season is complete after the event that SEASON STATUS lists last.
+- **After the races.** The earnings (`920`, with the place under YOU PLACED and the total), the level progress (`909`), the level and affinity rewards (`910`, one page each, with their credits), a championship's result (`911`) and a gift car (`108`, `114`, then YES; A keeps the default), up to the next World Tour screen.
+- **The season's end.** The title shows `208_SEASON_END`, which moves on by itself, and on the World Tour screen the season list (`207_SEASON_LIST_DIALOG`, "You now qualify for next year's CLUBMAN DIVISION."), which A closes. The driver marks the season complete on the end screen, and the next event as the first of the season the list names.
 - **Unknown screens** are recorded in `season-state.json` with their text and a capture. They get an A only where they show CONTINUE, OK or YES.
 - **No car changes.** The driver neither changes nor buys a car yet. A stop where the player's car fits no event ends the run at the title's refusal.
 
@@ -199,15 +199,15 @@ The BuildRoot profile is two events into season 1, the AMATEUR DIVISION, which h
 4. TopGear Loop: two TopGear bowling challenges.
 5. Hockenheim Short: the Class F World Championship, a qualifier and heats.
 
-In the exploration run of 29 October 2026 the AI won the Asian Tour and passed the bowling target. A profile copy therefore plays three events of season 1. `--min-hours` keeps the run going into the next season, for a soak of that length.
+A profile copy therefore plays three events of season 1. `--min-hours` keeps the run going into the next seasons, for a soak of that length. The first such run (30 October 2026, `--seasons 1 --min-hours 2`, 2x and 240 Hz on the native path) played 19 events in 2.04 hours: the rest of the Amateur Division, the seven events of the Clubman Division, and nine of the Sportsman Series ([career season soak](../analysis/career-season-soak.md)).
 
 Results in `--out`:
 
 | File | Contents |
 | --- | --- |
-| `season.jsonl` | one record per finished event: the stop's events with their restrictions; the event, its track and bonus; the car and the driver level; the credits before (its screen) and after (the next event's screen); SEASON STATUS; every race (place, seconds, earnings total); the rewards and their credits; the gift cars; the start, end and length |
+| `season.jsonl` | one record per finished event: the stop's events with their restrictions; the event, its track and bonus; the car and the driver level; the credits before (its screen) and after (the next event's screen); SEASON STATUS; every race (place, seconds, earnings total); the rewards and their credits; the gift cars; the season's end and the season list; the start, end and length. An event the cap or a failure cut short is written too, with `unfinished` |
 | `season-state.json` | the driver's state after every step (the event, the phase, the screens noted, a failure or the cap), for a stopped run |
-| `events/` | PNG captures of each event's season status, post-race menu and earnings, of noted screens and of a failure. The run keeps 240 captures (the first 8 minutes, `FM4_CAPTURE_ARCHIVE_LIMIT`), then only the newest |
+| `events/` | PNG captures of each event's season status, post-race menu and earnings, of a season's end and list, of noted screens and of a failure. The run keeps 240 captures (the first 8 minutes, `FM4_CAPTURE_ARCHIVE_LIMIT`), then only the newest. A 2-hour run takes about 0.4 GB in all |
 | `soak.jsonl` | every 30 s: the process's private bytes, working set, page file use, and handle, thread, GDI and USER object counts; its dedicated, shared and committed GPU memory (the "GPU Process Memory" performance counters of its process id, summed over its adapters); and the driver's phase |
 | `summary.json` `season` | the events, the seasons completed, a failure or the cap, and the credits check: per event, the credits after less those before, against the earnings plus the rewards' credits |
 
@@ -217,6 +217,7 @@ Results in `--out`:
 - For each metric it reports the slope per hour after the warm-up.
 - For each metric it also reports the lowest value of each race cycle, from the end of one race to the end of the next. Memory that rises with every race and never comes back shows as floors that only climb.
 - It gives the frame time percentiles per minute and per race.
+- It lists the kernel and XAM stubs called, from `runtime.log` and its rotated parts (`runtime.1.log` to `runtime.4.log`; the runtime rotates at 5 MB).
 
 Its verdict uses the thresholds proposed for the season soak (29 October 2026):
 
@@ -232,16 +233,17 @@ Its verdict uses the thresholds proposed for the season soak (29 October 2026):
 - `pre_race`;
 - `countdown`: from the cars' placement to the race;
 - `race`;
+- `finish`: a race's last seconds after the finish line, which the title runs at 30 fps until the race scenario ends (the race's last perf windows with a median frame of 30 ms or more);
 - `rewards`: from the post-race menu to the gift car.
 
 The driver presses CONTINUE at once, so the run has no replay phase. For each event and phase, the survey summarises the perf trace:
 
-- frame times and hitches;
+- frame times, frames over 16, 33 and 50 ms, and hitches (frames over twice the phase's median and over 34 ms, so a 30 fps screen's 33.3 ms frames are none);
 - the GPU time a frame, split into the post passes, the swap and the scene;
 - the host render thread's and the submit thread's busy time;
 - the shaders and pipelines made in play.
 
-It lists every frame over 50 ms with its time and phase, and ranks the event and phase pairs by p99 and by frames over 33 ms a minute.
+It lists every frame over 50 ms with its time and phase, and ranks the event and phase pairs by p99 and by hitches a minute.
 
 The season soak holds the GPU queue in class `perf` for its whole length.
 
@@ -471,8 +473,8 @@ All scripts live in [`outputs/FM4-build/e2e/`](../../outputs/FM4-build/e2e/).
 | `frame_diff.py <a> <b> [--out DIR]` | pixel difference of two frozen frames (captures or runs), with 1:1 crops of the largest differences ([frozen-frames.md](frozen-frames.md)) |
 | `parity.py <baseline> <candidate> [--out DIR]` | FAIL rules of a frozen-frame pair: draws and predicated packets per frame, image difference, new error keys ([frozen-frames.md](frozen-frames.md)) |
 | `coverage.py <run> --functions <BuildRoot>\project\generated\default [--json]` | the PM4 writers of each phase and of the career menus: the `FM4_N0_TRACE` ring allocations by function and the identity check's ranges by writer ([traces.md](traces.md#identity-check-of-the-native-path-fm4_native_check-host_render_check)) |
-| `soak_report.py <run> [--json]` | the soak analysis of a run with `soak.jsonl`: slopes per hour after the first race, the floors per race, frame time percentiles per minute and per race, the verdict against the thresholds, and the kernel and XAM stubs of its `runtime.log`; writes `soak-report.json` ([career season](#career-season-and-soak)) |
-| `season_perf.py <run> [--top N] [--json]` | the performance survey of a `career_season` run: per event and phase (menus, loading, pre-race, countdown, race, rewards) the fps, frame time percentiles, frames over 16, 33 and 50 ms, GPU time and its parts, render and submit thread time and the shader work in play; every frame over 50 ms with its time and phase; the slowest pairs ranked; writes `season-perf.json` and each event's `perf` in `season.jsonl` ([career season](#career-season-and-soak)) |
+| `soak_report.py <run> [--json]` | the soak analysis of a run with `soak.jsonl`: slopes per hour after the first race, the floors per race, frame time percentiles per minute and per race, the verdict against the thresholds, and the kernel and XAM stubs of its `runtime.log` and the log's rotated parts; writes `soak-report.json` ([career season](#career-season-and-soak)) |
+| `season_perf.py <run> [--top N] [--json]` | the performance survey of a `career_season` run: per event and phase (menus, loading, pre-race, countdown, race, finish, rewards) the fps, frame time percentiles, frames over 16, 33 and 50 ms, GPU time and its parts, render and submit thread time and the shader work in play; every frame over 50 ms with its time and phase; the slowest pairs ranked; writes `season-perf.json` and each event's `perf` in `season.jsonl` ([career season](#career-season-and-soak)) |
 | `test_career_season.py` | offline tests of `career_season.py` (its OCR parsers, and the driver against a simulated World Tour), `soak_report.py` and `season_perf.py` |
 | `test_e2e_tools.py` | offline tests of `frame_diff.py`, `parity.py`, `coverage.py`, `perf_ab.py` and the summary fields they read |
 | `race_clock.py <run>` | race timer of the captures against wall time (1.0: real time); needs `--keep-ppm` captures |

@@ -617,26 +617,37 @@ class Season:
         event['places'] = [r.get('place') for r in event['races']]
         event['earnings_total'] = sum(r.get('earnings_total') or 0 for r in event['races'])
         event['credits_after'] = None  # read on the next event's screen
-        rows = (event.get('season') or {}).get('events') or []
         # A division boundary: the first event of a season other than the previous event's.
         season = event.get('season') or {}
-        previous = next((r['season'] for r in reversed(self.records) if r.get('season')), None)
+        # The previous event's season; an event with an unread screen in between that started a
+        # season stands for that season.
+        previous = None
+        for r in reversed(self.records):
+            if r.get('season_started') and not r.get('season'):
+                break
+            if r.get('season'):
+                previous = r['season']
+                break
         last = self.records[-1] if self.records else {}
         if last.get('season_complete'):
-            # The season list after a season's end names the next one ('... CLUBMAN DIVISION.').
-            named = next((m.group(1) for m in (re.search(r"([A-Z][A-Z\-]+ DIVISION)", x)
+            # The season list after a season's end names the next one ('You now qualify for next
+            # year's CLUBMAN DIVISION.').
+            named = next((m.group(1) for m in (re.search(r"next year.s (.+?)\.?$", x)
                                                for x in event.get('season_list') or []) if m), None)
             event['season_started'] = {'season': season.get('name') or named, 'after': last['season_complete']}
         elif season and previous and not same_season(season, previous):
             event['season_started'] = {'season': season.get('name'), 'after': previous.get('name')}
-        # The season is complete when the title showed its end (208_SEASON_END), or when this
-        # event was the last one of its SEASON STATUS.
-        if event.get('season_end') or (rows and rows[-1][1].startswith('CURRENT')):
+        # The season is complete when the title showed its end (208_SEASON_END). The SEASON
+        # STATUS box is no proof: it shows five rows, so a season of seven ends below it.
+        if event.get('season_end'):
+            # The end screen's title is whole; the status box's may be cut short.
             end = event.get('season_end')
-            name = season.get('name') or (end if isinstance(end, str) else None)
+            name = (end if isinstance(end, str) else None) or season.get('name')
             event['season_complete'] = name
-            self.seasons_done.append({'season': name, 'events': len(rows), 'ended_s': event['end_s'],
-                                      'event': event['event']})
+            since = next((i for i in range(len(self.records) - 1, -1, -1)
+                          if self.records[i].get('season_complete')), -1)
+            self.seasons_done.append({'season': name, 'events_in_run': len(self.records) - since,
+                                      'ended_s': event['end_s'], 'event': event['event']})
         self.records.append(event)
         self.write_log()
         self.save_state(phase='event done')

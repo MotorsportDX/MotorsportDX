@@ -57,6 +57,10 @@
       "provenance": "Project documentation; GUI launcher UX audit and proposal"
     },
     {
+      "path": "docs/analysis/career-season-soak.md",
+      "provenance": "Project documentation; career season soak measurements, performance survey and stub inventory"
+    },
+    {
       "path": "docs/analysis/preview.md",
       "provenance": "Project documentation; preview distribution form and readiness checklist"
     },

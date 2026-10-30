@@ -540,6 +540,15 @@ Moved from [current](current.md) when the stage 6 close gate replaced them ([rac
 - A career at 3/2 and 240 Hz with the defaults: exit 0, race 238.59 fps, the same four log errors as main's; against `l1fs32` WARN on `wait_reg_mem` only (435.40 to 532.20 ms/s), where the same code path at `a787079` (snapshot `whl1`) passed. With `wheel=true` on the recording sink: exit 0, the host started in the game, and the recording held zero force, blocked for focus.
 - Not covered: a real wheel (this PC has none). The owner's checklist covers the device, the forces, focus loss and a killed process.
 
+### 30 October 2026: statements replaced by the career season soak
+
+The [career season soak](current.md#career-season-soak-30-october-2026) ran the first 2-hour soak and listed the career's stubs. Until then [current status](current.md) read:
+
+- Stability and runtime: "A 2-hour soak test (memory, handles and VRAM) has never been run." and "The XAM and kernel stubs called across all scenarios have not been listed from `runtime.log`."
+- Gameplay coverage, not validated: "one full career season".
+- The status by area: "All cars and tracks, a full career season | Not validated | Status not verified; this does not mean they are broken".
+- Next validation steps: "1. **Run the 2-hour soak test and the 60 vs 240 fps handling test.** The soak test watches memory, handles and VRAM. The handling test compares lap times and handling at both rates." and "4. **Inventory the stubs.** List every XAM and kernel stub called in `runtime.log` across all scenarios."
+
 ## 5. Superseded settings and decisions
 
 Each row gives the date of the change, the setting that was replaced, and what happened later. The current values are in [running](../running.md) and [current status](current.md).

@@ -119,6 +119,10 @@ class FakeWorldTour:
 
     def lines(self):
         event = self.events[self.index]
+        if self.state == 'season_end':
+            self.emit('scene 245 200_WORLD_TOUR')
+            self.state = 'done'
+            return [line('AMATEUR DIVISION', 640, 360)]
         if self.state == 'globe':
             self.globe_reads -= 1
             if self.globe_reads <= 0:
@@ -246,6 +250,11 @@ class FakeWorldTour:
             self.next_stop()
 
     def next_stop(self):
+        if self.index == len(self.events) - 1 and self.state != 'season_end':
+            # The season's last event: its end screen, which moves on by itself once read.
+            self.emit('scene 216 EMPTY_SCENE', 'scene 184 035_D_LOADING', 'scene 18 208_SEASON_END')
+            self.state = 'season_end'
+            return
         self.emit('scene 216 EMPTY_SCENE', 'scene 184 035_D_LOADING', 'scene 245 200_WORLD_TOUR')
         self.index = min(self.index + 1, len(self.events) - 1)
         self.row = 0
@@ -387,11 +396,14 @@ class SoakReportTests(unittest.TestCase):
                 '[2026-10-29 21:00:00.000] [error] [krnl] [t1] Unimplemented XAM message app=000000FE, '
                 'msg=0002B003, arg1=7057FA50, arg2=00000000',
                 '[2026-10-29 21:00:01.000] [info] [gpu] [t2] nothing to see']) + '\n')
+            # A rotated part (older lines) is read before the current log.
+            (Path(tmp) / 'runtime.1.log').write_text(
+                '[2026-10-29 20:57:30.000] [warning] [krnl] [t4648] __imp__XamXStudioRequest STUB\n')
             found = soak_report.stubs(log)
             self.assertEqual([(e['name'], e['count']) for e in found],
-                             [('XamXStudioRequest', 2), ('IoDismountVolumeByFileHandle', 1),
+                             [('XamXStudioRequest', 3), ('IoDismountVolumeByFileHandle', 1),
                               ('XAM message app=000000FE, msg=0002B003', 1), ('XFileFsDeviceInformation', 1)])
-            self.assertEqual(found[0]['first'], '2026-10-29 20:58:00.000')
+            self.assertEqual(found[0]['first'], '2026-10-29 20:57:30.000')
             self.assertEqual(found[0]['last'], '2026-10-29 20:59:00.000')
 
     def test_rising_frame_times_fail(self):

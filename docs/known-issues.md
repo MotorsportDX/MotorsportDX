@@ -28,6 +28,8 @@ laptop.
 On the latest build the automated tests reach the intro and the menus, Quick
 Race at 60, 120 and 240 Hz, photo mode (take, save and view a photo), career races through to
 their rewards with replays, and one downloadable content car on a downloadable content track.
+A 2-hour career session played 19 World Tour events in a row without a stop, through the end
+of two divisions into the third.
 The project owner has played Quick Race, career, photo mode and replays on both computers
 above.
 
@@ -90,6 +92,12 @@ above.
   checked, nor whether the Xbox shows the same. High and above use the full car shader. Before 26 October 2026 the Xbox race quality also ran races
   without the look's ambient occlusion, anti-aliasing and cockpit glass; the five quality
   presets fixed that.
+- **Memory use grows in a long career session.** Over the first 2-hour session the game's
+  memory rose by about 2.3 GB and its video memory by about 1.2 GB while every event loaded a
+  new track, more slowly each hour. Whether it levels off once tracks repeat is not tested yet.
+  The frame rate did not drop over the session.
+- **Short pauses on the screens after a race:** the gift car's paint screen and the level
+  screens can pause for 0.15 to 0.4 s. Races themselves had no pause over 50 ms in the session.
 - **Saves:** each build starts with its own profile in the BuildRoot. Saves from other
   builds, other computers or an Xbox are not imported, and moving a profile between builds is
   not guaranteed to work.
@@ -105,7 +113,9 @@ build, and reports about them are welcome.
   stay in sync.
 - Split screen, Rivals, Hot Lap, multiplayer, online play and Kinect (Kinect and online
   services are not expected to work).
-- A full career season, most cars and tracks, and most cars of the downloadable content packs.
-- Autovista, photo overwrite, and long sessions (two hours or more: memory and stability).
+- The career past the third division, buying a car in the career, most cars and tracks, and
+  most cars of the downloadable content packs.
+- Autovista, photo overwrite, sessions longer than two hours, and long sessions outside the
+  career.
 - Lap times and handling at 120 or 240 fps against 60 fps.
 - Other GPUs, desktops and processors (see [Tested hardware](#tested-hardware)), HDR displays.
