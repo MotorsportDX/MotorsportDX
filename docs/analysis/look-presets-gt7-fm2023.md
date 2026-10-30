@@ -1,6 +1,6 @@
 # Look presets after GT7 and FM2023
 
-Two look presets beside `aces`, `gt`, `neutral` and `original`: `gt7`, after the look of Gran Turismo 7, and `fm2023`, after Forza Motorsport (2023). The project owner decided on 29 October 2026 to keep the four presets as they are and add these two, judged against the owner's look board of reference images. Both use the look mods and the post passes ([running.md, Look](../running.md#look), [post pass framework](post-pass-framework.md)) on the native path and the RTV path's classic mods alike; they get no work on the PM4 RTV path beyond what the shared mods give, which is frozen ([AGENTS.md](../../AGENTS.md)).
+Two look presets beside `aces`, `gt`, `neutral` and `original`: `gt7`, after the look of Gran Turismo 7, and `fm2023`, after Forza Motorsport (2023). The project owner decided on 29 October 2026 to keep the four presets as they are and add these two, judged against the owner's look board of reference images. Both use the look mods and the post passes ([running.md, Look](../running-look.md#look), [post pass framework](post-pass-framework.md)) on the native path and the RTV path's classic mods alike; they get no work on the PM4 RTV path beyond what the shared mods give, which is frozen ([AGENTS.md](../../AGENTS.md)).
 
 ## 1. The references and the measures
 

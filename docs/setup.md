@@ -265,7 +265,7 @@ checkout yet. An existing checkout at the pinned commit needs no network.
 
 #### The GameInput package
 
-The pad driver choice `gameinput` ([running.md](running.md#pad-drivers)) builds SDL's GameInput
+The pad driver choice `gameinput` ([running.md](running-controls.md#pad-drivers)) builds SDL's GameInput
 driver against GameInput API v3. `setup` and `build` fetch the Microsoft.GameInput package,
 version 3.5.283, from `https://api.nuget.org/v3-flatcontainer/microsoft.gameinput/3.5.283/microsoft.gameinput.3.5.283.nupkg`
 into `BuildRoot\gameinput-sdk\3.5.283` (`fetch_gameinput` in `pipeline.py`) and refuse any file

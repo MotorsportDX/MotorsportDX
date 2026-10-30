@@ -73,7 +73,7 @@ report helps. Besides the files above, send:
 | the `-Wheel` value | the launcher's **Wheel value** field on the Racing wheel tab | every wheel setting |
 | the wheel software's profile | Pit House (or the wheel's own software) | its maximum angle, force feedback strength, road sensitivity, damper, friction and inertia |
 
-Name the wheel, the base and the pedals, and say which [checklist](running.md#racing-wheel-test-checklist)
+Name the wheel, the base and the pedals, and say which [checklist](running-controls.md#racing-wheel-test-checklist)
 step shows the problem. The game replaces its recording at every run, like the logs, so copy it
 right after the run.
 

@@ -19,7 +19,7 @@ on the development laptop.
 
 Racing wheels: **none tested yet**. The planned test set is the project owner's MOZA Racing R9
 base (direct drive) with the ESX steering wheel and the SR-P pedals (two pedals, no clutch
-pedal), run from an export with the [wheel checklist](running.md#racing-wheel-test-checklist).
+pedal), run from an export with the [wheel checklist](running-controls.md#racing-wheel-test-checklist).
 Every wheel result so far comes from a virtual wheel and recorded forces on the development
 laptop.
 
@@ -55,10 +55,10 @@ above.
   `gameinput` pad driver starts but has not run a pad yet. The game's STEERING AXIS DEADZONE
   INSIDE cannot go below about 24 in practice: to steer from the first stick movement, use the
   runtime's steering anti-deadzone (`-Pad 'anti_deadzone=1,stick_deadzone=0.05'`, see
-  [the game's steering deadzone](running.md#the-games-steering-deadzone)) and leave the game's
+  [the game's steering deadzone](running-controls.md#the-games-steering-deadzone)) and leave the game's
   setting at 24.
 - **Racing wheels** are new and off by default (`-Wheel 'on=1'`, or the launcher's Controls
-  page, [racing wheel](running.md#racing-wheel)): the steering, pedals and shift buttons drive
+  page, [racing wheel](running-controls.md#racing-wheel)): the steering, pedals and shift buttons drive
   the car with each car's own steering lock and an end stop past it, and the game's steering
   torque drives the force feedback, with kerb, grass and impact vibrations. They were checked
   with a virtual wheel and recorded forces only; no real wheel has been tested yet (see

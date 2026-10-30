@@ -2,7 +2,7 @@
 
 The runtime can write the game's textures to DDS files and sample edited DDS files in their place. A texture is named by a hash of its contents, so a replacement keeps working across runs, builds and the Japan/Asia and USA releases, the way Dolphin texture packs and Content Shaders Patch textures do. This is the route for new skies, leaves, billboards and a later night sky: the shader mods can recolor those surfaces but cannot give them new images, and editing the track archives (`bin.zip`, LZX-compressed, with an undocumented `.bin`/`.bix` format, 32 tracks) is not practical.
 
-Usage is in [running.md](../running.md#texture-replacement). For the current state see [status/current.md](../status/current.md).
+Usage is in [running.md](../running-look.md#texture-replacement). For the current state see [status/current.md](../status/current.md).
 
 ## Summary
 

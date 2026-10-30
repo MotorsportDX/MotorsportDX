@@ -157,7 +157,7 @@ Conclusions:
 
 ## Third-party code: GT7 tone mapping
 
-The look's tone curve `gt7` (the preset `gt7`, [running.md](running.md#look)) is a port to HLSL of the SDR path of Polyphony Digital's sample implementation of the GT7 tone mapping operator, published with its talk in the SIGGRAPH 2025 course "Physically Based Shading in Theory and Practice" ([gt7_tone_mapping.cpp](https://blog.selfshadow.com/publications/s2025-shading-course/pdi/supplemental/gt7_tone_mapping.cpp), version 1.0 of 10 August 2025). No file of the sample is stored in the repository, and nothing was downloaded for the port: its code was read from the research of 25 October 2026 ([look presets](analysis/look-presets-gt7-fm2023.md#2-the-gt7-operator)).
+The look's tone curve `gt7` (the preset `gt7`, [running.md](running-look.md#look)) is a port to HLSL of the SDR path of Polyphony Digital's sample implementation of the GT7 tone mapping operator, published with its talk in the SIGGRAPH 2025 course "Physically Based Shading in Theory and Practice" ([gt7_tone_mapping.cpp](https://blog.selfshadow.com/publications/s2025-shading-course/pdi/supplemental/gt7_tone_mapping.cpp), version 1.0 of 10 August 2025). No file of the sample is stored in the repository, and nothing was downloaded for the port: its code was read from the research of 25 October 2026 ([look presets](analysis/look-presets-gt7-fm2023.md#2-the-gt7-operator)).
 
 | Item | Details |
 | --- | --- |

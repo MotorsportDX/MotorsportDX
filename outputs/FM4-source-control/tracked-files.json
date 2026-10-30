@@ -41,6 +41,14 @@
       "provenance": "Project documentation; launcher usage, options, look knobs and controls"
     },
     {
+      "path": "docs/running-look.md",
+      "provenance": "Project documentation; look presets and knobs, and texture replacement (part of running.md)"
+    },
+    {
+      "path": "docs/running-controls.md",
+      "provenance": "Project documentation; pads, racing wheels and the keyboard, with test checklists (part of running.md)"
+    },
+    {
       "path": "docs/sources-and-licensing.md",
       "provenance": "Project documentation; source inventory, third-party notices and review rules"
     },

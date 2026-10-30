@@ -242,7 +242,7 @@ Details:
 
 ## Stage 2
 
-Stage 2 (25 October 2026) implements the options of the table above, every default unchanged, as the main session decided: no GameInput option, the anti-deadzone, trigger rumble and the input thread off by default, trigger rumble only on pads that report `SDL_PROP_GAMEPAD_CAP_TRIGGER_RUMBLE_BOOLEAN`, and a Guide target still subject to `guide_button`. How to use them is in [running.md](../running.md#controller).
+Stage 2 (25 October 2026) implements the options of the table above, every default unchanged, as the main session decided: no GameInput option, the anti-deadzone, trigger rumble and the input thread off by default, trigger rumble only on pads that report `SDL_PROP_GAMEPAD_CAP_TRIGGER_RUMBLE_BOOLEAN`, and a Guide target still subject to `guide_button`. How to use them is in [running.md](../running-controls.md#controller).
 
 ### What changed
 
@@ -285,7 +285,7 @@ Build: `I:\FM4-build-usa`, snapshot `snapshots\gp-s2` of 25 October 2026, from c
 
 - In 240 Hz races the thread removes the UI thread's wait: the pads are updated every 1.4 ms instead of in pairs every 8.4 ms, a new state waits 0.85 ms instead of 4.2 ms for its update, and its age at the title's read falls from 6.6 to 2.8 ms on average and from 12.2 to 5.6 ms at the 99th percentile. The thread off reproduces stage 1's 240 Hz numbers (`gp-ai240`).
 - At 60 and 120 Hz the UI thread keeps up on this PC, and the thread changes nothing beyond the windows' spread: the update interval grows from about 0.7 to 0.8 ms to 1.4 ms (`SDL_DelayNS` of 1 ms plus the update), and the wait for an update stays at about 0.8 ms on average.
-- `rawinput` and `wgi` behave like `default` with the thread on: their updates take no longer, so nothing was marshalled to the UI thread. With only the virtual pad, though, neither RAWINPUT's WGI correlation nor the WGI driver had a device to read; the owner's Series controller and the Ally X runs of the [checklist](../running.md#controller-test-checklist) are needed for that.
+- `rawinput` and `wgi` behave like `default` with the thread on: their updates take no longer, so nothing was marshalled to the UI thread. With only the virtual pad, though, neither RAWINPUT's WGI correlation nor the WGI driver had a device to read; the owner's Series controller and the Ally X runs of the [checklist](../running-controls.md#controller-test-checklist) are needed for that.
 - The thread is kept as an opt-in for every driver; nothing here argues for turning it off for one.
 
 **Trigger rumble** through the virtual pad's `RumbleTriggers` callback, human-driven runs at 60 Hz with the stage 1 driving script (full throttle, brake held, full lock into the barrier):
@@ -302,7 +302,7 @@ Build: `I:\FM4-build-usa`, snapshot `snapshots\gp-s2` of 25 October 2026, from c
 
 **Smoke gate**, fast route, 240 Hz, against `s1b-rtv1x` (the FSR session's stage 1 binary): `career` PASS (`gp2s`). `photo` failed at the fast route's boot step: the main menu's `push UI_Homespace` came 0.84 s after the title scene, during the previous step's 2.5 s wait, so the check never saw it after a press, and the next presses went into the career. The same failure is in earlier runs of other sessions (`n3p-rov-a`, `n4pth2-fnu`, `n5b-freeze-1x-rov`, `n6z-nat1x-240-photo`, `n6z-nat2x-240-photo`). `photo_view` failed with it, for want of a saved photo. Re-run (`gp2s2`): both reached their goal, WARN on capture statistics only (race 212.6 fps against 207.9, p99 6.89 against 6.83 ms; the photo loads).
 
-Not covered here: real pads (the owner's [test checklist](../running.md#controller-test-checklist); the Ally X's results follow), RAWINPUT's WGI correlation and the WGI driver with a device, the focus-loss stop of trigger rumble (the probe reads the pads in the background, so it does not apply there), the XInput backend's options and its rumble at exit, and PlayStation pads.
+Not covered here: real pads (the owner's [test checklist](../running-controls.md#controller-test-checklist); the Ally X's results follow), RAWINPUT's WGI correlation and the WGI driver with a device, the focus-loss stop of trigger rumble (the probe reads the pads in the background, so it does not apply there), the XInput backend's options and its rumble at exit, and PlayStation pads.
 
 ### The owner's ROG Xbox Ally X test
 
@@ -366,7 +366,7 @@ steering deadzone. The runtime's anti-deadzone now uses that range:
   inside the title's deadzone and loses to any keyboard steering, as before.
 - The runtime's inner deadzone (`pad_stick_deadzone`) stays for sticks that do not rest at 0;
   0.05 goes with the anti-deadzone. The launchers keep both off for now; the owner's checklist has
-  a profile with both on for each pad ([running.md](../running.md#controller-test-checklist)).
+  a profile with both on for each pad ([running.md](../running-controls.md#controller-test-checklist)).
 - `fm4_pad_shaping_tests` checks, for the default inner edge (7,864.08) and the floor (7,849) with
   the outer edge 31,128.7: the title's steering through its own formula equals the stick's
   deflection within 0.0001 over the whole travel, is positive from the first step and rising,
@@ -417,7 +417,7 @@ Verification, 25 October 2026, on `I:\FM4-build-usa` (snapshot `gp-s6` from comm
 - On this PC the loader creates the v3 interface (`GameInputInitialize` returns `S_OK`, through `GameInputRedist.dll` 4.0.302); a small check program built from the same two files showed it before the game run.
 - `gp3-gi60`, `driver=gameinput` with the latency probe, AI race at 60 Hz: the log has `SDL GameInput: a GameInput v3 runtime is available; GameInput takes the pads it supports`, the run reaches its goal, and the probe's virtual pad is read as with `default` (age at the title's read 8.79 ms against 8.83, update gaps 0.83 ms); the error lines are those of every run.
 - Smoke (`gp3s`, fast route, 240 Hz, `photo` against `gp2s2`): reached its goal, race 230.5 fps against 212.6, p99 5.35 against 6.89 ms; WARN on `wait_reg_mem` (229 to 335 ms/s, from main's render changes since the baseline) and the capture statistics.
-- Not covered: a pad that GameInput takes (this PC has none connected), so the trigger rumble and the Share button through GameInput are the owner's test ([checklist](../running.md#controller-test-checklist)); the fallback on a PC without a v3 runtime, which this PC cannot show (SDL tries every driver and keeps the ones that start, `SDL_InitJoysticks`, and the runtime logs the loader's HRESULT).
+- Not covered: a pad that GameInput takes (this PC has none connected), so the trigger rumble and the Share button through GameInput are the owner's test ([checklist](../running-controls.md#controller-test-checklist)); the fallback on a PC without a v3 runtime, which this PC cannot show (SDL tries every driver and keeps the ones that start, `SDL_InitJoysticks`, and the runtime logs the loader's HRESULT).
 
 ## Left for later
 
