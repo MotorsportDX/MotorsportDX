@@ -1,6 +1,6 @@
 # FSR: plan
 
-A plan to add AMD FSR 3.1 to the runtime's post pass framework, first in its native anti-aliasing mode (no upscaling) beside the project's own [TAA](taa.md), and then as an upscaler on N5's scales. Stages 0 to 2 are done: the runtime builds the upscaler from the SDK source behind `REX_FSR` (section 3.1), runs its native anti-aliasing at the scene_color point (9.8) and was checked in the game (9.9); stage 3, upscaling, is section 11. Written on 20 October 2026 and updated against N5 on 25 October 2026 (sections 9 to 11); the license review is in [sources and licensing](../sources-and-licensing.md#third-party-code-amd-fidelityfx-sdk-fsr-31).
+A plan to add AMD FSR 3.1 to the runtime's post pass framework, first in its native anti-aliasing mode (no upscaling) beside the project's own [TAA](taa.md), and then as an upscaler on N5's scales. Stages 0 to 3 are done: the runtime builds the upscaler from the SDK source behind `REX_FSR` (section 3.1), runs its native anti-aliasing at the scene_color point (9.8), was checked in the game (9.9) and upscales on N5's scales (section 11, 25 October 2026); TAAU, the project's TAA as the upscaler, followed on 26 October 2026 (section 14). Written on 20 October 2026 and updated against N5 on 25 October 2026 (sections 9 to 11); the license review is in [sources and licensing](../sources-and-licensing.md#third-party-code-amd-fidelityfx-sdk-fsr-31).
 
 ## Summary
 

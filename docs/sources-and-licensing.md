@@ -119,7 +119,6 @@ Every commit of every ref of the development repository was scanned (352 commits
 
 ## Open items before a public release
 
-- **No project license.** No license is assigned to the project's own code (`work/fm4-rex`, `work/fm4-launcher`, `outputs`, the docs); without one, others may read the source but have no right to reuse it. `work/runtime` stays BSD-3-Clause. The choice is the project owner's.
 - **Two vendored files without a stated license.** `pe_image.h` (a Microsoft copyright line only) and disruptorplus (MIT upstream; no license file in the SDK's copy), both from Xenia and fetched from the upstream SDK, not stored here.
 - **Notices not re-read from upstream.** The copyright years of AMD's FidelityFX CAS and FSR 1 licenses, and the DirectX Shader Compiler's `LICENSE.TXT`, which the SDK's copy of the DXC headers does not include; the review did not download them.
 - **Unleashed Recompiled in the ReXGlue SDK.** Four files of the runtime fork are marked as based on XenonRecomp and Unleashed Recompiled (GPL 3.0), with only ReXGlue's BSD-3-Clause notice ([above](#projects-this-work-builds-on)). Ask the ReXGlue SDK which parts, if any, come from Unleashed Recompiled.
@@ -192,7 +191,7 @@ Used by N6's increment 1.2: the DXIL world and the offline pass (`native_shader_
 | License | Three files in the release, read on 28 October 2026: `LICENSE-MS.txt` (Microsoft's software license terms for the DirectX Shader Compiler), `LICENSE-LLVM.txt` (the University of Illinois/NCSA Open Source License of LLVM) and `LICENCE-MIT.txt` (MIT, Microsoft). `LICENSE-MS.txt` allows the distribution of the object code on the release's distributables file list only, and the release carries no such list; distributing also requires end-user terms that protect the code and Microsoft as much and an indemnity |
 | How it reaches the game | It is never distributed by the project. Setup fetches the release into the BuildRoot for builds. The GUI launcher fetches the same release, from the same URL with the same SHA-256, before its offline pass when the two DLLs are not beside it; without a connection the shaders compile with FXC as today. The three license files stay beside the DLLs |
 | Exports | No file of the release, so a launcher on another computer fetches it itself |
-| Not covered | Whether the GUI launcher may be given to others: [distribution](#distribution) allows no binaries today, and the project has no license yet ([open items](#open-items-before-a-public-release)) |
+| Not covered | Whether the GUI launcher may be given to others: [distribution](#distribution) allows no binaries today; the project's own code is under the BSD 3-Clause License since 27 October 2026 ([licensing](#licensing-and-attribution)) |
 
 ## Inventory and the pre-commit check
 

@@ -1,6 +1,8 @@
 # The native path as the default with a discrete GPU
 
-Status: readiness report, 26 October 2026, for the main session's decision. Today the launchers run the native path ([D3D-level HLE](d3d-hle.md), stages N1 to N5) by default only on a computer with integrated GPUs only (the main session's decision of 24 October 2026, [17.25](d3d-hle-n4.md#1725-the-second-rog-xbox-ally-x-run-24-october-2026)); with a discrete GPU the default is RTV, the PM4 path on host render targets. This note gathers what flipping that default would change, the evidence on the development laptop, and a recommendation. RTV (`-Rtv`) and `-Rov` stay selectable as the references either way (AGENTS.md, render target paths).
+Status: done. The flip landed on 26 October 2026 (`6bbdc17`): the launchers run the native path by default on every computer, and RTV (`-Rtv`) is the players' fallback, frozen since 27 October 2026 ([gate tiers](d3d-hle.md#gate-tiers-the-main-sessions-decision-of-22-october-2026)). The readiness report below is kept as it was written.
+
+Readiness report, 26 October 2026, for the main session's decision. Before the flip the launchers ran the native path ([D3D-level HLE](d3d-hle.md), stages N1 to N5) by default only on a computer with integrated GPUs only (the main session's decision of 24 October 2026, [17.25](d3d-hle-n4.md#1725-the-second-rog-xbox-ally-x-run-24-october-2026)); with a discrete GPU the default was RTV, the PM4 path on host render targets. This note gathers what flipping that default would change, the evidence on the development laptop, and a recommendation. RTV (`-Rtv`) and `-Rov` stay selectable as the references either way (AGENTS.md, render target paths).
 
 ## 1. What the flip changes, setting by setting
 

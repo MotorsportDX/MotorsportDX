@@ -1,6 +1,6 @@
 # Draw work off the command processor thread: feasibility
 
-Status: analysis, 20 October 2026. Nothing here is implemented.
+Status: superseded by the native port. Analysis of 20 October 2026; nothing here was implemented as written. The next day the project chose the native port ([D3D-level HLE](d3d-hle.md)), whose stage N4 moved the draw back end onto the replay side of the host render thread ([D3D-level HLE, 17](d3d-hle-n4.md)). The measurements below describe the RTV command processor of that day.
 
 ## Question
 

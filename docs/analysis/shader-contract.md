@@ -1,6 +1,6 @@
 # Native shader contract
 
-Status: stage N5 item of the [native port](d3d-hle.md#82-shaders-on-the-native-path), 28 October 2026. The design was approved by the main session on 27 October 2026; increments 1, 2, 4, 3 and 5 are implemented behind `native_shader_contract` (off by default). Increment 6 (vertex shader hooks) is designed, its decisions taken by the main session on 28 October 2026 (section 9), and in implementation. The other N5 items are in [d3d-hle-n5.md](d3d-hle-n5.md).
+Status: stage N5 item of the [native port](d3d-hle.md#82-shaders-on-the-native-path), 28 October 2026. The design was approved by the main session on 27 October 2026; increments 1, 2, 4, 3, 5 and 6 are implemented behind `native_shader_contract` (off by default); increment 6 (vertex shader hooks) passed its close gate on 28 October 2026 (section 9.9). The other N5 items are in [d3d-hle-n5.md](d3d-hle-n5.md).
 
 ## Summary
 
@@ -11,7 +11,7 @@ Status: stage N5 item of the [native port](d3d-hle.md#82-shaders-on-the-native-p
 - **Increment 4**: the per-pass decisions. The car materials draw most of their race draws into the mirrors, which the manifest classes; the project owner kept the mirrors as the scene (section 6).
 - **Increment 3**: declared resources. An entry reads the post passes' textures by name (`srv = ["post:<name>"]`) and PNG files of the look directory (`"file:<name>"`, at most 8, each an 8-bit RGB or RGBA PNG up to 4,096 by 4,096). The race's final combine became an entry that reads the occlusion by name and draws byte for byte as its classic mod; a test pattern from a look file reaches the screen byte for byte as the same values computed in the shader (section 7).
 - **Increment 5**: replacement shaders. An entry's `shader` takes the place of the game shader's HLSL and reads the game's inputs by names the manifest gives to registers (`[pixel.inputs]`). A probe proved the names, packed indices, bindings and signatures byte for byte; the race's final combine is now the project's own tone mapping, written from the documented formula (the project owner's decision of 27 October 2026), and matches the game at the game's knob values within 1 level in 1 pixel of a 2x frame (section 8). The increments are in section 3.
-- **Increment 6** (in implementation, 28 October 2026): vertex shader hooks through a vertex HLSL generator that mirrors the DXBC translator, keyed by the ucode keys of the native path, proven byte for byte with every vertex shader of a frame through the generator (section 9).
+- **Increment 6** (done, 28 October 2026): vertex shader hooks through a vertex HLSL generator that mirrors the DXBC translator, keyed by the ucode keys of the native path, proven byte for byte with every vertex shader of a frame through the generator (section 9).
 
 ## 1. What ties a look mod to the DXBC translation
 
