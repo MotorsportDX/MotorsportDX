@@ -47,6 +47,7 @@
 #include <rex/system/kernel_state.h>
 #include <rex/system/user_module.h>
 #include "util/cp_sampler.h"
+#include "util/thread_sampler.h"
 
 REXCVAR_DEFINE_BOOL(vsync, true, "GPU", "Enable vertical sync");
 
@@ -285,6 +286,7 @@ void CommandProcessor::SetDesiredSwapPostEffect(SwapPostEffect swap_post_effect)
 
 void CommandProcessor::WorkerThreadMain() {
   cp_sampler::Start();
+  thread_sampler::Start();
   if (!SetupContext()) {
     rex::FatalError("Unable to setup command processor internal state");
     return;

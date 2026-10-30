@@ -4934,6 +4934,14 @@
       "provenance": "runtime-fork"
     },
     {
+      "path": "work/runtime/src/graphics/util/thread_sampler.h",
+      "provenance": "runtime-fork"
+    },
+    {
+      "path": "work/runtime/src/graphics/util/thread_sampler.cpp",
+      "provenance": "runtime-fork"
+    },
+    {
       "path": "work/runtime/src/graphics/util/cvar_ab.h",
       "provenance": "runtime-fork"
     },
