@@ -112,7 +112,7 @@ The end-to-end harness, [`e2e.py`](outputs/FM4-build/e2e/e2e.py), runs the game 
 - **Gameplay coverage incomplete:** not every car, track, and mode, sessions over two hours, audio, Kinect, multiplayer, online, and most cars of downloadable content have been validated. One DLC car on a DLC track is covered by the `dlc` e2e scenario. Save migration between builds or computers, other GPUs, and performance are not guaranteed. "Not verified" does not mean "broken".
 - **Test driver:** the harness drives cars with FM4's own AI, through the rebuilt `engageaionstart` developer option. This is a test tool, not a player feature. Some FM4 menus ignore the first press, so the scenarios press until the expected screen is read.
 
-The next validation priorities are a clean setup on a second computer, then audio, split screen, Rivals, Hot Lap, the career's later divisions and more GPUs, which need testers who own the game, and a soak that revisits tracks after the first two-hour soak ([career season soak](docs/analysis/career-season-soak.md)). The full list is in [current status](docs/status/current.md), and the preview checklist in the [preview plan](docs/analysis/preview.md).
+The next validation priorities are the latest build on the ROG Xbox Ally X, a real racing wheel and a clean setup on a second computer, then audio, split screen, Rivals, Hot Lap, the career's later divisions and more GPUs, which need testers who own the game, and a soak that revisits tracks after the first two-hour soak ([career season soak](docs/analysis/career-season-soak.md)). The full list is in [current status](docs/status/current.md), and the preview checklist in the [preview plan](docs/analysis/preview.md).
 
 ## Documentation
 
