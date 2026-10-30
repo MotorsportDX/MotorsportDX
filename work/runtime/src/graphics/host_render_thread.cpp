@@ -21,6 +21,7 @@
 
 #include "util/cp_sampler.h"
 #include "util/perf_trace.h"
+#include "util/thread_sampler.h"
 
 REXCVAR_DEFINE_BOOL(host_render_thread, false, "GPU",
                     "Stage N1 of the native path: a host render thread consumes the guest's "
@@ -127,6 +128,7 @@ void CommandProcessor::CreateHostRenderQueue() {
 
 void CommandProcessor::HostRenderThreadMain() {
   cp_sampler::Start();
+  thread_sampler::Start();
   if (!SetupContext()) {
     rex::FatalError("Unable to setup command processor internal state");
     return;
