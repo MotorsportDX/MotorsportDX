@@ -13,14 +13,15 @@ These rules apply to every AI agent working in this repository.
 - `README.md` is the landing page: what the project is, supported versions, quick start, and an index of the other docs. Keep it short.
 - Detailed docs live under `docs/`:
   - `docs/setup.md`: prerequisites, setup, generate, build, troubleshooting.
-  - `docs/running.md`: launcher usage, options, look knobs, controls.
+  - `docs/running.md`: launcher usage and options; the entry point to the topic pages `docs/running-look.md` (look presets, look knobs, texture replacement) and `docs/running-controls.md` (pad, racing wheel, keyboard).
   - `docs/status/current.md`: the present state, verified results on the latest build, open gaps, next validation steps.
-  - `docs/status/history.md`: dated results and past measurements.
+  - `docs/status/history.md`: the dated timeline, superseded statements and settings, and past measurements.
+  - `docs/status/history-results.md`: verified result sections moved out of `docs/status/current.md` once a later build superseded them.
   - `docs/known-issues.md` and `docs/bug-reports.md`: for players, the known problems and tested hardware in plain terms, and how to report a bug. Keep them in step with `docs/status/current.md`.
   - `docs/e2e/`: e2e harness guide, trace variables, experiment switches.
-  - `docs/analysis/`: research and design notes.
+  - `docs/analysis/`: research and design notes, indexed in `docs/analysis/README.md`, which marks each note active, done or superseded.
   - `docs/sources-and-licensing.md`: source inventory, third-party notices, review rules.
-- When verification results change, update `docs/status/current.md` and move the superseded result into `docs/status/history.md`. Do not leave two conflicting "current" statements.
+- When verification results change, update `docs/status/current.md` and move the superseded result into `docs/status/history.md` or `docs/status/history-results.md`. Do not leave two conflicting "current" statements.
 - Do not link to `PLAN.txt`. It is a local planning file and is not part of the repository.
 - Write dates in full (`16 October 2026`). Write decimals with a point (`0.6`) and thousands with a comma (`50,233`).
 - Keep docs factual and in the present tense unless they describe history.
