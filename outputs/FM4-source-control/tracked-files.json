@@ -53,6 +53,10 @@
       "provenance": "Project documentation; bug report guide: logs, traces and how to collect them"
     },
     {
+      "path": "docs/analysis/README.md",
+      "provenance": "Project documentation; index of the analysis notes with their status"
+    },
+    {
       "path": "docs/analysis/launcher-ux.md",
       "provenance": "Project documentation; GUI launcher UX audit and proposal"
     },
