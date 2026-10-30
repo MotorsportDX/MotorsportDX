@@ -227,7 +227,7 @@ Runs 1 to 6 use render scale 1x (Display page). On the Ally X's 1080p panel the 
 
 ### Render thread idle wait A/B
 
-The A/B of `fm4_render_thread_idle_wait` (30 October 2026, off by default; [career season soak, 12](analysis/career-season-soak.md#12-the-render-threads-idle-wait-30-october-2026)) with the GUI launcher of an export: **Show developer options** on, **Performance trace** on, render scale 1x, the default look and the race frame rate the screen allows. Two profiles, alike but for the extra cvars of the second, `--fm4_render_thread_idle_wait=true`. Run each as a Quick Race of at least three minutes, then quit to the menu, look at the post-race screens and close the game; once on battery and once on AC. Send back the `perf-<profile>-<time>.jsonl` files, `play.log` and `runtime.log`, and the battery's drain if the device shows it.
+The A/B of `fm4_render_thread_idle_wait` (30 October 2026, off by default; [career season soak, 12](analysis/career-season-soak.md#12-the-render-threads-idle-wait-30-october-2026)) with the GUI launcher of an export: **Show developer options** on, **Performance trace** on, render scale 1x, the default look and the race frame rate the screen allows. Two profiles, alike but for the extra cvars of the second, `--fm4_render_thread_idle_wait=false` (the wait is on by default since 31 October 2026). Run each as a Quick Race of at least three minutes, then quit to the menu, look at the post-race screens and close the game; once on battery and once on AC. Send back the `perf-<profile>-<time>.jsonl` files, `play.log` and `runtime.log`, and the battery's drain if the device shows it.
 ### Export to another computer
 
 `export` copies what the launcher needs into a folder outside the BuildRoot and the
@@ -333,6 +333,10 @@ The launcher uses these runtime settings (set in `launch_cvars` in
   again instead of polling it on a whole core (`guest_ring_wait_sleep=true`, RTV and `-Native`;
   [section 17.16](analysis/d3d-hle-n4.md)). `-Rov`, the unchanged reference, keeps the title's
   wait.
+- The title's render thread waits for its next queued frame, at most 1 ms, instead of turning its frame
+  loop and recomputing the gamma ramp between frames (`fm4_render_thread_idle_wait=true`, since 31 October
+  2026; [career season soak, 12](analysis/career-season-soak.md#12-the-render-threads-idle-wait-30-october-2026)).
+  `-Rov` keeps the title's loop.
 - The runtime asks for 1 ms timer resolution and opts the process out of power throttling
   (`high_resolution_timing=true`, a runtime default on every path, `-Rov` included, since it is a
   host setting and not a title correction; [section 17.19](analysis/d3d-hle-n4.md)): the guest's

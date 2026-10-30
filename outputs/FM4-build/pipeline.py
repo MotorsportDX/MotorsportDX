@@ -2108,9 +2108,9 @@ def launch_plan(root,disc1,single_tile=False,fixed_vblank=False,frame_rate=None,
         # The earlier pixel shader interlock path: GPU about 7 ms a race frame
         # instead of 2.5, for comparisons when the host render target path misbehaves.
         cvars.pop('edram_single_rt_no_wrap')
-        # The uncorrected reference keeps the title's ring index wait as it is.
+        # The uncorrected reference keeps the title's ring index wait and frame loop as they are.
         cvars.update({'render_target_path_d3d12':'rov','rov_occlusion_async':'all',
-                      'guest_ring_wait_sleep':'false'})
+                      'guest_ring_wait_sleep':'false','fm4_render_thread_idle_wait':'false'})
     if native:
         cvars.update(native_cvars(single_tile or one_pass,rov))
         if one_pass:
@@ -2478,6 +2478,10 @@ def launch_cvars(root,disc1,log_file):
             # The title's ring index wait sleeps until the read pointer is published again
             # instead of spinning on a core (docs/analysis/d3d-hle-n4.md 17.16); -Rov turns it off.
             'guest_ring_wait_sleep':'true',
+            # The title render thread waits for its next queued frame, at most 1 ms, instead of
+            # turning its frame loop and recomputing the gamma ramp between frames
+            # (docs/analysis/career-season-soak.md 12); -Rov turns it off.
+            'fm4_render_thread_idle_wait':'true',
             # 16x anisotropic filtering for every mipmapped linear texture: the title asks for
             # none on most and 2x-16x on a few, and the runtime default forces 4x.
             'anisotropic_override':'5',

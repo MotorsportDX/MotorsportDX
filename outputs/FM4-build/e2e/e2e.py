@@ -1339,9 +1339,11 @@ def run_once(options, out):
     if (args.get('render_target_path_d3d12') == 'rov' and
             any(item.startswith('FM4_ONE_PASS_MSAA=') for item in options.env)):
         raise SystemExit("FM4_ONE_PASS_MSAA is the native path's one-pass MSAA; -Rov cannot run it")
-    # -Rov keeps the title's ring index wait as it is, like Build.ps1 -Rov (d3d-hle-n4.md 17.16).
+    # -Rov keeps the title's ring index wait and frame loop as they are, like Build.ps1 -Rov
+    # (d3d-hle-n4.md 17.16, career-season-soak.md 12).
     if args.get('render_target_path_d3d12') == 'rov':
         args['guest_ring_wait_sleep'] = 'false'
+        args['fm4_render_thread_idle_wait'] = 'false'
     if options.native:
         # One tile only, like Build.ps1 -Native, which runs the PM4 RTV path in tiles; here a
         # tiled run is refused instead, so a --native result is always the native path. The

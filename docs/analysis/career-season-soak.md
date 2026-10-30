@@ -136,7 +136,7 @@ The shader and pipeline work in play over the whole run: 7 vertex and 89 pixel s
 Ranked by what a player would notice. The first ranking came from this run's measurements alone; the reward screens' traces of [section 9](#9-the-reward-screen-hitches-30-october-2026) re-ranked it: their hitches are the title's own work, so they moved from the first place to the last.
 
 1. **The race at 2x is GPU-bound below 240 fps.** 194.8 fps with 5.02 ms of GPU a frame; 240 fps needs 4.17 ms. The scene is 3.55 ms, and the look's passes are 1.44 ms, GTAO the largest (0.71 ms, 14% of the frame). Candidates: GTAO at a lower resolution or fewer samples at 2x, and a check of what the scene's 3.55 ms holds at 2x against 3/2 (3.28 ms of GPU a whole frame there in the Level 1 gate). The render thread is busy 3.48 ms of a 4.79 ms frame, so after the GPU it is the next limit.
-2. **The title render thread's frame loop spins.** Found by the reward screens' traces ([section 9](#9-the-reward-screen-hitches-30-october-2026)) and measured in [section 11](#11-the-title-render-threads-gamma-ramp-30-october-2026): between two frames the title's render thread turns its frame loop without waiting, and every turn recomputes the gamma ramp with `pow`, 17 to 92 turns a frame. That takes about 160 ms of CPU a second in races and 270 to 600 ms a second in the menus, loading and reward screens: CPU and power that a handheld such as the ROG Xbox Ally X would get back. A wait for the next frame in place of the spin ([section 12](#12-the-render-threads-idle-wait-30-october-2026)) takes 4.7 to 7.8% of the process's CPU time and 3.8 to 5.7% of the energy off a Quick Race; it is off by default while the countdown, which it makes dearer, is not explained.
+2. **The title render thread's frame loop spins.** Found by the reward screens' traces ([section 9](#9-the-reward-screen-hitches-30-october-2026)) and measured in [section 11](#11-the-title-render-threads-gamma-ramp-30-october-2026): between two frames the title's render thread turns its frame loop without waiting, and every turn recomputes the gamma ramp with `pow`, 17 to 92 turns a frame. That takes about 160 ms of CPU a second in races and 270 to 600 ms a second in the menus, loading and reward screens: CPU and power that a handheld such as the ROG Xbox Ally X would get back. A wait for the next frame in place of the spin ([section 12](#12-the-render-threads-idle-wait-30-october-2026)) takes 5.2 to 6.0% of the process's CPU time and 4.0 to 8.0% of the energy off a Quick Race, in every phase; it is on by default since 31 October 2026.
 3. **Pipelines for a new track at its loading.** One wait of 365 ms at Mugello Club's loading for a pipeline the creation threads were making (the longest early pipeline 369 ms), and 25 waits of 768 ms over the run. These are pipelines that the pipeline library did not hold for a track first seen in this run. Adding the career's tracks to the offline pass, or creating a track's pipelines while its loading screen shows, would take them off the loading's frames.
 4. **The pre-race menu's GPU time and hitches.** It has the highest GPU time a frame (7.80 ms; the scene 6.47 ms, the showroom car at 2x) and the most hitches a minute at Hockenheim (27). Its p99 of 33.6 ms is the menu's own 30 fps transitions. A trace of what the showroom draws at 2x would say whether it needs the race's scale.
 5. **Long frames in the menus (566 ms at event 7) and at boot (733 ms).** The boot's frame is in the window where 32 look mods compiled on the workers (14 s on the workers, 110 pending), so the BuildRoot's mod cache lacked the default look's defines after the look presets' latest change; the menus' 566 ms frame holds no shader work. Both happen once; a trace of the menu frame is the next step.
@@ -363,5 +363,57 @@ The pacing:
 
 - The wait takes 76 to 260 ms of CPU a second and 1.0 to 3.7 W off the race, and more in the menus, loading and reward screens. A whole run uses 4.7 to 7.8% less CPU time and 3.8 to 5.7% less energy, with the race's frame rate and p50 unchanged.
 - The countdown goes the other way, in all three pairs: 246 to 394 ms of CPU a second and 2 to 3 W more, and 1 to 2% fewer frames. The cause is not measured. A guess is the main thread's throttle, which yields in a loop while two frames are queued: a render thread that has just woken takes its frame later than one that polls.
-- Under the rule of the task (on by default only with a saving and no pacing change), the switch stays off by default until that phase is explained.
-- For the owner's A/B on the ROG Xbox Ally X, the GUI launcher's extra cvars take `--fm4_render_thread_idle_wait=true` ([Ally X run set](../running.md#render-thread-idle-wait-ab)).
+- Under the rule of the task (on by default only with a saving and no pacing change), the switch stayed off by default until that phase was explained. It was, and the wait is on by default since 31 October 2026 ([12.1](#121-the-countdown-and-the-wait-on-by-default-31-october-2026)).
+
+### 12.1 The countdown, and the wait on by default, 31 October 2026
+
+**The countdown's cost.** A profiled pair (`cd-prof-off`, `-on`: 1x, two races of 60 s, `REX_THREAD_PROFILE`) put it on the title render thread, not on the main thread.
+
+- The extra cost came in one of the two countdowns of a run with the wait: the first race's in the runs above, the second one's here (2,657 against about 2,200 ms of CPU a second).
+- In that countdown, the main thread's time rose by about 40 ms a second, and its throttle loop did not show up in the profile.
+- The render thread's time rose from about 660 to 785 ms a second:
+  - its wait for the GPU in `Resource::WaitForFence` fell from about 280 to 24 ms a second;
+  - the gamma ramp's `pow` doubled, from about 73 to 156 ms a second.
+
+The cause is a second path through `RunFrame` that does not poll the queue.
+
+- At `0x822DB70C`, `RunFrame` branches to `loc_822DB9E4` in two cases:
+  - **the frame-index branch:** its frame index `r22` is not past `[this+2356]`;
+  - **the queue-empty branch:** `[this+2892]` is 2 (the race) and the queue's count (`+128`) is 0.
+- That path calls `Sleep(0, alertable)` (`sub_8238C778`, returning to `0x822DBA08`) and returns. Its turns spin past the wait, which follows only the polls.
+
+**The fix** (`75bf3d0`), with the main session's condition that the frame-index branch stays as it is:
+
+- The `RunFrame` hook keeps its `CRenderThread` and the frame queue's count at the turn's start.
+- The hook of `sub_8238C778` from `0x822DBA08` tells the two branches apart (`r22` is non-volatile).
+- On the queue-empty branch, when the count is still 0, it first sleeps until a frame is queued after the turn began, at most 1 ms, and then runs the title's `Sleep(0)`. This happens outside every lock.
+- `render_idle_waits` counts both branches, with the switch on or off.
+
+Off, the queue-empty branch turned 2,600 to 14,000 times a second in the loading, reward and pre-race screens and in some countdowns: that was most of their spin. The frame-index branch took 0 to 1 turn a second.
+
+**The measurements** on build `75bf3d0`, the same runs as above (`iw2-qr1`, `iw2-qr32`, `iw2-qr2`, `iw2-off`, `iw2-on`). The 1x pair was repeated with on first, then off (`iw3-qr1`): the first 1x pair's off run drew more power as it went (42 to 62 W over its fifths), and that put its energy at +6.2% for the wait.
+
+| Run | Whole run CPU | Energy | Race CPU off → on | Race power | Countdown CPU | Countdown power |
+|---|---|---|---|---|---|---|
+| 1x, on first | −6.0% | −4.0% | 2,807 → 2,690 ms a second | 50.9 → 48.9 W | 2,488 → 2,040 | 46.2 → 41.1 W |
+| 1x, off first | −5.8% | +6.2% (drift) | 3,082 → 2,923 | 60.1 → 63.6 W | 2,125 → 2,122 | 48.5 → 55.9 W |
+| 3/2 | −5.2% | −5.0% | 2,908 → 2,815 | 53.6 → 51.7 W | 2,088 → 2,135 | 43.7 → 42.8 W |
+| 2x | −5.7% | −8.0% | 3,009 → 2,923 | 53.1 → 49.7 W | 2,468 → 2,354 | 48.0 → 44.6 W |
+
+- The menus, reward, loading and pre-race screens use less CPU in every pair, by 40 to 630 ms a second.
+- The loop's turns fell to 100 to 440 a second in every phase.
+- The pacing did not change:
+
+| Run | Race fps off / on | Race p50 off / on | Race p99, two races, off / on | Countdown fps off / on |
+|---|---|---|---|---|
+| 1x, on first | 233.5 / 232.8 | 4.12 / 4.13 ms | 4.95, 4.97 / 4.93, 5.55 ms | 175.1 / 173.7 |
+| 3/2 | 231.0 / 232.6 | 4.16 / 4.15 ms | 5.85, 5.02 / 5.15, 5.10 ms | 167.6 / 166.6 |
+| 2x | 194.2 / 203.3 | 4.72 / 4.59 ms | 6.95, 7.59 / 7.07, 6.90 ms | 147.2 / 151.1 |
+
+- The loading screens ran at 37.4 to 38.4 fps and the menus at 59.1 to 59.4 fps in every run.
+- The gamma ramp's hashes were the same set and sequence in every pair. The driver's menu navigation reached every race at the same times.
+- The parity freeze at 3/2 passes. `compare.py` warns only that the guest's idle wait rose from 1 to 58 ms a second, which is the wait itself.
+
+**Decision.** Every phase uses less CPU and power with the wait, within the noise of one pair: the 3/2 countdown's +47 ms a second came with 0.9 W less. The frame rate and frame times stay the same. So `fm4_render_thread_idle_wait` is on by default in both launchers (`pipeline.launch_cvars`, which the GUI launcher's `launcher.json` comes from), as `guest_ring_wait_sleep` is. `-Rov`, the uncorrected reference, turns it off.
+
+The ROG Xbox Ally X A/B is the owner's, with `--fm4_render_thread_idle_wait=false` in the extra cvars of the profile without the wait ([render thread idle wait A/B](../running.md#render-thread-idle-wait-ab)).
