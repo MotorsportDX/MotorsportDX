@@ -1596,7 +1596,7 @@ def display_settings(display=DEFAULT_DISPLAY,fullscreen=False,supersample=False,
     return cvars,(f'Display {display}: {screen}, render {scale_text} ({render_width}x{render_height})'
                   f'{view}{gpu_note}{aspect_note}')
 
-# -Upscale (docs/running.md#upscaling, docs/analysis/fsr-plan.md 11): FSR 3.1 renders the scene
+# -Upscale (docs/running.md#-upscale, docs/analysis/fsr-plan.md 11): FSR 3.1 renders the scene
 # at the output's lines divided by the mode's ratio and upscales it to the output scale.
 UPSCALE_MODES={'native':1.0,'quality':1.5,'balanced':1.7,'performance':2.0}
 DEFAULT_UPSCALE='native'
@@ -2402,7 +2402,7 @@ def launcher_tests(root):
     print(f'Launcher tests passed: {result["plans"]} plans, discs and {len(discs["packages"])} content packages.')
 
 def export(root,out,jobs):
-    """A folder that runs the game with MotorsportDX.exe alone (docs/running.md#export): the
+    """A folder that runs the game with MotorsportDX.exe alone (docs/running.md#export-to-another-computer): the
     launcher, game-build's executable, modules and runtime, the look mods, the post passes, the
     shader cache, launcher.json, CREDITS.txt, the third-party notices, and the launcher's
     backdrop when the BuildRoot has one and the folder does not. Not user-data: the
