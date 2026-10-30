@@ -298,6 +298,8 @@
 !/work/fm4-rex/src/fm4-ui-diagnostics.cpp
 !/work/fm4-rex/src/fm4-d3d-trace.cpp
 !/work/fm4-rex/src/fm4-guest-hooks.cpp
+!/work/fm4-rex/src/fm4-crt-hooks.cpp
+!/work/fm4-rex/src/fm4-crt-helpers.h
 !/work/fm4-rex/src/fm4-guest-hooks.h
 !/work/fm4-rex/src/fm4-n0-trace.cpp
 !/work/fm4-rex/src/fm4-native-check.cpp
@@ -315,6 +317,7 @@
 !/work/fm4-rex/src/vector-instruction-tests.h
 !/work/fm4-rex/tests/CMakeLists.txt
 !/work/fm4-rex/tests/draw-scale-tests.cpp
+!/work/fm4-rex/tests/crt-helpers-tests.cpp
 !/work/fm4-rex/tests/look-tonemap-tests.cpp
 !/work/fm4-rex/tests/make-vector-vectors.py
 !/work/fm4-rex/tests/pad-shaping-tests.cpp

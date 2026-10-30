@@ -68,6 +68,9 @@ target_link_libraries(fm4_shader_mod_tests PRIVATE d3dcompiler)
 add_executable(fm4_look_tonemap_tests look-tonemap-tests.cpp)
 target_compile_definitions(fm4_look_tonemap_tests PRIVATE NOMINMAX WIN32_LEAN_AND_MEAN)
 target_link_libraries(fm4_look_tonemap_tests PRIVATE d3d11 d3dcompiler)
+# The native C runtime helpers: strstr against the guest's loop, the pow memo (header only).
+add_executable(fm4_crt_helpers_tests crt-helpers-tests.cpp)
+target_include_directories(fm4_crt_helpers_tests PRIVATE ../src)
 # The track lighting file edits of FM4_TRACK_SETTINGS (header only).
 add_executable(fm4_track_settings_tests track-settings-tests.cpp)
 target_include_directories(fm4_track_settings_tests PRIVATE ../src)

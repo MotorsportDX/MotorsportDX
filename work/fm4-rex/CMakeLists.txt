@@ -29,6 +29,7 @@ add_custom_command(TARGET fm4_rex_codegen POST_BUILD
 set(FM4REX_SOURCES
     src/main.cpp
     src/fm4-command-line.cpp
+    src/fm4-crt-hooks.cpp
     src/fm4-crash-diagnostics.cpp
     src/fm4-dev-features.cpp
     src/fm4-fixed-seed.cpp

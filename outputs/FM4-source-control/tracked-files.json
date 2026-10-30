@@ -1265,6 +1265,14 @@
       "provenance": "Original integration source: the hook registry of the D3D layer diagnostics; guest function addresses only, no game function bodies"
     },
     {
+      "path": "work/fm4-rex/src/fm4-crt-hooks.cpp",
+      "provenance": "Original integration source: native strstr and a pow memo for the title's C runtime; guest function addresses only, no game function bodies"
+    },
+    {
+      "path": "work/fm4-rex/src/fm4-crt-helpers.h",
+      "provenance": "Original integration source: strstr, the pow memo table and FNV-1a; no game function bodies"
+    },
+    {
       "path": "work/fm4-rex/src/fm4-guest-hooks.h",
       "provenance": "Original integration source: declarations of the hook registry features; no game content"
     },
@@ -4831,6 +4839,10 @@
     },
     {
       "path": "work/fm4-rex/tests/draw-scale-tests.cpp",
+      "provenance": "Synthetic tests/oracle; no game input data"
+    },
+    {
+      "path": "work/fm4-rex/tests/crt-helpers-tests.cpp",
       "provenance": "Synthetic tests/oracle; no game input data"
     },
     {
