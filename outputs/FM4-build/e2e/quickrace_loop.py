@@ -234,17 +234,22 @@ class Loop:
             return self.fail(f'{tag}: the race did not start')
         self.cycle['race_s'] = self.now_s()
         self.label(f'{tag}: race')
-        until = min(self.deadline, time.time() + self.race_s)
+        race_start = time.time()
+        until = min(self.deadline, race_start + self.race_s)
+        finished = False
         while time.time() < until:
             self.poll()
-            if self.scene == '924_POST_RACE':  # the AI finished the race first
+            # The AI finished first (a short track): the post-race menu, with a pop-up over it at once.
+            if any(re.search(r'^scene \d+ 924_POST_RACE$', e[1]) for e in self.screen.events(race_start)):
+                finished = True
+                self.cycle['finished_s'] = self.now_s()
                 break
             time.sleep(0.5)
         if time.time() >= self.deadline:
             return self.fail(f'{tag}: during the race')
         # Quit, then back to the Free Play menu.
         self.label(f'{tag}: quit')
-        if self.scene != '924_POST_RACE':
+        if not finished:
             if not self.press_until_event('start', r'^scene \d+ 925_PAUSE_MENU$', 30, retry=5):
                 return self.fail(f'{tag}: no pause menu')
             time.sleep(1)
