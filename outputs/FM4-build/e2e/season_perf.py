@@ -6,7 +6,9 @@ summarises the perf trace (perf.jsonl) of each event and phase:
 - the phases: `menus` (the World Tour, the event's screen and every other menu), `loading`
   (the event's loading, the unloading after it, the loading screens between menus), `pre_race`
   (the pre-race menu), `countdown` (from the cars' placement to the race), `race` (the race
-  scenario's push to its pop) and `rewards` (the post-race menu, the earnings, the level and
+  scenario's push to its pop), `finish` (a race's last seconds after the finish line, which the
+  title runs at 30 fps: the race's last perf windows with a median frame of 30 ms or more) and
+  `rewards` (the post-race menu, the earnings, the level and
   affinity rewards and a gift car's screens); the driver presses CONTINUE at once, so a season run
   has no replay;
 - per event and phase: seconds, frames, fps, the frame time p50, p95 and p99, the frames over 16,
@@ -30,7 +32,7 @@ HERE = Path(__file__).resolve().parent
 sys.path.insert(0, str(HERE))
 from soak_report import percentile, read_events, read_jsonl  # noqa: E402
 
-PHASES = ('menus', 'loading', 'pre_race', 'countdown', 'race', 'rewards')
+PHASES = ('menus', 'loading', 'pre_race', 'countdown', 'race', 'finish', 'rewards')
 LOADING = {'19_DYNAMIC_LOADING_WORLDTOUR', '17_DYNAMIC_LOADING_FREEPLAY', '6_C_INI_UNLOADING', '035_D_LOADING'}
 REWARDS = {'924_POST_RACE', '920_POST_RACE_EARNINGS', '909_LEVEL_PROGRESS', '910_POST_RACE_LEVEL_REWARDS',
            '108_C_BUY_CARSELECT', '114_C_BUY_BUYCAR_COLOR'}
@@ -116,6 +118,9 @@ def finish(bucket):
         return None
     n, g = len(frames), bucket['gpu_frames'] or 1
     minutes = sum(frames) / 60000
+    # A hitch: a frame over twice the phase's median and over the 30 fps frame (the title's
+    # 30 fps screens pace at 33.3 ms, which is no hitch).
+    hitch_ms = max(34.0, 2 * percentile(frames, 0.50))
     result = {
         'seconds': round(bucket['seconds'], 1), 'frames': n,
         'fps': round(1000 * n / sum(frames), 2),
@@ -125,6 +130,8 @@ def finish(bucket):
         'frame_ms_max': round(max(frames), 1),
         **{f'over_{ms}ms': sum(f > ms for f in frames) for ms in OVER},
         'over_33ms_per_min': round(sum(f > 33 for f in frames) / minutes, 2) if minutes else None,
+        'hitch_ms': round(hitch_ms, 1), 'hitches': sum(f > hitch_ms for f in frames),
+        'hitches_per_min': round(sum(f > hitch_ms for f in frames) / minutes, 2) if minutes else None,
         'gpu_ms_per_frame': round(bucket['gpu_ms'] / g, 3) if bucket['gpu_frames'] else None,
         'gpu_parts_ms': {name: round(ms / g, 3) for name, ms in
                          sorted({**bucket['passes'], 'swap': bucket['swap_ms'], 'scene': bucket['scene_ms']}.items(),
@@ -154,10 +161,20 @@ def survey(run):
                 return record['event']
         return None
     buckets, totals, long_frames = {}, {p: new_bucket() for p in PHASES}, []
-    for window in perf:
+    phases = [phase_at(spans, w['t'] - w.get('window_ms', 0) / 2000) for w in perf]
+    # A race's last seconds after the finish run at the title's 30 fps until the race scenario
+    # pops: the windows at the end of a race whose median frame is 30 ms or more.
+    for index in range(len(perf)):
+        if phases[index] == 'race' and (index + 1 == len(perf) or phases[index + 1] != 'race'):
+            back = index
+            while back >= 0 and phases[back] == 'race' and perf[back].get('frame_ms') and \
+                    percentile(perf[back]['frame_ms'], 0.5) >= 30:
+                phases[back] = 'finish'
+                back -= 1
+    for window, phase in zip(perf, phases):
         start = window['t'] - window.get('window_ms', 0) / 1000
         t = window['t'] - window.get('window_ms', 0) / 2000
-        phase, event = phase_at(spans, t), event_of(t)
+        event = event_of(t)
         add_window(buckets.setdefault((event, phase), new_bucket()), window)
         add_window(totals[phase], window)
         clock = start
@@ -165,7 +182,7 @@ def survey(run):
             clock += ms / 1000
             if ms > 50:
                 long_frames.append({'t_s': round(clock, 2), 'ms': round(ms, 1), 'event': event,
-                                    'phase': phase_at(spans, clock)})
+                                    'phase': phase if phase == 'finish' else phase_at(spans, clock)})
         # The window's own list of frames over 50 ms has their shader work.
         for entry in window.get('long_frames') or []:
             match = next((f for f in reversed(long_frames) if abs(f['ms'] - entry[0]) < 0.05 and
@@ -195,9 +212,9 @@ def survey(run):
                 candidates.append({'event': entry['event'], 'track': entry['track'], 'name': entry['name'],
                                    'phase': phase, **{k: stats[k] for k in (
                                        'seconds', 'fps', 'frame_ms_p99', 'over_33ms_per_min', 'over_50ms',
-                                       'gpu_ms_per_frame')}})
+                                       'hitches', 'hitches_per_min', 'gpu_ms_per_frame')}})
     report['slowest_p99'] = sorted(candidates, key=lambda c: -c['frame_ms_p99'])
-    report['most_hitches'] = sorted(candidates, key=lambda c: -(c['over_33ms_per_min'] or 0))
+    report['most_hitches'] = sorted(candidates, key=lambda c: -(c['hitches_per_min'] or 0))
     return report, records
 
 
@@ -223,10 +240,10 @@ def main():
     for c in report['slowest_p99'][:options.top]:
         print(f"    {c['frame_ms_p99']} ms  event {c['event']} {c['track']} {c['phase']} ({c['seconds']} s, "
               f"{c['fps']} fps, GPU {c['gpu_ms_per_frame']} ms)")
-    print(f'  most frames over 33 ms a minute:')
+    print(f'  most hitches a minute (frames over twice the median and over 34 ms):')
     for c in report['most_hitches'][:options.top]:
-        print(f"    {c['over_33ms_per_min']}/min  event {c['event']} {c['track']} {c['phase']} "
-              f"({c['over_50ms']} over 50 ms)")
+        print(f"    {c['hitches_per_min']}/min  event {c['event']} {c['track']} {c['phase']} "
+              f"({c['hitches']} hitches, {c['over_50ms']} over 50 ms)")
 
 
 if __name__ == '__main__':

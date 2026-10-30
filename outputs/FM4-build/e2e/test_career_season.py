@@ -53,6 +53,17 @@ class ParserTests(unittest.TestCase):
             ['Tsukuba Short', 'CURRENT EVENT'], ['TopGear Loop', 'NOT YET STARTED'],
             ['Hockenheim Short', 'NOT YET STARTED']])
 
+    def test_place_and_same_season(self):
+        self.assertEqual(career_season.place_of(['YOU PLACED', '2nd', 'RACE WINNINGS', '2nd']), 2)
+        self.assertIsNone(career_season.place_of(['RACE WINNINGS', '+1,000 CR', 'FAIL']))
+        events = [['Ladera Short', 'COMPLETED EVENT'], ['Tsukuba Short', 'CURRENT EVENT']]
+        self.assertTrue(career_season.same_season({'name': 'AMATEUR DIVISION', 'events': events},
+                                                  {'name': 'AMATEUR', 'events': events}))
+        self.assertFalse(career_season.same_season(
+            {'name': 'AMATEUR DIVISION', 'events': events},
+            {'name': 'SEMI-PRO DIVISION', 'events': [['Fujimi Kaido', 'CURRENT EVENT'], ['Sedona', 'NOT YET STARTED']]}))
+        self.assertTrue(career_season.same_season({'name': 'AMATEUR DIVISION'}, {'name': 'AMATEUR'}))
+
     def test_restrictions_and_car_fits(self):
         box = [line('EVENT RESTRICTIONS', 306, 175), line('W 275', 306, 242),
                line('BODY FAMILY must be Economy', 305, 335), line('CANCEL', 923, 391)]

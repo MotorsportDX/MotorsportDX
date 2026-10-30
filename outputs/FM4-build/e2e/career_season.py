@@ -52,6 +52,27 @@ STALL_S = 180
 RACE_TIMEOUT_S = 25 * 60
 
 
+def place_of(text):
+    """The place under 'YOU PLACED' (the earnings and the level progress show it), or None."""
+    for index, line in enumerate(text):
+        if line.upper() == 'YOU PLACED':
+            for below in text[index + 1:index + 3]:
+                if PLACE.match(below):
+                    return int(PLACE.match(below).group(1))
+    return None
+
+
+def same_season(a, b):
+    """Whether two SEASON STATUS boxes are one season: most of their destinations agree (the
+    OCR may cut a season's title short, 'AMATEUR' for 'AMATEUR DIVISION')."""
+    first = [d.upper() for d, _ in a.get('events') or [] if d]
+    second = [d.upper() for d, _ in b.get('events') or [] if d]
+    if first and second:
+        return sum(x == y for x, y in zip(first, second)) * 2 >= max(len(first), len(second))
+    one, two = (a.get('name') or '').upper(), (b.get('name') or '').upper()
+    return one.startswith(two) or two.startswith(one)
+
+
 def credits_of(lines):
     """The player's credits in the footer line ('8,610 CR'), or None."""
     for line in lines:
@@ -160,7 +181,7 @@ class Season:
                  'racing': self.racing,
                  'events_done': len(self.records), 'seasons_done': self.seasons_done,
                  'event': self.event, 'unknown_screens': self.unknown[-20:], 'failure': self.failure,
-                 **extra}
+                 'capped': self.capped, **extra}
         tmp = self.state_path.with_suffix('.tmp')
         tmp.write_text(json.dumps(state, indent=2))
         tmp.replace(self.state_path)
@@ -292,6 +313,11 @@ class Season:
                 self.save_state(phase='cap reached')
                 return bool(self.records)
             if not self.world_tour() or not self.event_screen() or not self.play_event():
+                if self.event and self.event.get('races'):
+                    # The event the cap or a failure cut short, marked as such.
+                    self.event.update({'unfinished': True, 'end_s': self.now_s(),
+                                       'places': [r.get('place') for r in self.event['races']]})
+                    self.write_log(self.records + [self.event])
                 return self.capped and bool(self.records)
 
     def world_tour(self):
@@ -314,6 +340,16 @@ class Season:
                         return self.fail(f'event {number}: the CHALLENGE EVENT box stays')
                     # Closing the box writes no scene event: the World Tour screen is back.
                     self.scene = '200_WORLD_TOUR'
+                elif item[1] == '207_SEASON_LIST_DIALOG':
+                    # After a season's end: the list of seasons, the next one highlighted. A takes it.
+                    lines = self.read(6)
+                    text = [l['text'].strip() for l in lines if l['text'].strip()]
+                    self.event['season_list'] = text[:16]
+                    self.keep_capture(f'{number:02d}-season-list')
+                    gone = '!' + text[0] if text else '!SEASON'
+                    if not self.read_until(gone, 60, action='a', retry=6):
+                        return self.fail(f'event {number}: the season list stays')
+                    self.scene = '200_WORLD_TOUR'
                 elif not self.handle(item[1], None, item[0]):
                     return False
                 until = time.time() + 240
@@ -323,6 +359,11 @@ class Season:
                 continue
             lines = self.read(6)
             if lines and self.e2e.shows(lines, ROW_TEXT) and row_event(lines):
+                # The row slides in: its first event reads garbled until it settles.
+                time.sleep(2)
+                settled = self.read(6)
+                if settled and self.e2e.shows(settled, ROW_TEXT) and row_event(settled):
+                    lines = settled
                 return self.choose_event(lines)
         return self.fail(f'event {number}: the World Tour row of events did not show (scene {self.scene})')
 
@@ -355,6 +396,12 @@ class Season:
         if moves:
             self.e2e.press(self.input_file, ','.join(moves), 0.12)
         time.sleep(1.5)
+        # The chosen event read again, now that the row stands still.
+        again = row_event(self.read(4))
+        if row and again and again['name'] != row[choice]['name']:
+            self.event['name_first_read'] = row[choice]['name']
+            self.event['name'] = again['name']
+            self.event['track'] = again.get('track') or self.event.get('track')
         self.save_state(phase='event chosen')
         if not self.press_until_event('a', r'^scene \d+ 204_C_RACE_INFO$', 40, retry=5):
             return self.fail(f"event {self.event['event']}: its screen did not open")
@@ -364,9 +411,18 @@ class Season:
         """The event's screen: the footer, SEASON STATUS, then START RACE."""
         number = self.event['event']
         self.label(f'event {number}: event screen')
-        lines = self.read_until('START RACE', 30)
+        lines = self.read_until('START RACE', 20)
         if not lines:
-            return self.fail(f'event {number}: no START RACE')
+            # Windows OCR deskews a whole image by the angle of tilted artwork (the Inline Four
+            # Showcase's banner, 15 degrees) and then misreads the straight menu. The screen
+            # opens with START RACE focused: A starts the event without reading it.
+            self.event['event_screen_unread'] = True
+            self.keep_capture(f'{number:02d}-event-screen-unread')
+            if self.records and self.records[-1].get('credits_after') is None:
+                self.records[-1]['credits_after'] = self.event.get('credits_row')
+                self.write_log()
+            self.event['credits_before'] = self.event.get('credits_row')
+            return self.start_event()
         car, level, credit = footer(lines)
         self.event.update({'car': car or self.event.get('car'),
                            'level_before': level or self.event.get('level_before'),
@@ -383,6 +439,11 @@ class Season:
             self.read_until('!EVENT STATUS', 20, action='a', retry=5)
         if not self.e2e.select_label(self.screen, self.input_file, 30, 'START RACE'):
             return self.fail(f'event {number}: START RACE could not be selected')
+        return self.start_event()
+
+    def start_event(self):
+        """A on START RACE until the event loads; the queue keeps only the screens after it."""
+        number = self.event['event']
         if not self.press_until_event('a', r'^scene \d+ 19_DYNAMIC_LOADING_WORLDTOUR$', 30, retry=5):
             return self.fail(f'event {number}: the event did not load')
         self.event['races'] = []
@@ -461,16 +522,25 @@ class Season:
             total = None
             totals = [l for l in lines if l['text'].strip().upper() == 'TOTAL']
             if totals:
+                # OCR reads a 1 or a 0 as a letter at times ('+8,1 IO CR').
+                digits = lambda l: re.sub(r'^\+(.*)CR$', lambda m: '+' + m.group(1).translate(
+                    str.maketrans('IlO', '110')) + 'CR', l['text'].strip())
                 below = [l for l in lines if 0 < l['y'] - totals[0]['y'] <= 40
-                         and SIGNED_CREDITS.match(l['text'].strip())]
+                         and SIGNED_CREDITS.match(digits(l))]
                 if below:
-                    total = int(re.sub(r'[^\d]', '', below[0]['text']))
+                    total = int(re.sub(r'[^\d]', '', digits(below[0])))
             if race is not None:
-                race.update({'earnings_total': total, 'earnings': [l['text'].strip() for l in lines][:24],
+                text = [l['text'].strip() for l in lines]
+                race.update({'earnings_total': total, 'earnings': text[:24],
                              'earnings_capture': self.keep_capture(f'{number:02d}-race{race["race"]}-earnings')})
+                if race.get('place') is None:
+                    race['place'] = place_of(text)
             return self.press_on(scene, t, 60, retry=6)
         if scene == '909_LEVEL_PROGRESS':
-            self.event['level_progress'] = [l['text'].strip() for l in self.read(6)][:16]
+            text = [l['text'].strip() for l in self.read(6)]
+            self.event['level_progress'] = text[:16]
+            if race is not None and race.get('place') is None:
+                race['place'] = place_of(text)
             return self.press_on(scene, t, 60, retry=6)
         if scene == '910_POST_RACE_LEVEL_REWARDS':
             return self.reward_pages(t)
@@ -482,6 +552,12 @@ class Season:
             return self.press_on(scene, t, 30)
         if scene == '114_C_BUY_BUYCAR_COLOR':
             return self.press_on(scene, t, 30)
+        if scene == '208_SEASON_END':
+            # The season's end (its title); it moves on to the World Tour by itself.
+            text = [l['text'].strip() for l in self.read(4) if l['text'].strip()]
+            self.event['season_end'] = ' '.join(text[:3]) or True
+            self.keep_capture(f'{number:02d}-season-end')
+            return True
         lines = self.read(5)
         if e.shows(lines, 'Are you sure|=YES|CONTINUE|=OK|A OK'):
             e.press(self.input_file, 'a', 0.12)
@@ -543,14 +619,21 @@ class Season:
         event['credits_after'] = None  # read on the next event's screen
         rows = (event.get('season') or {}).get('events') or []
         # A division boundary: the first event of a season other than the previous event's.
-        name = (event.get('season') or {}).get('name')
-        previous = next(((r.get('season') or {}).get('name') for r in reversed(self.records)
-                         if (r.get('season') or {}).get('name')), None)
-        if name and previous and name != previous:
-            event['season_started'] = {'season': name, 'after': previous}
-        # The season is complete when this event was its last one.
-        if rows and rows[-1][1].startswith('CURRENT'):
-            name = event['season'].get('name')
+        season = event.get('season') or {}
+        previous = next((r['season'] for r in reversed(self.records) if r.get('season')), None)
+        last = self.records[-1] if self.records else {}
+        if last.get('season_complete'):
+            # The season list after a season's end names the next one ('... CLUBMAN DIVISION.').
+            named = next((m.group(1) for m in (re.search(r"([A-Z][A-Z\-]+ DIVISION)", x)
+                                               for x in event.get('season_list') or []) if m), None)
+            event['season_started'] = {'season': season.get('name') or named, 'after': last['season_complete']}
+        elif season and previous and not same_season(season, previous):
+            event['season_started'] = {'season': season.get('name'), 'after': previous.get('name')}
+        # The season is complete when the title showed its end (208_SEASON_END), or when this
+        # event was the last one of its SEASON STATUS.
+        if event.get('season_end') or (rows and rows[-1][1].startswith('CURRENT')):
+            end = event.get('season_end')
+            name = season.get('name') or (end if isinstance(end, str) else None)
             event['season_complete'] = name
             self.seasons_done.append({'season': name, 'events': len(rows), 'ended_s': event['end_s'],
                                       'event': event['event']})
@@ -559,9 +642,10 @@ class Season:
         self.save_state(phase='event done')
         return True
 
-    def write_log(self):
+    def write_log(self, records=None):
         """season.jsonl: one line per finished event, rewritten as credits_after fills in."""
-        self.log_path.write_text(''.join(json.dumps(r) + '\n' for r in self.records))
+        records = self.records if records is None else records
+        self.log_path.write_text(''.join(json.dumps(r) + '\n' for r in records))
 
     def summary(self):
         """The season part of the run's summary.json. The credits check per event: the credits
