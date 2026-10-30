@@ -77,6 +77,10 @@
       "provenance": "Project documentation; preview distribution form and readiness checklist"
     },
     {
+      "path": "docs/analysis/builder-installer.md",
+      "provenance": "Project documentation; builder installer design (no game content shipped)"
+    },
+    {
       "path": "docs/status/current.md",
       "provenance": "Project documentation; current verification status, open gaps and next validation steps"
     },

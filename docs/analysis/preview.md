@@ -38,7 +38,7 @@ the preview cannot start without it.
 | Testers can clone the source: GitHub's `main` is about 184 commits behind local `main` (25 October 2026), and nothing is pushed without the owner | **Blocker** (push to a private repository with the testers invited, or another channel the owner chooses) | **Blocker** (push to a public repository) |
 | A named preview commit or tag | Not done (recommended) | **Blocker** |
 | A clean setup on a second computer (another user's Windows, other paths and versions) | Not done: the first testers are that test | **Blocker** |
-| A step-by-step install of the toolchain (Visual Studio 2022 with the C++ workload and the Windows SDK, LLVM 20.1.8, Python 3.11, Git); `doctor` checks them but does not install them | Not done (the testers can be helped one by one) | Not done (strongly recommended) |
+| A step-by-step install of the toolchain (Visual Studio 2022 with the C++ workload and the Windows SDK, LLVM 20.1.8, Python 3.11, Git); `doctor` checks them but does not install them; the design of a builder installer that guides it is in [builder installer](builder-installer.md) | Not done (the testers can be helped one by one) | Not done (strongly recommended) |
 | CI that builds the repository | Not done | Not done (it cannot run without game data; a build of the runtime and the launcher only would catch most breakage) |
 
 ### Licensing and content

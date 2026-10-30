@@ -8,7 +8,7 @@ Status:
 - **Done**: the work is finished or the research answered its question; the note is the record and the reference.
 - **Superseded**: a later note or decision replaced it; it is kept for its measurements.
 
-Updated on 30 October 2026.
+Updated on 31 October 2026.
 
 ## Native port and render paths
 
@@ -77,3 +77,4 @@ Updated on 30 October 2026.
 | Note | Status | Contents |
 | --- | --- | --- |
 | [preview.md](preview.md) | Active | What a preview can be (source only), the internal names, and the checklist for a closed and a public preview |
+| [builder-installer.md](builder-installer.md) | Active | A free download without the game that builds Motorsport DX on the player's computer from their discs: what it ships (two options, their licences), the toolchain, the flow, the launcher's builder mode, increments, risks and the owner's decisions |

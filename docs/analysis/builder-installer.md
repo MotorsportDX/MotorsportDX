@@ -1,0 +1,384 @@
+# Builder installer (31 October 2026)
+
+A design for a **builder installer**: a free download that carries none of the game and guides a
+player from their own discs to a built, running Motorsport DX on their own Windows computer. It is
+a design only: no code is changed, nothing was downloaded for it, and no game or GPU run was made.
+Sizes and licence terms that only a download could confirm are marked "not checked".
+
+Where it starts from: releases are source only ([distribution](../sources-and-licensing.md#distribution),
+[preview plan](preview.md)). Each player clones the repository, installs the toolchain by hand and
+runs `Build.ps1` ([setup](../setup.md)). The [preview checklist](preview.md#source-and-build) lists
+"a step-by-step install of the toolchain" as not done and strongly recommended for a public preview;
+this note is that step, made into a program.
+
+## 1. Goal and hard limits
+
+The goal: a player who owns the game downloads one small package, points it at their discs, agrees
+to each download it asks for, waits, and plays. No command line, no PowerShell execution policy, no
+clone.
+
+Hard limits, which every option below keeps:
+
+- **Nothing game-derived is ever shipped.** No game code (`fm4_rex.exe` and the two module DLLs are
+  the game's code recompiled from the player's discs), no game data, no `loaded-image.bin`, no
+  generated source, no shader cache (`cache` holds shaders translated from the game), no export and
+  no BuildRoot. Everything game-derived is generated and compiled on the player's computer from
+  their own discs, as `generate` and `build` do today.
+- **No launcher backdrop.** The package carries no picture; the launcher draws its dark gradient
+  ([GUI launcher](../running.md#gui-launcher)).
+- **No DirectX Shader Compiler.** Its `LICENSE-MS.txt` does not allow passing it on
+  ([DXC](../sources-and-licensing.md#third-party-code-directx-shader-compiler)); the player's
+  computer fetches it, as setup and the launcher's Shaders page do today.
+- **No Forza names or logos** in the package's name, icon or pages. The product is Motorsport DX,
+  with the non-affiliation line of the About page.
+- **No silent installs and no system changes.** Every download is listed with its source, size and
+  licence and needs the player's consent in the window. The installer never accepts a licence for
+  the player, never changes a security setting (no antivirus exclusion, no execution policy), and
+  installs nothing for all users without Windows' own elevation prompt in front of the player.
+- **One commit.** The launcher, the source and the build come from the same tag, because the
+  launcher's launch plan must match the runtime's cvars (the launcher tests of every `build` check
+  that, [GUI launcher](../running.md#gui-launcher)).
+
+## 2. What the player brings
+
+| Input | Required | Checked by | Notes |
+| --- | --- | --- | --- |
+| Disc 1 (Play Disc), extracted | Yes | `validate_discs` and `disc_release` in [pipeline.py](../../outputs/FM4-build/pipeline.py); the launcher's port in [discs.cpp](../../work/fm4-launcher/src/discs.cpp) | The three executables (`default.xex`, `XMediaFacade_default.xex`, `SpeechFacade_default.xex`) must match the SHA-256 hashes of one release in `RELEASES`: **USA** (media ID `26FF1101`) or **Japan/Asia** (media ID `633772A0`). A mix, another revision, a title update or a renamed file is refused. `Media` and `Database.xmplr` must be there too |
+| Disc 2, extracted | No (needed for its cars) | `disc2_packages`, `content_error` | The four STFS packages under `content\0000000000000000\4d530910\00000002` |
+| DLC packages | No | `validate_content` | STFS (`CON`, `LIVE`, `PIRS`) with title ID `4D530910` and content type `00000002`; title updates and other titles are skipped ([downloadable content](../setup.md#downloadable-content)) |
+| Disc 1 or Disc 2 as an ISO | Not today | `validate_discs` says "not an ISO" | An optional increment ([7](#7-increments)) and an owner question ([9](#9-decisions-for-the-project-owner)) |
+
+The releases are the same game: one build serves both ([releases](releases.md)). Title updates are
+not supported ([title updates](title-updates.md)).
+
+**When the check runs.** First, before any download: the launcher already holds the release hashes
+and the content rules in `launcher.json` and checks the discs as `generate` does
+([Game data page](../running.md#gui-launcher)). A player whose discs fail learns it before the
+toolchain's gigabytes are fetched. `generate` checks them again.
+
+**The discs stay where they are.** The game reads Disc 1 in place (`game_data_root`), `build`
+validates the Disc paths of `local.json` again on every rebuild, and the first Play imports Disc 2
+and the DLC into `user-data` (about their own size). The installer says so before it starts.
+Whether Disc 2 and the DLC folders may move after their import is not checked.
+
+## 3. What the installer ships: two options
+
+### 3.1 Option A: the launcher and a source snapshot at a tag
+
+The package is a zip (no admin needed to unpack it) with:
+
+- `MotorsportDX.exe`, the GUI launcher, built at the tag, with a builder mode ([6](#6-the-launcher-ux));
+- `launcher.json` for the tag, the launcher's tables (pure project data: releases, content rules,
+  presets, cvars), written without a build ([7](#7-increments), B1);
+- `source\`, a `git archive` of the tag (on 31 October 2026, `627e914` gave 1,256 files, 18.5 MB,
+  4.6 MB as a zip), with a version stamp in place of the Git metadata;
+- `toolchain.json`, the pinned list of downloads (section [4](#4-the-toolchain-on-the-players-computer));
+- `LICENSE.txt`, `CREDITS.txt` and `third-party-notices`.
+
+Everything else, the runtime and `rexglue.exe` included, is fetched as source and built on the
+player's computer, exactly as `setup`, `generate` and `build` do today.
+
+Licences of what option A ships:
+
+| Component | Licence | Notice condition | In the package |
+| --- | --- | --- | --- |
+| The project's own code (launcher, pipeline, integration, docs) | BSD-3-Clause ([LICENSE](../../LICENSE)) | keep the notice | `LICENSE.txt`, source |
+| Dear ImGui 1.92.5 | MIT | notice in all copies | `MotorsportDX.exe` |
+| SDL 3 (`8bf3b72`, static), altered by the GameInput patch | zlib | none for binaries; the patch marks the altered source | `MotorsportDX.exe`; the patch in the source |
+| Microsoft.GameInput 3.5.283, the API v3 header and loader only | MIT (those two files) | notice in all copies | `MotorsportDX.exe`, inside SDL |
+| JSON for Modern C++ 3.11.3 | MIT | notice in all copies | `MotorsportDX.exe` |
+| `wheel_host.cpp` of the runtime fork | BSD-3-Clause | as the project | `MotorsportDX.exe` |
+| The C++ runtime of the toolchain that builds the launcher, if linked statically (B3) | Microsoft's Visual Studio terms | not checked | `MotorsportDX.exe` |
+| The runtime fork `work/runtime` as source (ReXGlue SDK, Xenia-derived portions) | BSD-3-Clause | notice in source | source |
+| XenonRecomp-based files of the fork (`include/rex/ppc/context.h`, `function.h`, `intrinsics.h`, `src/codegen/config.cpp`) | MIT, with the open Unleashed Recompiled question ([open items](../sources-and-licensing.md#open-items-before-a-public-release)) | notice in all copies (`XenonRecomp-LICENSE.txt`) | source only; compiled on the player's computer |
+| Xenia's resolve shaders, adapted | BSD-3-Clause (`LICENSE.xenia`) | notice in source | source |
+| The look's GT7 tone mapping port | MIT (Polyphony Digital) | notice in all copies | source and `look` |
+
+The launcher links nothing else: no game code or data, no FFmpeg or libmspack (LGPL, in
+`rexruntime.dll` only), no DXC, none of the four XenonRecomp-based files (checked on 31 October 2026
+against [work/fm4-launcher/CMakeLists.txt](../../work/fm4-launcher/CMakeLists.txt): its sources,
+`wheel_host.cpp`, Dear ImGui and `SDL3::SDL3-static`, and Windows' own system libraries). It uses
+Windows' `urlmon` and `bcrypt` to fetch and check DXC, and Windows' `tar.exe` to unpack it
+([shaders.cpp](../../work/fm4-launcher/src/shaders.cpp)); the builder reuses the same three.
+
+What option A fetches on the player's computer (each with consent, [4](#4-the-toolchain-on-the-players-computer)):
+
+| Component | Licence | Used for |
+| --- | --- | --- |
+| ReXGlue SDK `f5337cd`, its 13 submodules and 11 vendored folders | BSD-3-Clause, MIT, zlib, Boost 1.0, BSD-2-Clause, LGPL 2.1+ (FFmpeg, libmspack), GPL 2.0+ (the binutils disassembler, in `rexglue.exe` only), two files without a stated licence ([third-party components](../sources-and-licensing.md#third-party-components)) | built into the runtime, `rexglue.exe` and the game on the player's computer; nothing is passed on, so the LGPL and GPL terms are met as today ([LGPL](../sources-and-licensing.md#lgpl-ffmpeg-and-libmspack)) |
+| AMD FidelityFX SDK v1.1.4 (sparse) | MIT; its `binary_store` holds a DXC 1.8.2403 under Microsoft's terms, run at build time with `-Fsr on` only | FSR 3.1 when built in; `setup` fetches it on every BuildRoot |
+| Microsoft.GameInput 3.5.283 (NuGet) | the two used files MIT; the rest of the package under Microsoft's terms, not extracted | SDL's GameInput driver |
+| DirectX Shader Compiler v1.9.2609 | Microsoft's DXC terms, LLVM's NCSA, MIT | the native path's DXIL shaders |
+| The toolchain (section [4](#4-the-toolchain-on-the-players-computer)) | per tool | building |
+
+Trade-offs of option A:
+
+- **Download:** the package is about 10 MB (the launcher 4.5 MB on the development BuildRoot, more
+  with a static C++ runtime, not checked; the source 4.6 MB). The player's computer then fetches the
+  SDK sources (the upstream clone holds 1,086 MB on the development BuildRoot), the FidelityFX SDK
+  (72 MB in the BuildRoot), GameInput (2 MB), DXC (32 MB zip) and the toolchain (section 4).
+- **Time:** the measured clean `all`, about 16 minutes at `-Jobs 8` on the 20-thread development
+  laptop, of which the game's own compilation took 141 s
+  ([clean setup](../status/current.md#clean-setup-from-a-fresh-clone-25-october-2026)), plus the
+  toolchain. A slower computer is not measured.
+- **Failure points:** every fetch (GitHub, NuGet, the toolchain hosts), the runtime build, the
+  game build, the tests at the end of `build`. All are the paths the project already runs on every
+  BuildRoot, with logs per stage.
+- **Licences:** nothing new is passed on but the launcher; the LGPL, GPL and Unleashed questions
+  stay where they are today.
+
+### 3.2 Option B: the launcher with a prebuilt runtime and `rexglue.exe`
+
+The package adds `runtime-install` (the development BuildRoot's holds 59 MB: `rexruntime.dll`
+10.5 MB, `rexgpu-xenos.dll` 9.5 MB, `rexglue.exe` 3.5 MB, the headers, import libraries and CMake
+files the game builds against). Only the game is generated and compiled on the player's computer.
+The upstream SDK clone, the FidelityFX SDK and GameInput are then not needed; DXC still is.
+
+Licences that option B adds, because these binaries would be passed on:
+
+| Component | Licence | What passing it on requires |
+| --- | --- | --- |
+| FFmpeg (libavcodec, libavutil) and libmspack (`lzxd.c`), static in `rexruntime.dll` | LGPL 2.1 or later | the LGPL text, an offer of the libraries' source as built, and relinking with a changed library ([LGPL](../sources-and-licensing.md#lgpl-ffmpeg-and-libmspack)): the package would need the runtime's object files or a way to relink, beyond the source snapshot |
+| GNU binutils PowerPC disassembler, in `rexglue.exe` | GPL 2.0 or later | the complete corresponding source of `rexglue.exe` under the GPL, and the licence text; the project's own code and every library in it must be GPL-compatible (BSD, MIT, zlib and Boost are) |
+| The four XenonRecomp-based files, in the runtime, the game's code and `rexglue.exe` | MIT as marked; possibly GPL 3.0 if they hold Unleashed Recompiled code | the open question must be answered by the ReXGlue SDK first ([projects](../sources-and-licensing.md#projects-this-work-builds-on)) |
+| `pe_image.h` and disruptorplus (vendored, in `rexruntime.dll` and `rexgpu-xenos.dll`) | no stated licence in the SDK's copy | a licence must be found first ([open items](../sources-and-licensing.md#open-items-before-a-public-release)) |
+| The rest of the runtime's libraries (fmt, spdlog, toml++, xxHash, SIMDe, CLI11, inja, UTF8-CPP, o1heap, Dear ImGui, SDL, GameInput, FidelityFX with `-Fsr on`, the vendored notices) | permissive | the notices, which `third-party-notices` already holds |
+
+Trade-offs of option B:
+
+- **Download:** about 70 MB for the package, against about 10 MB; the player's computer skips the
+  1.1 GB upstream clone and the FidelityFX and GameInput fetches.
+- **Time:** saves the runtime's build (not measured on its own; the 16-minute `all` includes it and
+  the fetches) but not the game's 141 s nor the toolchain, which the game's build needs in full:
+  clang 20, the MSVC libraries, the Windows SDK, CMake, Ninja and Python stay.
+- **Failure points:** fewer fetches, but a new one: the prebuilt runtime must match the source and
+  the compiler exactly (ABI, `-march=x86-64-v2`, the cvars), and `build` today always rebuilds the
+  runtime from source (`build_runtime` in `build_game`), so the pipeline needs a mode that trusts a
+  shipped `runtime-install` and checks its hashes.
+- **Licences:** blocked until the LGPL relinking, the GPL source of `rexglue.exe`, the Unleashed
+  Recompiled question and the two vendored files are resolved.
+
+### 3.3 Recommendation
+
+**Option A.** It passes on only the launcher, whose licences are all permissive and already in
+`third-party-notices`; it keeps every LGPL and GPL component on the source-only footing it has
+today; and it runs the same `setup`, `generate` and `build` that every gate and the clean setup of
+25 October 2026 ran. Option B saves less than it looks (the toolchain stays, and the game's own
+compile stays) and needs four licence items answered first. It can follow later as an increment if
+those items are closed and download size proves to matter.
+
+## 4. The toolchain on the player's computer
+
+What `doctor` and `Build.ps1` require today: Windows x64, Python 3.11+ x64, `git`, `cmake` 3.25+,
+`ninja`, `clang`/`clang++` 20.x, `link` and `fxc.exe` in the Visual Studio x64 developer
+environment, which `Build.ps1` enters through `vswhere` and `Enter-VsDevShell`
+([Build.ps1](../../outputs/FM4-build/Build.ps1)). The MSVC tools are needed even though clang
+compiles: clang targets the MSVC ABI and links against MSVC's C++ library and the Windows SDK's
+headers and libraries.
+
+Versions on the development computer on 31 October 2026 (read locally): clang 20.1.8, Visual Studio
+Community 2022 with MSVC 14.44.35207, its bundled CMake 3.31.6 and Ninja 1.12.1, Windows SDK
+10.0.26100.0, Python 3.11.9, Git 2.55.0. "Installed size" is the folder size there, not a download
+size.
+
+| Tool | Source | Pinned version and hash | Licence | Size | Portable (no admin) |
+| --- | --- | --- | --- | --- | --- |
+| Visual Studio 2022 Build Tools: MSVC x64 tools, Windows SDK (with `fxc.exe`), C++ CMake tools (CMake and Ninja) | Microsoft's bootstrapper `vs_BuildTools.exe`, run interactively so the player accepts the terms in Microsoft's window | validated: MSVC 14.44, SDK 10.0.26100.0; the bootstrapper is not pinned by hash today; a fixed-version channel is not checked | Microsoft's Build Tools terms; whether they allow this use without a Visual Studio licence is **not checked** (Community is free for individuals) | installed on the development computer: MSVC 1,411 MB, the Windows Kits folder 1,708 MB (five SDK versions), CMake and Ninja 58 MB; the download is not checked | **No**: Microsoft's installer, with an elevation prompt |
+| LLVM 20.1.8 (clang, lld) | the LLVM project's GitHub release | 20.1.8 validated; a release asset and its SHA-256 are not pinned yet (not checked) | Apache-2.0 with LLVM exceptions | installed: 2,427 MB; download not checked | The Windows installer: not checked whether it installs per user. A Windows archive of the release: not checked whether 20.1.8 has one |
+| CMake 3.25+ | from the Build Tools above, or Kitware's Windows zip | 3.31.6 (the Build Tools'); a zip hash is not pinned | BSD-3-Clause | 58 MB with Ninja (the Build Tools') | Yes (zip), or comes with the Build Tools |
+| Ninja | from the Build Tools, or the Ninja project's Windows zip | 1.12.1 (the Build Tools') | Apache-2.0 | one executable | Yes |
+| Python 3.11 x64 | python.org's Windows embeddable package (zip) | 3.11.9 on the development computer; asset and hash not pinned (not checked) | PSF License | installed (full) 125 MB; the embeddable zip not checked | Yes, if the pipeline runs on the embeddable package: it reads only the standard library, but imports `prepare.py` from its own folder, and the embeddable package's `._pth` file limits `sys.path` (to check in B2) |
+| Git 2.x | Git for Windows' MinGit zip | 2.55.0 validated; asset and hash not pinned (not checked) | GPL 2.0; the player fetches it from Git for Windows, the package does not carry it | installed (full Git) 404 MB; MinGit not checked | Yes (MinGit) |
+| VC++ 2015-2022 x64 redistributable | Microsoft (`vc_redist.x64.exe`) | not pinned | Microsoft's terms | not checked | No (admin). Avoidable: the Build Tools carry the redistributable DLLs (`VC\Redist\MSVC`, 103 MB on the development computer), which `build` can copy beside the game for that computer (B6); the shipped launcher links the C++ runtime statically so that it starts on a computer without either |
+| AMD FidelityFX SDK v1.1.4 | GitHub, sparse clone; `FFX_MIRROR` | commit `c6efa6bf7f2027b3ec94f28578bb5965eabb9e55`, refused otherwise | MIT | about 39 MB of files and 36 MB of Git objects ([setup](../setup.md#1-setup)) | Yes (in the BuildRoot) |
+| Microsoft.GameInput 3.5.283 | NuGet; `GAMEINPUT_MIRROR` | SHA-512 `59083faf...fe77705`, refused otherwise | MIT for the two used files | 2,143,539 bytes | Yes (in the BuildRoot) |
+| DirectX Shader Compiler v1.9.2609 | GitHub release; `DXC_MIRROR`, `FM4_DXC_MIRROR` | SHA-256 `ad31b1fc...a4a7e7f1` of the zip, and one per DLL | Microsoft's DXC terms (no redistribution), NCSA, MIT | 32,287,592 bytes | Yes; the launcher reuses a valid zip in `downloads\dxc` |
+| ReXGlue SDK `f5337cd` and its submodules | GitHub (`git clone`, submodules) | the commit; the submodules pinned by it | per [third-party components](../sources-and-licensing.md#third-party-components) | 1,086 MB in the BuildRoot | Yes (in the BuildRoot); no mirror today |
+
+Notes:
+
+- **Reuse before download.** The builder looks for what is installed first (`vswhere`, `py -0p`,
+  LLVM's default folder, `git` on the path) and offers a download only for what is missing or of
+  the wrong version.
+- **Portable tools** go into `<InstallRoot>\toolchain\<tool>-<version>`, never onto the system
+  `PATH`; the builder starts the pipeline with its own environment (B1).
+- **Pins.** The four project pins (SDK commit, FidelityFX commit, GameInput SHA-512, DXC SHA-256)
+  exist today. LLVM, Python, MinGit and the Build Tools bootstrapper need a pinned asset, size and
+  SHA-256 in `toolchain.json`; finding them means downloading each once on the development computer,
+  which needs the owner's approval (B2).
+- **A portable MSVC** (downloading the MSVC and Windows SDK packages from Microsoft's manifests
+  without the installer) would remove the admin step but means the program, not the player, takes
+  Microsoft's packages; not recommended.
+
+## 5. The flow
+
+```text
+Preflight -> Disc check -> Plan and consent -> Toolchain fetch -> Setup -> Generate -> Build
+          -> Content import (first Play) -> Offline shader pass -> First run
+```
+
+| Step | What happens | Time (measured, development laptop) | Typical failures |
+| --- | --- | --- | --- |
+| 1. Preflight | Windows 10 or 11 x64 (Windows 10 is not tested); a CPU with x86-64-v2 (SSE3, SSSE3, SSE4.1, SSE4.2, POPCNT, CMPXCHG16B, LAHF/SAHF, by CPUID: the default build uses `-march=x86-64-v2`); a Direct3D 12 GPU (`D3D12CreateDevice` at feature level 11_0); RAM, which sets `-Jobs` (`-Jobs 8` ran on 32 GB; the memory per job is not measured); free disk on the install drive; the install path (short, ASCII, outside any synced folder) | seconds | old CPU or GPU; too little disk |
+| 2. Disc check | Disc 1, Disc 2 and the DLC folders, as `generate` checks them (section [2](#2-what-the-player-brings)) | seconds (three SHA-256 hashes) | wrong release, missing files, a title update, an ISO |
+| 3. Plan and consent | One page lists what is missing: each download with its host, size, licence (a button opens it) and where it goes; the Build Tools' elevation prompt is announced | the player's | the player declines |
+| 4. Toolchain fetch | Each download to `downloads\`, checked against its pin, unpacked into `toolchain\`; the Build Tools' installer runs in its own window | not measured | network, a hash mismatch, a declined elevation |
+| 5. Setup | `setup`: the runtime source, the SDK's third-party libraries, FidelityFX, GameInput, DXC, the resolve shaders, the runtime build | part of the 16 min `all` (not measured on its own) | GitHub unreachable, a compile error |
+| 6. Generate | `generate`: the loader reads `default.xex`, the switch tables, `rexglue.exe codegen`, the guards; writes `local.json` | part of the 16 min | disc moved since step 2 |
+| 7. Build | `build`: the game (141 s), the DLLs staged, DXC staged, the instruction, post pass (WARP), CPU and launcher tests, `build-result.json`, the launcher | part of the 16 min | a compile error, a test failure |
+| 8. Content import | The first Play imports Disc 2 (2.8 GB) and the DLC into `user-data` | 15 s for Disc 2 and eight DLC packages on 25 October 2026 | disk full |
+| 9. Offline shader pass | The Shaders page's pass, which the launcher starts by itself once per build ([Shaders page](../running.md#shaders-page)) | not part of this design's measurements | GPU or driver problems |
+| 10. First run | Play. The new profile plays the game's intro video, gamma adjustment and intro race | minutes | crashes: the error banner and the logs |
+
+Disk: the BuildRoot held 2.6 GB after `build` in the clean setup; Disc 2's import adds 2.8 GB and
+the DLC about their own size; the installed toolchain on the development computer is about 5.6 GB
+(LLVM 2.4 GB, MSVC 1.4 GB, the Windows Kits 1.7 GB with five SDK versions, Python, Git), a fresh
+install's footprint is not checked. A provisional preflight floor of 20 GB free, to be set from
+B2's measurements.
+
+**How the builder drives the pipeline.** It runs `pipeline.py` directly with the toolchain's Python,
+not `Build.ps1`, so the PowerShell execution policy never matters: it captures the environment of
+the Build Tools' `VsDevCmd.bat -arch=x64 -host_arch=x64` once, puts its own LLVM, CMake, Ninja and
+Git first on that environment's `PATH`, and starts each action as a child process with the logs
+in `BuildRoot\logs`. The BuildRoot is `<InstallRoot>\build`, outside `source`, which keeps
+`pipeline.py`'s BuildRoot rule.
+
+**Resume after a failure.** Every stage already leaves a marker: `setup-complete.json`, `local.json`
+(generate), `build-result.json` (build); fetches keep a valid file and resume with no network
+(`fetch_gameinput`, `fetch_dxc`, an existing FidelityFX checkout); the builds are incremental. The
+builder keeps `builder-state.json` (the tag, the step reached, the toolchain found) and starts at the
+first step without its marker; **Retry** reruns the failed step only. A partial download keeps its
+`.partial` name and starts again.
+
+**Logs.** `BuildRoot\logs` per stage, as today, plus `logs\builder.log` (what the builder ran, with
+the times, the tool versions and the hashes checked). The failure page opens the log of the failed
+stage and shows its last lines.
+
+**Updates.** A new tag is a new package. The player unpacks it over the old one or points it at the
+existing install (B5): the builder replaces `source\` (unpacked beside it first, then swapped), keeps
+`build\`, `toolchain\` and `downloads\`, fetches only what a changed `toolchain.json` asks for, and
+runs `generate` and `build` again in the same BuildRoot. Kept: `user-data` (profiles, saves, imported
+content), `launcher-settings.json` (profiles, looks, bindings) and `cache` (the shader pass runs
+again by itself because the executable changed). Before the rebuild the builder copies `user-data`'s
+save files to `backups\<date>`: saves are not checked between builds
+([known issues](../known-issues.md)).
+
+## 6. The launcher UX
+
+The launcher already has the pieces: the racing-theme frame, pages driven by pad, mouse, keyboard or
+touch, the Game data page's disc checks, the Shaders page's fetch with a pinned hash and its
+progress, and the error banner ([GUI launcher](../running.md#gui-launcher),
+[launcher UX](launcher-ux.md)). What it lacks is a start without a game: today it shows "No
+game-build\fm4_rex.exe beside the launcher" and stops.
+
+**Builder mode.** When the launcher finds no built game beside it, Home's Play becomes **Build the
+game** and a **Build** page leads, as a first-run wizard of four screens:
+
+1. **Welcome:** what will happen, the time and disk it takes, that the discs stay in place, and
+   that nothing of the game is downloaded.
+2. **Your discs:** the Game data page's rows (Disc 1, Disc 2, the DLC), checked at once.
+3. **Downloads:** the plan of step 3, each row with its host, size and licence, **Download all** or
+   one by one; the Build Tools row says that Microsoft's installer opens and asks for administrator
+   rights.
+4. **Build:** the steps of section 5 as rows (waiting, running, done, failed) with the elapsed time
+   and an estimate from the measured times; a bar for the compile from Ninja's `[n/total]` lines in
+   the stage's log; **Pause** (ends the running stage, resumes from its marker), **Open log**.
+
+While it builds the launcher keeps the computer awake for itself (`SetThreadExecutionState`, no
+setting changed), warns on battery, and stays usable.
+
+**Plain errors.** Each known failure has a sentence and an action, from the messages the pipeline
+already prints:
+
+| Pipeline message | The builder says | Action |
+| --- | --- | --- |
+| `Unsupported executables in ...` | "These discs are not a supported release (USA or Japan/Asia)." | Choose Disc 1 again |
+| `Missing Disc 2 content package` | "Disc 2 is incomplete: four packages are missing from its content folder." | Choose Disc 2 again, or build without it |
+| `... cannot be fetched with its pinned SHA-...` | "The download from <host> did not arrive whole or has changed." | Retry; mirrors |
+| `cannot be reached and FFX_MIRROR names no mirror` | "GitHub cannot be reached." | Retry later |
+| `Use LLVM 20.x` | "The installed LLVM is not version 20." | Use the builder's own |
+| `Exit <n>; log: ...` in a build | "The build stopped in <stage>." | Open log, Retry, report |
+| `Launcher tests failed` | "The launcher and the game of this build disagree." | Report: a project bug |
+| Windows' disk full | "The drive is full: <n> GB more are needed." | Free space, Retry |
+
+**Bug reports.** The failure page has **Copy details**: the tag, the step, the tool versions, the
+error and the paths of the logs to attach, following [bug reports](../bug-reports.md)
+([which files](../bug-reports.md#which-files-to-send), [privacy](../bug-reports.md#privacy): the logs
+show the install paths, which may hold the Windows user name). It copies text only; nothing is sent.
+
+**After the build.** `build` writes its own `MotorsportDX.exe` into `build\game-build`, from the same
+tag. The shipped launcher hands over to it (starts it and exits; a file in use cannot be replaced),
+and later starts it directly when `build-result.json`'s version stamp names its own tag; otherwise it
+offers **Rebuild**. The shortcut points at the shipped one.
+
+## 7. Increments
+
+Estimates in AI calendar time (1 person-week ≈ 3.5 h, range 2 to 7 h). B0 is the owner's.
+
+| Increment | Contents | Estimate | Verification |
+| --- | --- | --- | --- |
+| B0 | The owner's decisions of section 9; `main` pushed to GitHub; a first tag | owner | - |
+| B1. Pipeline for a builder | A `preflight` action with JSON output (CPU features, GPU, RAM, disk, path); `--progress` JSON lines per step; a `launcher-data` action that writes `launcher.json` without a build; a version stamp file in the snapshot, read by `source_state` when the source is not a Git checkout; running from a `git archive` snapshot and from the embeddable Python; the environment from `VsDevCmd.bat` without `Build.ps1` | 3.5 h | `test_pipeline.py` cases; `all` from a `git archive` snapshot into a new BuildRoot on the development computer (build only, no GPU run) |
+| B2. Toolchain manifest and fetcher | `toolchain.json` (asset URL, size, SHA-256, licence, unpack rule) for LLVM, Python, MinGit and the Build Tools bootstrapper, each download approved by the owner once to pin it; detection of installed tools; unpack into `toolchain\`; the Build Tools' interactive install with the workloads named | 5 h | a Windows account or sandbox without the tools (Windows Sandbox on Windows 11 Pro is an optional feature the owner turns on, or a VM): each fetch, a hash refusal, a resumed partial download, a mirror |
+| B3. Builder mode in the launcher | The Build page and wizard, consent, progress, plain errors, resume, logs, keep-awake; the launcher with a static C++ runtime; `--screenshot build` and `--state builder` for reviews | 7 h | the launcher tests; screenshots at scale 1 and 1.5 (WARP); a full build through the launcher into a new install root on the development computer |
+| B4. The package | A `package` action at a tag: the launcher built at the tag (needs only `setup`, no discs), `launcher.json`, `git archive` source, `toolchain.json`, licences and notices, into one zip; an allowlist check of the zip (no BuildRoot file, no executable but `MotorsportDX.exe`, no picture, no DXC, a size limit) | 3.5 h | the zip's listing against the allowlist; the zip on the clean account or sandbox of B2 up to a built game |
+| B5. Updates | Pointing a new package at an install; the source swap; `generate` and `build` again; the `user-data` backup | 2 h | an update from one tag to the next on the development computer: the hashes of `user-data` before and after, the shader pass runs again |
+| B6. Second computer | The package on a second Windows computer (the ROG Xbox Ally X or another), run by the owner, from download to a Quick Race; the app-local C++ runtime beside the game if the redistributable is missing there | 1 h of notes; the owner's run | the owner's report, as [bug reports](../bug-reports.md) asks |
+| B7 (optional). ISO input | Disc 1 and Disc 2 from Xbox 360 disc images: either unpacked into a folder by a small tool on the runtime's GDFX reader ([disc_image_device.h](../../work/runtime/include/rex/filesystem/devices/disc_image_device.h)), or read in place (the three XEX for `generate`, the runtime mounting the image); needs the owner's yes | 5 h | both releases' images against their extracted folders: the same hashes, the same `generate` output |
+| B8 (optional). Option B | The shipped runtime, after the licence items of 3.2 | 3.5 h, plus the licence work | a game built against the shipped runtime has the hashes of one built from source |
+
+B1 to B5: about 21 h (12 to 42 h). No increment needs a game run on the GPU until B6, whose run is
+the owner's.
+
+## 8. Risks
+
+- **The Build Tools.** The largest download and the only admin step; their terms for a player
+  without a Visual Studio licence are not checked; a newer MSVC library may require a newer clang
+  than 20 (MSVC's library sets a minimum clang version), which would break a build on a computer
+  that installs the Build Tools later than the tag. Mitigation: a fixed-version Build Tools channel
+  if Microsoft offers one for 17.x (not checked), and the builder reporting the MSVC version.
+- **Upstream availability.** GitHub, NuGet and the toolchain hosts. FidelityFX, GameInput and DXC
+  have mirrors; the 1.1 GB ReXGlue SDK clone and its submodules have none. A Git bundle mirror for
+  them, as for FidelityFX, is a later step.
+- **Antivirus and SmartScreen.** An unsigned program that downloads compilers and runs them is what
+  heuristics flag; Windows SmartScreen warns on an unsigned download. Signing costs money (owner).
+  Real-time scanning also slows the build; the builder may say so but never adds an exclusion.
+- **Paths.** Spaces, non-ASCII Windows user names, synced folders (OneDrive) and the 260-character
+  path limit with the generated tree are not checked. Mitigation: the default install root is a
+  short folder on the chosen drive (for example `D:\MotorsportDX`), checked by the preflight.
+- **Slow and small computers.** The build time and the memory per compile job are not measured
+  below the development laptop; the preflight sets `-Jobs` from the RAM.
+- **Support load.** About ten downloads and three build stages: every failure lands on the
+  project. The plain errors and **Copy details** keep reports useful.
+- **Visibility.** The loader decrypts the player's `default.xex` with the runtime's XEX code; that is
+  true of the source today, but a one-click download makes the project more visible. This note is
+  not legal advice; whether to seek some is the owner's call.
+- **The distribution rule.** Shipping the launcher changes what [distribution](../sources-and-licensing.md#distribution)
+  allows today. A launcher passed around outside the package (without its source and tag) cannot
+  build anything, but it must still carry `LICENSE.txt` and the notices.
+- **Discs moved after the build.** The game and every rebuild read the Disc paths of `local.json`;
+  the Game data page must update them (and `generate` run again) when the player moves a disc.
+
+## 9. Decisions for the project owner
+
+1. **Whether the launcher may be distributed on its own**, inside the builder package. Today
+   [distribution](../sources-and-licensing.md#distribution) says the runtime DLLs and the launcher are
+   not distributed on their own; this note does not change that rule. The launcher alone is
+   licence-clean (section 3.1) and useless without a build.
+2. **Option A or B.** Recommended: A. B only after the LGPL relinking, the GPL source of
+   `rexglue.exe`, the Unleashed Recompiled question and the two vendored files are resolved.
+3. **Publication:** push `main` to GitHub (about 220 commits behind local `main`), the first tag and
+   its name, where the package is hosted (for example the repository's releases), and whether the
+   first package goes to a closed or a public preview ([preview plan](preview.md)).
+4. **The toolchain route:** the player installs the Build Tools through Microsoft's own installer
+   (recommended), or a portable MSVC route (not recommended).
+5. **The downloads the package may make on a player's computer**, and the approval to download each
+   new one (LLVM 20.1.8, the Python 3.11 embeddable package, MinGit, the Build Tools bootstrapper)
+   once on the development computer to pin its size and hash (B2).
+6. **ISO input** (B7): yes or no, and unpacked to a folder or read in place.
+7. **Code signing** of the package's launcher, or the SmartScreen warning.
+8. **Updates:** a new package by hand (recommended first), or a check of the repository's releases
+   from the launcher, which is a network request the player would consent to.
+9. **The name** of the package (for example "Motorsport DX Builder") and its page; no Forza names or
+   logos.
+10. **Legal advice** on the visibility of a one-click builder (section 8), if the owner wants it.
