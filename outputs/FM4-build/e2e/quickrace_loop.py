@@ -14,10 +14,11 @@ A cycle, driven by the title's screen events and OCR:
   unloading, then the track select again), and B back to the Free Play menu (track, location,
   car, manufacturer select, Free Play).
 
-Both selects keep the last choice, so a pair is found by its name, not by a count of presses. The
-first pass takes the pairs from --qr-pairs or, without it, a manufacturer and a location
---qr-step (locations: LOCATION_STEP) presses on from the previous ones, and records their names; the later passes repeat the
-same pairs in the same order. The run stops after the pass in which it is --min-hours old, at the
+Opened from the Free Play menu, both selects start on their first entry, so pair i of the first
+pass is i * --qr-step Right presses on the manufacturer select and i * LOCATION_STEP on the
+location select (or the pairs of --qr-pairs, found by name). The first pass records the names
+and presses; the later passes repeat the same pairs in the same order, the presses checked by
+the name read (and Right on until it, when it differs). The run stops after the pass in which it is --min-hours old, at the
 cap within a cycle, or on a failure.
 
 Per cycle it appends to qrloop.jsonl: the pass, the pair's index, the manufacturer, car,
@@ -191,10 +192,9 @@ class Loop:
         if not self.wait_event(r'^scene \d+ 115_C_BUY_MFRSELECT$', 20, after=self.cursor - 30):
             return self.fail(f'{tag}: no manufacturer select')
         time.sleep(1.5)
-        if first:
-            mfr = self.step_and_read(self.step if index else 0)
-        else:
-            mfr = self.seek(self.pairs[index][0])
+        # Both selects open on their first entry: a pair is its number of Right presses from it.
+        mfr_presses = self.step * index if first else self.presses(index, 2, self.step * index)
+        mfr = self.select(mfr_presses, None if first else self.pairs[index][0])
         if not mfr:
             return self.fail(f'{tag}: the manufacturer was not read')
         self.cycle['manufacturer'] = mfr
@@ -209,10 +209,8 @@ class Loop:
                 return self.fail(f'{tag}: {scene} did not open')
             time.sleep(1.5)
         # The location.
-        if first:
-            location = self.step_and_read(LOCATION_STEP if index else 0)
-        else:
-            location = self.seek(self.pairs[index][1])
+        location_presses = LOCATION_STEP * index if first else self.presses(index, 3, LOCATION_STEP * index)
+        location = self.select(location_presses, None if first else self.pairs[index][1])
         if not location:
             return self.fail(f'{tag}: the location was not read')
         self.cycle['location'] = location
@@ -221,7 +219,7 @@ class Loop:
         time.sleep(1.5)
         self.cycle['track'] = title_line(self.read())
         if first:
-            self.pairs.append([mfr, location])
+            self.pairs.append([mfr, location, mfr_presses, location_presses])
         # The race.
         self.label(f'{tag}: loading')
         if not self.press_until_event('a', r'^scene \d+ 17_DYNAMIC_LOADING_FREEPLAY$', 20, retry=3):
@@ -295,27 +293,25 @@ class Loop:
                 return name
         return None
 
-    def step_and_read(self, presses):
-        """Right `presses` times, each until the name read changes (a select can drop a press
-        while it settles: the soak of 30 October 2026 kept one pair for five), then the name."""
-        name = self.current_name()
+    def presses(self, index, column, fallback):
+        """The Right presses of a pair the first pass recorded."""
+        pair = self.pairs[index]
+        return pair[column] if len(pair) > column else fallback
+
+    def select(self, presses, expected=None):
+        """On a select screen, which opens on its first entry (it does not keep the last choice
+        when opened from the Free Play menu, 30 October 2026): Right `presses` times, then the
+        name read; when it is not `expected`, Right on until it is."""
+        if not self.current_name():
+            return None
         for _ in range(presses):
-            for _attempt in range(4):
-                self.press('right')
-                until = time.time() + 4
-                changed = None
-                while time.time() < until:
-                    now = title_line(self.read(2))
-                    if now and not same_name(now, name):
-                        changed = now
-                        break
-                if changed:
-                    name = changed
-                    break
-            else:
-                return None
-        time.sleep(1)
-        return self.current_name() or name
+            self.press('right')
+            time.sleep(0.6)
+        time.sleep(1.5)
+        name = self.current_name()
+        if expected is None or same_name(name, expected):
+            return name
+        return self.seek(expected)
 
     def seek(self, name, limit=80):
         """Right until the select screen shows `name` (both selects wrap round)."""
