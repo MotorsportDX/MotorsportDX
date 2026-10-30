@@ -284,19 +284,23 @@ flowchart TD
     snap --> perf
     snap --> full
     snap --> career
+    snap --> parity
+    snap --> cold
     smoke["smoke<br/>one run per scenario at 240 Hz<br/>about 10 minutes"]
     perf["perf<br/>three runs of photo at 240 Hz"]
     full["full<br/>three runs of every scenario at 60 and 240 Hz<br/>about 1 hour"]
     career["career<br/>career_finish and career_progress"]
+    parity["parity<br/>two freeze runs at 60 Hz"]
+    cold["cold<br/>career on empty caches, then photo"]
 ```
 
-`matrix.py` runs a set of cells on a snapshot of the game build (`<BuildRoot>\snapshots\<name>`, checked against `build-result.json`), so `Build.ps1 -Action build` can rebuild `game-build` while a gate runs. Cells still run one at a time, because performance numbers need the machine to themselves. Pick the tier by what a change can break:
+`matrix.py` runs a set of cells on a snapshot of the game build (`<BuildRoot>\snapshots\<name>`, checked against `build-result.json`), so `Build.ps1 -Action build` can rebuild `game-build` while a gate runs. Cells still run one at a time, because performance numbers need the machine to themselves. The harness runs RTV unless `--native` is given (`matrix.py --native` passes it to every cell), while the launchers run the native path by default: gates of the players' default need `--native`. Pick the tier by what a change can break:
 
 | Tier | Cells | Runs per cell | Use |
 | --- | --- | --- | --- |
 | `smoke` | `photo`, `photo_view`, `career` at 240 Hz | 1 (about 10 min) | every change, before measuring anything |
 | `perf` | `photo` at 240 Hz | 3 | performance work, against a baseline gate of the same tier: its race phase (12 cars, 30 s) and photo mode |
-| `full` | `photo`, `photo_view`, `career` at 60 and 240 Hz | 3 (about 1 hour) | before committing a stage; `--hz 60,120,240` adds 120 Hz |
+| `full` | `photo`, `photo_view`, `career` at 60 and 240 Hz | 3 (about 1 hour) | the full gate at the end of a level of the native port; `--hz 60,120,240` adds 120 Hz |
 | `career` | `career_finish` and `career_progress` at 240 Hz | 1 (about 8 min) | a career race to its rewards and the progress after a restart |
 | `parity` | `freeze` at 60 Hz | 2 (about 8 min) | image, draw and predication parity of a frozen frame with `parity.py` against a baseline ([frozen-frames.md](frozen-frames.md)) |
 | `cold` | `career`, then `photo`, at 240 Hz | 1 (about 9 min) | a fresh install's shader caches: `career` on empty caches (`--cold-cache`), `photo` on the caches `career` left (`--cache-from`, a new track in the second session); the stalls of shader compiles in play ([d3d-hle-n6.md 19.3.4](../analysis/d3d-hle-n6.md#1934-increments-and-gates)) |
@@ -304,6 +308,8 @@ flowchart TD
 ```
 python outputs\FM4-build\e2e\matrix.py --build-root <BuildRoot> --name <name> --tier smoke --baseline <older name>
 ```
+
+Which cells a change gets follows the project's gate rule ([gate tiers](../analysis/d3d-hle.md#gate-tiers-the-main-sessions-decision-of-22-october-2026)): since 29 October 2026, during a level of the native port, an increment lands after one short check of 15 to 20 minutes (the build and its snapshot, the offline shader pass on a cold copy, and one `career` race at 3/2 on the native path), and one full gate runs at the end of the level. RTV and `-Rov` are out of the gates since 27 and 28 October 2026; the image proof is the native path against the previous main's native path, with a capture compared at 1:1.
 
 Options: `--build-root` and `--name` are required. `--tier` defaults to `smoke`. `--scenarios`, `--hz` and `--repeat` override the tier. `--baseline` compares each cell with the cell of the same Hz and scenario of that gate. `--game-build` (default `game-build`) names the build to snapshot, `--no-snapshot` runs the build directory itself, `--human` keeps the harness throttle, `--look` gives every cell a look as `Build.ps1 -Look` (for example `pc,taa=0` for a baseline without TAA, or `pc,taa_point=1`), `--quality` a race quality as `Build.ps1 -Quality` (for example `ultra`), `--native` the native path (`e2e.py --native`), `--fast-route` runs the cells that have a [fast route](#fast-route) on it, `--cold-cache` runs any tier's cells on cold caches as the `cold` tier does, `--cache-copy` runs each cell on a private copy of the warm caches ([concurrent cells](#concurrent-cells)), `--offline-pass` runs the offline shader pass before each cell (`e2e.py --offline-pass`), and `--env` and `--arg` pass to every cell.
 
@@ -346,7 +352,7 @@ The harness uses the launcher environment (`pipeline.launch_env`):
 
 - `FM4_HALF_RATE_MIRROR=1`: the rear-view mirror is drawn every other frame in every race. `--env FM4_HALF_RATE_MIRROR=0` renders it every frame, also in the 12 car Quick Race.
 - `--env FM4_SHADOW_WORKAROUND=1` skips the shadow map outside the cockpit in races (`Build.ps1 -ShadowWorkaround`).
-- The race render quality is the launcher's (`pipeline.py` `QUALITY_PRESETS`, `high` by default, passed through `FM4_RACE_SETTINGS`). `--quality xbox|high|ultra` picks another; with `--env FM4_TILING_SCENARIO=<n>` the preset keeps that tiling scenario.
+- The race render quality is the launcher's (`pipeline.py` `QUALITY_PRESETS`, `high` by default, passed through `FM4_RACE_SETTINGS`). `--quality low|medium|high|extrahigh|ultra` picks another (`xbox` is `medium`); with `--env FM4_TILING_SCENARIO=<n>` the preset keeps that tiling scenario.
 
 Frame rates above 60 (`Build.ps1 -FrameRate <n>` sets both of these):
 

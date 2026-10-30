@@ -21,7 +21,8 @@ invitation names. Use one report per problem.
 5. **The build**: the Motorsport DX commit (`git log -1 --format=%h` in the repository), whether it
    was built with `-Fsr on`, and whether you run from the BuildRoot or from an export.
 6. **The options**: the `Build.ps1 -Action run` command line, or in the GUI launcher the
-   profile's settings (Advanced, **Copy command line**). With `-Info` or F2 the settings overlay
+   profile's settings (Advanced, **Show developer options**, then **Copy the command line** on the
+   Developer tab). With `-Info` or F2 the settings overlay
    shows the render path, scale and look in the game.
 
 ## Which files to send
@@ -37,8 +38,8 @@ game replaces the two logs, so copy them right after the run that showed the pro
 | `build-result.json` (in the BuildRoot or the export) | the hashes of the binaries and the source they were built from | when the build is not a plain commit, or on request |
 | a screenshot or two | what is wrong on screen | for anything you can see |
 
-The performance trace: in the GUI launcher, turn on **Performance trace** on the Advanced
-page; each Play then writes its own `perf-<profile>-<time>.jsonl`. With `Build.ps1`, set the
+The performance trace: in the GUI launcher, turn on **Show developer options** on the Advanced
+page and then **Performance trace** on its Developer tab; each Play then writes its own `perf-<profile>-<time>.jsonl`. With `Build.ps1`, set the
 file before the run:
 
 ```powershell
@@ -68,9 +69,9 @@ report helps. Besides the files above, send:
 | --- | --- | --- |
 | `wheel-test.log` | the launcher folder's `logs` | the launcher's wheel test, with the device line `Wheel report:`: the wheel's name, vendor and product ID, axes, buttons, hats and force feedback effects |
 | `wheel-test-forces.csv` | the launcher folder's `logs`, with **Record forces** on in the wheel test | every test force sent |
-| the game's force recording | the file named by `--wheel_ffb_record=<full path>` in the Advanced page's **Extra cvars**, for example `<the launcher folder>\logs\wheel-forces.csv` | every force the game sent, with the game's torque, the wheel's angle, the lock and the end stop |
+| the game's force recording | the file named by `--wheel_ffb_record=<full path>` in **Extra cvars** on the Advanced page's Developer tab, for example `<the launcher folder>\logs\wheel-forces.csv` | every force the game sent, with the game's torque, the wheel's angle, the lock and the end stop |
 | the `Wheel` lines of `runtime.log` | `Select-String -Path logs\runtime.log -Pattern 'Wheel' \| ForEach-Object Line` | the device line, the mapping and the force settings the game ran with |
-| the `-Wheel` value | the launcher's **Wheel value** field on the Racing wheel tab | every wheel setting |
+| the `-Wheel` value | the launcher's **Wheel value** field on the Racing wheel tab, shown with **Show developer options** on | every wheel setting |
 | the wheel software's profile | Pit House (or the wheel's own software) | its maximum angle, force feedback strength, road sensitivity, damper, friction and inertia |
 
 Name the wheel, the base and the pedals, and say which [checklist](running-controls.md#racing-wheel-test-checklist)

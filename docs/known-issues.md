@@ -15,7 +15,8 @@ are in [status/current.md](status/current.md). To report a problem, see
 Both run Windows 11. No other GPU (other NVIDIA cards, AMD discrete cards, Intel Arc), no
 desktop, no Windows 10 computer and no lower-end processor has been tried. A second computer
 has not yet built the game from a clean clone; on 25 October 2026 a clean clone built and ran
-on the development laptop.
+on the development laptop. The ROG Xbox Ally X last ran exports of 24 and 25 October 2026: the
+latest build, with the launcher's new look and its shader pass, has not run there yet.
 
 Racing wheels: **none tested yet**. The planned test set is the project owner's MOZA Racing R9
 base (direct drive) with the ESX steering wheel and the SR-P pedals (two pedals, no clutch
@@ -25,8 +26,8 @@ laptop.
 
 ## What works
 
-On the latest build the automated tests reach the intro and the menus, Quick
-Race at 60, 120 and 240 Hz, photo mode (take, save and view a photo), career races through to
+On the latest build the automated tests reach the intro and the menus, races at 240 Hz
+(60 and 120 Hz were last checked on an earlier build), photo mode (take, save and view a photo), career races through to
 their rewards with replays, and one downloadable content car on a downloadable content track.
 A 2-hour career session played 19 World Tour events in a row without a stop, through the end
 of two divisions into the third.
@@ -42,7 +43,7 @@ above.
   integrated GPUs). It has run on two GPUs only (see [Tested hardware](#tested-hardware)): if
   a picture looks wrong or the game stops on your GPU, try the launcher's render path "RTV"
   (`-Rtv`) and say in your [bug report](bug-reports.md) whether it changes anything. RTV is no
-  longer tested since 28 October 2026, so it can have problems of its own.
+  longer tested since 27 October 2026, so it can have problems of its own.
 - **The cockpit view in the game's own look is very dark on sunny tracks.** This is the game's own
   interior lighting. The default look fills the interior with the game's own sky light since
   26 October 2026 (`cockpit_fill`), which keeps the gauges readable; `-Look original` shows the

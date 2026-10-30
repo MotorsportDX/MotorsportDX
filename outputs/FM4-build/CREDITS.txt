@@ -37,6 +37,14 @@ Compiler.
 
 Turn 10 Studios, who made Forza Motorsport 4.
 
+The code of other projects in the program files: SDL 3 (Sam Lantinga and contributors), Dear
+ImGui (Omar Cornut), FFmpeg and libmspack, AMD FidelityFX (CAS, FSR 1, and FSR 3.1 with -Fsr
+on), Microsoft's GameInput header and loader and d3dx12.h, Polyphony Digital's GT7 tone mapping
+sample (SIGGRAPH 2025, the tone curve of the gt7 look), {fmt}, spdlog, toml++, xxHash, SIMD
+Everywhere, o1heap, CLI11, UTF8-CPP, JSON for Modern C++, stb_image and the small libraries that
+ReXGlue keeps from Xenia. Microsoft's DirectX Shader Compiler compiles the native path's
+shaders; the launcher fetches it on the player's computer.
+
 Motorsport DX is not affiliated with or endorsed by Microsoft, Xbox Game Studios or Turn 10
 Studios. Forza Motorsport and Xbox are trademarks of the Microsoft group of companies.
 

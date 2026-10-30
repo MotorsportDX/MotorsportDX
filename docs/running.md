@@ -236,11 +236,15 @@ repository:
 The folder holds `MotorsportDX.exe`, `game-build` (the executable, the two modules and
 the runtime DLLs of `build-result.json`), `look`, `passes`, the shader cache (`cache`),
 `launcher.json`, `build-result.json`, `CREDITS.txt` (the projects that made it possible), the
-license notices of the third-party code in the binaries (`third-party-notices`), the
+project's own license (`LICENSE.txt`), the license notices of the third-party code in the
+binaries (`third-party-notices`), the
 launcher's backdrop when the BuildRoot has one and the folder has none (a local picture, see
 [GUI launcher](#gui-launcher)), and a first `launcher-settings.json` with the
 Disc and content paths of `local.json`. It does not hold `user-data`: profiles, saves
-and imported content stay on the build computer. `export` checks the artifact hashes
+and imported content stay on the build computer. It does not hold the DirectX Shader
+Compiler (`dxcompiler.dll` and `dxil.dll`) either: its license does not allow passing it on,
+so the launcher's [Shaders page](#shaders-page) fetches it on the other computer, and without
+it the shaders compile with FXC ([third-party code](sources-and-licensing.md#third-party-code-directx-shader-compiler)). `export` checks the artifact hashes
 first, and refuses a folder that is not empty unless it is an earlier export, which it
 updates and whose `launcher-settings.json` it keeps.
 
@@ -250,7 +254,8 @@ On the other computer:
    to have `MSVCP140_ATOMIC_WAIT.dll`. The GPU must support Direct3D 12.
 2. Copy the export folder and your extracted discs to it.
 3. Start `MotorsportDX.exe`, set Disc 1, Disc 2 and the content on the Game data page,
-   and press Play. The first Play imports Disc 2 and the content packages into
+   let the Shaders page run the shader pass (it fetches the DirectX Shader Compiler first,
+   32 MB, when the computer is online), and press Play. The first Play imports Disc 2 and the content packages into
    `user-data` in the export folder; it needs free space of about the size of the
    packages.
 

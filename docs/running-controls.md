@@ -346,8 +346,8 @@ lets it drive the car, off leaves only its force feedback. The tab's sections, i
 
 The wheel merges with the controller as the game merges two bindings of one action: the
 larger pedal, the steering of larger magnitude, a shift from either. The menus are still
-driven with the controller or the keyboard. The launcher's **Wheel value** field shows the
-profile's `-Wheel` value.
+driven with the controller or the keyboard. The launcher's **Wheel value** field (with **Show developer options** on
+the Advanced page) shows the profile's `-Wheel` value.
 
 The game's anti-cheat rule withholds a race's credits and experience when a lap has fewer
 than 10 frames with a fast steering change. Its threshold is a change per frame, so at a high
