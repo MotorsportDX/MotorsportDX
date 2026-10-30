@@ -10,8 +10,9 @@
 //   <ms> <thread id> <stack id>                a sample
 // with <ms> on the perf trace's clock (REX_PERF_TRACE_FILE's 't', in ms), so a
 // sample can be matched to a window's long frames. Offsets into the game's
-// executable resolve with its linker map (season_hitches.py); the runtime's
-// DLLs by module. Does nothing without the variable, and on other platforms.
+// executable resolve with its linker map (outputs/FM4-build/e2e/thread_profile.py);
+// the runtime's DLLs by module. Does nothing without the variable, and on other
+// platforms.
 
 namespace rex::graphics::thread_sampler {
 

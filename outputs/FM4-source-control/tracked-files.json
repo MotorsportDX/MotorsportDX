@@ -281,6 +281,10 @@
       "provenance": "Original test tooling for this project; no game content or original game function bodies"
     },
     {
+      "path": "outputs/FM4-build/e2e/thread_profile.py",
+      "provenance": "Original test tooling for this project; no game content or original game function bodies"
+    },
+    {
       "path": "outputs/FM4-build/e2e/soak_report.py",
       "provenance": "Original test tooling for this project; no game content or original game function bodies"
     },
@@ -1265,12 +1269,8 @@
       "provenance": "Original integration source: the hook registry of the D3D layer diagnostics; guest function addresses only, no game function bodies"
     },
     {
-      "path": "work/fm4-rex/src/fm4-crt-hooks.cpp",
-      "provenance": "Original integration source: native strstr and a pow memo for the title's C runtime; guest function addresses only, no game function bodies"
-    },
-    {
-      "path": "work/fm4-rex/src/fm4-crt-helpers.h",
-      "provenance": "Original integration source: strstr, the pow memo table and FNV-1a; no game function bodies"
+      "path": "work/fm4-rex/src/fm4-gamma-ramp-trace.cpp",
+      "provenance": "Original integration source: a diagnostic hash of the gamma ramps the title hands to its D3D layer; guest function addresses only, no game function bodies"
     },
     {
       "path": "work/fm4-rex/src/fm4-guest-hooks.h",
@@ -4839,10 +4839,6 @@
     },
     {
       "path": "work/fm4-rex/tests/draw-scale-tests.cpp",
-      "provenance": "Synthetic tests/oracle; no game input data"
-    },
-    {
-      "path": "work/fm4-rex/tests/crt-helpers-tests.cpp",
       "provenance": "Synthetic tests/oracle; no game input data"
     },
     {

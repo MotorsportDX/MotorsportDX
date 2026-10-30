@@ -18,8 +18,8 @@ Opened from the Free Play menu, both selects start on their first entry, so pair
 pass is i * --qr-step Right presses on the manufacturer select and i * LOCATION_STEP on the
 location select (or the pairs of --qr-pairs, found by name). The first pass records the names
 and presses; the later passes repeat the same pairs in the same order, the presses checked by
-the name read (and Right on until it, when it differs). The run stops after the pass in which it is --min-hours old, at the
-cap within a cycle, or on a failure.
+the name read (and Right on until it, when it differs). The run stops after at least two
+passes once it is --min-hours old, at the cap within a cycle, or on a failure.
 
 Per cycle it appends to qrloop.jsonl: the pass, the pair's index, the manufacturer, car,
 location and track read, and the times; qrloop-state.json holds the state after every step. The

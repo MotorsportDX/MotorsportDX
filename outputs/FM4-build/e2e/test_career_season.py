@@ -413,6 +413,23 @@ class SoakReportTests(unittest.TestCase):
             self.assertFalse(report['verdict']['race_frame_p50']['pass'])
             self.assertTrue(report['verdict']['private_bytes']['pass'])
 
+    def test_revisit_run_is_judged_on_its_last_pass(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            run = self.write_run(tmp, private_per_race=0)
+            soak = [json.loads(l) for l in (run / 'soak.jsonl').read_text().splitlines()]
+            half = len(soak) // 2
+            for i, s in enumerate(soak):
+                # Pass 1 fills a cache (+300 MB), pass 2 stays level; handles leak in both.
+                s['label'] = f'pass {1 + (i >= half)} pair {i * 3 // len(soak)}: race'
+                s['private_bytes'] = (2000 + 300 * min(i, half) / half) * soak_report.MB
+                s['handles'] = 900 + i
+            (run / 'soak.jsonl').write_text(''.join(json.dumps(s) + '\n' for s in soak))
+            verdict = soak_report.analyse(run)['verdict']
+            self.assertTrue(verdict['private_bytes']['pass'], verdict['private_bytes'])
+            self.assertEqual(verdict['private_bytes']['judged_on'], 'pass 2')
+            self.assertGreater(verdict['private_bytes']['whole_run_slope_per_hour'], 50)
+            self.assertFalse(verdict['handles']['pass'])
+
 
 class QuickRaceLoopTests(unittest.TestCase):
     def test_title_line_and_same_name(self):

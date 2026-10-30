@@ -2125,15 +2125,17 @@ def main():
     parser.add_argument('--seasons', type=int, default=1,
                         help='career_season: stop once this many World Tour seasons are complete')
     parser.add_argument('--min-hours', type=float, default=0.0,
-                        help='career_season: keep playing after the seasons until the run is this old')
+                        help='career_season: keep playing after the seasons until the run is this old; '
+                             'quickrace_loop: after two passes, start another pass until it is')
     parser.add_argument('--max-hours', type=float, default=3.0,
-                        help='career_season: the cap; the run stops at it, within an event too')
+                        help='career_season and quickrace_loop: the cap; the run stops at it, within an event '
+                             'or a race too')
     parser.add_argument('--qr-pairs', help='quickrace_loop: the pairs as JSON, [["Acura", "Bernese Alps"], ...]; '
                                            'without it the first pass picks them (--qr-count, --qr-step)')
     parser.add_argument('--qr-count', type=int, default=11, help='quickrace_loop: pairs in a pass')
     parser.add_argument('--qr-step', type=int, default=3,
                         help='quickrace_loop: Right presses between two manufacturers of the first pass '
-                             '(locations move by one)')
+                             '(the locations move by 2)')
     parser.add_argument('--qr-race-seconds', type=float, default=180,
                         help='quickrace_loop: seconds of each race before QUIT RACE')
     parser.add_argument('--soak', action='store_true',

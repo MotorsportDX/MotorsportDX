@@ -838,11 +838,9 @@ def post_pass_tests(root,jobs):
          'fm4_post_pass_shader_tests','fm4_shader_mod_tests','fm4_track_settings_tests',
          'fm4_texture_replacement_tests','fm4_draw_scale_tests','fm4_pad_shaping_tests',
          'fm4_keyboard_model_tests','fm4_native_shader_contract_tests','fm4_wheel_ffb_tests',
-         'fm4_wheel_mapping_tests','fm4_wheel_host_tests','fm4_look_tonemap_tests',
-         'fm4_crt_helpers_tests'],
+         'fm4_wheel_mapping_tests','fm4_wheel_host_tests','fm4_look_tonemap_tests'],
         log=root/'logs/tests-build.log')
     run([build/'fm4_track_settings_tests.exe'],cwd=build,log=root/'logs/track-settings-tests.log')
-    run([build/'fm4_crt_helpers_tests.exe'],cwd=build,log=root/'logs/crt-helpers-tests.log')
     run([build/'fm4_texture_replacement_tests.exe'],cwd=build,
         log=root/'logs/texture-replacement-tests.log')
     run([build/'fm4_post_pass_camera_tests.exe'],cwd=build,log=root/'logs/post-pass-camera-tests.log')

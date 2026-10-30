@@ -21,7 +21,8 @@ Reads the run's soak.jsonl (soak.py), perf.jsonl and events.txt, and writes soak
 The verdict uses the thresholds proposed for the season soak (29 October 2026): private bytes
 grow at most 50 MB an hour, the process's dedicated GPU memory at most 25 MB an hour, handles at
 most 100 and threads at most 5 an hour, and the races' p50 and p99 frame times of the last third
-of the races are at most 10% above those of the first third.
+of the races are at most 10% above those of the first third. A run with more than one pass is
+judged on its last pass's slopes (judged_on), with the whole run's beside them.
 """
 import argparse
 import bisect
@@ -372,18 +373,26 @@ def analyse(run):
                           'rise': round(last / first - 1, 4) if first else None,
                           'slope_ms_per_hour': round(slope([(r['start_s'] / 3600, r[key]) for r in per_race]), 4)}
     report['frame_trend'] = trend
-    # The verdict against the proposed thresholds.
+    # The verdict against the proposed thresholds. A run that revisits its pairs is judged on its
+    # last pass, where a cache has stopped filling and a leak still rises; the whole run's slope
+    # stays beside it.
+    report['passes'] = passes(samples)
+    last_pass = max(report['passes'], key=int) if report['passes'] and len(report['passes']) > 1 else None
     verdict = {}
     for metric, limit in THRESHOLDS.items():
-        value = report['metrics'].get(metric, {}).get('slope_per_hour')
+        whole = report['metrics'].get(metric, {}).get('slope_per_hour')
+        value = whole
+        if last_pass:
+            value = report['passes'][last_pass]['metrics'].get(metric, {}).get('slope_per_hour')
         limit_shown = show(metric, limit)
         verdict[metric] = {'slope_per_hour': value, 'limit': limit_shown,
                            'pass': None if value is None else value <= limit_shown}
+        if last_pass:
+            verdict[metric].update(judged_on=f'pass {last_pass}', whole_run_slope_per_hour=whole)
     for key, values in trend.items():
         verdict[f'race_frame_{key}'] = {'rise': values['rise'], 'limit': FRAME_RISE,
                                         'pass': None if values['rise'] is None else values['rise'] <= FRAME_RISE}
     report['verdict'] = verdict
-    report['passes'] = passes(samples)
     report['handle_types'] = handle_type_trend(samples)
     report['guest_memory'] = guest_memory(run, samples)
     report['stubs'] = stubs(run / 'runtime.log')
