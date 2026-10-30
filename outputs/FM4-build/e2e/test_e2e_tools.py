@@ -663,7 +663,7 @@ class RaceCheckTests(unittest.TestCase):
         # scenario.
         for scenarios in (e2e.SCENARIOS, e2e.FAST_SCENARIOS):
             for name, steps in scenarios.items():
-                drives = any(step[1].startswith(('rt=', '~y@')) or step[1] == 'season' for step in steps)
+                drives = any(step[1].startswith(('rt=', '~y@')) or step[1] in ('season', 'qrloop') for step in steps)
                 self.assertEqual(name in e2e.RACE_SCENARIOS, drives, name)
 
     def test_disc_prompt_fails(self):

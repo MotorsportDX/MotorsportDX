@@ -277,6 +277,10 @@
       "provenance": "Original test tooling for this project; no game content or original game function bodies"
     },
     {
+      "path": "outputs/FM4-build/e2e/quickrace_loop.py",
+      "provenance": "Original test tooling for this project; no game content or original game function bodies"
+    },
+    {
       "path": "outputs/FM4-build/e2e/soak_report.py",
       "provenance": "Original test tooling for this project; no game content or original game function bodies"
     },

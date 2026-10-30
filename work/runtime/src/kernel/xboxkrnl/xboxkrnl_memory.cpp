@@ -12,7 +12,15 @@
 // Disable warnings about unused parameters for kernel functions
 #pragma GCC diagnostic ignored "-Wunused-parameter"
 
+#include <algorithm>
+#include <atomic>
+#include <chrono>
+#include <cstdlib>
 #include <cstring>
+#include <fstream>
+#include <iomanip>
+#include <string>
+#include <thread>
 
 #include <rex/assert.h>
 #include <rex/kernel/xboxkrnl/private.h>
@@ -488,6 +496,86 @@ struct X_MM_QUERY_STATISTICS_RESULT {
 };
 static_assert_size(X_MM_QUERY_STATISTICS_RESULT, 104);
 
+// The available pages MmQueryStatistics last returned to the title (the guest memory trace).
+std::atomic<uint32_t> last_available_pages{UINT32_MAX};
+
+namespace {
+
+struct HeapUse {
+  uint64_t used = 0;        // committed pages
+  uint64_t reserved = 0;    // reserved or committed pages
+  uint64_t unreserved = 0;  // free pages
+};
+
+HeapUse MeasureHeap(memory::BaseHeap* heap) {
+  HeapUse use;
+  if (!heap) return use;
+  use.reserved = uint64_t(heap->reserved_page_count()) * heap->page_size();
+  use.unreserved = uint64_t(heap->unreserved_page_count()) * heap->page_size();
+  const uint64_t end = uint64_t(heap->heap_base()) + heap->heap_size();
+  uint64_t address = heap->heap_base();
+  while (address < end) {
+    memory::HeapAllocationInfo info{};
+    if (!heap->QueryRegionInfo(uint32_t(address), &info) || !info.region_size) break;
+    if (info.state & memory::kMemoryAllocationCommit) use.used += info.region_size;
+    address = uint64_t(info.base_address) + info.region_size;
+  }
+  return use;
+}
+
+void WriteHeap(std::ostream& output, const char* name, const HeapUse& use) {
+  output << ",\"" << name << "\":{\"used\":" << use.used << ",\"reserved\":" << use.reserved
+         << ",\"unreserved\":" << use.unreserved << '}';
+}
+
+}  // namespace
+
+// REX_GUEST_MEM_TRACE=<file>: every 5 s one JSON line of the guest's memory use (diagnostics,
+// off without the variable): the physical heaps at vA0000000 (64 KB pages), vC0000000 (16 MB)
+// and vE0000000 (4 KB), views of the same 512 MB, and the physical heap under them, with the
+// highest committed bytes of that heap since the start; the virtual heaps v00000000 and
+// v40000000; and the available pages MmQueryStatistics last returned (null when the title has
+// not called it). 'unix' is the wall clock in seconds, as the e2e soak sampler's 't'.
+void StartGuestMemoryTrace() {
+  const char* path = std::getenv("REX_GUEST_MEM_TRACE");
+  if (!path || !*path) return;
+  std::thread([output_path = std::string(path)]() {
+    std::ofstream output(output_path, std::ios::app);
+    uint64_t peak_used = 0;
+    const auto start = std::chrono::steady_clock::now();
+    for (;;) {
+      std::this_thread::sleep_for(std::chrono::seconds(5));
+      auto* memory = REX_KERNEL_MEMORY();
+      if (!memory) continue;
+      const HeapUse physical = MeasureHeap(memory->GetPhysicalHeap());
+      peak_used = std::max(peak_used, physical.used);
+      const double unix_s = std::chrono::duration<double>(
+                                std::chrono::system_clock::now().time_since_epoch())
+                                .count();
+      const double uptime_s =
+          std::chrono::duration<double>(std::chrono::steady_clock::now() - start).count();
+      output << std::fixed << std::setprecision(1) << "{\"unix\":" << unix_s
+             << ",\"uptime_s\":" << uptime_s;
+      WriteHeap(output, "physical", physical);
+      output << ",\"physical_peak_used\":" << peak_used;
+      WriteHeap(output, "vA0000000", MeasureHeap(memory->LookupHeapByType(true, 0x10000)));
+      WriteHeap(output, "vC0000000", MeasureHeap(memory->LookupHeapByType(true, 0x1000000)));
+      WriteHeap(output, "vE0000000", MeasureHeap(memory->LookupHeapByType(true, 0x1000)));
+      WriteHeap(output, "v00000000", MeasureHeap(memory->LookupHeap(0x00000000)));
+      WriteHeap(output, "v40000000", MeasureHeap(memory->LookupHeap(0x40000000)));
+      const uint32_t available = last_available_pages.load(std::memory_order_relaxed);
+      output << ",\"available_pages\":";
+      if (available == UINT32_MAX) {
+        output << "null";
+      } else {
+        output << available;
+      }
+      output << "}\n";
+      output.flush();
+    }
+  }).detach();
+}
+
 u32 MmQueryStatistics_entry(ppc_ptr_t<X_MM_QUERY_STATISTICS_RESULT> stats_ptr) {
   if (!stats_ptr) {
     return X_STATUS_INVALID_PARAMETER;
@@ -528,6 +616,7 @@ u32 MmQueryStatistics_entry(ppc_ptr_t<X_MM_QUERY_STATISTICS_RESULT> stats_ptr) {
 
   stats_ptr->title.available_pages =
       stats_ptr->total_physical_pages - stats_ptr->kernel_pages - used_pages;
+  last_available_pages.store(stats_ptr->title.available_pages, std::memory_order_relaxed);
   stats_ptr->title.total_virtual_memory_bytes = 0x2FFE0000;
   stats_ptr->title.reserved_virtual_memory_bytes = reserved_pages_bytes;
   stats_ptr->title.physical_pages = 0x00001000;  // TODO(gibbed): FIXME

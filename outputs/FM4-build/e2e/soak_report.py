@@ -13,7 +13,10 @@ Reads the run's soak.jsonl (soak.py), perf.jsonl and events.txt, and writes soak
 - the frame times: p50, p95 and p99 per minute of the run, and per race (its race windows), with
   the slope of the races' p50 and p99 per hour and the first third of the races against the last;
 - the kernel and XAM stubs the run called (runtime.log): each stubbed function or unimplemented
-  XAM message with its count and the times of its first and last call.
+  XAM message with its count and the times of its first and last call;
+- for a run that revisits the same tracks and cars (quickrace_loop.py), the same metrics per pass
+  and each pair's floor against the pass before (passes); and the process's handles by object
+  type, first against last (handle_types).
 
 The verdict uses the thresholds proposed for the season soak (29 October 2026): private bytes
 grow at most 50 MB an hour, the process's dedicated GPU memory at most 25 MB an hour, handles at
@@ -21,6 +24,7 @@ most 100 and threads at most 5 an hour, and the races' p50 and p99 frame times o
 of the races are at most 10% above those of the first third.
 """
 import argparse
+import bisect
 import json
 import re
 import statistics
@@ -138,6 +142,123 @@ def show(metric, value):
     return round(value / MB, 1) if metric in BYTES else round(value, 2)
 
 
+PASS_LABEL = re.compile(r'^pass (\d+) pair (\d+)')
+
+
+def passes(samples):
+    """A run that revisits the same tracks and cars (quickrace_loop.py: labels 'pass <p> pair <i>:
+    ...'): per pass and metric, the slope per hour inside the pass, each pair's floor (its lowest
+    sample) and the floors' rise over the pass; and per pair the floor against the same pair's in
+    the pass before. A cache stays level once a pass repeats what an earlier one loaded; a leak
+    keeps rising on the repeat."""
+    by_pass = {}
+    for s in samples:
+        match = PASS_LABEL.match(s.get('label') or '')
+        if match:
+            by_pass.setdefault(int(match.group(1)), []).append((int(match.group(2)), s))
+    if not by_pass:
+        return None
+    result = {}
+    floors = {}
+    for number, items in sorted(by_pass.items()):
+        entry = {'samples': len(items), 'hours': round((items[-1][1]['t'] - items[0][1]['t']) / 3600, 3),
+                 'pairs': len({pair for pair, _ in items}), 'metrics': {}}
+        for metric in METRICS:
+            values = [(s['t'], s[metric]) for _, s in items if s.get(metric) is not None]
+            if len(values) < 2:
+                continue
+            pair_floor = {}
+            for pair, s in items:
+                if s.get(metric) is not None:
+                    pair_floor[pair] = min(pair_floor.get(pair, s[metric]), s[metric])
+            floors[(number, metric)] = pair_floor
+            ordered = [pair_floor[p] for p in sorted(pair_floor)]
+            t0 = values[0][0]
+            metric_entry = {
+                'slope_per_hour': show(metric, slope([((t - t0) / 3600, v) for t, v in values])),
+                'first_floor': show(metric, ordered[0]), 'last_floor': show(metric, ordered[-1]),
+                'floor_rise': show(metric, ordered[-1] - ordered[0]),
+                'floor_slope_per_pair': show(metric, slope(list(enumerate(ordered)))),
+            }
+            before = floors.get((number - 1, metric))
+            if before:
+                deltas = [pair_floor[p] - before[p] for p in sorted(pair_floor) if p in before]
+                if deltas:
+                    metric_entry['against_previous_pass'] = {
+                        'median': show(metric, statistics.median(deltas)),
+                        'first_pair': show(metric, deltas[0]), 'last_pair': show(metric, deltas[-1])}
+            entry['metrics'][metric] = metric_entry
+        result[str(number)] = entry
+    return result
+
+
+def handle_type_trend(samples):
+    """The handles by object type at the first sample after the warm-up's end of each pass, or of
+    the run's first and last samples: the types whose count changed most."""
+    with_types = [s for s in samples if s.get('handle_types')]
+    if len(with_types) < 2:
+        return None
+    first, last = with_types[0]['handle_types'], with_types[-1]['handle_types']
+    change = {name: last.get(name, 0) - first.get(name, 0) for name in set(first) | set(last)}
+    points = []
+    for s in with_types:
+        match = PASS_LABEL.match(s.get('label') or '')
+        key = (match.group(1), match.group(2)) if match else None
+        if key and (not points or points[-1]['pass_pair'] != list(key)):
+            points.append({'pass_pair': list(key), 'uptime_s': s['uptime_s'], 'types': s['handle_types']})
+    return {'first': first, 'last': last,
+            'change': dict(sorted(((k, v) for k, v in change.items() if v), key=lambda kv: -abs(kv[1]))),
+            'per_pair': points}
+
+
+def guest_memory(run, samples):
+    """guest-mem.jsonl (REX_GUEST_MEM_TRACE): the guest's physical memory (of 512 MB) and virtual
+    heaps: the peak committed physical bytes, when and where it was (the soak label of the
+    nearest sample, and the pass's pair from qrloop.jsonl), the last values, and per pass the
+    first and last committed physical bytes."""
+    lines = read_jsonl(run / 'guest-mem.jsonl')
+    if not lines:
+        return None
+    labelled = sorted((s['t'], s.get('label')) for s in samples)
+    times = [t for t, _ in labelled]
+
+    def label_at(unix):
+        if not labelled:
+            return None
+        i = max(0, bisect.bisect_right(times, unix) - 1)
+        return labelled[i][1]
+
+    pairs = {}
+    for cycle in read_jsonl(run / 'qrloop.jsonl'):
+        pairs[(cycle['pass'], cycle['pair'])] = {k: cycle.get(k) for k in ('manufacturer', 'car', 'location', 'track')}
+    peak = max(lines, key=lambda l: l['physical']['used'])
+    where = label_at(peak['unix'])
+    match = PASS_LABEL.match(where or '')
+    mb = lambda v: round(v / MB, 1)
+    result = {
+        'samples': len(lines), 'physical_total_mb': 512,
+        'peak_physical_used_mb': mb(peak['physical']['used']),
+        'peak_uptime_s': peak['uptime_s'], 'peak_label': where,
+        'peak_pair': pairs.get((int(match.group(1)), int(match.group(2)))) if match else None,
+        'last': {name: {k: mb(v) for k, v in lines[-1][name].items()}
+                 for name in ('physical', 'vA0000000', 'vC0000000', 'vE0000000', 'v00000000', 'v40000000')
+                 if name in lines[-1]},
+        'peak_virtual_used_mb': {name: mb(max(l[name]['used'] for l in lines if name in l))
+                                 for name in ('v00000000', 'v40000000') if name in lines[0]},
+        'available_pages_last': lines[-1].get('available_pages'),
+    }
+    per_pass = {}
+    for line in lines:
+        match = PASS_LABEL.match(label_at(line['unix']) or '')
+        if match:
+            per_pass.setdefault(match.group(1), []).append(line['physical']['used'])
+    if per_pass:
+        result['physical_used_per_pass_mb'] = {
+            p: {'first': mb(v[0]), 'last': mb(v[-1]), 'min': mb(min(v)), 'max': mb(max(v))}
+            for p, v in per_pass.items()}
+    return result
+
+
 def analyse(run):
     samples = read_jsonl(run / 'soak.jsonl')
     events = read_events(run / 'events.txt')
@@ -210,6 +331,9 @@ def analyse(run):
         verdict[f'race_frame_{key}'] = {'rise': values['rise'], 'limit': FRAME_RISE,
                                         'pass': None if values['rise'] is None else values['rise'] <= FRAME_RISE}
     report['verdict'] = verdict
+    report['passes'] = passes(samples)
+    report['handle_types'] = handle_type_trend(samples)
+    report['guest_memory'] = guest_memory(run, samples)
     report['stubs'] = stubs(run / 'runtime.log')
     report['pass'] = all(v['pass'] is not False for v in verdict.values())
     return report
@@ -236,6 +360,20 @@ def main():
               f"{t['slope_ms_per_hour']} ms/h")
     for name, v in report['verdict'].items():
         print(f"  {name}: {'PASS' if v['pass'] else 'FAIL' if v['pass'] is False else 'n/a'} ({v})")
+    for number, entry in (report.get('passes') or {}).items():
+        print(f"  pass {number}: {entry['hours']} h, {entry['pairs']} pairs")
+        for metric in ('private_bytes', 'gpu_dedicated', 'handles'):
+            m = entry['metrics'].get(metric)
+            if m:
+                print(f"    {metric}: {m['slope_per_hour']}/h, floors {m['first_floor']} -> {m['last_floor']} "
+                      f"({m['floor_rise']:+}), against the pass before {m.get('against_previous_pass')}")
+    if report.get('handle_types'):
+        print(f"  handle types changed: {report['handle_types']['change']}")
+    guest = report.get('guest_memory')
+    if guest:
+        print(f"  guest physical memory: peak {guest['peak_physical_used_mb']} of 512 MB at "
+              f"{guest['peak_uptime_s']} s ({guest['peak_label']}, {guest['peak_pair']}); "
+              f"virtual peaks {guest['peak_virtual_used_mb']}; per pass {guest.get('physical_used_per_pass_mb')}")
     print(f"  stubs called: {len(report['stubs'])}")
     for entry in report['stubs']:
         print(f"    {entry['count']:>8} {entry['module']} {entry['name']} ({entry['first']} to {entry['last']})")

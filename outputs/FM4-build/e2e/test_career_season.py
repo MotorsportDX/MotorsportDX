@@ -10,6 +10,7 @@ HERE = Path(__file__).resolve().parent
 sys.path.insert(0, str(HERE))
 import career_season  # noqa: E402
 import e2e  # noqa: E402
+import quickrace_loop  # noqa: E402
 import season_perf  # noqa: E402
 import soak_report  # noqa: E402
 
@@ -411,6 +412,41 @@ class SoakReportTests(unittest.TestCase):
             report = soak_report.analyse(self.write_run(tmp, private_per_race=0, frame_rise=0.5))
             self.assertFalse(report['verdict']['race_frame_p50']['pass'])
             self.assertTrue(report['verdict']['private_bytes']['pass'])
+
+
+class QuickRaceLoopTests(unittest.TestCase):
+    def test_title_line_and_same_name(self):
+        lines = [line('UNITED STATES', 296, 77), line('Acura', 294, 115), line('ACURA', 805, 566)]
+        self.assertEqual(quickrace_loop.title_line(lines), 'Acura')
+        self.assertIsNone(quickrace_loop.title_line([line('ACURA', 805, 566)]))
+        self.assertTrue(quickrace_loop.same_name('Camino Viejo de Montserrat', 'Camino Viejo de Montserrat'))
+        self.assertTrue(quickrace_loop.same_name('Bernese Alps', 'BerneseAlps'))
+        self.assertTrue(quickrace_loop.same_name('Abarth', 'Abarlh'))
+        self.assertFalse(quickrace_loop.same_name('Acura', 'Alfa Romeo'))
+        self.assertFalse(quickrace_loop.same_name(None, 'Acura'))
+
+    def test_passes_tell_a_cache_from_a_leak(self):
+        def samples(leak_mb):
+            result, t = [], 0
+            for number in (1, 2):
+                for pair in range(4):
+                    for _ in range(5):
+                        t += 30
+                        # Pass 1 loads each pair once (+50 MB a pair); pass 2 adds leak_mb a pair.
+                        level = 50 * (pair + 1) if number == 1 else 200 + leak_mb * (pair + 1)
+                        result.append({'t': t, 'uptime_s': t, 'label': f'pass {number} pair {pair}: race',
+                                       'private_bytes': (1000 + level) * soak_report.MB,
+                                       'handle_types': {'Event': 100 + (pair if number == 2 else 0)}})
+            return result
+        cache = soak_report.passes(samples(0))
+        self.assertEqual(cache['2']['metrics']['private_bytes']['floor_rise'], 0)
+        self.assertEqual(cache['1']['metrics']['private_bytes']['floor_rise'], 150)
+        leak = soak_report.passes(samples(40))
+        self.assertEqual(leak['2']['metrics']['private_bytes']['floor_rise'], 120)
+        self.assertGreater(leak['2']['metrics']['private_bytes']['against_previous_pass']['last_pair'], 0)
+        trend = soak_report.handle_type_trend(samples(0))
+        self.assertEqual(trend['change'], {'Event': 3})
+        self.assertIsNone(soak_report.passes([{'t': 1, 'label': 'event 1: race'}]))
 
 
 class SeasonPerfTests(unittest.TestCase):

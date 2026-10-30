@@ -38,6 +38,7 @@
 !/outputs/FM4-build/e2e/cpu_power.py
 !/outputs/FM4-build/e2e/career_season.py
 !/outputs/FM4-build/e2e/soak.py
+!/outputs/FM4-build/e2e/quickrace_loop.py
 !/outputs/FM4-build/e2e/soak_report.py
 !/outputs/FM4-build/e2e/season_perf.py
 !/outputs/FM4-build/e2e/test_career_season.py

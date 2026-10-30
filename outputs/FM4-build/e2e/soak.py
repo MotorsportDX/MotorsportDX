@@ -4,6 +4,7 @@ Every 30 s (--soak-interval) a thread records the process's private bytes, worki
 file use, handle, thread, GDI and USER object counts, and its own GPU memory: the "GPU Process
 Memory" performance counters of its process id (dedicated, shared and committed bytes, summed
 over the adapters it uses; the counters DXGI's QueryVideoMemoryInfo reports inside the process).
+The process's handles by object type come from the system's handle table (handle_types).
 A label set by the scenario (set_label) says where the run was, so a report can line the samples
 up with the races. soak_report.py analyses the file. On another platform the sampler records
 nothing.
@@ -94,6 +95,78 @@ def process_counters(handle, pid):
             'gdi': user32.GetGuiResources(handle, 0), 'user': user32.GetGuiResources(handle, 1)}
 
 
+class HandleTypes:
+    """The process's handles by object type (Event, Thread, Section, File...), from the system's
+    handle table (NtQuerySystemInformation, SystemExtendedHandleInformation) and the object type
+    names (NtQueryObject, ObjectTypesInformation). None when either call fails."""
+
+    class ENTRY(ctypes.Structure):
+        _fields_ = [('Object', ctypes.c_void_p), ('UniqueProcessId', ctypes.c_size_t),
+                    ('HandleValue', ctypes.c_size_t), ('GrantedAccess', wintypes.ULONG),
+                    ('CreatorBackTraceIndex', wintypes.USHORT), ('ObjectTypeIndex', wintypes.USHORT),
+                    ('HandleAttributes', wintypes.ULONG), ('Reserved', wintypes.ULONG)]
+
+    def __init__(self, pid):
+        self.pid = pid
+        self.names = None
+        try:
+            self.ntdll = ctypes.WinDLL('ntdll')
+            self.ntdll.NtQuerySystemInformation.argtypes = [wintypes.ULONG, ctypes.c_void_p, wintypes.ULONG,
+                                                            ctypes.POINTER(wintypes.ULONG)]
+            self.ntdll.NtQueryObject.argtypes = [wintypes.HANDLE, wintypes.ULONG, ctypes.c_void_p, wintypes.ULONG,
+                                                 ctypes.POINTER(wintypes.ULONG)]
+            self.names = self._type_names()
+        except (AttributeError, OSError, ValueError):
+            self.names = None
+        self.size = 1 << 22
+
+    def _type_names(self):
+        size = 1 << 16
+        while size < 1 << 24:
+            buffer = ctypes.create_string_buffer(size)
+            needed = wintypes.ULONG()
+            status = self.ntdll.NtQueryObject(None, 3, buffer, size, ctypes.byref(needed)) & 0xFFFFFFFF
+            if status == 0xC0000004:  # STATUS_INFO_LENGTH_MISMATCH
+                size *= 2
+                continue
+            if status:
+                return None
+            raw = buffer.raw
+            count = int.from_bytes(raw[0:4], 'little')
+            offset = 8  # ULONG NumberOfTypes, aligned to the pointer size
+            names = {}
+            for _ in range(count):
+                length = int.from_bytes(raw[offset:offset + 2], 'little')
+                maximum = int.from_bytes(raw[offset + 2:offset + 4], 'little')
+                name = raw[offset + 104:offset + 104 + length].decode('utf-16-le', 'replace')
+                names[raw[offset + 90]] = name  # TypeIndex, after the two BOOLEANs at 88 and 89
+                offset += 104 + ((maximum + 7) & ~7)
+            return names
+        return None
+
+    def sample(self):
+        if not self.names:
+            return {}
+        while self.size < 1 << 28:
+            buffer = ctypes.create_string_buffer(self.size)
+            needed = wintypes.ULONG()
+            status = self.ntdll.NtQuerySystemInformation(0x40, buffer, self.size, ctypes.byref(needed)) & 0xFFFFFFFF
+            if status == 0xC0000004:
+                self.size = max(self.size * 2, (needed.value + (1 << 20)) & ~0xFFFF)
+                continue
+            if status:
+                return {}
+            count = ctypes.c_size_t.from_buffer(buffer, 0).value
+            entries = (self.ENTRY * count).from_buffer(buffer, 2 * ctypes.sizeof(ctypes.c_size_t))
+            types = {}
+            for entry in entries:
+                if entry.UniqueProcessId == self.pid:
+                    name = self.names.get(entry.ObjectTypeIndex, str(entry.ObjectTypeIndex))
+                    types[name] = types.get(name, 0) + 1
+            return {'handle_types': dict(sorted(types.items(), key=lambda kv: -kv[1]))}
+        return {}
+
+
 class GpuMemory:
     """The "GPU Process Memory" counters of one process id, summed over its instances (one per
     adapter and memory segment group); values are None where Windows has no such counters."""
@@ -161,6 +234,7 @@ class SoakSampler:
     def _run(self):
         handle = wintypes.HANDLE(int(self.process._handle))
         gpu = GpuMemory(self.process.pid)
+        handle_types = HandleTypes(self.process.pid)
         started = time.time()
         try:
             with open(self.path, 'w', encoding='utf-8') as output:
@@ -170,7 +244,7 @@ class SoakSampler:
                     wait = self.interval
                     record = {'t': round(time.time(), 1), 'uptime_s': round(time.time() - started, 1),
                               'label': self.label, **process_counters(handle, self.process.pid),
-                              **gpu.sample()}
+                              **gpu.sample(), **handle_types.sample()}
                     output.write(json.dumps(record) + '\n')
                     output.flush()
                     self.samples += 1

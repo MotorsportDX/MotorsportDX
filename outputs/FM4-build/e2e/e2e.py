@@ -169,6 +169,10 @@ SCENARIOS.update({
         [60, 'up,a', 0.12, '@scene \\d+ 200_WORLD_TOUR', 10],
         [3 * 3600, 'season', 0],
     ],
+    # Quick Races on a fixed list of (manufacturer, location) pairs, pass after pass, in one
+    # process (quickrace_loop.py): the soak that revisits tracks and cars. From the main menu,
+    # the driver until a pass ends after --min-hours, at most --max-hours. Needs engageaionstart.
+    'quickrace_loop': _TO_MAIN_MENU + [[3 * 3600, 'qrloop', 0]],
 })
 SCENARIOS.update({
     # Downloadable content: Quick Race with a car of the Porsche Expansion Pack (Porsche is not in
@@ -305,7 +309,7 @@ FAST_SCENARIOS['camera_race'] = (FAST_SCENARIOS['quickrace']
 # BuildRoot without Disc 2, 25 October 2026) passed. A run whose timeline ends before the push
 # waits up to RACE_WAIT_S for it (a cold shader cache slows the countdown down).
 RACE_SCENARIOS = {'quickrace', 'race', 'photo', 'menu_race', 'camera_race', 'freeze', 'career',
-                  'career_finish', 'career_season', 'dlc'}
+                  'career_finish', 'career_season', 'quickrace_loop', 'dlc'}
 # career_season keeps this many captures (8 minutes at one every 2 s), then only the newest
 # (live-latest.ppm): the driver keeps the captures of each event's end in <out>/events.
 SEASON_CAPTURE_LIMIT = 240
@@ -582,7 +586,7 @@ def check_actions(steps):
     """Parses every input action of the steps, so a bad one fails before the launch."""
     for index, (wait, action, hold, *text) in enumerate(steps):
         action = action[1:] if text and action.startswith('?') else action
-        if action in ('wait', 'season') or action.startswith(('phase:', 'select:', 'defines:')):
+        if action in ('wait', 'season', 'qrloop') or action.startswith(('phase:', 'select:', 'defines:')):
             continue
         for press in action.split(','):
             try:
@@ -1229,7 +1233,7 @@ def run_once(options, out):
 
     # Same cvars as Build.ps1 -Action run.
     sys.path[:0] = [str(HERE), str(HERE.parent)]
-    import career_season, cpu_power, pipeline, soak
+    import career_season, cpu_power, pipeline, quickrace_loop, soak
     args = {k: str(v) for k, v in pipeline.launch_cvars(root, state['disc1'], out / 'runtime.log').items()}
     # Nobody can type into the host keyboard dialog: XAM prompts answer with their defaults.
     args['headless'] = 'true'
@@ -1289,9 +1293,12 @@ def run_once(options, out):
     env.update(FM4_CAPTURE_DIR=str(capture),
                FM4_TEST_INPUT_FILE=str(input_file), REX_PERF_TRACE_FILE=str(out / 'perf.jsonl'),
                FM4_TEST_EVENTS_FILE=str(events_file))
-    season = options.scenario == 'career_season' and not options.steps and not options.goal
+    season = options.scenario in ('career_season', 'quickrace_loop') and not options.steps and not options.goal
     if season:
         env['FM4_CAPTURE_ARCHIVE_LIMIT'] = str(SEASON_CAPTURE_LIMIT)
+    if season or options.soak:
+        # The guest's heaps every 5 s beside soak.jsonl (soak_report.py, docs/e2e/traces.md).
+        env['REX_GUEST_MEM_TRACE'] = str(out / 'guest-mem.jsonl')
     # The launcher's race render quality and tiling: one tile when the look has TAA on RTV
     # (--msaa keeps the tiles); --env FM4_TILING_SCENARIO keeps its tiling scenario.
     tiling_given = any(item.startswith('FM4_TILING_SCENARIO=') for item in options.env)
@@ -1423,7 +1430,7 @@ def run_once(options, out):
     # process's GPU memory every --soak-interval seconds; career_season always samples.
     soak_sampler = soak.SoakSampler(process, out / 'soak.jsonl', options.soak_interval) \
         if options.soak or season else None
-    season_driver = None
+    season_driver = loop_driver = None
     timeline = []
     crashed = None
     goal_reached = None
@@ -1457,6 +1464,17 @@ def run_once(options, out):
                 if not done:
                     failed_step = f'step {index}: season: {season_driver.failure or "no event finished"}'
                     break
+            elif action == 'qrloop':
+                loop_driver = quickrace_loop.Loop(
+                    sys.modules[__name__], screen, input_file, out, time.time() + options.max_hours * 3600,
+                    pairs=json.loads(options.qr_pairs) if options.qr_pairs else None,
+                    count=options.qr_count, step=options.qr_step, race_s=options.qr_race_seconds,
+                    min_hours=options.min_hours, sampler=soak_sampler, started=started)
+                done = loop_driver.run()
+                timeline.append([round(time.time() - started, 1), action, done])
+                if not done:
+                    failed_step = f'step {index}: qrloop: {loop_driver.failure or "fewer than two passes"}'
+                    break
             else:
                 deadline = time.time() + wait
                 while time.time() < deadline:
@@ -1482,7 +1500,7 @@ def run_once(options, out):
             if not done:
                 failed_step = f'step {index}: {action}' + (f' -> {text[0]!r}' if text else '') + ' timed out'
                 break
-            if text or action.startswith('select:') or action == 'season':
+            if text or action.startswith('select:') or action in ('season', 'qrloop'):
                 goal_reached = True if goal_reached is None else goal_reached
         if failed_step:
             goal_reached = False
@@ -1605,6 +1623,7 @@ def run_once(options, out):
         'cpu_power': sampler.summary(),
         # career_season: its events, seasons, credits check and places (season.jsonl has the events).
         'season': season_driver.summary() if season_driver else None,
+        'qrloop': loop_driver.summary() if loop_driver else None,
         'soak': {'interval_s': options.soak_interval, 'samples': soak_sampler.samples} if soak_sampler else None,
         'affinity': {'mask': options.affinity, 'sets': sampler.affinity_sets} if options.affinity else None,
         'errors': errors,
@@ -2109,6 +2128,14 @@ def main():
                         help='career_season: keep playing after the seasons until the run is this old')
     parser.add_argument('--max-hours', type=float, default=3.0,
                         help='career_season: the cap; the run stops at it, within an event too')
+    parser.add_argument('--qr-pairs', help='quickrace_loop: the pairs as JSON, [["Acura", "Bernese Alps"], ...]; '
+                                           'without it the first pass picks them (--qr-count, --qr-step)')
+    parser.add_argument('--qr-count', type=int, default=11, help='quickrace_loop: pairs in a pass')
+    parser.add_argument('--qr-step', type=int, default=3,
+                        help='quickrace_loop: Right presses between two manufacturers of the first pass '
+                             '(locations move by one)')
+    parser.add_argument('--qr-race-seconds', type=float, default=180,
+                        help='quickrace_loop: seconds of each race before QUIT RACE')
     parser.add_argument('--soak', action='store_true',
                         help='record soak.jsonl (soak.py) in any scenario; career_season always does')
     parser.add_argument('--soak-interval', type=float, default=30.0, help='seconds between soak samples')

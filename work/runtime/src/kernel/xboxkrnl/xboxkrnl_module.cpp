@@ -48,6 +48,8 @@ REXCVAR_DEFINE_BOOL(kernel_cert_monitor, false, "Kernel", "Enable cert monitor")
 namespace rex::kernel::xboxkrnl {
 using namespace rex::system;
 
+void StartGuestMemoryTrace();  // xboxkrnl_memory.cpp
+
 bool XboxkrnlModule::SendPIXCommand(const char* cmd) {
   // TODO: JIT - PIX commands require JIT processor->Execute
   // if (!REXCVAR_GET(kernel_pix)) {
@@ -197,6 +199,9 @@ XboxkrnlModule::XboxkrnlModule(Runtime* emulator, KernelState* kernel_state)
         memory::store_and_swap<uint32_t>(lpKeTimeStampBundle + 16,
                                          chrono::Clock::QueryGuestUptimeMillis());
       });
+
+  // REX_GUEST_MEM_TRACE: the guest's heaps every 5 s (xboxkrnl_memory.cpp).
+  StartGuestMemoryTrace();
 
   // Wire kernel object type variables to KernelGuestGlobals.
   // KernelGuestGlobals is allocated in KernelState ctor, which runs before this.
