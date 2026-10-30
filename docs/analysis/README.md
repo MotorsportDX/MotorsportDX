@@ -64,7 +64,7 @@ Updated on 30 October 2026.
 
 | Note | Status | Contents |
 | --- | --- | --- |
-| [career-season-soak.md](career-season-soak.md) | Active | The first 2-hour World Tour soak: memory, handles and GPU memory over time, a performance survey and the career's stubs; the reward screen hitches (the title's own work); the soak that revisits tracks and cars (a host cache, and a slow handle leak); the title render thread's frame loop, which spins between frames and recomputes the gamma ramp on every turn |
+| [career-season-soak.md](career-season-soak.md) | Active | The first 2-hour World Tour soak: memory, handles and GPU memory over time, a performance survey and the career's stubs; the reward screen hitches (the title's own work); the soak that revisits tracks and cars (a host cache, and a slow handle leak); the title render thread's frame loop, which spins between frames and recomputes the gamma ramp on every turn, and the wait that replaces the spin (off by default) |
 | [photo-autovista-replay.md](photo-autovista-replay.md) | Active | How photo mode, Autovista and replays render, what the gates cover, and the plan (M5); research of 18 October 2026 on RTV |
 | [direct-race-launch.md](direct-race-launch.md) | Superseded | A Quick Race launch without the menus (not built); the e2e fast route through the menus replaced it |
 | [releases.md](releases.md) | Done | How the Japan/Asia and USA releases differ, and why one build serves both |

@@ -224,6 +224,10 @@ Runs 1 to 6 use render scale 1x (Display page). On the Ally X's 1080p panel the 
 - Run the set once on AC power and once on battery: a handheld changes its power plan on battery, and that is where Windows parks cores and throttles processes.
 - Send back only these files from the export's `logs` folder: the `perf-<profile>-<time>.jsonl` files (timings, draw counts and the CPU time per thread), `play.log` and `runtime.log` (the game's log). Note for each trace whether it ran on AC or battery. The logs show the paths of the export and of the Discs, which may include the Windows user name; nothing from `user-data` (the profile, the saves and the imported content) is needed or included.
 
+
+### Render thread idle wait A/B
+
+The A/B of `fm4_render_thread_idle_wait` (30 October 2026, off by default; [career season soak, 12](analysis/career-season-soak.md#12-the-render-threads-idle-wait-30-october-2026)) with the GUI launcher of an export: **Show developer options** on, **Performance trace** on, render scale 1x, the default look and the race frame rate the screen allows. Two profiles, alike but for the extra cvars of the second, `--fm4_render_thread_idle_wait=true`. Run each as a Quick Race of at least three minutes, then quit to the menu, look at the post-race screens and close the game; once on battery and once on AC. Send back the `perf-<profile>-<time>.jsonl` files, `play.log` and `runtime.log`, and the battery's drain if the device shows it.
 ### Export to another computer
 
 `export` copies what the launcher needs into a folder outside the BuildRoot and the

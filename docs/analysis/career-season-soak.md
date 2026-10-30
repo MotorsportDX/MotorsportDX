@@ -136,7 +136,7 @@ The shader and pipeline work in play over the whole run: 7 vertex and 89 pixel s
 Ranked by what a player would notice. The first ranking came from this run's measurements alone; the reward screens' traces of [section 9](#9-the-reward-screen-hitches-30-october-2026) re-ranked it: their hitches are the title's own work, so they moved from the first place to the last.
 
 1. **The race at 2x is GPU-bound below 240 fps.** 194.8 fps with 5.02 ms of GPU a frame; 240 fps needs 4.17 ms. The scene is 3.55 ms, and the look's passes are 1.44 ms, GTAO the largest (0.71 ms, 14% of the frame). Candidates: GTAO at a lower resolution or fewer samples at 2x, and a check of what the scene's 3.55 ms holds at 2x against 3/2 (3.28 ms of GPU a whole frame there in the Level 1 gate). The render thread is busy 3.48 ms of a 4.79 ms frame, so after the GPU it is the next limit.
-2. **The title render thread's frame loop spins.** Found by the reward screens' traces ([section 9](#9-the-reward-screen-hitches-30-october-2026)) and measured in [section 11](#11-the-title-render-threads-gamma-ramp-30-october-2026): between two frames the title's render thread turns its frame loop without waiting, and every turn recomputes the gamma ramp with `pow`, 17 to 92 turns a frame. That takes about 160 ms of CPU a second in races and 270 to 600 ms a second in the menus, loading and reward screens: CPU and power that a handheld such as the ROG Xbox Ally X would get back. A wait for the next frame in place of the spin is proposed; the main session decides.
+2. **The title render thread's frame loop spins.** Found by the reward screens' traces ([section 9](#9-the-reward-screen-hitches-30-october-2026)) and measured in [section 11](#11-the-title-render-threads-gamma-ramp-30-october-2026): between two frames the title's render thread turns its frame loop without waiting, and every turn recomputes the gamma ramp with `pow`, 17 to 92 turns a frame. That takes about 160 ms of CPU a second in races and 270 to 600 ms a second in the menus, loading and reward screens: CPU and power that a handheld such as the ROG Xbox Ally X would get back. A wait for the next frame in place of the spin ([section 12](#12-the-render-threads-idle-wait-30-october-2026)) takes 4.7 to 7.8% of the process's CPU time and 3.8 to 5.7% of the energy off a Quick Race; it is off by default while the countdown, which it makes dearer, is not explained.
 3. **Pipelines for a new track at its loading.** One wait of 365 ms at Mugello Club's loading for a pipeline the creation threads were making (the longest early pipeline 369 ms), and 25 waits of 768 ms over the run. These are pipelines that the pipeline library did not hold for a track first seen in this run. Adding the career's tracks to the offline pass, or creating a track's pipelines while its loading screen shows, would take them off the loading's frames.
 4. **The pre-race menu's GPU time and hitches.** It has the highest GPU time a frame (7.80 ms; the scene 6.47 ms, the showroom car at 2x) and the most hitches a minute at Hockenheim (27). Its p99 of 33.6 ms is the menu's own 30 fps transitions. A trace of what the showroom draws at 2x would say whether it needs the race's scale.
 5. **Long frames in the menus (566 ms at event 7) and at boot (733 ms).** The boot's frame is in the window where 32 look mods compiled on the workers (14 s on the workers, 110 pending), so the BuildRoot's mod cache lacked the default look's defines after the look presets' latest change; the menus' 566 ms frame holds no shader work. Both happen once; a trace of the menu frame is the next step.
@@ -304,4 +304,64 @@ The spin is the title's own design: on the Xbox 360 the render thread has a hard
 
 - Following the main session's rule (keep a helper only for a measured saving), the memo and the native `strstr` were taken out.
 - The gamma ramp hash stays as a trace, to check a change to the loop.
-- A wait in place of the spin is proposed to the main session, which decides on it.
+- A wait in place of the spin was decided on the same day ([section 12](#12-the-render-threads-idle-wait-30-october-2026)).
+
+## 12. The render thread's idle wait, 30 October 2026
+
+The main session's decision of 30 October 2026, after section 11: let the title render thread wait for its next frame instead of spinning, off by default behind a switch, and measure it.
+
+**The queue's two sides.**
+
+- The consumer is `RunFrame`'s poll, `sub_822C0840`. It is called from `0x822DB85C` and `0x822DB95C` on the queue at `CRenderThread+2472`. Under the queue's `CScopedLock` at `+64`, it takes the first buffer from the list at `+28` when the list's size at `+32` is not 0, and returns whether there is one.
+- The producer is the main thread's `sub_82379E90`, reached from `Game::MainLoop` through `sub_822A2550`. Under the same lock, it inserts the recorded buffer (`+52`) into that list with `sub_82940438`, the call that returns to `0x8237A1BC`, and writes the new size to `+128`.
+- The main thread itself throttles in `sub_822AA630`. While more than one frame is queued, it yields (`NtYieldExecution`) and checks again.
+
+**The change** (`fm4-render-idle-wait.cpp`, `fm4_render_thread_idle_wait`, off by default):
+
+- A hook of `sub_82940438` counts a publication after the insert from `0x8237A1BC`.
+- The hook of `RunFrame`'s poll notes the count before the poll, and whether the poll found the queue empty. It never waits there, because it runs under the queue's lock, which the main thread needs in order to queue.
+- With the switch on, the next `RunFrame` first sleeps until the next publication, at most 1 ms. That sleep is outside every lock: `ThreadProc` holds none between two `RunFrame` calls. Turns that did not poll (the loading frames' path) or that found a frame do not wait.
+- The perf trace's `render_idle_waits` gives a second's waits, their timeouts and time, and the frames queued.
+
+The main thread queues two buffers a frame: 464 a second at 232 fps.
+
+**The measurements.** Seven check runs on build `677b07d`, I:\FM4-build-usa, the native path, 240 Hz, each pair off and then on:
+
+- Quick Race at 1x, 3/2 and 2x (`iw-qr1-off`, `-on`, `iw-qr32-*`, `iw-qr2-*`): two races of 150 s each, the gamma ramp hash on.
+- The parity freeze at 3/2 (`iw-off`, `iw-on`).
+
+The process's CPU time and the package's power per phase (`cpu_power.jsonl`), off → on:
+
+| Phase | 1x | 3/2 | 2x |
+|---|---|---|---|
+| Race | 3,076 → 2,833 ms a second, 54.4 → 50.7 W | 3,023 → 2,947, 52.2 → 51.2 W | 3,219 → 2,959, 54.5 → 51.3 W |
+| Menus | 2,314 → 2,193, 37.7 → 36.3 W | 1,238 → 1,081, 34.4 → 31.2 W | 583 → 502, 26.3 → 25.1 W |
+| Rewards | 864 → 689, 28.2 → 26.6 W | 1,028 → 811, 30.8 → 29.6 W | 829 → 784, 28.0 → 27.6 W |
+| Loading | 1,818 → 1,803, 37.7 → 37.2 W | 1,950 → 1,759, 39.2 → 36.8 W | 1,998 → 1,700, 38.3 → 35.0 W |
+| Countdown | 2,158 → 2,411, 43.2 → 46.2 W | 2,107 → 2,353, 44.0 → 46.0 W | 2,166 → 2,560, 43.9 → 46.7 W |
+| Whole run | −6.8% CPU, −5.7% energy | −4.7%, −3.8% | −7.8%, −5.0% |
+
+The pre-race menu, 11 s a race, waits in none of its turns and moves either way.
+
+The turns of the loop (`SetGammaRamp` calls) in races fell from 5,014, 3,833 and 6,286 a second to 1,219, 1,320 and 1,040. The remaining turns of about five a frame do not poll, or poll a queue that holds a frame. 25 to 31% of the waits in races ended at their 1 ms limit.
+
+The pacing:
+
+| Run | Race fps off / on | Race p50 off / on | Race p99, two races, off / on |
+|---|---|---|---|
+| 1x | 231.8 / 232.3 | 4.16 / 4.14 ms | 5.18, 5.21 / 5.86, 5.00 ms |
+| 3/2 | 230.2 / 230.6 | 4.16 / 4.17 ms | 5.59, 5.66 / 5.65, 5.41 ms |
+| 2x | 200.9 / 201.2 | 4.61 / 4.61 ms | 7.49, 7.16 / 7.07, 7.23 ms |
+
+- Loading screens ran at 37.1 → 37.6, 37.4 → 38.2 and 38.3 → 37.2 fps; the menus at 59.1 to 59.4 fps in every run.
+- The countdown ran at 172.9 → 170.9, 165.8 → 161.8 and 145.4 → 144.6 fps, with p99 9.45 → 9.23, 9.40 → 9.58 and 10.09 → 12.53 ms.
+- The driver's menu navigation reached every race at the same times: the race started 72.6 / 72.0 s and 62.3 / 62.3 s into its cycle at 1x.
+- The gamma ramp's hashes were the same set and sequence off and on at every scale. The ramp changes once, 0 to 1 ms after the first ramp at the boot, and never during a fade. So `UpdateCombineFade` does not step a visible fade on each turn, and fewer turns do not change one.
+- The parity freeze passes: the same draws and predication. The frozen frames differ in 26% and 32% of their pixels, as two runs of one setting do, and the 1:1 crops show the same picture.
+
+**Reading.**
+
+- The wait takes 76 to 260 ms of CPU a second and 1.0 to 3.7 W off the race, and more in the menus, loading and reward screens. A whole run uses 4.7 to 7.8% less CPU time and 3.8 to 5.7% less energy, with the race's frame rate and p50 unchanged.
+- The countdown goes the other way, in all three pairs: 246 to 394 ms of CPU a second and 2 to 3 W more, and 1 to 2% fewer frames. The cause is not measured. A guess is the main thread's throttle, which yields in a loop while two frames are queued: a render thread that has just woken takes its frame later than one that polls.
+- Under the rule of the task (on by default only with a saving and no pacing change), the switch stays off by default until that phase is explained.
+- For the owner's A/B on the ROG Xbox Ally X, the GUI launcher's extra cvars take `--fm4_render_thread_idle_wait=true` ([Ally X run set](../running.md#render-thread-idle-wait-ab)).
