@@ -309,9 +309,13 @@ REX_HOOK_RAW(sub_822FEF08) {  // Segment overflow of the inline writers
   N0OverflowPost(ctx, base);
 }
 
-// The render thread's frame.
+// The render thread's frame. With fm4_render_thread_idle_wait, a turn after a
+// poll that found the frame queue empty first waits for the next queued frame
+// (fm4-render-idle-wait.cpp).
+void FM4RenderIdleWait();
 REX_EXTERN(__imp__sub_822DB318);
 REX_HOOK_RAW(sub_822DB318) {
+  FM4RenderIdleWait();
   N0Thread(N0Entry::kRenderFrame);
   const uint64_t start = N0ZoneStart();
   __imp__sub_822DB318(ctx, base);

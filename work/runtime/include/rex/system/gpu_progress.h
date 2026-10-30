@@ -25,12 +25,31 @@ bool WaitReadPointerPublication(uint32_t seen, uint32_t timeout_us);
 bool GuestRingWaitSleep();
 
 // The sleeps of WaitReadPointerPublication since the last call, for the perf
-// trace: their count, their time and how many ended at the timeout.
+// trace: their count, their time, how many ended at the timeout, and the
+// publications since the last call.
 struct WaitStats {
   uint32_t waits = 0;
   uint32_t timeouts = 0;
   uint64_t ns = 0;
+  uint32_t publications = 0;
 };
 WaitStats TakeWaitStats();
+
+// The title render thread's frame queue (docs/analysis/career-season-soak.md,
+// section 12). Between two frames the title's render thread turns its frame loop
+// without waiting: it polls the queue that the game's main thread fills with
+// each frame's commands, and recomputes the gamma ramp on every turn. The
+// title's hooks count a publication after each push into that queue, and with
+// fm4_render_thread_idle_wait a turn that found the queue empty first sleeps
+// until the next push, at most a given time.
+void PublishFrameQueued();
+uint32_t FrameQueuePublications();
+// Sleeps until a push after `seen` (from FrameQueuePublications), or at most
+// `timeout_us`. Returns false on the timeout.
+bool WaitFrameQueued(uint32_t seen, uint32_t timeout_us);
+// fm4_render_thread_idle_wait.
+bool RenderThreadIdleWait();
+// The sleeps of WaitFrameQueued and the pushes since the last call.
+WaitStats TakeIdleWaitStats();
 
 }  // namespace rex::system::gpu_progress

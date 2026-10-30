@@ -300,6 +300,7 @@
 !/work/fm4-rex/src/fm4-d3d-trace.cpp
 !/work/fm4-rex/src/fm4-guest-hooks.cpp
 !/work/fm4-rex/src/fm4-gamma-ramp-trace.cpp
+!/work/fm4-rex/src/fm4-render-idle-wait.cpp
 !/work/fm4-rex/src/fm4-guest-hooks.h
 !/work/fm4-rex/src/fm4-n0-trace.cpp
 !/work/fm4-rex/src/fm4-native-check.cpp

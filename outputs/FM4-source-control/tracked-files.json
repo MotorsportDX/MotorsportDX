@@ -1269,6 +1269,10 @@
       "provenance": "Original integration source: the hook registry of the D3D layer diagnostics; guest function addresses only, no game function bodies"
     },
     {
+      "path": "work/fm4-rex/src/fm4-render-idle-wait.cpp",
+      "provenance": "Original integration source: a host wait for the title render thread's next queued frame; guest function addresses only, no game function bodies"
+    },
+    {
       "path": "work/fm4-rex/src/fm4-gamma-ramp-trace.cpp",
       "provenance": "Original integration source: a diagnostic hash of the gamma ramps the title hands to its D3D layer; guest function addresses only, no game function bodies"
     },

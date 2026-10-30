@@ -1310,6 +1310,15 @@ inline void OnSwap() {
     state->output << ",\"guest_ring_waits\":{\"waits\":" << ring.waits
                   << ",\"timeouts\":" << ring.timeouts << ",\"ms\":" << ring.ns / 1000000.0 << '}';
   }
+  // The title render thread's waits for a queued frame (fm4_render_thread_idle_wait) and the
+  // frames the main thread queued (career-season-soak.md, section 12).
+  {
+    const rex::system::gpu_progress::WaitStats idle =
+        rex::system::gpu_progress::TakeIdleWaitStats();
+    state->output << ",\"render_idle_waits\":{\"waits\":" << idle.waits
+                  << ",\"timeouts\":" << idle.timeouts << ",\"ms\":" << idle.ns / 1000000.0
+                  << ",\"queued\":" << idle.publications << '}';
+  }
   state->output << ",\"wait_ms\":{";
   for (size_t i = 0; i < size_t(Wait::kCount); ++i) {
     state->output << (i ? "," : "") << '"' << kNames[i] << "\":" << ms(state->wait_ticks[i]);
