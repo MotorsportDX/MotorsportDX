@@ -8,7 +8,7 @@ At 240 Hz and 1x the race is limited by the single command processor (CP) thread
 
 ## Where the CP time goes
 
-Race phase, `I:\FM4-build-usa`, launcher defaults, 240 Hz, 1x (gates `sflc` and `sflp`, 20 October 2026, see [current status](../status/current.md#submit-thread-at-the-swap-20-october-2026)): 155.8-165.2 fps, 2,400-3,050 draws per frame, CP busy 969-976 ms/s. Zones in ms/s (inclusive; the perf trace's own zones cost about 7% of CP samples, so the values are a little high):
+Race phase, `I:\FM4-build-usa`, launcher defaults, 240 Hz, 1x (gates `sflc` and `sflp`, 20 October 2026, see [current status](../status/history-results.md#submit-thread-at-the-swap-20-october-2026)): 155.8-165.2 fps, 2,400-3,050 draws per frame, CP busy 969-976 ms/s. Zones in ms/s (inclusive; the perf trace's own zones cost about 7% of CP samples, so the values are a little high):
 
 | Part | ms/s | Share of CP |
 |---|---|---|

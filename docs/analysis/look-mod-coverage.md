@@ -416,7 +416,7 @@ The glass, chrome and rim mods waited for a scene facing the sun, and the road c
 
 The clear coat setting A of 17 October 2026 had been chosen from race A/B runs in which no camera faced the sun. `clearcoat_glint` is a soft limit in units of the sun's diffuse light, so it only changes highlights above it; it also limits the glass, chrome and rim highlights.
 
-**The `pc` preset**: since 20 October 2026, at the project owner's choice from these crops, `pc` has `clearcoat_glint=1`, `road_specular=0`, `road_sheen=0.4`, `glass=1`, `chrome=1` and `rims=1`; `-Look "pc,clearcoat_glint=4,road_specular=1,road_sheen=0,glass=0,chrome=0,rims=0"` is the `pc` before them. The smoke gate is in [current status](../status/current.md#pc-facing-the-sun-20-october-2026).
+**The `pc` preset**: since 20 October 2026, at the project owner's choice from these crops, `pc` has `clearcoat_glint=1`, `road_specular=0`, `road_sheen=0.4`, `glass=1`, `chrome=1` and `rims=1`; `-Look "pc,clearcoat_glint=4,road_specular=1,road_sheen=0,glass=0,chrome=0,rims=0"` is the `pc` before them. The smoke gate is in [current status](../status/history-results.md#pc-facing-the-sun-20-october-2026).
 
 Not checked: other tracks and times of day, the split-screen set, the cockpit camera toward the sun with the new knobs, and the chrome rim shaders on screen.
 

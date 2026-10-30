@@ -46,8 +46,8 @@ The title update file names follow the execution info: `633772A0\tu0000000b_0000
 
 ## Checked on a USA build
 
-A new BuildRoot set up, generated and built from the USA discs on 18 October 2026 produced the same loaded image, switch tables and generated sources as the Japan/Asia discs. It imported the USA Disc 2 and the DLC packages, booted to the intro with a new profile, and passed the smoke gate with the `dlc` cell on a profile made by the Japan/Asia executable. The results are in [current status](../status/current.md#usa-release-18-october-2026).
+A new BuildRoot set up, generated and built from the USA discs on 18 October 2026 produced the same loaded image, switch tables and generated sources as the Japan/Asia discs. It imported the USA Disc 2 and the DLC packages, booted to the intro with a new profile, and passed the smoke gate with the `dlc` cell on a profile made by the Japan/Asia executable. The results are in [current status](../status/history-results.md#usa-release-18-october-2026).
 
-Performance is the same. The same binary ran the `perf` gate on both Disc 1 extractions in the order USA, Japan/Asia, Japan/Asia, USA: with the draws per frame of each race taken out, the race fps differ by 0.2 fps (p = 0.92). See [current status](../status/current.md#usa-against-japanasia-performance-18-october-2026). Since one game build runs either Disc 1, a BuildRoot built from one release can check the other with `--arg game_data_root=<other Disc 1>`.
+Performance is the same. The same binary ran the `perf` gate on both Disc 1 extractions in the order USA, Japan/Asia, Japan/Asia, USA: with the draws per frame of each race taken out, the race fps differ by 0.2 fps (p = 0.92). See [current status](../status/history-results.md#usa-against-japanasia-performance-18-october-2026). Since one game build runs either Disc 1, a BuildRoot built from one release can check the other with `--arg game_data_root=<other Disc 1>`.
 
 Not compared: the European release, and the title updates of either release.

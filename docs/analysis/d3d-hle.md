@@ -184,7 +184,7 @@ Reviewer findings that apply to every design:
 
 ## 7. What it can gain on the current build
 
-Smoke gates at 240 Hz and 1x, 20 October 2026 ([current status](../status/current.md#one-tile-with-taa-the-presets-and-taas-history-20-october-2026)):
+Smoke gates at 240 Hz and 1x, 20 October 2026 ([current status](../status/history-results.md#one-tile-with-taa-the-presets-and-taas-history-20-october-2026)):
 
 | Race | Tiles (`-Msaa`) | One tile | One tile, asynchronous swap |
 |---|---|---|---|
@@ -194,7 +194,7 @@ Smoke gates at 240 Hz and 1x, 20 October 2026 ([current status](../status/curren
 With one tile the CP waits for the vblank 376 to 458 ms/s, so at the defaults the race is close to the 240 Hz limit and a faster CP adds a few fps at most; at 2x the GPU sets the frame rate (5.54 ms per race frame with TAA in one tile, 19 October 2026, one run). Where an HLE or its first stage can pay off:
 
 - the tiled modes, whose CP is saturated (one-pass tiles, decoded replays);
-- other computers with slower CPUs (the [GUI launcher and export](../status/current.md#gui-launcher-and-export-20-october-2026)), where the cost per draw is higher; not measured;
+- other computers with slower CPUs (the [GUI launcher and export](../status/history-results.md#gui-launcher-and-export-20-october-2026)), where the cost per draw is higher; not measured;
 - frame-time stability (p99) rather than average fps;
 - capabilities that need render targets outside the EDRAM model (MSAA without tiles, wider aspect ratios, higher-precision scene formats for [HDR output](hdr-output.md), anchors for upscalers): stage 2 of design A only.
 

@@ -77,6 +77,10 @@
       "provenance": "Project documentation; dated performance measurements (no game content)"
     },
     {
+      "path": "docs/status/history-results.md",
+      "provenance": "Project documentation; verified results moved from current status, 16 to 28 October 2026"
+    },
+    {
       "path": "docs/e2e/README.md",
       "provenance": "Project documentation; e2e harness guide (original test tooling, no game content)"
     },

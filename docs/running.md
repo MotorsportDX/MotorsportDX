@@ -271,7 +271,7 @@ before `pc` had TAA, which adds about 0.1 ms at 1x and 0.15 ms at 2x. With TAA t
 cost about 1 ms less GPU time at 2x (19 October 2026). At 1x and 240 Hz the one tile takes
 0.5 to 0.6 ms less GPU time and a fifth to a quarter fewer draws per race frame than the
 tiles: races ran at 230.7 to 236.9 fps against 200.5 to 218.1 fps with `-Msaa` (20 October
-2026, [current status](status/current.md#one-tile-with-taa-the-presets-and-taas-history-20-october-2026)).
+2026, [current status](status/history-results.md#one-tile-with-taa-the-presets-and-taas-history-20-october-2026)).
 On the native default at 240 Hz (26 October 2026, [native default](analysis/native-default.md#23-performance)),
 a 2560x1600 screen's race (2560x1600 with 2x MSAA) ran at 171.6 to 175.1 fps with 5.60 to
 5.70 ms of GPU time a frame, against 162.7 to 165.9 fps and 5.81 to 6.01 ms on RTV at 2x
@@ -835,7 +835,7 @@ Measured on 26 October 2026 in a frozen race frame whose exposure input was step
 exposure made 90% of its change 1.47 to 1.50 s after the step at 60 Hz, with and without the
 knob; with it 1.41 s at 240 Hz on RTV held at 160 fps by its tiles, and 1.43 s on the native
 path at 229 fps, against 0.59 and 0.34 s without it. Details in the
-[current status](status/current.md#auto-exposure-adaptation-by-frame-time-26-october-2026).
+[current status](status/history-results.md#auto-exposure-adaptation-by-frame-time-26-october-2026).
 
 ### Sun glare
 
