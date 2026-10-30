@@ -54,21 +54,29 @@ struct PowState {
   bool reported_full = false;
 };
 
+void Report(const PowState& s);
+
 PowState& Pow() {
   static PowState* state = [] {
     auto* result = new PowState;
-    std::atexit([] {
-      PowState& s = Pow();
-      std::fprintf(stderr,
-                   "FM4 pow memo: %llu lookups, %llu hits, %zu of %zu entries, %llu check mismatches, "
-                   "%llu calls from other threads\n",
-                   (unsigned long long)s.memo.lookups(), (unsigned long long)s.memo.hits(), s.memo.entries(),
-                   s.memo.capacity(), (unsigned long long)s.mismatches, (unsigned long long)s.other_threads);
-    });
+    std::atexit([] { Report(Pow()); });
     return result;
   }();
   return *state;
 }
+
+void Report(const PowState& s) {
+  std::fprintf(stderr,
+               "FM4 pow memo: %llu lookups, %llu hits, %zu of %zu entries, %llu check mismatches, "
+               "%llu calls from other threads\n",
+               (unsigned long long)s.memo.lookups(), (unsigned long long)s.memo.hits(), s.memo.entries(),
+               s.memo.capacity(), (unsigned long long)s.mismatches, (unsigned long long)s.other_threads);
+  std::fflush(stderr);
+}
+
+// A process the harness kills never runs atexit: the counters also go out every 2^22 lookups
+// (about a minute of ramps at 240 fps).
+constexpr uint64_t kReportEvery = uint64_t(1) << 22;
 
 bool IsRampCall(uint32_t lr) {
   for (uint32_t site : kRampCallSites) {
@@ -113,7 +121,9 @@ REX_HOOK_RAW(sub_8230FCF0) {  // pow
   const double x = ctx.f1.f64, y = ctx.f2.f64;
   const uint64_t x_bits = std::bit_cast<uint64_t>(x), y_bits = std::bit_cast<uint64_t>(y);
   uint64_t result = 0;
-  if (state.memo.Find(x_bits, y_bits, &result)) {
+  const bool found = state.memo.Find(x_bits, y_bits, &result);
+  if (state.memo.lookups() % kReportEvery == 0) Report(state);
+  if (found) {
     if (kPowMemoCheck) {
       __imp__sub_8230FCF0(ctx, base);
       if (ctx.f1.u64 != result) ++state.mismatches;
