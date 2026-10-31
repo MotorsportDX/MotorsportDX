@@ -823,7 +823,9 @@ and 7 to 11 stay open; they are settled before B6.
    **Decided on 31 October 2026: route (b)**, once the main session has read Microsoft's terms;
    route (a) is the fallback. **Reopened the same day:** the terms do not clearly cover a player
    who builds only to play, by either route, and route (b) has two questions of its own
-   ([the licence reading](#47-the-msvc-libraries-and-the-windows-sdk)). B4 waits for the owner.
+   ([the licence reading](#47-the-msvc-libraries-and-the-windows-sdk)). **The owner's decision of
+   31 October 2026: research route (c), llvm-mingw, first**: a design note with the port's scope,
+   cost and risks, and a prototype plan, before any download or port.
 5. **The downloads the package may make on a player's computer**, and the approval to download each
    new one (LLVM 20.1.8, the Python embeddable package, CMake, Ninja, MinGit, the pinned Microsoft
    packages and the Build Tools bootstrapper) once on the development computer to pin its size and
