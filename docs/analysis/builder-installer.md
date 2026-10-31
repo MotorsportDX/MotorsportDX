@@ -205,15 +205,15 @@ checked".
 | Prerequisite | The builder's route | Portable, no admin, pinned | Licence: may the installer fetch it? ship it? | Download | Disk |
 | --- | --- | --- | --- | --- | --- |
 | Git | **Avoided:** the SDK and its submodules as archives at their pinned commits ([4.3](#43-git-avoided)); MinGit as the fallback | Archives: yes, pinned by a hash over the unpacked files. MinGit: a zip, yes; its hash is not pinned yet | Archives: the sources' own licences, fetched as today. MinGit: GPL 2.0 (fetch: yes; ship: only with its source offer, so not shipped) | not checked (archives, MinGit) | needed files 201 MB (the development BuildRoot's `runtime-source\thirdparty`), against today's clone of 1,086 MB |
-| Python 3.11 x64 | python.org's Windows embeddable package ([4.4](#44-python)) | Yes (a zip); pinned once the asset is hashed | PSF License 2.0: fetch yes; shipping is allowed with its notices and those of the libraries it bundles (not checked which), but it is fetched to keep the package small | not checked | the full install 125 MB; the embeddable package not checked |
-| CMake 3.25+ | Kitware's Windows x64 zip ([4.5](#45-cmake-and-ninja)) | Yes; version and hash to pin | BSD-3-Clause: fetch and ship allowed | not checked | Visual Studio's copy with Ninja: 58 MB |
-| Ninja | the Ninja project's Windows zip | Yes; one executable | Apache-2.0: fetch and ship allowed | not checked | one executable |
-| LLVM 20 (clang, clang++, lld-link, llvm-ar, llvm-rc) | the LLVM release's Windows archive, unpacked ([4.6](#46-llvm-20)) | Yes if 20.1.8 has a Windows archive (not checked); else the installer's files unpacked without running it (not checked) | Apache-2.0 with LLVM exceptions: fetch and ship allowed | not checked | full install 2,427 MB; the members the build uses: not checked |
+| Python 3.11 x64 | python.org's Windows embeddable package ([4.4](#44-python)) | Yes (a zip), pinned in `toolchain.json` (B3) | PSF License 2.0: fetch yes; shipping is allowed with its notices and those of the libraries it bundles (its `LICENSE.txt` lists them), but it is fetched to keep the package small | 11.2 MB | the full install 125 MB; the embeddable package 21.7 MB |
+| CMake 3.25+ | Kitware's Windows x64 zip ([4.5](#45-cmake-and-ninja)) | Yes; 3.31.6 pinned (B3) | BSD-3-Clause: fetch and ship allowed | 46.5 MB | Visual Studio's copy with Ninja: 58 MB; the builder keeps 20.9 MB of the zip |
+| Ninja | the Ninja project's Windows zip | Yes; one executable, 1.12.1 pinned (B3) | Apache-2.0: fetch and ship allowed | 0.28 MB | one executable, 0.57 MB |
+| LLVM 20 (clang, clang++, lld-link, llvm-ar, llvm-rc) | the LLVM release's Windows archive, unpacked ([4.6](#46-llvm-20)) | Yes: 20.1.8's `.tar.xz`, pinned (B3) | Apache-2.0 with LLVM exceptions: fetch and ship allowed | 939.5 MB | full install 2,427 MB; the members the build uses 304 MB |
 | MSVC x64 tools (the C and C++ runtime and library headers and libraries) | route (b): Microsoft's packages from Microsoft's servers after the player accepts the licence ([4.7](#47-the-msvc-libraries-and-the-windows-sdk)); route (a) as the fallback | (b): yes, pinned by the SHA-256 that Microsoft's manifest lists per payload. (a): no, admin | Microsoft's Visual Studio terms. **Ship: no.** Fetch: (a) yes, through Microsoft's installer; (b) **not checked** whether the terms cover files fetched without the installer | not checked ((b) smaller; (a) several GB) | MSVC tools 1,411 MB installed, with parts the build does not use |
 | `link` | **lld-link** from LLVM, which the builds already use: `CMAKE_LINKER` is LLVM's `lld-link.exe` in the development BuildRoot's runtime and game build caches. Only `doctor`'s check of `link` goes | - | - | - | - |
 | Windows SDK (headers, libraries) | with the MSVC libraries: route (b) or (a) | as above | Microsoft's SDK terms: ship no; fetch as above | not checked | the Windows Kits folder 1,708 MB with five SDK versions |
-| `fxc.exe` (Windows SDK) | **Avoided:** Windows' own `d3dcompiler_47.dll` ([4.8](#48-fxc-replaced-by-d3dcompile)) | nothing to fetch | part of Windows | none | none |
-| `rc.exe` (Windows SDK, found by CMake) | `llvm-rc` from LLVM; `work/` has no resource script (the third-party sources: not checked) | - | - | - | - |
+| `fxc.exe` (Windows SDK) | **Replaced** by Windows' own `d3dcompiler_47.dll` (B3, [4.8](#48-fxc-replaced-by-d3dcompile)) | nothing to fetch | part of Windows | none | none |
+| `rc.exe` (Windows SDK, found by CMake) | `llvm-rc` from LLVM, which CMake finds instead; no build compiles a resource script (no `.rc` in the development BuildRoot's `build.ninja` files) | - | - | - | - |
 | The Visual Studio developer environment (`vswhere`, `Enter-VsDevShell` in `Build.ps1`) | **Avoided:** the builder sets `INCLUDE`, `LIB` and `PATH` to its own folders and runs `pipeline.py` without `Build.ps1` | - | - | - | - |
 | VC++ 2015-2022 x64 runtime (to run the game) | app-local: the runtime DLLs beside the game for that computer only ([4.10](#410-what-runs-on-the-players-computer)) | yes | Microsoft's terms (the runtime DLLs are the redistributable part); fetching them by route (b): not checked | not checked | not checked |
 
@@ -265,11 +265,14 @@ HTTPS, `zipfile`, `subprocess`), and the game's CMake asks only for the interpre
 [work/fm4-rex/CMakeLists.txt](../../work/fm4-rex/CMakeLists.txt)). To check when it is pinned:
 
 - the embeddable package's `._pth` file fixes `sys.path`, and `pipeline.py` imports `prepare.py` from
-  its own folder: the builder adds that folder to the `._pth` file, or `pipeline.py` puts its own
-  folder on `sys.path` (one line);
-- the modules it carries (`_ssl` for HTTPS, `_lzma` to unpack a `.tar.xz`): not checked;
-- the version: 3.11.9 runs the pipeline today; whether 3.11 has a later Windows binary release is not
-  checked, and a later Python would need its own run of the pipeline's tests.
+  its own folder: since B3 `pipeline.py` puts its own folder on `sys.path`, and the `._pth` file
+  stays as shipped;
+- the modules it carries: `_ssl` (OpenSSL 3.0.13, with the Windows certificate store), `_lzma`,
+  `_ctypes` and `_msi` are in the package (B3); HTTPS through it was not exercised (every fetch of
+  the B3 run came from local copies);
+- the version: 3.11.9 runs the pipeline and is pinned; it was, as far as known here, the last 3.11
+  release with Windows binaries (later 3.11 releases are source-only security releases; not
+  re-checked online), and a later Python would need its own run of the pipeline's tests.
 
 ### 4.5 CMake and Ninja
 
@@ -281,12 +284,10 @@ allow shipping them; fetching keeps the package small.
 ### 4.6 LLVM 20
 
 The build needs clang, clang++, lld-link, llvm-ar and llvm-rc, with clang's own headers and builtins
-(`lib\clang\20`). The LLVM project's GitHub release of 20.1.8 has a Windows installer; whether it also
-has a Windows archive (`clang+llvm-20.1.8-x86_64-pc-windows-msvc.tar.xz`) is not checked. Either way
-the builder unpacks rather than installs, and can keep only the members the build uses: the full
-install is 2,427 MB on the development computer, mostly what the build never runs (the size of the
-selection is not checked). Unpacking a `.tar.xz` needs Python's `lzma` or Windows' `tar.exe` with xz
-support (neither checked).
+(`lib\clang\20`). The LLVM project's GitHub release of 20.1.8 has a Windows archive,
+`clang+llvm-20.1.8-x86_64-pc-windows-msvc.tar.xz` (939.5 MB; 5,010 members, 4,189 MB unpacked, no
+links). The builder unpacks it with Python's `lzma` and keeps only the members the build uses: 301
+files, 304 MB (B3).
 
 ### 4.7 The MSVC libraries and the Windows SDK
 
@@ -327,8 +328,10 @@ replacement calls `D3DCompile` (from Python through `ctypes`, so nothing needs b
 `D3DCOMPILE_OPTIMIZATION_LEVEL3 | D3DCOMPILE_PREFER_FLOW_CONTROL`, the defines and the standard file
 include handler, strips the reflection, debug and private data with `D3DStripShader`, and writes the
 header with the array name of `/Vn`. Windows' copy of the DLL may be another build than the SDK's, so
-the bytecode may differ: B3 compares the headers of both on the development computer and runs the
-resolve paths' checks. About 1.5 h, inside B3.
+the bytecode could differ. **Done in B3:** on the development computer all 33 headers are byte for
+byte those of `fxc.exe`, with `System32`'s DLL (10.0.26100.9711) and with the SDK's (10.0.26100.7705)
+([B3 results](#b3-results-31-october-2026)); the runtime therefore embeds the same shader bytecode as
+before, and the resolve paths needed no run of their own.
 
 ### 4.9 Other pins and mirrors
 
@@ -404,9 +407,10 @@ Preflight -> Disc check -> Plan and consent -> Toolchain fetch -> Setup -> Gener
 
 Disk: the BuildRoot held 2.6 GB after `build` in the clean setup; Disc 2's import adds 2.8 GB and
 the DLC about their own size; the installed toolchain on the development computer is about 5.6 GB
-(LLVM 2.4 GB, MSVC 1.4 GB, the Windows Kits 1.7 GB with five SDK versions, Python, Git), and the
-builder's portable selection is smaller (not checked). A provisional preflight floor of 20 GB free,
-to be set from the measurements of B3 and B4.
+(LLVM 2.4 GB, MSVC 1.4 GB, the Windows Kits 1.7 GB with five SDK versions, Python, Git). The
+builder's portable Python, CMake, Ninja and LLVM take 347 MB unpacked, beside 998 MB of their
+archives while those are kept (B3); Microsoft's libraries are B4's to measure. A provisional
+preflight floor of 20 GB free, to be set from the measurements of B3 and B4.
 
 **How the builder drives the pipeline.** It runs `pipeline.py` directly with the toolchain's Python,
 not `Build.ps1`, so the PowerShell execution policy never matters. It builds the environment
@@ -494,7 +498,7 @@ Estimates in AI calendar time (1 person-week ≈ 3.5 h, range 2 to 7 h). B0 is t
 | B0 | The owner's decisions of section 9; `main` pushed to GitHub; a first tag | owner | - |
 | B1. Pipeline for a builder (**done** on 31 October 2026, [results](#b1-results-31-october-2026)) | A `preflight` action with JSON output (CPU features, GPU, RAM, disk, path); `--progress` JSON lines per step; a `launcher-data` action that writes `launcher.json` without a build; a version stamp file in the snapshot, read by `source_state` when the source is not a Git checkout; running from a `git archive` snapshot without `Build.ps1`; the player build without the developer tests if the owner says so | 3.5 h | `test_pipeline.py` cases; `all` from a `git archive` snapshot into a new BuildRoot on the development computer (build only, no GPU run) |
 | B2. No Git (**done** on 31 October 2026, [results](#b2-results-31-october-2026)) | The SDK and its submodules as archives at their pinned commits with a hash over the unpacked files; FidelityFX only for a build with FSR; the SDL patch applied in Python; `doctor` without `git` | 3.5 h | the unpacked files' hash equals that of the development BuildRoot's `runtime-source\thirdparty`; `all` with Git off the `PATH` |
-| B3. The portable tools | `toolchain.json` (asset, size, SHA-256, licence, unpack rule) for Python (embeddable), CMake, Ninja and LLVM, each downloaded once with the owner's approval to pin it; the unpackers; detection of installed tools; the resolve shaders through `D3DCompile` instead of `fxc.exe`; `doctor` without `link`, `fxc.exe` and `vswhere` | 5 h | the `D3DCompile` headers against the `fxc.exe` ones on the development computer; `all` with only the portable tools and Visual Studio's libraries |
+| B3. The portable tools (**done** on 31 October 2026, [results](#b3-results-31-october-2026)) | `toolchain.json` (asset, size, SHA-256, licence, unpack rule) for Python (embeddable), CMake, Ninja and LLVM, each downloaded once with the owner's approval to pin it; the unpackers; detection of installed tools; the resolve shaders through `D3DCompile` instead of `fxc.exe`; `doctor` without `link`, `fxc.exe` and `vswhere` | 5 h | the `D3DCompile` headers against the `fxc.exe` ones on the development computer; `all` with only the portable tools and Visual Studio's libraries |
 | B4. Microsoft's libraries | Route (b) after the licence reading: the manifest reader, the pinned package list (MSVC 14.44 x64, Windows SDK 10.0.26100), the licence page, the VSIX, MSI and CAB unpacking, `INCLUDE` and `LIB`, the app-local C++ runtime DLLs; route (a) as the fallback | 7 h | `all` in a Windows account or sandbox without Visual Studio, LLVM, Python or Git (Windows Sandbox on Windows 11 Pro is an optional feature the owner turns on, or a VM), then the instruction tests; a game run there is the main session's call under the GPU rules |
 | B5. Builder mode in the launcher | The Build page and wizard, consent, progress, plain errors, resume, logs, keep-awake; the launcher with a static C++ runtime; `--screenshot build` and `--state builder` for reviews | 7 h | the launcher tests; screenshots at scale 1 and 1.5 (WARP); a full build through the launcher into a new install root on the development computer |
 | B6. The package | A `package` action at a tag: the launcher built at the tag (needs only `setup`, no discs), `launcher.json`, `git archive` source, `toolchain.json`, licences and notices, into one zip; an allowlist check of the zip (no BuildRoot file, no executable but `MotorsportDX.exe`, no picture, no DXC, nothing of Microsoft's, a size limit) | 3.5 h | the zip's listing against the allowlist; the zip in the clean account or sandbox of B4 up to a built game |
@@ -636,6 +640,92 @@ Not verified in B2: the FidelityFX archive from GitHub (its bytes, size and whet
 code renames only a finished download into place); a second computer; a game run of the build. The
 runtime's version falls back to `0.10.0.0-dev.unknown` in a snapshot (a CMake warning: its version
 comes from `git describe`), as in B1; the stamp could give it, before B6.
+
+### B3 results (31 October 2026)
+
+What B3 added to `pipeline.py` is documented in [setup](../setup.md#portable-tools): the tracked
+[`toolchain.json`](../../outputs/FM4-build/toolchain.json), the `toolchain` action with the
+detection of installed tools, the unpackers, and `--toolchain` for the other actions; the resolve
+shaders through `D3DCompile` ([setup, 1](../setup.md#1-setup)); `doctor` without `link`, `fxc.exe`
+and `vswhere`, which checks `INCLUDE` and `LIB` instead. `fxc.exe` is no longer used anywhere in
+the pipeline, on the developer path too. `patch_text` now reads CR CR LF as one line ending and
+writes it back, so a later change of the SDL patch reverses the old one in the development
+BuildRoots, whose three patched SDL files have it from the old `git apply` (their files were not
+touched).
+
+- **The downloads** (approved by the owner on 31 October 2026, made once with `curl` into
+  `I:\FM4-toolchain-b3\downloads`, 77 seconds in all, 71 of them LLVM's): each file has the size
+  the release page gives, and LLVM's archive has GitHub's digest; the SHA-256 of the other three
+  are the downloaded files' (their publishers' checksum files were not fetched). The pins are in
+  `toolchain.json` and in [sources and licensing](../sources-and-licensing.md#third-party-tools-the-builders-portable-toolchain).
+
+  | Tool | Archive bytes | Members | Kept files | Kept bytes |
+  | --- | --- | --- | --- | --- |
+  | Python 3.11.9 embeddable | 11,249,023 | 34 | 34 | 21,665,567 |
+  | CMake 3.31.6 | 46,473,549 | 8,146 | 3,767 | 20,927,837 |
+  | Ninja 1.12.1 | 275,425 | 1 | 1 | 569,856 |
+  | LLVM 20.1.8 (`.tar.xz`) | 939,541,912 | 5,010 (4,730 files, 280 folders, no links; 4,189,252,381 bytes) | 301 | 304,219,141 |
+  | Together | 997,539,909 | | 4,103 | 347,382,401 |
+
+  LLVM's selection is what the builds run: `clang`, `clang++`, `lld-link` (`CMAKE_LINKER`, and
+  `-fuse-ld=lld-link`, which CMake adds), `llvm-ar` (`CMAKE_AR`), `llvm-rc` (`CMAKE_RC_COMPILER`,
+  which CMake takes when there is no `rc.exe`; no build compiles a resource script), Clang's headers
+  and its builtins and profile libraries. `clang.exe` and `clang++.exe` are two copies of the same
+  101.9 MB program in the archive, and both are kept. CMake keeps `cmake.exe`, its modules and its
+  copyright file, not `cmake-gui`, `ctest`, `cpack`, `cmcldeps` or the documentation. The LLVM, CMake
+  and Ninja executables import only Windows' own DLLs (read with `llvm-objdump`): they need no
+  Visual C++ redistributable. The `toolchain --portable` action unpacked the four from the kept
+  archives in 44.3 s, 42.9 s of it LLVM's `.tar.xz` (its SHA-256 check included).
+- **Detection.** The same run reported the installed copies on the development computer: Python
+  3.11.9 (`C:\Program Files\Python311`), the CMake 3.31.6 and Ninja 1.12.1 that Visual Studio
+  bundles, and LLVM 20.1.8 in `C:\Program Files\LLVM\bin`, each accepted; without `--portable` the
+  action would fetch nothing here.
+- **`D3DCompile` against `fxc.exe`.** The 33 headers of the resolve shaders, the readback downscale
+  shader and the presenter's area downscale shader, compiled by `fxc.exe` of the Windows SDK
+  10.0.26100.0 (with its `d3dcompiler_47.dll` 10.0.26100.7705) and by `D3DCompile` through `ctypes`,
+  once with `System32`'s `d3dcompiler_47.dll` (10.0.26100.9711) and once with the SDK's: equal bytes,
+  all 33 in both cases, disassembly listing included; they also equal the development BuildRoot's
+  headers of 28 October 2026. The headers that the B3 build below compiled are the same bytes again.
+  The 33 compiles took 33.0 s in setup.
+- **The embeddable Python.** It ran the whole pipeline below (`python311._pth` unchanged; `pipeline.py`
+  puts its own folder on `sys.path`). It carries `_lzma`, `_ssl` (OpenSSL 3.0.13; the default
+  context loads 31 CA certificates from the Windows store), `_ctypes` and `_msi`. CMake's
+  `find_package(Python3 ... Interpreter)` in the game's project found it ("Found Python3:
+  ...\python-3.11.9\python.exe (found version 3.11.9)"), and the guards of `generate` and the
+  game's build ran under it. HTTPS was not exercised: every fetch of the run came from local copies.
+- **A snapshot build with only the portable tools.** `snapshot` of `cdcfca9` (1,258 files and the
+  stamp) into `I:\FM4-src-b3`; the 15 archives of `I:\FM4-build-b2\downloads` copied into the new
+  BuildRoot `I:\FM4-build-b3`, and the GameInput and DXC files of the development BuildRoot as local
+  copies (`GAMEINPUT_MIRROR`, `DXC_MIRROR`); `INCLUDE` and `LIB` from Visual Studio's
+  `vcvars64.bat`, and no other variable of it; `PATH` set to `C:\Windows\System32;C:\Windows`
+  only, so no `git`, `fxc`, `link`, `rc`, `mt`, `vswhere`, `cl`, `python`, `cmake` or `clang` was on
+  it; then the embeddable Python ran `pipeline.py all --toolchain I:\FM4-toolchain-b3 --tests player
+  --jobs 8` with USA Disc 1 and Disc 2. `doctor` passed with `Fetch: archive`, and every CMake cache
+  names the portable `cmake.exe`, `ninja.exe`, `clang++.exe`, `lld-link.exe`, `llvm-ar.exe` and
+  `llvm-rc.exe`. Times from the progress lines:
+
+  | Stage | Time | Largest steps |
+  | --- | --- | --- |
+  | `setup` | 210.5 s | unpacking and checking the 15 archives 59.7 s, the runtime's configure 55.1 s and build 61.2 s, the 33 shaders 33.0 s |
+  | `generate` | 40.3 s | `codegen` 28.0 s |
+  | `build` with `--tests player` | 191.5 s | the game 141.8 s; the wheel host test 8.5 s; the launcher 6.2 s |
+  | `all` | 443 s | |
+
+  The instruction, CPU and launcher tests (558 plans, the discs and Disc 2's four packages)
+  passed; `build-result.json` names `cdcfca9`, `dirty` false, `tests: player`. The BuildRoot held
+  1,719,104,970 bytes afterwards (1.72 GB, the 95.7 MB of archives included), as B2's. The times
+  match B2's with the installed tools (443.6 s).
+- **Tests.** `test_pipeline.py`: 49 pass (6 new: `toolchain.json`'s schema and pins, the unpackers'
+  selection and refusals for zip and tar.xz, the fetch with its pins, `.rejected` and the
+  installed-or-portable choice, the detection, the `D3DCompile` call and header, CR CR LF; and the
+  `doctor` test rewritten for `lld-link`, `INCLUDE` and `LIB`).
+
+Not verified in B3: a computer without Visual Studio (clang also finds an installed Visual Studio
+by itself when `INCLUDE` is unset, so this run shows that the portable tools suffice beside
+Microsoft's libraries, not that nothing else of Visual Studio is read; B4's sandbox run shows that);
+the downloads through the pipeline's own `fetch_tool` over HTTPS (the pins were made with `curl`;
+the run took the kept files); `TOOLCHAIN_MIRROR`; the embeddable Python's HTTPS; a game run of the
+build (not part of B3); Windows 10.
 
 ## 8. Risks
 

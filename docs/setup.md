@@ -98,10 +98,10 @@ the same packages before their first launch ([content import](e2e/README.md#cont
 | System | Windows x64, a CPU compatible with x86-64-v2, a GPU that supports Direct3D 12 |
 | Git | Git for Windows, with HTTPS access to GitHub (for the SDK, its pinned submodules and, with `-Fsr on`, the FidelityFX SDK). Setup uses partial and sparse clones; validated version: **2.55.0**. Needed only for `-Fetch git`, the default in a Git checkout; a [source snapshot](#source-snapshots) fetches GitHub's archives without Git ([fetching without Git](#fetching-without-git)) |
 | Python | **Python 3.11+ x64**, for example from python.org. Use a real `python.exe`, not the Microsoft Store alias in `WindowsApps`. `py -0p` lists the installed versions with their paths: an install for all users is in `C:\Program Files\Python311`, one for the current user in `%LOCALAPPDATA%\Programs\Python\Python311`. Only the standard library is used |
-| Visual Studio | Visual Studio 2022 or Build Tools, workload **Desktop development with C++**, MSVC x64 tools |
-| Windows SDK | Includes `fxc.exe`. Validated version: **10.0.26100.0** |
-| Build tools | CMake **3.25+** and Ninja. Both can be installed through the Visual Studio Installer |
-| LLVM | **LLVM 20.x x64**. Validated version: **20.1.8** |
+| Visual Studio | Visual Studio 2022 or Build Tools, workload **Desktop development with C++**, MSVC x64 tools: the build uses its C and C++ libraries (headers and import libraries), not its compiler or linker |
+| Windows SDK | Headers and libraries. Validated version: **10.0.26100.0**. Its `fxc.exe` is no longer used (since 31 October 2026): the resolve shaders compile through Windows' own `d3dcompiler_47.dll` |
+| Build tools | CMake **3.25+** and Ninja. Both can be installed through the Visual Studio Installer, or fetched by the [`toolchain` action](#portable-tools) |
+| LLVM | **LLVM 20.x x64**. Validated version: **20.1.8**. Installed, or fetched by the [`toolchain` action](#portable-tools) |
 
 Disk space and time, measured on 25 October 2026 with a fresh clone and a new BuildRoot on
 the development laptop (Intel Core Ultra 7 255HX, 20 threads, 32 GB, `-Jobs 8`): `all`
@@ -116,8 +116,11 @@ of 4 is slower.
 
 The `doctor` action checks the prerequisites and reports what is missing: Windows
 x64, 64-bit Python 3.11 or newer, `git` (with `-Fetch git` only), `cmake`, `ninja`, `clang`,
-`clang++` and `link` on the path, LLVM 20.x (from `clang++ --version`), CMake 3.25 or newer, and
-`fxc.exe` in the Visual Studio developer environment. It also reports the BuildRoot's
+`clang++`, `lld-link` and `llvm-ar` on the path, LLVM 20.x (from `clang++ --version`), CMake 3.25
+or newer, Windows' `d3dcompiler_47.dll`, and Microsoft's C and C++ libraries and the Windows SDK
+in the folders of `INCLUDE` and `LIB` (`vcruntime.h`, `corecrt.h`, `windows.h` and `d3d12.h`;
+`msvcrt.lib`, `ucrt.lib`, `kernel32.lib` and `d3d12.lib`). It asks for no tool of Visual Studio
+(`link`, `fxc.exe`, `vswhere`): clang++ links with LLVM's `lld-link`. It also reports the BuildRoot's
 FidelityFX SDK (fetched or not, at the pinned commit or not) and its mirror
 ([the FidelityFX SDK mirror](#the-fidelityfx-sdk-mirror)), and the GameInput package
 ([the GameInput package](#the-gameinput-package)). `Build.ps1` sets up the
@@ -242,7 +245,12 @@ The stages can also run separately:
   file keeps its own line endings (since 31 October 2026; before, `git apply` in a scratch copy,
   which gave every line of the three patched files a doubled carriage return, CR CR LF, on a
   checkout with Git for Windows' CRLF line endings);
-- compiles the licensed Xenia/ReXGlue resolve shaders with the Windows SDK FXC;
+- compiles the licensed Xenia/ReXGlue resolve shaders, the readback downscale shader and the
+  presenter's area downscale shader to DXBC headers through `D3DCompile` in Windows' own
+  `d3dcompiler_47.dll` (from Python by `ctypes`), with FXC's `/O3 /Gfp` and its strip options;
+  the headers are byte for byte those of the Windows SDK's `fxc.exe` (33 headers compared on
+  31 October 2026, with `System32`'s DLL 10.0.26100.9711 and the SDK's 10.0.26100.7705), so
+  setup no longer needs `fxc.exe`;
 - builds and installs the Release runtime locally.
 
 #### Fetching without Git
@@ -428,11 +436,12 @@ them too.
 `pipeline.py` runs directly with Python 3.11+ x64 from a checkout or a
 [source snapshot](#source-snapshots): `python outputs\FM4-build\pipeline.py <action>
 --build-root <folder> ...`, with the options of [Parameters](#parameters) in lower case with
-hyphens (`--disc1`, `--jobs`, `--tests`, `--progress`). The caller provides the environment
-that `Build.ps1` sets up: the Visual Studio x64 developer environment (`fxc.exe` through
-`WindowsSdkDir` and `WindowsSDKVersion`, `link`, the C and C++ libraries) and LLVM 20 first on
-`PATH`. `preflight`, `launcher-data` and `snapshot` need none of it: they run before any
-toolchain exists. In a snapshot no action needs Git: the fetches take GitHub's archives
+hyphens (`--disc1`, `--jobs`, `--tests`, `--progress`). The caller provides the environment:
+CMake, Ninja and LLVM 20 on `PATH` (installed ones, or the [portable tools](#portable-tools)
+with `--toolchain`), and Microsoft's C and C++ libraries and the Windows SDK in `INCLUDE` and
+`LIB`, which Visual Studio's x64 developer environment sets (`Build.ps1` enters it). Nothing else
+of Visual Studio is needed on `PATH`. `preflight`, `launcher-data`, `snapshot` and `toolchain`
+need none of it: they run before any toolchain exists. In a snapshot no action needs Git: the fetches take GitHub's archives
 ([fetching without Git](#fetching-without-git)) and the SDL patch is applied in Python
 (increment B2). `doctor` asks for `git` only with `--fetch git`.
 
@@ -548,6 +557,61 @@ longer give the stamp's `tree`; both are `null` without a stamp. The BuildRoot m
 the snapshot altogether, so `--build-root` is required there (the default `work\portable-fm4`
 would lie inside it).
 
+### Portable tools
+
+`pipeline.py toolchain --toolchain <folder>` gives a computer without the build tools their
+portable copies, with no installer, no administrator rights and nothing on the system `PATH`.
+[outputs/FM4-build/toolchain.json](../outputs/FM4-build/toolchain.json) pins each tool's
+archive by its URL, size and SHA-256, with its licence, the versions taken from an installed
+copy, and the members to keep:
+
+| Tool | Archive | Bytes | Kept | Unpacked bytes | Licence |
+| --- | --- | --- | --- | --- | --- |
+| Python 3.11.9 | python.org's embeddable package `python-3.11.9-embed-amd64.zip` | 11,249,023 | all 34 files | 21,665,567 | PSF-2.0 (`LICENSE.txt`, with the notices of the libraries it bundles) |
+| CMake 3.31.6 | Kitware's `cmake-3.31.6-windows-x86_64.zip` | 46,473,549 | `bin/cmake.exe`, `share/cmake-3.31/`, `doc/cmake/Copyright.txt` (3,767 files) | 20,927,837 | BSD-3-Clause |
+| Ninja 1.12.1 | the Ninja project's `ninja-win.zip` | 275,425 | `ninja.exe` | 569,856 | Apache-2.0 |
+| LLVM 20.1.8 | the LLVM release's `clang+llvm-20.1.8-x86_64-pc-windows-msvc.tar.xz` | 939,541,912 | `clang`, `clang++`, `lld-link`, `llvm-ar`, `llvm-rc`, clang's headers (`lib/clang/20/include`) and its builtins and profile libraries (301 files) | 304,219,141 | Apache-2.0 with LLVM exceptions |
+
+The action first looks for installed copies (`detect_tools`): the tool on `PATH`, then LLVM's
+default folder (`Program Files\LLVM\bin`), CMake's, and the CMake and Ninja that Visual Studio
+bundles, and runs each one for its version. LLVM 20.x (with `clang++`, `lld-link` and `llvm-ar`
+beside `clang`), CMake 3.25 or newer and Ninja 1.10 or newer are taken; Python is the
+interpreter that runs the action. Only a tool without an accepted copy is fetched and unpacked
+into `<folder>\<tool>-<version>`, or every tool with `--portable`. The archives are kept in
+`--downloads` (default `<folder>\downloads`) and fetched only when missing, from the folder
+`TOOLCHAIN_MIRROR` first; an archive with another size or SHA-256 is refused (a kept one is
+renamed to `.rejected` and fetched again). `<folder>\toolchain-state.json` names each tool's
+source (`installed` or `portable`), folder and version, and the action prints the same with every
+installed copy it found, as JSON. With `--progress` its stage is `toolchain` and its steps
+`toolchain-<tool>`.
+
+Archives are untrusted data: they are unpacked only by the pipeline's own code (`zipfile`, and
+`tarfile` with Python's `lzma` for `.tar.xz`), only members below the archive's top folder and in
+the keep list, and only regular files: an absolute path, a drive, `..`, a member outside the top
+folder and any link are refused, and every keep entry must match a member. A tool runs only from
+a folder whose archive passed its size and SHA-256. The LLVM, CMake and Ninja executables link
+the C runtime statically (they import only Windows' own DLLs), and the embeddable Python brings
+its own `vcruntime140.dll`, so none of them needs the Visual C++ redistributable.
+
+Any other action takes `--toolchain <folder>` to put the folders of its `toolchain-state.json`
+first on `PATH`, for itself and the processes it starts. A build then needs only `INCLUDE` and
+`LIB` from outside (Microsoft's libraries; increment B4 of the
+[builder installer](analysis/builder-installer.md) fetches them too). For example, with
+`INCLUDE` and `LIB` taken from Visual Studio's x64 environment and nothing else on `PATH` but
+`C:\Windows\System32` and `C:\Windows`:
+
+```powershell
+I:\toolchain\python-3.11.9\python.exe <snapshot>\outputs\FM4-build\pipeline.py all `
+    --toolchain I:\toolchain --build-root I:\FM4-build --disc1 <Disc 1> --disc2 <Disc 2> `
+    --jobs 8 --tests player
+```
+
+The embeddable Python fixes `sys.path` in its `python311._pth` file, without the script's
+folder; `pipeline.py` puts its own folder on `sys.path` itself, so the file stays as shipped. It
+carries the modules the pipeline uses (`_lzma`, `_ssl` with the Windows certificate store,
+`_ctypes`, `tomllib`), and the game's CMake takes it as its Python interpreter
+(`Python3_EXECUTABLE`, for `guard-generated.py`).
+
 ### Local mirrors for developers
 
 To build into a new BuildRoot without network, for example to check a snapshot, each fetch can
@@ -559,6 +623,7 @@ take a local copy:
 | `FFX_MIRROR` | The FidelityFX SDK bundle, or with `--fetch archive` the SDK's archive | First, when the BuildRoot has no checkout ([the mirror](#the-fidelityfx-sdk-mirror)) |
 | `GAMEINPUT_MIRROR` | The `.nupkg` file | First ([the GameInput package](#the-gameinput-package)) |
 | `DXC_MIRROR` | The release zip | First ([the DirectX Shader Compiler](#the-directx-shader-compiler)) |
+| `TOOLCHAIN_MIRROR` | A folder holding the archives of [`toolchain.json`](#portable-tools) under their release file names | First, by the `toolchain` action |
 
 Every copy is checked against its pin as a download is. With `GIT_NO_LAZY_FETCH=1` Git also
 refuses to fetch a missing object of the FidelityFX checkout instead of fetching it.

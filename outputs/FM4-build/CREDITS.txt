@@ -32,8 +32,8 @@ The Xbox 360 homebrew, modding and reverse-engineering communities, whose resear
 shared knowledge that projects like this build on.
 
 The tools that build it: LLVM and Clang, CMake and Ninja, Python, Git, Microsoft's Visual
-Studio build tools, the Windows SDK with its shader compiler (FXC), and the DirectX Shader
-Compiler.
+Studio build tools, the Windows SDK, Windows' Direct3D shader compiler (d3dcompiler_47.dll,
+the compiler of FXC), and the DirectX Shader Compiler.
 
 Turn 10 Studios, who made Forza Motorsport 4.
 

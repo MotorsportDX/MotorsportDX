@@ -145,7 +145,7 @@ Motorsport DX would not exist without the people and projects below.
 - **rexdex's recompiler** ([rexdex/recompiler](https://github.com/rexdex/recompiler)), the original Xbox 360 static recompiler, which ReXGlue names as an inspiration.
 - **XenosRecomp** and **Unleashed Recompiled** ([hedge-dev/XenosRecomp](https://github.com/hedge-dev/XenosRecomp), [hedge-dev/UnleashedRecomp](https://github.com/hedge-dev/UnleashedRecomp)), whose shader recompiler and port of a game at the Direct3D level showed the way for this project's shader mods and its native render path. They were read for ideas; this project uses no code of them.
 - The Xbox 360 homebrew, modding and reverse-engineering communities, whose research is the shared knowledge that projects like this build on.
-- The tools that build it: LLVM and Clang, CMake and Ninja, Python, Git, Microsoft's Visual Studio build tools, the Windows SDK with its shader compiler (FXC), and the DirectX Shader Compiler.
+- The tools that build it: LLVM and Clang, CMake and Ninja, Python, Git, Microsoft's Visual Studio build tools, the Windows SDK, Windows' Direct3D shader compiler (`d3dcompiler_47.dll`, the compiler of FXC), and the DirectX Shader Compiler.
 - Turn 10 Studios, who made Forza Motorsport 4.
 
 The same thanks are in [CREDITS.txt](outputs/FM4-build/CREDITS.txt), which `build` and `export` put beside `MotorsportDX.exe`, and on the GUI launcher's About page.
