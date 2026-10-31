@@ -7,21 +7,24 @@ owner chose to research this route first on 31 October 2026 ("Riset llvm-mingw d
 Visual Studio Build Tools, Community and Windows SDK terms do not clearly cover a player who builds
 the game only to play it.
 
-This is a design note. Nothing was downloaded, built or run. The counts come from `grep` over the
-repository at `4c9ca04` and over the development BuildRoot's generated code and vendored third-party
-sources (`I:\FM4-build-usa`); the mingw-w64 and llvm-mingw facts come from their source trees and
-the GitHub API, read on the web. Anything that only a build can settle is marked "not checked". This
-note is not legal advice.
+Sections 1 to 9 are the design research, made before anything was downloaded, built or run. The
+counts come from `grep` over the repository at `4c9ca04` and over the development BuildRoot's
+generated code and vendored third-party sources (`I:\FM4-build-usa`); the mingw-w64 and llvm-mingw
+facts come from their source trees and the GitHub API, read on the web. Section 10 records the
+prototype of section 8, built on 31 October 2026 with the owner's approval of its one download, and
+corrects the verdicts of section 1.1 that the build proved wrong. This note is not legal advice.
 
-**Summary.** The port looks smaller than the 14 to 28 h guessed in the builder note, but its real
-risks are in the ABI and only a build can find them. No site needs a rewrite. The runtime already
-builds for Linux and macOS (with libc++ on macOS), its Windows code calls the Win32 API rather than
-the MSVC runtime, and mingw-w64 has every D3D12, DXGI, WIC and D3DCompile declaration the project
-uses, plus `wrl/client.h` and its own `dxcapi.h`. What needs real work: the 59 calls of D3D12
-methods that return a struct (a known mingw ABI trap), the GameInput header for SDL, the symbol
-export of `rexruntime.dll`, and the proof that the game behaves the same (setjmp and longjmp, the
-exception handlers, performance). **Recommendation: a prototype first** (section 9), with one
-download of 171 MB, before the owner decides between routes (c) and (a).
+**Summary.** The prototype passed every kill criterion of section 8 in about 1 h. With llvm-mingw
+20250709 and no Microsoft library, header or SDK, the whole player build (`all --tests player`)
+passes: the runtime, `rexglue.exe`, the game and its two modules, the launcher, the instruction
+tests (295,650 checks, the same output as the MSVC build), the ten CPU tests and the launcher tests
+(558 plans). `rexglue.exe` built with mingw generates the same code byte for byte. A D3D12 probe on
+WARP gets the same struct returns as an MSVC-library build of it; without mingw-w64's aggregate
+return switch it crashes. The port needed 15 small shims, 13 of them guarded for mingw, and no
+rewrite (section 10.2); the build with Microsoft's libraries keeps every instruction (section 10.6).
+Not verified: a game run, performance, setjmp and longjmp at run time, SDL's GameInput driver (left
+out under mingw). **Recommendation:** a smoke run of the mingw build on the native path next, then the
+steps of section 5 (section 10.7).
 
 ## 1. MSVC-specific code
 
@@ -42,7 +45,11 @@ mingw-w64's headers instead of the Windows SDK's.
 ### 1.1 The sites, classified
 
 "As-is" means mingw-w64's headers or clang provide the same name, read in mingw-w64's source at the
-commit llvm-mingw 20250709 uses (section 6); none of it was compiled.
+commit llvm-mingw 20250709 uses (section 6); none of it was compiled for this table. The prototype's
+build corrected five verdicts: `std::chrono::clock_cast` is missing in libc++, `#pragma comment(lib)`
+works with lld, the export setting needs more than `--export-all-symbols`, DXC's header needs GUID
+declarations rather than mingw-w64's own header, and `WIDL_EXPLICIT_AGGREGATE_RETURNS` is set by
+mingw-w64 itself (section 10.2).
 
 | Class | Sites | Where | Verdict |
 | --- | --- | --- | --- |
@@ -60,14 +67,14 @@ commit llvm-mingw 20250709 uses (section 6); none of it was compiled.
 | `IID_PPV_ARGS` / `__uuidof` | 145 / 1 | the D3D12, DXGI, D3D11 and WIC code | as-is for the interfaces of mingw-w64's headers: `IID_PPV_ARGS` expands to `__mingw_uuidof` through `__CRT_UUID_DECL`, and `wrl/client.h` has the `ComPtrRef` overload of `IID_PPV_ARGS_Helper` (124 calls pass `&com_ptr`) |
 | `thread_local` | 72 | spread | as-is: llvm-mingw uses Windows' native TLS |
 | `__int128` (emitted for `mulhd`) | 1 builder | [arithmetic.cpp:194](../../work/runtime/src/codegen/builders/arithmetic.cpp) | as-is: clang supports it on x86-64 mingw |
-| C++20 and C++23 library: `std::filesystem` (579 uses), `std::expected`, `std::jthread`, `std::stop_token`, `std::format` (10), `std::from_chars` (integers; floats go through the runtime's own `portable_float_from_chars`), `std::chrono::clock_cast`, `std::byteswap`, one `std::regex` | spread | as-is with libc++ 20, as far as known; the runtime's POSIX branches already compile against libc++ on macOS upstream (not checked for this fork) |
-| SEH `__try`/`__except` | 2 | [threading_win.cpp:75](../../work/runtime/src/core/threading_win.cpp) (the debugger's thread-name exception, only when a debugger is attached; `SetThreadDescription` names threads anyway); [exceptions.h:107](../../work/runtime/include/rex/platform/exceptions.h) (`SEH_TRY` macros) | **small shim**: `__try` needs `-fms-extensions` on a mingw target, and whether clang generates it there is not checked. The first site can go under mingw; the macros are emitted only for guest functions with SEH scopes ([function_graph.cpp:679](../../work/runtime/src/codegen/function_graph.cpp)), and the FM4 generated code has none (0 `SEH_TRY` in 368 files) |
-| `#pragma comment(lib, "winmm.lib")` | 2 | [cp_sampler.h:18](../../work/runtime/src/graphics/util/cp_sampler.h), [thread_sampler.cpp:14](../../work/runtime/src/graphics/util/thread_sampler.cpp) | **small shim**: `target_link_libraries(... winmm)`; whether lld in mingw mode honours the pragma is not checked |
+| C++20 and C++23 library: `std::filesystem` (579 uses), `std::expected`, `std::jthread`, `std::stop_token`, `std::format` (10), `std::from_chars` (integers; floats go through the runtime's own `portable_float_from_chars`), `std::chrono::clock_cast`, `std::byteswap`, one `std::regex` | spread | as-is with libc++ 20, except `clock_cast` and `clock_time_conversion`, which libc++ lacks (38 files failed on them): the runtime's existing Apple fallback in [chrono.h](../../work/runtime/include/rex/chrono/chrono.h) now covers any libc++, and the launcher uses `file_clock::to_sys` (prototype, section 10.2) |
+| SEH `__try`/`__except` | 2 | [threading_win.cpp:75](../../work/runtime/src/core/threading_win.cpp) (the debugger's thread-name exception, only when a debugger is attached; `SetThreadDescription` names threads anyway); [exceptions.h:107](../../work/runtime/include/rex/platform/exceptions.h) (`SEH_TRY` macros) | **small shim**: clang rejects `__try` on a mingw target. The first site is left out under mingw (prototype, section 10.2); the macros are emitted only for guest functions with SEH scopes ([function_graph.cpp:679](../../work/runtime/src/codegen/function_graph.cpp)), and the FM4 generated code has none (0 `SEH_TRY` in 368 files) |
+| `#pragma comment(lib, "winmm.lib")` | 2 | [cp_sampler.h:18](../../work/runtime/src/graphics/util/cp_sampler.h), [thread_sampler.cpp:14](../../work/runtime/src/graphics/util/thread_sampler.cpp) | as-is: lld in mingw mode honours the pragma (`rexgpu-xenos.dll` imports `WINMM.dll`; prototype) |
 | Linker options in MSVC form | 4 | `LINKER:/MAP:` ([fm4-rex CMakeLists.txt:66](../../work/fm4-rex/CMakeLists.txt)); `/DELAYLOAD` with FSR only ([rexglue CMakeLists.txt:33](../../work/runtime/src/rexglue/CMakeLists.txt)); `-Xlinker /DEBUG` and `/opt:lldltojobs` in [pipeline.py](../../outputs/FM4-build/pipeline.py) | **small shim**: lld's MinGW driver takes `--pdb=`, `--thinlto-jobs=`, and `-Xlink=<option>` for lld-link options (the last not checked) |
 | `wWinMain` | 1 | [windowed_app_main_sdl.cpp:107](../../work/runtime/src/ui/windowed_app_main_sdl.cpp) | **small shim**: `-municode` on the game's link |
-| `WINDOWS_EXPORT_ALL_SYMBOLS` | 1 | [system/CMakeLists.txt:61](../../work/runtime/src/system/CMakeLists.txt) (`rexruntime.dll`, 10,647 exports today) | **small shim, to verify**: CMake implements it only for MSVC-style linkers; mingw needs `-Wl,--export-all-symbols` (the DLL has one `dllexport`, which turns mingw's automatic export off) and data imports go through mingw's auto-import with run-time pseudo relocations |
-| DXC's API header | 1 header | the vendored `thirdparty/dxc/include/dxcapi.h` (DXC commit `6b6f402`, NCSA) declares its interfaces with `__declspec(uuid)` | **small shim**: mingw-w64 ships its own `dxcapi.h` with `__CRT_UUID_DECL` for every interface the runtime uses (`IDxcCompiler3`, `IDxcUtils`, `IDxcResult`, `IDxcBlobUtf8`, `IDxcVersionInfo2`); use it, or a newer DXC header with the same declarations |
-| **D3D12 methods that return a struct** | **59 calls**: `GetCPUDescriptorHandleForHeapStart` 17, `GetGPUDescriptorHandleForHeapStart` 8, `GetDesc` 29, `GetDesc1` 3, `GetResourceAllocationInfo` 2 | the D3D12 back end, for example [command_processor.cpp:2183](../../work/runtime/src/graphics/d3d12/command_processor.cpp) | **real work, to verify**: Microsoft's x64 ABI returns a struct from a member function through a hidden pointer; the GNU C++ ABI on mingw does not, the classic mingw D3D12 crash ([GCC bug 64384](https://gcc.gnu.org/pipermail/gcc-bugs/2020-June/705246.html)). mingw-w64's `d3d12.h` carries both forms behind `WIDL_EXPLICIT_AGGREGATE_RETURNS` (16 places), and none of its headers defines that macro: the build must define it before `d3d12.h` and a test must show each call returns the right value. `dxgi1_6.h` and `d3d11.h` have no such method in use (DXGI's `GetDesc` returns an `HRESULT`) |
+| `WINDOWS_EXPORT_ALL_SYMBOLS` | 1 | [system/CMakeLists.txt:61](../../work/runtime/src/system/CMakeLists.txt) (`rexruntime.dll`, 10,647 exports today) | **small shim**: CMake implements it only for MSVC-style linkers; mingw needs `-Wl,--export-all-symbols`, and lld's option leaves out every name that begins with `__imp_`, which all 2,866 guest import thunks have: they get a `dllexport` declaration under mingw in [hook.h](../../work/runtime/include/rex/hook.h) (prototype, section 10.2). Data imports go through mingw's auto-import with run-time pseudo relocations |
+| DXC's API header | 1 header | the vendored `thirdparty/dxc/include/dxcapi.h` (DXC commit `6b6f402`, NCSA) declares its interfaces with `__declspec(uuid)` | **small shim**: the vendored header compiles, but mingw-w64's `__uuidof` does not read `__declspec(uuid)`; the runtime declares the GUIDs of the nine DXC and DXBC interfaces it asks for with `__CRT_UUID_DECL` under mingw (prototype, section 10.2), and keeps the vendored header, since `DxbcConverter.h` is not in mingw-w64's |
+| **D3D12 methods that return a struct** | **59 calls**: `GetCPUDescriptorHandleForHeapStart` 17, `GetGPUDescriptorHandleForHeapStart` 8, `GetDesc` 29, `GetDesc1` 3, `GetResourceAllocationInfo` 2 | the D3D12 back end, for example [command_processor.cpp:2183](../../work/runtime/src/graphics/d3d12/command_processor.cpp) | **real work, to verify**: Microsoft's x64 ABI returns a struct from a member function through a hidden pointer; the GNU C++ ABI on mingw does not, the classic mingw D3D12 crash ([GCC bug 64384](https://gcc.gnu.org/pipermail/gcc-bugs/2020-June/705246.html)). mingw-w64's `d3d12.h` carries both forms behind `WIDL_EXPLICIT_AGGREGATE_RETURNS` (16 places), and its `_mingw_mac.h` defines that macro for every GCC and clang C++ build (this note said none did; the prototype found it). The WARP probe of section 10.4 shows the calls return the MSVC build's values with it and crash without it; the runtime's CMake sets it explicitly as well. `dxgi1_6.h` and `d3d11.h` have no such method in use (DXGI's `GetDesc` returns an `HRESULT`) |
 | setjmp and longjmp in the generated code | 2 generated files of FM4 (`fm4_bounds.toml` sets `setjmp_address` and `longjmp_address`: "Native setjmp/longjmp must unwind the host stack") | the template [pch_h.inja:269](../../work/runtime/resources/templates/codegen/pch_h.inja) | **compiles as-is; behaviour to verify**: with the Universal CRT on x64, mingw-w64's `setjmp` passes the frame address to `_setjmp`, so `longjmp` unwinds through the frames as under MSVC; the title's error path that uses it is not exercised by a short run |
 
 **Count by class:** about 530 lines compile as-is (49 intrinsics, 5 `__declspec`, 6 `__stdcall`,
@@ -107,17 +114,22 @@ llvm-mingw 20250709 builds (its `build-mingw-w64.sh`).
 | Others linked | `dbghelp`, `winmm`, `bcrypt`, `shcore`, `urlmon`, `ole32`, `shell32`, `advapi32`, `user32`, `ws2_32`, `dxguid` | each has a `.def` or source in `mingw-w64-crt` (`ws2_32` not looked up) |
 | `d3dx12.h` | not used by the runtime; FidelityFX brings its own copy | none |
 
-**Gaps:** `gameinput.h` (the project brings the MIT one) and the `WIDL_EXPLICIT_AGGREGATE_RETURNS`
-switch the build has to set. No D3D12 or DXGI interface the runtime uses is missing.
+**Gaps:** `gameinput.h` (the project brings the MIT one). The prototype found three more missing
+headers: `DXProgrammableCapture.h` (the PIX capture interface `IDXGraphicsAnalysis`, declared under
+mingw in [d3d12_api.h](../../work/runtime/include/rex/ui/d3d12/d3d12_api.h)), `crtversion.h` (for
+FFmpeg) and `endian.h` (for the crypto), and that mingw-w64's headers default to Windows 7
+(`_WIN32_WINNT` 0x0601), which hides `SetProcessInformation`, `RRF_SUBKEY_WOW6432KEY`,
+`GetDpiForMonitor` and `SetProcessDpiAwarenessContext`: the build sets 0x0A00, as the Windows SDK
+does by default. No D3D12 or DXGI interface the runtime uses is missing.
 
 ## 3. Third-party libraries under mingw
 
 | Library | How the runtime builds it | Under mingw |
 | --- | --- | --- |
-| FFmpeg (`libavutil`, `libavcodec`, Xenia's fork `0604b46`) | the runtime's own CMake list with a checked-in `config_windows_x86_64.h` | made by `configure --toolchain=msvc` (`CC_IDENT` names MSVC 19.39): `HAVE_W32THREADS 1`, `HAVE_LIBC_MSVCRT 1`, `HAVE_ALIGNED_MALLOC 1`, `HAVE_IO_H 1`, `HAVE_UNISTD_H 0`, no inline assembly, no x86 assembly. Each holds under mingw with the Universal CRT, so it probably compiles; if not, a mingw config header (`configure --target-os=mingw32`, made once by a developer) replaces it. Not checked |
-| SDL3 (static, GameInput patch) | SDL's own CMake, with the NuGet header put first for SDL's sources ([thirdparty CMakeLists.txt:318](../../work/runtime/thirdparty/CMakeLists.txt)) | SDL supports mingw. Its `HAVE_GAMEINPUT_H` check (`check_c_source_compiles` of `#include <gameinput.h>`) finds the Windows SDK's old header today; under mingw it finds none and the GameInput driver is left out unless the check is pointed at the NuGet folder (`CMAKE_REQUIRED_INCLUDES`). Whether `GameInput.cpp` and SDL's GameInput sources then compile is not checked. **Real work, small to medium**; without it SDL's other pad drivers take the pads |
+| FFmpeg (`libavutil`, `libavcodec`, Xenia's fork `0604b46`) | the runtime's own CMake list with a checked-in `config_windows_x86_64.h` | made by `configure --toolchain=msvc` (`CC_IDENT` names MSVC 19.39): `HAVE_W32THREADS 1`, `HAVE_LIBC_MSVCRT 1`, `HAVE_ALIGNED_MALLOC 1`, `HAVE_IO_H 1`, `HAVE_UNISTD_H 0`, no inline assembly, no x86 assembly. Each holds under mingw with the Universal CRT. The prototype found one gap: `HAVE_LIBC_MSVCRT` includes `crtversion.h`, which mingw-w64 lacks (151 files failed); a two-line stub with the Universal CRT's major version 14 keeps FFmpeg's code that of the MSVC build. No other change |
+| SDL3 (static, GameInput patch) | SDL's own CMake, with the NuGet header put first for SDL's sources ([thirdparty CMakeLists.txt:318](../../work/runtime/thirdparty/CMakeLists.txt)) | SDL supports mingw. Its `HAVE_GAMEINPUT_H` check (`check_c_source_compiles` of `#include <gameinput.h>`) finds the Windows SDK's old header today; under mingw it finds none and the GameInput driver is left out unless the check is pointed at the NuGet folder (`CMAKE_REQUIRED_INCLUDES`). The prototype confirmed it: under mingw `HAVE_GAMEINPUT_H` is empty and SDL's GameInput driver is left out, while the runtime's `GameInput.cpp` compiles (with `_WIN32_WINNT` 0x0A00). **Real work, small to medium, not done**; without it SDL's other pad drivers take the pads |
 | Dear ImGui, fmt, spdlog, simde, toml++, CLI11, inja, stb | header or plain sources | each has `__MINGW32__` branches or no compiler-specific code (counted in the vendored trees); expected as-is |
-| libmspack (`lzxd.c`), xxHash, o1heap, utfcpp, tiny-AES, aes_128, the crypto and DXBC checksum files, RenderDoc's header | plain C and C++ | no `_MSC_VER` (xxHash 1 header) and no Windows code; as-is |
+| libmspack (`lzxd.c`), xxHash, o1heap, utfcpp, tiny-AES, aes_128, the crypto and DXBC checksum files, RenderDoc's header | plain C and C++ | no Windows code; as-is, except the crypto's `sha256.cpp`, which reads `<endian.h>` on every compiler but MSVC (a stub under mingw, section 10.2); `_MSC_VER` also in xxHash (1 header) |
 | The PowerPC disassembler of `rexglue.exe` (`thirdparty/disasm`, from binutils) | C | no compiler-specific code; as-is |
 | FidelityFX FSR 3.1 | built from source with clang when `-Fsr` is on ([rex_fsr.cmake](../../work/runtime/cmake/rex_fsr.cmake)) | **not checked**, likely work (its own D3D12 back end, PIX header, `/DELAYLOAD`). Off for players; a developer-only build keeps it on MSVC's libraries or drops it |
 
@@ -136,8 +148,9 @@ is outside the player build.
 | The e2e harness | runs the built game and reads its logs and captures | nothing toolchain-specific beyond the map and PDBs above; `matrix.py` copies `.exe`, `.dll`, `.pdb` and `.map`, and the two new DLLs (below) must be staged too |
 
 **Run-time files.** llvm-mingw links libc++ and libunwind as DLLs by default (`libc++.dll`,
-`libunwind.dll`; read in its documentation, not checked in the archive); the game's five modules would share them as they share the VC++ runtime DLLs
-today, staged beside the game. Both are LLVM's (Apache-2.0 with LLVM exceptions), so even shipping
+1,843,712 bytes, and `libunwind.dll`, 92,160 bytes, in the archive's `x86_64-w64-mingw32in`;
+the prototype's modules import both); the game's five modules share them as they share the VC++
+runtime DLLs today, staged beside the game. Both are LLVM's (Apache-2.0 with LLVM exceptions), so even shipping
 them would be allowed. The Universal CRT is part of Windows 10 and 11. **This removes the VC++
 redistributable from the player's computer** and the open licence question of fetching its DLLs
 ([builder note 4.10](builder-installer.md#410-what-runs-on-the-players-computer)). The shipped
@@ -185,7 +198,10 @@ Read from the GitHub API on 31 October 2026:
 URL: `https://github.com/mstorsjo/llvm-mingw/releases/download/20250709/llvm-mingw-20250709-ucrt-x86_64.zip`
 (GitHub redirects release downloads to its asset host). The `ucrt` build is the one to take: the
 Universal CRT is in every Windows 10 and 11, and the `msvcrt` build targets the old `msvcrt.dll`.
-The unpacked size and the member list are not checked. The newest release, 20261020, carries LLVM
+Unpacked by the pipeline's own `unpack_tool` (prototype): 9,353 members, all below the top folder
+`llvm-mingw-20250709-ucrt-x86_64`, no link and no refused path; 9,104 files, 671,790,153 bytes, in
+3.9 s. The archive holds the toolchains for four targets (x86-64, i686, ARMv7, ARM64); which members
+the builder keeps is not decided. The newest release, 20261020, carries LLVM
 23.1.4 (`llvm-mingw-20261020-ucrt-x86_64.zip`, 190,612,575 bytes); moving to it is a separate step,
 like any compiler update.
 
@@ -208,31 +224,34 @@ launcher (which uses `d3d11.h`, not `d3d12.h`) is not checked.
 **It replaces the B3 LLVM download.** llvm-mingw's clang is a full clang 20.1.8 with lld, `llvm-ar`
 and `llvm-rc` (as `llvm-windres`), so it takes the place of LLVM's 939.5 MB `.tar.xz` with a
 171 MB zip; Python, CMake and Ninja stay. Whether its clang can still target `x86_64-pc-windows-msvc`
-for the A/B build with Microsoft's libraries, and which members the builder keeps, are not checked.
+for the A/B build with Microsoft's libraries is checked only as far as emitting LLVM IR for that
+target (section 10.4); a link with it is not checked.
 
 ## 7. Estimate
 
-AI calendar time (1 person-week ≈ 3.5 h, range 2 to 7 h); the ranges are wide because the
-compile errors are not counted until the prototype.
+AI calendar time (1 person-week ≈ 3.5 h, range 2 to 7 h). Before the prototype this note estimated
+14 to 28 h, most likely 18 h, with 2 to 3 h for the prototype and 3 to 7 h for the runtime's port.
+The prototype took about 1.5 h with this note's update and did most of the porting (section 10),
+so the estimate of what is left is:
 
 | Area | Work | Estimate |
 | --- | --- | --- |
-| Prototype (section 8) | the download, a CMake toolchain file, the runtime and the instruction tests | 2 to 3 h |
-| Pipeline and toolchain | `toolchain.json` entry, `doctor` for mingw (no `INCLUDE`/`LIB`), the target triple, the PDB and map flags, staging `libc++.dll` and `libunwind.dll`, `test_pipeline.py` cases | 2 to 4 h |
-| Runtime | the shims of 1.1, `WIDL_EXPLICIT_AGGREGATE_RETURNS` and a WARP test of the 59 calls, the DXC header, the exports, whatever the compiler reports | 3 to 7 h |
-| Third party | SDL's GameInput, FFmpeg's config if needed | 1 to 3 h |
-| Title code, tests, launcher | `-municode`, the map option, the static launcher, the WARP tests | 1 to 2 h |
-| Tooling | the map parser or `/map`, the profiling build, PGO checked once | 1 to 2 h |
-| Verification | the full gate, the perf A/B both ways, new baselines, docs and notices; the Ally X run is the owner's | 4 to 7 h |
-| **Total** | | **14 to 28 h**, most likely about 18 h |
+| Prototype (section 8) | done on 31 October 2026 (section 10) | done |
+| Pipeline and toolchain | a `toolchain.json` entry for llvm-mingw with a keep list (the archive holds four targets), the toolchain file in `pipeline.py` itself instead of the prototype's wrapper, `doctor` without `INCLUDE` and `LIB`, `libc++.dll` and `libunwind.dll` staged beside the game and the tests, DWARF stripped or moved to a PDB (51 MB in `fm4_rex.exe`), `test_pipeline.py` cases | 2 to 4 h |
+| Runtime | the shims are in (section 10.2); left: the runtime's own struct-returning calls checked on WARP in the CPU tests, and the auto-import of data at run time | 0.5 to 1.5 h |
+| Third party | SDL's GameInput driver under mingw | 1 to 2 h |
+| Title code, tests, launcher | done, but for the map format | 0.5 h |
+| Tooling | the map parser for lld's format or lld-link's `/map`, the profiling build (`-gcodeview`, `--pdb`), PGO checked once | 1 to 2 h |
+| Verification | the smoke run, the full gate, the perf A/B both ways, new baselines, docs and notices; the Ally X run is the owner's | 4 to 7 h |
+| **Total left** | | **9 to 17 h**, most likely about 12 h |
 
-The total matches the builder note's guess, but the split is different: little porting, most of it
-in proof. Against it stands route (a)'s cost inside B4 (small) and route (b)'s 7 h, both with the
-licence question left open.
+Most of what is left is proof, as before. Against it stands route (a)'s cost inside B4 (small) and
+route (b)'s 7 h, both with the licence question left open.
 
 ## 8. Prototype plan
 
-The smallest step that proves or kills the route, on the development computer, with no GPU run:
+The smallest step that proves or kills the route, on the development computer, with no GPU run.
+**Done on 31 October 2026; it passed (section 10).**
 
 1. **Download** `llvm-mingw-20250709-ucrt-x86_64.zip` (171,028,561 bytes, from `github.com`, pinned
    by the digest above) into a new folder, for example `I:\FM4-toolchain-mingw`. **The only
@@ -264,17 +283,259 @@ under the GPU rules), then the steps of section 5. The prototype's result goes i
 | The COM struct-return ABI | wrong descriptor handles or descriptions: corruption or a device removal, only at run time | `WIDL_EXPLICIT_AGGREGATE_RETURNS`, the WARP probe (8.4), and the full gate |
 | setjmp and longjmp across the generated frames | a title error path that misbehaves only under mingw | the same CRT `longjmp` with the frame address; a targeted test of the two generated users |
 | SEH, VEH and C++ exceptions together | the write watch, the null-access capture and the MMIO handlers run in VEH, before any frame handler, so the C++ exception model should not matter; not shown | the e2e runs with the diagnostics on |
-| Exports and auto-import of `rexruntime.dll` | link failures, or pseudo relocations in a module of 69 MB | `--export-all-symbols`; an export file if needed |
+| Exports and auto-import of `rexruntime.dll` | link failures, or pseudo relocations in a module of 69 MB | `--export-all-symbols` and the `__imp_` exports of `hook.h` link (section 10.2); the pseudo relocations at run time are not shown |
 | Silent differences in libm or `memcpy` | small numeric or performance changes | the instruction tests; the perf A/B; the gate's captures |
 | GameInput | pads through SDL's other drivers only, until fixed | the SDL check against the NuGet header |
 | Two toolchains during the switch | gates that test something else than players run | one toolchain (section 5) |
 | llvm-mingw is one maintainer's project | releases stop | the pin keeps working; its scripts can rebuild the same toolchain from LLVM's and mingw-w64's sources |
 | FSR | a developer build without FSR, or kept on MSVC's libraries | FSR is off for players |
 
-**Recommendation: a prototype first.** The route removes every Microsoft licence from the player's
-build (the libraries, the Windows SDK and the VC++ redistributable), downloads 171 MB instead of
-940 MB for the compiler plus Microsoft's packages, and needs no administrator rights. The code
-reading finds no blocker, but the risks that matter (the ABI at the COM boundary, setjmp, exports)
-show only in a build and a run. The prototype of section 8 costs 2 to 3 h and one download; after a
-pass the route costs about 12 to 25 h more, after a fail route (a), Microsoft's installer, stays the
-fallback with its open licence question for players.
+**Recommendation, after the prototype: route (c).** The route removes every Microsoft licence from
+the player's build (the libraries, the Windows SDK and the VC++ redistributable), downloads 171 MB
+instead of 940 MB for the compiler plus Microsoft's packages, and needs no administrator rights. The
+prototype passed every kill criterion (section 10); the risks it could not reach are run-time ones
+(a game run, setjmp and longjmp, auto-import, performance), and the next step is the smoke run that
+reaches them (section 10.7). The route costs about 9 to 17 h more (section 7); route (a),
+Microsoft's installer, stays the fallback with its open licence question for players.
+
+## 10. Prototype results (31 October 2026)
+
+The prototype of section 8, approved by the owner with its one download on 31 October 2026 ("saya
+ijinkan"), on the development laptop, with no GPU run. Code: `5c4b25f` on the builder branch.
+
+**Setup.** The archive came once with `curl` (13 s) into the new, empty folder
+`I:\FM4-toolchain-mingw\downloads`: 171,028,561 bytes with the SHA-256 of section 6. It was
+unpacked by the pipeline's `unpack_tool` under `python -I` into
+`I:\FM4-toolchain-mingw\llvm-mingw-20250709-ucrt-x86_64` (section 6). Its `clang++` is clang
+20.1.8 with the default target `x86_64-w64-windows-gnu`. Nothing else came from the network: the
+15 third-party archives were copies of `I:\FM4-build-b3\downloads`, GameInput and DXC came through
+`GAMEINPUT_MIRROR` and `DXC_MIRROR` from `I:\FM4-build-usa`, and Python 3.11.9, CMake 3.31.6 and
+Ninja 1.12.1 were B3's portable copies in `I:\FM4-toolchain-b3`.
+
+**How it builds.** Three files in [outputs/FM4-build/mingw](../../outputs/FM4-build/mingw):
+
+- [x86_64-w64-mingw32.cmake](../../outputs/FM4-build/mingw/x86_64-w64-mingw32.cmake), the CMake
+  toolchain file: llvm-mingw's `x86_64-w64-mingw32-clang`, `-clang++`, `-windres`, `llvm-ar` and
+  `llvm-ranlib`, from `FM4_MINGW_ROOT`;
+- [prototype.py](../../outputs/FM4-build/mingw/prototype.py), which runs `pipeline.py`'s own
+  `setup`, `generate` and `build` stages:
+  - it wraps the pipeline's `run()` so that every CMake configure (the runtime, the loader, the
+    game, the tests and the launcher) takes the toolchain file instead of `clang`;
+  - `--keep-going` adds `ninja -k 0`;
+  - `PATH` holds only llvm-mingw's `bin`, the portable CMake, Ninja and Python, `System32` and
+    `Windows`, and `INCLUDE` and `LIB` are removed;
+  - after `setup` it copies `libc++.dll` and `libunwind.dll` into `runtime-install\bin`, which
+    `build` stages beside the game;
+  - `pipeline.py` itself is unchanged;
+- [d3d12_abi_probe.cpp](../../outputs/FM4-build/mingw/d3d12_abi_probe.cpp), the ABI probe of
+  section 10.4.
+
+The iterations ran in the scratch BuildRoot `I:\FM4-build-mingw`, the final clean run in
+`I:\FM4-build-mingw2`. Every build went through the build queue.
+
+### 10.1 Errors by class
+
+Each pass built with `ninja -k 0`, so every error of a pass was seen before a fix.
+
+| Pass | Class | Files (errors) | In 1.1? | Fix (10.2) |
+| --- | --- | --- | --- | --- |
+| Runtime, pass 1: 203 of 787 steps failed | FFmpeg's MSVC config includes `crtversion.h`, which mingw-w64 lacks | 151 | no (section 3 named FFmpeg's config as a risk) | stub |
+| | libc++ has no `clock_time_conversion` and `clock_cast` | 38, and 2 calls in `threading_win.cpp` | yes, verdict "as-is": wrong | the Apple fallback for any libc++ |
+| | `DXProgrammableCapture.h` missing | 24 | no | declaration |
+| | mingw-w64's headers default to Windows 7: `SetProcessInformation`, `RRF_SUBKEY_WOW6432KEY` (GameInput's loader) | 2 | no | `_WIN32_WINNT` 0x0A00 |
+| | `__try` | 1 | yes | left out under mingw |
+| Runtime, pass 2: 3 failed | the crypto's `sha256.cpp` includes `<endian.h>` on any compiler but MSVC | 1 | no | stub |
+| | `_uuidof` with one underscore, an MSVC alias of `__uuidof` | 1 | no | `__uuidof` |
+| | `FARPROC` assigned to `void*`, which MSVC mode allows and GNU mode rejects | 1 (6) | no | explicit cast |
+| Runtime, pass 3: the link of `rexgpu-xenos.dll` | `__mingw_uuidof<T>()` undefined for nine DXC and DXBC interfaces | 9 symbols | yes (DXC's header) | GUID declarations |
+| Runtime, pass 4 | the DLLs named `librexruntime.dll` and `librexgpu-xenos.dll`, which the GPU plugin loader would not find | not an error | no | no prefix |
+| Game | both module DLLs: every guest import thunk undefined (`__imp__KeTlsAlloc` and the rest); lld's `--export-all-symbols` leaves out names that begin with `__imp_`, and the MSVC build exports 2,866 of them | 2 links | yes (the export setting) | `dllexport` in `REX_EXPORT` |
+| Launcher | `GetDpiForMonitor`, `SetProcessDpiAwarenessContext` (Windows 7 default); `clock_cast`; libc++'s file clock counts in `__int128` nanoseconds; `WinMain` undefined | 4 | partly (`wWinMain` for the game only) | `_WIN32_WINNT`, `file_clock::to_sys`, `-municode` |
+
+Nothing needed a rewrite of shared runtime code. The classes outside section 1.1 are four missing
+headers, the Windows version default, the DLL prefix and two MSVC-mode spellings. Warnings only:
+`-fasync-exceptions` is unused on the mingw target (the generated code has no SEH scopes), and the
+runtime's usual `-Wunused` warnings.
+
+### 10.2 The shims
+
+All in [work/runtime](../../work/runtime), [work/fm4-rex](../../work/fm4-rex) and
+[work/fm4-launcher](../../work/fm4-launcher), commit `5c4b25f`. Fifteen in all: thirteen under
+CMake's `MINGW`, `__MINGW32__` or `_LIBCPP_VERSION`, and two spellings that need no guard.
+
+| Shim | Where | Guard |
+| --- | --- | --- |
+| `_WIN32_WINNT` and `WINVER` 0x0A00, `WIDL_EXPLICIT_AGGREGATE_RETURNS`, for the runtime and, through `rexruntime`'s public definitions, the game and its tests | [CMakeLists.txt](../../work/runtime/CMakeLists.txt), [system/CMakeLists.txt](../../work/runtime/src/system/CMakeLists.txt) | `MINGW` |
+| DLLs without the `lib` prefix | the runtime's and the game's `CMakeLists.txt` | `MINGW` |
+| `-Wl,--export-all-symbols` for `rexruntime.dll` | [system/CMakeLists.txt](../../work/runtime/src/system/CMakeLists.txt) | `MINGW` |
+| `REX_EXPORT_DECL`: a `dllexport` declaration of each name in `REX_EXPORT`, `REX_EXPORT_STUB`, `REX_EXPORT_STUB_RETURN` and `REX_HOOK_RAW`; these macros define all 2,866 `__imp_` names | [hook.h](../../work/runtime/include/rex/hook.h) | `__MINGW32__` |
+| `crtversion.h` with `_VC_CRT_MAJOR_VERSION` 14, for libavutil and libavcodec | [thirdparty/CMakeLists.txt](../../work/runtime/thirdparty/CMakeLists.txt) | `MINGW` |
+| `endian.h` (little-endian) for `xboxkrnl_crypt.cpp`, which includes `sha256.cpp` | [kernel/CMakeLists.txt](../../work/runtime/src/kernel/CMakeLists.txt) | `MINGW` |
+| `clock_time_conversion` and `clock_cast`: the existing Apple fallback, now for any libc++ | [chrono.h](../../work/runtime/include/rex/chrono/chrono.h) | `__APPLE__` or `_LIBCPP_VERSION` |
+| `IDXGraphicsAnalysis` declared as the Windows SDK declares it | [d3d12_api.h](../../work/runtime/include/rex/ui/d3d12/d3d12_api.h) | `__MINGW32__` |
+| `__CRT_UUID_DECL` for `IDxcBlob`, `IDxcBlobUtf8`, `IDxcIncludeHandler`, `IDxcCompiler`, `IDxcCompiler3`, `IDxcUtils`, `IDxcResult`, `IDxcVersionInfo2`, `IDxbcConverter`, with the GUIDs of the vendored headers | [d3d12_api.h](../../work/runtime/include/rex/ui/d3d12/d3d12_api.h) | `__MINGW32__` |
+| No `__try` around the debugger's thread-name exception | [threading_win.cpp](../../work/runtime/src/core/threading_win.cpp) | `__MINGW32__` |
+| `-Wl,-Map=` instead of `/MAP:`, and `-municode` for `fm4_rex.exe` | [fm4-rex/CMakeLists.txt](../../work/fm4-rex/CMakeLists.txt) | `MINGW` |
+| The launcher: `_WIN32_WINNT` 0x0A00, `-municode`, `-static` (libc++ linked into the shipped program) | [fm4-launcher/CMakeLists.txt](../../work/fm4-launcher/CMakeLists.txt) | `MINGW` |
+| The launcher's build date: `file_clock::to_sys`, cast to the system clock's duration | [app.cpp](../../work/fm4-launcher/src/app.cpp) | `_LIBCPP_VERSION` |
+| `__uuidof(ID3D12Device)` for `_uuidof(...)` | [d3d12_provider.cpp:259](../../work/runtime/src/ui/d3d12/d3d12_provider.cpp) | none: one keyword in clang's MSVC mode |
+| `reinterpret_cast<void*>` for six `FARPROC` assignments | [xinput_input_driver.cpp](../../work/runtime/src/input/xinput/xinput_input_driver.cpp) | none: the conversion MSVC mode made implicitly |
+
+Corrections to the research: `#pragma comment(lib, ...)` needs no shim (lld honours it), and
+mingw-w64's `_mingw_mac.h` already defines `WIDL_EXPLICIT_AGGREGATE_RETURNS` for every GCC and clang
+C++ build, so the CMake definition only makes it explicit. SDL's GameInput driver is left out under
+mingw (`HAVE_GAMEINPUT_H` empty), as section 3 expected; the fix is not part of the prototype.
+
+### 10.3 Generate and the tests
+
+- **Generate.** `rexglue.exe` built with mingw ran `generate` with USA Disc 1. In the clean
+  BuildRoot its 511 files in `project\generated` (269,459,918 bytes) equal those of the B3 build
+  (`I:\FM4-build-b3`, `rexglue.exe` with Microsoft's libraries) byte for byte, but for
+  `codegen.d`, which names the BuildRoot. `loaded-image.bin`, `fm4_switches.toml` (271 switch
+  tables) and the manifest are equal too.
+- **The codegen stamps.** In the iteration BuildRoot the three `codegen.stamp` files and
+  `codegen.build.stamp` held another fingerprint than B3's. It comes from that folder, not from the
+  toolchain: the same mingw `rexglue.exe` gives B3's fingerprint on a copy of that project elsewhere,
+  and B3's `rexglue.exe` gives it there too. The stamps are the codegen's cache key; what in that
+  folder changes the key was not found.
+- **The instruction tests.** `fm4_instruction_tests.exe` built with mingw: 295,650 checks, 0
+  failures, and the same output line as B3's (`half_checks` 68,121, `vector_checks` 227,529,
+  `old_fma_differences` 264, `old_dot_differences` 84), in 96 ms.
+- **The player tests.** The ten CPU tests passed, among them the wheel host test against SDL's
+  virtual wheel and the native shader contract's parser. So did the launcher tests: 558 plans, the
+  discs and Disc 2's four packages.
+
+### 10.4 The D3D12 ABI probe
+
+The probe makes a WARP device and calls the struct-returning methods of section 1.1:
+
+- `GetCPUDescriptorHandleForHeapStart`, on a shader-visible CBV/SRV/UAV heap and on an RTV heap;
+- `GetGPUDescriptorHandleForHeapStart`;
+- the heaps', a texture's and a copy queue's `GetDesc`;
+- `GetResourceAllocationInfo` for a texture and a buffer;
+- `GetAdapterLuid`, against DXGI's adapter description.
+
+It writes a null SRV through the start handle and reads the device's removed reason. It was built
+three ways from the same source:
+
+- with LLVM 20.1.8 against Microsoft's libraries (B3's `clang++`, Visual Studio's `INCLUDE` and
+  `LIB`);
+- with llvm-mingw;
+- with llvm-mingw and `PROBE_GNU_RETURNS`, which undefines the macro after `_mingw_mac.h`.
+
+| Line | Microsoft's libraries | llvm-mingw | llvm-mingw, GNU returns |
+| --- | --- | --- | --- |
+| heap start handles set (CPU, aligned; GPU; RTV CPU) | 1, 1, 1, 1 | the same | crashed before its first line (exit 139) |
+| `heap.desc` (type, count, flags, node mask) | 0, 1234, 1, 1 | the same | |
+| `rtv.desc` | 2, 7, 0, 1 | the same | |
+| increment | 64 | the same | |
+| removed reason after the write | 0x00000000 | the same | |
+| `allocation` (texture 1280 x 720 x 3, 4 mips, RGBA16F) | 29,425,664, 65,536 | the same | |
+| `allocation.buffer` (196,608 bytes) | 196,608, 65,536 | the same | |
+| `resource.desc` | 3, 65,536, 1280, 720, 3, 4, 10, 1, 0, 0, 1 | the same | |
+| `queue.desc` | 3, 100, 0, 1 | the same | |
+| LUID equal to DXGI's | 1 | the same | |
+| failures | 0 | 0 | |
+
+The two working builds print the same 14 lines. clang's IR for a minimal COM interface shows why the
+third crashes: on `x86_64-w64-windows-gnu` an 8-byte struct comes back in a register and a 16-byte
+one through a hidden pointer passed before `this`, while `x86_64-pc-windows-msvc` passes the hidden
+pointer after `this` for both. The kill criterion "a struct return that stays wrong with the macro"
+is not met.
+
+### 10.5 Times and sizes
+
+| Step | Time |
+| --- | --- |
+| Download | 13 s |
+| Unpack (9,104 files) | 3.9 s |
+| Runtime, pass 1 with `-k 0` (setup with the archives' unpack) | 188 s |
+| Runtime, passes 2 to 5 (incremental) | 12 to 58 s each |
+| `generate` (iteration BuildRoot) | 35 s |
+| Game, pass 1 with `-k 0` | 146 s |
+| The ABI probe, three builds and runs | 3 s |
+
+The clean run, `prototype.py all --tests player --jobs 8` into the new BuildRoot
+`I:\FM4-build-mingw2`, against B3's run with Microsoft's libraries:
+
+| Stage | llvm-mingw | B3 (MSVC libraries) | Largest steps (llvm-mingw) |
+| --- | --- | --- | --- |
+| `setup` | 202.9 s | 210.5 s | unpacking the archives 57.9 s, the runtime's configure 54.2 s and build 56.6 s |
+| `generate` | 35.2 s | 40.3 s | `codegen` 23.4 s |
+| `build --tests player` | 181.8 s | 191.5 s | the game 132.2 s, the wheel host test 8.5 s, the launcher 6.6 s |
+| `all` | 420 s | 443 s | |
+
+| Size | llvm-mingw | MSVC libraries (B3) |
+| --- | --- | --- |
+| The toolchain, unpacked (all of it) | 671,790,153 bytes, 9,104 files | LLVM's kept 304,219,141 bytes, plus Visual Studio and the Windows SDK |
+| The BuildRoot after the clean run | 1,771,208,764 bytes, 16,973 files | 1,719,104,970 bytes, 16,984 files |
+| The iteration BuildRoot `I:\FM4-build-mingw` | 2,067,428,992 bytes | |
+| `fm4_rex.exe` | 120,898,048 bytes (`.text` 63,255,062; DWARF 51,312,671) | 68,908,032 bytes (`.text` 66,430,150; no debug data) |
+| `fm4_rex_XMediaFacade_default.dll`, `fm4_rex_SpeechFacade_default.dll` | 21,559,808, 15,301,632 | 12,391,424, 8,992,768 |
+| `rexruntime.dll` | 13,777,920 bytes, 17,655 exports | 11,006,464 bytes, 10,647 exports |
+| `rexgpu-xenos.dll` | 8,420,864 | 7,491,584 |
+| `MotorsportDX.exe` (static) | 6,651,904 | 4,763,136 |
+| Staged C++ runtime | `libc++.dll` 1,843,712, `libunwind.dll` 92,160 | the VC++ redistributable |
+
+The generated code's `-gline-tables-only` stays in the mingw binaries as DWARF, where lld-link drops
+it without `/DEBUG`; the code itself is 5 % smaller. The extra exports come from
+`--export-all-symbols`, which also exports inline and template functions. No mingw module imports a
+Microsoft C++ runtime DLL: they import the Universal CRT's `api-ms-win-crt-*` sets, `libc++.dll`,
+`libunwind.dll` and Windows' own DLLs, and the launcher only Windows' own DLLs. Run-time pseudo
+relocations of mingw's auto-import: 121 in `fm4_rex.exe`, 4 in each module, 1,150 in
+`rexgpu-xenos.dll`.
+
+### 10.6 The MSVC path
+
+The shims leave the build with Microsoft's libraries as it was. Two builds with the current
+toolchain show it, both made as B3's was: B3's portable Python 3.11.9, CMake, Ninja and LLVM 20.1.8,
+Visual Studio's `INCLUDE` and `LIB`, `PATH` set to `System32` and `Windows` only, the archives
+copied into each BuildRoot's `downloads`, and `all --tests player --jobs 8` with USA Disc 1 and
+Disc 2.
+
+- **The branch.** A `snapshot` of `5c4b25f` in `I:\FM4-src-mingwcheck` was built into
+  `I:\FM4-build-msvccheck`. `doctor` passed. The stages took 212.4 s for `setup`, 38.6 s for
+  `generate` and 193.0 s for `build` (444 s in all). The instruction tests printed the same line
+  as in section 10.3, and the ten CPU tests and the launcher tests (558 plans) passed.
+  `build-result.json` names `5c4b25f`, with `dirty` false.
+- **The previous main.** A `snapshot` of `cc4e7f9` (the code of B3) in `I:\FM4-src-mingwbase1`
+  was built into `I:\FM4-build-msvcbase1` (441 s, passed). Its folder names have the same lengths
+  as the branch's, since the source paths land in the binaries as strings.
+
+The two builds, section by section:
+
+- `.text` is equal in `fm4_rex.exe`, both modules, `rexgpu-xenos.dll`, `MotorsportDX.exe` and
+  `fm4_instruction_tests.exe`. Their `.rdata` and `.data` differ by the path strings and the build
+  timestamp.
+- In `rexruntime.dll`, `.text` has the same size and differs in 48 bytes at 39 places. 36 of them
+  decode as instructions that differ only in a RIP-relative displacement to a string that moved
+  within `.rdata`. The other 3 are decodes that start inside an instruction, and their bytes show
+  the same shift of 0x45.
+
+No instruction of the MSVC build changed.
+
+### 10.7 Not verified, and the next step
+
+Not verified:
+
+- **A game run** (no GPU run in the prototype). Not exercised: D3D12 on a hardware adapter, the
+  runtime's own 59 struct-returning calls, audio, input, the GPU plugin loaded by name, and the
+  staged `libc++.dll` without llvm-mingw's `bin` on `PATH`. The tests ran with that folder on
+  `PATH`, and `tests-build` has no copy of the two DLLs.
+- **Auto-import at run time**: no test links `rexruntime.dll`, so its pseudo relocations ran
+  nowhere.
+- setjmp and longjmp through the generated frames; the vectored exception handlers, the write watch
+  and the crash dumps; C++ exceptions across the modules.
+- Performance (section 5's A/B).
+- SDL's GameInput driver (left out).
+- lld's map format for `thread_profile.py` and `soak_report.py`; PDBs; the profiling, flavor, PGO
+  and FSR builds.
+- The launcher beyond `--test`.
+- A computer without Visual Studio (the mingw target never looks for it, and `INCLUDE` and `LIB`
+  were unset), Windows 10.
+- llvm-mingw's `clang` targeting `x86_64-pc-windows-msvc`, beyond emitting IR.
+
+**Next step, the main session's call under the GPU rules:** a smoke run of the mingw build on the
+native path against the previous main's MSVC build, with a native capture at 1:1 beside the
+reference. If it passes, the steps of section 5 follow: the pipeline's own switch to llvm-mingw
+(section 7), the full gate and the performance A/B both ways.
