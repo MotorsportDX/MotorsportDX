@@ -19,7 +19,8 @@ invitation names. Use one report per problem.
 4. **The game**: the release that `generate` printed (`Disc 1: USA release` or Japan/Asia),
    and whether Disc 2 and downloadable content are imported.
 5. **The build**: the Motorsport DX commit (`git log -1 --format=%h` in the repository), whether it
-   was built with `-Fsr on`, and whether you run from the BuildRoot or from an export.
+   was built with `-Fsr on` or with `-Abi msvc` (`build-result.json` names the `abi`; the default
+   since 1 November 2026 is llvm-mingw), and whether you run from the BuildRoot or from an export.
 6. **The options**: the `Build.ps1 -Action run` command line, or in the GUI launcher the
    profile's settings (Advanced, **Show developer options**, then **Copy the command line** on the
    Developer tab). With `-Info` or F2 the settings overlay
@@ -53,12 +54,14 @@ game, so the trace has the problem and its end.
 **If the game crashes or closes**, also send what Windows recorded: open the Event Viewer
 (Win+R, `eventvwr`), Windows Logs, Application, and copy the text of the `Application Error`
 entry for `fm4_rex.exe` at that time (the faulting module and its offset). If the GUI launcher
-shows an exit code, add it.
+shows an exit code, add it. If the game does not start at all and Windows names `libc++.dll` or
+`libunwind.dll`, say whether the game's folder (`game-build`) holds them: `build` and `export`
+put them beside the game.
 
 Lines that every run writes and that are not problems on their own: in `runtime.log` the
 error `ResolvePath(update:\media.zip) failed - device not found` (no title update is mounted), and
 the `STUB` warnings of Xbox services the game calls but does not need; in the console of
-`Build.ps1`, `'vswhere.exe' is not recognized`.
+`Build.ps1 -Abi msvc`, `'vswhere.exe' is not recognized`.
 
 ## Racing wheel
 

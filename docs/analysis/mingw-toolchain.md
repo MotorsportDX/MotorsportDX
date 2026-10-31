@@ -1,9 +1,12 @@
 # The llvm-mingw toolchain: route (c) (31 October 2026)
 
-**Status (31 October 2026): the switch is under way.** The owner decided to move the build to
-llvm-mingw after the prototype ("Lanjut pindah"). Its first increment, M1, makes llvm-mingw the
-default of every action (section 11); its verification gate, M2, comes next. Sections 1 to 10 are
-the research and the prototype as they stood before the decision.
+**Status (1 November 2026): the switch is verified on the development laptop.** The owner decided
+to move the build to llvm-mingw after the prototype ("Lanjut pindah"). Its first increment, M1,
+made llvm-mingw the default of every action (section 11); its verification, M2, found the llvm-mingw
+build equal to the MSVC build of the same commit in the full gate, the career, parity and perf
+tiers, the screens that do not depend on the race, and a short soak (section 12). The owner's run
+of its export on the ROG Xbox Ally X is left. Sections 1 to 10 are the research and the prototype
+as they stood before the decision.
 
 Research for route (c) of the [builder installer](builder-installer.md#47-the-msvc-libraries-and-the-windows-sdk):
 can Motorsport DX build with **llvm-mingw** (clang targeting mingw-w64, with libc++, mingw-w64's C
@@ -951,3 +954,152 @@ The exported game was not run.
 - A checkout older than M1 knows no ABI: once a BuildRoot is mingw, a branch made before the switch
   must not build into it, since it would configure it again with LLVM for Microsoft's libraries
   ([setup, toolchain](../setup.md#toolchain)).
+
+## 12. The verification: M2 (1 November 2026)
+
+The owner's acceptance criteria of section 11, run by the plan of 11.6. Local main `1fea8e4` (M1's
+code and the note) was built twice on the development laptop through `Build.ps1`, from a clean
+checkout of it, with FSR on (as the development BuildRoot's runtime has it) and every build test:
+
+- `I:\FM4-build-usa` with `-Abi msvc` and `-LLVMRoot 'C:\Program Files\LLVM'` in the Visual Studio
+  environment, incremental: 748.9 s (the game 140.8 s, the shader-mod tests 477.0 s);
+- the new `I:\FM4-build-usamg` with llvm-mingw from `I:\FM4-toolchain-m1` (`-Toolchain`), `all`
+  with `--fetch git` and the local mirrors (`THIRDPARTY_MIRROR`, the FidelityFX bundle, GameInput,
+  DXC), Disc 2 and the eight DLC packages: 959.6 s (setup 220.1 s, generate 34.8 s, build 704.2 s,
+  the game 128.5 s).
+
+Both `build-result.json` name `1fea8e4`, not dirty, with `abi` msvc and mingw. Both passed the
+instruction tests (295,650 checks, the same line), the CPU tests, the shader-mod and post pass
+tests, FSR's checks on the GPU and the launcher tests (558 plans, 12 content packages).
+`I:\FM4-build-usamg` got the profile `B13EBABEBABEBABE` and `achievements` of `I:\FM4-build-usa`;
+its first e2e run imported Disc 2 and the DLC, ran the offline shader pass (36.1 s, 1,076 pixel
+shaders added) and a `photo` and a `career` race into its own caches. Every GPU run below ran in
+two perf holds of the queue, the native path (`--native`), 1x unless noted, the default look,
+the AI driver; the runs of `I:\FM4-build-usamg` are the new build's baselines.
+
+### 12.1 The full gate and the career tier
+
+`matrix.py --tier full --native`, three runs a cell, `m2fms` (MSVC) and `m2fmg` (llvm-mingw); every
+cell of both reached its goal in all three runs. Race and other phases, MSVC against llvm-mingw:
+
+| Cell | MSVC (`m2fms`) | llvm-mingw (`m2fmg`) | `compare.py` |
+| --- | --- | --- | --- |
+| 60 Hz `photo` | race 60.0 fps, p99 17.20 ms; photo mode 29.98 | race 60.0, p99 17.16; photo mode 29.98 | WARN: the final captures' luma and black share |
+| 60 Hz `career` | race 60.0, p99 17.22; replay 59.97 | race 60.0, p99 17.25; replay 59.97 | PASS |
+| 60 Hz `photo_view` | 57.01 | 57.01 | WARN: the captures' luma |
+| 240 Hz `photo` | race 239.41, p99 4.80; photo mode 29.98 | race 239.23, p99 4.83; photo mode 29.98 | PASS |
+| 240 Hz `career` | race 236.90, p99 4.95; replay 119.08 | race 237.02, p99 4.92; replay 118.97 | PASS |
+| 240 Hz `photo_view` | 57.01 | 56.96 | WARN: the captures' luma |
+| `career_finish` (career tier) | race 237.18, p99 4.92 | race 236.86, p99 4.99 | PASS |
+| `career_progress` | 57.42 | 57.44 | PASS |
+
+The WARNs are the captures' statistics, which the races' variance moves: `photo_view` loads the
+photo that its own gate's `photo` cell saved, and the final captures of the 60 Hz `photo` cell
+range from 30% to 76% black within one build (MSVC) and 37% to 53% (llvm-mingw). No cell has a new
+error key, a clear gray or a washed-out frame.
+
+### 12.2 The frozen frame
+
+The `parity` tier (`freeze` at 60 Hz and 2x, two runs, `FM4_FIXED_SEED=1`), `m2pms` and `m2pmg`,
+compared with `parity.py`: **PASS**.
+
+| | run 1 | run 2 |
+| --- | --- | --- |
+| Draws a frame, MSVC / llvm-mingw | 2,235.93 / 2,211.92 (−1.1%) | 2,234.40 / 2,213.46 (−0.9%) |
+| Predicated packets run a frame | 5,080.94 / 5,063.94 | 5,067.42 / 5,073.48 |
+| Pixels above 4 between the builds | 40.72% | 40.83% |
+| Pixels above 4 within each build (run 1 against run 2) | MSVC 29.58%, llvm-mingw 28.46% | |
+
+The draws now lie within the 3% limit (the prototype's were 10% apart, section 10.7). The 1:1 crops
+(`I:\FM4-build-usamg\e2e\m2-parity\run1` and `run2`, `diff-crop*.png`) show two complete renders of
+nearby moments of the race: the grandstand's crowd and railings, the start line's paint, no
+missing or broken surface. The moment's variance between builds stays a separate item (10.8).
+
+### 12.3 Performance, both orders
+
+The `perf` tier (`photo` at 240 Hz, three runs a cell) in three pairs: MSVC then llvm-mingw
+(`m2ab1ms`, `m2ab1mg`), llvm-mingw then MSVC (`m2ab2mg`, `m2ab2ms`), and, since that pair's MSVC
+cell was slow, MSVC then llvm-mingw again (`m2ab3ms`, `m2ab3mg`). Means of the runs' race phases:
+
+| Pair | Build | Race fps (the three runs) | p99 ms | GPU ms a frame | Render thread ms a frame | Process CPU ms/s | Package W |
+| --- | --- | --- | --- | --- | --- | --- | --- |
+| A | MSVC | 238.29 (239.2, 237.8, 237.9) | 4.87 | 2.26 | 2.76 | 3,075 | 56.9 |
+| A | llvm-mingw | 235.11 (237.3, 230.0, 238.0) | 4.96 | 2.30 | 3.01 | 3,339 | 64.2 |
+| B | llvm-mingw | 238.81 (239.2, 239.2, 238.1) | 4.81 | 2.21 | 2.58 | 3,172 | 55.4 |
+| B | MSVC | 229.70 (226.4, 239.2, 223.4) | 5.33 | 2.33 | 3.32 | 3,294 | 59.1 |
+| C | MSVC | 234.94 (233.7, 231.8, 239.3) | 4.99 | 2.24 | 3.09 | 3,176 | 54.3 |
+| C | llvm-mingw | 237.51 (236.2, 237.8, 238.6) | 4.84 | 2.23 | 2.91 | 3,259 | 53.3 |
+| All nine runs | MSVC | 234.31 (median 237.77) | 5.06 | 2.27 | 3.06 | 3,182 | 56.8 |
+| All nine runs | llvm-mingw | 237.14 (median 238.00) | 4.87 | 2.25 | 2.83 | 3,257 | 57.6 |
+
+Photo mode ran at 29.95 (MSVC) and 29.98 fps (llvm-mingw) in every cell. The slow runs came on
+both sides (llvm-mingw's run 2 of pair A, MSVC's runs 1 and 3 of pair B and runs 1 and 2 of pair C):
+the command processor's draw time rose in them (531 against about 375 ms a second in MSVC's
+slowest run, 488 against about 420 in llvm-mingw's) on either build: the package's power drifting within the hold, not the build. The race is CPU-bound at 1x (GPU 2.25 ms a frame); the GPU time and the render thread's are
+the same within the runs' spread. **llvm-mingw is not slower**; its process CPU time is 2.4%
+higher on average, within the cells' spread of 3,075 to 3,339 ms a second.
+
+### 12.4 The rendering at 1:1 where the moment does not depend on the race
+
+`e2e.py --scenario photo_view` at 2x with `--keep-ppm` on both builds (`m2det-ms` in
+`I:\FM4-build-usa\e2e`, `m2det-mg` in `I:\FM4-build-usamg\e2e`), both on the same profile (the
+first run of `m2fms-240-photo`, with its saved photo). Each 2560x1440 capture was paired with the
+other build's capture of the same screen (the title's screen events) and the nearest time within
+it:
+
+- **25 pairs byte-identical (0 pixels differ)**: the message box after the boot (4 captures), MY
+  PROFILE (7), the photo list (1) and the saved photo opened (12), and the first capture, the 1280x720
+  legal notice;
+- the career home (`102_H_CAR_HOME`, the Ford Ka in front of the Alps, 2 captures): 50% and 77% of the
+  pixels differ, 10% and 16% by more than 4. Its car turns and its clouds move, and the captures lie
+  0.24 s and 0.28 s apart in the two runs: the same scene at another instant;
+- three captures in screen transitions (the background's fade, the empty scene, MY PROFILE's
+  first frame) differ the same way: the fade's phase at the capture.
+
+The splash videos were not compared (their captures do not pair by screen event).
+
+### 12.5 Pads, the soak and the export
+
+- **SDL's GameInput driver** (`m2gi`, `--arg sdl_joystick_driver=gameinput --arg
+  input_latency_probe=true` on `I:\FM4-build-usamg`): the log has `SDL joystick driver option:
+  gameinput` and `SDL GameInput: a GameInput v3 runtime is available; GameInput takes the pads it
+  supports`, and the latency probe's virtual pad is read (driver `virtual`, update to guest read
+  p50 7.8 to 8.8 ms). No physical pad was connected to the laptop, so a pad through GameInput was
+  not seen; the ROG Xbox Ally X run can show it.
+- **The soak**: `career_season` (the rest of season 1: three events in about 20 minutes; the cap
+  `--max-hours 1.5`) on both builds (`m2soak` in `I:\FM4-build-usamg\e2e`, `m2soak-ms` in
+  `I:\FM4-build-usa\e2e`). Both finished the three events. `soak_report.py` gives both the same
+  verdict, FAIL on the slopes of private bytes, GPU memory and handles, which over 20 minutes are the
+  caches that the 2-hour soaks showed filling ([status](../status/current.md#revisit-soak-and-the-title-render-thread-30-october-2026)):
+
+  | | llvm-mingw | MSVC |
+  | --- | --- | --- |
+  | Private bytes an hour | +431 MB | +568 MB |
+  | Dedicated GPU memory an hour | +44 MB | +82 MB |
+  | Handles an hour | +617 | +555 |
+  | Threads an hour | +3 (PASS) | −11 (PASS) |
+  | Race p50, last third against the first | +0.4% (PASS) | +3.1% (PASS) |
+  | Race p99, last third against the first | −4.3% (PASS) | +12.7% (FAIL) |
+
+  The guest's memory peaks at 386.8 of 512 MB, as on the MSVC builds.
+- **The export** for the owner's ROG Xbox Ally X: `D:\FM4-export\MotorsportDX-2026-11-01-mingw`,
+  324,742,387 bytes. It holds `MotorsportDX.exe`, the backdrop, `game-build` with the five binaries
+  and `libc++.dll` and `libunwind.dll`, the look mods, the post passes, the shader cache,
+  `launcher.json`, the credits, the license, and the notices with `LLVM-LICENSE.txt` and
+  `MinGW-w64-runtime-COPYING.txt`; no `dxcompiler.dll` or `dxil.dll` and no PDB. Not run.
+
+### 12.6 Verdicts and what is left
+
+| Criterion | Verdict |
+| --- | --- |
+| The full gate against its own baselines | PASS: every cell of both builds, no FAIL between them; `I:\FM4-build-usamg`'s runs are the baselines |
+| The perf A/B in both orders | PASS: 237.14 against 234.31 fps over nine runs each; a suspicious pair repeated in reverse |
+| The rendering at 1:1 where the moment does not depend on the race | PASS: 25 pairs byte-identical at 2x; the differing captures are animations at another instant |
+| The frozen frame | PASS (draws −1.1%, image 40.7%), two complete renders at 1:1 |
+| Pads through GameInput | the driver starts and reads the virtual pad; a physical pad not seen |
+| The ROG Xbox Ally X | left: the owner's run of the export |
+
+Not verified: the ROG Xbox Ally X; a physical pad through GameInput; a computer that never had
+Visual Studio; Windows 10; a soak longer than 20 minutes on the llvm-mingw build; 120 Hz, 3/2 and
+2x races beside the freeze; the flavor builds in a game run. The conversion of `I:\FM4-build-usa`
+(11.6) waits for the owner's run.

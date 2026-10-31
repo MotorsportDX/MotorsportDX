@@ -28,6 +28,7 @@ timeline
     26 October : Native path the default on every computer : Five quality presets
     27 to 29 October : Stage N6 and the Level 1 final gate : Racing wheel stages 0 to 6 : Launcher racing theme : Look presets gt7 and fm2023
     30 October : First 2-hour career season soak : Revisit soak (caches, a slow handle leak) and the spinning render thread
+    31 October to 1 November : The builder's pipeline (B1 to B3) : The build moves to llvm-mingw (M1, M2)
 ```
 
 | Date | Milestone |
@@ -50,6 +51,8 @@ timeline
 | 28 October 2026 | The shader contract's increments 5 and 6; the game's pixel shaders from the disc and pipelines created ahead of the replay (N6 1.3 and 1.5); resolves without needless writes; RTV and `-Rov` out of all gates. |
 | 29 October 2026 | The DXIL world by default where DXC is beside the game, and the pipeline library (N6 1.2 and 1.4); the Level 1 final gate; racing wheel stages 0 to 6 with the countdown lock fix; the launcher's racing theme (T1 to T6); the look presets `gt7` and `fm2023`. |
 | 30 October 2026 | The `career_season` scenario and the first 2-hour soak with its performance survey; the reward screen hitches traced to the title; the `quickrace_loop` soak that revisits tracks and cars (caches, a slow handle leak); the title render thread found spinning between frames. |
+| 31 October 2026 | The builder installer's pipeline (B1 to B3: preflight, no Git, portable tools); the llvm-mingw prototype; the owner's decision to build with llvm-mingw and its first increment (M1). |
+| 1 November 2026 | The llvm-mingw build verified against the MSVC build of the same commit (M2): full gate, career, parity and perf tiers, 2x captures, a short soak; its export for the ROG Xbox Ally X. |
 
 ## 1. Clean-build verification (13-14 October 2026)
 
@@ -708,3 +711,10 @@ Statements of [current status](current.md) that the wait on by default replaced 
 - Current gaps, performance: "The title render thread spins between frames and recomputes the gamma ramp on every turn, 158 ms of CPU a second in races and up to 600 ms on the reward screens. The wait for the next frame that replaces the spin (`fm4_render_thread_idle_wait`) saves 4.7 to 7.8% of the CPU time, but is off by default: it makes the countdown dearer, for a reason not yet measured, and the ROG Xbox Ally X has not run it ([render thread idle wait](current.md#render-thread-idle-wait-30-and-31-october-2026))."
 - Verified on the latest build, "Render thread idle wait, 30 October 2026": `fm4_render_thread_idle_wait` (off by default; `fm4-render-idle-wait.cpp`): when the title render thread's frame loop found its deferred command queue empty, the next turn sleeps until the main thread queues a frame, at most 1 ms, instead of turning again at once. A hook of the main thread's insert into the queue (`sub_82940438` from `0x8237A1BC`) wakes it ([career season soak, 12](../analysis/career-season-soak.md#12-the-render-threads-idle-wait-30-october-2026)). Measured on build `677b07d` (I:\FM4-build-usa, the native path, 240 Hz, Quick Race with two races of 150 s, off then on at 1x, 3/2 and 2x): a whole run used 6.8%, 4.7% and 7.8% less CPU time and 5.7%, 3.8% and 5.0% less energy. The race took 243, 76 and 260 ms of CPU a second and 3.7, 1.0 and 3.2 W less, with the same frame rate (231.8 / 232.3, 230.2 / 230.6, 200.9 / 201.2 fps) and p50. The menus, loading and reward screens use less too. The countdown before the start used 246 to 394 ms of CPU a second and 2 to 3 W more, with 1 to 2% fewer frames, in all three pairs. The picture is the same: the gamma ramp's hash sequence, the parity freeze at 3/2 (`iw-off`, `iw-on`, PASS), the menus' frame rate and the driver's menu timings. Not covered: the ROG Xbox Ally X (the owner's A/B: extra cvars `--fm4_render_thread_idle_wait=true`), the cause of the countdown's cost, 60 and 120 Hz, the career.
 - Next validation steps: "**A/B the render thread's idle wait on the ROG Xbox Ally X.** Two Quick Races at 1x on battery and on AC, one with the extra cvars `--fm4_render_thread_idle_wait=true`, with the performance trace ([Ally X run set](../running.md#render-thread-idle-wait-ab)); with a profile of the countdown on this PC, it decides whether the wait is turned on by default."
+
+### Statements replaced on 1 November 2026
+
+Statements of [current status](current.md) that the switch to llvm-mingw replaced ([the switch](current.md#the-switch-to-llvm-mingw-31-october-and-1-november-2026)):
+
+- **Latest result:** a 2.8-hour soak that drove the same 11 Quick Race tracks and cars three times at 2x and 240 Hz on the native path: memory and GPU memory are caches that fill on the first pass and stay level on the third, the guest's memory never moves, and handles leak slowly (about 15 a race). The title render thread spins between frames and recomputes the gamma ramp on every turn ([revisit soak](current.md#revisit-soak-and-the-title-render-thread-30-october-2026)).
+- **Platform**: Windows x64 only, with a matching toolchain and GPU. Setup checks the prerequisites and does not install Visual Studio, Python or LLVM. A clone alone is not a playable game package. See [setup](../setup.md).

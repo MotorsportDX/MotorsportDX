@@ -18,6 +18,13 @@ has not yet built the game from a clean clone; on 25 October 2026 a clean clone 
 on the development laptop. The ROG Xbox Ally X last ran exports of 24 and 25 October 2026: the
 latest build, with the launcher's new look and its shader pass, has not run there yet.
 
+Since 1 November 2026 the game is built with llvm-mingw instead of Microsoft's Visual Studio
+libraries ([setup, toolchain](setup.md#toolchain)). Building needs no Visual Studio and no Windows
+SDK, and the game no longer needs the Visual C++ Redistributable: its C++ runtime, `libc++.dll` and
+`libunwind.dll`, lies beside it in `game-build`. On the development laptop the new build plays as
+the old one did (the same frame rates and the same picture where a screen does not depend on the
+race); on the ROG Xbox Ally X it has not run yet.
+
 Racing wheels: **none tested yet**. The planned test set is the project owner's MOZA Racing R9
 base (direct drive) with the ESX steering wheel and the SR-P pedals (two pedals, no clutch
 pedal), run from an export with the [wheel checklist](running-controls.md#racing-wheel-test-checklist).
@@ -53,7 +60,7 @@ above.
 - **Controllers:** the ROG Xbox Ally X's built-in pad works and rumbles (the owner's runs; it
   has no trigger rumble). The other pad options were checked with a virtual pad only; an Xbox
   Series controller and PlayStation pads have not been tested, and the
-  `gameinput` pad driver starts but has not run a pad yet. The game's STEERING AXIS DEADZONE
+  `gameinput` pad driver starts (also in the llvm-mingw build) but has not run a real pad yet. The game's STEERING AXIS DEADZONE
   INSIDE cannot go below about 24 in practice: to steer from the first stick movement, use the
   runtime's steering anti-deadzone (`-Pad 'anti_deadzone=1,stick_deadzone=0.05'`, see
   [the game's steering deadzone](running-controls.md#the-games-steering-deadzone)) and leave the game's

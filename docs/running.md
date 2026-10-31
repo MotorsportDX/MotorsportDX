@@ -37,7 +37,7 @@ and [status/history.md](status/history.md).
 ## Launching
 
 ```powershell
-.\outputs\FM4-build\Build.ps1 -Action run -BuildRoot 'D:\FM4-build' -LLVMRoot 'C:\Program Files\LLVM' -Python 'C:\Python311\python.exe'
+.\outputs\FM4-build\Build.ps1 -Action run -BuildRoot 'D:\FM4-build' -MingwRoot 'D:\Tools\llvm-mingw-20250709-ucrt-x86_64' -Python 'C:\Python311\python.exe'
 ```
 
 If you open a new PowerShell session, define `$common` again as shown in
@@ -234,11 +234,11 @@ The A/B of `fm4_render_thread_idle_wait` (30 October 2026, off by default; [care
 repository:
 
 ```powershell
-.\outputs\FM4-build\Build.ps1 -Action export -BuildRoot 'D:\FM4-build' -LLVMRoot 'C:\Program Files\LLVM' -Python 'C:\Python311\python.exe' -Out 'E:\FM4-portable'
+.\outputs\FM4-build\Build.ps1 -Action export -BuildRoot 'D:\FM4-build' -MingwRoot 'D:\Tools\llvm-mingw-20250709-ucrt-x86_64' -Python 'C:\Python311\python.exe' -Out 'E:\FM4-portable'
 ```
 
-The folder holds `MotorsportDX.exe`, `game-build` (the executable, the two modules and
-the runtime DLLs of `build-result.json`), `look`, `passes`, the shader cache (`cache`),
+The folder holds `MotorsportDX.exe`, `game-build` (the executable, the two modules, the
+runtime DLLs and the C++ runtime `libc++.dll` and `libunwind.dll` of `build-result.json`), `look`, `passes`, the shader cache (`cache`),
 `launcher.json`, `build-result.json`, `CREDITS.txt` (the projects that made it possible), the
 project's own license (`LICENSE.txt`), the license notices of the third-party code in the
 binaries (`third-party-notices`), the
@@ -254,8 +254,10 @@ updates and whose `launcher-settings.json` it keeps.
 
 On the other computer:
 
-1. Install the Microsoft Visual C++ 2015-2022 Redistributable (x64), recent enough
-   to have `MSVCP140_ATOMIC_WAIT.dll`. The GPU must support Direct3D 12.
+1. The GPU must support Direct3D 12. Nothing needs installing for an export of the default
+   build (llvm-mingw, since 1 November 2026): its C++ runtime is in `game-build`. An export of an
+   `-Abi msvc` build, or of a build before 1 November 2026, needs the Microsoft Visual C++
+   2015-2022 Redistributable (x64), recent enough to have `MSVCP140_ATOMIC_WAIT.dll`.
 2. Copy the export folder and your extracted discs to it.
 3. Start `MotorsportDX.exe`, set Disc 1, Disc 2 and the content on the Game data page,
    let the Shaders page run the shader pass (it fetches the DirectX Shader Compiler first,
