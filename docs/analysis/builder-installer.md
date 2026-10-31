@@ -313,6 +313,48 @@ which a reading (no download) can answer before B4 starts. (a) stays as the fall
 window when (b) is ruled out or fails. (c) costs a port and a full re-validation for what (b) already
 gives.
 
+**The licence reading (31 October 2026) reopens this recommendation.** The main session read the
+terms with no download:
+
+- **Visual Studio 2022 Build Tools** (the terms the catalog links, LinkId 2179911: Microsoft's text
+  of March 2024, read in Microsoft's online document viewer):
+  - 1.a: the software is a supplement to Visual Studio Community, Professional or Enterprise, and
+    its use needs a valid licence to one of them;
+  - 1.d: without such a licence, it may be used only to compile and build C++ components that a
+    third party released under an OSI-approved licence and that are reasonably required to build
+    the user's own applications ("Open Source Dependencies"); 1.e: not to develop them further;
+  - 2.b: files may be copied onto build devices solely for those purposes;
+  - 4: no working around technical limitations, no sharing or publishing of the software, and no
+    offering it stand-alone or combined with an application for others to use.
+- **Visual Studio Community 2022** (LinkId 2179811):
+  - 1.a: an individual may use it to develop and test their own applications, for any purpose;
+  - 1.b: an organisation may use it, among other cases, for applications released under
+    OSI-approved licences.
+- **The Windows SDK** (`sdk_license.rtf` of 10.0.26100, `EULAID:WIN10SDK.RTM.AUG_2018`):
+  - 1.a: any number of copies on the user's devices to design, develop and test their programs,
+    and each copy must be complete;
+  - 2.a: distributable code only as its REDIST.TXT list names it;
+  - 7: no working around technical limitations, and no publishing of the software for others to
+    copy.
+- `Redist.txt` in this computer's Visual Studio only points to `https://aka.ms/vs/17/redist.txt`
+  (not read).
+
+What follows from the text:
+
+1. A developer of the project is covered: Community 1.a, or Build Tools with a Community licence.
+2. A player who builds the game only to play it fits none of these clauses clearly. Build Tools 1.d
+   is about the dependencies of the user's own applications, Community 1.a about the user's own
+   applications, and the SDK about the user's own programs. This holds for routes (a) and (b)
+   alike: the installer changes how the files arrive, not the terms.
+3. Route (b) adds two questions of its own:
+   - the SDK's condition that each copy is complete, which an x64 selection of its MSIs does not
+     meet;
+   - whether unpacking Microsoft's packages without its installer counts as working around a
+     technical limitation, which the text does not answer.
+4. Route (c) depends on no Microsoft terms.
+
+This note is not legal advice. The route is the owner's decision again (section 9, item 4).
+
 ### 4.8 FXC, replaced by D3DCompile
 
 `fxc.exe` is used in one place: `compile_resolve_shaders` in
@@ -779,7 +821,9 @@ and 7 to 11 stay open; they are settled before B6.
    player accepts the terms in the builder (recommended, once the terms are read and allow it), with
    (a), Microsoft's Build Tools installer, as the fallback; not (c).
    **Decided on 31 October 2026: route (b)**, once the main session has read Microsoft's terms;
-   route (a) is the fallback.
+   route (a) is the fallback. **Reopened the same day:** the terms do not clearly cover a player
+   who builds only to play, by either route, and route (b) has two questions of its own
+   ([the licence reading](#47-the-msvc-libraries-and-the-windows-sdk)). B4 waits for the owner.
 5. **The downloads the package may make on a player's computer**, and the approval to download each
    new one (LLVM 20.1.8, the Python embeddable package, CMake, Ninja, MinGit, the pinned Microsoft
    packages and the Build Tools bootstrapper) once on the development computer to pin its size and
