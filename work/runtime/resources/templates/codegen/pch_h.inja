@@ -266,18 +266,32 @@ extern PPCFuncMapping PPCFuncMappings[];
 // Setjmp/Longjmp
 //=============================================================================
 
-inline std::unordered_map<u32, jmp_buf>& get_jmp_buf_map() {
-  static thread_local std::unordered_map<u32, jmp_buf> map;
+// The Universal CRT's x64 setjmp stores xmm6-xmm15 with movdqa, so each buffer must be 16-byte
+// aligned. mingw-w64 puts that alignment on the SETJMP_FLOAT128 typedef rather than on the
+// struct, which clang drops inside std::pair: under llvm-mingw the map's buffers were only
+// 8-byte aligned (docs/analysis/mingw-toolchain.md).
+#if defined(__MINGW32__)
+struct alignas(16) PPCJmpBuf {
+  jmp_buf buf;
+};
+#define PPC_JMP_BUF(entry) ((entry).buf)
+#else
+using PPCJmpBuf = jmp_buf;
+#define PPC_JMP_BUF(entry) (entry)
+#endif
+
+inline std::unordered_map<u32, PPCJmpBuf>& get_jmp_buf_map() {
+  static thread_local std::unordered_map<u32, PPCJmpBuf> map;
   return map;
 }
 
-#define ppc_setjmp(guest_buf_addr) (setjmp(::get_jmp_buf_map()[(guest_buf_addr)]))
+#define ppc_setjmp(guest_buf_addr) (setjmp(PPC_JMP_BUF(::get_jmp_buf_map()[(guest_buf_addr)])))
 
 [[noreturn]] inline void ppc_longjmp(u32 guest_buf_addr, int val) {
   auto& map = get_jmp_buf_map();
   auto it = map.find(guest_buf_addr);
   if (it != map.end()) {
-    longjmp(it->second, val);
+    longjmp(PPC_JMP_BUF(it->second), val);
   }
   std::abort();
 }
