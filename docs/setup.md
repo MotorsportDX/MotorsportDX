@@ -270,7 +270,8 @@ comment, which `git archive` writes).
 
 Unpacking takes only regular files and links: every member passes `tarfile`'s data filter
 (nothing absolute, nothing outside the folder), and paths with `..` or `:` are refused. Nothing
-from an archive is run but the build itself.
+from an archive is run but the build itself. A submodule's folder from an archive has no `.git`
+file, so the runtime's `thirdparty/CMakeLists.txt` asks only that each one holds files.
 
 The unpacked 24 folders (12,750 files) gave the same hash as the development BuildRoot's Git
 checkout of the same commits under this rule on 31 October 2026. A pin that moves to another

@@ -493,7 +493,7 @@ Estimates in AI calendar time (1 person-week ≈ 3.5 h, range 2 to 7 h). B0 is t
 | --- | --- | --- | --- |
 | B0 | The owner's decisions of section 9; `main` pushed to GitHub; a first tag | owner | - |
 | B1. Pipeline for a builder (**done** on 31 October 2026, [results](#b1-results-31-october-2026)) | A `preflight` action with JSON output (CPU features, GPU, RAM, disk, path); `--progress` JSON lines per step; a `launcher-data` action that writes `launcher.json` without a build; a version stamp file in the snapshot, read by `source_state` when the source is not a Git checkout; running from a `git archive` snapshot without `Build.ps1`; the player build without the developer tests if the owner says so | 3.5 h | `test_pipeline.py` cases; `all` from a `git archive` snapshot into a new BuildRoot on the development computer (build only, no GPU run) |
-| B2. No Git | The SDK and its submodules as archives at their pinned commits with a hash over the unpacked files; FidelityFX only for a build with FSR; the SDL patch applied in Python; `doctor` without `git` | 3.5 h | the unpacked files' hash equals that of the development BuildRoot's `runtime-source\thirdparty`; `all` with Git off the `PATH` |
+| B2. No Git (**done** on 31 October 2026, [results](#b2-results-31-october-2026)) | The SDK and its submodules as archives at their pinned commits with a hash over the unpacked files; FidelityFX only for a build with FSR; the SDL patch applied in Python; `doctor` without `git` | 3.5 h | the unpacked files' hash equals that of the development BuildRoot's `runtime-source\thirdparty`; `all` with Git off the `PATH` |
 | B3. The portable tools | `toolchain.json` (asset, size, SHA-256, licence, unpack rule) for Python (embeddable), CMake, Ninja and LLVM, each downloaded once with the owner's approval to pin it; the unpackers; detection of installed tools; the resolve shaders through `D3DCompile` instead of `fxc.exe`; `doctor` without `link`, `fxc.exe` and `vswhere` | 5 h | the `D3DCompile` headers against the `fxc.exe` ones on the development computer; `all` with only the portable tools and Visual Studio's libraries |
 | B4. Microsoft's libraries | Route (b) after the licence reading: the manifest reader, the pinned package list (MSVC 14.44 x64, Windows SDK 10.0.26100), the licence page, the VSIX, MSI and CAB unpacking, `INCLUDE` and `LIB`, the app-local C++ runtime DLLs; route (a) as the fallback | 7 h | `all` in a Windows account or sandbox without Visual Studio, LLVM, Python or Git (Windows Sandbox on Windows 11 Pro is an optional feature the owner turns on, or a VM), then the instruction tests; a game run there is the main session's call under the GPU rules |
 | B5. Builder mode in the launcher | The Build page and wizard, consent, progress, plain errors, resume, logs, keep-awake; the launcher with a static C++ runtime; `--screenshot build` and `--state builder` for reviews | 7 h | the launcher tests; screenshots at scale 1 and 1.5 (WARP); a full build through the launcher into a new install root on the development computer |
@@ -548,6 +548,94 @@ Not verified in B1: the fetches over the network in a new BuildRoot (the code pa
 but for the order of the local copies); `preflight` on another computer, on Windows 10, or with the
 fallback of `IsProcessorFeaturePresent` (covered by tests with faked inputs only); a BuildRoot with
 spaces or non-ASCII characters; a game run of the snapshot's build (not part of B1).
+
+### B2 results (31 October 2026)
+
+What B2 added to `pipeline.py` is documented in [setup](../setup.md#fetching-without-git): `--fetch
+archive` (the default in a source snapshot) takes GitHub's archives of the pinned commits, kept in
+`BuildRoot\downloads`; the FidelityFX SDK is fetched only for a build with `-Fsr on`; the SDL patch
+is applied in Python; `doctor` asks for `git` only with `--fetch git`. The developer path (`--fetch
+git`, the default in a checkout) keeps the clones and `THIRDPARTY_MIRROR`: it is unchanged but for
+the SDL patch and FidelityFX's fetch, which follow the same rules on both paths. One change in the
+runtime fork: its `thirdparty/CMakeLists.txt` checked each submodule for a `.git` file; it now asks
+for any file in the folder, since an archive has no `.git`.
+
+- **The hash rule.** A SHA-256 over each file's path, a zero byte and the SHA-256 of its contents
+  with every CRLF read as LF, in path order; a submodule's `.git` file and the pipeline's `.fm4-*`
+  markers are left out. Reading CRLF as LF makes a Git for Windows checkout (CRLF) and the archive
+  (LF) compare; the files keep the archive's endings. Symbolic links (15 in libmspack, one in
+  o1heap) are written as files holding their target, as the development checkout has them
+  (`core.symlinks=false`).
+- **The downloads** (approved by the owner on 31 October 2026, made once, 21 seconds in all):
+
+  | Archive | Commit | Bytes | Files kept | SHA-256 of the archive (not pinned) |
+  | --- | --- | --- | --- | --- |
+  | rexglue/rexglue-sdk | `f5337cd` | 51,283,324 | 59 (the 11 vendored folders) | `58aa7ea03ea79db428ed7d52c96bdad0780d5680459948c0517c1de81570113c` |
+  | wmarti/FFmpeg | `0604b46` | 13,842,847 | 7,501 | `cb05b8b2a0ea051150bd70bc98091cd1e27f92f5000b48bbfe3828b0e89d4991` |
+  | libsdl-org/SDL | `8bf3b72` | 15,977,394 | 2,200 | `bb4f83f5d6041c3a22186cdac4e15ed71e4127a1a8532dbb382f4b730a334b61` |
+  | simd-everywhere/simde | `71fd833` | 7,481,259 | 1,332 | `72b2c14a487560b7eb203795f2c2fead5c7499662e639944cca2a9bb19f09029` |
+  | ocornut/imgui | `6d910d5` | 2,012,931 | 268 | `b715a3226320aaebaea79dc6af6405ae37cdcb479817fddaef12a17d8bd15a3a` |
+  | marzer/tomlplusplus | `3017243` | 1,295,179 | 212 | `291254ffe7f2433f90deef878d0d9335534a350a958ea23ecf511b7b2277bf7f` |
+  | Cyan4973/xxHash | `e626a72` | 1,147,772 | 87 | `34e71c085636fbc1726482996d92719d0a16e6a6097970ecf2990a27b3821162` |
+  | fmtlib/fmt | `407c905` | 711,737 | 128 | `2bc1fe4a5b6d5d6a614239b4ca1d520e66e152a02d3d262684d26dfd6ab3438a` |
+  | kyz/libmspack | `3059077` | 409,099 | 319 | `342427b589ec04ba50ac5662119400955cbb0d9c52259ad1c8188dae505ab0f2` |
+  | pavel-kirienko/o1heap | `388a73f` | 401,202 | 29 | `b9c6c40d1eda938028c8a9e3d1de3a4e0762bd6253bcaef37169e8962e8a5ec9` |
+  | CLIUtils/CLI11 | `bfffd37` | 392,159 | 296 | `03c9b7921b8f99ca39ae660b03ebf9bd5a3f4280201f7d04bc5639b1e0496401` |
+  | pantor/inja | `7d1b460` | 387,554 | 102 | `e86aee0376a9ae726bff9d9309e1319bc6e9ddce3d3204df21953aa6f0d96899` |
+  | gabime/spdlog | `79524dd` | 281,845 | 177 | `c6dee844e35a54cc80e3ab76aae2310763e0b49c7397549dfa4d4657d9737138` |
+  | nemtrif/utfcpp | `63d64de` | 35,376 | 29 | `f11186e50579ba4404ad531be74f30b31fa8986abe54f4742cfef52009a4f614` |
+  | nemequ/munit (SIMDe's `test/munit`) | `da8f734` | 27,727 | 11 | `835a9ee03e3b9560af5a2e4465394e00337398f5baba9d686083b8e1d93f0c30` |
+  | 15 archives | | 95,687,405 | 12,750 | |
+
+  Each archive named its commit in its pax comment. The archives' own SHA-256 are recorded here
+  only, to tell later whether GitHub's bytes changed; the pins are the hashes of the unpacked files.
+- **Against the development BuildRoot.** The 24 folders unpacked from the archives (12,750 files)
+  give the same hash as `I:\FM4-build-usa\runtime-upstream\thirdparty`, the Git checkout of the same
+  commits, folder by folder and in all. After the SDL patch, 23 folders equal those of its
+  `runtime-source\thirdparty`; in SDL the three patched files differ only in line endings: the
+  development copy has CR CR LF on every line, the Python patch LF. The old `git apply` in a
+  scratch copy wrote CRLF there under `core.autocrlf=true`, and the copy back turned each LF into
+  CRLF once more; `I:\FM4-build-b1` has the same. The compiler read those lines as blank lines in
+  between, harmless in these files (no line continuations). The Python patch reversed gives the
+  pinned SDL tree again, and applied to the CRLF checkout it keeps CRLF.
+- **FidelityFX** was not downloaded (not approved). A `git archive` of `FFX_REV` made from the
+  bundle `D:\FM4-archive\third-party\fidelityfx-sdk-v1.1.4.bundle` (14,672,438 bytes, `FFX_PATHS`
+  only, LF endings as GitHub's server writes them) unpacked to 493 files with the hash of the
+  development BuildRoot's sparse checkout; that hash is `FFX_TREE`. The size of GitHub's full
+  archive of the SDK is not known.
+- **A snapshot build without Git.** `snapshot` of `7dfb1bf` (1,257 files and the stamp, 5.7 s) into
+  `I:\FM4-src-b2`; then `pipeline.py all --tests player --jobs 8` with Python directly into the new
+  BuildRoot `I:\FM4-build-b2` (the archives already in its `downloads`), USA Disc 1 and Disc 2, with
+  the two folders that hold `git.exe` removed from `PATH` (no `git` left), the GameInput and DXC
+  files of the development BuildRoot as local copies, and no `THIRDPARTY_MIRROR` or `FFX_MIRROR`.
+  `doctor` passed with `Fetch: archive`. A first run stopped at the runtime's configure on the
+  `.git` check above; it was moved to `D:\FM4-archive\FM4-build-b2-attempt1` and run again after
+  the fix. Times from the progress lines:
+
+  | Stage | Time | Largest steps |
+  | --- | --- | --- |
+  | `setup` | 211.9 s | unpacking and checking the 15 archives 56.2 s, the runtime's configure 55.1 s and build 59.9 s; the SDL patch's check and patch under 0.1 s each |
+  | `generate` | 38.8 s | `codegen` 26.9 s |
+  | `build` with `--tests player` | 192.6 s | the game 142.7 s; the wheel host test 8.5 s; the launcher 6.1 s |
+  | `all` | 443.6 s | |
+
+  The instruction, CPU and launcher tests passed; `build-result.json` names `7dfb1bf`, `dirty`
+  false, `tests: player`. The BuildRoot held 1,719,425,921 bytes afterwards (1.72 GB, the 95.7 MB
+  of archives included, no `runtime-upstream`).
+- **FSR without Git.** In the same BuildRoot, `build --fsr on --tests player` with `FFX_MIRROR`
+  naming the local archive: 66.5 s (copying and unpacking the archive 2.6 s, the runtime with the
+  FSR 3 upscaler and its DX12 backend 20.4 s, 115 steps, the game 10.5 s); the runtime's cache has
+  `REX_FSR=ON` with the unpacked SDK. The BuildRoot then held 1.80 GB.
+- **Tests.** `test_pipeline.py`: 43 pass (7 new: the hash rule, the unpacker's selection and
+  refusals, the archive fetch with its pins and `.rejected`, the pins' consistency, the patch
+  applier exact, refusing and with CRLF, `apply_patch` writing nothing on a failure, the fetch mode
+  and `doctor` without Git).
+
+Not verified in B2: the FidelityFX archive from GitHub (its bytes, size and whether its files give
+`FFX_TREE`; the pin comes from a local `git archive`); a download that fails or is cut off midway (the
+code renames only a finished download into place); a second computer; a game run of the build. The
+runtime's version falls back to `0.10.0.0-dev.unknown` in a snapshot (a CMake warning: its version
+comes from `git describe`), as in B1; the stamp could give it, before B6.
 
 ## 8. Risks
 
