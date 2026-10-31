@@ -63,8 +63,11 @@ if(REXGLUE_BUILD_TESTS)
     list(APPEND REQUIRED_SUBMODULES catch2)
 endif()
 
+# A submodule's folder holds a .git file in a Git checkout; from an archive of its commit
+# (pipeline.py --fetch archive) it has the files only, so any file counts.
 foreach(submodule ${REQUIRED_SUBMODULES})
-    if(NOT EXISTS "${CMAKE_CURRENT_SOURCE_DIR}/${submodule}/.git")
+    file(GLOB submodule_files "${CMAKE_CURRENT_SOURCE_DIR}/${submodule}/*")
+    if(NOT submodule_files)
         message(FATAL_ERROR
             "Git submodule '${submodule}' is not initialized.\n"
             "Please run: git submodule update --init --recursive\n"
