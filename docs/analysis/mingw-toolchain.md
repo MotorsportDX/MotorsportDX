@@ -649,19 +649,23 @@ The main session compared the frozen frames at 1:1: the rendering is the same, a
 state differs (the needles, the cars' places, the place on the track). Each build repeats itself,
 and `FM4_FIXED_FRAME_TIME=1` does not remove the difference. Players must not get another
 simulation, so this blocks the switch until it is explained. Two searches on
-31 October 2026, about 3 h in all, ruled out the following and did not find the cause.
+31 October 2026, about 3 h in all, ruled out the following and did not find the cause. A third
+search the same day (about 2.5 h, "The rewind's keyframes" below) found that both rewinds go back
+to the same moment, so the race itself differs by then.
 
 **Where the difference shows.**
 
-- The race is the same until the rewind:
+- The start looks the same:
   - the same grid (5th of 12, the same cars) at 00:01.5;
   - the same Y presses: 110 guest polls with Y and 94 converted, from the same packet numbers
     on, in all four runs;
   - the rewind shows 12.03 s after the race scenario in both builds.
 - Both rewinds reach their oldest frame: REWIND FURTHER is greyed at 1:1 in both frozen frames.
-- The MSVC build's oldest frame lies about 6 to 10 s into the race, as an older MSVC run on the
-  development BuildRoot shows too (`l1c-ab32-60-freeze`). The mingw build's lies at the start line,
-  about 1 s in. **The mingw build's rewind keeps a longer history.**
+- The MSVC build's frozen frame shows the car past the grandstand, as an older MSVC run on the
+  development BuildRoot does too (`l1c-ab32-60-freeze`); the mingw build's shows it at the start
+  line. The second search read this as a longer rewind history under mingw. The third search
+  showed that this reading is wrong: both rewinds stop on the keyframe taken 10.0 s after the race
+  start, and the mingw build's car has come less far by then.
 
 **Ruled out.**
 
@@ -700,25 +704,93 @@ The time base and the session's rewind are the same in both builds. The differen
 picture that the rewind shows: the replay's oldest kept frame, which is the title's own data.
 Parity on the probe runs: draws +8.9 %, FAIL, as before.
 
+#### The rewind's keyframes (a third search)
+
+The rewind does not play the replay back to a buffer's oldest frame. It restores one of up to
+eight saved race states ("mulligan keyframes"), and the frozen frame is the picture of the one it
+stops on. Read from the generated code and confirmed by a probe:
+
+- **The keyframe list** is one object, its pointer at `0x82DDB144` (built by `sub_8247D178`,
+  reset by `sub_824749A0`): the time of the next keyframe at +4, eight entries of 12 bytes from +8
+  (session time, the player car's lap progress, a memory stream with the state), the count at
+  +104 and the index shown at +112.
+- **Taking a keyframe** (`sub_82489818`): skipped while any car is in a state that blocks it
+  (`sub_8247D218`). Otherwise the entries shift by one, the new one gets the session time and the
+  lap progress (the double at +72 of the car's object at +11664), the state is written to its
+  stream, and the next keyframe is due 4 s later. Keyframes whose lap number (the progress rounded
+  down) lies more than one lap below the newest one's are dropped.
+- **The settings** (registered by `sub_823EBB40` under `Replay`, defaults set by `sub_823E8870`):
+  `TimeAfterRaceStartForFirstKeyframe` 10.0 s, `TimeBetweenMulliganKeyframes` 4.0 s,
+  `TimeDiffToIgnoreTheFirstKeyframe` 1.5 s, `ReplayRecordKeyframeFrequency` 20.0. This is why the
+  rewind takes Y only after about 10 s of race.
+- **The rewind**: Y first takes a keyframe of the present moment. The rewind then starts on
+  index 1, or on index 2 when the newest two keyframes lie less than 1.5 s apart (`sub_82479090`),
+  and seeks to it (`sub_82479228`). REWIND FURTHER stays available while the index + 1 is below
+  the count (`sub_8253EF48`).
+- **The replay files** are not part of it. The replay recorder writes its packets through a block
+  cache (`sub_829775A0`; 11 blocks of 8,192 bytes for `replay_stream`, 5 of 4,096 for
+  `main_side_stream`) into files on `cache:\`, which the runtime maps to
+  `<BuildRoot>\cache\fm4-game-cache`
+  ([fm4-content-installer.cpp](../../work/fm4-rex/src/fm4-content-installer.cpp)).
+
+**The probe** (not committed): hooks of `sub_82479090`, `sub_82479228` and `sub_8247D218`, and a
+log of the keyframe object whenever it changed, behind `FM4_REPLAY_PROBE`. One `freeze` run per
+build under one perf hold, with the switches of the time probe above: `rp1-m` (MSVC,
+`I:\FM4-build-msvcchek3`) and `rp1-g` (mingw, `I:\FM4-build-mingw2`), both on `c4a0a4a` with the
+probe.
+
+| | MSVC | llvm-mingw |
+| --- | --- | --- |
+| Race start (the first keyframe set due 10 s later) | session 45.545549, update 3,582 | session 46.446450, update 3,583 |
+| First keyframe | 55.555560, update 4,182; lap progress 0.019167 | 56.456461, update 4,183; lap progress 0.017279 |
+| Y: keyframe of the moment | 56.556561, update 4,244; 0.023336 | 57.457462, update 4,245; 0.020034 |
+| The rewind | count 2, first index 1, seek 0 to 1: the first keyframe | the same |
+| Blocked keyframes | none | none |
+
+Both rewinds therefore stop on the same moment, 10.01 s after the race start; the 60 updates of
+session time that the time probe saw it rewind are the step back from the Y keyframe to it. At
+that moment the player's car (driven by the AI) has covered 9.9 % less of the lap in the mingw
+build. **The difference is the race itself, not the rewind or the replay.**
+
+**The replay files agree.** The two `replay_stream` files of these runs:
+
+- have about the same size, 40,041 bytes (MSVC) and 39,867 (mingw), and the same number of
+  packets for the first car (58). The working hypothesis of this search (frames of another size
+  under MSVC, so that fewer fit) does not hold, and the rewind does not read these files.
+- hold the same initial state of the first car (its first packet differs in no byte), but its
+  next packet already differs in position bytes, and the difference grows from there. The replay
+  records from 60 updates after the race scenario, so the cars move differently from the
+  countdown on, as the dumps of [frozen-frames.md](../e2e/frozen-frames.md) found between two
+  MSVC runs; between the builds the difference shows in the first recorded packet.
+- list the 12 cars with another permutation of the byte above each car's replay id (the cars'
+  attach records near offset 0x150: 0, 10, 11, 4, ... under MSVC and 0, 2, 3, 8, ... under
+  mingw). Its meaning is not read. The MSVC permutation is the same in `I:\FM4-build-msvcbase1`
+  and `I:\FM4-build-msvcchek3`, and an older run on `I:\FM4-build-pass` has a third one, so it
+  depends on more than the toolchain. It is a candidate for a difference that exists before the
+  race starts.
+
 **Not checked, in the order the next search would take them.**
 
-1. The title's replay recorder: where it keeps its frames, and their count and bytes per frame at
-   the freeze in both builds. The MSVC build keeps fewer seconds than the mingw build. A buffer
-   of the same size that fills faster under MSVC would point to recorded data that differs
-   between the builds: for example bytes the host writes into guest memory without
-   initializing them, which a compressor would size differently.
-2. A value that the host hands to the guest and that depends on the C++ library: iteration order
+1. Where the cars' motion first differs between the builds: the dumps of the 12 cars'
+   `CCarDynamics` per session update from the placing on (as in
+   [frozen-frames.md](../e2e/frozen-frames.md)), in one run per build, and the first word and
+   update that differ. Whether the 77 words that looked "not written yet" there differ between the
+   builds too.
+2. The meaning of the cars' permutation in the replay's attach records (a pool slot, or the order
+   in which the cars were created), and whether the cars' update order follows it.
+3. A value that the host hands to the guest and that depends on the C++ library: iteration order
    of `std::unordered_map` or `std::unordered_set`, or equal elements after `std::sort` (libc++
-   and MSVC's STL order them differently, each the same in every run). Examples: enumerations
-   of files, content, handles or objects that the kernel or XAM functions return.
+   and MSVC's STL order them differently, each the same in every run). A look through the
+   runtime found no such iteration that reaches the guest in the kernel, XAM's content listing
+   (`ListFiles` keeps `FindFirstFileW`'s order) or the file system; the look is not exhaustive.
 
 ### 10.9 Not verified, and the next step
 
 Not verified:
 
-- **The frozen frame at the same moment** (10.7, 10.8): the parity gate fails on draws because the
-  mingw build's rewind keeps a longer history and freezes another moment of the same race; the
-  cause is not found.
+- **The frozen frame at the same moment** (10.7, 10.8): the parity gate fails on draws. Both
+  rewinds stop on the keyframe 10 s after the race start, but the race differs by then: the cars
+  move differently from the first recorded replay packet on. The cause is not found.
 - **Longer play**: one smoke and one parity gate, and three single career runs. Not exercised:
   the auto-import pseudo relocations beyond these runs, a longjmp of the title's error path,
   the vectored handlers under faults other than the runtime's own, audio and input beyond the
