@@ -362,9 +362,10 @@ names what mingw-w64 lacks (`gameinput.h`), pins llvm-mingw 20250709 (LLVM 20.1.
 
 **Route (c) prototyped (31 October 2026):** with that one download the whole player build passes
 with llvm-mingw, its tests included, the generated code is the MSVC build's byte for byte, and a
-D3D12 probe on WARP returns the same structs; 15 small shims, no rewrite, and about 9 to 17 h left,
+D3D12 probe on WARP returns the same structs; 16 small shims, no rewrite, and about 9 to 17 h left,
 most of it proof ([mingw-toolchain.md, section 10](mingw-toolchain.md#10-prototype-results-31-october-2026)).
-A game run is not part of it.
+On the GPU the smoke A/B passes after the setjmp fix of section 10.7; the frozen-frame parity still
+fails on draws, because the mingw build freezes another moment of the same race.
 
 ### 4.8 FXC, replaced by D3DCompile
 

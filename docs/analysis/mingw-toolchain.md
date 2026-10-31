@@ -20,11 +20,15 @@ passes: the runtime, `rexglue.exe`, the game and its two modules, the launcher, 
 tests (295,650 checks, the same output as the MSVC build), the ten CPU tests and the launcher tests
 (558 plans). `rexglue.exe` built with mingw generates the same code byte for byte. A D3D12 probe on
 WARP gets the same struct returns as an MSVC-library build of it; without mingw-w64's aggregate
-return switch it crashes. The port needed 15 small shims, 13 of them guarded for mingw, and no
+return switch it crashes. The port needed 16 small shims, 14 of them guarded for mingw, and no
 rewrite (section 10.2); the build with Microsoft's libraries keeps every instruction (section 10.6).
-Not verified: a game run, performance, setjmp and longjmp at run time, SDL's GameInput driver (left
-out under mingw). **Recommendation:** a smoke run of the mingw build on the native path next, then the
-steps of section 5 (section 10.7).
+On the GPU (section 10.7), the first mingw runs crashed at every race load: the Universal CRT's
+setjmp needs a 16-byte aligned buffer, and mingw-w64's `jmp_buf` loses that alignment inside a
+`std::pair`. A guarded wrapper fixed it, and the smoke A/B then passed with both builds at about the
+same fps. The frozen-frame parity gate still fails on draws, because the mingw build freezes
+another moment of the same race (cause not found). Not verified: performance, SDL's GameInput
+driver (left out under mingw). **Recommendation:** find why the frozen moment differs, then the steps of section 5 (section
+10.8).
 
 ## 1. MSVC-specific code
 
@@ -75,7 +79,7 @@ mingw-w64 itself (section 10.2).
 | `WINDOWS_EXPORT_ALL_SYMBOLS` | 1 | [system/CMakeLists.txt:61](../../work/runtime/src/system/CMakeLists.txt) (`rexruntime.dll`, 10,647 exports today) | **small shim**: CMake implements it only for MSVC-style linkers; mingw needs `-Wl,--export-all-symbols`, and lld's option leaves out every name that begins with `__imp_`, which all 2,866 guest import thunks have: they get a `dllexport` declaration under mingw in [hook.h](../../work/runtime/include/rex/hook.h) (prototype, section 10.2). Data imports go through mingw's auto-import with run-time pseudo relocations |
 | DXC's API header | 1 header | the vendored `thirdparty/dxc/include/dxcapi.h` (DXC commit `6b6f402`, NCSA) declares its interfaces with `__declspec(uuid)` | **small shim**: the vendored header compiles, but mingw-w64's `__uuidof` does not read `__declspec(uuid)`; the runtime declares the GUIDs of the nine DXC and DXBC interfaces it asks for with `__CRT_UUID_DECL` under mingw (prototype, section 10.2), and keeps the vendored header, since `DxbcConverter.h` is not in mingw-w64's |
 | **D3D12 methods that return a struct** | **59 calls**: `GetCPUDescriptorHandleForHeapStart` 17, `GetGPUDescriptorHandleForHeapStart` 8, `GetDesc` 29, `GetDesc1` 3, `GetResourceAllocationInfo` 2 | the D3D12 back end, for example [command_processor.cpp:2183](../../work/runtime/src/graphics/d3d12/command_processor.cpp) | **real work, to verify**: Microsoft's x64 ABI returns a struct from a member function through a hidden pointer; the GNU C++ ABI on mingw does not, the classic mingw D3D12 crash ([GCC bug 64384](https://gcc.gnu.org/pipermail/gcc-bugs/2020-June/705246.html)). mingw-w64's `d3d12.h` carries both forms behind `WIDL_EXPLICIT_AGGREGATE_RETURNS` (16 places), and its `_mingw_mac.h` defines that macro for every GCC and clang C++ build (this note said none did; the prototype found it). The WARP probe of section 10.4 shows the calls return the MSVC build's values with it and crash without it; the runtime's CMake sets it explicitly as well. `dxgi1_6.h` and `d3d11.h` have no such method in use (DXGI's `GetDesc` returns an `HRESULT`) |
-| setjmp and longjmp in the generated code | 2 generated files of FM4 (`fm4_bounds.toml` sets `setjmp_address` and `longjmp_address`: "Native setjmp/longjmp must unwind the host stack") | the template [pch_h.inja:269](../../work/runtime/resources/templates/codegen/pch_h.inja) | **compiles as-is; behaviour to verify**: with the Universal CRT on x64, mingw-w64's `setjmp` passes the frame address to `_setjmp`, so `longjmp` unwinds through the frames as under MSVC; the title's error path that uses it is not exercised by a short run |
+| setjmp and longjmp in the generated code | 2 generated files of FM4 (`fm4_bounds.toml` sets `setjmp_address` and `longjmp_address`: "Native setjmp/longjmp must unwind the host stack") | the template [pch_h.inja:269](../../work/runtime/resources/templates/codegen/pch_h.inja) | **compiles as-is; crashed at run time**: the Universal CRT's setjmp stores `xmm6` to `xmm15` with `movdqa`, and mingw-w64's `jmp_buf` loses its 16-byte alignment inside the template's `std::pair`, so every race load crashed; a guarded `alignas(16)` wrapper in [rex/ppc.h](../../work/runtime/include/rex/ppc.h) fixes it (section 10.7). `longjmp` through the frames passed a small test; the title's error path that uses it is not exercised by a short run |
 
 **Count by class:** about 530 lines compile as-is (49 intrinsics, 5 `__declspec`, 6 `__stdcall`,
 14 pragmas, 33 CRT calls, 35 Win32 exception and fiber calls, 312 WRL and `IID_PPV_ARGS` lines,
@@ -281,7 +285,7 @@ under the GPU rules), then the steps of section 5. The prototype's result goes i
 | Risk | Effect | Mitigation |
 | --- | --- | --- |
 | The COM struct-return ABI | wrong descriptor handles or descriptions: corruption or a device removal, only at run time | `WIDL_EXPLICIT_AGGREGATE_RETURNS`, the WARP probe (8.4), and the full gate |
-| setjmp and longjmp across the generated frames | a title error path that misbehaves only under mingw | the same CRT `longjmp` with the frame address; a targeted test of the two generated users |
+| setjmp and longjmp across the generated frames | the buffers' alignment crashed every race load (fixed, section 10.7); a title error path that misbehaves only under mingw | the aligned wrapper; a targeted test of the two generated users |
 | SEH, VEH and C++ exceptions together | the write watch, the null-access capture and the MMIO handlers run in VEH, before any frame handler, so the C++ exception model should not matter; not shown | the e2e runs with the diagnostics on |
 | Exports and auto-import of `rexruntime.dll` | link failures, or pseudo relocations in a module of 69 MB | `--export-all-symbols` and the `__imp_` exports of `hook.h` link (section 10.2); the pseudo relocations at run time are not shown |
 | Silent differences in libm or `memcpy` | small numeric or performance changes | the instruction tests; the perf A/B; the gate's captures |
@@ -293,9 +297,9 @@ under the GPU rules), then the steps of section 5. The prototype's result goes i
 **Recommendation, after the prototype: route (c).** The route removes every Microsoft licence from
 the player's build (the libraries, the Windows SDK and the VC++ redistributable), downloads 171 MB
 instead of 940 MB for the compiler plus Microsoft's packages, and needs no administrator rights. The
-prototype passed every kill criterion (section 10); the risks it could not reach are run-time ones
-(a game run, setjmp and longjmp, auto-import, performance), and the next step is the smoke run that
-reaches them (section 10.7). The route costs about 9 to 17 h more (section 7); route (a),
+prototype passed every kill criterion (section 10). The game runs on the GPU after one more shim
+(section 10.7). The open run-time question is the frozen-frame parity, and the next step is its
+cause (section 10.8). The route costs about 9 to 17 h more (section 7); route (a),
 Microsoft's installer, stays the fallback with its open licence question for players.
 
 ## 10. Prototype results (31 October 2026)
@@ -360,7 +364,8 @@ runtime's usual `-Wunused` warnings.
 ### 10.2 The shims
 
 All in [work/runtime](../../work/runtime), [work/fm4-rex](../../work/fm4-rex) and
-[work/fm4-launcher](../../work/fm4-launcher), commit `5c4b25f`. Fifteen in all: thirteen under
+[work/fm4-launcher](../../work/fm4-launcher), commits `5c4b25f` and, for the setjmp buffers, `f1292ab`
+(section 10.7). Sixteen in all: fourteen under
 CMake's `MINGW`, `__MINGW32__` or `_LIBCPP_VERSION`, and two spellings that need no guard.
 
 | Shim | Where | Guard |
@@ -374,6 +379,7 @@ CMake's `MINGW`, `__MINGW32__` or `_LIBCPP_VERSION`, and two spellings that need
 | `clock_time_conversion` and `clock_cast`: the existing Apple fallback, now for any libc++ | [chrono.h](../../work/runtime/include/rex/chrono/chrono.h) | `__APPLE__` or `_LIBCPP_VERSION` |
 | `IDXGraphicsAnalysis` declared as the Windows SDK declares it | [d3d12_api.h](../../work/runtime/include/rex/ui/d3d12/d3d12_api.h) | `__MINGW32__` |
 | `__CRT_UUID_DECL` for `IDxcBlob`, `IDxcBlobUtf8`, `IDxcIncludeHandler`, `IDxcCompiler`, `IDxcCompiler3`, `IDxcUtils`, `IDxcResult`, `IDxcVersionInfo2`, `IDxbcConverter`, with the GUIDs of the vendored headers | [d3d12_api.h](../../work/runtime/include/rex/ui/d3d12/d3d12_api.h) | `__MINGW32__` |
+| The generated code's setjmp buffers: `rex::ppc::JmpBuf`, an `alignas(16)` wrapper, through `REX_PPC_JMP_BUF_TYPE` and `REX_PPC_JMP_BUF` in the two templates (section 10.7) | [rex/ppc.h](../../work/runtime/include/rex/ppc.h), [pch_h.inja](../../work/runtime/resources/templates/codegen/pch_h.inja) | `__MINGW32__` |
 | No `__try` around the debugger's thread-name exception | [threading_win.cpp](../../work/runtime/src/core/threading_win.cpp) | `__MINGW32__` |
 | `-Wl,-Map=` instead of `/MAP:`, and `-municode` for `fm4_rex.exe` | [fm4-rex/CMakeLists.txt](../../work/fm4-rex/CMakeLists.txt) | `MINGW` |
 | The launcher: `_WIN32_WINNT` 0x0A00, `-municode`, `-static` (libc++ linked into the shipped program) | [fm4-launcher/CMakeLists.txt](../../work/fm4-launcher/CMakeLists.txt) | `MINGW` |
@@ -514,19 +520,139 @@ The two builds, section by section:
 
 No instruction of the MSVC build changed.
 
-### 10.7 Not verified, and the next step
+### 10.7 The game runs and the setjmp crash
+
+The main session asked for a smoke A/B on the GPU after section 10.6. Both runs used the native
+path (`--native`), the launcher's default look, `FM4_FIXED_SEED=1`, and `matrix.py`'s `smoke` tier,
+then its `parity` tier. They ran under one perf hold of the queue. Both BuildRoots got a copy of
+`I:\FM4-build-usa`'s played profile (`B13EBABEBABEBABE`, `achievements`), and `e2e.py` imported
+Disc 2 into each before its first launch; the mingw build's import mode worked. The game's `PATH`
+held only `C:\Windows\System32`, `C:\Windows` and Windows PowerShell's folder, no toolchain
+folder. The mingw game therefore loaded the `libc++.dll` and `libunwind.dll` staged beside it.
+
+**The first A/B.** The MSVC build of `cc4e7f9` (`I:\FM4-build-msvcbase1`) passed every cell. The
+mingw build of `5c4b25f` (`I:\FM4-build-mingw2`) booted and rendered:
+
+- the splash videos, the title screen and the main menu;
+- the Free Play and Career menus;
+- the career car screen.
+
+It then crashed with exit code 0xC0000005 every time a race loaded:
+
+- after `17_DYNAMIC_LOADING_FREEPLAY` in `photo` and both `freeze` runs;
+- after `push 8-Car_PreRace` in `career`.
+
+Nothing else showed the crash: no error key that the MSVC run lacks, no device removal, no event
+in Windows' Application log, and no dump (the title's crash dump is only for guest null
+accesses).
+
+**The stack.** The unpacked llvm-mingw has `lldb.exe`, but the runtime takes access violations
+on purpose (the MMIO and write-watch handlers), so a debugger would stop at each. Instead,
+[fm4-crash-diagnostics.cpp](../../work/fm4-rex/src/fm4-crash-diagnostics.cpp) got an
+unhandled-exception filter, under `__MINGW32__` and only in harness runs (`FM4_CAPTURE_DIR`). It
+writes the exception, the registers, and the stack unwound from the exception's context with
+`RtlVirtualUnwind`, as module+offset, to `<capture>\unhandled-crash.txt`.
+`llvm-symbolizer` reads the mingw binaries' DWARF line tables. The crash (run `mgdiag1`):
+
+| Frame | Where |
+| --- | --- |
+| #00 | `ucrtbase.dll+0xed52b`: `__intrinsic_setjmpex+0x3b`, `movdqa %xmm6, 0x60(%rcx)`, with `rcx` = `0x1cfefbe0c28` (8 bytes past a 16-byte boundary) |
+| #01 | `fm4_rex.exe`: `ppc_setjmp` in `sub_826FEEC8` ([generated](../../work/runtime/resources/templates/codegen/pch_h.inja) `fm4_rex_recomp.113.cpp`) |
+| #02 to #10 | eight more generated functions (`sub_82701A90`, `sub_826FB6E0`, ... `sub_8275F320`) |
+| #11 to #13 | `rex::system::XThread::Execute`, its `std::function`, `rex::thread::ThreadStartRoutine` |
+
+**The cause** (the setjmp row of section 1.1; that row said "compiles as-is; behaviour to verify"):
+
+- The generated code keeps one `jmp_buf` per guest buffer in a
+  `std::unordered_map<u32, jmp_buf>`.
+- The Universal CRT's x64 setjmp stores `xmm6` to `xmm15` with `movdqa`, which needs a 16-byte
+  aligned buffer.
+- Microsoft's `setjmp.h` puts the 16-byte alignment on the `_SETJMP_FLOAT128` struct.
+  mingw-w64's puts it on the `SETJMP_FLOAT128` typedef (`typedef _CRT_ALIGN(16) struct ...`).
+- clang then reports `alignof(jmp_buf)` = 16 but `alignof(std::pair<const uint32_t, jmp_buf>)` = 8,
+  so the map's buffers sat 8 bytes off a 16-byte boundary (measured in a small mingw program).
+
+Nothing of the ABI cases listed in the brief (a COM struct return, auto-import, SEH) was involved.
+
+**The fix**, `d13cea5` and then `f1292ab`:
+
+- Under `__MINGW32__`, [rex/ppc.h](../../work/runtime/include/rex/ppc.h) defines an `alignas(16)`
+  wrapper, `rex::ppc::JmpBuf`, at its end.
+- The two templates ([pch_h.inja](../../work/runtime/resources/templates/codegen/pch_h.inja) and
+  the test template) use it through `REX_PPC_JMP_BUF_TYPE` and `REX_PPC_JMP_BUF`. Outside
+  llvm-mingw these expand to `jmp_buf` and the buffer itself.
+- `d13cea5` first put the wrapper into the template itself. That added 14 lines, and the generated
+  code stores `__LINE__` values of the precompiled header as immediates (0x149 became 0x157), so
+  the MSVC build's modules changed although their code did not. `f1292ab` keeps the template's
+  line count.
+- A small mingw program with the wrapper: all 64 buffers 16-byte aligned, and 1,000 setjmp and
+  longjmp pairs across 21 frames returned correctly.
+
+**The second A/B** (`mgabms2` and `mgabmp2` against `mgabgs2` and `mgabgp2`, on `d13cea5`; the same
+cells):
+
+| Cell | MSVC (`cc4e7f9`) | llvm-mingw |
+| --- | --- | --- |
+| `photo` | pass: race 237.11 fps, p99 4.84 ms; photo mode 29.95 fps | pass: race 233.88 fps, p99 5.18 ms; photo mode 29.98 fps |
+| `career` | pass: race 234.21 fps, p99 5.35 ms; replay 118.46 fps | pass: race 236.29 fps, p99 5.09 ms; replay 117.65 fps |
+| `photo_view` | pass, 56.98 fps | pass, 57.02 fps |
+| `freeze` (2 runs, 2x) | pass, 59.95 fps | pass, 60.0 fps |
+
+One run each, so the fps is not a performance verdict. One `career` run of the final build
+`f1292ab` passed too: race 237.02 fps, p99 4.94 ms.
+
+**Parity of the frozen frame: FAIL on draws.**
+
+- `parity.py` against the MSVC cell:
+  - draws per frame: 2,266 and 2,263 against 2,053 and 2,055 (+10 %; the limit is 3 %);
+  - predicated runs: +19 %;
+  - image: 41.6 % and 42.3 % of the pixels differ by more than 4 (the limit is 60 %).
+- The two MSVC gates against each other passed: draws within 0.7 %, image 35.6 %.
+- A third pair with `FM4_FIXED_FRAME_TIME=1` (`mgfzm`, `mgfzg`, one run each) gave the same picture:
+  draws +11 %, image 43.0 %.
+- At 1:1 the frozen frames show the same race at another moment, and both are complete renders.
+  Race frames from the same second (the HUD at 00:01.5 and 00:01.8) show the same place (5/12),
+  the same cars and the same grid. The MSVC frame shows the car past the grandstand with one car
+  ahead. The mingw frame shows it at the start line with three cars ahead in view, which accounts
+  for the extra draws.
+- [frozen-frames.md](../e2e/frozen-frames.md) records that the moment is not pinned, since the
+  race advances by wall time. Here the mingw build lands on another moment in all three runs, while
+  the MSVC runs land on one moment. Why the mingw build's rewind reaches another moment is not
+  found.
+
+Files:
+
+- **The 2x captures** of the second A/B:
+  - `I:\FM4-build-msvcbase1\e2e\mgabmp2-60-freeze\run1\capture` and `run2`;
+  - `I:\FM4-build-mingw2\e2e\mgabgp2-60-freeze\run1\capture` and `run2`;
+  - the frozen frames compared are the last of the phase (`frame-087.ppm` and `frame-088.ppm` in
+    run 1).
+- **Race captures at 1x**: the `photo` and `career` cells, `mgabms2-240-*` and `mgabgs2-240-*`.
+- **The parity reports and crops**: `I:\FM4-build-mingw2\e2e\mgabgp2-parity` and `mgfzg-parity`.
+
+**The MSVC path after the fix.**
+
+- A `snapshot` of `f1292ab` in `I:\FM4-src-mingwchek3` was built into `I:\FM4-build-msvcchek3`
+  as in section 10.6 (445 s, the instruction and launcher tests passed).
+- Against the `cc4e7f9` build of section 10.6:
+  - `.text` is equal in `fm4_rex.exe`, both modules, `rexgpu-xenos.dll`, `MotorsportDX.exe` and
+    `fm4_instruction_tests.exe`;
+  - `rexruntime.dll`'s `.text` differs only in 176 RIP-relative displacements to moved strings
+    (and three decodes that start inside an instruction).
+- The crash reporter changes nothing in the MSVC build: it is under `__MINGW32__`, and
+  `fm4_rex.exe`'s `.text` is equal.
+
+### 10.8 Not verified, and the next step
 
 Not verified:
 
-- **A game run** (no GPU run in the prototype). Not exercised: D3D12 on a hardware adapter, the
-  runtime's own 59 struct-returning calls, audio, input, the GPU plugin loaded by name, and the
-  staged `libc++.dll` without llvm-mingw's `bin` on `PATH`. The tests ran with that folder on
-  `PATH`, and `tests-build` has no copy of the two DLLs.
-- **Auto-import at run time**: no test links `rexruntime.dll`, so its pseudo relocations ran
-  nowhere.
-- setjmp and longjmp through the generated frames; the vectored exception handlers, the write watch
-  and the crash dumps; C++ exceptions across the modules.
-- Performance (section 5's A/B).
+- **The frozen frame at the same moment** (10.7): the parity gate fails on draws because the mingw
+  build's rewind freezes another moment of the same race; the cause is not found.
+- **Longer play**: one smoke and one parity gate, and three single career runs. Not exercised:
+  the auto-import pseudo relocations beyond these runs, a longjmp of the title's error path,
+  the vectored handlers under faults other than the runtime's own, audio and input beyond the
+  scenarios.
+- Performance (section 5's A/B): one run per cell only.
 - SDL's GameInput driver (left out).
 - lld's map format for `thread_profile.py` and `soak_report.py`; PDBs; the profiling, flavor, PGO
   and FSR builds.
@@ -535,7 +661,7 @@ Not verified:
   were unset), Windows 10.
 - llvm-mingw's `clang` targeting `x86_64-pc-windows-msvc`, beyond emitting IR.
 
-**Next step, the main session's call under the GPU rules:** a smoke run of the mingw build on the
-native path against the previous main's MSVC build, with a native capture at 1:1 beside the
-reference. If it passes, the steps of section 5 follow: the pipeline's own switch to llvm-mingw
+**Next step, the main session's call:** the cause of the other frozen moment. It decides whether
+the parity gate can compare the two toolchains at all, or whether the mingw build changes the
+title's behaviour. Then the steps of section 5: the pipeline's own switch to llvm-mingw
 (section 7), the full gate and the performance A/B both ways.
