@@ -68,9 +68,10 @@ rexglue_setup_target(fm4_rex GPU_PLUGINS xenos)
 if(WIN32)
     target_link_libraries(fm4_rex PRIVATE dbghelp)
     if(MINGW)
-        # lld's MinGW driver: its own map format (not MSVC's, which thread_profile.py and
-        # soak_report.py read), and -municode for the SDL entry point's wWinMain.
-        target_link_options(fm4_rex PRIVATE "LINKER:-Map=${CMAKE_CURRENT_BINARY_DIR}/fm4_rex.map"
+        # lld's MinGW driver writes its own map format with -Map; lld-link's /map, passed through
+        # -Xlink, writes the MSVC format that thread_profile.py and soak_report.py read. -municode
+        # for the SDL entry point's wWinMain.
+        target_link_options(fm4_rex PRIVATE "LINKER:-Xlink=/map:${CMAKE_CURRENT_BINARY_DIR}/fm4_rex.map"
             -municode)
     else()
         target_link_options(fm4_rex PRIVATE "LINKER:/MAP:${CMAKE_CURRENT_BINARY_DIR}/fm4_rex.map")

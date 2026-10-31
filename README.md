@@ -38,7 +38,7 @@ flowchart LR
 
 ## Quick start
 
-Prerequisites (Windows x64, Git, Python 3.11+ x64, the Visual Studio 2022 C++ tools, and LLVM 20.x) are listed in [docs/setup.md](docs/setup.md). The scripts check them but do not install them.
+Prerequisites (Windows x64, Git, Python 3.11+ x64, CMake and Ninja, and the unpacked [llvm-mingw](https://github.com/mstorsjo/llvm-mingw) 20250709, which brings the compiler and the C and C++ libraries; no Visual Studio and no Windows SDK) are listed in [docs/setup.md](docs/setup.md). The scripts check them but do not install them; the `toolchain` action can fetch CMake, Ninja, Python and llvm-mingw as portable copies ([portable tools](docs/setup.md#portable-tools)).
 
 Run the following in PowerShell. Replace the example paths with the locations on your computer.
 
@@ -58,7 +58,7 @@ Set-ExecutionPolicy -Scope Process -ExecutionPolicy Bypass
 
 $common = @{
     BuildRoot = 'D:\FM4-build'
-    LLVMRoot  = 'C:\Program Files\LLVM'
+    MingwRoot = 'D:\Tools\llvm-mingw-20250709-ucrt-x86_64'
     Python    = 'C:\Python311\python.exe'
     Jobs      = 4
 }
@@ -66,7 +66,7 @@ $common = @{
 .\outputs\FM4-build\Build.ps1 -Action doctor @common
 ```
 
-`Build.ps1` sets up the Visual Studio x64 environment automatically. `LLVMRoot` is the LLVM installation directory, the one that contains a `bin` folder. `Python` is the path of a Python 3.11 or newer (x64); `py -0p` lists the installed ones. Raise `Jobs` towards the number of CPU threads to build faster: with 8 jobs, `all` took about 16 minutes on the development laptop.
+`MingwRoot` is the unpacked `llvm-mingw-20250709-ucrt-x86_64` folder, the one that contains a `bin` folder. `Python` is the path of a Python 3.11 or newer (x64); `py -0p` lists the installed ones. Raise `Jobs` towards the number of CPU threads to build faster: with 8 jobs, `all` took about 16 minutes on the development laptop.
 
 ### 3. Set up, generate, and build
 
@@ -145,7 +145,7 @@ Motorsport DX would not exist without the people and projects below.
 - **rexdex's recompiler** ([rexdex/recompiler](https://github.com/rexdex/recompiler)), the original Xbox 360 static recompiler, which ReXGlue names as an inspiration.
 - **XenosRecomp** and **Unleashed Recompiled** ([hedge-dev/XenosRecomp](https://github.com/hedge-dev/XenosRecomp), [hedge-dev/UnleashedRecomp](https://github.com/hedge-dev/UnleashedRecomp)), whose shader recompiler and port of a game at the Direct3D level showed the way for this project's shader mods and its native render path. They were read for ideas; this project uses no code of them.
 - The Xbox 360 homebrew, modding and reverse-engineering communities, whose research is the shared knowledge that projects like this build on.
-- The tools that build it: LLVM and Clang, CMake and Ninja, Python, Git, Microsoft's Visual Studio build tools, the Windows SDK, Windows' Direct3D shader compiler (`d3dcompiler_47.dll`, the compiler of FXC), and the DirectX Shader Compiler.
+- The tools that build it: [llvm-mingw](https://github.com/mstorsjo/llvm-mingw) (Martin Storsjö) with LLVM and Clang, libc++ and the [mingw-w64](https://www.mingw-w64.org/) headers and runtime, CMake and Ninja, Python, Git, Windows' Direct3D shader compiler (`d3dcompiler_47.dll`, the compiler of FXC), and the DirectX Shader Compiler. Microsoft's Visual Studio build tools and the Windows SDK built the project until 31 October 2026.
 - Turn 10 Studios, who made Forza Motorsport 4.
 
 The same thanks are in [CREDITS.txt](outputs/FM4-build/CREDITS.txt), which `build` and `export` put beside `MotorsportDX.exe`, and on the GUI launcher's About page.
@@ -166,6 +166,8 @@ The third-party code in the program files, with its license. The license texts a
 - The small libraries that ReXGlue vendors from Xenia: aes_128, DES, TinySHA1, Stephan Brumme's SHA-256, the Rijndael reference code, [stb_image](https://github.com/nothings/stb), disruptorplus, the RenderDoc API header, the DirectX Shader Compiler API headers, AMD's DXBC checksum (derived from the RSA Data Security, Inc. MD5 Message-Digest Algorithm) and the ProggyTiny font.
 - AMD FidelityFX: Contrast Adaptive Sharpening and FidelityFX Super Resolution 1 in the presenter (from Xenia), and FidelityFX Super Resolution 3.1 from the [AMD FidelityFX SDK](https://github.com/GPUOpen-LibrariesAndSDKs/FidelityFX-SDK), Copyright (C) 2024 Advanced Micro Devices, Inc., MIT, built from source into the runtime when it is built with `-Fsr on`, with Microsoft's `d3dx12.h` (MIT).
 - The GT7 tone mapping operator from Polyphony Digital's sample implementation (`gt7_tone_mapping.cpp`, SIGGRAPH 2025), Copyright (c) 2025 Polyphony Digital Inc., MIT: ported to HLSL in the look mods as the tone curve of the `gt7` look.
+- [LLVM](https://llvm.org)'s libc++, libc++abi, libunwind and compiler-rt builtins, from [llvm-mingw](https://github.com/mstorsjo/llvm-mingw) 20250709, Apache-2.0 with LLVM exceptions: the C++ runtime of every binary, as `libc++.dll` and `libunwind.dll` beside the game and linked statically into the GUI launcher.
+- The [mingw-w64](https://www.mingw-w64.org/) runtime, Copyright (c) 2009-2013 by the mingw-w64 project, Zope Public License 2.1 with the notices of its `COPYING.MinGW-w64-runtime.txt`: the startup code and C runtime helpers linked into every binary, and the Windows and Direct3D headers the code is compiled against.
 - The recompiler uses the GNU binutils PowerPC disassembler (GPL 2.0 or later) at build time; it is not part of the game's binaries.
 
 ## Pre-commit check

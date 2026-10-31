@@ -76,8 +76,7 @@
 !/outputs/FM4-build/switch-recipes.json
 !/outputs/FM4-build/test_pipeline.py
 !/outputs/FM4-build/toolchain.json
-!/outputs/FM4-build/mingw/x86_64-w64-mingw32.cmake
-!/outputs/FM4-build/mingw/prototype.py
+!/outputs/FM4-build/llvm-mingw.cmake
 !/outputs/FM4-build/mingw/d3d12_abi_probe.cpp
 !/outputs/FM4-build/verification.json
 !/outputs/FM4-build/xmedia_bounds.toml
@@ -95,6 +94,8 @@
 !/outputs/FM4-source-control/third-party-notices/fmt-LICENSE.txt
 !/outputs/FM4-source-control/third-party-notices/inja-LICENSE.txt
 !/outputs/FM4-source-control/third-party-notices/libmspack-COPYING.LIB.txt
+!/outputs/FM4-source-control/third-party-notices/LLVM-LICENSE.txt
+!/outputs/FM4-source-control/third-party-notices/MinGW-w64-runtime-COPYING.txt
 !/outputs/FM4-source-control/third-party-notices/Microsoft-d3dx12-LICENSE.txt
 !/outputs/FM4-source-control/third-party-notices/Microsoft-GameInput-LICENSE.txt
 !/outputs/FM4-source-control/third-party-notices/nlohmann-json-LICENSE.txt

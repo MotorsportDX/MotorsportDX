@@ -1089,7 +1089,8 @@ class PipelineTests(unittest.TestCase):
             calls=[]
             with tempfile.TemporaryDirectory() as directory, \
                     patch.object(pipeline,'run',lambda args,**kwargs:calls.append([str(a) for a in args])), \
-                    patch.object(pipeline,'runtime_fsr',lambda build:None), patch('builtins.print'):
+                    patch.object(pipeline,'runtime_fsr',lambda build:None), patch('builtins.print'), \
+                    patch.object(pipeline,'ABI','msvc'):
                 pipeline.post_pass_tests(Path(directory),4,tests)
             build=next(call for call in calls if '--build' in call)
             self.assertEqual(set(build[build.index('--target')+1:]),set(expected),tests)
@@ -1297,14 +1298,19 @@ class PipelineTests(unittest.TestCase):
                 folder.mkdir()
                 for name in names:
                     (folder/name).write_bytes(b'')
-            outputs={'clang++':'clang version 20.1.8','cmake':'cmake version 3.31.6'}
-            tools=set(pipeline.DOCTOR_TOOLS)
+            outputs={'clang++':'clang version 20.1.8\nTarget: x86_64-pc-windows-msvc\n',
+                     'cmake':'cmake version 3.31.6'}
+            tools=set(pipeline.DOCTOR_TOOLS['msvc'])
             environment={'INCLUDE':os.pathsep.join(map(str,include)),'LIB':str(lib[0])}
-            with patch.dict(os.environ,environment), \
+            with patch.dict(os.environ,environment), patch.object(pipeline,'ABI','msvc'), \
                     patch.object(pipeline.shutil,'which',lambda name:name if name in tools else None), \
                     patch.object(pipeline,'d3dcompiler',lambda:None), \
                     patch.object(pipeline.subprocess,'check_output',lambda args,**kwargs:outputs[args[0]]):
                 self.assertIsNone(pipeline.doctor('archive'))
+                outputs['clang++']='clang version 20.1.8\nTarget: x86_64-w64-windows-gnu\n'
+                with self.assertRaisesRegex(RuntimeError,'does not target x86_64-pc-windows-msvc'):
+                    pipeline.doctor('archive')
+                outputs['clang++']='clang version 20.1.8\nTarget: x86_64-pc-windows-msvc\n'
                 with self.assertRaisesRegex(RuntimeError,'Missing git'):
                     pipeline.doctor('git')
                 # No Visual Studio tool is asked for: link, fxc and vswhere are not in tools.
@@ -1319,6 +1325,71 @@ class PipelineTests(unittest.TestCase):
             with patch.dict(os.environ,{'INCLUDE':'','LIB':''}):
                 self.assertEqual(len(pipeline.msvc_libraries_missing()),
                                  len(pipeline.MSVC_HEADERS)+len(pipeline.MSVC_LIBRARIES))
+
+    def test_abi(self):
+        """--abi: mingw configures every project with the toolchain file and llvm-mingw's folder,
+        msvc with clang and clang++; libc++ and libunwind are staged with mingw only; a BuildRoot
+        keeps the ABI it was set up with (msvc before the switch) and refuses the other; doctor
+        checks llvm-mingw's files and target with mingw."""
+        with tempfile.TemporaryDirectory() as directory, patch('builtins.print'):
+            directory=Path(directory)
+            mingw=directory/'llvm-mingw'
+            for name in ('bin/x86_64-w64-mingw32-clang++.exe',*pipeline.MINGW_FILES):
+                (mingw/name).parent.mkdir(parents=True,exist_ok=True)
+                (mingw/name).write_bytes(name.encode())
+            which=lambda name:str(mingw/'bin'/(name+'.exe')) if (mingw/'bin'/(name+'.exe')).is_file() else None
+            with patch.object(pipeline.shutil,'which',which):
+                self.assertEqual(pipeline.mingw_root(),mingw.resolve())
+                self.assertEqual(pipeline.compilers('CXX'),
+                                 [f'-DCMAKE_TOOLCHAIN_FILE={pipeline.MINGW_TOOLCHAIN_FILE.as_posix()}',
+                                  f'-DFM4_MINGW_ROOT={mingw.resolve().as_posix()}'])
+                with patch.object(pipeline,'ABI','msvc'):
+                    self.assertEqual(pipeline.compilers('C','CXX'),
+                                     ['-DCMAKE_C_COMPILER=clang','-DCMAKE_CXX_COMPILER=clang++'])
+                    pipeline.stage_mingw_runtime(directory)
+                    self.assertFalse((directory/'libc++.dll').exists())
+                pipeline.stage_mingw_runtime(directory)
+                for name in pipeline.MINGW_RUNTIME_DLLS:
+                    self.assertEqual((directory/name).read_bytes(),f'x86_64-w64-mingw32/bin/{name}'.encode())
+            with patch.object(pipeline.shutil,'which',lambda name:None):
+                with self.assertRaisesRegex(RuntimeError,'llvm-mingw'):
+                    pipeline.compilers('CXX')
+            root=directory/'root'
+            root.mkdir()
+            self.assertIsNone(pipeline.build_root_abi(root))
+            pipeline.check_abi(root)
+            (root/'runtime-build').mkdir()
+            (root/'runtime-build/CMakeCache.txt').write_text(
+                'CMAKE_CXX_COMPILER:FILEPATH=I:/llvm-mingw/bin/x86_64-w64-mingw32-clang++.exe\n')
+            self.assertEqual(pipeline.build_root_abi(root),'mingw')
+            (root/'setup-complete.json').write_text(json.dumps({'runtime':'work/runtime'}))
+            self.assertEqual(pipeline.build_root_abi(root),'msvc')
+            with self.assertRaisesRegex(RuntimeError,'--abi msvc, not mingw'):
+                pipeline.check_abi(root)
+            with patch.object(pipeline,'ABI','msvc'):
+                pipeline.check_abi(root)
+            (root/'setup-complete.json').write_text(json.dumps({'abi':'mingw'}))
+            pipeline.check_abi(root)
+            outputs={'x86_64-w64-mingw32-clang++':'clang version 20.1.8\nTarget: x86_64-w64-windows-gnu\n',
+                     'cmake':'cmake version 3.31.6'}
+            for name in pipeline.DOCTOR_TOOLS['mingw']:
+                (mingw/'bin'/(name+'.exe')).write_bytes(b'')
+            with patch.object(pipeline.shutil,'which',which), patch.dict(os.environ,{'INCLUDE':'','LIB':''}), \
+                    patch.object(pipeline,'d3dcompiler',lambda:None), \
+                    patch.object(pipeline.subprocess,'check_output',lambda args,**kwargs:outputs[args[0]]):
+                self.assertIsNone(pipeline.doctor('archive'))
+                (mingw/'include/d3d12.h').unlink()
+                with self.assertRaisesRegex(RuntimeError,r'lacks include/d3d12\.h'):
+                    pipeline.doctor('archive')
+                (mingw/'bin/ld.lld.exe').unlink()
+                with self.assertRaisesRegex(RuntimeError,'Missing ld.lld'):
+                    pipeline.doctor('archive')
+        with tempfile.TemporaryDirectory() as directory:
+            state=Path(directory)/pipeline.TOOLCHAIN_STATE
+            state.write_text(json.dumps({'schema':1,'tools':{'cmake':{'bin':'C:/cmake'},
+                                                             'llvm-mingw':{'bin':'C:/mingw'}}}))
+            with patch.dict(os.environ,{'PATH':'C:/Windows'}):
+                self.assertEqual(pipeline.use_toolchain(directory,('llvm-mingw',)),['C:/cmake'])
 
     def test_patch_cr_cr_lf(self):
         """A file with CR CR LF line endings (the old git apply's copy in a development BuildRoot)
@@ -1341,23 +1412,32 @@ class PipelineTests(unittest.TestCase):
             self.assertEqual((directory/'tree/src/a.c').read_bytes(),source)
 
     def test_toolchain_json(self):
-        """toolchain.json pins the four tools with https URLs, sizes and SHA-256; LLVM keeps the
-        executables and headers the build runs; a malformed entry is refused."""
+        """toolchain.json pins the four tools with https URLs, sizes and SHA-256; llvm-mingw keeps
+        the executables, headers and libraries the build runs and reads, for x86-64 only, and is
+        accepted by its clang's version; a malformed entry is refused."""
         tools=pipeline.load_toolchain()
-        self.assertEqual(set(tools),{'python','cmake','ninja','llvm'})
+        self.assertEqual(set(tools),{'python','cmake','ninja','llvm-mingw'})
         for name,tool in tools.items():
             self.assertTrue(tool['url'].startswith('https://'),name)
             self.assertRegex(tool['sha256'],r'^[0-9a-f]{64}$')
-            self.assertTrue(pipeline.tool_accepts(tool,tool['version']),name)
-        llvm=tools['llvm']
-        self.assertEqual(llvm['sha256'],'f229769f11d6a6edc8ada599c0cda964b7dee6ab1a08c6cf9dd7f513e85b107f')
-        for member in ('bin/clang.exe','bin/clang++.exe','bin/lld-link.exe','bin/llvm-ar.exe',
-                       'lib/clang/20/include/stddef.h'):
-            self.assertTrue(pipeline.archive_selected(member,llvm['keep']),member)
-        self.assertFalse(pipeline.archive_selected('bin/clangd.exe',llvm['keep']))
-        self.assertTrue(pipeline.tool_accepts(llvm,'20.1.0'))
-        self.assertFalse(pipeline.tool_accepts(llvm,'19.1.7'))
-        self.assertFalse(pipeline.tool_accepts(llvm,'21.1.0'))
+            if name!='llvm-mingw':
+                self.assertTrue(pipeline.tool_accepts(tool,tool['version']),name)
+        mingw=tools['llvm-mingw']
+        self.assertEqual((mingw['version'],mingw['size'],mingw['sha256']),
+                         ('20250709',171028561,'82babcd6aae4dc3606e8e0471d816989c384b4bf86a139f184a8b4a1b2c2758d'))
+        for member in ('bin/x86_64-w64-mingw32-clang++.exe','bin/clang-20.exe','bin/ld.lld.exe',
+                       'bin/llvm-ar.exe','bin/libLLVM-20.dll','bin/x86_64-w64-windows-gnu.cfg',
+                       'include/d3d12.h','include/c++/v1/vector','lib/clang/20/include/stddef.h',
+                       'lib/clang/20/lib/windows/libclang_rt.profile-x86_64.a',
+                       'x86_64-w64-mingw32/lib/libucrt.a','x86_64-w64-mingw32/bin/libc++.dll',
+                       'x86_64-w64-mingw32/share/mingw32/COPYING.MinGW-w64-runtime.txt'):
+            self.assertTrue(pipeline.archive_selected(member,mingw['keep']),member)
+        for member in ('bin/clangd.exe','bin/aarch64-w64-mingw32-clang.exe','i686-w64-mingw32/lib/libucrt.a',
+                       'python/bin/python3.exe','lib/clang/20/lib/windows/libclang_rt.asan_dynamic-x86_64.dll.a'):
+            self.assertFalse(pipeline.archive_selected(member,mingw['keep']),member)
+        self.assertTrue(pipeline.tool_accepts(mingw,'20.1.8'))
+        self.assertFalse(pipeline.tool_accepts(mingw,'19.1.7'))
+        self.assertFalse(pipeline.tool_accepts(mingw,'21.1.0'))
         self.assertTrue(pipeline.tool_accepts(tools['cmake'],'4.1.2'))
         self.assertFalse(pipeline.tool_accepts(tools['cmake'],'3.24.4'))
         data=json.loads(pipeline.TOOLCHAIN.read_text(encoding='utf-8'))
@@ -1365,9 +1445,9 @@ class PipelineTests(unittest.TestCase):
             path=Path(directory)/'toolchain.json'
             for change in ({'url':'http://example.org/x.zip'},{'sha256':'ABC'},{'size':'1'},
                            {'format':'7z'},{'keep':['../bin/x.exe']},{'keep':[]},
-                           {'license_file':'LICENSE.TXT'},{'accept':['20']},{'extra':1}):
+                           {'license_file':'NOT-KEPT.TXT'},{'accept':['20']},{'extra':1}):
                 bad=json.loads(json.dumps(data))
-                bad['tools']['llvm'].update(change)
+                bad['tools']['llvm-mingw'].update(change)
                 path.write_text(json.dumps(bad),encoding='utf-8')
                 with self.assertRaises(ValueError,msg=change):
                     pipeline.load_toolchain(path)
@@ -1496,21 +1576,22 @@ class PipelineTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as directory:
             folder=Path(directory)
             tool=self.tool(accept=['20','21'])
-            self.assertIsNone(pipeline.probe_tool('llvm',folder,tool))
-            for name in ('clang.exe','clang++.exe','lld-link.exe'):
+            self.assertIsNone(pipeline.probe_tool('llvm-mingw',folder,tool))
+            for name in ('x86_64-w64-mingw32-clang.exe','x86_64-w64-mingw32-clang++.exe','ld.lld.exe'):
                 (folder/name).write_bytes(b'')
-            output='clang version 20.1.8\nTarget: x86_64-pc-windows-msvc\n'
+            output='clang version 20.1.8\nTarget: x86_64-w64-windows-gnu\n'
             result=lambda args,**kwargs:subprocess.CompletedProcess(args,0,output,'')
             with patch.object(pipeline.subprocess,'run',result):
-                probe=pipeline.probe_tool('llvm',folder,tool)
+                probe=pipeline.probe_tool('llvm-mingw',folder,tool)
                 self.assertEqual((probe['version'],probe['missing'],probe['accepted']),('20.1.8',['llvm-ar.exe'],False))
                 (folder/'llvm-ar.exe').write_bytes(b'')
-                self.assertTrue(pipeline.probe_tool('llvm',folder,tool)['accepted'])
+                self.assertTrue(pipeline.probe_tool('llvm-mingw',folder,tool)['accepted'])
                 output='clang version 19.1.7\n'
-                self.assertFalse(pipeline.probe_tool('llvm',folder,tool)['accepted'])
+                self.assertFalse(pipeline.probe_tool('llvm-mingw',folder,tool)['accepted'])
             with patch.object(pipeline.shutil,'which',lambda name:str(folder/name)), \
                     patch.dict(os.environ,{'ProgramFiles':str(folder/'programs')}):
-                self.assertEqual(pipeline.tool_folders('llvm')[:2],[folder,folder/'programs/LLVM/bin'])
+                self.assertEqual(pipeline.tool_folders('llvm-mingw'),[folder])
+                self.assertEqual(pipeline.tool_folders('cmake')[:2],[folder,folder/'programs/CMake/bin'])
 
     def test_d3d_compile(self):
         """The resolve shaders' compile through Windows' D3DCompile: defines (a bare name is 1),

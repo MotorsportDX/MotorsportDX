@@ -20,6 +20,11 @@ The binaries a build produces, and what each one contains:
                     fmt and spdlog (linked statically), and header code of toml++ and SIMDe;
                     they call the rest of the runtime in rexruntime.dll
   MotorsportDX.exe  the GUI launcher: the project's code, SDL3, Dear ImGui and nlohmann/json
+  libc++.dll, libunwind.dll
+                    LLVM's C++ runtime from llvm-mingw, which the binaries above but the
+                    launcher import; the launcher links it statically
+Every binary also holds the mingw-w64 runtime and LLVM's compiler-rt builtins (linked
+statically), since the build uses llvm-mingw (docs/setup.md#toolchain).
 An export holds these binaries. The tools below stay in the BuildRoot and are never exported:
   rexglue.exe       the recompiler (build time only): ReXGlue code, inja, nlohmann/json, CLI11,
                     the GNU binutils PowerPC disassembler, toml++, fmt, spdlog, xxHash, SIMDe
@@ -77,6 +82,23 @@ Libraries the runtime builds (the upstream SDK's submodules at that commit)
   utfcpp-LICENSE.txt           UTF8-CPP (commit 63d64de), Boost Software License 1.0.
                                https://github.com/nemtrif/utfcpp
   o1heap-LICENSE.txt           o1heap 3.0.0, MIT. https://github.com/pavel-kirienko/o1heap
+
+The toolchain's libraries (llvm-mingw 20250709, https://github.com/mstorsjo/llvm-mingw)
+  LLVM-LICENSE.txt             The LLVM Project's license, Apache License 2.0 with LLVM
+                               Exceptions, with the notices of the third-party software in
+                               LLVM (llvm-mingw's LICENSE.TXT, LLVM 20.1.8): libc++, libc++abi
+                               and libunwind (libc++.dll and libunwind.dll beside the game,
+                               static in the launcher) and compiler-rt's builtins (static in
+                               every binary). https://llvm.org
+  MinGW-w64-runtime-COPYING.txt
+                               The mingw-w64 runtime's licensing notice
+                               (COPYING.MinGW-w64-runtime.txt of llvm-mingw's
+                               x86_64-w64-mingw32/share/mingw32; mingw-w64 at commit a0e69f7):
+                               "Copyright (c) 2009, 2010, 2011, 2012, 2013 by the mingw-w64
+                               project" (Zope Public License 2.1) and the notices of the parts
+                               under other licenses, which the runtime asks to carry with
+                               binaries that link it statically, as every binary of the build
+                               does. https://www.mingw-w64.org
 
 Files the SDK vendors in its thirdparty folder (mostly from Xenia)
   aes_128-LICENSE.txt          aes_128, "Copyright (c) 2017 LuoPeng", MIT.

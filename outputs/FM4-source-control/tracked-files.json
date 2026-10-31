@@ -401,16 +401,12 @@
       "provenance": "Reviewed bootstrap tooling or documentation; no original game function bodies"
     },
     {
+      "path": "outputs/FM4-build/llvm-mingw.cmake",
+      "provenance": "Project-authored CMake toolchain file of the default build: llvm-mingw (x86_64-w64-mingw32); no game data"
+    },
+    {
       "path": "outputs/FM4-build/mingw/d3d12_abi_probe.cpp",
       "provenance": "Project-authored D3D12 ABI probe of the llvm-mingw prototype: the struct-returning D3D12 methods called on a WARP device; no game data"
-    },
-    {
-      "path": "outputs/FM4-build/mingw/prototype.py",
-      "provenance": "Project-authored driver of the llvm-mingw prototype: runs pipeline.py's stages with the mingw CMake toolchain file; no game data"
-    },
-    {
-      "path": "outputs/FM4-build/mingw/x86_64-w64-mingw32.cmake",
-      "provenance": "Project-authored CMake toolchain file for llvm-mingw (x86_64-w64-mingw32); no game data"
     },
     {
       "path": "outputs/FM4-build/pipeline.py",
@@ -491,6 +487,14 @@
     {
       "path": "outputs/FM4-source-control/third-party-notices/Microsoft-d3dx12-LICENSE.txt",
       "provenance": "Repository policy/tooling or upstream license"
+    },
+    {
+      "path": "outputs/FM4-source-control/third-party-notices/LLVM-LICENSE.txt",
+      "provenance": "Third-party license text: the LLVM Project's Apache-2.0 with LLVM Exceptions, from llvm-mingw 20250709's LICENSE.TXT (LLVM 20.1.8), for libc++, libunwind and compiler-rt in the binaries"
+    },
+    {
+      "path": "outputs/FM4-source-control/third-party-notices/MinGW-w64-runtime-COPYING.txt",
+      "provenance": "Third-party license text: mingw-w64's COPYING.MinGW-w64-runtime.txt from llvm-mingw 20250709, the runtime notice for binaries that link it statically"
     },
     {
       "path": "outputs/FM4-source-control/third-party-notices/Microsoft-GameInput-LICENSE.txt",

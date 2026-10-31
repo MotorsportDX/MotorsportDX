@@ -307,8 +307,6 @@ if(UNIX AND NOT APPLE)
     set(SDL_PIPEWIRE_SHARED   ON  CACHE BOOL "" FORCE)
 endif()
 
-add_subdirectory(sdl3)
-
 # GameInput API v3 for SDL's GameInput driver (sdl_joystick_driver=gameinput): the MIT header
 # and loader of the Microsoft.GameInput NuGet package, which setup fetches outside the
 # repository (REX_GAMEINPUT_DIR: include/gameinput.h and src/GameInput.cpp). The header comes
@@ -316,6 +314,25 @@ add_subdirectory(sdl3)
 # the newest GameInput runtime DLL at run time, is built into SDL. SDL's patch for v3
 # (outputs/FM4-build/sdl3-gameinput-v3.patch) keeps the SDK's older API without it.
 set(REX_GAMEINPUT_DIR "" CACHE PATH "The Microsoft.GameInput package's MIT header and loader")
+if(MINGW AND REX_GAMEINPUT_DIR)
+    # SDL turns its GameInput driver on when a C file can include <gameinput.h> (HAVE_GAMEINPUT_H).
+    # mingw-w64 has no such header, and the package's v3 header is C++ only ("GameInput requires
+    # C++"), so the check is made here, as C++ against the package's header, before SDL's own:
+    # SDL skips a check whose result is already set (docs/analysis/mingw-toolchain.md 3).
+    include(CheckCXXSourceCompiles)
+    set(CMAKE_REQUIRED_INCLUDES "${REX_GAMEINPUT_DIR}/include")
+    check_cxx_source_compiles("
+        #define COBJMACROS
+        #include <gameinput.h>
+        int main() { return 0; }" HAVE_GAMEINPUT_H)
+    unset(CMAKE_REQUIRED_INCLUDES)
+    if(NOT HAVE_GAMEINPUT_H)
+        message(FATAL_ERROR "REX_GAMEINPUT_DIR: include/gameinput.h does not compile with mingw-w64")
+    endif()
+endif()
+
+add_subdirectory(sdl3)
+
 if(WIN32 AND REX_GAMEINPUT_DIR)
     if(NOT EXISTS "${REX_GAMEINPUT_DIR}/include/gameinput.h" OR
        NOT EXISTS "${REX_GAMEINPUT_DIR}/src/GameInput.cpp")

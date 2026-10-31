@@ -5,7 +5,10 @@ player from their own discs to a built, running Motorsport DX on their own Windo
 written as a design, with no code changed, nothing downloaded and no game or GPU run. Sizes and
 licence terms that only a download could confirm are marked "not checked". The owner decided its
 first questions on 31 October 2026 (section [9](#9-decisions-for-the-project-owner)), and
-increment B1 is done (section [7](#7-increments)).
+increments B1 to B3 are done (section [7](#7-increments)). The same day the owner chose route (c)
+for the compiler's libraries: the build moved to llvm-mingw, which replaces increment B4 and every
+Microsoft package of this note ([4.7](#47-the-msvc-libraries-and-the-windows-sdk)). Sections 4.1,
+4.2 and 4.10 describe the design before that choice.
 
 Where it starts from: releases are source only ([distribution](../sources-and-licensing.md#distribution),
 [preview plan](preview.md)). Each player clones the repository, installs the toolchain by hand and
@@ -360,6 +363,16 @@ MSVC-specific code (no blocker found; the D3D12 struct returns, setjmp and the e
 names what mingw-w64 lacks (`gameinput.h`), pins llvm-mingw 20250709 (LLVM 20.1.8, 171 MB), estimates
 14 to 28 h, and recommends a prototype of 2 to 3 h with that one download before the route is chosen.
 
+**Route (c) chosen (31 October 2026).** The owner decided to move the build to llvm-mingw ("Lanjut
+pindah"). Its first increment (M1) makes llvm-mingw the default of every action, for players and
+developers ([setup, toolchain](../setup.md#toolchain)): `toolchain.json` pins llvm-mingw 20250709 in
+place of LLVM 20.1.8's archive, `doctor` asks for nothing of Visual Studio, and `libc++.dll` and
+`libunwind.dll` go beside the game instead of the VC++ runtime DLLs. **Increment B4 is replaced by
+this route:** the builder fetches no Microsoft package, needs no licence page for Microsoft's terms
+and no `INCLUDE` or `LIB`; route (a) is no longer the fallback. The build with Microsoft's libraries
+stays selectable as `-Abi msvc` only for the A/B of the switch's verification (M2), then goes. The
+switch's state is in [mingw-toolchain.md, section 11](mingw-toolchain.md#11-the-switch-m1-31-october-2026).
+
 **Route (c) prototyped (31 October 2026):** with that one download the whole player build passes
 with llvm-mingw, its tests included, the generated code is the MSVC build's byte for byte, and a
 D3D12 probe on WARP returns the same structs; 16 small shims, no rewrite, and about 9 to 17 h left,
@@ -553,7 +566,7 @@ Estimates in AI calendar time (1 person-week ≈ 3.5 h, range 2 to 7 h). B0 is t
 | B1. Pipeline for a builder (**done** on 31 October 2026, [results](#b1-results-31-october-2026)) | A `preflight` action with JSON output (CPU features, GPU, RAM, disk, path); `--progress` JSON lines per step; a `launcher-data` action that writes `launcher.json` without a build; a version stamp file in the snapshot, read by `source_state` when the source is not a Git checkout; running from a `git archive` snapshot without `Build.ps1`; the player build without the developer tests if the owner says so | 3.5 h | `test_pipeline.py` cases; `all` from a `git archive` snapshot into a new BuildRoot on the development computer (build only, no GPU run) |
 | B2. No Git (**done** on 31 October 2026, [results](#b2-results-31-october-2026)) | The SDK and its submodules as archives at their pinned commits with a hash over the unpacked files; FidelityFX only for a build with FSR; the SDL patch applied in Python; `doctor` without `git` | 3.5 h | the unpacked files' hash equals that of the development BuildRoot's `runtime-source\thirdparty`; `all` with Git off the `PATH` |
 | B3. The portable tools (**done** on 31 October 2026, [results](#b3-results-31-october-2026)) | `toolchain.json` (asset, size, SHA-256, licence, unpack rule) for Python (embeddable), CMake, Ninja and LLVM, each downloaded once with the owner's approval to pin it; the unpackers; detection of installed tools; the resolve shaders through `D3DCompile` instead of `fxc.exe`; `doctor` without `link`, `fxc.exe` and `vswhere` | 5 h | the `D3DCompile` headers against the `fxc.exe` ones on the development computer; `all` with only the portable tools and Visual Studio's libraries |
-| B4. Microsoft's libraries | Route (b) after the licence reading: the manifest reader, the pinned package list (MSVC 14.44 x64, Windows SDK 10.0.26100), the licence page, the VSIX, MSI and CAB unpacking, `INCLUDE` and `LIB`, the app-local C++ runtime DLLs; route (a) as the fallback | 7 h | `all` in a Windows account or sandbox without Visual Studio, LLVM, Python or Git (Windows Sandbox on Windows 11 Pro is an optional feature the owner turns on, or a VM), then the instruction tests; a game run there is the main session's call under the GPU rules |
+| B4. Microsoft's libraries (**replaced** on 31 October 2026 by route (c), llvm-mingw: [4.7](#47-the-msvc-libraries-and-the-windows-sdk)) | Route (b) after the licence reading: the manifest reader, the pinned package list (MSVC 14.44 x64, Windows SDK 10.0.26100), the licence page, the VSIX, MSI and CAB unpacking, `INCLUDE` and `LIB`, the app-local C++ runtime DLLs; route (a) as the fallback | 7 h | `all` in a Windows account or sandbox without Visual Studio, LLVM, Python or Git (Windows Sandbox on Windows 11 Pro is an optional feature the owner turns on, or a VM), then the instruction tests; a game run there is the main session's call under the GPU rules |
 | B5. Builder mode in the launcher | The Build page and wizard, consent, progress, plain errors, resume, logs, keep-awake; the launcher with a static C++ runtime; `--screenshot build` and `--state builder` for reviews | 7 h | the launcher tests; screenshots at scale 1 and 1.5 (WARP); a full build through the launcher into a new install root on the development computer |
 | B6. The package | A `package` action at a tag: the launcher built at the tag (needs only `setup`, no discs), `launcher.json`, `git archive` source, `toolchain.json`, licences and notices, into one zip; an allowlist check of the zip (no BuildRoot file, no executable but `MotorsportDX.exe`, no picture, no DXC, nothing of Microsoft's, a size limit) | 3.5 h | the zip's listing against the allowlist; the zip in the clean account or sandbox of B4 up to a built game |
 | B7. Updates | Pointing a new package at an install; the source swap; `generate` and `build` again; the `user-data` backup | 2 h | an update from one tag to the next on the development computer: the hashes of `user-data` before and after, the shader pass runs again |
@@ -562,7 +575,8 @@ Estimates in AI calendar time (1 person-week ≈ 3.5 h, range 2 to 7 h). B0 is t
 | B10 (optional). Option B | The shipped runtime, after the licence items of 3.2 | 3.5 h, plus the licence work | a game built against the shipped runtime has the hashes of one built from source |
 
 B1 to B7: about 31.5 h (18 to 63 h). No increment needs a game run on the GPU until B8, whose run is
-the owner's. Route (c) of 4.7 is not an increment: it is not recommended.
+the owner's. Route (c) of 4.7 replaced B4 on 31 October 2026; its own increments (M1, the pipeline
+and the code; M2, the verification) are in [mingw-toolchain.md](mingw-toolchain.md).
 
 ### B1 results (31 October 2026)
 
@@ -833,11 +847,13 @@ and 7 to 11 stay open; they are settled before B6.
    player accepts the terms in the builder (recommended, once the terms are read and allow it), with
    (a), Microsoft's Build Tools installer, as the fallback; not (c).
    **Decided on 31 October 2026: route (b)**, once the main session has read Microsoft's terms;
-   route (a) is the fallback. **Reopened the same day:** the terms do not clearly cover a player
+   route (a) is the fallback. **Superseded the same day: route (c)** (below). **Reopened the same day:** the terms do not clearly cover a player
    who builds only to play, by either route, and route (b) has two questions of its own
    ([the licence reading](#47-the-msvc-libraries-and-the-windows-sdk)). **The owner's decision of
    31 October 2026: research route (c), llvm-mingw, first**: a design note with the port's scope,
-   cost and risks, and a prototype plan, before any download or port.
+   cost and risks, and a prototype plan, before any download or port. After the prototype, **the
+   owner's decision of 31 October 2026: move to llvm-mingw** ("Lanjut pindah"), for players and
+   developers; B4 is replaced.
 5. **The downloads the package may make on a player's computer**, and the approval to download each
    new one (LLVM 20.1.8, the Python embeddable package, CMake, Ninja, MinGit, the pinned Microsoft
    packages and the Build Tools bootstrapper) once on the development computer to pin its size and

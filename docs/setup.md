@@ -98,10 +98,9 @@ the same packages before their first launch ([content import](e2e/README.md#cont
 | System | Windows x64, a CPU compatible with x86-64-v2, a GPU that supports Direct3D 12 |
 | Git | Git for Windows, with HTTPS access to GitHub (for the SDK, its pinned submodules and, with `-Fsr on`, the FidelityFX SDK). Setup uses partial and sparse clones; validated version: **2.55.0**. Needed only for `-Fetch git`, the default in a Git checkout; a [source snapshot](#source-snapshots) fetches GitHub's archives without Git ([fetching without Git](#fetching-without-git)) |
 | Python | **Python 3.11+ x64**, for example from python.org. Use a real `python.exe`, not the Microsoft Store alias in `WindowsApps`. `py -0p` lists the installed versions with their paths: an install for all users is in `C:\Program Files\Python311`, one for the current user in `%LOCALAPPDATA%\Programs\Python\Python311`. Only the standard library is used |
-| Visual Studio | Visual Studio 2022 or Build Tools, workload **Desktop development with C++**, MSVC x64 tools: the build uses its C and C++ libraries (headers and import libraries), not its compiler or linker |
-| Windows SDK | Headers and libraries. Validated version: **10.0.26100.0**. Its `fxc.exe` is no longer used (since 31 October 2026): the resolve shaders compile through Windows' own `d3dcompiler_47.dll` |
-| Build tools | CMake **3.25+** and Ninja. Both can be installed through the Visual Studio Installer, or fetched by the [`toolchain` action](#portable-tools) |
-| LLVM | **LLVM 20.x x64**. Validated version: **20.1.8**. Installed, or fetched by the [`toolchain` action](#portable-tools) |
+| llvm-mingw | **llvm-mingw 20250709**, the Universal CRT build for x86-64 hosts (`llvm-mingw-20250709-ucrt-x86_64.zip`): clang 20.1.8 with lld, LLVM's libc++ and mingw-w64's headers and libraries, the compiler, linker, C and C++ libraries and Windows headers of the build ([toolchain](#toolchain)). Unpacked into any folder, nothing installed: fetched by the [`toolchain` action](#portable-tools), or its folder passed with `-MingwRoot`. No Visual Studio and no Windows SDK (since 31 October 2026); the resolve shaders compile through Windows' own `d3dcompiler_47.dll` |
+| Build tools | CMake **3.25+** and Ninja. Installed (for example through the Visual Studio Installer), or fetched by the [`toolchain` action](#portable-tools) |
+| For `-Abi msvc` only | The build with Microsoft's libraries, kept only for the A/B of the switch ([toolchain](#toolchain)): Visual Studio 2022 or Build Tools with **Desktop development with C++** (its C and C++ libraries, not its compiler or linker), the Windows SDK (validated: **10.0.26100.0**) and **LLVM 20.x x64** (validated: **20.1.8**) |
 
 Disk space and time, measured on 25 October 2026 with a fresh clone and a new BuildRoot on
 the development laptop (Intel Core Ultra 7 255HX, 20 threads, 32 GB, `-Jobs 8`): `all`
@@ -115,17 +114,21 @@ be on another drive.
 of 4 is slower.
 
 The `doctor` action checks the prerequisites and reports what is missing: Windows
-x64, 64-bit Python 3.11 or newer, `git` (with `-Fetch git` only), `cmake`, `ninja`, `clang`,
-`clang++`, `lld-link` and `llvm-ar` on the path, LLVM 20.x (from `clang++ --version`), CMake 3.25
-or newer, Windows' `d3dcompiler_47.dll`, and Microsoft's C and C++ libraries and the Windows SDK
-in the folders of `INCLUDE` and `LIB` (`vcruntime.h`, `corecrt.h`, `windows.h` and `d3d12.h`;
-`msvcrt.lib`, `ucrt.lib`, `kernel32.lib` and `d3d12.lib`). It asks for no tool of Visual Studio
-(`link`, `fxc.exe`, `vswhere`): clang++ links with LLVM's `lld-link`. It also reports the BuildRoot's
-FidelityFX SDK (fetched or not, at the pinned commit or not) and its mirror
+x64, 64-bit Python 3.11 or newer, `git` (with `-Fetch git` only), `cmake`, `ninja`,
+`x86_64-w64-mingw32-clang`, `x86_64-w64-mingw32-clang++`, `ld.lld` and `llvm-ar` on the path,
+clang 20.x targeting `x86_64-w64-windows-gnu` (from `x86_64-w64-mingw32-clang++ --version`), CMake
+3.25 or newer, Windows' `d3dcompiler_47.dll`, and in llvm-mingw's folder mingw-w64's `windows.h`,
+`d3d12.h`, `libucrt.a` and `libd3d12.a`, libc++'s headers and import library, and `libc++.dll` and
+`libunwind.dll`. It asks for nothing of Visual Studio or the Windows SDK. With `-Abi msvc` it
+checks instead for `clang`, `clang++`, `lld-link` and `llvm-ar`, a `clang++` 20.x targeting
+`x86_64-pc-windows-msvc`, and Microsoft's C and C++ libraries and the Windows SDK in the folders
+of `INCLUDE` and `LIB` (`vcruntime.h`, `corecrt.h`, `windows.h` and `d3d12.h`; `msvcrt.lib`,
+`ucrt.lib`, `kernel32.lib` and `d3d12.lib`). It also reports the BuildRoot's FidelityFX SDK
+(fetched or not, at the pinned commit or not) and its mirror
 ([the FidelityFX SDK mirror](#the-fidelityfx-sdk-mirror)), and the GameInput package
-([the GameInput package](#the-gameinput-package)). `Build.ps1` sets up the
-Visual Studio x64 environment itself. The scripts do not silently install system
-software or change security settings.
+([the GameInput package](#the-gameinput-package)). `Build.ps1` enters the Visual Studio x64
+environment only for `-Abi msvc`. The scripts do not silently install system software or change
+security settings.
 
 ## Commands
 
@@ -147,7 +150,7 @@ Set-Location MotorsportDX
 
 $common = @{
     BuildRoot = 'D:\FM4-build'
-    LLVMRoot  = 'C:\Program Files\LLVM'
+    MingwRoot = 'D:\Tools\llvm-mingw-20250709-ucrt-x86_64'
     Python    = 'C:\Python311\python.exe'
     Jobs      = 4
 }
@@ -168,7 +171,7 @@ Remove the `Disc2` or `Content` entry if you do not use that content. Instead of
 the parameters written out, not `@common`:
 
 ```powershell
-powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\outputs\FM4-build\Build.ps1 -Action doctor -LLVMRoot 'C:\Program Files\LLVM' -Python 'C:\Python311\python.exe'
+powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\outputs\FM4-build\Build.ps1 -Action doctor -MingwRoot 'D:\Tools\llvm-mingw-20250709-ucrt-x86_64' -Python 'C:\Python311\python.exe'
 ```
 
 ### Actions
@@ -201,7 +204,10 @@ The stages can also run separately:
 | Parameter | Meaning |
 | --- | --- |
 | `-BuildRoot` | Private build directory. Defaults to `work\portable-fm4` in the repository, which Git ignores. It must be a dedicated directory: not the repository root or one of its parents, and not inside `outputs`, `work\fm4-rex` or `work\runtime`. |
-| `-LLVMRoot` | LLVM 20.x install directory that contains `bin`. Its `bin` folder is placed first on `PATH`. |
+| `-MingwRoot` | The unpacked llvm-mingw folder that contains `bin`. Its `bin` folder is placed first on `PATH`. |
+| `-Toolchain` | The folder of the [portable tools](#portable-tools): the folders of its `toolchain-state.json` are placed first on `PATH`. |
+| `-Abi` | `mingw` (the default) or `msvc`: the C and C++ libraries the build targets. `msvc` is the build with Microsoft's libraries, kept only for the A/B of the switch; see [Toolchain](#toolchain). |
+| `-LLVMRoot` | With `-Abi msvc` only: the LLVM 20.x install directory that contains `bin`. Its `bin` folder is placed first on `PATH`. |
 | `-Python` | Python 3.11+ x64 executable. Default: `python`. |
 | `-Jobs` | Number of parallel jobs, 1 to 64. Default: 4. |
 | `-Disc1` | Extracted Disc 1 root. Required by `generate` and `all`. |
@@ -215,6 +221,58 @@ The stages can also run separately:
 | `-Tests` | `developer` (the default) or `player`, for `build` and `all`: which tests run at the end of `build`. See [3. Build](#3-build). |
 | `-Progress` | A file to which `setup`, `generate`, `build` and `all` append one JSON line for each stage and step, or `-` for the output. See [Progress lines](#progress-lines). |
 | `-Revision` | The commit of `snapshot`. Default: `HEAD`. |
+
+## Toolchain
+
+Since 31 October 2026 every action builds with **llvm-mingw** by default (`-Abi mingw`,
+`--abi mingw`; the project owner's decision of 31 October 2026): clang 20.1.8 for
+`x86_64-w64-mingw32` with LLVM's libc++ and libunwind, mingw-w64's headers and import libraries,
+the Universal CRT that Windows 10 and 11 carry, and lld. Nothing of Visual Studio or the Windows
+SDK is read, so a player's build depends on no Microsoft licence terms. The reasons, the port and
+its verification are in the [llvm-mingw note](analysis/mingw-toolchain.md).
+
+- **Compilers.** Every CMake project (the runtime, the loader, the game, the tests and the
+  launcher) is configured with the toolchain file
+  [llvm-mingw.cmake](../outputs/FM4-build/llvm-mingw.cmake) and `FM4_MINGW_ROOT`, the llvm-mingw
+  folder of the `x86_64-w64-mingw32-clang++` on `PATH`.
+- **The C++ runtime.** The runtime, the game's modules, `rexglue.exe` and the tests link libc++
+  and libunwind as DLLs. `setup` copies `libc++.dll` and `libunwind.dll` from llvm-mingw's
+  `x86_64-w64-mingw32\bin` into `runtime-install\bin`; `build` copies them beside the game and
+  into `tests-build`, `build-result.json` lists their hashes, and `export` copies them. The GUI
+  launcher links libc++ statically and needs no DLL. No Visual C++ redistributable is needed.
+- **Debug information.** The runtime and the game compile with CodeView line tables
+  (`-gline-tables-only -gcodeview`), and lld writes a PDB beside each binary (`--pdb`, with
+  `--strip-all`, which leaves the DWARF of llvm-mingw's own prebuilt objects and the COFF symbol
+  table out of the binaries; `llvm-symbolizer` would read that DWARF instead of the PDB):
+  `build` copies `fm4_rex.pdb`, the two modules' PDBs, `rexruntime.pdb` and `rexgpu-xenos.pdb`
+  into `game-build`. An export carries none. `profbuild` copies `game-build` with its PDBs into
+  `game-build-prof`, since the default build already has what the profiling build adds with
+  `-Abi msvc`.
+- **The link map.** `game-build\fm4_rex.map` is lld-link's map in MSVC's format (`/map`, passed
+  through lld's MinGW driver with `-Xlink`), the format `thread_profile.py` and
+  `soak_report.py` read.
+- **SDL's GameInput driver.** mingw-w64 has no `gameinput.h`, and the GameInput package's v3
+  header is C++ only, so SDL's own check (a C compile) cannot find it. The runtime's
+  `thirdparty/CMakeLists.txt` makes the check first, as C++ against the package's header
+  (`HAVE_GAMEINPUT_H`), and SDL builds its GameInput driver as it does with the Windows SDK.
+- **The BuildRoot's ABI.** `setup-complete.json` records `abi`; a BuildRoot set up before the
+  switch has none and counts as `msvc`. `setup`, `generate`, `build`, `all` and `profbuild`
+  refuse a BuildRoot of the other ABI (`... holds a build with --abi msvc, not mingw`): its
+  CMake folders would be configured again with the other compiler beside an install and game
+  build of the old one. Build into a new BuildRoot, or pass the BuildRoot's ABI. `run`,
+  `export` and `warmcache` take the BuildRoot's ABI when `-Abi` is not given. The check exists
+  only in the pipeline since the switch: a checkout of an older commit (a branch made before 31
+  October 2026) knows no ABI and would configure a mingw BuildRoot again with LLVM for
+  Microsoft's libraries, so it must not build into one.
+
+**`-Abi msvc` (temporary).** The build before the switch: LLVM's `clang` and `clang++` for
+`x86_64-pc-windows-msvc`, with Microsoft's C and C++ libraries and the Windows SDK from `INCLUDE`
+and `LIB` (`Build.ps1 -Abi msvc` enters Visual Studio's x64 environment, and `-LLVMRoot` names
+LLVM). Its flags, outputs and tests are those of before: no PDB, no staged C++ runtime DLL,
+`/MAP` for the map. It exists only for the A/B of the switch's verification (the performance A/B
+and the rendering compared at 1:1 against the mingw build of the same commit) and is removed
+afterwards. With `--toolchain`, llvm-mingw's folder is left off `PATH` for it, since its `clang`
+and `clang++` would target mingw; `doctor` checks the target of `clang++`.
 
 ## Stages
 
@@ -383,7 +441,8 @@ runtime edits need only this stage. It then:
 - copies the title's sources (`work/fm4-rex/src`, `tests` and `CMakeLists.txt`) into the
   private project again, leaving unchanged files untouched, as `generate` does;
 - compiles the application and both modules;
-- stages the matching runtime and GPU DLLs;
+- stages the matching runtime and GPU DLLs, and with llvm-mingw `libc++.dll`, `libunwind.dll`
+  and the PDBs ([toolchain](#toolchain));
 - runs the arithmetic instruction tests, the post pass tests (the GTAO passes on WARP),
   the shader-mod CPU tests (no GPU needed; see the
   [post pass framework](analysis/post-pass-framework.md)) and the CPU tests of the pads, the
@@ -437,11 +496,11 @@ them too.
 [source snapshot](#source-snapshots): `python outputs\FM4-build\pipeline.py <action>
 --build-root <folder> ...`, with the options of [Parameters](#parameters) in lower case with
 hyphens (`--disc1`, `--jobs`, `--tests`, `--progress`). The caller provides the environment:
-CMake, Ninja and LLVM 20 on `PATH` (installed ones, or the [portable tools](#portable-tools)
-with `--toolchain`), and Microsoft's C and C++ libraries and the Windows SDK in `INCLUDE` and
-`LIB`, which Visual Studio's x64 developer environment sets (`Build.ps1` enters it). Nothing else
-of Visual Studio is needed on `PATH`. `preflight`, `launcher-data`, `snapshot` and `toolchain`
-need none of it: they run before any toolchain exists. In a snapshot no action needs Git: the fetches take GitHub's archives
+CMake, Ninja and llvm-mingw on `PATH` (installed ones, or the [portable tools](#portable-tools)
+with `--toolchain`). Nothing of Visual Studio or the Windows SDK is needed, and `INCLUDE` and
+`LIB` are not read (`--abi msvc` needs them, from Visual Studio's x64 developer environment).
+`preflight`, `launcher-data`, `snapshot` and `toolchain` need none of it: they run before any
+toolchain exists. In a snapshot no action needs Git: the fetches take GitHub's archives
 ([fetching without Git](#fetching-without-git)) and the SDL patch is applied in Python
 (increment B2). `doctor` asks for `git` only with `--fetch git`.
 
@@ -570,13 +629,14 @@ copy, and the members to keep:
 | Python 3.11.9 | python.org's embeddable package `python-3.11.9-embed-amd64.zip` | 11,249,023 | all 34 files | 21,665,567 | PSF-2.0 (`LICENSE.txt`, with the notices of the libraries it bundles) |
 | CMake 3.31.6 | Kitware's `cmake-3.31.6-windows-x86_64.zip` | 46,473,549 | `bin/cmake.exe`, `share/cmake-3.31/`, `doc/cmake/Copyright.txt` (3,767 files) | 20,927,837 | BSD-3-Clause |
 | Ninja 1.12.1 | the Ninja project's `ninja-win.zip` | 275,425 | `ninja.exe` | 569,856 | Apache-2.0 |
-| LLVM 20.1.8 | the LLVM release's `clang+llvm-20.1.8-x86_64-pc-windows-msvc.tar.xz` | 939,541,912 | `clang`, `clang++`, `lld-link`, `llvm-ar`, `llvm-rc`, clang's headers (`lib/clang/20/include`) and its builtins and profile libraries (301 files) | 304,219,141 | Apache-2.0 with LLVM exceptions |
+| llvm-mingw 20250709 | `llvm-mingw-20250709-ucrt-x86_64.zip` of the llvm-mingw release (clang 20.1.8) | 171,028,561 | the x86-64 compiler drivers (`x86_64-w64-mingw32-clang`, `-clang++`, `-windres`, with `clang`, `clang++`, `clang-20` and their configuration files), `ld.lld`, `llvm-ar`, `llvm-ranlib`, `llvm-rc`, `llvm-objdump`, `llvm-symbolizer` and `llvm-profdata` with LLVM's and clang's DLLs and libc++ and libunwind, `include` (mingw-w64's and libc++'s headers), clang's headers and its x86-64 builtins and profile libraries, and `x86_64-w64-mingw32` (the import and static libraries, the C++ runtime DLLs and mingw-w64's licence files); not the i686, ARMv7 and ARM64 targets, lldb, clangd, clang-tidy or the bundled Python (5,406 files) | 325,064,777 | LLVM's Apache-2.0 with LLVM exceptions (`LICENSE.TXT`), mingw-w64's ZPL 2.1 and others, ISC for llvm-mingw's own scripts and wrappers |
 
-The action first looks for installed copies (`detect_tools`): the tool on `PATH`, then LLVM's
-default folder (`Program Files\LLVM\bin`), CMake's, and the CMake and Ninja that Visual Studio
-bundles, and runs each one for its version. LLVM 20.x (with `clang++`, `lld-link` and `llvm-ar`
-beside `clang`), CMake 3.25 or newer and Ninja 1.10 or newer are taken; Python is the
-interpreter that runs the action. Only a tool without an accepted copy is fetched and unpacked
+The action first looks for installed copies (`detect_tools`): the tool on `PATH`, then CMake's
+default folder and the CMake and Ninja that Visual Studio bundles, and runs each one for its
+version. An llvm-mingw whose clang is 20.x (with `x86_64-w64-mingw32-clang++`, `ld.lld` and
+`llvm-ar` beside `x86_64-w64-mingw32-clang`; it has no installer, so only a copy on `PATH` is
+found), CMake 3.25 or newer and Ninja 1.10 or newer are taken; Python is the interpreter that
+runs the action. Only a tool without an accepted copy is fetched and unpacked
 into `<folder>\<tool>-<version>`, or every tool with `--portable`. The archives are kept in
 `--downloads` (default `<folder>\downloads`) and fetched only when missing, from the folder
 `TOOLCHAIN_MIRROR` first; an archive with another size or SHA-256 is refused (a kept one is
@@ -589,16 +649,15 @@ Archives are untrusted data: they are unpacked only by the pipeline's own code (
 `tarfile` with Python's `lzma` for `.tar.xz`), only members below the archive's top folder and in
 the keep list, and only regular files: an absolute path, a drive, `..`, a member outside the top
 folder and any link are refused, and every keep entry must match a member. A tool runs only from
-a folder whose archive passed its size and SHA-256. The LLVM, CMake and Ninja executables link
-the C runtime statically (they import only Windows' own DLLs), and the embeddable Python brings
-its own `vcruntime140.dll`, so none of them needs the Visual C++ redistributable.
+a folder whose archive passed its size and SHA-256. CMake and Ninja link the C runtime
+statically (they import only Windows' own DLLs), llvm-mingw's executables import its own
+`libc++.dll` and LLVM's DLLs from its `bin` folder and the Universal CRT, and the embeddable
+Python brings its own `vcruntime140.dll`, so none of them needs the Visual C++ redistributable.
 
 Any other action takes `--toolchain <folder>` to put the folders of its `toolchain-state.json`
-first on `PATH`, for itself and the processes it starts. A build then needs only `INCLUDE` and
-`LIB` from outside (Microsoft's libraries; increment B4 of the
-[builder installer](analysis/builder-installer.md) fetches them too). For example, with
-`INCLUDE` and `LIB` taken from Visual Studio's x64 environment and nothing else on `PATH` but
-`C:\Windows\System32` and `C:\Windows`:
+first on `PATH`, for itself and the processes it starts. A build then needs nothing else: for
+example, with nothing on `PATH` but `C:\Windows\System32` and `C:\Windows`, and no `INCLUDE` or
+`LIB`:
 
 ```powershell
 I:\toolchain\python-3.11.9\python.exe <snapshot>\outputs\FM4-build\pipeline.py all `
@@ -645,6 +704,10 @@ flavor names are sorted and joined with hyphens, and the build writes
 Example: `-Flavor thinlto,v3` builds `game-build-thinlto-v3`. `pgo-gen` and
 `pgo-use` cannot be combined in one build; the launcher rejects the request.
 
+With llvm-mingw, `thinlto` passes ThinLTO's jobs to lld's MinGW driver (`--thinlto-jobs`), and
+`pgo-gen` links llvm-mingw's profile library (`libclang_rt.profile-x86_64.a`); `llvm-profdata`
+is in its `bin` folder. Every flavor build also writes the PDBs of the [toolchain](#toolchain).
+
 Profiles stay in `BuildRoot`. Run a flavor build with
 `e2e.py --game-build game-build-<flavor>` (see [e2e/README.md](e2e/README.md)). The
 default build keeps `-march=x86-64-v2` without LTO or PGO.
@@ -666,7 +729,7 @@ FM4-build/
 ├── runtime-build/    # Runtime build
 ├── runtime-install/  # Locally installed runtime
 ├── project/          # Integration source and private generated/
-├── game-build/       # Executable, modules, runtime, GPU plugins
+├── game-build/       # Executable, modules, runtime, GPU plugins, libc++ and libunwind, PDBs
 ├── user-data/        # Profiles, saves, imported Disc 2 and DLC content
 ├── cache/            # Game and shader cache (shader-overrides/: compiled look mods)
 ├── logs/             # Logs for setup, generate, build and startup
@@ -725,7 +788,11 @@ repository.
 ## Troubleshooting
 
 - **Setup or build fails:** run `doctor` first. Check that `Python` points to a real
-  Python executable and that `LLVMRoot` points to LLVM 20.x.
+  Python executable and that `MingwRoot` points to the unpacked llvm-mingw 20250709 (or, with
+  `-Abi msvc`, that `LLVMRoot` points to LLVM 20.x).
+- **`... holds a build with --abi msvc, not mingw`** (or the reverse): the BuildRoot was built
+  with the other C and C++ libraries ([toolchain](#toolchain)). Use a new BuildRoot for the
+  default build, or pass `-Abi` with the BuildRoot's own.
 - **An executable is rejected** (`Unsupported executables in ...` or `Missing
   executable`): check the game version and that the extraction is complete. The
   three executables must all be those of one supported release, as extracted from
@@ -755,16 +822,19 @@ repository.
 - **`Launcher tests failed`:** the GUI launcher's port of the launch rules differs from
   `pipeline.py`. The log lists each difference (`logs\launcher-tests.log` and
   `launcher-build\tests\result.json`). Change `work/fm4-launcher/src/plan.cpp` to match.
-- **The GUI launcher does not start on another computer:** install the Visual C++
-  2015-2022 x64 redistributable. A missing `MSVCP140_ATOMIC_WAIT.dll` means an older
-  one is installed.
+- **The game does not start, `libc++.dll` or `libunwind.dll` was not found:** the game's
+  folder lacks llvm-mingw's C++ runtime, which `build` and `export` copy beside it. Run `build`
+  (or `export`) again; do not copy the game's files by hand without them.
+- **The GUI launcher of an `-Abi msvc` build does not start on another computer:** install the
+  Visual C++ 2015-2022 x64 redistributable. A missing `MSVCP140_ATOMIC_WAIT.dll` means an older
+  one is installed. The default build's launcher needs none.
 - **PowerShell blocks the script** (`running scripts is disabled on this system`): allow
   scripts for the window with `Set-ExecutionPolicy -Scope Process -ExecutionPolicy Bypass`, as
   in [Commands](#commands).
 - **`The term 'C:\Python311\python.exe' is not recognized`:** the `Python` path of `$common`
   does not exist. `py -0p` prints the paths of the installed Pythons.
 - **`'vswhere.exe' is not recognized as an internal or external command`** at the start of
-  every action: printed by the Visual Studio developer environment that `Build.ps1` enters;
+  every action with `-Abi msvc`: printed by the Visual Studio developer environment that `Build.ps1` enters;
   it is harmless, the actions still find the tools (`doctor` says `Preflight passed`).
 - **`Launcher tests failed`** or **`-TextureReplace is not a directory`** right after the
   launcher build in a new BuildRoot: a build of the repository before 25 October 2026 ran one

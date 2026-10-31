@@ -265,15 +265,97 @@ def run(args, cwd=None, log=None, env=None):
     else:
         subprocess.run(args, cwd=cwd, env=env, check=True)
 
-# The build's tools on PATH: CMake drives Ninja, clang and clang++ compile, and clang++ links with
-# lld-link (-fuse-ld=lld-link, which CMake adds when it finds lld-link); llvm-ar makes the static
-# libraries. Nothing of Visual Studio runs (no link, no fxc, no vswhere).
-DOCTOR_TOOLS=('cmake','ninja','clang','clang++','lld-link','llvm-ar')
+# The C and C++ libraries and the ABI the build targets (--abi, docs/setup.md#toolchain). mingw, the
+# default: llvm-mingw's clang with libc++, mingw-w64's headers and import libraries and the
+# Universal CRT, through the CMake toolchain file MINGW_TOOLCHAIN_FILE; nothing of Microsoft's
+# toolchain or SDK (docs/analysis/mingw-toolchain.md). msvc: LLVM's clang with Microsoft's C and
+# C++ libraries and the Windows SDK, the build before the switch, kept only for the A/B against
+# the mingw build while the switch is verified, then removed.
+ABIS=('mingw','msvc')
+ABI='mingw'
+MINGW_TOOLCHAIN_FILE=HERE/'llvm-mingw.cmake'
+# llvm-mingw's C++ runtime, which every module links as DLLs: staged beside rexglue.exe, the game
+# and the tests (the launcher links it statically).
+MINGW_RUNTIME_DLLS=('libc++.dll','libunwind.dll')
+# The mingw build's debug information: CodeView line tables in PDBs beside fm4_rex.exe, its two
+# modules, rexruntime.dll, rexgpu-xenos.dll and rexglue.exe (lld's --pdb with no name: the
+# binary's own with .pdb). Without them lld keeps the generated code's line tables in
+# fm4_rex.exe as DWARF (51 MB). --strip-all keeps the DWARF of llvm-mingw's own prebuilt objects
+# (the CRT's) and the COFF symbol table out of the binaries, as the MSVC build has none:
+# llvm-symbolizer reads a binary's DWARF before its PDB and would find no game function.
+MINGW_DEBUG_FLAGS='-gline-tables-only -gcodeview'
+MINGW_PDB_LINK='-Wl,--pdb= -Wl,--strip-all'
+# The runtime's PDBs, written beside its DLLs in runtime-source/out/win-amd64.
+RUNTIME_PDBS=('rexruntime.pdb','rexgpu-xenos.pdb')
+# The build's tools on PATH, per ABI. mingw: CMake drives Ninja; llvm-mingw's
+# x86_64-w64-mingw32-clang and -clang++ compile and link with ld.lld (its MinGW driver); llvm-ar
+# makes the static libraries. msvc: clang and clang++ compile and link with lld-link
+# (-fuse-ld=lld-link, which CMake adds when it finds lld-link). Nothing of Visual Studio runs (no
+# link, no fxc, no vswhere).
+DOCTOR_TOOLS={'mingw':('cmake','ninja','x86_64-w64-mingw32-clang','x86_64-w64-mingw32-clang++',
+                       'ld.lld','llvm-ar'),
+              'msvc':('cmake','ninja','clang','clang++','lld-link','llvm-ar')}
+# The compiler whose version doctor reads, and the target it must report.
+DOCTOR_COMPILERS={'mingw':('x86_64-w64-mingw32-clang++','x86_64-w64-windows-gnu'),
+                  'msvc':('clang++','x86_64-pc-windows-msvc')}
+# What the mingw build reads of llvm-mingw's folder: mingw-w64's headers and import libraries,
+# the Universal CRT's, libc++ and the runtime DLLs.
+MINGW_FILES=('include/windows.h','include/d3d12.h','include/c++/v1/vector',
+             'x86_64-w64-mingw32/lib/libucrt.a','x86_64-w64-mingw32/lib/libd3d12.a',
+             'x86_64-w64-mingw32/lib/libc++.dll.a',
+             *(f'x86_64-w64-mingw32/bin/{name}' for name in MINGW_RUNTIME_DLLS))
 # What clang and lld-link need of Microsoft's C and C++ libraries, the Universal CRT and the
-# Windows SDK, looked for in the folders of INCLUDE and LIB: Visual Studio's x64 environment
-# today, the builder's own folders from B4 (docs/analysis/builder-installer.md 4.7).
+# Windows SDK with --abi msvc, looked for in the folders of INCLUDE and LIB: Visual Studio's x64
+# environment.
 MSVC_HEADERS=('vcruntime.h','corecrt.h','windows.h','d3d12.h')
 MSVC_LIBRARIES=('msvcrt.lib','ucrt.lib','kernel32.lib','d3d12.lib')
+
+def mingw_root():
+    """The llvm-mingw folder of the x86_64-w64-mingw32-clang++ on PATH."""
+    found=shutil.which('x86_64-w64-mingw32-clang++')
+    if not found:
+        raise RuntimeError('Missing x86_64-w64-mingw32-clang++ (llvm-mingw). See docs/setup.md: the '
+                           'portable tools (--toolchain), or Build.ps1 -MingwRoot.')
+    return Path(found).resolve().parent.parent
+
+def compilers(*languages):
+    """The CMake arguments that pick the compilers of a project: with mingw, the toolchain file
+    and llvm-mingw's folder; with msvc, clang or clang++ for each of languages (C, CXX)."""
+    if ABI=='mingw':
+        return [f'-DCMAKE_TOOLCHAIN_FILE={MINGW_TOOLCHAIN_FILE.as_posix()}',
+                f'-DFM4_MINGW_ROOT={mingw_root().as_posix()}']
+    return [f'-DCMAKE_{language}_COMPILER={"clang" if language=="C" else "clang++"}'
+            for language in languages]
+
+def stage_mingw_runtime(directory):
+    """With mingw, MINGW_RUNTIME_DLLS from llvm-mingw's x86_64 folder into directory."""
+    if ABI!='mingw':
+        return
+    source=mingw_root()/'x86_64-w64-mingw32/bin'
+    for name in MINGW_RUNTIME_DLLS:
+        target=Path(directory)/name
+        if not target.is_file() or digest(target)!=digest(source/name):
+            shutil.copyfile(source/name,target)
+
+def build_root_abi(root):
+    """The ABI a BuildRoot's build folders hold: setup-complete.json's abi; msvc for one set up
+    before the switch (no abi there); for a runtime build folder without setup-complete.json, its
+    compiler; None for a new BuildRoot."""
+    state=root/'setup-complete.json'
+    if state.is_file():
+        return json.loads(state.read_text(encoding='utf-8')).get('abi','msvc')
+    cache=root/'runtime-build/CMakeCache.txt'
+    if cache.is_file():
+        return 'mingw' if 'x86_64-w64-mingw32-clang' in cache.read_text(errors='replace') else 'msvc'
+    return None
+
+def check_abi(root):
+    """Refuses to build into a BuildRoot that holds the other ABI's objects: its CMake folders would
+    be configured again with the other compiler, beside an install and game build of the old one."""
+    abi=build_root_abi(root)
+    if abi and abi!=ABI:
+        raise RuntimeError(f'{root} holds a build with --abi {abi}, not {ABI}. Pass --abi {abi}, or '
+                           'build into another BuildRoot (docs/setup.md#toolchain).')
 
 def msvc_libraries_missing():
     """The files of MSVC_HEADERS and MSVC_LIBRARIES in no folder of INCLUDE and LIB."""
@@ -285,18 +367,23 @@ def msvc_libraries_missing():
     return missing
 
 def doctor(fetch='git'):
-    """The tools of DOCTOR_TOOLS on PATH (and git with fetch git; archive, fetch_mode, needs no
-    Git), LLVM 20, CMake 3.25+, Windows' d3dcompiler_47.dll, and Microsoft's libraries in
-    INCLUDE and LIB (msvc_libraries_missing)."""
+    """The tools of DOCTOR_TOOLS[ABI] on PATH (and git with fetch git; archive, fetch_mode, needs
+    no Git), clang 20 for the ABI's target, CMake 3.25+ and Windows' d3dcompiler_47.dll; with
+    mingw, llvm-mingw's MINGW_FILES; with msvc, Microsoft's libraries in INCLUDE and LIB
+    (msvc_libraries_missing)."""
     if os.name != 'nt' or sys.maxsize <= 2**32 or sys.version_info < (3,11):
         raise RuntimeError('Requires Windows x64 and Python 3.11 or newer (64-bit).')
-    for name in (('git',) if fetch=='git' else ())+DOCTOR_TOOLS:
+    for name in (('git',) if fetch=='git' else ())+DOCTOR_TOOLS[ABI]:
         if not shutil.which(name):
-            raise RuntimeError(f'Missing {name}. See docs/setup.md: Build.ps1 from a VS C++ environment, '
-                               'or the portable tools (--toolchain).')
-    version = subprocess.check_output(['clang++', '--version'], text=True)
+            raise RuntimeError(f'Missing {name}. See docs/setup.md: the portable tools (--toolchain), '
+                               'or Build.ps1 -MingwRoot'+(' from a VS C++ environment' if ABI=='msvc' else '')+'.')
+    compiler,target=DOCTOR_COMPILERS[ABI]
+    version = subprocess.check_output([compiler, '--version'], text=True)
     if not re.search(r'clang version 20\.', version):
-        raise RuntimeError('Use LLVM 20.x (validated: 20.1.8); pass -LLVMRoot to Build.ps1.')
+        raise RuntimeError(f'{compiler}: use clang 20.x (validated: 20.1.8, llvm-mingw 20250709).')
+    if not re.search(rf'^Target: {re.escape(target)}$', version, re.M):
+        raise RuntimeError(f'{compiler} does not target {target}, which --abi {ABI} needs '
+                           '(docs/setup.md#toolchain).')
     cmake_version = subprocess.check_output(['cmake','--version'],text=True)
     match = re.search(r'version (\d+)\.(\d+)',cmake_version)
     if not match or tuple(map(int, match.groups())) < (3,25):
@@ -305,13 +392,19 @@ def doctor(fetch='git'):
         d3dcompiler()
     except OSError as error:
         raise RuntimeError(f"Windows' d3dcompiler_47.dll cannot be loaded: {error}") from error
-    missing = msvc_libraries_missing()
-    if missing:
-        raise RuntimeError('Microsoft C/C++ libraries or Windows SDK not found: '+', '.join(missing)+
-                           '. Run from the Visual Studio x64 environment (Build.ps1) or set INCLUDE '
-                           'and LIB (docs/setup.md).')
-    print('Preflight passed. LLVM:', version.splitlines()[0], 'CMake:', shutil.which('cmake'),
-          'Fetch:', fetch)
+    if ABI=='mingw':
+        missing=[name for name in MINGW_FILES if not (mingw_root()/name).is_file()]
+        if missing:
+            raise RuntimeError(f'llvm-mingw in {mingw_root()} lacks '+', '.join(missing)+
+                               ' (docs/setup.md#portable-tools).')
+    else:
+        missing = msvc_libraries_missing()
+        if missing:
+            raise RuntimeError('Microsoft C/C++ libraries or Windows SDK not found: '+', '.join(missing)+
+                               '. Run from the Visual Studio x64 environment (Build.ps1 -Abi msvc) or '
+                               'set INCLUDE and LIB (docs/setup.md).')
+    print('Preflight passed. ABI:', ABI, 'Compiler:', version.splitlines()[0], 'CMake:',
+          shutil.which('cmake'), 'Fetch:', fetch)
 
 # The builder's portable tools (docs/setup.md#portable-tools, docs/analysis/builder-installer.md
 # 4.4 to 4.6): toolchain.json pins each tool's archive by URL, size and SHA-256, with its licence,
@@ -330,8 +423,9 @@ TOOL_PROBES={'python':('python.exe',['-I','-c','import sys;print("%d.%d.%d"%sys.
                        r'^(\d+(?:\.\d+)+)',()),
              'cmake':('cmake.exe',['--version'],r'cmake version (\d+(?:\.\d+)+)',()),
              'ninja':('ninja.exe',['--version'],r'^(\d+(?:\.\d+)+)',()),
-             'llvm':('clang.exe',['--version'],r'clang version (\d+(?:\.\d+)+)',
-                     ('clang++.exe','lld-link.exe','llvm-ar.exe'))}
+             # llvm-mingw's version is its release date; an installed copy is accepted by its clang's.
+             'llvm-mingw':('x86_64-w64-mingw32-clang.exe',['--version'],r'clang version (\d+(?:\.\d+)+)',
+                           ('x86_64-w64-mingw32-clang++.exe','ld.lld.exe','llvm-ar.exe'))}
 
 def version_tuple(text):
     return tuple(int(part) for part in text.split('.'))
@@ -353,7 +447,7 @@ def load_toolchain(path=TOOLCHAIN):
         problems=[f'fields {sorted(set(tool)^fields)}'] if set(tool)!=fields else []
         if not problems:
             keep,accept=tool['keep'],tool['accept']
-            checks=[(isinstance(tool['version'],str) and bool(re.fullmatch(r'\d+(\.\d+)+',tool['version'])),'version'),
+            checks=[(isinstance(tool['version'],str) and bool(re.fullmatch(r'\d+(\.\d+)*',tool['version'])),'version'),
                     (isinstance(tool['url'],str) and tool['url'].startswith('https://'),'url'),
                     (type(tool['size']) is int and tool['size']>0,'size'),
                     (isinstance(tool['sha256'],str) and bool(re.fullmatch(r'[0-9a-f]{64}',tool['sha256'])),'sha256'),
@@ -399,8 +493,8 @@ def probe_tool(name,folder,tool):
 
 def tool_folders(name):
     """The folders where an installed copy of a tool may stand, in order: the PATH's, then the
-    default install folders (LLVM's; CMake's; the CMake and Ninja that Visual Studio bundles). For
-    Python, the folder of the interpreter that runs this."""
+    default install folders (CMake's; the CMake and Ninja that Visual Studio bundles; llvm-mingw has
+    no installer). For Python, the folder of the interpreter that runs this."""
     if name=='python':
         return [Path(sys.executable).parent]
     found=shutil.which(TOOL_PROBES[name][0])
@@ -408,9 +502,7 @@ def tool_folders(name):
     programs=[Path(os.environ[variable]) for variable in ('ProgramFiles','ProgramFiles(x86)')
               if os.environ.get(variable)]
     bundled='Microsoft Visual Studio/*/*/Common7/IDE/CommonExtensions/Microsoft/CMake'
-    if name=='llvm':
-        folders+=[program/'LLVM/bin' for program in programs]
-    elif name=='cmake':
+    if name=='cmake':
         folders+=[program/'CMake/bin' for program in programs]
         folders+=[path/'CMake/bin' for program in programs for path in sorted(program.glob(bundled),reverse=True)]
     elif name=='ninja':
@@ -577,14 +669,15 @@ def toolchain(directory,downloads=None,portable=False,path=TOOLCHAIN):
                                            encoding='utf-8')
     return {'found':found,'tools':state}
 
-def use_toolchain(directory):
+def use_toolchain(directory,skip=()):
     """--toolchain: the folders of <directory>/toolchain-state.json first on PATH, for this
-    process and the ones it starts."""
+    process and the ones it starts; skip: tools left off (llvm-mingw with --abi msvc, whose clang
+    and clang++ would shadow LLVM's)."""
     path=Path(directory)/TOOLCHAIN_STATE
     if not path.is_file():
         raise RuntimeError(f'{path} does not exist: run the toolchain action first.')
     state=json.loads(path.read_text(encoding='utf-8'))
-    folders=[tool['bin'] for tool in state['tools'].values()]
+    folders=[tool['bin'] for name,tool in state['tools'].items() if name not in skip]
     os.environ['PATH']=os.pathsep.join([*folders,os.environ.get('PATH','')])
     return folders
 
@@ -1831,15 +1924,20 @@ def build_runtime(root, jobs, fsr=None, build=None):
     if not cache.is_file() or f'REX_GAMEINPUT_DIR:PATH={gameinput}' not in cache.read_text(errors='replace'):
         options.append(f'-DREX_GAMEINPUT_DIR={gameinput}')
     if not (build/'build.ninja').is_file() or options:
+        # mingw: line tables and PDBs (MINGW_DEBUG_FLAGS).
+        flags='-march=x86-64-v2'+(' '+MINGW_DEBUG_FLAGS if ABI=='mingw' else '')
+        linker=[f'-DCMAKE_SHARED_LINKER_FLAGS={MINGW_PDB_LINK}',f'-DCMAKE_EXE_LINKER_FLAGS={MINGW_PDB_LINK}'] \
+            if ABI=='mingw' else []
         run(['cmake','-S',source,'-B',build,'-G','Ninja','-DCMAKE_BUILD_TYPE=Release',
-             '-DCMAKE_C_COMPILER=clang','-DCMAKE_CXX_COMPILER=clang++',
-             '-DCMAKE_C_FLAGS=-march=x86-64-v2','-DCMAKE_CXX_FLAGS=-march=x86-64-v2',
+             *compilers('C','CXX'),f'-DCMAKE_C_FLAGS={flags}',f'-DCMAKE_CXX_FLAGS={flags}',*linker,
              '-DREXGLUE_ENABLE_TRACY=OFF','-DREXGLUE_BUILD_TESTS=OFF','-DREXGLUE_USE_VULKAN=OFF',
              *options,f'-DCMAKE_INSTALL_PREFIX={install}'],
             log=root/('logs/runtime-configure.log' if default_build else f'logs/{build.name}-configure.log'))
     run(['cmake','--build',build,'--parallel',jobs],log=root/f'logs/{build.name}.log')
     if default_build:
         run(['cmake','--install',build],log=root/'logs/runtime-install.log')
+        # Beside rexglue.exe and the runtime DLLs, which build copies beside the game.
+        stage_mingw_runtime(install/'bin')
 
 def setup(root, jobs, fsr=None):
     # The FidelityFX SDK only for a build with FSR (build_runtime fetches it).
@@ -1852,7 +1950,7 @@ def setup(root, jobs, fsr=None):
     (root/'setup-complete.json').write_text(json.dumps({'thirdparty_revision':SDK_REV,
                                                         'fidelityfx_revision':FFX_REV,
                                                         'gameinput_version':GAMEINPUT_VERSION,
-                                                        'runtime':'work/runtime'}))
+                                                        'runtime':'work/runtime','abi':ABI}))
 
 def sync_title(project):
     """Copies the title's sources (work/fm4-rex/src and tests, its CMakeLists.txt) into the
@@ -1881,7 +1979,7 @@ def generate(root, disc1, disc2, content, jobs):
         copy_source(HERE/name,project/name)
     loader = root/'loader-build'
     run(['cmake','-S',HERE/'loader','-B',loader,'-G','Ninja','-DCMAKE_BUILD_TYPE=Release',
-         '-DCMAKE_CXX_COMPILER=clang++',f'-DCMAKE_PREFIX_PATH={install}'],log=root/'logs/loader-configure.log')
+         *compilers('CXX'),f'-DCMAKE_PREFIX_PATH={install}'],log=root/'logs/loader-configure.log')
     run(['cmake','--build',loader,'--parallel',jobs],log=root/'logs/loader-build.log')
     env = dict(os.environ, PATH=str(install/'bin')+os.pathsep+os.environ['PATH'])
     run([loader/'fm4_dump.exe',disc1/'default.xex',root/'loaded-image.bin'],cwd=root,env=env,log=root/'logs/image-load.log')
@@ -1939,26 +2037,38 @@ def build_game(root,jobs,flavor=(),fsr=None,tests='developer'):
     # title's hooks of later commits (photo mode of entry 0 at s, 26 October 2026).
     sync_title(project)
     suffix=build.name[len('game-build'):]
-    # clang++ drives lld-link, so linker options go through -Xlinker.
-    lto_jobs=f'-Xlinker /opt:lldltojobs={jobs}'
-    linker=[f'-DCMAKE_EXE_LINKER_FLAGS={lto_jobs}',f'-DCMAKE_SHARED_LINKER_FLAGS={lto_jobs}'] \
-        if 'thinlto' in flavor else []
+    flags=flavor_flags(root,flavor)
+    if ABI=='mingw':
+        # Line tables and PDBs (MINGW_DEBUG_FLAGS); lld's MinGW driver takes ThinLTO's jobs as
+        # --thinlto-jobs.
+        flags+=' '+MINGW_DEBUG_FLAGS
+        link=MINGW_PDB_LINK+(f' -Wl,--thinlto-jobs={jobs}' if 'thinlto' in flavor else '')
+    else:
+        # clang++ drives lld-link, so linker options go through -Xlinker.
+        link=f'-Xlinker /opt:lldltojobs={jobs}' if 'thinlto' in flavor else ''
+    linker=[f'-DCMAKE_EXE_LINKER_FLAGS={link}',f'-DCMAKE_SHARED_LINKER_FLAGS={link}'] if link else []
     run(['cmake','-S',project,'-B',build,'-G','Ninja','-DCMAKE_BUILD_TYPE=Release',
-         '-DCMAKE_CXX_COMPILER=clang++',f'-DCMAKE_CXX_FLAGS={flavor_flags(root,flavor)}',*linker,
+         *compilers('CXX'),f'-DCMAKE_CXX_FLAGS={flags}',*linker,
          f'-DCMAKE_PREFIX_PATH={install}',f'-DPython3_EXECUTABLE={sys.executable}',
          f'-DFM4_LOADED_IMAGE={root / "loaded-image.bin"}'],log=root/f'logs/game-configure{suffix}.log')
     started=time.time()
     run(['cmake','--build',build,'--parallel',jobs],log=root/f'logs/game-build{suffix}.log')
     print(f'Game build took {time.time()-started:.0f} s.')
-    # Always stage the matching runtime/plugin, including incremental builds.
+    # Always stage the matching runtime/plugin, including incremental builds; with mingw also
+    # libc++ and libunwind (in install/bin) and the runtime's PDBs.
     for dll in (install/'bin').glob('*.dll'):
         shutil.copyfile(dll,build/dll.name)
+    if ABI=='mingw':
+        for name in RUNTIME_PDBS:
+            shutil.copyfile(root/'runtime-source/out/win-amd64'/name,build/name)
     stage_dxc(root,build)
     run([build/'fm4_instruction_tests.exe'],cwd=build,log=root/f'logs/instruction-tests{suffix}.log')
     post_pass_tests(root,jobs,tests)
     artifacts = ['fm4_rex.exe','fm4_rex_XMediaFacade_default.dll','fm4_rex_SpeechFacade_default.dll','rexruntime.dll','rexgpu-xenos.dll']
+    if ABI=='mingw':
+        artifacts += MINGW_RUNTIME_DLLS
     report = {'artifacts':{name:digest(build/name) for name in artifacts},'gameplay_verified':False,
-              'source':source_state(root),'tests':tests}
+              'source':source_state(root),'tests':tests,'abi':ABI}
     (root/f'build-result{suffix}.json').write_text(json.dumps(report,indent=2))
     if not flavor:
         build_launcher(root,jobs)
@@ -2020,11 +2130,13 @@ def post_pass_tests(root,jobs,tests='developer'):
     fsr=([f'-DREX_RUNTIME_SOURCE={(root/"runtime-source").as_posix()}']+
          (['-DREX_FSR=ON',f'-DREX_FSR_SDK_DIR={sdk.as_posix()}'] if sdk else ['-DREX_FSR=OFF']))
     run(['cmake','-S',source,'-B',build,'-G','Ninja','-DCMAKE_BUILD_TYPE=Release',
-         '-DCMAKE_CXX_COMPILER=clang++',f'-DREX_HEADER_ROOT={root/"runtime-install/include"}',
+         *compilers('CXX'),f'-DREX_HEADER_ROOT={root/"runtime-install/include"}',
          f'-DCMAKE_PREFIX_PATH={root/"runtime-install"}',*fsr],
         log=root/'logs/tests-configure.log')
     run(['cmake','--build',build,'--parallel',jobs,'--target',*PLAYER_TESTS,
          *(SHADER_TESTS if developer else ())],log=root/'logs/tests-build.log')
+    # The tests run with the toolchain off PATH too.
+    stage_mingw_runtime(build)
     run([build/'fm4_track_settings_tests.exe'],cwd=build,log=root/'logs/track-settings-tests.log')
     run([build/'fm4_texture_replacement_tests.exe'],cwd=build,
         log=root/'logs/texture-replacement-tests.log')
@@ -2066,6 +2178,16 @@ def build_profiling(root,jobs):
     game=root/'game-build'
     if not (game/'fm4_rex.exe').is_file():
         raise RuntimeError('Run build first.')
+    if ABI=='mingw':
+        # The mingw build has the line tables and PDBs already (MINGW_DEBUG_FLAGS): a copy of it.
+        profiling=root/'game-build-prof'
+        profiling.mkdir(exist_ok=True)
+        for path in game.iterdir():
+            if path.suffix in ('.exe','.dll','.pdb'):
+                shutil.copyfile(path,profiling/path.name)
+        print(f'Profiling build in {profiling} (game-build with its PDBs): e2e/e2e.py --game-build '
+              'game-build-prof, then e2e/cp_profile.py.')
+        return
     sync_runtime(root)
     fetch_thirdparty(root)
     compile_resolve_shaders(root)
@@ -2085,8 +2207,7 @@ def build_profiling(root,jobs):
     flags='-march=x86-64-v2 -gline-tables-only -gcodeview'
     if not (build/'build.ninja').is_file():
         run(['cmake','-S',mirror,'-B',build,'-G','Ninja','-DCMAKE_BUILD_TYPE=Release',
-             '-DCMAKE_C_COMPILER=clang','-DCMAKE_CXX_COMPILER=clang++',
-             f'-DCMAKE_C_FLAGS={flags}',f'-DCMAKE_CXX_FLAGS={flags}',
+             *compilers('C','CXX'),f'-DCMAKE_C_FLAGS={flags}',f'-DCMAKE_CXX_FLAGS={flags}',
              '-DCMAKE_SHARED_LINKER_FLAGS=-Xlinker /DEBUG','-DCMAKE_EXE_LINKER_FLAGS=-Xlinker /DEBUG',
              '-DREXGLUE_ENABLE_TRACY=OFF','-DREXGLUE_BUILD_TESTS=OFF','-DREXGLUE_USE_VULKAN=OFF'],
             log=root/'logs/runtime-configure-prof.log')
@@ -3465,7 +3586,7 @@ def build_launcher(root,jobs):
     source's Dear ImGui and JSON header, into game-build; its files into the BuildRoot."""
     build=launcher_build_directory(root)
     run(['cmake','-S',LAUNCHER_DIRECTORY,'-B',build,'-G','Ninja','-DCMAKE_BUILD_TYPE=Release',
-         '-DCMAKE_CXX_COMPILER=clang++','-DCMAKE_C_COMPILER=clang',
+         *compilers('CXX','C'),
          '-DCMAKE_CXX_FLAGS=-march=x86-64-v2','-DCMAKE_C_FLAGS=-march=x86-64-v2',
          f'-DCMAKE_PREFIX_PATH={root/"runtime-install"}',
          f'-DFM4_THIRDPARTY={root/"runtime-source/thirdparty"}'],log=root/'logs/launcher-configure.log')
@@ -3703,7 +3824,7 @@ def launch_cvars(root,disc1,log_file):
             'log_file':log_file}
 
 def main():
-    global PROGRESS,FETCH
+    global PROGRESS,FETCH,ABI
     parser=argparse.ArgumentParser(description=__doc__)
     parser.add_argument('action',choices=['doctor','setup','generate','build','all','run','warmcache',
                                           'profbuild','export','preflight','launcher-data','snapshot',
@@ -3825,6 +3946,12 @@ def main():
                              "(the default in a Git checkout), archive takes GitHub's archives of the "
                              'pinned commits without Git (the default in a source snapshot; '
                              'docs/setup.md#fetching-without-git)')
+    parser.add_argument('--abi',choices=ABIS,
+                        help='setup, generate, build, all, profbuild: mingw builds with llvm-mingw '
+                             '(default); msvc with LLVM and Microsoft\'s libraries from the Visual '
+                             'Studio x64 environment, only for the A/B against the mingw build while '
+                             'the switch is verified (docs/setup.md#toolchain). run, export and '
+                             "warmcache default to the BuildRoot's own")
     parser.add_argument('--toolchain',type=Path,
                         help='toolchain: the folder to put the portable tools in; any other action: '
                              "put that folder's tools (its toolchain-state.json) first on PATH "
@@ -3871,6 +3998,8 @@ def main():
         raise ValueError(f'flavor must be a comma list of {FLAVORS}, not both pgo-gen and pgo-use')
     if args.ffx_mirror: os.environ['FFX_MIRROR']=args.ffx_mirror
     if args.fetch: FETCH=args.fetch
+    # The actions that build nothing keep the BuildRoot's ABI unless told otherwise.
+    ABI=args.abi or (args.action in ('run','export','warmcache') and build_root_abi(root)) or 'mingw'
     if args.progress:
         if args.progress=='-':
             PROGRESS=sys.stdout
@@ -3885,7 +4014,7 @@ def main():
         print(json.dumps(report,indent=1))
         return
     if args.toolchain:
-        print('Toolchain:',', '.join(use_toolchain(args.toolchain)))
+        print('Toolchain:',', '.join(use_toolchain(args.toolchain,('llvm-mingw',) if ABI=='msvc' else ())))
     doctor(fetch_mode())
     print(ffx_status(root))
     print(gameinput_status(root))
@@ -3899,6 +4028,8 @@ def main():
         validate_content(discs[1],args.content)
     root.mkdir(parents=True,exist_ok=True)
     check_layout(root)
+    if args.action in ('setup','generate','build','all','profbuild'):
+        check_abi(root)
     fsr=None if args.fsr is None else args.fsr=='on'
     if args.action in ('setup','all'):
         with progress('stage','setup'): setup(root,args.jobs,fsr)

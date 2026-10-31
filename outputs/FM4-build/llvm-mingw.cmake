@@ -1,9 +1,13 @@
-# CMake toolchain file for the llvm-mingw prototype (docs/analysis/mingw-toolchain.md, section 8):
-# clang targeting x86_64-w64-mingw32 with libc++, mingw-w64's headers and C runtime (the Universal
-# CRT) and lld, instead of Microsoft's C and C++ libraries and the Windows SDK. FM4_MINGW_ROOT is
-# the unpacked llvm-mingw-20250709-ucrt-x86_64 folder; the build runs on Windows for Windows, so
+# CMake toolchain file of the default build (docs/setup.md#toolchain,
+# docs/analysis/mingw-toolchain.md): llvm-mingw's clang targeting x86_64-w64-mingw32 with libc++,
+# mingw-w64's headers and C runtime (the Universal CRT) and lld, instead of Microsoft's C and C++
+# libraries and the Windows SDK. pipeline.py passes FM4_MINGW_ROOT, the unpacked llvm-mingw folder
+# of the x86_64-w64-mingw32-clang++ on PATH. The build runs on Windows for Windows, so
 # CMAKE_SYSTEM_NAME stays the host's and nothing counts as cross-compiling.
-set(FM4_MINGW_ROOT "$ENV{FM4_MINGW_ROOT}" CACHE PATH "The unpacked llvm-mingw folder")
+if(NOT FM4_MINGW_ROOT)
+    set(FM4_MINGW_ROOT "$ENV{FM4_MINGW_ROOT}")
+endif()
+set(FM4_MINGW_ROOT "${FM4_MINGW_ROOT}" CACHE PATH "The unpacked llvm-mingw folder")
 if(NOT FM4_MINGW_ROOT OR NOT EXISTS "${FM4_MINGW_ROOT}/bin/x86_64-w64-mingw32-clang++.exe")
     message(FATAL_ERROR "FM4_MINGW_ROOT must name the unpacked llvm-mingw folder.")
 endif()
