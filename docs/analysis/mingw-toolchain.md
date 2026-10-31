@@ -324,12 +324,14 @@ unpacked by the pipeline's `unpack_tool` under `python -I` into
 `GAMEINPUT_MIRROR` and `DXC_MIRROR` from `I:\FM4-build-usa`, and Python 3.11.9, CMake 3.31.6 and
 Ninja 1.12.1 were B3's portable copies in `I:\FM4-toolchain-b3`.
 
-**How it builds.** Three files in [outputs/FM4-build/mingw](../../outputs/FM4-build/mingw):
+**How it builds.** Three files in `outputs/FM4-build/mingw` at the prototype's commit `5c4b25f`
+(M1 moved the toolchain file to [llvm-mingw.cmake](../../outputs/FM4-build/llvm-mingw.cmake) and
+removed `prototype.py`, section 11):
 
-- [x86_64-w64-mingw32.cmake](../../outputs/FM4-build/mingw/x86_64-w64-mingw32.cmake), the CMake
+- `x86_64-w64-mingw32.cmake`, the CMake
   toolchain file: llvm-mingw's `x86_64-w64-mingw32-clang`, `-clang++`, `-windres`, `llvm-ar` and
   `llvm-ranlib`, from `FM4_MINGW_ROOT`;
-- [prototype.py](../../outputs/FM4-build/mingw/prototype.py), which runs `pipeline.py`'s own
+- `prototype.py`, which runs `pipeline.py`'s own
   `setup`, `generate` and `build` stages:
   - it wraps the pipeline's `run()` so that every CMake configure (the runtime, the loader, the
     game, the tests and the launcher) takes the toolchain file instead of `clang`;
