@@ -6,6 +6,7 @@ import os
 import re
 from pathlib import Path
 import struct
+import tarfile
 import tempfile
 import time
 import unittest
@@ -1092,6 +1093,210 @@ class PipelineTests(unittest.TestCase):
             ran={Path(call[0]).stem for call in calls if call[0].endswith('.exe')}
             self.assertEqual(ran,set(expected),tests)
         with self.assertRaises(ValueError): pipeline.post_pass_tests(Path('.'),4,'none')
+
+    @staticmethod
+    def write_archive(path,commit,members,top='repo-top'):
+        """A GitHub-like archive: a tar.gz with the commit as its pax comment and one top folder;
+        members maps a name to bytes (a file), ('link', target) or ('hard', target)."""
+        with tarfile.open(path,'w:gz',format=tarfile.PAX_FORMAT,pax_headers={'comment':commit}) as tar:
+            directory=tarfile.TarInfo(top+'/')
+            directory.type=tarfile.DIRTYPE
+            tar.addfile(directory)
+            for name,data in members.items():
+                info=tarfile.TarInfo(name if name.startswith('/') else f'{top}/{name}')
+                if isinstance(data,tuple):
+                    info.type=tarfile.SYMTYPE if data[0]=='link' else tarfile.LNKTYPE
+                    info.linkname=data[1]
+                    tar.addfile(info)
+                else:
+                    info.size=len(data)
+                    tar.addfile(info,io.BytesIO(data))
+
+    def test_archive_tree(self):
+        """The pin of unpacked files: paths and contents, CRLF read as LF, without Git's files and
+        the pipeline's markers."""
+        with tempfile.TemporaryDirectory() as directory:
+            first,second=Path(directory)/'first',Path(directory)/'second'
+            for root,ending in ((first,b'\n'),(second,b'\r\n')):
+                (root/'src').mkdir(parents=True)
+                (root/'src/a.c').write_bytes(b'int a;'+ending+b'int b;'+ending)
+                (root/'b.bin').write_bytes(b'\x00\x01')
+            (second/'.git').write_text('gitdir: ../.git/modules/x')
+            (second/'.fm4-sdl3-gameinput-v3.patch').write_text('marker')
+            self.assertEqual(pipeline.archive_tree(first),pipeline.archive_tree(second))
+            (second/'src/a.c').write_bytes(b'int a;\r\nint c;\r\n')
+            self.assertNotEqual(pipeline.archive_tree(first),pipeline.archive_tree(second))
+            (second/'src/a.c').write_bytes(b'int a;\nint b;\n')
+            (second/'src/a.c').rename(second/'a.c')
+            self.assertNotEqual(pipeline.archive_tree(first),pipeline.archive_tree(second))
+
+    def test_unpack_archive(self):
+        """Members below the top folder, those of select only; a symbolic link as a file holding
+        its target; the commit from the pax comment; refused paths and member kinds."""
+        commit='c'*40
+        with tempfile.TemporaryDirectory() as directory:
+            directory=Path(directory)
+            archive=directory/'a.tar.gz'
+            self.write_archive(archive,commit,{'LICENSE.txt':b'license','sdk/include/x.h':b'x',
+                                               'sdk/include/link.h':('link','x.h'),
+                                               'sdk/src/y.c':b'y','sdk/include.txt':b'no'})
+            self.assertEqual(pipeline.unpack_archive(archive,directory/'all',commit),5)
+            self.assertEqual((directory/'all/sdk/include/link.h').read_bytes(),b'x.h')
+            self.assertEqual(pipeline.unpack_archive(archive,directory/'some',commit,
+                                                     ['LICENSE.txt','sdk/include/']),3)
+            self.assertEqual(sorted(path.relative_to(directory/'some').as_posix()
+                                    for path in (directory/'some').rglob('*') if path.is_file()),
+                             ['LICENSE.txt','sdk/include/link.h','sdk/include/x.h'])
+            with self.assertRaisesRegex(RuntimeError,'not of'):
+                pipeline.unpack_archive(archive,directory/'other',commit.replace('c','d'))
+            for members in ({'../outside.txt':b'x'},{'a/../../outside.txt':b'x'},
+                            {'link.h':('link','../../outside')},{'hard.h':('hard','repo-top/a')},
+                            {'/repo-top/absolute.txt':b'x'},{'a:stream':b'x'}):
+                bad=directory/'bad.tar.gz'
+                self.write_archive(bad,commit,members)
+                target=directory/f'bad{len(list(directory.iterdir()))}'
+                with self.assertRaises((RuntimeError,tarfile.FilterError),msg=members):
+                    pipeline.unpack_archive(bad,target,commit)
+                self.assertFalse((directory/'outside.txt').exists())
+
+    def test_fetch_thirdparty_archives(self):
+        """--fetch archive: the SDK's vendored folders and each submodule (a nested one after its
+        parent) from the kept archives, each checked against its pin; a mismatch renames the
+        archive to .rejected and stops."""
+        sdk,first,nested='a'*40,'b'*40,'c'*40
+        with tempfile.TemporaryDirectory() as directory, patch('builtins.print'):
+            root=Path(directory)
+            downloads=root/'downloads'
+            downloads.mkdir()
+            self.write_archive(downloads/f'owner-sdk-{sdk}.tar.gz',sdk,
+                               {'thirdparty/one/a.h':b'a','thirdparty/two/b.h':b'b',
+                                'thirdparty/unused/c.h':b'c','src/main.cpp':b'm'})
+            self.write_archive(downloads/f'owner-lib-{first}.tar.gz',first,
+                               {'lib.h':b'lib\r\n','test/README':b'readme'})
+            self.write_archive(downloads/f'owner-munit-{nested}.tar.gz',nested,{'munit.c':b'munit'})
+            def tree(files):
+                with tempfile.TemporaryDirectory() as other:
+                    for name,data in files.items():
+                        (Path(other)/name).parent.mkdir(parents=True,exist_ok=True)
+                        (Path(other)/name).write_bytes(data)
+                    return pipeline.archive_tree(other)
+            archives=(('lib','owner/lib',first,tree({'lib.h':b'lib\n','test/README':b'readme'})),
+                      ('lib/test/munit','owner/munit',nested,tree({'munit.c':b'munit'})))
+            destination=root/'runtime-source/thirdparty'
+            with patch.object(pipeline,'SDK_REPOSITORY','owner/sdk'), patch.object(pipeline,'SDK_REV',sdk), \
+                    patch.object(pipeline,'THIRDPARTY_VENDORED',('one','two')), \
+                    patch.object(pipeline,'SDK_TREE',tree({'thirdparty/one/a.h':b'a','thirdparty/two/b.h':b'b'})), \
+                    patch.object(pipeline,'THIRDPARTY_ARCHIVES',archives), \
+                    patch.object(pipeline,'download_archive',
+                                 lambda repository,commit,folder,log,mirror=None:
+                                 Path(folder)/f'{repository.replace("/","-")}-{commit}.tar.gz'):
+                (destination/'lib').mkdir(parents=True)
+                (destination/'lib/stale.h').write_text('from an earlier fetch')
+                pipeline.fetch_thirdparty_archives(root,destination)
+                self.assertEqual(sorted(path.relative_to(destination).as_posix()
+                                        for path in destination.rglob('*') if path.is_file()),
+                                 ['lib/lib.h','lib/test/README','lib/test/munit/munit.c','one/a.h','two/b.h'])
+                self.assertEqual((destination/'lib/lib.h').read_bytes(),b'lib\r\n')
+                self.assertTrue((root/'logs/thirdparty-unpack.log').is_file())
+                with patch.object(pipeline,'THIRDPARTY_ARCHIVES',(archives[0],archives[1][:3]+('0'*64,))):
+                    with self.assertRaisesRegex(RuntimeError,'pinned'):
+                        pipeline.fetch_thirdparty_archives(root,destination)
+                self.assertTrue((downloads/f'owner-munit-{nested}.tar.gz.rejected').is_file())
+                self.assertFalse((downloads/f'owner-munit-{nested}.tar.gz').exists())
+
+    def test_thirdparty_pins(self):
+        """Every submodule has an archive, the nested one after its parent; the FidelityFX paths
+        select their files."""
+        folders=[folder for folder,_,_,_ in pipeline.THIRDPARTY_ARCHIVES]
+        self.assertEqual({folder.split('/')[0] for folder in folders},set(pipeline.THIRDPARTY_SUBMODULES))
+        self.assertLess(folders.index('simde'),folders.index('simde/test/munit'))
+        for _,repository,commit,tree in pipeline.THIRDPARTY_ARCHIVES:
+            self.assertRegex(repository,r'^[\w.-]+/[\w.-]+$')
+            self.assertRegex(commit,r'^[0-9a-f]{40}$')
+            self.assertRegex(tree,r'^[0-9a-f]{64}$')
+        select=[path.lstrip('/') for path in pipeline.FFX_PATHS]
+        self.assertTrue(pipeline.archive_selected('sdk/include/FidelityFX/host/ffx_fsr3.h',select))
+        self.assertTrue(pipeline.archive_selected('LICENSE.txt',select))
+        self.assertFalse(pipeline.archive_selected('docs/LICENSE.txt',select))
+        self.assertFalse(pipeline.archive_selected('sdk/includes.txt',select))
+        self.assertFalse(pipeline.archive_selected('PrebuiltSignedDLL/amd_fidelityfx_dx12.dll',select))
+
+    PATCH=(b'# A comment before the diff.\n'
+           b'diff --git a/src/a.c b/src/a.c\nindex 1111111..2222222 100644\n--- a/src/a.c\n+++ b/src/a.c\n'
+           b'@@ -1,3 +1,4 @@\n one\n+inserted\n two\n three\n'
+           b'@@ -6,2 +7,2 @@ six\n six\n-seven\n\\ No newline at end of file\n+SEVEN\n'
+           b'\\ No newline at end of file\n')
+    SOURCE=b'one\ntwo\nthree\nfour\nfive\nsix\nseven'
+    PATCHED=b'one\ninserted\ntwo\nthree\nfour\nfive\nsix\nSEVEN'
+
+    def test_patch_text(self):
+        """Hunks apply only exactly where they stand (no fuzz, no other offset), in reverse too,
+        and each file keeps its own line endings, the missing last newline included."""
+        (name,hunks),=pipeline.parse_patch(self.PATCH)
+        self.assertEqual((name,len(hunks)),('src/a.c',2))
+        self.assertEqual(pipeline.patch_text(self.SOURCE,hunks),self.PATCHED)
+        self.assertEqual(pipeline.patch_text(self.PATCHED,hunks,reverse=True),self.SOURCE)
+        crlf=self.SOURCE.replace(b'\n',b'\r\n')
+        self.assertEqual(pipeline.patch_text(crlf,hunks),self.PATCHED.replace(b'\n',b'\r\n'))
+        for source in (b'zero\n'+self.SOURCE,self.SOURCE.replace(b'two',b'Two'),self.SOURCE+b'\n',
+                       self.PATCHED):
+            with self.assertRaisesRegex(ValueError,'does not match'):
+                pipeline.patch_text(source,hunks)
+        for bad in (b'diff --git a/x b/x\n--- /dev/null\n+++ b/x\n@@ -0,0 +1 @@\n+x\n',
+                    b'diff --git a/x b/x\nBinary files a/x and b/x differ\n',
+                    b'diff --git a/x b/x\n--- a/x\n+++ b/x\n@@ -1,2 +1,2 @@\n x\n',
+                    b'diff --git a/x b/x\n--- a/../x\n+++ b/../x\n@@ -1 +1 @@\n-x\n+y\n'):
+            with self.assertRaises(ValueError,msg=bad):
+                pipeline.parse_patch(bad)
+
+    def test_apply_patch(self):
+        """apply_patch: check writes nothing, a mismatch in any file writes nothing, and the
+        SDL patch applies to and reverses from a CRLF copy of its files."""
+        with tempfile.TemporaryDirectory() as directory, patch('builtins.print'):
+            directory=Path(directory)
+            patch_file=directory/'change.patch'
+            patch_file.write_bytes(self.PATCH.replace(b'\n',b'\r\n'))
+            (directory/'tree/src').mkdir(parents=True)
+            source=directory/'tree/src/a.c'
+            source.write_bytes(self.SOURCE.replace(b'\n',b'\r\n'))
+            log=directory/'logs/patch-change.log'
+            pipeline.apply_patch(patch_file,directory/'tree',log,check=True)
+            self.assertEqual(source.read_bytes(),self.SOURCE.replace(b'\n',b'\r\n'))
+            pipeline.apply_patch(patch_file,directory/'tree',log)
+            self.assertEqual(source.read_bytes(),self.PATCHED.replace(b'\n',b'\r\n'))
+            with self.assertRaisesRegex(RuntimeError,'does not apply'):
+                pipeline.apply_patch(patch_file,directory/'tree',log)
+            self.assertIn('error',log.read_text(encoding='utf-8'))
+            pipeline.apply_patch(patch_file,directory/'tree',log,reverse=True)
+            self.assertEqual(source.read_bytes(),self.SOURCE.replace(b'\n',b'\r\n'))
+            two=directory/'two.patch'
+            two.write_bytes(self.PATCH+self.PATCH.split(b'\n',1)[1].replace(b'src/a.c',b'src/b.c'))
+            (directory/'tree/src/b.c').write_bytes(b'other')
+            with self.assertRaises(RuntimeError):
+                pipeline.apply_patch(two,directory/'tree',log)
+            self.assertEqual(source.read_bytes(),self.SOURCE.replace(b'\n',b'\r\n'))
+
+    def test_fetch_mode_and_doctor(self):
+        """--fetch: archive in a snapshot, git in a checkout, or as given; doctor wants Git only
+        for git."""
+        with patch.object(pipeline,'FETCH',None):
+            with patch.object(pipeline,'is_git_checkout',lambda:False):
+                self.assertEqual(pipeline.fetch_mode(),'archive')
+            with patch.object(pipeline,'is_git_checkout',lambda:True):
+                self.assertEqual(pipeline.fetch_mode(),'git')
+        with patch.object(pipeline,'FETCH','archive'), patch.object(pipeline,'is_git_checkout',lambda:True):
+            self.assertEqual(pipeline.fetch_mode(),'archive')
+        with tempfile.TemporaryDirectory() as directory, patch('builtins.print'):
+            fxc=Path(directory)/'bin/10.0.26100.0/x64/fxc.exe'
+            fxc.parent.mkdir(parents=True)
+            fxc.write_bytes(b'')
+            outputs={'clang++':'clang version 20.1.8','cmake':'cmake version 3.31.6'}
+            with patch.dict(os.environ,{'WindowsSdkDir':directory,'WindowsSDKVersion':'10.0.26100.0\\'}), \
+                    patch.object(pipeline.shutil,'which',lambda name:None if name=='git' else name), \
+                    patch.object(pipeline.subprocess,'check_output',lambda args,**kwargs:outputs[args[0]]):
+                self.assertEqual(pipeline.doctor('archive'),fxc)
+                with self.assertRaisesRegex(RuntimeError,'Missing git'):
+                    pipeline.doctor('git')
 
     def test_clear_gray(self):
         """The e2e clear color check: smooth neutral grays that pass 102 (asphalt under TAA) are no

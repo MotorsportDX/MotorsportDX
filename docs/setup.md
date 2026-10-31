@@ -96,7 +96,7 @@ the same packages before their first launch ([content import](e2e/README.md#cont
 | Component | Requirement |
 | --- | --- |
 | System | Windows x64, a CPU compatible with x86-64-v2, a GPU that supports Direct3D 12 |
-| Git | Git for Windows, with HTTPS access to GitHub (for the SDK, its pinned submodules and the FidelityFX SDK). Setup uses partial and sparse clones; validated version: **2.55.0** |
+| Git | Git for Windows, with HTTPS access to GitHub (for the SDK, its pinned submodules and, with `-Fsr on`, the FidelityFX SDK). Setup uses partial and sparse clones; validated version: **2.55.0**. Needed only for `-Fetch git`, the default in a Git checkout; a [source snapshot](#source-snapshots) fetches GitHub's archives without Git ([fetching without Git](#fetching-without-git)) |
 | Python | **Python 3.11+ x64**, for example from python.org. Use a real `python.exe`, not the Microsoft Store alias in `WindowsApps`. `py -0p` lists the installed versions with their paths: an install for all users is in `C:\Program Files\Python311`, one for the current user in `%LOCALAPPDATA%\Programs\Python\Python311`. Only the standard library is used |
 | Visual Studio | Visual Studio 2022 or Build Tools, workload **Desktop development with C++**, MSVC x64 tools |
 | Windows SDK | Includes `fxc.exe`. Validated version: **10.0.26100.0** |
@@ -108,16 +108,17 @@ the development laptop (Intel Core Ultra 7 255HX, 20 threads, 32 GB, `-Jobs 8`):
 took about 16 minutes, of which the game's own compilation took 141 seconds, and the
 BuildRoot held 2.6 GB after `build` (1.1 GB of it the upstream SDK clone with its
 submodules). The first run then imports Disc 2 (2.8 GB) and the downloadable content
-packages into the BuildRoot, about their own size. Setup downloads the SDK, its submodules
-and the FidelityFX SDK from GitHub once. The build directory can be on another drive.
+packages into the BuildRoot, about their own size. Setup downloads the SDK and its submodules
+from GitHub once (the FidelityFX SDK only for a build with `-Fsr on`). The build directory can
+be on another drive.
 `-Jobs` can go up to the number of threads when the computer has the memory; the default
 of 4 is slower.
 
 The `doctor` action checks the prerequisites and reports what is missing: Windows
-x64, 64-bit Python 3.11 or newer, `git`, `cmake`, `ninja`, `clang`, `clang++` and
-`link` on the path, LLVM 20.x (from `clang++ --version`), CMake 3.25 or newer, and
+x64, 64-bit Python 3.11 or newer, `git` (with `-Fetch git` only), `cmake`, `ninja`, `clang`,
+`clang++` and `link` on the path, LLVM 20.x (from `clang++ --version`), CMake 3.25 or newer, and
 `fxc.exe` in the Visual Studio developer environment. It also reports the BuildRoot's
-FidelityFX SDK checkout (fetched or not, at the pinned commit or not) and its mirror
+FidelityFX SDK (fetched or not, at the pinned commit or not) and its mirror
 ([the FidelityFX SDK mirror](#the-fidelityfx-sdk-mirror)), and the GameInput package
 ([the GameInput package](#the-gameinput-package)). `Build.ps1` sets up the
 Visual Studio x64 environment itself. The scripts do not silently install system
@@ -205,7 +206,8 @@ The stages can also run separately:
 | `-Content` | Content package files or directories (DLC). Optional, one or more, read by `generate`, `all` and `run`. See [Downloadable content](#downloadable-content). |
 | `-Flavor` | Compiler experiment for `build`, for example `thinlto,v3`. See [Build flavors](#build-flavors). |
 | `-Fsr` | `on` or `off`, for `setup`, `build` and `all`: link AMD FSR 3.1 into the runtime, built from the FidelityFX SDK source (`REX_FSR`). `on` fetches the pinned SDK first. The runtime build folder keeps the choice for later builds; off by default. See [FSR 3.1](#fsr-31-optional). |
-| `-FfxMirror` | The FidelityFX SDK mirror for `setup`, `build` and `all`, in place of the `FFX_MIRROR` environment variable: another Git URL or a local `.bundle` file. See [the FidelityFX SDK mirror](#the-fidelityfx-sdk-mirror). |
+| `-FfxMirror` | The FidelityFX SDK mirror for `setup`, `build` and `all`, in place of the `FFX_MIRROR` environment variable: another Git URL or a local `.bundle` file, or with `-Fetch archive` a local copy or another URL of the SDK's archive. See [the FidelityFX SDK mirror](#the-fidelityfx-sdk-mirror). |
+| `-Fetch` | `git` or `archive`, for `setup`, `build` and `all`: how the third-party sources are fetched. `git` clones them (the default in a Git checkout); `archive` takes GitHub's archives of the pinned commits without Git (the default in a [source snapshot](#source-snapshots)). See [fetching without Git](#fetching-without-git). |
 | `-Out` | The folder of `export`, outside the BuildRoot and the repository; of `launcher-data`, outside the source; or the new folder of `snapshot`, outside the repository. |
 | `-Tests` | `developer` (the default) or `player`, for `build` and `all`: which tests run at the end of `build`. See [3. Build](#3-build). |
 | `-Progress` | A file to which `setup`, `generate`, `build` and `all` append one JSON line for each stage and step, or `-` for the output. See [Progress lines](#progress-lines). |
@@ -221,20 +223,59 @@ The stages can also run separately:
 - mirrors `work/runtime` to `BuildRoot\runtime-source`;
 - takes the third-party libraries from `rexglue/rexglue-sdk` at commit
   `f5337cdc947ff6d4c4196737e2c807a48f2a1fc2`: the vendored directories and the 13
-  submodules that the D3D12 build needs. Vulkan, SPIR-V, Tracy and the tests are not
-  fetched;
-- takes the AMD FidelityFX SDK from `GPUOpen-LibrariesAndSDKs/FidelityFX-SDK`, tag
-  `v1.1.4`, commit `c6efa6bf7f2027b3ec94f28578bb5965eabb9e55`: a sparse, blob-filtered Git
-  clone of the files the FSR 3 upscaler and its DX12 backend build from (about 39 MB plus
-  36 MB of Git objects) in `BuildRoot\fidelityfx-sdk`. Setup refuses any other commit, and
-  takes it from the [mirror](#the-fidelityfx-sdk-mirror) when GitHub cannot be reached;
+  submodules that the D3D12 build needs (with `-Fetch git` a clone in
+  `BuildRoot\runtime-upstream`, with `-Fetch archive` [GitHub's archives](#fetching-without-git)).
+  Vulkan, SPIR-V, Tracy and the tests are not fetched;
+- with `-Fsr on` only (since 31 October 2026; before, every setup fetched it), takes the AMD
+  FidelityFX SDK from `GPUOpen-LibrariesAndSDKs/FidelityFX-SDK`, tag
+  `v1.1.4`, commit `c6efa6bf7f2027b3ec94f28578bb5965eabb9e55`: the files the FSR 3 upscaler and
+  its DX12 backend build from (about 39 MB) in `BuildRoot\fidelityfx-sdk`, with `-Fetch git` as a
+  sparse, blob-filtered Git clone (plus 36 MB of Git objects), with `-Fetch archive` from the
+  commit's archive. Setup refuses any other commit, and takes it from the
+  [mirror](#the-fidelityfx-sdk-mirror) when GitHub cannot be reached;
 - takes the Microsoft.GameInput package, version 3.5.283, from NuGet (2.04 MB) into
   `BuildRoot\gameinput-sdk\3.5.283`, and extracts its two MIT files: the GameInput API v3
   header and its loader source ([the GameInput package](#the-gameinput-package));
 - patches the fetched SDL source for GameInput API v3
-  ([outputs/FM4-build/sdl3-gameinput-v3.patch](../outputs/FM4-build/sdl3-gameinput-v3.patch));
+  ([outputs/FM4-build/sdl3-gameinput-v3.patch](../outputs/FM4-build/sdl3-gameinput-v3.patch))
+  in Python: every hunk must match exactly where it stands (no fuzz, no other offset), and each
+  file keeps its own line endings (since 31 October 2026; before, `git apply` in a scratch copy,
+  which gave every line of the three patched files a doubled carriage return, CR CR LF, on a
+  checkout with Git for Windows' CRLF line endings);
 - compiles the licensed Xenia/ReXGlue resolve shaders with the Windows SDK FXC;
 - builds and installs the Release runtime locally.
+
+#### Fetching without Git
+
+With `-Fetch archive` (`--fetch archive`, the default in a [source snapshot](#source-snapshots)),
+setup takes the third-party sources as GitHub's archives of the pinned commits
+(`https://codeload.github.com/<owner>/<repository>/tar.gz/<commit>`), with no Git on the
+computer: the upstream SDK's archive at `f5337cd`, of which only the 11 vendored folders are
+unpacked, and one archive for each of the 13 submodules at the commit the SDK pins, plus SIMDe's
+own submodule `test/munit` (`THIRDPARTY_ARCHIVES` in `pipeline.py`). The archives are kept in
+`BuildRoot\downloads` and fetched only when missing, so a rerun needs no network. On 31 October
+2026 the 15 archives held 95.7 MB (the SDK's 51.3 MB, SDL's 16.0 MB, FFmpeg's 13.8 MB) and
+downloaded in 21 seconds.
+
+GitHub does not promise the same archive bytes over time, so the pin of each archive is a hash
+over its unpacked files, not over the archive: a SHA-256 over, in path order, each file's path
+below its folder, a zero byte and the SHA-256 of its contents with every CRLF read as LF. Files
+of Git (a submodule's `.git` file) and the pipeline's markers (`.fm4-*`) are not counted. Line
+endings are read as LF because a Git for Windows checkout writes CRLF where the archive has LF;
+the files keep the archive's own. A symbolic link in an archive (libmspack has 15, o1heap one) is
+written as a file holding its target, as Git for Windows writes it without symbolic links. A
+folder whose files differ from its pin stops setup, and its archive is renamed to `.rejected`,
+so that the next run fetches it again. The archive must also name the pinned commit (its pax
+comment, which `git archive` writes).
+
+Unpacking takes only regular files and links: every member passes `tarfile`'s data filter
+(nothing absolute, nothing outside the folder), and paths with `..` or `:` are refused. Nothing
+from an archive is run but the build itself.
+
+The unpacked 24 folders (12,750 files) gave the same hash as the development BuildRoot's Git
+checkout of the same commits under this rule on 31 October 2026. A pin that moves to another
+commit gets its new hash from the first fetch's stop message, after its files have been compared
+with a Git checkout of that commit.
 
 #### FSR 3.1 (optional)
 
@@ -261,6 +302,13 @@ variable, or `Build.ps1 -FfxMirror`) names it:
   GitHub. The project owner may fork the SDK to their own GitHub account and name the fork
   here; check that the fork has the tag `v1.1.4` (fork every branch, not the main branch
   only, or push the tag to it). A mirror at another commit is refused like GitHub.
+- **With `-Fetch archive`**, a local copy of the commit's archive (a `.tar.gz` file, used first,
+  without network) or another URL of it (tried after GitHub). The archive holds the whole SDK;
+  only the files of the sparse checkout above are unpacked, and they must give the pinned hash
+  ([fetching without Git](#fetching-without-git)). A `.bundle` is ignored there. The SDK's
+  archive was not downloaded from GitHub for this pin (its size is not known); the pin comes from
+  a `git archive` of the pinned commit made from the bundle above, whose 493 unpacked files gave
+  the same hash as the development BuildRoot's sparse checkout on 31 October 2026.
 
 ```powershell
 $env:FFX_MIRROR = 'D:\FM4-archive\third-party\fidelityfx-sdk-v1.1.4.bundle'
@@ -383,8 +431,9 @@ hyphens (`--disc1`, `--jobs`, `--tests`, `--progress`). The caller provides the 
 that `Build.ps1` sets up: the Visual Studio x64 developer environment (`fxc.exe` through
 `WindowsSdkDir` and `WindowsSDKVersion`, `link`, the C and C++ libraries) and LLVM 20 first on
 `PATH`. `preflight`, `launcher-data` and `snapshot` need none of it: they run before any
-toolchain exists. Until increment B2 of the builder, `setup` still needs Git for the SDK and
-FidelityFX fetches and the SDL patch.
+toolchain exists. In a snapshot no action needs Git: the fetches take GitHub's archives
+([fetching without Git](#fetching-without-git)) and the SDL patch is applied in Python
+(increment B2). `doctor` asks for `git` only with `--fetch git`.
 
 ### Preflight
 
@@ -448,7 +497,7 @@ instead, between the action's other output. Schema 1:
 | `schema` | 1 |
 | `event` | `stage` (`setup`, `generate`, `build`) or `step` |
 | `stage` | The stage the line belongs to, or `null` for a step outside a stage |
-| `step` | For a step: the name of its log without `.log` (every process the pipeline starts with a log is a step: `runtime-configure`, `runtime-build`, `codegen`, `game-build`, `instruction-tests`, ...), or `gameinput-fetch`, `dxc-fetch`, `thirdparty-mirror`; `null` for a stage. A name can come twice: the FidelityFX fetch's Git commands share `fidelityfx-fetch` |
+| `step` | For a step: the name of its log without `.log` (every process the pipeline starts with a log is a step: `runtime-configure`, `runtime-build`, `codegen`, `game-build`, `instruction-tests`, `patch-sdl3-gameinput-v3`, ...), or `gameinput-fetch`, `dxc-fetch`, `thirdparty-mirror`; with `--fetch archive` `thirdparty-download`, `thirdparty-unpack`, `fidelityfx-download` and `fidelityfx-unpack`, each with a log of its archives (size, source and seconds; files, hash and seconds); `null` for a stage. A name can come twice: the FidelityFX fetch's Git commands share `fidelityfx-fetch`, and `patch-sdl3-gameinput-v3` comes once for the check and once for the patch |
 | `state` | `running`, then `done` or `failed` |
 | `elapsed` | Seconds since the stage or step started, to a tenth; 0 on `running` |
 | `log` | The step's log in `BuildRoot\logs`, or `null` |
@@ -505,8 +554,8 @@ take a local copy:
 
 | Variable | Local copy | Used |
 | --- | --- | --- |
-| `THIRDPARTY_MIRROR` | A checkout of the upstream SDK at the pinned commit with its 13 submodules, such as another BuildRoot's `runtime-upstream` | Setup copies the third-party folders from it instead of cloning, and refuses it at another commit or with a submodule that is missing or differs from its pin. For developers only; the builder takes archives instead (B2) |
-| `FFX_MIRROR` | The FidelityFX SDK bundle | First, when the BuildRoot has no checkout ([the mirror](#the-fidelityfx-sdk-mirror)) |
+| `THIRDPARTY_MIRROR` | A checkout of the upstream SDK at the pinned commit with its 13 submodules, such as another BuildRoot's `runtime-upstream` | With `--fetch git` only: setup copies the third-party folders from it instead of cloning, and refuses it at another commit or with a submodule that is missing or differs from its pin. `--fetch archive` keeps its archives in `BuildRoot\downloads` instead; copying them into a new BuildRoot's `downloads` saves the network the same way |
+| `FFX_MIRROR` | The FidelityFX SDK bundle, or with `--fetch archive` the SDK's archive | First, when the BuildRoot has no checkout ([the mirror](#the-fidelityfx-sdk-mirror)) |
 | `GAMEINPUT_MIRROR` | The `.nupkg` file | First ([the GameInput package](#the-gameinput-package)) |
 | `DXC_MIRROR` | The release zip | First ([the DirectX Shader Compiler](#the-directx-shader-compiler)) |
 
@@ -544,8 +593,9 @@ layout is:
 ```text
 FM4-build/
 ├── runtime-source/   # Copy of work/runtime + third-party libraries
-├── runtime-upstream/ # Upstream SDK clone (only for third-party libraries)
-├── fidelityfx-sdk/   # AMD FidelityFX SDK, sparse clone (only with -Fsr on)
+├── runtime-upstream/ # Upstream SDK clone (only for third-party libraries; -Fetch git)
+├── downloads/        # GitHub's archives of the pinned commits (-Fetch archive)
+├── fidelityfx-sdk/   # AMD FidelityFX SDK, sparse clone or the archive's files (only with -Fsr on)
 ├── gameinput-sdk/    # Microsoft.GameInput package and its two MIT files
 ├── runtime-build/    # Runtime build
 ├── runtime-install/  # Locally installed runtime

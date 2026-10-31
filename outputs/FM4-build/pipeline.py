@@ -261,10 +261,11 @@ def run(args, cwd=None, log=None, env=None):
     else:
         subprocess.run(args, cwd=cwd, env=env, check=True)
 
-def doctor():
+def doctor(fetch='git'):
+    """fetch: git needs Git on PATH; archive (fetch_mode) does not."""
     if os.name != 'nt' or sys.maxsize <= 2**32 or sys.version_info < (3,11):
         raise RuntimeError('Requires Windows x64 and Python 3.11 or newer (64-bit).')
-    for name in ('git', 'cmake', 'ninja', 'clang', 'clang++', 'link'):
+    for name in (('git',) if fetch=='git' else ())+('cmake', 'ninja', 'clang', 'clang++', 'link'):
         if not shutil.which(name):
             raise RuntimeError(f'Missing {name}. See docs/setup.md and use Build.ps1 from a VS C++ environment.')
     version = subprocess.check_output(['clang++', '--version'], text=True)
@@ -279,7 +280,7 @@ def doctor():
     fxc = Path(sdk_dir)/'bin'/sdk_version/'x64/fxc.exe'
     if not sdk_dir or not sdk_version or not fxc.is_file():
         raise RuntimeError('Windows SDK x64 fxc.exe not found in the VS development environment.')
-    print('Preflight passed. LLVM:', version.splitlines()[0], 'FXC:', fxc)
+    print('Preflight passed. LLVM:', version.splitlines()[0], 'FXC:', fxc, 'Fetch:', fetch)
     return fxc
 
 # The preflight action (docs/setup.md#preflight): whether this computer can build and run the
@@ -701,6 +702,189 @@ def sync_runtime(root):
         (source/relative).unlink(missing_ok=True)
     listing.write_text(json.dumps(sorted(current)))
 
+# The fetch without Git (--fetch archive, the default in a source snapshot; docs/setup.md#fetching-
+# without-git, docs/analysis/builder-installer.md 4.3): GitHub's archive of each pinned commit,
+# kept in <BuildRoot>/downloads so that a rerun needs no network, and unpacked by unpack_archive.
+# GitHub does not promise the same archive bytes over time, so each pin is a tree hash over the
+# unpacked files (archive_tree), not a hash of the archive. --fetch git clones with Git instead
+# (the default in a Git checkout, with THIRDPARTY_MIRROR and FFX_MIRROR's bundle). A pin that
+# moves to another commit gets its tree from the stop of a first fetch, which names it, after
+# its files are checked against those of a Git checkout of that commit.
+FETCHES=('git','archive')
+FETCH=None
+ARCHIVE_URL='https://codeload.github.com/{repository}/tar.gz/{commit}'
+SDK_REPOSITORY='rexglue/rexglue-sdk'
+# The tree of the SDK archive's thirdparty/<THIRDPARTY_VENDORED> folders.
+SDK_TREE='6af5992d2ef095868df356f153200f47ce9e152abbb64f7e934e75858e2c6aea'
+# The submodules of THIRDPARTY_SUBMODULES at the commits SDK_REV pins, and SIMDe's own submodule:
+# (folder under runtime-source/thirdparty, GitHub repository, commit, tree of the unpacked files).
+THIRDPARTY_ARCHIVES=(
+    ('FFmpeg','wmarti/FFmpeg','0604b464c7cb4ebc94940cf1f324a3b26b87717c',
+     '184ac24d36d8bb3bd698e1d8307d1e66a47864e422a13e42197f58626d1daafc'),
+    ('cli11','CLIUtils/CLI11','bfffd37e1f804ca4fae1caae106935791696b6a9',
+     'eda0373a41e5bf63b44a85237a80c8724e3d76d53f14516bca5d5cb5ef873624'),
+    ('fmt','fmtlib/fmt','407c905e45ad75fc29bf0f9bb7c5c2fd3475976f',
+     'ba0cfa2a9c50599b7aecf832a3c05ea596cc1369386ffa1b34dd3d571031644c'),
+    ('imgui','ocornut/imgui','6d910d5487d11ca567b61c7824b0c78c569d62f0',
+     'c95a0108745952ae8de7e9a00f83254d6d65fa0e881dc627185ae323037a0c81'),
+    ('inja','pantor/inja','7d1b4600b68595085a949743331c2e5673f511ea',
+     '3d8f06bb2480e23bb206cfcea50123f1de82534d2ce8cc20bbc78f321dd82ff5'),
+    ('libmspack','kyz/libmspack','305907723a4e7ab2018e58040059ffb5e77db837',
+     '819297b5467e2d0291a0c0a4c6b9a573d7fa8928e1b44bd31de07bf0bf1299a9'),
+    ('o1heap','pavel-kirienko/o1heap','388a73fd9007300e5130c5fe352d9ce3288b6dde',
+     '53818b72775c6277baedb8f87e8d5105eb751cfee31823a213d43556f886616b'),
+    ('sdl3','libsdl-org/SDL','8bf3b7215ad9fc3deb583c6a3a37c6c67f2e24e4',
+     '8ed4149c4144b6386cc71a35e45daf959249c7f504104e0127ef78a9c5b6d935'),
+    ('simde','simd-everywhere/simde','71fd833d9666141edcd1d3c109a80e228303d8d7',
+     'b710307fde2f826a94585095390b0fb7ed7cc34c9d2660c8d0ce3a5bd1928727'),
+    ('simde/test/munit','nemequ/munit','da8f73412998e4f1adf1100dc187533a51af77fd',
+     'eb71663930e8e87b7b23bf6394b9e741a2fe0193b659ad096f50b6017f378405'),
+    ('spdlog','gabime/spdlog','79524ddd08a4ec981b7fea76afd08ee05f83755d',
+     '9ed7f9f61a45b43a86924832a50227222b3b744cd337c266885ea82d39cf3ffa'),
+    ('tomlplusplus','marzer/tomlplusplus','30172438cee64926dc41fdd9c11fb3ba5b2ba9de',
+     'e79ec344df246dbba398945b19311a02a0d852f053070ed86605f3698e3fb4da'),
+    ('utfcpp','nemtrif/utfcpp','63d64de49fd6b829f7c8694df5ab2ee625cb7134',
+     '02329d5bb9ae4b60dbe90b8f39062a8f3337e8fdb692e2325508854d6f9b3e58'),
+    ('xxHash','Cyan4973/xxHash','e626a72bc2321cd320e953a0ccf1584cad60f363',
+     'e5a779b901f27d027dbaac8297eba6e47c4cf72e6f31f662154c3adb203e4bd2'))
+
+def fetch_mode():
+    """--fetch, else archive in a source snapshot and git in a Git checkout."""
+    return FETCH or ('git' if is_git_checkout() else 'archive')
+
+def archive_tree(directory):
+    """The pin of unpacked files: a SHA-256 over, in posix-path order, path + b'\\0' + the SHA-256
+    of the contents with each CRLF read as LF, for the files below directory except Git's (a .git
+    file or folder) and the pipeline's markers (.fm4-*). Line endings are read as LF because a Git
+    for Windows checkout writes CRLF where the archive has LF; the files keep their own."""
+    directory=Path(directory)
+    files=sorted((path.relative_to(directory).as_posix(),path) for path in directory.rglob('*')
+                 if path.is_file() and not any(part=='.git' or part.startswith('.fm4-')
+                                               for part in path.relative_to(directory).parts))
+    tree=hashlib.sha256()
+    for name,path in files:
+        tree.update(name.encode()+b'\0'+hashlib.sha256(path.read_bytes().replace(b'\r\n',b'\n')).digest())
+    return tree.hexdigest()
+
+def archive_selected(name,select):
+    """Whether an archive member's path below its top folder is in select: a file, or a folder
+    ending with '/'. None selects everything."""
+    return select is None or any(name==entry or entry.endswith('/') and name.startswith(entry)
+                                 for entry in select)
+
+def unpack_archive(archive,destination,commit,select=None):
+    """The files of a GitHub archive (a git archive tar.gz with one top folder) below that folder
+    into destination, those of select only (archive_selected). Every member passes tarfile's data
+    filter and a check of its own path (nothing absolute, no '..', no ':'); a symbolic link is
+    written as a file holding its target, as a Git for Windows checkout without symbolic links
+    writes it, and any other kind of member is refused. The archive's commit (its pax comment)
+    must be commit. Returns the number of files."""
+    destination=Path(destination)
+    destination.mkdir(parents=True)
+    top,count=None,0
+    with tarfile.open(archive) as tar:
+        for member in tar:
+            first,_,name=member.name.partition('/')
+            top=top or first
+            if first!=top:
+                raise RuntimeError(f'{archive}: {member.name} is outside its top folder {top}.')
+            name=name.rstrip('/')
+            if not name or member.isdir() or not archive_selected(name,select):
+                continue
+            parts=name.split('/')
+            if '..' in parts or '' in parts or ':' in name or '\\' in name:
+                raise RuntimeError(f'{archive}: refused member path {member.name!r}.')
+            member=tarfile.data_filter(member,str(destination))
+            if member.isfile():
+                data=tar.extractfile(member).read()
+            elif member.issym():
+                data=member.linkname.encode()
+            else:
+                raise RuntimeError(f'{archive}: {member.name} is neither a file nor a symbolic link.')
+            target=destination.joinpath(*parts)
+            target.parent.mkdir(parents=True,exist_ok=True)
+            target.write_bytes(data)
+            count+=1
+        comment=tar.pax_headers.get('comment')
+    if comment not in (None,commit):
+        raise RuntimeError(f'{archive} is an archive of {comment}, not of {commit}.')
+    return count
+
+def download_archive(repository,commit,downloads,log,mirror=None):
+    """<downloads>/<owner>-<repo>-<commit>.tar.gz, GitHub's archive of the commit, kept for later
+    runs: fetched only when missing, from mirror first when it is a local file (another URL of
+    the archive is tried after GitHub). Its files are checked when they are unpacked."""
+    path=Path(downloads)/f'{repository.replace("/","-")}-{commit}.tar.gz'
+    if path.is_file():
+        return path
+    path.parent.mkdir(parents=True,exist_ok=True)
+    partial=path.with_name(path.name+'.partial')
+    url=ARCHIVE_URL.format(repository=repository,commit=commit)
+    local=mirror is not None and Path(mirror).is_file()
+    for source in filter(None,(mirror,url) if local else (url,mirror)):
+        started=time.monotonic()
+        try:
+            if Path(source).is_file():
+                shutil.copyfile(source,partial)
+            else:
+                with urllib.request.urlopen(source,timeout=300) as response, partial.open('wb') as stream:
+                    shutil.copyfileobj(response,stream,1<<20)
+        except (OSError,ValueError) as error:
+            print(f'{repository} {commit[:7]}: {source} failed: {error}')
+            continue
+        partial.replace(path)
+        with Path(log).open('a',encoding='utf-8') as stream:
+            stream.write(f'{path.name} {path.stat().st_size} bytes from {source} in '
+                         f'{time.monotonic()-started:.1f} s\n')
+        return path
+    partial.unlink(missing_ok=True)
+    raise RuntimeError(f'The archive of {repository} {commit} cannot be fetched '
+                       '(docs/setup.md#fetching-without-git).')
+
+def unpack_checked(archive,stage,commit,tree,select,log):
+    """unpack_archive into stage (emptied first), then the pin: files whose archive_tree differs
+    from tree stop the build, and the archive is renamed to .rejected so that a rerun fetches it
+    again."""
+    started=time.monotonic()
+    shutil.rmtree(stage,ignore_errors=True)
+    files=unpack_archive(archive,stage,commit,select)
+    actual=archive_tree(stage)
+    with Path(log).open('a',encoding='utf-8') as stream:
+        stream.write(f'{archive.name} {files} files, tree {actual}, {time.monotonic()-started:.1f} s\n')
+    if actual!=tree:
+        archive.replace(archive.with_name(archive.name+'.rejected'))
+        raise RuntimeError(f'{archive.name} does not unpack to the pinned files: tree {actual}, '
+                           f'pinned {tree}.')
+
+def place(source,target):
+    """Moves the folder source to target, replacing what is there."""
+    shutil.rmtree(target,ignore_errors=True)
+    target.parent.mkdir(parents=True,exist_ok=True)
+    os.replace(source,target)
+
+def fetch_thirdparty_archives(root,destination):
+    """--fetch archive: the SDK's archive for THIRDPARTY_VENDORED and THIRDPARTY_ARCHIVES' archives
+    for the submodules, each checked against its pin, into destination."""
+    archives=[('',SDK_REPOSITORY,SDK_REV,SDK_TREE,[f'thirdparty/{name}/' for name in THIRDPARTY_VENDORED]),
+              *[(folder,repository,commit,tree,None) for folder,repository,commit,tree in THIRDPARTY_ARCHIVES]]
+    log=root/'logs/thirdparty-download.log'
+    log.parent.mkdir(parents=True,exist_ok=True)
+    with progress('step','thirdparty-download',log):
+        paths=[download_archive(repository,commit,root/'downloads',log)
+               for _,repository,commit,_,_ in archives]
+    log=root/'logs/thirdparty-unpack.log'
+    stage=destination/'.fm4-unpack'
+    with progress('step','thirdparty-unpack',log):
+        # A folder before the ones inside it (simde before simde/test/munit).
+        for (folder,_,commit,tree,select),archive in zip(archives,paths):
+            unpack_checked(archive,stage,commit,tree,select,log)
+            if folder:
+                place(stage,destination/folder)
+            else:
+                for name in THIRDPARTY_VENDORED:
+                    place(stage/'thirdparty'/name,destination/name)
+        shutil.rmtree(stage,ignore_errors=True)
+
 def thirdparty_mirror():
     """THIRDPARTY_MIRROR (environment, developers only): a local checkout of the upstream SDK at
     SDK_REV with the submodules of THIRDPARTY_SUBMODULES checked out unchanged, for example another
@@ -732,6 +916,12 @@ def fetch_thirdparty(root):
     wanted = {'revision':SDK_REV,'vendored':THIRDPARTY_VENDORED,'submodules':THIRDPARTY_SUBMODULES}
     if marker.is_file() and json.loads(marker.read_text()) == json.loads(json.dumps(wanted)):
         return
+    if fetch_mode()=='archive':
+        if os.environ.get('THIRDPARTY_MIRROR'):
+            print('THIRDPARTY_MIRROR is read by --fetch git only.')
+        fetch_thirdparty_archives(root,destination)
+        marker.write_text(json.dumps(wanted))
+        return
     mirror = thirdparty_mirror()
     if mirror:
         print(f'Third-party libraries from THIRDPARTY_MIRROR {mirror}.')
@@ -751,29 +941,119 @@ def fetch_thirdparty(root):
         shutil.copytree(upstream/'thirdparty'/name,destination/name,symlinks=True)
     marker.write_text(json.dumps(wanted))
 
+HUNK=re.compile(rb'^@@ -(\d+)(?:,(\d+))? \+(\d+)(?:,(\d+))? @@')
+
+def parse_patch(data):
+    """The files of a git diff that changes existing text files, as [(path, hunks)]; a hunk is
+    (old start, old count, new start, new count, [(tag, text, newline)]) with tag ' ', '-' or
+    '+', the text without its line ending, and newline False where the diff says 'No newline at
+    end of file'. Lines before
+    the first 'diff --git' are a comment. Anything else (new, deleted, renamed or binary files)
+    is refused."""
+    lines=data.replace(b'\r\n',b'\n').split(b'\n')
+    if lines and lines[-1]==b'':
+        lines.pop()
+    files,index=[],0
+    while index<len(lines) and not lines[index].startswith(b'diff --git '):
+        index+=1
+    while index<len(lines):
+        line=lines[index]
+        if line.startswith(b'diff --git '):
+            files.append([None,[]])
+        elif line.startswith(b'--- '):
+            if not line.startswith(b'--- a/') or line==b'--- a/':
+                raise ValueError(f'Unsupported patch line: {line.decode(errors="replace")}')
+        elif line.startswith(b'+++ '):
+            if not line.startswith(b'+++ b/'):
+                raise ValueError(f'Unsupported patch line: {line.decode(errors="replace")}')
+            files[-1][0]=line[6:].decode()
+        elif line.startswith(b'index '):
+            pass
+        elif line.startswith(b'@@'):
+            match=HUNK.match(line)
+            if not match or not files or files[-1][0] is None:
+                raise ValueError(f'Bad hunk header: {line.decode(errors="replace")}')
+            old_start,old_count,new_start,new_count=(int(value) if value is not None else 1
+                                                     for value in match.groups())
+            body,old,new=[],0,0
+            while old<old_count or new<new_count:
+                index+=1
+                if index>=len(lines):
+                    raise ValueError('The patch ends inside a hunk.')
+                text=lines[index]
+                if text.startswith(b'\\') and body:
+                    body[-1][2]=False
+                    continue
+                tag=chr(text[0]) if text else ' '
+                if tag not in ' -+':
+                    raise ValueError(f'Bad hunk line: {text.decode(errors="replace")}')
+                body.append([tag,text[1:],True])
+                old+=tag!='+'
+                new+=tag!='-'
+            while index+1<len(lines) and lines[index+1].startswith(b'\\'):
+                index+=1
+                body[-1][2]=False
+            files[-1][1].append((old_start,old_count,new_start,new_count,[tuple(entry) for entry in body]))
+        else:
+            raise ValueError(f'Unsupported patch line: {line.decode(errors="replace")}')
+        index+=1
+    for name,_ in files:
+        if name is None or name.startswith('/') or '..' in name.split('/') or ':' in name:
+            raise ValueError(f'Unsupported patch path: {name}')
+    return files
+
+def patch_text(data,hunks,reverse=False):
+    """data with hunks applied exactly: each hunk's old lines must stand at its own line (moved
+    only by the earlier hunks' added and removed lines), with no fuzz and no other offset; reverse
+    swaps each hunk's sides. Returns the new data with data's own line endings (CRLF when it has
+    any), or raises ValueError."""
+    crlf=b'\r\n' in data
+    lines=[(line,True) for line in data.replace(b'\r\n',b'\n').split(b'\n')]
+    if lines[-1][0]==b'':
+        lines.pop()
+    else:
+        lines[-1]=(lines[-1][0],False)
+    delta=0
+    for number,(old_start,old_count,new_start,new_count,body) in enumerate(hunks,1):
+        if reverse:
+            old_start,old_count=new_start,new_count
+            body=[({'-':'+','+':'-'}.get(tag,tag),line,newline) for tag,line,newline in body]
+        old=[(line,newline) for tag,line,newline in body if tag!='+']
+        new=[(line,newline) for tag,line,newline in body if tag!='-']
+        # An empty old side starts after its line, any other at it.
+        position=old_start-(1 if old_count else 0)+delta
+        if position<0 or lines[position:position+len(old)]!=old:
+            raise ValueError(f'hunk {number} does not match at line {position+1}')
+        lines[position:position+len(old)]=new
+        delta+=len(new)-len(old)
+    output=b'\n'.join(line for line,_ in lines)+(b'\n' if lines and lines[-1][1] else b'')
+    return output.replace(b'\n',b'\r\n') if crlf else output
+
 def apply_patch(patch, directory, log, reverse=False, check=False):
-    """git apply of a patch with LF line endings to a directory whose files may have CRLF ones
-    (Git for Windows checks submodules out with CRLF): the files the patch names are copied with
-    LF into a scratch directory, patched there, and written back with their own line endings.
-    Raises RuntimeError when the patch does not apply exactly."""
-    names=[line[6:].strip() for line in patch.read_text(encoding='utf-8').splitlines()
-           if line.startswith('+++ b/')]
-    scratch=log.parent/f'patch-{patch.stem}'
-    shutil.rmtree(scratch,ignore_errors=True)
-    crlf={}
-    for name in names:
-        data=(directory/name).read_bytes()
-        crlf[name]=b'\r\n' in data
-        (scratch/name).parent.mkdir(parents=True,exist_ok=True)
-        (scratch/name).write_bytes(data.replace(b'\r\n',b'\n'))
-    args=['git','apply','-p1',*(['--reverse'] if reverse else []),*(['--check'] if check else []),
-          str(patch.resolve())]
-    run(args,cwd=scratch,log=log)
-    if not check:
-        for name in names:
-            data=(scratch/name).read_bytes()
-            (directory/name).write_bytes(data.replace(b'\n',b'\r\n') if crlf[name] else data)
-    shutil.rmtree(scratch,ignore_errors=True)
+    """A git diff (parse_patch) applied in Python to a directory whose files may have CRLF line
+    endings (Git for Windows checks submodules out with CRLF; an archive has LF): every hunk must
+    match exactly (patch_text), as git apply without fuzz requires, and each file keeps its own
+    line endings. check: test only. Nothing is written unless every file applies. Raises
+    RuntimeError when the patch does not apply exactly."""
+    log.parent.mkdir(parents=True,exist_ok=True)
+    with progress('step',log.stem,log), log.open('w',encoding='utf-8') as output:
+        output.write(f'{"Checking" if check else "Applying"}{" in reverse" if reverse else ""} '
+                     f'{patch} in {directory}\n')
+        patched={}
+        try:
+            for name,hunks in parse_patch(patch.read_bytes()):
+                path=Path(directory)/name
+                try:
+                    patched[path]=patch_text(path.read_bytes(),hunks,reverse)
+                except (OSError,ValueError) as error:
+                    raise ValueError(f'{name}: {error}') from error
+                output.write(f'{name}: {len(hunks)} hunks apply\n')
+        except ValueError as error:
+            output.write(f'error: {error}\n')
+            raise RuntimeError(f'{patch.name} does not apply to {directory}: {error}; log: {log}') from error
+        if not check:
+            for path,data in patched.items():
+                path.write_bytes(data)
 
 def patch_thirdparty(root):
     """THIRDPARTY_PATCHES on runtime-source/thirdparty, once: a marker beside each patched
@@ -1025,9 +1305,46 @@ def ffx_write_bundle(sdk, bundle, log):
     remove_git_tree(temporary)
     print(f'FidelityFX SDK bundle written to {bundle}.')
 
+FFX_REPOSITORY='GPUOpen-LibrariesAndSDKs/FidelityFX-SDK'
+# The archive_tree of FFX_PATHS unpacked from the archive of FFX_REV.
+FFX_TREE='2b72ecbb3f15ed10c0e4066bfc713d039039046c11267a36d397e0342ca42037'
+FFX_MARKER='.fm4-fidelityfx.json'
+
+def ffx_archive_wanted():
+    return json.loads(json.dumps({'revision':FFX_REV,'paths':FFX_PATHS,'tree':FFX_TREE}))
+
+def fetch_fidelityfx_archive(root):
+    """--fetch archive: FFX_PATHS of GitHub's archive of FFX_REV in <BuildRoot>/fidelityfx-sdk,
+    checked against FFX_TREE. FFX_MIRROR may name a local copy of that archive (used first) or
+    another URL of it."""
+    sdk=root/'fidelityfx-sdk'
+    marker=sdk/FFX_MARKER
+    if marker.is_file() and json.loads(marker.read_text())==ffx_archive_wanted():
+        return sdk
+    if (sdk/'.git').exists():
+        raise RuntimeError(f'{sdk} is a checkout of --fetch git: build with --fetch git, or use a new BuildRoot.')
+    mirror=ffx_mirror()
+    if ffx_is_bundle(mirror):
+        print(f'FFX_MIRROR {mirror} is a bundle, which --fetch git reads; fetching the archive.')
+        mirror=None
+    log=root/'logs/fidelityfx-download.log'
+    log.parent.mkdir(parents=True,exist_ok=True)
+    with progress('step','fidelityfx-download',log):
+        archive=download_archive(FFX_REPOSITORY,FFX_REV,root/'downloads',log,mirror)
+    log=root/'logs/fidelityfx-unpack.log'
+    stage=root/'fidelityfx-unpack'
+    with progress('step','fidelityfx-unpack',log):
+        unpack_checked(archive,stage,FFX_REV,FFX_TREE,[path.lstrip('/') for path in FFX_PATHS],log)
+        place(stage,sdk)
+    marker.write_text(json.dumps(ffx_archive_wanted()))
+    return sdk
+
 def fetch_fidelityfx(root):
     """<BuildRoot>/fidelityfx-sdk at FFX_REV, sparse (FFX_PATHS), from GitHub or else from
-    FFX_MIRROR (ffx_mirror). Stops when the checked-out commit differs from the pinned one."""
+    FFX_MIRROR (ffx_mirror). Stops when the checked-out commit differs from the pinned one.
+    With --fetch archive, fetch_fidelityfx_archive."""
+    if fetch_mode()=='archive':
+        return fetch_fidelityfx_archive(root)
     sdk=root/'fidelityfx-sdk'
     log=root/'logs/fidelityfx-fetch.log'
     mirror=ffx_mirror()
@@ -1065,8 +1382,14 @@ def fetch_fidelityfx(root):
 def ffx_status(root):
     """doctor's line on the FidelityFX SDK checkout and its mirror."""
     sdk=root/'fidelityfx-sdk'
-    head=ffx_head(sdk) if (sdk/'.git').is_dir() else None
-    state=('not fetched yet (setup fetches it)' if head is None else
+    marker=sdk/FFX_MARKER
+    if marker.is_file():
+        state=('unpacked from the archive of the pinned commit'
+               if json.loads(marker.read_text())==ffx_archive_wanted() else
+               'unpacked from an archive of another pin: a build with FSR unpacks it again')
+        return f'FidelityFX SDK: {sdk} {state} {FFX_REV[:7]} ({FFX_TAG}).'
+    head=ffx_head(sdk) if (sdk/'.git').is_dir() and shutil.which('git') else None
+    state=('not fetched yet (a setup or build with --fsr on fetches it)' if head is None else
            f'at the pinned commit {FFX_REV[:7]} ({FFX_TAG})' if head==FFX_REV else
            f'at {head[:7]}, not the pinned commit {FFX_REV[:7]}: setup checks it out again')
     mirror=ffx_mirror()
@@ -1112,7 +1435,7 @@ def build_runtime(root, fxc, jobs, fsr=None, build=None):
         run(['cmake','--install',build],log=root/'logs/runtime-install.log')
 
 def setup(root, fxc, jobs, fsr=None):
-    fetch_fidelityfx(root)
+    # The FidelityFX SDK only for a build with FSR (build_runtime fetches it).
     # The two fetches without a process of their own are steps of --progress too.
     with progress('step','gameinput-fetch'):
         fetch_gameinput(root)
@@ -2973,7 +3296,7 @@ def launch_cvars(root,disc1,log_file):
             'log_file':log_file}
 
 def main():
-    global PROGRESS
+    global PROGRESS,FETCH
     parser=argparse.ArgumentParser(description=__doc__)
     parser.add_argument('action',choices=['doctor','setup','generate','build','all','run','warmcache',
                                           'profbuild','export','preflight','launcher-data','snapshot'])
@@ -3089,6 +3412,11 @@ def main():
                         help='setup, build, all: link AMD FSR 3.1, built from the FidelityFX SDK '
                              'source, into the runtime (REX_FSR; fetches the pinned SDK). Kept for '
                              'later builds; off by default')
+    parser.add_argument('--fetch',choices=FETCHES,
+                        help='setup, build, all: how the third-party sources are fetched: git clones '
+                             "(the default in a Git checkout), archive takes GitHub's archives of the "
+                             'pinned commits without Git (the default in a source snapshot; '
+                             'docs/setup.md#fetching-without-git)')
     parser.add_argument('--flavor',default='',help='opt-in compiler experiment for build: comma list of '+','.join(FLAVORS))
     args=parser.parse_args()
     root=args.build_root.resolve()
@@ -3124,13 +3452,14 @@ def main():
     if set(flavor)-set(FLAVORS) or {'pgo-gen','pgo-use'}<=set(flavor):
         raise ValueError(f'flavor must be a comma list of {FLAVORS}, not both pgo-gen and pgo-use')
     if args.ffx_mirror: os.environ['FFX_MIRROR']=args.ffx_mirror
+    if args.fetch: FETCH=args.fetch
     if args.progress:
         if args.progress=='-':
             PROGRESS=sys.stdout
         else:
             Path(args.progress).parent.mkdir(parents=True,exist_ok=True)
             PROGRESS=open(args.progress,'a',encoding='utf-8')
-    fxc=doctor()
+    fxc=doctor(fetch_mode())
     print(ffx_status(root))
     print(gameinput_status(root))
     print(dxc_status(root))

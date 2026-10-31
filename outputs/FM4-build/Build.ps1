@@ -10,6 +10,7 @@ param(
     [string]$Flavor,
     [ValidateSet('on','off')][string]$Fsr,
     [string]$FfxMirror,
+    [ValidateSet('git','archive')][string]$Fetch,
     [string]$Out,
     [string]$Revision,
     [string]$Progress,
@@ -58,6 +59,7 @@ if ($BuildRoot) { $arguments += @('--build-root', $BuildRoot) }
 if ($Flavor) { $arguments += @('--flavor', $Flavor) }
 if ($Fsr) { $arguments += @('--fsr', $Fsr) }
 if ($FfxMirror) { $arguments += @('--ffx-mirror', $FfxMirror) }
+if ($Fetch) { $arguments += @('--fetch', $Fetch) }
 if ($Out) { $arguments += @('--out', $Out) }
 if ($Revision) { $arguments += @('--revision', $Revision) }
 if ($Progress) { $arguments += @('--progress', $Progress) }
