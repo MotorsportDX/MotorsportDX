@@ -1,5 +1,10 @@
 # The llvm-mingw toolchain: route (c) (31 October 2026)
 
+**Status (31 October 2026): the switch is under way.** The owner decided to move the build to
+llvm-mingw after the prototype ("Lanjut pindah"). Its first increment, M1, makes llvm-mingw the
+default of every action (section 11); its verification gate, M2, comes next. Sections 1 to 10 are
+the research and the prototype as they stood before the decision.
+
 Research for route (c) of the [builder installer](builder-installer.md#47-the-msvc-libraries-and-the-windows-sdk):
 can Motorsport DX build with **llvm-mingw** (clang targeting mingw-w64, with libc++, mingw-w64's C
 runtime and headers, and lld) instead of Microsoft's C and C++ libraries and the Windows SDK? The
@@ -28,7 +33,9 @@ setjmp needs a 16-byte aligned buffer, and mingw-w64's `jmp_buf` loses that alig
 same fps. The frozen-frame parity gate still fails on draws, because the mingw build freezes
 another moment of the same race (cause not found). Not verified: performance, SDL's GameInput
 driver (left out under mingw). **Recommendation:** find why the frozen moment differs (section
-10.8; the switch is blocked until then), then the steps of section 5 (section 10.9).
+10.8; the switch is blocked until then), then the steps of section 5 (section 10.9). The owner
+decided to switch anyway, with the race-order variance as a separate item and M2's rendering
+check on a capture whose moment does not depend on the race (section 11).
 
 ## 1. MSVC-specific code
 
@@ -804,7 +811,141 @@ Not verified:
   were unset), Windows 10.
 - llvm-mingw's `clang` targeting `x86_64-pc-windows-msvc`, beyond emitting IR.
 
-**Next step, the main session's call:** the cause of the other frozen moment, along the list of
-10.8. It decides whether the parity gate can compare the two toolchains at all, or whether the mingw
+**Superseded by the owner's decision of 31 October 2026** (section 11): the switch goes ahead,
+the frozen moment's cause is a separate item, and M2 compares the rendering where the moment does
+not depend on the race. **Next step as written before the decision:** the cause of the other
+frozen moment, along the list of 10.8. It decides whether the parity gate can compare the two toolchains at all, or whether the mingw
 build changes the title's behaviour; until then the switch is blocked. Then the steps of section 5: the pipeline's own switch to llvm-mingw
 (section 7), the full gate and the performance A/B both ways.
+
+## 11. The switch: M1 (31 October 2026)
+
+The owner decided on 31 October 2026 to build everything with llvm-mingw, for players and
+developers ("Lanjut pindah"). M1 is the pipeline and the code; M2 is the verification gate:
+
+- a full gate of the mingw build against its own baselines;
+- a performance A/B against the MSVC build of the same commit, in both orders;
+- the rendering compared at 1:1 at a capture whose moment does not depend on the race (the frozen
+  moment differs between the toolchains, section 10.8), or an in-run A/B;
+- the owner's run on the ROG Xbox Ally X through an export.
+
+The race-order variance of section 10.8 is a separate item. M1's code is `420ef1d`; what it changed
+is documented in [setup, toolchain](../setup.md#toolchain).
+
+### 11.1 What M1 changed
+
+| Item of the brief | Done |
+| --- | --- |
+| `toolchain.json` | `llvm-mingw` 20250709 replaces LLVM 20.1.8's `.tar.xz`, with a keep list of the x86-64 members the build reads: 5,406 files, 325,064,777 bytes unpacked, against 9,104 files and 671,790,153 bytes for the whole archive (unpacked in 2.2 s). Its version is the release date; an installed copy is accepted by its clang's version (20.x). Python, CMake and Ninja stay |
+| `pipeline.py` | `--abi mingw` (the default) configures every CMake project with [llvm-mingw.cmake](../../outputs/FM4-build/llvm-mingw.cmake), the prototype's toolchain file, moved out of `mingw/`; `prototype.py` is removed. `doctor` checks llvm-mingw's tools, its target and its files, and nothing of Visual Studio. `libc++.dll` and `libunwind.dll` are staged into `runtime-install\bin`, `game-build` and `tests-build`, listed in `build-result.json`, and exported. The BuildRoot records its ABI in `setup-complete.json` and refuses the other one |
+| `--abi msvc` | the build before the switch, unchanged, for M2's A/B only; documented as temporary. `Build.ps1 -Abi msvc` enters Visual Studio's environment; `--toolchain` leaves llvm-mingw off `PATH` for it |
+| PDBs | `-gline-tables-only -gcodeview` for the runtime and the game, `-Wl,--pdb=` and `-Wl,--strip-all` for every link. The PDBs of `fm4_rex.exe`, both modules, `rexruntime.dll` and `rexgpu-xenos.dll` go into `game-build`. `--strip-all` is needed: without it llvm-mingw's prebuilt objects (the CRT's) leave DWARF in each binary, which `llvm-symbolizer` reads before the PDB, so it named no game function; with it, a generated function and a runtime method resolve to their names and lines |
+| The map | lld-link's `/map` through `-Wl,-Xlink=`, the MSVC format: `thread_profile.py`'s `load_map` and `soak_report.py`'s parser read the mingw map as they read the MSVC one (99,232 `sub_` entries and 49,616 guest functions in both), so the scripts are unchanged |
+| SDL's GameInput driver | the package's v3 header is C++ only ("GameInput requires C++"), so SDL's C check cannot pass. Under mingw the runtime's `thirdparty/CMakeLists.txt` runs the check first, as C++ against the package's header; SDL skips its own when the result is set. `HAVE_GAMEINPUT_H` is 1 again and SDL builds its GameInput driver. Pads through GameInput on a GPU run: not checked in M1 |
+| FFmpeg's `config_windows_x86_64.h` | right for mingw as it is. Every feature it enables exists in mingw-w64 with the Universal CRT (the build compiles and links all of them): `io.h`, `direct.h`, `malloc.h`, `_aligned_malloc`, `MemoryBarrier`, `__rdtsc`, the Win32 threads, BCrypt, `dxva.h` and `dxgidebug.h`. `HAVE_LIBC_MSVCRT` selects the Universal CRT's `%Id` and `%Iu`, which the Universal CRT reads, and the two `ff_open` and `ff_tempfile` wrappers; the `crtversion.h` stub (major version 14) skips its old-CRT branch. Features mingw has but the config turns off (`unistd.h`, pthreads, inline assembly, `gettimeofday`) stay off, as in the MSVC build, so FFmpeg runs the same code paths under both. FFmpeg's own `_MSC_VER` branches (intrinsics in `libavutil/x86`) are taken only by the MSVC build, which defines `_MSC_VER`; the mingw build takes their GNU builtins |
+| The developer tests | all pass under mingw: the post pass tests on WARP (30.5 s), the shader-mod tests (464.6 s) and the GT7 tone curve test, besides the instruction, CPU and launcher tests |
+| FSR | **builds and passes under mingw**: `build --fsr on` in the iteration BuildRoot built the FSR 3 upscaler and its DX12 backend (115 steps, the SDK's shader compiler running as before), and the developer tests with FSR passed, among them FSR's checks on the hardware adapter (a still edge, a moving box without a trail, a reset at a cut). The SDK's files were a copy of the development BuildRoot's checkout, with the pinned tree hash (`FFX_TREE`); FSR is off for players |
+| Flavors and PGO | llvm-mingw has the profile library (`lib/clang/20/lib/windows/libclang_rt.profile-x86_64.a`, kept) and `llvm-profdata`. `-Flavor pgo-gen` built and linked it (`fm4_rex.exe` 101,464,576 bytes with its counters; the game build 123 s); `-Flavor thinlto,v3` built in 99 s with `--thinlto-jobs`. Neither ran. `profbuild` copies `game-build` with its PDBs |
+| Docs and notices | [setup](../setup.md#toolchain), [sources and licensing](../sources-and-licensing.md#third-party-components), README, `CREDITS.txt`, the notices (`LLVM-LICENSE.txt`, `MinGW-w64-runtime-COPYING.txt`), the [builder note](builder-installer.md) (B4 replaced). winpthreads is not linked (no binary imports or holds it: FFmpeg's `pthread_create` is its own Win32 wrapper), so its notice is not carried |
+
+### 11.2 The builds
+
+All in scratch BuildRoots, through the build queue, with nothing on `PATH` but the tools and
+`C:\Windows\System32` and `C:\Windows`, the archives of `I:\FM4-build-b3\downloads` copied into each
+BuildRoot, GameInput and DXC from `I:\FM4-build-usa` as local copies, and USA Disc 1 and Disc 2.
+
+- **The portable tools.** `toolchain --portable` into `I:\FM4-toolchain-m1` from copies of the
+  pinned archives (no download): Python, CMake and Ninja as in B3, llvm-mingw with its keep list.
+  Every build below with llvm-mingw ran from it, with no `INCLUDE` or `LIB` set.
+- **The iteration BuildRoot** `I:\FM4-build-m1it`, from the worktree: `all` with every test passed
+  at the first try (906.7 s); then `build --fsr on`, the FSR test on the GPU (under a perf hold),
+  and the two flavors.
+- **The snapshot.** `snapshot` of `420ef1d` into `I:\FM4-src-mingwchek4` (1,263 files), built twice:
+  - **mingw**, `all` with every test into the new BuildRoot `I:\FM4-build-m1mg`: passed in 912 s
+    (setup 205.6 s, generate 34.3 s, build 671.9 s, of it the game 127.2 s and the shader-mod tests
+    464.6 s). The instruction tests print the MSVC build's line (295,650 checks); the ten CPU
+    tests, the three shader tests and the launcher tests (558 plans) passed. `build-result.json`
+    names `420ef1d`, `dirty` false, `abi` mingw.
+  - **`--abi msvc`**, `all --tests player` into `I:\FM4-build-msvcchek4`, made as section 10.6's
+    builds (B3's portable tools with LLVM 20.1.8, Visual Studio's `INCLUDE` and `LIB` only): passed
+    in 441 s (setup 213.8 s, generate 38.5 s, build 188.2 s, of it the game 139.4 s).
+
+**The MSVC path is unchanged.** `I:\FM4-build-msvcchek3` no longer holds `f1292ab`'s build (the
+probes of section 10.8 were built into it later), so the check compares with the MSVC build of
+`cc4e7f9` in `I:\FM4-build-msvcbase1`, which section 10.7 found equal to `f1292ab`'s but for
+`rexruntime.dll`'s string displacements:
+
+- `.text` is equal in `fm4_rex.exe` (66,430,150 bytes), both modules, `rexgpu-xenos.dll`,
+  `MotorsportDX.exe` and `fm4_instruction_tests.exe`;
+- in `rexruntime.dll` it has the same size and differs in 385 bytes at 295 places; disassembled
+  whole, 299 instruction lines differ, and every one only in a RIP-relative displacement (none after
+  the displacements are masked).
+
+### 11.3 Sizes and times
+
+| | llvm-mingw (M1) | llvm-mingw (prototype) | MSVC libraries |
+| --- | --- | --- | --- |
+| `fm4_rex.exe` | 65,886,208 (`.text` 63,256,246; no debug data) | 120,898,048 (51 MB of DWARF) | 68,908,032 (`.text` 66,430,150) |
+| `fm4_rex.pdb` | 65,437,696 | - | - |
+| `fm4_rex_XMediaFacade_default.dll`, its PDB | 11,360,256; 11,055,104 | 21,559,808 | 12,391,424 |
+| `fm4_rex_SpeechFacade_default.dll`, its PDB | 8,210,944; 8,527,872 | 15,301,632 | 8,992,768 |
+| `rexruntime.dll`, its PDB | 10,059,264; 28,315,648 | 13,777,920 | 11,007,488 |
+| `rexgpu-xenos.dll`, its PDB | 6,654,464; 14,594,048 | 8,420,864 | 7,492,096 |
+| `MotorsportDX.exe` (static) | 6,673,408 | 6,651,904 | 4,763,136 |
+| `libc++.dll`, `libunwind.dll` | 1,843,712; 92,160 | the same | the VC++ redistributable |
+| PDBs in `game-build` | 128,069,632 | - | - |
+| The BuildRoot after `all` (no run data) | 1,940,730,075 bytes (every test) | 1,771,208,764 (player tests) | 1,719,414,908 (player tests) |
+| The game's build | 127.2 s | 132.2 s | 139.4 s |
+
+The line tables and PDBs cost no measurable build time: the game built in 127.2 s against the
+prototype's 132.2 s without them, one run each. The PDBs add 128 MB to `game-build`, and the
+binaries shrink by the DWARF they held.
+
+### 11.4 The short check
+
+`matrix.py`'s `smoke` tier on the native path (`--native`, the launcher's default look,
+`FM4_FIXED_SEED=1`), gate `m1smoke` on the snapshot's mingw build in `I:\FM4-build-m1mg`, under one
+perf hold of the queue. The BuildRoot got a copy of `I:\FM4-build-usa`'s played profile
+(`B13EBABEBABEBABE`, `achievements`), and `e2e.py` imported Disc 2 before the first launch. The
+game's `PATH` held only `C:\Windows\System32`, `C:\Windows` and Windows PowerShell's folder, so it
+loaded the `libc++.dll` and `libunwind.dll` staged beside it. Against the MSVC cells of section
+10.7 (`mgabms2`, `cc4e7f9`, `I:\FM4-build-msvcbase1`), one run each:
+
+| Cell | llvm-mingw `420ef1d` | MSVC `cc4e7f9` | `compare.py` |
+| --- | --- | --- | --- |
+| `photo` | pass, race reached: race 233.54 fps, p99 5.04 ms; photo mode 29.98 fps | race 237.11 fps, p99 4.84 ms; photo mode 29.95 fps | WARN: the captures' black share (6.6 points; races differ) |
+| `career` | pass, race reached: race 237.05 fps, p99 5.02 ms; replay 118.53 fps | race 234.21 fps, p99 5.35 ms; replay 118.46 fps | WARN: `wait_reg_mem` 409.6 to 538.5 ms/s |
+| `photo_view` | pass, 57.04 fps | 56.98 fps | WARN: the captures' luma (65.4 to 73.9) and histogram |
+
+No cell failed, no new error key, no clear gray or washed-out frame; `build-result.json`'s source
+is `420ef1d`, not dirty. One run per cell, so the fps is not a performance verdict (M2's A/B is).
+
+**The export.** `export` of the same build into the scratch folder `I:\FM4-export-m1` copied the
+five binaries with `libc++.dll` and `libunwind.dll` into its `game-build`, and the notices with
+`LLVM-LICENSE.txt` and `MinGW-w64-runtime-COPYING.txt` (132,956,171 bytes with the shader cache).
+The exported game was not run.
+
+### 11.5 Not verified in M1
+
+- Everything of M2: the full gate, the performance A/B, the rendering at 1:1, the Ally X run.
+- Pads through SDL's GameInput driver on a GPU run (the driver now builds; `sdl_joystick_driver=gameinput`
+  was not run).
+- A run of an exported mingw build, here or on another computer (11.4: the export holds the
+  DLLs and the notices).
+- The flavor builds and the profiling copy in a game run; a PGO cycle.
+- `Build.ps1` itself (every build here ran `pipeline.py` directly); a computer without Visual
+  Studio; Windows 10.
+- llvm-mingw's clang for `x86_64-pc-windows-msvc` (the `--abi msvc` build takes LLVM's).
+
+### 11.6 The BuildRoots (the main session's decision of 31 October 2026)
+
+- `I:\FM4-build-usa`, the development BuildRoot with the MSVC baselines, stays MSVC through M2: it
+  is rebuilt incrementally at the new main with `--abi msvc` (the same ABI, so no stale objects),
+  as the MSVC side of the A/B.
+- The mingw side of M2 is the new BuildRoot `I:\FM4-build-usamg`.
+- After M2 and the owner's Ally X run, `I:\FM4-build-usa` is converted in place: its compiled
+  folders move to `D:\FM4-archive`, and `all` runs with llvm-mingw; `user-data`, `cache`, the
+  content and `e2e` (the MSVC baselines as history) stay, so every path stays.
+- A checkout older than M1 knows no ABI: once a BuildRoot is mingw, a branch made before the switch
+  must not build into it, since it would configure it again with LLVM for Microsoft's libraries
+  ([setup, toolchain](../setup.md#toolchain)).
