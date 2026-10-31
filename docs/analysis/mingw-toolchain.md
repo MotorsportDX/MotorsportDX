@@ -27,8 +27,8 @@ setjmp needs a 16-byte aligned buffer, and mingw-w64's `jmp_buf` loses that alig
 `std::pair`. A guarded wrapper fixed it, and the smoke A/B then passed with both builds at about the
 same fps. The frozen-frame parity gate still fails on draws, because the mingw build freezes
 another moment of the same race (cause not found). Not verified: performance, SDL's GameInput
-driver (left out under mingw). **Recommendation:** find why the frozen moment differs, then the steps of section 5 (section
-10.8).
+driver (left out under mingw). **Recommendation:** find why the frozen moment differs (section
+10.8; the switch is blocked until then), then the steps of section 5 (section 10.9).
 
 ## 1. MSVC-specific code
 
@@ -299,8 +299,9 @@ the player's build (the libraries, the Windows SDK and the VC++ redistributable)
 instead of 940 MB for the compiler plus Microsoft's packages, and needs no administrator rights. The
 prototype passed every kill criterion (section 10). The game runs on the GPU after one more shim
 (section 10.7). The open run-time question is the frozen-frame parity, and the next step is its
-cause (section 10.8). The route costs about 9 to 17 h more (section 7); route (a),
-Microsoft's installer, stays the fallback with its open licence question for players.
+cause (sections 10.8 and 10.9); until it is explained the switch is blocked. The route costs
+about 9 to 17 h more (section 7); route (a), Microsoft's installer, stays the fallback with its
+open licence question for players.
 
 ## 10. Prototype results (31 October 2026)
 
@@ -642,12 +643,59 @@ Files:
 - The crash reporter changes nothing in the MSVC build: it is under `__MINGW32__`, and
   `fm4_rex.exe`'s `.text` is equal.
 
-### 10.8 Not verified, and the next step
+### 10.8 The other frozen moment: what is ruled out
+
+The main session compared the frozen frames at 1:1: the rendering is the same, and only the game
+state differs (the needles, the cars' places, the place on the track). Each build repeats itself,
+and `FM4_FIXED_FRAME_TIME=1` does not remove the difference. Players must not get another
+simulation, so this blocks the switch until it is explained. A search of about 2 h on
+31 October 2026 ruled out the following and did not find the cause.
+
+**Where the difference shows.**
+
+- The race is the same until the rewind:
+  - the same grid (5th of 12, the same cars) at 00:01.5;
+  - the same Y presses: 110 guest polls with Y and 94 converted, from the same packet numbers
+    on, in all four runs;
+  - the rewind shows 12.03 s after the race scenario in both builds.
+- Both rewinds reach their oldest frame: REWIND FURTHER is greyed at 1:1 in both frozen frames.
+- The MSVC build's oldest frame lies about 6 to 10 s into the race, as an older MSVC run on the
+  development BuildRoot shows too (`l1c-ab32-60-freeze`). The mingw build's lies at the start line,
+  about 1 s in. **The mingw build's rewind keeps a longer history.**
+
+**Ruled out.**
+
+| Lead | Check | Result |
+| --- | --- | --- |
+| The floating-point environment | the runtime keeps the FPSCR in MXCSR through simde (`fpscr.h`); no `fesetround`, `_controlfp` or `FE_*` use in the runtime, the title code or the templates | the same code in both builds; x87 is not used |
+| Host libm | the imports of both `fm4_rex.exe` | both take `fma`, `fmaf`, `log2f`, `sqrt` and `sqrtf` from the Universal CRT, the only math the generated code calls (11,046 `std::fma`, 319 `sqrt`, 8 `log2f`); MSVC also imports `_dsign` |
+| `long double` (80-bit under mingw, 64-bit under MSVC) | the runtime, the title code and the templates | not used |
+| Thread timing | the MSVC build with its process confined to 4 performance cores (`--affinity 0xC3`, `mgaff-m`) | it still freezes the MSVC moment: draws 2,017 against 2,017 (pass) and −10 % against mingw |
+| Frame pacing | the frame times of the race (`perf.jsonl`) | the same distribution, 16.2 to 17.2 ms |
+| The guest's memory | `REX_GUEST_MEM_TRACE` in a `boot` run of each build (`mgmem-m`, `mgmem-g`) | identical: the title's two pools (329,973,760 and 58,720,256 bytes at the same addresses), the same heaps to the byte |
+| The race start | session times with the fixed frame time: the 3-2-1 starts 60 updates after the placing in both | the same; mingw's pre-race has 37 more session updates of loading, which also varies within one build |
+| Duplicated cvar storage | the `FLAGS_*_storage_` accessors in `fm4_rex.exe` | lld's import thunks, one instance in `rexruntime.dll` as under MSVC |
+| `CallFrame`'s registers that are not initialized | its users | not used by the title or the runtime |
+
+**Not checked, in the order the next search would take them.**
+
+1. A value that the host hands to the guest and that depends on the C++ library: iteration order
+   of `std::unordered_map` or `std::unordered_set`, or equal elements after `std::sort` (libc++
+   and MSVC's STL order them differently, each the same in every run). Examples: enumerations
+   of files, content, handles or objects that the kernel or XAM functions return.
+2. The guest's timebase and time source during the rewind (`sub_822D92D8`, `mftb`): how the rewind
+   measures its history. If it measures in time rather than frames, a difference in what the
+   guest reads there would change it.
+3. A probe that dumps the rewind's own state (its buffer's head and tail) at the freeze in both
+   builds, to tell a longer buffer from a different reading of the same buffer.
+
+### 10.9 Not verified, and the next step
 
 Not verified:
 
-- **The frozen frame at the same moment** (10.7): the parity gate fails on draws because the mingw
-  build's rewind freezes another moment of the same race; the cause is not found.
+- **The frozen frame at the same moment** (10.7, 10.8): the parity gate fails on draws because the
+  mingw build's rewind keeps a longer history and freezes another moment of the same race; the
+  cause is not found.
 - **Longer play**: one smoke and one parity gate, and three single career runs. Not exercised:
   the auto-import pseudo relocations beyond these runs, a longjmp of the title's error path,
   the vectored handlers under faults other than the runtime's own, audio and input beyond the
@@ -661,7 +709,7 @@ Not verified:
   were unset), Windows 10.
 - llvm-mingw's `clang` targeting `x86_64-pc-windows-msvc`, beyond emitting IR.
 
-**Next step, the main session's call:** the cause of the other frozen moment. It decides whether
-the parity gate can compare the two toolchains at all, or whether the mingw build changes the
-title's behaviour. Then the steps of section 5: the pipeline's own switch to llvm-mingw
+**Next step, the main session's call:** the cause of the other frozen moment, along the list of
+10.8. It decides whether the parity gate can compare the two toolchains at all, or whether the mingw
+build changes the title's behaviour; until then the switch is blocked. Then the steps of section 5: the pipeline's own switch to llvm-mingw
 (section 7), the full gate and the performance A/B both ways.
