@@ -74,6 +74,7 @@
 !/outputs/FM4-build/speech_bounds.toml
 !/outputs/FM4-build/switch-recipes.json
 !/outputs/FM4-build/test_pipeline.py
+!/outputs/FM4-build/toolchain.json
 !/outputs/FM4-build/verification.json
 !/outputs/FM4-build/xmedia_bounds.toml
 !/outputs/FM4-source-control/check-staged-content.py

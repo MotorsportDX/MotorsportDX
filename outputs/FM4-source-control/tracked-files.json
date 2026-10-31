@@ -425,6 +425,10 @@
       "provenance": "Reviewed bootstrap tooling or documentation; no original game function bodies"
     },
     {
+      "path": "outputs/FM4-build/toolchain.json",
+      "provenance": "Builder toolchain pins: public release URLs, sizes, SHA-256 and licence names of Python, CMake, Ninja and LLVM; no game data"
+    },
+    {
       "path": "outputs/FM4-build/texture-extract.cpp",
       "provenance": "Original tooling for this project; no game content or original game function bodies"
     },

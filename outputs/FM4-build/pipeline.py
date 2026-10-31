@@ -16,9 +16,13 @@ import time
 import urllib.request
 import zipfile
 
+HERE = Path(__file__).resolve().parent
+# Python's embeddable package (the builder's, docs/setup.md#portable-tools) fixes sys.path in its
+# ._pth file, without the script's folder; so does -I.
+if str(HERE) not in sys.path:
+    sys.path.insert(0,str(HERE))
 from prepare import write_switches
 
-HERE = Path(__file__).resolve().parent
 REPO = HERE.parents[1]
 # The runtime (ReXGlue SDK fork, D3D12 only) lives in work/runtime. Its
 # third-party libraries still come from the upstream SDK at this revision:
@@ -261,13 +265,35 @@ def run(args, cwd=None, log=None, env=None):
     else:
         subprocess.run(args, cwd=cwd, env=env, check=True)
 
+# The build's tools on PATH: CMake drives Ninja, clang and clang++ compile, and clang++ links with
+# lld-link (-fuse-ld=lld-link, which CMake adds when it finds lld-link); llvm-ar makes the static
+# libraries. Nothing of Visual Studio runs (no link, no fxc, no vswhere).
+DOCTOR_TOOLS=('cmake','ninja','clang','clang++','lld-link','llvm-ar')
+# What clang and lld-link need of Microsoft's C and C++ libraries, the Universal CRT and the
+# Windows SDK, looked for in the folders of INCLUDE and LIB: Visual Studio's x64 environment
+# today, the builder's own folders from B4 (docs/analysis/builder-installer.md 4.7).
+MSVC_HEADERS=('vcruntime.h','corecrt.h','windows.h','d3d12.h')
+MSVC_LIBRARIES=('msvcrt.lib','ucrt.lib','kernel32.lib','d3d12.lib')
+
+def msvc_libraries_missing():
+    """The files of MSVC_HEADERS and MSVC_LIBRARIES in no folder of INCLUDE and LIB."""
+    missing=[]
+    for variable,names in (('INCLUDE',MSVC_HEADERS),('LIB',MSVC_LIBRARIES)):
+        folders=[Path(folder) for folder in os.environ.get(variable,'').split(os.pathsep) if folder]
+        missing+=[f'{name} ({variable})' for name in names
+                  if not any((folder/name).is_file() for folder in folders)]
+    return missing
+
 def doctor(fetch='git'):
-    """fetch: git needs Git on PATH; archive (fetch_mode) does not."""
+    """The tools of DOCTOR_TOOLS on PATH (and git with fetch git; archive, fetch_mode, needs no
+    Git), LLVM 20, CMake 3.25+, Windows' d3dcompiler_47.dll, and Microsoft's libraries in
+    INCLUDE and LIB (msvc_libraries_missing)."""
     if os.name != 'nt' or sys.maxsize <= 2**32 or sys.version_info < (3,11):
         raise RuntimeError('Requires Windows x64 and Python 3.11 or newer (64-bit).')
-    for name in (('git',) if fetch=='git' else ())+('cmake', 'ninja', 'clang', 'clang++', 'link'):
+    for name in (('git',) if fetch=='git' else ())+DOCTOR_TOOLS:
         if not shutil.which(name):
-            raise RuntimeError(f'Missing {name}. See docs/setup.md and use Build.ps1 from a VS C++ environment.')
+            raise RuntimeError(f'Missing {name}. See docs/setup.md: Build.ps1 from a VS C++ environment, '
+                               'or the portable tools (--toolchain).')
     version = subprocess.check_output(['clang++', '--version'], text=True)
     if not re.search(r'clang version 20\.', version):
         raise RuntimeError('Use LLVM 20.x (validated: 20.1.8); pass -LLVMRoot to Build.ps1.')
@@ -275,13 +301,292 @@ def doctor(fetch='git'):
     match = re.search(r'version (\d+)\.(\d+)',cmake_version)
     if not match or tuple(map(int, match.groups())) < (3,25):
         raise RuntimeError('CMake 3.25+ is required.')
-    sdk_dir = os.environ.get('WindowsSdkDir', '')
-    sdk_version = os.environ.get('WindowsSDKVersion', '').strip('\\/')
-    fxc = Path(sdk_dir)/'bin'/sdk_version/'x64/fxc.exe'
-    if not sdk_dir or not sdk_version or not fxc.is_file():
-        raise RuntimeError('Windows SDK x64 fxc.exe not found in the VS development environment.')
-    print('Preflight passed. LLVM:', version.splitlines()[0], 'FXC:', fxc, 'Fetch:', fetch)
-    return fxc
+    try:
+        d3dcompiler()
+    except OSError as error:
+        raise RuntimeError(f"Windows' d3dcompiler_47.dll cannot be loaded: {error}") from error
+    missing = msvc_libraries_missing()
+    if missing:
+        raise RuntimeError('Microsoft C/C++ libraries or Windows SDK not found: '+', '.join(missing)+
+                           '. Run from the Visual Studio x64 environment (Build.ps1) or set INCLUDE '
+                           'and LIB (docs/setup.md).')
+    print('Preflight passed. LLVM:', version.splitlines()[0], 'CMake:', shutil.which('cmake'),
+          'Fetch:', fetch)
+
+# The builder's portable tools (docs/setup.md#portable-tools, docs/analysis/builder-installer.md
+# 4.4 to 4.6): toolchain.json pins each tool's archive by URL, size and SHA-256, with its licence,
+# the versions accepted of an installed copy, and the members to keep. The toolchain action finds
+# installed tools first (detect_tools) and fetches and unpacks only the missing ones, or all of
+# them with --portable, into the --toolchain folder; with --toolchain, the other actions put that
+# folder's tools first on PATH (use_toolchain).
+TOOLCHAIN=HERE/'toolchain.json'
+TOOLCHAIN_SCHEMA=1
+TOOLCHAIN_STATE='toolchain-state.json'
+TOOL_MARKER='.fm4-tool.json'
+TOOL_FORMATS=('zip','tar.xz')
+# Per tool: the executable whose version is read, its arguments, the version's pattern, and the
+# other executables that must stand beside it.
+TOOL_PROBES={'python':('python.exe',['-I','-c','import sys;print("%d.%d.%d"%sys.version_info[:3])'],
+                       r'^(\d+(?:\.\d+)+)',()),
+             'cmake':('cmake.exe',['--version'],r'cmake version (\d+(?:\.\d+)+)',()),
+             'ninja':('ninja.exe',['--version'],r'^(\d+(?:\.\d+)+)',()),
+             'llvm':('clang.exe',['--version'],r'clang version (\d+(?:\.\d+)+)',
+                     ('clang++.exe','lld-link.exe','llvm-ar.exe'))}
+
+def version_tuple(text):
+    return tuple(int(part) for part in text.split('.'))
+
+def load_toolchain(path=TOOLCHAIN):
+    """toolchain.json's tools, checked: per tool (one of TOOL_PROBES) its version, an https url,
+    size, sha256, license, license_file (a kept member or None), format (TOOL_FORMATS), top (the
+    archive's top folder or ''), keep (None for every member, or files and folders ending in
+    '/'), bin (the executables' folder in the unpacked tree) and accept ([lowest, below], the
+    versions taken from an installed copy; below may be None)."""
+    data=json.loads(Path(path).read_text(encoding='utf-8'))
+    if data.get('schema')!=TOOLCHAIN_SCHEMA:
+        raise ValueError(f'{path}: schema {data.get("schema")}, not {TOOLCHAIN_SCHEMA}.')
+    tools=data.get('tools')
+    if not isinstance(tools,dict) or set(tools)-set(TOOL_PROBES) or not tools:
+        raise ValueError(f'{path}: tools must name some of {", ".join(TOOL_PROBES)}.')
+    for name,tool in tools.items():
+        fields={'version','url','size','sha256','license','license_file','format','top','keep','bin','accept'}
+        problems=[f'fields {sorted(set(tool)^fields)}'] if set(tool)!=fields else []
+        if not problems:
+            keep,accept=tool['keep'],tool['accept']
+            checks=[(isinstance(tool['version'],str) and bool(re.fullmatch(r'\d+(\.\d+)+',tool['version'])),'version'),
+                    (isinstance(tool['url'],str) and tool['url'].startswith('https://'),'url'),
+                    (type(tool['size']) is int and tool['size']>0,'size'),
+                    (isinstance(tool['sha256'],str) and bool(re.fullmatch(r'[0-9a-f]{64}',tool['sha256'])),'sha256'),
+                    (isinstance(tool['license'],str) and bool(tool['license']),'license'),
+                    (tool['format'] in TOOL_FORMATS and tool['url'].endswith('.'+tool['format']),'format'),
+                    (isinstance(tool['top'],str) and '/' not in tool['top'],'top'),
+                    (keep is None or isinstance(keep,list) and bool(keep) and all(
+                        isinstance(entry,str) and entry and not entry.startswith('/') and
+                        '..' not in entry.split('/') and ':' not in entry for entry in keep),'keep'),
+                    (tool['license_file'] is None or keep is None or archive_selected(tool['license_file'],keep),
+                     'license_file'),
+                    (isinstance(tool['bin'],str),'bin'),
+                    (isinstance(accept,list) and len(accept)==2 and isinstance(accept[0],str) and
+                     (accept[1] is None or isinstance(accept[1],str)),'accept')]
+            problems=[field for ok,field in checks if not ok]
+        if problems:
+            raise ValueError(f'{path}: tool {name}: bad {", ".join(problems)}.')
+    return tools
+
+def tool_accepts(tool,version):
+    """Whether version (a string) lies in the tool's accept range."""
+    lowest,below=tool['accept']
+    return version_tuple(version)>=version_tuple(lowest) and (below is None or
+                                                              version_tuple(version)<version_tuple(below))
+
+def probe_tool(name,folder,tool):
+    """The tool's copy in folder as {path, version, accepted, missing}, or None when folder has
+    no executable of it. Runs the executable for its version."""
+    executable,arguments,pattern,beside=TOOL_PROBES[name]
+    folder=Path(folder)
+    if not (folder/executable).is_file():
+        return None
+    try:
+        output=subprocess.run([folder/executable,*arguments],capture_output=True,text=True,
+                              timeout=60).stdout
+    except (OSError,subprocess.SubprocessError):
+        output=''
+    match=re.search(pattern,output,re.M)
+    version=match.group(1) if match else None
+    missing=[other for other in beside if not (folder/other).is_file()]
+    return {'path':str(folder),'version':version,'missing':missing,
+            'accepted':bool(version) and not missing and tool_accepts(tool,version)}
+
+def tool_folders(name):
+    """The folders where an installed copy of a tool may stand, in order: the PATH's, then the
+    default install folders (LLVM's; CMake's; the CMake and Ninja that Visual Studio bundles). For
+    Python, the folder of the interpreter that runs this."""
+    if name=='python':
+        return [Path(sys.executable).parent]
+    found=shutil.which(TOOL_PROBES[name][0])
+    folders=[Path(found).parent] if found else []
+    programs=[Path(os.environ[variable]) for variable in ('ProgramFiles','ProgramFiles(x86)')
+              if os.environ.get(variable)]
+    bundled='Microsoft Visual Studio/*/*/Common7/IDE/CommonExtensions/Microsoft/CMake'
+    if name=='llvm':
+        folders+=[program/'LLVM/bin' for program in programs]
+    elif name=='cmake':
+        folders+=[program/'CMake/bin' for program in programs]
+        folders+=[path/'CMake/bin' for program in programs for path in sorted(program.glob(bundled),reverse=True)]
+    elif name=='ninja':
+        folders+=[path/'Ninja' for program in programs for path in sorted(program.glob(bundled),reverse=True)]
+    unique={}
+    for folder in folders:
+        unique.setdefault(os.path.normcase(os.path.abspath(folder)),folder)
+    return list(unique.values())
+
+def detect_tools(tools):
+    """The installed copies of each tool found in tool_folders, as {name: [probe_tool, ...]}; the
+    first accepted one is the one a build would use."""
+    return {name:[probe for probe in (probe_tool(name,folder,tool) for folder in tool_folders(name)) if probe]
+            for name,tool in tools.items()}
+
+def fetch_tool(name,tool,downloads,log,mirror=None):
+    """<downloads>/<the URL's file name> with the tool's pinned size and SHA-256: kept from an
+    earlier run, else copied from the folder mirror (TOOLCHAIN_MIRROR) or downloaded. A kept file
+    that fails the check is renamed to .rejected, and fetched again."""
+    path=Path(downloads)/tool['url'].rsplit('/',1)[1]
+    def valid(candidate):
+        return candidate.is_file() and candidate.stat().st_size==tool['size'] and digest(candidate)==tool['sha256']
+    if path.is_file():
+        if valid(path):
+            with Path(log).open('a',encoding='utf-8') as stream:
+                stream.write(f'{path.name} {tool["size"]} bytes, SHA-256 checked, kept from an earlier run\n')
+            return path
+        path.replace(path.with_name(path.name+'.rejected'))
+    path.parent.mkdir(parents=True,exist_ok=True)
+    partial=path.with_name(path.name+'.partial')
+    for source in filter(None,(Path(mirror)/path.name if mirror else None,tool['url'])):
+        started=time.monotonic()
+        try:
+            if isinstance(source,Path):
+                if not source.is_file():
+                    continue
+                shutil.copyfile(source,partial)
+            else:
+                with urllib.request.urlopen(source,timeout=300) as response, partial.open('wb') as stream:
+                    shutil.copyfileobj(response,stream,1<<20)
+        except (OSError,ValueError) as error:
+            print(f'{name}: {source} failed: {error}')
+            continue
+        if valid(partial):
+            partial.replace(path)
+            with Path(log).open('a',encoding='utf-8') as stream:
+                stream.write(f'{path.name} {tool["size"]} bytes, SHA-256 checked, from {source} in '
+                             f'{time.monotonic()-started:.1f} s\n')
+            return path
+        print(f'{name}: {source} does not have the pinned size and SHA-256.')
+    partial.unlink(missing_ok=True)
+    raise RuntimeError(f'{name} {tool["version"]} cannot be fetched with its pinned SHA-256 '
+                       '(docs/setup.md#portable-tools).')
+
+def tool_member(name,top,archive):
+    """An archive member's path below the top folder ('' for none), or None for the top folder
+    itself. Refused: an absolute path, a drive or ':', '..' or an empty part, a member outside the
+    top folder."""
+    path=name.replace('\\','/')
+    parts=path.rstrip('/').split('/')
+    if path.startswith('/') or ':' in path or '..' in parts or '' in parts:
+        raise RuntimeError(f'{archive}: refused member path {name!r}.')
+    if top:
+        if parts[0]!=top:
+            raise RuntimeError(f'{archive}: {name} is outside its top folder {top}.')
+        parts=parts[1:]
+    return '/'.join(parts) or None
+
+def unpack_tool(archive,destination,tool):
+    """The members of a tool's archive (zip, or tar.xz through Python's lzma) below its top folder
+    and in its keep list (archive_selected) into destination, which is created. Refused: the paths
+    tool_member refuses, and any member that is not a file or a folder (a link above all); every
+    keep entry must match a member. Returns (files, bytes)."""
+    destination=Path(destination)
+    destination.mkdir(parents=True)
+    keep,top=tool['keep'],tool['top']
+    matched,files,size=set(),0,0
+    def write(name,stream):
+        nonlocal files,size
+        matched.update(entry for entry in keep or () if archive_selected(name,[entry]))
+        target=destination.joinpath(*name.split('/'))
+        target.parent.mkdir(parents=True,exist_ok=True)
+        with target.open('xb') as output:
+            shutil.copyfileobj(stream,output,1<<20)
+        files+=1
+        size+=target.stat().st_size
+    if tool['format']=='zip':
+        with zipfile.ZipFile(archive) as package:
+            for info in package.infolist():
+                name=tool_member(info.filename,top,archive)
+                kind=stat.S_IFMT(info.external_attr>>16)
+                if kind and kind not in (stat.S_IFREG,stat.S_IFDIR):
+                    raise RuntimeError(f'{archive}: {info.filename} is neither a file nor a folder.')
+                if name is None or info.is_dir() or not archive_selected(name,keep):
+                    continue
+                with package.open(info) as stream:
+                    write(name,stream)
+    else:
+        with tarfile.open(archive,'r:xz') as tar:
+            for member in tar:
+                name=tool_member(member.name,top,archive)
+                if member.isdir():
+                    continue
+                if not member.isfile():
+                    raise RuntimeError(f'{archive}: {member.name} is neither a file nor a folder.')
+                member=tarfile.data_filter(member,str(destination))
+                if name is None or not archive_selected(name,keep):
+                    continue
+                with tar.extractfile(member) as stream:
+                    write(name,stream)
+    unmatched=[entry for entry in keep or () if entry not in matched]
+    if unmatched:
+        raise RuntimeError(f'{archive} has no {", ".join(unmatched)}.')
+    return files,size
+
+def install_tool(name,tool,directory,downloads,log,mirror=None):
+    """<directory>/<name>-<version>: the tool fetched (fetch_tool) and unpacked (unpack_tool) into
+    a .partial folder, then moved into place with a marker of its pin; kept when the marker
+    matches."""
+    target=Path(directory)/f'{name}-{tool["version"]}'
+    marker=target/TOOL_MARKER
+    wanted={'sha256':tool['sha256'],'top':tool['top'],'keep':tool['keep']}
+    if marker.is_file() and json.loads(marker.read_text(encoding='utf-8'))==wanted:
+        return target
+    archive=fetch_tool(name,tool,downloads,log,mirror)
+    stage=target.with_name(target.name+'.partial')
+    shutil.rmtree(stage,ignore_errors=True)
+    started=time.monotonic()
+    files,size=unpack_tool(archive,stage,tool)
+    (stage/TOOL_MARKER).write_text(json.dumps(wanted),encoding='utf-8')
+    place(stage,target)
+    with Path(log).open('a',encoding='utf-8') as stream:
+        stream.write(f'{name} {tool["version"]}: {files} files, {size} bytes in {target}, '
+                     f'{time.monotonic()-started:.1f} s\n')
+    return target
+
+def toolchain(directory,downloads=None,portable=False,path=TOOLCHAIN):
+    """The toolchain action: for each tool of toolchain.json, the first accepted installed copy
+    (detect_tools), else, or for every tool with portable, the pinned archive fetched and unpacked
+    into directory (install_tool), from downloads (default <directory>/downloads) or the folder
+    TOOLCHAIN_MIRROR. Writes <directory>/toolchain-state.json with each tool's source (installed or
+    portable), folder and version, which --toolchain reads. Returns {found, tools}."""
+    tools=load_toolchain(path)
+    directory=Path(directory).resolve()
+    downloads=Path(downloads) if downloads else directory/'downloads'
+    log=directory/'logs/toolchain.log'
+    log.parent.mkdir(parents=True,exist_ok=True)
+    found=detect_tools(tools)
+    state={}
+    for name,tool in tools.items():
+        installed=next((probe for probe in found[name] if probe['accepted']),None)
+        if installed and not portable:
+            state[name]={'source':'installed','bin':installed['path'],'version':installed['version'],
+                         'license':tool['license']}
+            continue
+        with progress('step',f'toolchain-{name}',log):
+            target=install_tool(name,tool,directory,downloads,log,os.environ.get('TOOLCHAIN_MIRROR'))
+            probe=probe_tool(name,target/tool['bin'],tool)
+        if not probe or not probe['accepted']:
+            raise RuntimeError(f'{name} in {target} does not run as version {tool["version"]}: {probe}')
+        state[name]={'source':'portable','bin':probe['path'],'version':probe['version'],
+                     'license':tool['license']}
+    (directory/TOOLCHAIN_STATE).write_text(json.dumps({'schema':TOOLCHAIN_SCHEMA,'tools':state},indent=1)+'\n',
+                                           encoding='utf-8')
+    return {'found':found,'tools':state}
+
+def use_toolchain(directory):
+    """--toolchain: the folders of <directory>/toolchain-state.json first on PATH, for this
+    process and the ones it starts."""
+    path=Path(directory)/TOOLCHAIN_STATE
+    if not path.is_file():
+        raise RuntimeError(f'{path} does not exist: run the toolchain action first.')
+    state=json.loads(path.read_text(encoding='utf-8'))
+    folders=[tool['bin'] for tool in state['tools'].values()]
+    os.environ['PATH']=os.pathsep.join([*folders,os.environ.get('PATH','')])
+    return folders
 
 # The preflight action (docs/setup.md#preflight): whether this computer can build and run the
 # game, before any download, as JSON. Every check has a state: pass, warn (it may work, but is
@@ -1002,13 +1307,19 @@ def parse_patch(data):
             raise ValueError(f'Unsupported patch path: {name}')
     return files
 
+def line_ending(data):
+    """A text's line ending: CR CR LF when it has any (the old git apply's copy into a Git for
+    Windows BuildRoot wrote it on every line of a patched file), else CRLF when it has any, else
+    LF."""
+    return next((ending for ending in (b'\r\r\n',b'\r\n') if ending in data),b'\n')
+
 def patch_text(data,hunks,reverse=False):
     """data with hunks applied exactly: each hunk's old lines must stand at its own line (moved
     only by the earlier hunks' added and removed lines), with no fuzz and no other offset; reverse
-    swaps each hunk's sides. Returns the new data with data's own line endings (CRLF when it has
-    any), or raises ValueError."""
-    crlf=b'\r\n' in data
-    lines=[(line,True) for line in data.replace(b'\r\n',b'\n').split(b'\n')]
+    swaps each hunk's sides. Returns the new data with data's own line endings (line_ending), or
+    raises ValueError."""
+    ending=line_ending(data)
+    lines=[(line,True) for line in data.replace(ending,b'\n').split(b'\n')]
     if lines[-1][0]==b'':
         lines.pop()
     else:
@@ -1027,7 +1338,7 @@ def patch_text(data,hunks,reverse=False):
         lines[position:position+len(old)]=new
         delta+=len(new)-len(old)
     output=b'\n'.join(line for line,_ in lines)+(b'\n' if lines and lines[-1][1] else b'')
-    return output.replace(b'\n',b'\r\n') if crlf else output
+    return output.replace(b'\n',ending)
 
 def apply_patch(patch, directory, log, reverse=False, check=False):
     """A git diff (parse_patch) applied in Python to a directory whose files may have CRLF line
@@ -1204,37 +1515,133 @@ def gameinput_status(root):
     return (f'GameInput package: Microsoft.GameInput {GAMEINPUT_VERSION} in {directory} {state}; '
             f'{"mirror " + mirror if mirror else "no mirror (GAMEINPUT_MIRROR is not set)"}.')
 
-def compile_resolve_shaders(root, fxc):
+# The resolve shaders go through D3DCompile in Windows' own d3dcompiler_47.dll (System32), the
+# compiler that fxc.exe fronts, by ctypes: nothing to fetch or build, and no Windows SDK tool on the
+# builder's PATH (docs/analysis/builder-installer.md 4.8). The flags are fxc's /O3 /Gfp; the strip
+# flags are /Qstrip_reflect /Qstrip_debug /Qstrip_priv.
+D3DCOMPILE_PREFER_FLOW_CONTROL=1<<10
+D3DCOMPILE_OPTIMIZATION_LEVEL3=1<<15
+D3DCOMPILER_STRIP_FLAGS=0x1|0x2|0x8
+D3D_COMPILE_STANDARD_FILE_INCLUDE=1
+
+def d3dcompiler(path=None):
+    """d3dcompiler_47.dll with the ctypes signatures of D3DCompile, D3DStripShader and
+    D3DDisassemble; path: another copy of it (System32's by default)."""
+    import ctypes
+    from ctypes import wintypes
+    library=ctypes.WinDLL(str(path) if path else
+                          os.path.join(os.environ.get('SystemRoot',r'C:\Windows'),'System32','d3dcompiler_47.dll'))
+    blob=ctypes.POINTER(ctypes.c_void_p)
+    library.D3DCompile.argtypes=[ctypes.c_void_p,ctypes.c_size_t,ctypes.c_char_p,ctypes.c_void_p,
+                                 ctypes.c_void_p,ctypes.c_char_p,ctypes.c_char_p,wintypes.UINT,
+                                 wintypes.UINT,ctypes.POINTER(blob),ctypes.POINTER(blob)]
+    library.D3DStripShader.argtypes=[ctypes.c_void_p,ctypes.c_size_t,wintypes.UINT,ctypes.POINTER(blob)]
+    library.D3DDisassemble.argtypes=[ctypes.c_void_p,ctypes.c_size_t,wintypes.UINT,ctypes.c_char_p,
+                                     ctypes.POINTER(blob)]
+    for function in (library.D3DCompile,library.D3DStripShader,library.D3DDisassemble):
+        function.restype=ctypes.c_long
+    return library
+
+def blob_bytes(blob):
+    """The contents of an ID3DBlob (GetBufferPointer, GetBufferSize), which is then released."""
+    import ctypes
+    table=ctypes.cast(blob[0],ctypes.POINTER(ctypes.c_void_p))
+    method=lambda index,result:ctypes.WINFUNCTYPE(result,ctypes.c_void_p)(table[index])
+    try:
+        return ctypes.string_at(method(3,ctypes.c_void_p)(blob),method(4,ctypes.c_size_t)(blob))
+    finally:
+        method(2,ctypes.c_ulong)(blob)
+
+def d3d_compile(source,target,defines=(),library=None):
+    """(stripped DXBC, its disassembly) of the HLSL file source with entry point main, as fxc
+    /T target /O3 /Gfp /Qstrip_reflect /Qstrip_debug /Qstrip_priv with /D defines ('NAME' or
+    'NAME=VALUE'; a bare name is 1, as fxc defines it). Includes resolve from source's folder
+    (the standard include handler). Raises RuntimeError with the compiler's messages."""
+    import ctypes
+    library=library or d3dcompiler()
+    source=Path(source).resolve()
+    data=source.read_bytes()
+    pairs=[(name.encode(),value.encode()) for name,_,value in
+           (define.partition('=') if '=' in define else (define,'','1') for define in defines)]
+    macros=(ctypes.c_char_p*(2*len(pairs)+2))(*[text for pair in pairs for text in pair],None,None)
+    code,errors=ctypes.POINTER(ctypes.c_void_p)(),ctypes.POINTER(ctypes.c_void_p)()
+    result=library.D3DCompile(data,len(data),str(source).encode(),macros,
+                              D3D_COMPILE_STANDARD_FILE_INCLUDE,b'main',target.encode(),
+                              D3DCOMPILE_OPTIMIZATION_LEVEL3|D3DCOMPILE_PREFER_FLOW_CONTROL,0,
+                              ctypes.byref(code),ctypes.byref(errors))
+    messages=blob_bytes(errors).decode(errors='replace').rstrip('\0') if errors else ''
+    if result<0 or not code:
+        raise RuntimeError(f'D3DCompile of {source} ({target}) failed: 0x{result&0xffffffff:08x}\n{messages}')
+    compiled=blob_bytes(code)
+    stripped=ctypes.POINTER(ctypes.c_void_p)()
+    result=library.D3DStripShader(compiled,len(compiled),D3DCOMPILER_STRIP_FLAGS,ctypes.byref(stripped))
+    if result<0:
+        raise RuntimeError(f'D3DStripShader of {source} failed: 0x{result&0xffffffff:08x}')
+    compiled=blob_bytes(stripped)
+    listing=ctypes.POINTER(ctypes.c_void_p)()
+    result=library.D3DDisassemble(compiled,len(compiled),0,None,ctypes.byref(listing))
+    if result<0:
+        raise RuntimeError(f'D3DDisassemble of {source} failed: 0x{result&0xffffffff:08x}')
+    return compiled,blob_bytes(listing).rstrip(b'\0').decode()
+
+def shader_header(bytecode,disassembly,name):
+    """The header that fxc /Fh /Vn name writes: the disassembly in #if 0, then the bytes as
+    const BYTE name[], six to a line, with CRLF line endings."""
+    rows=[', '.join(f'{value:3d}' for value in bytecode[index:index+6])
+          for index in range(0,len(bytecode),6)]
+    text=(f'#if 0\n{disassembly}#endif\n\nconst BYTE {name}[] =\n{{\n'+
+          ', \n'.join('    '+row for row in rows)+'\n};\n')
+    return text.replace('\r\n','\n').replace('\n','\r\n').encode()
+
+def compile_shader(source,target,output,name,defines=(),log=None,library=None):
+    """d3d_compile of source into the header output (shader_header) as the step log.stem of
+    --progress, with the compiler's error in log."""
+    log.parent.mkdir(parents=True,exist_ok=True)
+    with progress('step',log.stem,log):
+        try:
+            bytecode,disassembly=d3d_compile(source,target,defines,library)
+        except RuntimeError as error:
+            log.write_text(f'{error}\n',encoding='utf-8')
+            raise RuntimeError(f'{error}\nlog: {log}') from error
+        log.write_text(f'D3DCompile {source} {target} {" ".join(defines)} -> {output} '
+                       f'({len(bytecode)} bytes)\n',encoding='utf-8')
+        Path(output).write_bytes(shader_header(bytecode,disassembly,name))
+
+def resolve_shader_jobs(source):
+    """The shaders of compile_resolve_shaders below the runtime source folder source, as
+    (HLSL file, target, header, array name, defines)."""
+    shaders=source/'src/graphics/shaders'
+    shader_source=shaders/'fm4-resolve'
+    bytecode=shaders/'bytecode/d3d12_5_1'
+    xe=['SHADING_LANGUAGE_HLSL_XE=1']
+    jobs=[(shader_source/f'{name}.cs.xesl','cs_5_1',bytecode/f'{name}_cs.h',f'{name}_cs',xe)
+          for name in RESOLVE_SHADERS]
+    jobs.append((shaders/'resolve_downscale.cs.hlsl','cs_5_1',bytecode/'resolve_downscale_cs.h',
+                 'resolve_downscale_cs',[]))
+    jobs+=[(shader_source/'resolve_host_32bpp.xesli','cs_5_1',bytecode/f'{name}_cs.h',f'{name}_cs',
+            xe+defines) for name,defines in RESOLVE_HOST_SHADERS.items()]
+    jobs.append((source/'src/ui/shaders/guest_output_area.ps.hlsl','ps_5_1',
+                 source/'src/ui/shaders/bytecode/d3d12_5_1/guest_output_area_ps.h','guest_output_area_ps',[]))
+    return jobs
+
+def compile_resolve_shaders(root):
     """FM4 resolve shaders, the scaled readback downscale shader and the presenter's area
-    downscale shader -> DXBC headers; only when their sources changed."""
+    downscale shader -> DXBC headers through D3DCompile (compile_shader), byte for byte the ones
+    fxc.exe writes; only when their sources changed."""
     source = root/'runtime-source'
+    jobs = resolve_shader_jobs(source)
     shaders = source/'src/graphics/shaders'
-    shader_source = shaders/'fm4-resolve'
     downscale = shaders/'resolve_downscale.cs.hlsl'
     area = source/'src/ui/shaders/guest_output_area.ps.hlsl'
     inputs = hashlib.sha256(b''.join(path.read_bytes() for path in
-                                     sorted(shader_source.glob('*.xesl*'))+[downscale,area]))
+                                     sorted((shaders/'fm4-resolve').glob('*.xesl*'))+[downscale,area]))
     marker = source/'.fm4-resolve-shaders'
-    bytecode = shaders/'bytecode/d3d12_5_1'
-    area_output = source/'src/ui/shaders/bytecode/d3d12_5_1/guest_output_area_ps.h'
-    outputs = [bytecode/f'{name}_cs.h' for name in RESOLVE_SHADERS]+[bytecode/'resolve_downscale_cs.h']
-    host_outputs = [bytecode/f'{name}_cs.h' for name in RESOLVE_HOST_SHADERS]
     if (marker.is_file() and marker.read_text() == inputs.hexdigest() and
-            all(path.is_file() for path in outputs+host_outputs+[area_output])):
+            all(output.is_file() for _,_,output,_,_ in jobs)):
         return
-    strip = ['/O3','/Qstrip_reflect','/Qstrip_debug','/Qstrip_priv','/Gfp','/nologo']
-    flags = ['/T','cs_5_1',*strip]
-    for name,output in zip(RESOLVE_SHADERS,outputs):
-        run([fxc,'/D','SHADING_LANGUAGE_HLSL_XE=1',*flags,
-             '/Fh',output,'/Vn',name+'_cs',shader_source/(name+'.cs.xesl')],log=root/f'logs/{name}.log')
-    for (name,defines),output in zip(RESOLVE_HOST_SHADERS.items(),host_outputs):
-        run([fxc,'/D','SHADING_LANGUAGE_HLSL_XE=1',*[arg for define in defines for arg in ('/D',define)],
-             *flags,'/Fh',output,'/Vn',name+'_cs',shader_source/'resolve_host_32bpp.xesli'],
-            log=root/f'logs/{name}.log')
-    run([fxc,*flags,'/Fh',outputs[-1],'/Vn','resolve_downscale_cs',downscale],
-        log=root/'logs/resolve_downscale.log')
-    run([fxc,'/T','ps_5_1',*strip,'/Fh',area_output,'/Vn','guest_output_area_ps',area],
-        log=root/'logs/guest_output_area.log')
+    library = d3dcompiler()
+    for hlsl,target,output,name,defines in jobs:
+        compile_shader(hlsl,target,output,name,defines,root/f'logs/{name.rsplit("_",1)[0]}.log',library)
     marker.write_text(inputs.hexdigest())
 
 def ffx_mirror():
@@ -1402,7 +1809,7 @@ def ffx_status(root):
         mirror_state=f'mirror {mirror}'
     return f'FidelityFX SDK: {sdk} {state}; {mirror_state}.'
 
-def build_runtime(root, fxc, jobs, fsr=None, build=None):
+def build_runtime(root, jobs, fsr=None, build=None):
     """fsr: True or False sets REX_FSR (AMD FSR 3.1 from the FidelityFX SDK source, fetched
     by fetch_fidelityfx); None keeps the build directory's setting (off when it is new). build:
     another build directory, which is built but not installed."""
@@ -1412,7 +1819,7 @@ def build_runtime(root, fxc, jobs, fsr=None, build=None):
     sync_runtime(root)
     fetch_thirdparty(root)
     patch_thirdparty(root)
-    compile_resolve_shaders(root, fxc)
+    compile_resolve_shaders(root)
     options=[]
     if fsr is not None:
         options=['-DREX_FSR=ON',f'-DREX_FSR_SDK_DIR={fetch_fidelityfx(root).as_posix()}'] if fsr \
@@ -1434,14 +1841,14 @@ def build_runtime(root, fxc, jobs, fsr=None, build=None):
     if default_build:
         run(['cmake','--install',build],log=root/'logs/runtime-install.log')
 
-def setup(root, fxc, jobs, fsr=None):
+def setup(root, jobs, fsr=None):
     # The FidelityFX SDK only for a build with FSR (build_runtime fetches it).
     # The two fetches without a process of their own are steps of --progress too.
     with progress('step','gameinput-fetch'):
         fetch_gameinput(root)
     with progress('step','dxc-fetch'):
         fetch_dxc(root)
-    build_runtime(root, fxc, jobs, fsr)
+    build_runtime(root, jobs, fsr)
     (root/'setup-complete.json').write_text(json.dumps({'thirdparty_revision':SDK_REV,
                                                         'fidelityfx_revision':FFX_REV,
                                                         'gameinput_version':GAMEINPUT_VERSION,
@@ -1519,7 +1926,7 @@ def flavor_flags(root,flavor):
         flags+=[f'-fprofile-use={profile.as_posix()}','-Wno-profile-instr-out-of-date','-Wno-profile-instr-unprofiled']
     return ' '.join(flags)
 
-def build_game(root,fxc,jobs,flavor=(),fsr=None,tests='developer'):
+def build_game(root,jobs,flavor=(),fsr=None,tests='developer'):
     """tests: developer, every test (the default), or player (TEST_SETS)."""
     project, install, build = root/'project',root/'runtime-install',game_build_dir(root,flavor)
     if not (root/'local.json').is_file():
@@ -1527,7 +1934,7 @@ def build_game(root,fxc,jobs,flavor=(),fsr=None,tests='developer'):
     state=json.loads((root/'local.json').read_text())
     validate_discs(state['disc1'],state['disc2'])
     # Edits in work/runtime are picked up here: sync, incremental build, install.
-    build_runtime(root,fxc,jobs,fsr)
+    build_runtime(root,jobs,fsr)
     # And edits in work/fm4-rex: a build of the project as generate left it ran without the
     # title's hooks of later commits (photo mode of entry 0 at s, 26 October 2026).
     sync_title(project)
@@ -1651,7 +2058,7 @@ def post_pass_tests(root,jobs,tests='developer'):
          LOOK_DIRECTORY,';'.join(look_defines(look_knobs(DEFAULT_LOOK)))],cwd=build,
         log=root/'logs/shader-mod-tests.log')
 
-def build_profiling(root,fxc,jobs):
+def build_profiling(root,jobs):
     """game-build-prof: game-build with a runtime that has line tables and PDBs, for the
     command processor sampling profiler (REX_CP_PROFILE, docs/e2e/traces.md). The runtime writes its
     outputs into <source>/out, so this compiles a mirror of runtime-source (runtime-source-prof)
@@ -1661,7 +2068,7 @@ def build_profiling(root,fxc,jobs):
         raise RuntimeError('Run build first.')
     sync_runtime(root)
     fetch_thirdparty(root)
-    compile_resolve_shaders(root,fxc)
+    compile_resolve_shaders(root)
     source,mirror,build=root/'runtime-source',root/'runtime-source-prof',root/'runtime-build-prof'
     current=set()
     for path in source.rglob('*'):
@@ -3299,7 +3706,8 @@ def main():
     global PROGRESS,FETCH
     parser=argparse.ArgumentParser(description=__doc__)
     parser.add_argument('action',choices=['doctor','setup','generate','build','all','run','warmcache',
-                                          'profbuild','export','preflight','launcher-data','snapshot'])
+                                          'profbuild','export','preflight','launcher-data','snapshot',
+                                          'toolchain'])
     parser.add_argument('--build-root',type=Path,default=REPO/'work/portable-fm4')
     parser.add_argument('--disc1',type=Path)
     parser.add_argument('--disc2',type=Path)
@@ -3417,6 +3825,16 @@ def main():
                              "(the default in a Git checkout), archive takes GitHub's archives of the "
                              'pinned commits without Git (the default in a source snapshot; '
                              'docs/setup.md#fetching-without-git)')
+    parser.add_argument('--toolchain',type=Path,
+                        help='toolchain: the folder to put the portable tools in; any other action: '
+                             "put that folder's tools (its toolchain-state.json) first on PATH "
+                             '(docs/setup.md#portable-tools)')
+    parser.add_argument('--downloads',type=Path,
+                        help="toolchain: the folder of the tools' archives (default "
+                             '<toolchain>/downloads), kept for later runs')
+    parser.add_argument('--portable',action='store_true',
+                        help='toolchain: fetch and unpack every tool, also where an installed copy '
+                             'would do')
     parser.add_argument('--flavor',default='',help='opt-in compiler experiment for build: comma list of '+','.join(FLAVORS))
     args=parser.parse_args()
     root=args.build_root.resolve()
@@ -3459,7 +3877,16 @@ def main():
         else:
             Path(args.progress).parent.mkdir(parents=True,exist_ok=True)
             PROGRESS=open(args.progress,'a',encoding='utf-8')
-    fxc=doctor(fetch_mode())
+    if args.action=='toolchain':
+        if not args.toolchain:
+            raise ValueError('toolchain needs --toolchain, the folder of the portable tools.')
+        with progress('stage','toolchain'):
+            report=toolchain(args.toolchain,args.downloads,args.portable)
+        print(json.dumps(report,indent=1))
+        return
+    if args.toolchain:
+        print('Toolchain:',', '.join(use_toolchain(args.toolchain)))
+    doctor(fetch_mode())
     print(ffx_status(root))
     print(gameinput_status(root))
     print(dxc_status(root))
@@ -3474,13 +3901,13 @@ def main():
     check_layout(root)
     fsr=None if args.fsr is None else args.fsr=='on'
     if args.action in ('setup','all'):
-        with progress('stage','setup'): setup(root,fxc,args.jobs,fsr)
+        with progress('stage','setup'): setup(root,args.jobs,fsr)
     if args.action in ('generate','all'):
         with progress('stage','generate'): generate(root,*discs,args.content,args.jobs)
     if args.action=='run' and args.content: save_content(root,args.content)
     if args.action in ('build','all'):
         with progress('stage','build'):
-            build_game(root,fxc,args.jobs,flavor,None if args.action=='all' else fsr,args.tests)
+            build_game(root,args.jobs,flavor,None if args.action=='all' else fsr,args.tests)
     if args.action=='run': launch(root,args.single_tile,args.fixed_vblank,args.frame_rate,args.rov,
                                      args.resolution_scale,args.full_rate_mirror,args.look,
                                      args.shadow_workaround,args.quality,args.display,
@@ -3489,7 +3916,7 @@ def main():
                                      args.native,args.msaa_samples,args.vsync,args.pad,
                                      args.upscale,args.keyboard,args.entry0,args.wheel)
     if args.action=='warmcache': warm_cache(root)
-    if args.action=='profbuild': build_profiling(root,fxc,args.jobs)
+    if args.action=='profbuild': build_profiling(root,args.jobs)
     if args.action=='export':
         if not args.out:
             raise ValueError('export needs --out (Build.ps1 -Out), the folder to export to.')

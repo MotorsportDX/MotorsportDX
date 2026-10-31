@@ -5,12 +5,15 @@ import json
 import os
 import re
 from pathlib import Path
+import stat
 import struct
+import subprocess
 import tarfile
 import tempfile
 import time
 import unittest
 from unittest.mock import patch
+import zipfile
 
 import pipeline
 from prepare import switches, BASE
@@ -1287,16 +1290,260 @@ class PipelineTests(unittest.TestCase):
         with patch.object(pipeline,'FETCH','archive'), patch.object(pipeline,'is_git_checkout',lambda:True):
             self.assertEqual(pipeline.fetch_mode(),'archive')
         with tempfile.TemporaryDirectory() as directory, patch('builtins.print'):
-            fxc=Path(directory)/'bin/10.0.26100.0/x64/fxc.exe'
-            fxc.parent.mkdir(parents=True)
-            fxc.write_bytes(b'')
+            directory=Path(directory)
+            include,lib=[directory/'include',directory/'um'],[directory/'lib']
+            for folder,names in ((include[0],pipeline.MSVC_HEADERS[:2]),(include[1],pipeline.MSVC_HEADERS[2:]),
+                                 (lib[0],pipeline.MSVC_LIBRARIES)):
+                folder.mkdir()
+                for name in names:
+                    (folder/name).write_bytes(b'')
             outputs={'clang++':'clang version 20.1.8','cmake':'cmake version 3.31.6'}
-            with patch.dict(os.environ,{'WindowsSdkDir':directory,'WindowsSDKVersion':'10.0.26100.0\\'}), \
-                    patch.object(pipeline.shutil,'which',lambda name:None if name=='git' else name), \
+            tools=set(pipeline.DOCTOR_TOOLS)
+            environment={'INCLUDE':os.pathsep.join(map(str,include)),'LIB':str(lib[0])}
+            with patch.dict(os.environ,environment), \
+                    patch.object(pipeline.shutil,'which',lambda name:name if name in tools else None), \
+                    patch.object(pipeline,'d3dcompiler',lambda:None), \
                     patch.object(pipeline.subprocess,'check_output',lambda args,**kwargs:outputs[args[0]]):
-                self.assertEqual(pipeline.doctor('archive'),fxc)
+                self.assertIsNone(pipeline.doctor('archive'))
                 with self.assertRaisesRegex(RuntimeError,'Missing git'):
                     pipeline.doctor('git')
+                # No Visual Studio tool is asked for: link, fxc and vswhere are not in tools.
+                self.assertFalse({'link','fxc','vswhere'}&tools)
+                tools.discard('lld-link')
+                with self.assertRaisesRegex(RuntimeError,'Missing lld-link'):
+                    pipeline.doctor('archive')
+                tools.add('lld-link')
+                (lib[0]/'d3d12.lib').unlink()
+                with self.assertRaisesRegex(RuntimeError,r'd3d12\.lib \(LIB\)'):
+                    pipeline.doctor('archive')
+            with patch.dict(os.environ,{'INCLUDE':'','LIB':''}):
+                self.assertEqual(len(pipeline.msvc_libraries_missing()),
+                                 len(pipeline.MSVC_HEADERS)+len(pipeline.MSVC_LIBRARIES))
+
+    def test_patch_cr_cr_lf(self):
+        """A file with CR CR LF line endings (the old git apply's copy in a development BuildRoot)
+        reads them as one line ending: the patch applies and reverses there and keeps them."""
+        self.assertEqual(pipeline.line_ending(b'a\r\r\nb\r\r\n'),b'\r\r\n')
+        self.assertEqual(pipeline.line_ending(b'a\r\nb\r\n'),b'\r\n')
+        self.assertEqual(pipeline.line_ending(b'a\nb'),b'\n')
+        (_,hunks),=pipeline.parse_patch(self.PATCH)
+        source,patched=(text.replace(b'\n',b'\r\r\n') for text in (self.SOURCE,self.PATCHED))
+        self.assertEqual(pipeline.patch_text(source,hunks),patched)
+        self.assertEqual(pipeline.patch_text(patched,hunks,reverse=True),source)
+        with tempfile.TemporaryDirectory() as directory, patch('builtins.print'):
+            directory=Path(directory)
+            patch_file=directory/'change.patch'
+            patch_file.write_bytes(self.PATCH)
+            (directory/'tree/src').mkdir(parents=True)
+            (directory/'tree/src/a.c').write_bytes(patched)
+            log=directory/'logs/patch-change.log'
+            pipeline.apply_patch(patch_file,directory/'tree',log,reverse=True)
+            self.assertEqual((directory/'tree/src/a.c').read_bytes(),source)
+
+    def test_toolchain_json(self):
+        """toolchain.json pins the four tools with https URLs, sizes and SHA-256; LLVM keeps the
+        executables and headers the build runs; a malformed entry is refused."""
+        tools=pipeline.load_toolchain()
+        self.assertEqual(set(tools),{'python','cmake','ninja','llvm'})
+        for name,tool in tools.items():
+            self.assertTrue(tool['url'].startswith('https://'),name)
+            self.assertRegex(tool['sha256'],r'^[0-9a-f]{64}$')
+            self.assertTrue(pipeline.tool_accepts(tool,tool['version']),name)
+        llvm=tools['llvm']
+        self.assertEqual(llvm['sha256'],'f229769f11d6a6edc8ada599c0cda964b7dee6ab1a08c6cf9dd7f513e85b107f')
+        for member in ('bin/clang.exe','bin/clang++.exe','bin/lld-link.exe','bin/llvm-ar.exe',
+                       'lib/clang/20/include/stddef.h'):
+            self.assertTrue(pipeline.archive_selected(member,llvm['keep']),member)
+        self.assertFalse(pipeline.archive_selected('bin/clangd.exe',llvm['keep']))
+        self.assertTrue(pipeline.tool_accepts(llvm,'20.1.0'))
+        self.assertFalse(pipeline.tool_accepts(llvm,'19.1.7'))
+        self.assertFalse(pipeline.tool_accepts(llvm,'21.1.0'))
+        self.assertTrue(pipeline.tool_accepts(tools['cmake'],'4.1.2'))
+        self.assertFalse(pipeline.tool_accepts(tools['cmake'],'3.24.4'))
+        data=json.loads(pipeline.TOOLCHAIN.read_text(encoding='utf-8'))
+        with tempfile.TemporaryDirectory() as directory:
+            path=Path(directory)/'toolchain.json'
+            for change in ({'url':'http://example.org/x.zip'},{'sha256':'ABC'},{'size':'1'},
+                           {'format':'7z'},{'keep':['../bin/x.exe']},{'keep':[]},
+                           {'license_file':'LICENSE.TXT'},{'accept':['20']},{'extra':1}):
+                bad=json.loads(json.dumps(data))
+                bad['tools']['llvm'].update(change)
+                path.write_text(json.dumps(bad),encoding='utf-8')
+                with self.assertRaises(ValueError,msg=change):
+                    pipeline.load_toolchain(path)
+            bad=json.loads(json.dumps(data))
+            bad['tools']['git']=bad['tools'].pop('ninja')
+            path.write_text(json.dumps(bad),encoding='utf-8')
+            with self.assertRaisesRegex(ValueError,'tools must name'):
+                pipeline.load_toolchain(path)
+
+    def tool(self,**fields):
+        tool={'version':'1.0.0','url':'https://example.org/tool.zip','size':1,'sha256':'0'*64,
+              'license':'MIT','license_file':None,'format':'zip','top':'tool-1.0.0',
+              'keep':['bin/tool.exe','share/'],'bin':'bin','accept':['1.0',None]}
+        tool.update(fields)
+        return tool
+
+    def test_unpack_tool(self):
+        """unpack_tool keeps the members of keep below the top folder, from a zip and a tar.xz,
+        and refuses absolute paths, drives, '..', members outside the top folder, links and a keep
+        entry that matches nothing."""
+        with tempfile.TemporaryDirectory() as directory:
+            directory=Path(directory)
+            members={'tool-1.0.0/bin/tool.exe':b'exe','tool-1.0.0/bin/other.exe':b'no',
+                     'tool-1.0.0/share/a/b.txt':b'b','tool-1.0.0/doc/x.html':b'x'}
+            def make_zip(name,extra=()):
+                path=directory/name
+                with zipfile.ZipFile(path,'w') as archive:
+                    archive.writestr('tool-1.0.0/',b'')
+                    for member,data in [*members.items(),*extra]:
+                        archive.writestr(member,data)
+                return path
+            def make_tar(name,extra=()):
+                path=directory/name
+                with tarfile.open(path,'w:xz') as archive:
+                    folder=tarfile.TarInfo('tool-1.0.0')
+                    folder.type=tarfile.DIRTYPE
+                    archive.addfile(folder)
+                    for member,data in members.items():
+                        info=tarfile.TarInfo(member)
+                        info.size=len(data)
+                        archive.addfile(info,io.BytesIO(data))
+                    for info in extra:
+                        archive.addfile(info)
+                return path
+            for archive,tool in ((make_zip('good.zip'),self.tool()),
+                                 (make_tar('good.tar.xz'),self.tool(format='tar.xz',
+                                                                    url='https://example.org/t.tar.xz'))):
+                out=directory/f'out-{archive.name}'
+                self.assertEqual(pipeline.unpack_tool(archive,out,tool),(2,4))
+                self.assertEqual(sorted(path.relative_to(out).as_posix() for path in out.rglob('*') if path.is_file()),
+                                 ['bin/tool.exe','share/a/b.txt'])
+                self.assertEqual(pipeline.unpack_tool(archive,directory/f'all-{archive.name}',
+                                                      self.tool(format=tool['format'],keep=None))[0],4)
+                with self.assertRaisesRegex(RuntimeError,'has no bin/missing.exe'):
+                    pipeline.unpack_tool(archive,directory/f'miss-{archive.name}',
+                                         self.tool(format=tool['format'],keep=['bin/tool.exe','bin/missing.exe']))
+            for index,(member,message) in enumerate((('/tool-1.0.0/abs.txt','refused'),
+                                                     ('tool-1.0.0/../evil.txt','refused'),
+                                                     ('C:/tool-1.0.0/x.txt','refused'),
+                                                     ('tool-1.0.0\\..\\evil.txt','refused'),
+                                                     ('other/x.txt','outside its top folder'))):
+                with self.assertRaisesRegex(RuntimeError,message,msg=member):
+                    pipeline.unpack_tool(make_zip(f'bad{index}.zip',[(member,b'x')]),directory/f'bad{index}',self.tool())
+            link=zipfile.ZipInfo('tool-1.0.0/bin/link')
+            link.external_attr=(stat.S_IFLNK|0o777)<<16
+            with self.assertRaisesRegex(RuntimeError,'neither a file nor a folder'):
+                pipeline.unpack_tool(make_zip('link.zip',[(link,b'/etc/passwd')]),directory/'link-zip',self.tool())
+            for index,kind in enumerate((tarfile.SYMTYPE,tarfile.LNKTYPE)):
+                info=tarfile.TarInfo('tool-1.0.0/share/link')
+                info.type,info.linkname=kind,'tool-1.0.0/bin/tool.exe'
+                with self.assertRaisesRegex(RuntimeError,'neither a file nor a folder'):
+                    pipeline.unpack_tool(make_tar(f'link{index}.tar.xz',[info]),directory/f'link-tar{index}',
+                                         self.tool(format='tar.xz',url='https://example.org/t.tar.xz'))
+            info=tarfile.TarInfo('tool-1.0.0/../evil.txt')
+            with self.assertRaisesRegex(RuntimeError,'refused'):
+                pipeline.unpack_tool(make_tar('dots.tar.xz',[info]),directory/'dots-tar',
+                                     self.tool(format='tar.xz',url='https://example.org/t.tar.xz'))
+
+    def test_install_tool(self):
+        """fetch_tool takes the archive from the mirror folder only with the pinned size and
+        SHA-256, renames a kept archive that fails them to .rejected, and install_tool unpacks it
+        once (its marker); toolchain uses an accepted installed copy unless portable."""
+        with tempfile.TemporaryDirectory() as directory, patch('builtins.print'):
+            directory=Path(directory)
+            mirror=directory/'mirror'
+            mirror.mkdir()
+            with zipfile.ZipFile(mirror/'tool.zip','w') as archive:
+                archive.writestr('tool-1.0.0/bin/tool.exe',b'exe')
+                archive.writestr('tool-1.0.0/share/x',b'x')
+            data=(mirror/'tool.zip').read_bytes()
+            tool=self.tool(size=len(data),sha256=pipeline.hashlib.sha256(data).hexdigest())
+            log=directory/'toolchain.log'
+            downloads=directory/'downloads'
+            with patch.object(pipeline.urllib.request,'urlopen',side_effect=OSError('offline')):
+                with self.assertRaisesRegex(RuntimeError,'cannot be fetched'):
+                    pipeline.fetch_tool('tool',dict(tool,sha256='1'*64),downloads,log,mirror)
+                self.assertFalse((downloads/'tool.zip').exists())
+                path=pipeline.fetch_tool('tool',tool,downloads,log,mirror)
+                self.assertEqual(path.read_bytes(),data)
+                path.write_bytes(b'changed')
+                pipeline.fetch_tool('tool',tool,downloads,log,mirror)
+                self.assertTrue((downloads/'tool.zip.rejected').is_file())
+                target=pipeline.install_tool('tool',tool,directory/'toolchain',downloads,log,mirror)
+                self.assertEqual((target/'bin/tool.exe').read_bytes(),b'exe')
+                self.assertFalse(target.with_name(target.name+'.partial').exists())
+                (downloads/'tool.zip').unlink()
+                self.assertEqual(pipeline.install_tool('tool',tool,directory/'toolchain',downloads,log),target)
+            tools={'tool':tool}
+            found={'tool':[{'path':'C:/tool','version':'1.0.1','missing':[],'accepted':True}]}
+            portable={'path':str(target/'bin'),'version':'1.0.0','missing':[],'accepted':True}
+            with patch.object(pipeline,'load_toolchain',lambda path:tools), \
+                    patch.object(pipeline,'detect_tools',lambda tools:found), \
+                    patch.object(pipeline,'probe_tool',lambda name,folder,tool:portable):
+                report=pipeline.toolchain(directory/'toolchain',downloads)
+                self.assertEqual(report['tools']['tool']['source'],'installed')
+                report=pipeline.toolchain(directory/'toolchain',downloads,portable=True)
+                self.assertEqual(report['tools']['tool'],{'source':'portable','bin':str(target/'bin'),
+                                                           'version':'1.0.0','license':'MIT'})
+            with patch.dict(os.environ,{'PATH':'C:/Windows'}):
+                self.assertEqual(pipeline.use_toolchain(directory/'toolchain'),[str(target/'bin')])
+                self.assertEqual(os.environ['PATH'],str(target/'bin')+os.pathsep+'C:/Windows')
+
+    def test_detect_tools(self):
+        """probe_tool reads the version of a tool's executable, wants the executables beside it
+        and the accepted versions; tool_folders lists PATH's copy first."""
+        with tempfile.TemporaryDirectory() as directory:
+            folder=Path(directory)
+            tool=self.tool(accept=['20','21'])
+            self.assertIsNone(pipeline.probe_tool('llvm',folder,tool))
+            for name in ('clang.exe','clang++.exe','lld-link.exe'):
+                (folder/name).write_bytes(b'')
+            output='clang version 20.1.8\nTarget: x86_64-pc-windows-msvc\n'
+            result=lambda args,**kwargs:subprocess.CompletedProcess(args,0,output,'')
+            with patch.object(pipeline.subprocess,'run',result):
+                probe=pipeline.probe_tool('llvm',folder,tool)
+                self.assertEqual((probe['version'],probe['missing'],probe['accepted']),('20.1.8',['llvm-ar.exe'],False))
+                (folder/'llvm-ar.exe').write_bytes(b'')
+                self.assertTrue(pipeline.probe_tool('llvm',folder,tool)['accepted'])
+                output='clang version 19.1.7\n'
+                self.assertFalse(pipeline.probe_tool('llvm',folder,tool)['accepted'])
+            with patch.object(pipeline.shutil,'which',lambda name:str(folder/name)), \
+                    patch.dict(os.environ,{'ProgramFiles':str(folder/'programs')}):
+                self.assertEqual(pipeline.tool_folders('llvm')[:2],[folder,folder/'programs/LLVM/bin'])
+
+    def test_d3d_compile(self):
+        """The resolve shaders' compile through Windows' D3DCompile: defines (a bare name is 1),
+        includes from the source's folder, a DXBC container, fxc's header layout, and the
+        compiler's message on an error."""
+        self.assertEqual(pipeline.shader_header(bytes(range(8)),'//\n// listing\n','name_cs'),
+                         b'#if 0\r\n//\r\n// listing\r\n#endif\r\n\r\nconst BYTE name_cs[] =\r\n{\r\n'
+                         b'      0,   1,   2,   3,   4,   5, \r\n      6,   7\r\n};\r\n')
+        try:
+            library=pipeline.d3dcompiler()
+        except OSError:
+            self.skipTest("Windows' d3dcompiler_47.dll is not available.")
+        with tempfile.TemporaryDirectory() as directory:
+            directory=Path(directory)
+            (directory/'common.hlsli').write_text('#define VALUE (FLAG + SCALE)\n',encoding='utf-8')
+            source=directory/'test.cs.hlsl'
+            source.write_text('#include "common.hlsli"\n#if FLAG != 1\n#error FLAG\n#endif\n'
+                              'RWByteAddressBuffer output : register(u0);\n'
+                              '[numthreads(1, 1, 1)] void main() { output.Store(0, VALUE); }\n',encoding='utf-8')
+            code,listing=pipeline.d3d_compile(source,'cs_5_1',['FLAG','SCALE=2'],library)
+            self.assertEqual(code[:4],b'DXBC')
+            self.assertIn('cs_5_1',listing)
+            self.assertIn('l(3)',listing)
+            self.assertNotIn(b'RDEF',code)
+            output=directory/'test_cs.h'
+            pipeline.compile_shader(source,'cs_5_1',output,'test_cs',['FLAG','SCALE=2'],directory/'logs/test.log',library)
+            self.assertTrue(output.read_bytes().startswith(b'#if 0\r\n//\r\n// Generated by Microsoft (R) D3D Shader Disassembler'))
+            self.assertIn(b'const BYTE test_cs[] =\r\n{\r\n     68,  88,  66,  67,',output.read_bytes())
+            with self.assertRaisesRegex(RuntimeError,'FLAG'):
+                pipeline.d3d_compile(source,'cs_5_1',['SCALE=2'],library)
+            with self.assertRaisesRegex(RuntimeError,'log:'):
+                pipeline.compile_shader(source,'cs_5_1',output,'test_cs',[],directory/'logs/bad.log',library)
+            self.assertIn('FLAG',(directory/'logs/bad.log').read_text(encoding='utf-8'))
 
     def test_clear_gray(self):
         """The e2e clear color check: smooth neutral grays that pass 102 (asphalt under TAA) are no
