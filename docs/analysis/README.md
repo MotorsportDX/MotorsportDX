@@ -78,3 +78,4 @@ Updated on 31 October 2026.
 | --- | --- | --- |
 | [preview.md](preview.md) | Active | What a preview can be (source only), the internal names, and the checklist for a closed and a public preview |
 | [builder-installer.md](builder-installer.md) | Active | A free download without the game that builds Motorsport DX on the player's computer from their discs: what it ships (two options, their licences), a toolchain the player does not install by hand, the flow, the launcher's builder mode, increments, risks and the owner's decisions |
+| [mingw-toolchain.md](mingw-toolchain.md) | Active | Route (c) of the builder: building with llvm-mingw instead of Microsoft's libraries and the Windows SDK; the MSVC-specific code by class, mingw-w64's headers, third-party libraries, tooling, one toolchain or two, the pin, licences, estimate, prototype plan and risks |

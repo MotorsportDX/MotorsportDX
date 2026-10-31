@@ -355,6 +355,11 @@ What follows from the text:
 
 This note is not legal advice. The route is the owner's decision again (section 9, item 4).
 
+**Route (c) researched (31 October 2026):** [mingw-toolchain.md](mingw-toolchain.md) counts the
+MSVC-specific code (no blocker found; the D3D12 struct returns, setjmp and the exports need proof),
+names what mingw-w64 lacks (`gameinput.h`), pins llvm-mingw 20250709 (LLVM 20.1.8, 171 MB), estimates
+14 to 28 h, and recommends a prototype of 2 to 3 h with that one download before the route is chosen.
+
 ### 4.8 FXC, replaced by D3DCompile
 
 `fxc.exe` is used in one place: `compile_resolve_shaders` in

@@ -81,6 +81,10 @@
       "provenance": "Project documentation; builder installer design (no game content shipped)"
     },
     {
+      "path": "docs/analysis/mingw-toolchain.md",
+      "provenance": "Project documentation; llvm-mingw toolchain research for the builder (route (c))"
+    },
+    {
       "path": "docs/status/current.md",
       "provenance": "Project documentation; current verification status, open gaps and next validation steps"
     },
