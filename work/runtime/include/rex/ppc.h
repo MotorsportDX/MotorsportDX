@@ -25,3 +25,22 @@ using rex::ppc::GetPPCFuncRegistry;
 using rex::ppc::GuestToHostFunction;
 using rex::ppc::HostToGuestFunction;
 using rex::ppc::ImportFunction;
+
+// The setjmp buffers of the generated code (pch_h.inja's get_jmp_buf_map). The Universal CRT's
+// x64 setjmp stores xmm6-xmm15 with movdqa, so each buffer must be 16-byte aligned; mingw-w64 puts
+// that alignment on the SETJMP_FLOAT128 typedef rather than on the struct, which clang drops
+// inside std::pair, so llvm-mingw builds wrap the buffer (docs/analysis/mingw-toolchain.md).
+// Defined here, at the end, so the template keeps its line count and the MSVC build its code.
+#if defined(__MINGW32__)
+#include <csetjmp>
+namespace rex::ppc {
+struct alignas(16) JmpBuf {
+  jmp_buf buf;
+};
+}  // namespace rex::ppc
+#define REX_PPC_JMP_BUF_TYPE ::rex::ppc::JmpBuf
+#define REX_PPC_JMP_BUF(entry) ((entry).buf)
+#else
+#define REX_PPC_JMP_BUF_TYPE jmp_buf
+#define REX_PPC_JMP_BUF(entry) (entry)
+#endif
