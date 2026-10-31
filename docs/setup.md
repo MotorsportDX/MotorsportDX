@@ -180,6 +180,9 @@ powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\outputs\FM4-build\Buil
 | `warmcache` | Fills the shader cache by running the e2e Quick Race timeline once, on a profile that has been played once to the main menu. See [running.md](running.md#shader-cache). |
 | `profbuild` | Builds `game-build-prof`, a copy with line tables and PDBs for profiling. Run `build` first. |
 | `export` | Copies the game and the GUI launcher into the `-Out` folder, to run on another computer. Run `build` first. See [running.md](running.md#export-to-another-computer). |
+| `preflight` | Checks whether this computer can build and run the game, before anything is fetched, and prints the result as JSON. Makes no changes. See [Preflight](#preflight). |
+| `launcher-data` | Writes the GUI launcher's `launcher.json` into `-Out` (or the BuildRoot) without a build. See [Launcher data](#launcher-data). |
+| `snapshot` | Writes a source snapshot of a commit (`-Revision`, default `HEAD`) with its version stamp into the new folder `-Out`. See [Source snapshots](#source-snapshots). |
 
 The stages can also run separately:
 
@@ -203,7 +206,10 @@ The stages can also run separately:
 | `-Flavor` | Compiler experiment for `build`, for example `thinlto,v3`. See [Build flavors](#build-flavors). |
 | `-Fsr` | `on` or `off`, for `setup`, `build` and `all`: link AMD FSR 3.1 into the runtime, built from the FidelityFX SDK source (`REX_FSR`). `on` fetches the pinned SDK first. The runtime build folder keeps the choice for later builds; off by default. See [FSR 3.1](#fsr-31-optional). |
 | `-FfxMirror` | The FidelityFX SDK mirror for `setup`, `build` and `all`, in place of the `FFX_MIRROR` environment variable: another Git URL or a local `.bundle` file. See [the FidelityFX SDK mirror](#the-fidelityfx-sdk-mirror). |
-| `-Out` | The folder of `export`, outside the BuildRoot and the repository. |
+| `-Out` | The folder of `export`, outside the BuildRoot and the repository; of `launcher-data`, outside the source; or the new folder of `snapshot`, outside the repository. |
+| `-Tests` | `developer` (the default) or `player`, for `build` and `all`: which tests run at the end of `build`. See [3. Build](#3-build). |
+| `-Progress` | A file to which `setup`, `generate`, `build` and `all` append one JSON line for each stage and step, or `-` for the output. See [Progress lines](#progress-lines). |
+| `-Revision` | The commit of `snapshot`. Default: `HEAD`. |
 
 ## Stages
 
@@ -246,10 +252,11 @@ variable, or `Build.ps1 -FfxMirror`) names it:
 
 - **A local `.bundle` file.** When the file does not exist, setup writes it after a fetch
   from GitHub: a Git bundle of the pinned commit with its trees and the sparse files' blobs
-  (about 15 MB), made from the checkout without network. When GitHub cannot be reached,
-  setup checks that the bundle holds the pinned commit and checks it out from there. On the
-  development computer it is `D:\FM4-archive\third-party\fidelityfx-sdk-v1.1.4.bundle`,
-  written on 25 October 2026.
+  (about 15 MB), made from the checkout without network. When the file exists and the
+  BuildRoot has no checkout yet, setup checks that the bundle holds the pinned commit and
+  checks it out from there first, without network (since 31 October 2026; before, only when
+  GitHub could not be reached). On the development computer it is
+  `D:\FM4-archive\third-party\fidelityfx-sdk-v1.1.4.bundle`, written on 25 October 2026.
 - **Another Git URL** that holds the tag `v1.1.4` at the pinned commit, used the same way as
   GitHub. The project owner may fork the SDK to their own GitHub account and name the fork
   here; check that the fork has the tag `v1.1.4` (fork every branch, not the main branch
@@ -272,9 +279,10 @@ into `BuildRoot\gameinput-sdk\3.5.283` (`fetch_gameinput` in `pipeline.py`) and 
 whose SHA-512 is not the pinned one (`59083faf...fe77705`, NuGet's published hash). They extract
 only the package's two MIT-licensed files, `include\gameinput.h` (the public header) and
 `src\GameInput.cpp` (the loader); the header is used for SDL's sources only, and the loader is
-built into SDL. `GAMEINPUT_MIRROR` (an environment variable) names a fallback: another URL of the
-same package or a local copy of the `.nupkg` file. An existing package with the pinned hash needs
-no network. Nothing of the package is committed or shipped, and nothing in it is run; the
+built into SDL. `GAMEINPUT_MIRROR` (an environment variable) names another source: a local copy
+of the `.nupkg` file, which is tried first, without network, or another URL of the same package,
+tried after NuGet. Either is refused without the pinned hash. An existing package with the
+pinned hash needs no network. Nothing of the package is committed or shipped, and nothing in it is run; the
 license review is in [sources and licensing](sources-and-licensing.md#third-party-code-microsoftgameinput).
 
 #### The DirectX Shader Compiler
@@ -337,6 +345,18 @@ runtime edits need only this stage. It then:
 - runs the launcher tests, which compare the launcher's launch plans and its Disc and
   content checks with those of `pipeline.py`. A flavor build skips the launcher.
 
+`-Tests player` (`--tests player`), the build of the
+[builder installer](analysis/builder-installer.md), leaves out the tests of the project's
+HLSL, which is the same on every computer: the post pass tests on WARP, the shader-mod tests
+(FXC compiles of the look mods) and the GT7 tone curve test on WARP, and the FSR checks on the
+GPU of a runtime built with `-Fsr on`. It keeps the instruction tests, the launcher tests and the
+CPU tests of C++ that the player's compiler builds into the game, the runtime and the launcher:
+the scene camera math, the track lighting edits, the texture replacement hash and DDS files, the
+draw scale fraction, the pads' shaping, the keyboard model, the native shader contract's
+manifest parser and pass classes, and the racing wheel's force feedback, mapping and host. Each
+of those runs in seconds and checks what this computer's compiler made. `developer`, the
+default, runs every test. `build-result.json` records the set in `tests`.
+
 ### Rebuilding after edits
 
 - After editing `work/runtime`, `work/fm4-rex` or `work/fm4-launcher`, `build` is enough.
@@ -347,6 +367,151 @@ runtime edits need only this stage. It then:
   generator's inputs (`outputs/FM4-build/*.toml`, `rexglue.cmake`).
 - A `BuildRoot` created before the runtime fork (one that contains `sdk-source`) is
   rejected. Choose a new `BuildRoot`.
+
+## Builder interface
+
+The [builder installer](analysis/builder-installer.md) runs `pipeline.py` itself, without
+`Build.ps1` and without a Git checkout. These actions and options serve it; developers can use
+them too.
+
+### Without Build.ps1
+
+`pipeline.py` runs directly with Python 3.11+ x64 from a checkout or a
+[source snapshot](#source-snapshots): `python outputs\FM4-build\pipeline.py <action>
+--build-root <folder> ...`, with the options of [Parameters](#parameters) in lower case with
+hyphens (`--disc1`, `--jobs`, `--tests`, `--progress`). The caller provides the environment
+that `Build.ps1` sets up: the Visual Studio x64 developer environment (`fxc.exe` through
+`WindowsSdkDir` and `WindowsSDKVersion`, `link`, the C and C++ libraries) and LLVM 20 first on
+`PATH`. `preflight`, `launcher-data` and `snapshot` need none of it: they run before any
+toolchain exists. Until increment B2 of the builder, `setup` still needs Git for the SDK and
+FidelityFX fetches and the SDL patch.
+
+### Preflight
+
+`preflight` prints one JSON object and exits with 0, or with 1 when a check fails. It needs no
+toolchain, writes nothing and fetches nothing. Schema 1:
+
+```json
+{
+ "schema": 1,
+ "ok": true,
+ "build_root": "D:\\MotorsportDX\\build",
+ "source": "D:\\MotorsportDX\\source",
+ "suggested_jobs": 8,
+ "checks": {
+  "windows": {"state": "pass", "version": "10.0.26200", "machine": "AMD64", "name": "Windows 11"},
+  "cpu": {"state": "pass", "level": "x86-64-v2", "method": "cpuid",
+          "features": {"sse3": true, "ssse3": true, "cmpxchg16b": true, "sse4_1": true,
+                       "sse4_2": true, "popcnt": true, "lahf_sahf": true},
+          "missing": [], "unchecked": []},
+  "gpu": {"state": "pass", "adapters": [{"name": "...", "vendor_id": "10DE",
+          "dedicated_video_memory": 12524191744, "software": false, "d3d12_11_0": true}]},
+  "memory": {"state": "pass", "total_bytes": 33731026944, "threads": 20, "suggested_jobs": 8},
+  "disk": {"state": "pass", "path": "D:\\", "free_bytes": 160009805824, "required_bytes": 20000000000},
+  "paths": {"state": "pass",
+            "build_root": {"state": "pass", "path": "D:\\MotorsportDX\\build", "length": 21, "problems": []},
+            "source": {"state": "pass", "path": "D:\\MotorsportDX\\source", "length": 22, "problems": []}}
+ }
+}
+```
+
+Each check has a `state`: `pass`; `warn`, which may work but is not tested; `fail`; or
+`unchecked`, when the check could not run on this computer (its `detail` says why). An
+`unchecked` check is never counted as a pass, and `ok` is false only when a check fails: the
+caller decides what to do with `warn` and `unchecked`. A check may carry a `detail` sentence.
+
+| Check | What it looks at | States |
+| --- | --- | --- |
+| `windows` | The Windows version (`sys.getwindowsversion`) and the machine Windows runs on (`IsWow64Process2`), and a 64-bit Python | `pass` on Windows 11 x64; `warn` on Windows 10 x64 (build 10240 or later), which is not tested; `fail` on any other version or machine (ARM64 included) |
+| `cpu` | The x86-64-v2 features of the default build (`-march=x86-64-v2`): SSE3, SSSE3, CMPXCHG16B, SSE4.1, SSE4.2 and POPCNT from CPUID leaf 1, LAHF/SAHF in 64-bit mode from leaf `0x80000001`. `method` is `cpuid`: a 10-instruction routine in executable memory runs the CPUID instruction | `fail` when a feature is missing (`missing`). Where the routine cannot run, `method` is `IsProcessorFeaturePresent`, which has no flag for POPCNT or LAHF/SAHF and reports a flag that an older Windows does not know as absent: those features are `null` in `features`, listed in `unchecked`, and the state is `unchecked` |
+| `gpu` | Every adapter DXGI lists, and whether `D3D12CreateDevice` accepts it at feature level 11_0. It is called without an output pointer, so no device is made | `pass` when a hardware adapter (not WARP) has Direct3D 12 at 11_0; `fail` otherwise; `unchecked` when `dxgi.dll` or `d3d12.dll` cannot be loaded |
+| `memory` | The installed RAM (`GlobalMemoryStatusEx`) and the logical processors | `pass`; `warn` below 15 GiB (builds below 16 GB are not measured). `suggested_jobs` is one job per 4 GiB of RAM, rounded, at most one per logical processor (32 GB gives 8, the measured `-Jobs 8`; 24 GB gives 6). The memory per job is not measured, so the rule is provisional; `pipeline.py`'s own default stays 4 |
+| `disk` | Free space on the drive of the BuildRoot (or of its nearest existing parent) | `fail` below 20 GB (`required_bytes`), a provisional floor for the BuildRoot, Disc 2's import, the downloadable content and the builder's toolchain |
+| `paths` | The BuildRoot's and the source folder's paths | `fail`: longer than 70 characters for the BuildRoot (the deepest file measured below one is 187 characters, Disc 2's imported content) or 150 for the source; non-ASCII characters; inside a synced folder; or a BuildRoot that the [BuildRoot rule](#parameters) refuses. `warn`: a BuildRoot longer than 46 characters (the FSR build's objects hold its path twice and reach twice its length plus 166) or a source longer than 100; spaces (not tested). Synced folders are those of OneDrive's environment variables, the sync roots registered with Windows' Cloud Files API, and folders with the Cloud Files placeholder attributes; a sync tool that uses none of them is not detected |
+
+### Progress lines
+
+With `--progress <file>` (`-Progress`), `setup`, `generate`, `build` and `all` append one JSON
+line to the file for each stage and step as it starts and as it ends, and flush it at once, so
+a caller can read the file while the action runs. `--progress -` writes the lines to the output
+instead, between the action's other output. Schema 1:
+
+```json
+{"schema": 1, "event": "stage", "stage": "setup", "step": null, "state": "running", "elapsed": 0.0, "log": null, "time": "2026-10-31T12:00:00Z"}
+{"schema": 1, "event": "step", "stage": "setup", "step": "runtime-build", "state": "running", "elapsed": 0.0, "log": "D:\\MotorsportDX\\build\\logs\\runtime-build.log", "time": "2026-10-31T12:01:10Z"}
+{"schema": 1, "event": "step", "stage": "setup", "step": "runtime-build", "state": "done", "elapsed": 95.3, "log": "D:\\MotorsportDX\\build\\logs\\runtime-build.log", "time": "2026-10-31T12:02:45Z"}
+{"schema": 1, "event": "stage", "stage": "setup", "step": null, "state": "failed", "elapsed": 160.2, "log": null, "time": "2026-10-31T12:02:50Z", "error": "Exit 1; log: ..."}
+```
+
+| Field | Meaning |
+| --- | --- |
+| `schema` | 1 |
+| `event` | `stage` (`setup`, `generate`, `build`) or `step` |
+| `stage` | The stage the line belongs to, or `null` for a step outside a stage |
+| `step` | For a step: the name of its log without `.log` (every process the pipeline starts with a log is a step: `runtime-configure`, `runtime-build`, `codegen`, `game-build`, `instruction-tests`, ...), or `gameinput-fetch`, `dxc-fetch`, `thirdparty-mirror`; `null` for a stage. A name can come twice: the FidelityFX fetch's Git commands share `fidelityfx-fetch` |
+| `state` | `running`, then `done` or `failed` |
+| `elapsed` | Seconds since the stage or step started, to a tenth; 0 on `running` |
+| `log` | The step's log in `BuildRoot\logs`, or `null` |
+| `time` | The time of the line, UTC |
+| `error` | On `failed` only: the error message |
+
+A failed step is followed by its stage's `failed` line, and the action then exits with an
+error. Steps that find their work done (an unchanged fetch, an up-to-date build) still write
+their two lines.
+
+### Launcher data
+
+`launcher-data` writes `launcher.json`, the tables of the [GUI launcher](running.md#gui-launcher)
+(the cvars of a launch, the looks, the quality tiers, the displays, the pad, keyboard and wheel
+knobs, the releases and the content rules), without a build: they are project data in
+`pipeline.py` and the look and pass files. With `-Out` it writes into that folder, otherwise
+into the BuildRoot. The file equals the one `build` writes (checked on 31 October 2026 against
+the development BuildRoot's, built from `627e914`).
+
+### Source snapshots
+
+A source snapshot is the source as the builder package carries it: the files of one commit, as
+`git archive` writes them, without Git metadata, and a version stamp. `snapshot -Out <new
+folder> [-Revision <commit>]` writes one from a checkout (uncommitted changes are not in it).
+The stamp is `source-stamp.json` at the snapshot's root:
+
+```json
+{
+ "schema": 1,
+ "commit": "508967345b7d3d38298c668838ddbe95329d108e",
+ "date": "2026-10-31T13:53:40+07:00",
+ "describe": "5089673",
+ "files": 1257,
+ "tree": "a276fde480a8dbfe95d013b09280ec960f5f00dce514ed0b7c76e3d2d3eab9b5"
+}
+```
+
+`commit` is the full commit hash, `date` its committer date, `describe` the output of `git
+describe --tags --always` (the tag once the project has one), `files` the number of files
+besides the stamp, and `tree` a SHA-256 over the paths and contents of the files in
+`work/runtime` and `work/fm4-rex` (each file's path relative to the snapshot, a zero byte and
+its SHA-256, in path order).
+
+In a snapshot (a source folder without `.git`), `build-result.json`'s `source` takes `head` from
+the stamp's `commit`, and `dirty` is true when the files of `work/runtime` or `work/fm4-rex` no
+longer give the stamp's `tree`; both are `null` without a stamp. The BuildRoot must lie outside
+the snapshot altogether, so `--build-root` is required there (the default `work\portable-fm4`
+would lie inside it).
+
+### Local mirrors for developers
+
+To build into a new BuildRoot without network, for example to check a snapshot, each fetch can
+take a local copy:
+
+| Variable | Local copy | Used |
+| --- | --- | --- |
+| `THIRDPARTY_MIRROR` | A checkout of the upstream SDK at the pinned commit with its 13 submodules, such as another BuildRoot's `runtime-upstream` | Setup copies the third-party folders from it instead of cloning, and refuses it at another commit or with a submodule that is missing or differs from its pin. For developers only; the builder takes archives instead (B2) |
+| `FFX_MIRROR` | The FidelityFX SDK bundle | First, when the BuildRoot has no checkout ([the mirror](#the-fidelityfx-sdk-mirror)) |
+| `GAMEINPUT_MIRROR` | The `.nupkg` file | First ([the GameInput package](#the-gameinput-package)) |
+| `DXC_MIRROR` | The release zip | First ([the DirectX Shader Compiler](#the-directx-shader-compiler)) |
+
+Every copy is checked against its pin as a download is. With `GIT_NO_LAZY_FETCH=1` Git also
+refuses to fetch a missing object of the FidelityFX checkout instead of fetching it.
 
 ## Build flavors
 
