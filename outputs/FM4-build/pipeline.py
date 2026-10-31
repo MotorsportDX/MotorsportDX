@@ -1,5 +1,6 @@
 """Windows source-only bootstrap. Private outputs stay below build-root."""
 import argparse
+import contextlib
 import hashlib
 import json
 import math
@@ -10,6 +11,7 @@ import shutil
 import stat
 import subprocess
 import sys
+import tarfile
 import time
 import urllib.request
 import zipfile
@@ -112,14 +114,46 @@ def copy_source(source, destination):
         shutil.copyfile(source, destination)
         os.utime(destination)
 
+def git_output(*args):
+    """The stripped output of a git command in the repository, or None when it fails."""
+    try:
+        result=subprocess.run(['git','-C',REPO,*args],capture_output=True,text=True)
+    except OSError:
+        return None
+    return result.stdout.strip() if result.returncode==0 else None
+
+def is_git_checkout():
+    """Whether the source is a Git checkout (a worktree's .git is a file), not a snapshot."""
+    return (REPO/'.git').exists()
+
+# A source snapshot (make_snapshot, docs/setup.md#source-snapshots) is a git archive of one
+# commit, which has no Git metadata: its version stamp names the commit, and source_state reads it.
+# STAMP_TREES are the folders whose files the stamp's tree hash covers, the ones source_state's
+# dirty flag watches in a checkout.
+STAMP_NAME='source-stamp.json'
+STAMP_TREES=('work/runtime','work/fm4-rex')
+
+def snapshot_tree(directory):
+    """A SHA-256 over the paths and contents of the files of STAMP_TREES under directory."""
+    directory=Path(directory)
+    files=sorted((path.relative_to(directory).as_posix(),path) for top in STAMP_TREES
+                 for path in (directory/top).rglob('*') if path.is_file())
+    tree=hashlib.sha256()
+    for name,path in files:
+        tree.update(name.encode()+b'\0'+bytes.fromhex(digest(path)))
+    return tree.hexdigest()
+
+def read_stamp(directory=None):
+    """The version stamp of a snapshot, or None when there is none."""
+    path=Path(directory or REPO)/STAMP_NAME
+    return json.loads(path.read_text(encoding='utf-8')) if path.is_file() else None
+
 def source_state(root):
     """What a build compiled: the HEAD of the checkout that ran it, whether its work/runtime or
     work/fm4-rex differ from HEAD, and a SHA-256 over the paths and contents of the BuildRoot's
     runtime-source (its mirror listing) and the project's title sources (src, tests,
-    CMakeLists.txt), which another checkout may have left there."""
-    def git(*args):
-        result=subprocess.run(['git','-C',REPO,*args],capture_output=True,text=True)
-        return result.stdout.strip() if result.returncode==0 else None
+    CMakeLists.txt), which another checkout may have left there. In a snapshot the stamp's
+    commit, and whether those folders differ from the stamp's tree hash (None without a stamp)."""
     source,project=root/'runtime-source',root/'project'
     listing=source/'.fm4-runtime-files.json'
     files=[('runtime-source/'+relative,source/relative)
@@ -133,19 +167,97 @@ def source_state(root):
     for name,path in sorted(files):
         if path.is_file():
             tree.update(name.encode()+b'\0'+bytes.fromhex(digest(path)))
-    status=git('status','--porcelain','--','work/runtime','work/fm4-rex')
-    return {'head':git('rev-parse','HEAD'),'dirty':bool(status),'tree':tree.hexdigest()}
+    if not is_git_checkout():
+        stamp=read_stamp()
+        if stamp is None:
+            return {'head':None,'dirty':None,'tree':tree.hexdigest()}
+        return {'head':stamp['commit'],'dirty':snapshot_tree(REPO)!=stamp['tree'],'tree':tree.hexdigest()}
+    status=git_output('status','--porcelain','--',*STAMP_TREES)
+    return {'head':git_output('rev-parse','HEAD'),'dirty':bool(status),'tree':tree.hexdigest()}
+
+def make_snapshot(out,revision='HEAD'):
+    """A source snapshot in out (new or empty, outside the repository): the git archive of
+    revision unpacked, and STAMP_NAME beside it with the commit, its date, the tag description,
+    the number of files and the tree hash of STAMP_TREES (snapshot_tree). Uncommitted changes
+    are not in it. The builder package's source folder (docs/analysis/builder-installer.md)."""
+    if not is_git_checkout():
+        raise RuntimeError(f'snapshot needs a Git checkout; {REPO} is not one.')
+    out=Path(out).resolve()
+    if out==REPO or REPO in out.parents or out in REPO.parents:
+        raise ValueError('The snapshot folder must be outside the repository.')
+    if out.exists() and any(out.iterdir()):
+        raise ValueError(f'{out} is not empty.')
+    commit=git_output('rev-parse','--verify',f'{revision}^{{commit}}')
+    if not commit:
+        raise ValueError(f'{revision} is not a commit of {REPO}.')
+    if commit==git_output('rev-parse','HEAD') and git_output('status','--porcelain'):
+        print('The checkout has uncommitted changes; the snapshot holds the commit only.')
+    out.mkdir(parents=True,exist_ok=True)
+    archive=out.parent/f'{out.name}.tar.partial'
+    try:
+        with archive.open('wb') as stream:
+            subprocess.run(['git','-C',REPO,'archive','--format=tar',commit],stdout=stream,check=True)
+        with tarfile.open(archive) as tar:
+            tar.extractall(out,filter='data')
+    finally:
+        archive.unlink(missing_ok=True)
+    stamp={'schema':1,'commit':commit,'date':git_output('show','-s','--format=%cI',commit),
+           'describe':git_output('describe','--tags','--always',commit),
+           'files':sum(1 for path in out.rglob('*') if path.is_file()),
+           'tree':snapshot_tree(out)}
+    (out/STAMP_NAME).write_text(json.dumps(stamp,indent=1)+'\n',encoding='utf-8')
+    print(f'Snapshot of {commit[:7]} in {out}: {stamp["files"]} files.')
+    return stamp
+
+# --progress (docs/setup.md#progress-lines): one JSON line for each stage and step as it starts
+# and ends, for a builder that shows the build's progress. PROGRESS is the open stream, or None.
+PROGRESS=None
+PROGRESS_SCHEMA=1
+_progress_stage=[None]
+
+def progress_event(event,name,state,elapsed=0.0,log=None,error=None):
+    if PROGRESS is None:
+        return
+    line={'schema':PROGRESS_SCHEMA,'event':event,
+          'stage':name if event=='stage' else _progress_stage[0],
+          'step':name if event=='step' else None,'state':state,'elapsed':round(elapsed,1),
+          'log':str(log) if log else None,
+          'time':time.strftime('%Y-%m-%dT%H:%M:%SZ',time.gmtime())}
+    if error is not None:
+        line['error']=str(error)
+    PROGRESS.write(json.dumps(line)+'\n')
+    PROGRESS.flush()
+
+@contextlib.contextmanager
+def progress(event,name,log=None):
+    """Writes the running line of a stage (setup, generate, build) or a step (a process with
+    its log, or a fetch), then its done or failed line with the elapsed seconds."""
+    started=time.monotonic()
+    if event=='stage':
+        _progress_stage[0]=name
+    progress_event(event,name,'running',log=log)
+    try:
+        yield
+    except BaseException as error:
+        progress_event(event,name,'failed',time.monotonic()-started,log,error)
+        raise
+    else:
+        progress_event(event,name,'done',time.monotonic()-started,log)
+    finally:
+        if event=='stage':
+            _progress_stage[0]=None
 
 def run(args, cwd=None, log=None, env=None):
     args = [str(x) for x in args]
     print('Running:', subprocess.list2cmdline(args), flush=True)
     if log:
         log.parent.mkdir(parents=True, exist_ok=True)
-        with log.open('w', encoding='utf-8') as output:
-            result = subprocess.run(args, cwd=cwd, stdout=output, stderr=subprocess.STDOUT, env=env)
-        if result.returncode:
-            print(log.read_text(errors='replace')[-6000:])
-            raise RuntimeError(f'Exit {result.returncode}; log: {log}')
+        with progress('step',log.stem,log):
+            with log.open('w', encoding='utf-8') as output:
+                result = subprocess.run(args, cwd=cwd, stdout=output, stderr=subprocess.STDOUT, env=env)
+            if result.returncode:
+                print(log.read_text(errors='replace')[-6000:])
+                raise RuntimeError(f'Exit {result.returncode}; log: {log}')
     else:
         subprocess.run(args, cwd=cwd, env=env, check=True)
 
@@ -169,6 +281,294 @@ def doctor():
         raise RuntimeError('Windows SDK x64 fxc.exe not found in the VS development environment.')
     print('Preflight passed. LLVM:', version.splitlines()[0], 'FXC:', fxc)
     return fxc
+
+# The preflight action (docs/setup.md#preflight): whether this computer can build and run the
+# game, before any download, as JSON. Every check has a state: pass, warn (it may work, but is
+# not tested), fail, or unchecked (it could not be checked here; never counted as a pass). The
+# probes below are separate functions so that the tests can replace them.
+PREFLIGHT_SCHEMA=1
+# x86-64-v2, which the default build targets (-march=x86-64-v2), beyond x86-64 itself: CPUID
+# leaf 1's ECX bits, and leaf 0x80000001's ECX bit 0 for LAHF and SAHF in 64-bit mode.
+X86_64_V2={'sse3':(1,0),'ssse3':(1,9),'cmpxchg16b':(1,13),'sse4_1':(1,19),'sse4_2':(1,20),
+           'popcnt':(1,23),'lahf_sahf':(0x80000001,0)}
+# IsProcessorFeaturePresent's flags for the same features where Windows has one: none for POPCNT
+# or LAHF/SAHF, and Windows versions older than the flag report it absent.
+X86_64_V2_FLAGS={'sse3':13,'cmpxchg16b':14,'ssse3':36,'sse4_1':37,'sse4_2':38}
+# A provisional floor for a first build: the BuildRoot (2.6 GB after build), Disc 2's import
+# (2.8 GB), the downloadable content and the builder's toolchain (docs/analysis/builder-installer.md 5).
+PREFLIGHT_DISK=20*10**9
+# The deepest file measured below a BuildRoot is 187 characters (Disc 2's imported content in
+# user-data): a longer BuildRoot path breaks Windows' 260-character limit. The FSR build's objects
+# hold the BuildRoot twice (CMake's object paths) and reach 2 x length + 166.
+PATH_LIMITS={'build_root':(46,70),'source':(100,150)}
+# Nominal RAM per compile job of -Jobs (8 jobs ran on 32 GB; the memory per job is not measured).
+JOB_MEMORY=4*2**30
+
+def cpuid(leaf):
+    """(EAX, EBX, ECX, EDX) of the CPUID instruction for leaf, sub-leaf 0, run from a small
+    x64 routine in executable memory."""
+    import ctypes
+    from ctypes import wintypes
+    # push rbx; mov eax,ecx; mov ecx,edx; cpuid; mov [r8],eax; mov [r8+4],ebx;
+    # mov [r8+8],ecx; mov [r8+12],edx; pop rbx; ret
+    code=bytes.fromhex('53 89c8 89d1 0fa2 418900 41895804 41894808 4189500c 5b c3'.replace(' ',''))
+    kernel32=ctypes.WinDLL('kernel32',use_last_error=True)
+    kernel32.VirtualAlloc.restype=ctypes.c_void_p
+    kernel32.VirtualAlloc.argtypes=(ctypes.c_void_p,ctypes.c_size_t,wintypes.DWORD,wintypes.DWORD)
+    kernel32.VirtualProtect.argtypes=(ctypes.c_void_p,ctypes.c_size_t,wintypes.DWORD,
+                                      ctypes.POINTER(wintypes.DWORD))
+    kernel32.VirtualFree.argtypes=(ctypes.c_void_p,ctypes.c_size_t,wintypes.DWORD)
+    memory=kernel32.VirtualAlloc(None,len(code),0x3000,0x04)  # MEM_COMMIT|MEM_RESERVE, PAGE_READWRITE
+    if not memory:
+        raise OSError(ctypes.get_last_error(),'VirtualAlloc failed')
+    try:
+        ctypes.memmove(memory,code,len(code))
+        old=wintypes.DWORD()
+        if not kernel32.VirtualProtect(memory,len(code),0x20,ctypes.byref(old)):  # PAGE_EXECUTE_READ
+            raise OSError(ctypes.get_last_error(),'VirtualProtect failed')
+        registers=(ctypes.c_uint32*4)()
+        ctypes.CFUNCTYPE(None,ctypes.c_uint32,ctypes.c_uint32,ctypes.c_void_p)(memory)(
+            leaf,0,ctypes.addressof(registers))
+        return tuple(registers)
+    finally:
+        kernel32.VirtualFree(memory,0,0x8000)  # MEM_RELEASE
+
+def processor_feature(flag):
+    import ctypes
+    return bool(ctypes.windll.kernel32.IsProcessorFeaturePresent(flag))
+
+def cpu_features():
+    """(method, {feature: True, False or None}) for X86_64_V2: from CPUID, or where CPUID cannot
+    run here, from IsProcessorFeaturePresent, which knows no POPCNT or LAHF/SAHF (None) and
+    reports a feature it does not know as absent (None as well: not checked)."""
+    try:
+        highest=cpuid(0)[0]
+        extended=cpuid(0x80000000)[0]
+        leaves={leaf:cpuid(leaf) for leaf in {leaf for leaf,_ in X86_64_V2.values()}
+                if leaf<=highest or 0x80000000<leaf<=extended}
+        return 'cpuid',{name:(bool(leaves[leaf][2]>>bit&1) if leaf in leaves else None)
+                        for name,(leaf,bit) in X86_64_V2.items()}
+    except (OSError,AttributeError,ValueError):
+        return 'IsProcessorFeaturePresent',{name:(True if name in X86_64_V2_FLAGS and
+                                                  processor_feature(X86_64_V2_FLAGS[name]) else None)
+                                            for name in X86_64_V2}
+
+def windows_version():
+    """(major, minor, build, native machine): the machine is AMD64, ARM64 or another name, from
+    IsWow64Process2 where Windows has it, else from the process."""
+    import ctypes
+    import platform
+    version=sys.getwindowsversion()
+    machine=platform.machine().upper()
+    try:
+        kernel32=ctypes.windll.kernel32
+        process,native=ctypes.c_ushort(),ctypes.c_ushort()
+        if kernel32.IsWow64Process2(ctypes.c_void_p(kernel32.GetCurrentProcess()),
+                                    ctypes.byref(process),ctypes.byref(native)):
+            machine={0x8664:'AMD64',0xAA64:'ARM64',0x14C:'X86'}.get(native.value,hex(native.value))
+    except AttributeError:
+        pass
+    return version.major,version.minor,version.build,machine
+
+def d3d12_adapters():
+    """Every adapter DXGI lists: its name, vendor ID, dedicated video memory, whether it is
+    software (WARP), and whether Direct3D 12 can make a device at feature level 11_0 on it.
+    D3D12CreateDevice is asked without an output pointer, so no device is made."""
+    import ctypes
+    from ctypes import wintypes
+    dxgi,d3d12=ctypes.WinDLL('dxgi'),ctypes.WinDLL('d3d12')
+    class GUID(ctypes.Structure):
+        _fields_=[('a',wintypes.DWORD),('b',wintypes.WORD),('c',wintypes.WORD),('d',ctypes.c_ubyte*8)]
+    class DESC1(ctypes.Structure):
+        _fields_=[('description',wintypes.WCHAR*128),('vendor',wintypes.UINT),('device',wintypes.UINT),
+                  ('subsys',wintypes.UINT),('revision',wintypes.UINT),('dedicated_video',ctypes.c_size_t),
+                  ('dedicated_system',ctypes.c_size_t),('shared_system',ctypes.c_size_t),
+                  ('luid_low',wintypes.DWORD),('luid_high',wintypes.LONG),('flags',wintypes.UINT)]
+    def method(obj,index,*types):
+        vtable=ctypes.cast(obj,ctypes.POINTER(ctypes.POINTER(ctypes.c_void_p))).contents
+        return ctypes.WINFUNCTYPE(ctypes.c_long,ctypes.c_void_p,*types)(vtable[index])
+    dxgi.CreateDXGIFactory1.restype=ctypes.c_long
+    d3d12.D3D12CreateDevice.restype=ctypes.c_long
+    d3d12.D3D12CreateDevice.argtypes=(ctypes.c_void_p,ctypes.c_int,ctypes.c_void_p,ctypes.c_void_p)
+    iid_factory1=GUID(0x770aae78,0xf26f,0x4dba,(ctypes.c_ubyte*8)(0xa8,0x29,0x25,0x3c,0x83,0xd1,0xb3,0x87))
+    iid_device=GUID(0x189819f1,0x1db6,0x4b57,(ctypes.c_ubyte*8)(0xbe,0x54,0x18,0x21,0x33,0x9b,0x85,0xf7))
+    factory=ctypes.c_void_p()
+    if dxgi.CreateDXGIFactory1(ctypes.byref(iid_factory1),ctypes.byref(factory))<0:
+        raise OSError('CreateDXGIFactory1 failed')
+    adapters=[]
+    try:
+        for index in range(64):
+            adapter=ctypes.c_void_p()
+            # IDXGIFactory1::EnumAdapters1, IDXGIAdapter1::GetDesc1, IUnknown::Release.
+            if method(factory,12,wintypes.UINT,ctypes.POINTER(ctypes.c_void_p))(factory,index,ctypes.byref(adapter)):
+                break
+            try:
+                desc=DESC1()
+                if method(adapter,10,ctypes.POINTER(DESC1))(adapter,ctypes.byref(desc)):
+                    continue
+                # Feature level 11_0 (0xb000); S_FALSE (1) says a device could be made.
+                result=d3d12.D3D12CreateDevice(adapter,0xb000,ctypes.byref(iid_device),None)
+                adapters.append({'name':desc.description,'vendor_id':f'{desc.vendor:04X}',
+                                 'dedicated_video_memory':desc.dedicated_video,
+                                 'software':bool(desc.flags&2),'d3d12_11_0':result>=0})
+            finally:
+                method(adapter,2)(adapter)
+    finally:
+        method(factory,2)(factory)
+    return adapters
+
+def memory_size():
+    """The installed RAM in bytes that Windows reports (GlobalMemoryStatusEx)."""
+    import ctypes
+    class MEMORYSTATUSEX(ctypes.Structure):
+        _fields_=[('length',ctypes.c_ulong),('load',ctypes.c_ulong),('total',ctypes.c_ulonglong),
+                  ('available',ctypes.c_ulonglong),('total_page',ctypes.c_ulonglong),
+                  ('available_page',ctypes.c_ulonglong),('total_virtual',ctypes.c_ulonglong),
+                  ('available_virtual',ctypes.c_ulonglong),('available_extended',ctypes.c_ulonglong)]
+    status=MEMORYSTATUSEX(length=ctypes.sizeof(MEMORYSTATUSEX))
+    if not ctypes.windll.kernel32.GlobalMemoryStatusEx(ctypes.byref(status)):
+        raise OSError('GlobalMemoryStatusEx failed')
+    return status.total
+
+def suggested_jobs(memory,threads):
+    """-Jobs for a computer: one job per JOB_MEMORY of RAM, at most one per thread, 1 to 64."""
+    return max(1,min(threads or 1,round(memory/JOB_MEMORY),64))
+
+def sync_roots():
+    """The folders that sync tools keep in the cloud: OneDrive's (its environment variables)
+    and every sync root registered with Windows' Cloud Files API (OneDrive, and other tools
+    that use it)."""
+    import winreg
+    roots={os.environ[name] for name in ('OneDrive','OneDriveConsumer','OneDriveCommercial')
+           if os.environ.get(name)}
+    manager=r'SOFTWARE\Microsoft\Windows\CurrentVersion\Explorer\SyncRootManager'
+    try:
+        with winreg.OpenKey(winreg.HKEY_LOCAL_MACHINE,manager) as key:
+            for index in range(winreg.QueryInfoKey(key)[0]):
+                try:
+                    with winreg.OpenKey(key,winreg.EnumKey(key,index)+r'\UserSyncRoots') as users:
+                        for value in range(winreg.QueryInfoKey(users)[1]):
+                            path=winreg.EnumValue(users,value)[1]
+                            if isinstance(path,str) and path:
+                                roots.add(path)
+                except OSError:
+                    continue
+    except OSError:
+        pass
+    return sorted(roots)
+
+def cloud_attributes(path):
+    """Whether the nearest existing folder of path carries the Cloud Files placeholder
+    attributes (pinned, unpinned, recall on open or on data access)."""
+    path=Path(path)
+    while not path.exists() and path.parent!=path:
+        path=path.parent
+    attributes=getattr(path.stat(),'st_file_attributes',0)
+    return bool(attributes&(0x40000|0x80000|0x100000|0x400000))
+
+def build_root_error(root):
+    """Why root cannot be a BuildRoot, or None. Never the repository or one of its parents, nor
+    inside the tracked deliverables and source folders; outside a snapshot altogether (the
+    builder replaces the snapshot on an update)."""
+    root=Path(root).resolve()
+    if root in (REPO,*REPO.parents) or any(root==REPO/d or REPO/d in root.parents
+                                           for d in ('outputs','work/fm4-rex','work/runtime')):
+        return 'BuildRoot must be a dedicated private directory, e.g. work/portable-fm4 or D:/FM4-build.'
+    if not is_git_checkout() and REPO in root.parents:
+        return f'BuildRoot must be outside the source snapshot {REPO}: pass --build-root.'
+    return None
+
+def path_check(path,role):
+    """The path problems of the BuildRoot or the source folder: its length (PATH_LIMITS), non-ASCII
+    characters, spaces (not tested), a synced folder, and for the BuildRoot build_root_error."""
+    path=Path(path).resolve()
+    text=str(path)
+    warn,limit=PATH_LIMITS[role]
+    problems=[]
+    if len(text)>limit:
+        problems.append(('fail',f'{len(text)} characters; at most {limit}'))
+    elif len(text)>warn:
+        problems.append(('warn',f'{len(text)} characters; above {warn} the deepest build files '
+                                'may pass the 260-character limit'))
+    if not text.isascii():
+        problems.append(('fail','non-ASCII characters'))
+    if ' ' in text:
+        problems.append(('warn','spaces (not tested)'))
+    folded=os.path.normcase(text)
+    synced=[root for root in sync_roots()
+            if folded==os.path.normcase(root) or folded.startswith(os.path.normcase(root).rstrip('\\/')+os.sep)]
+    if synced:
+        problems.append(('fail',f'inside the synced folder {synced[0]}'))
+    elif cloud_attributes(path):
+        problems.append(('fail','a cloud placeholder folder (Cloud Files attributes)'))
+    if role=='build_root' and build_root_error(path):
+        problems.append(('fail',build_root_error(path)))
+    state='fail' if any(s=='fail' for s,_ in problems) else 'warn' if problems else 'pass'
+    return {'state':state,'path':text,'length':len(text),'problems':[message for _,message in problems]}
+
+def preflight(root):
+    """The preflight report (PREFLIGHT_SCHEMA): Windows, the CPU's x86-64-v2 features, a GPU
+    with Direct3D 12 at feature level 11_0, RAM and a suggested -Jobs, free disk on the
+    BuildRoot's drive, and the BuildRoot's and source folder's paths. ok is false when any
+    check fails."""
+    root=Path(root).resolve()
+    checks={}
+    def guarded(name,check):
+        try:
+            checks[name]=check()
+        except Exception as error:  # A probe that cannot run here: never a pass.
+            checks[name]={'state':'unchecked','detail':f'{type(error).__name__}: {error}'}
+    def windows():
+        major,minor,build,machine=windows_version()
+        version=f'{major}.{minor}.{build}'
+        if machine!='AMD64' or sys.maxsize<=2**32:
+            return {'state':'fail','version':version,'machine':machine,
+                    'detail':'Windows x64 and a 64-bit Python are required'}
+        if (major,build)<(10,10240):
+            return {'state':'fail','version':version,'machine':machine,
+                    'detail':'Windows 10 or 11 is required'}
+        if build<22000:
+            return {'state':'warn','version':version,'machine':machine,'name':'Windows 10',
+                    'detail':'Windows 10 is not tested'}
+        return {'state':'pass','version':version,'machine':machine,'name':'Windows 11'}
+    def cpu():
+        method,features=cpu_features()
+        missing=[name for name,present in features.items() if present is False]
+        unchecked=[name for name,present in features.items() if present is None]
+        state='fail' if missing else 'unchecked' if unchecked else 'pass'
+        return {'state':state,'level':'x86-64-v2','method':method,'features':features,
+                'missing':missing,'unchecked':unchecked}
+    def gpu():
+        adapters=d3d12_adapters()
+        hardware=[a for a in adapters if not a['software'] and a['d3d12_11_0']]
+        return {'state':'pass' if hardware else 'fail','adapters':adapters,
+                **({} if hardware else {'detail':'no hardware adapter with Direct3D 12 at '
+                                                 'feature level 11_0'})}
+    def memory():
+        total,threads=memory_size(),os.cpu_count()
+        jobs=suggested_jobs(total,threads)
+        report={'state':'pass','total_bytes':total,'threads':threads,'suggested_jobs':jobs}
+        if total<15*2**30:
+            report.update(state='warn',detail='builds with less than 16 GB are not measured')
+        return report
+    def disk():
+        anchor=root
+        while not anchor.exists() and anchor.parent!=anchor:
+            anchor=anchor.parent
+        free=shutil.disk_usage(anchor).free
+        return {'state':'pass' if free>=PREFLIGHT_DISK else 'fail','path':anchor.anchor,
+                'free_bytes':free,'required_bytes':PREFLIGHT_DISK}
+    def paths():
+        items={'build_root':path_check(root,'build_root'),'source':path_check(REPO,'source')}
+        states=[item['state'] for item in items.values()]
+        return {'state':'fail' if 'fail' in states else 'warn' if 'warn' in states else 'pass',
+                **items}
+    for name,check in (('windows',windows),('cpu',cpu),('gpu',gpu),('memory',memory),
+                       ('disk',disk),('paths',paths)):
+        guarded(name,check)
+    return {'schema':PREFLIGHT_SCHEMA,'ok':all(check['state']!='fail' for check in checks.values()),
+            'build_root':str(root),'source':str(REPO),
+            'suggested_jobs':checks['memory'].get('suggested_jobs'),'checks':checks}
 
 def disc_release(disc1):
     """The supported release whose three executables Disc 1 holds. A set that mixes releases
@@ -301,12 +701,45 @@ def sync_runtime(root):
         (source/relative).unlink(missing_ok=True)
     listing.write_text(json.dumps(sorted(current)))
 
+def thirdparty_mirror():
+    """THIRDPARTY_MIRROR (environment, developers only): a local checkout of the upstream SDK at
+    SDK_REV with the submodules of THIRDPARTY_SUBMODULES checked out unchanged, for example another
+    BuildRoot's runtime-upstream. fetch_thirdparty copies from it instead of cloning, with no
+    network. Refused when it is at another commit or a submodule differs from its pin."""
+    mirror=os.environ.get('THIRDPARTY_MIRROR')
+    if not mirror:
+        return None
+    mirror=Path(mirror)
+    def git(*args):
+        result=subprocess.run(['git','-C',mirror,*args],capture_output=True,text=True)
+        if result.returncode:
+            raise RuntimeError(f'THIRDPARTY_MIRROR {mirror}: git {" ".join(args)} failed: {result.stderr.strip()}')
+        return result.stdout
+    if git('rev-parse','HEAD').strip()!=SDK_REV:
+        raise RuntimeError(f'THIRDPARTY_MIRROR {mirror} is not at the pinned SDK commit {SDK_REV}.')
+    paths=[f'thirdparty/{name}' for name in THIRDPARTY_SUBMODULES]
+    status=git('submodule','status','--recursive','--',*paths).splitlines()
+    changed=[line for line in status if line[:1]!=' ']
+    if changed or len(status)<len(paths) or git('status','--porcelain','--','thirdparty').strip():
+        raise RuntimeError(f'THIRDPARTY_MIRROR {mirror}: a submodule is missing or differs from its '
+                           f'pin: {changed or "git status shows changes"}')
+    return mirror
+
 def fetch_thirdparty(root):
     """Third-party libraries from the upstream SDK revision, outside the repository."""
     upstream, destination = root/'runtime-upstream', root/'runtime-source/thirdparty'
     marker = destination/'.fm4-thirdparty.json'
     wanted = {'revision':SDK_REV,'vendored':THIRDPARTY_VENDORED,'submodules':THIRDPARTY_SUBMODULES}
     if marker.is_file() and json.loads(marker.read_text()) == json.loads(json.dumps(wanted)):
+        return
+    mirror = thirdparty_mirror()
+    if mirror:
+        print(f'Third-party libraries from THIRDPARTY_MIRROR {mirror}.')
+        with progress('step','thirdparty-mirror'):
+            for name in THIRDPARTY_VENDORED+THIRDPARTY_SUBMODULES:
+                shutil.rmtree(destination/name,ignore_errors=True)
+                shutil.copytree(mirror/'thirdparty'/name,destination/name,symlinks=True)
+        marker.write_text(json.dumps(wanted))
         return
     if not upstream.exists():
         run(['git','clone','--no-checkout',SDK_URL,upstream],log=root/'logs/upstream-clone.log')
@@ -380,7 +813,9 @@ def fetch_gameinput(root):
         directory.mkdir(parents=True,exist_ok=True)
         mirror=os.environ.get('GAMEINPUT_MIRROR')
         partial=package.with_suffix('.partial')
-        for source in filter(None,(GAMEINPUT_URL,mirror)):
+        # A local copy first: no network, and the hash is checked all the same.
+        local=mirror is not None and Path(mirror).is_file()
+        for source in filter(None,(mirror,GAMEINPUT_URL) if local else (GAMEINPUT_URL,mirror)):
             try:
                 if Path(source).is_file():
                     shutil.copyfile(source,partial)
@@ -596,6 +1031,10 @@ def fetch_fidelityfx(root):
     sdk=root/'fidelityfx-sdk'
     log=root/'logs/fidelityfx-fetch.log'
     mirror=ffx_mirror()
+    if not (sdk/'.git').is_dir() and ffx_is_bundle(mirror) and Path(mirror).is_file():
+        # A local bundle first: no network, and the commit is checked all the same.
+        print(f'FidelityFX SDK from the mirror bundle {mirror}.')
+        ffx_restore_bundle(Path(mirror),sdk,log)
     if not (sdk/'.git').is_dir():
         clone=['git','clone','--filter=blob:none','--no-checkout','--sparse','--branch',FFX_TAG]
         try:
@@ -674,8 +1113,11 @@ def build_runtime(root, fxc, jobs, fsr=None, build=None):
 
 def setup(root, fxc, jobs, fsr=None):
     fetch_fidelityfx(root)
-    fetch_gameinput(root)
-    fetch_dxc(root)
+    # The two fetches without a process of their own are steps of --progress too.
+    with progress('step','gameinput-fetch'):
+        fetch_gameinput(root)
+    with progress('step','dxc-fetch'):
+        fetch_dxc(root)
     build_runtime(root, fxc, jobs, fsr)
     (root/'setup-complete.json').write_text(json.dumps({'thirdparty_revision':SDK_REV,
                                                         'fidelityfx_revision':FFX_REV,
@@ -754,7 +1196,8 @@ def flavor_flags(root,flavor):
         flags+=[f'-fprofile-use={profile.as_posix()}','-Wno-profile-instr-out-of-date','-Wno-profile-instr-unprofiled']
     return ' '.join(flags)
 
-def build_game(root,fxc,jobs,flavor=(),fsr=None):
+def build_game(root,fxc,jobs,flavor=(),fsr=None,tests='developer'):
+    """tests: developer, every test (the default), or player (TEST_SETS)."""
     project, install, build = root/'project',root/'runtime-install',game_build_dir(root,flavor)
     if not (root/'local.json').is_file():
         raise RuntimeError('Run generate first.')
@@ -782,10 +1225,10 @@ def build_game(root,fxc,jobs,flavor=(),fsr=None):
         shutil.copyfile(dll,build/dll.name)
     stage_dxc(root,build)
     run([build/'fm4_instruction_tests.exe'],cwd=build,log=root/f'logs/instruction-tests{suffix}.log')
-    post_pass_tests(root,jobs)
+    post_pass_tests(root,jobs,tests)
     artifacts = ['fm4_rex.exe','fm4_rex_XMediaFacade_default.dll','fm4_rex_SpeechFacade_default.dll','rexruntime.dll','rexgpu-xenos.dll']
     report = {'artifacts':{name:digest(build/name) for name in artifacts},'gameplay_verified':False,
-              'source':source_state(root)}
+              'source':source_state(root),'tests':tests}
     (root/f'build-result{suffix}.json').write_text(json.dumps(report,indent=2))
     if not flavor:
         build_launcher(root,jobs)
@@ -804,7 +1247,19 @@ def runtime_fsr(build):
     match=re.search(r'^REX_FSR_SDK_DIR:PATH=(.+)$',text,re.M)
     return Path(match.group(1).strip()) if match else None
 
-def post_pass_tests(root,jobs):
+# The tests of build (--tests, docs/setup.md#3-build): developer, the default, runs them all;
+# player, the builder's build (docs/analysis/builder-installer.md 4.11), keeps the instruction
+# tests, the launcher tests and PLAYER_TESTS, the tests of C++ that the player's compiler builds
+# into the game, the runtime and the launcher (seconds), and leaves out SHADER_TESTS, the tests of
+# the project's HLSL on WARP and with FXC, which is the same on every computer (minutes).
+PLAYER_TESTS=('fm4_post_pass_camera_tests','fm4_track_settings_tests','fm4_texture_replacement_tests',
+              'fm4_draw_scale_tests','fm4_pad_shaping_tests','fm4_keyboard_model_tests',
+              'fm4_native_shader_contract_tests','fm4_wheel_ffb_tests','fm4_wheel_mapping_tests',
+              'fm4_wheel_host_tests')
+SHADER_TESTS=('fm4_post_pass_shader_tests','fm4_shader_mod_tests','fm4_look_tonemap_tests')
+TEST_SETS=('developer','player')
+
+def post_pass_tests(root,jobs,tests='developer'):
     """CPU tests of the runtime's post passes (docs/analysis/post-pass-framework.md) and of the
     shader mods, no GPU: the scene camera math, the GTAO passes of work/fm4-rex/passes on WARP
     (Direct3D 12 on the CPU) as the framework runs them, FXC compiles of the override library and
@@ -817,7 +1272,11 @@ def post_pass_tests(root,jobs):
     and pass classes (docs/analysis/shader-contract.md), and the racing wheel's force feedback
     governor, its driving controls' mapping and its host with an SDL virtual wheel and no force
     device (docs/analysis/racing-wheels.md).
-    work/fm4-rex/tests, synced here like the runtime, built against the installed runtime headers. The WARP scene's checks were set with a GTAO radius of 1 m."""
+    work/fm4-rex/tests, synced here like the runtime, built against the installed runtime headers. The WARP scene's checks were set with a GTAO radius of 1 m.
+    tests: player builds and runs PLAYER_TESTS only (TEST_SETS)."""
+    if tests not in TEST_SETS:
+        raise ValueError(f'tests is one of {", ".join(TEST_SETS)}, not {tests!r}.')
+    developer=tests=='developer'
     source,build=root/'project/tests',root/'tests-build'
     inventory=json.loads((REPO/'outputs/FM4-source-control/tracked-files.json').read_text())
     for entry in inventory['files']:
@@ -834,12 +1293,8 @@ def post_pass_tests(root,jobs):
          '-DCMAKE_CXX_COMPILER=clang++',f'-DREX_HEADER_ROOT={root/"runtime-install/include"}',
          f'-DCMAKE_PREFIX_PATH={root/"runtime-install"}',*fsr],
         log=root/'logs/tests-configure.log')
-    run(['cmake','--build',build,'--parallel',jobs,'--target','fm4_post_pass_camera_tests',
-         'fm4_post_pass_shader_tests','fm4_shader_mod_tests','fm4_track_settings_tests',
-         'fm4_texture_replacement_tests','fm4_draw_scale_tests','fm4_pad_shaping_tests',
-         'fm4_keyboard_model_tests','fm4_native_shader_contract_tests','fm4_wheel_ffb_tests',
-         'fm4_wheel_mapping_tests','fm4_wheel_host_tests','fm4_look_tonemap_tests'],
-        log=root/'logs/tests-build.log')
+    run(['cmake','--build',build,'--parallel',jobs,'--target',*PLAYER_TESTS,
+         *(SHADER_TESTS if developer else ())],log=root/'logs/tests-build.log')
     run([build/'fm4_track_settings_tests.exe'],cwd=build,log=root/'logs/track-settings-tests.log')
     run([build/'fm4_texture_replacement_tests.exe'],cwd=build,
         log=root/'logs/texture-replacement-tests.log')
@@ -850,9 +1305,12 @@ def post_pass_tests(root,jobs):
     run([build/'fm4_wheel_ffb_tests.exe'],cwd=build,log=root/'logs/wheel-ffb-tests.log')
     run([build/'fm4_wheel_mapping_tests.exe'],cwd=build,log=root/'logs/wheel-mapping-tests.log')
     run([build/'fm4_wheel_host_tests.exe',build],cwd=build,log=root/'logs/wheel-host-tests.log')
-    run([build/'fm4_look_tonemap_tests.exe',LOOK_DIRECTORY],cwd=build,log=root/'logs/look-tonemap-tests.log')
     run([build/'fm4_native_shader_contract_tests.exe',LOOK_DIRECTORY/'shaders.toml'],cwd=build,
         log=root/'logs/native-shader-contract-tests.log')
+    if not developer:
+        print('Player tests: the shader tests on WARP and with FXC are left out (--tests player).')
+        return
+    run([build/'fm4_look_tonemap_tests.exe',LOOK_DIRECTORY],cwd=build,log=root/'logs/look-tonemap-tests.log')
     run([build/'fm4_post_pass_shader_tests.exe',root/'runtime-source/src/graphics/d3d12/post_pass.hlsli',
          PASSES_DIRECTORY,'GTAO_RADIUS=1'],cwd=build,log=root/'logs/post-pass-shader-tests.log')
     # FSR's checks run on the first hardware adapter (WARP crashes in FSR's shading change
@@ -2215,6 +2673,13 @@ def launcher_data():
                        'magics':[magic.decode() for magic in STFS_MAGICS],
                        'content_type_offset':CONTENT_TYPE_OFFSET,'title_id_offset':TITLE_ID_OFFSET}}
 
+def write_launcher_data(directory):
+    """directory/launcher.json (launcher_data): pure project data, so the launcher-data action
+    writes it without a build, for the builder package (docs/analysis/builder-installer.md)."""
+    path=Path(directory)/'launcher.json'
+    path.write_text(json.dumps(launcher_data(),indent=1),encoding='utf-8')
+    return path
+
 def look_files(directory):
     """The files of a look directory that a run reads: those of LOOK_SUFFIXES, and the PNG
     textures that the entries of its shaders.toml read (srv = ["file:<name>"], <name>.png), so
@@ -2240,7 +2705,7 @@ def stage_launcher_files(directory):
     credits and the licenses of the third-party code in the binaries, which the launcher's About
     page opens, and the project's own license."""
     directory=Path(directory)
-    (directory/'launcher.json').write_text(json.dumps(launcher_data(),indent=1),encoding='utf-8')
+    write_launcher_data(directory)
     shutil.copyfile(CREDITS,directory/'CREDITS.txt')
     shutil.copyfile(LICENSE,directory/'LICENSE.txt')
     shutil.copytree(NOTICES,directory/'third-party-notices',dirs_exist_ok=True)
@@ -2508,9 +2973,10 @@ def launch_cvars(root,disc1,log_file):
             'log_file':log_file}
 
 def main():
+    global PROGRESS
     parser=argparse.ArgumentParser(description=__doc__)
     parser.add_argument('action',choices=['doctor','setup','generate','build','all','run','warmcache',
-                                          'profbuild','export'])
+                                          'profbuild','export','preflight','launcher-data','snapshot'])
     parser.add_argument('--build-root',type=Path,default=REPO/'work/portable-fm4')
     parser.add_argument('--disc1',type=Path)
     parser.add_argument('--disc2',type=Path)
@@ -2519,7 +2985,17 @@ def main():
                              'for them; repeatable. Saved in local.json and imported at the next run')
     parser.add_argument('--jobs',type=int,default=4)
     parser.add_argument('--out',type=Path,
-                        help='export: the folder to export the game and its GUI launcher to')
+                        help='export: the folder to export the game and its GUI launcher to; '
+                             'launcher-data: the folder of launcher.json (default the BuildRoot); '
+                             'snapshot: the new folder of the source snapshot')
+    parser.add_argument('--revision',default='HEAD',
+                        help='snapshot: the commit to snapshot (default HEAD)')
+    parser.add_argument('--progress',
+                        help='setup, generate, build, all: append a JSON line for each stage and step '
+                             "to this file, or to the output with '-' (docs/setup.md#progress-lines)")
+    parser.add_argument('--tests',choices=TEST_SETS,default='developer',
+                        help='build, all: developer runs every test (default); player leaves out the '
+                             'shader tests on WARP and with FXC (docs/setup.md#3-build)')
     parser.add_argument('--single-tile',action='store_true',
                         help='run: races without MSAA and predicated tiling also with a look without '
                              'TAA, then with FXAA (a look with TAA, every preset, has one tile anyway)')
@@ -2616,15 +3092,44 @@ def main():
     parser.add_argument('--flavor',default='',help='opt-in compiler experiment for build: comma list of '+','.join(FLAVORS))
     args=parser.parse_args()
     root=args.build_root.resolve()
+    # The actions a builder runs before any toolchain exists: no doctor.
+    if args.action=='snapshot':
+        if not args.out:
+            raise ValueError('snapshot needs --out, the new folder of the snapshot.')
+        make_snapshot(args.out,args.revision)
+        return
+    if args.action=='preflight':
+        report=preflight(root)
+        print(json.dumps(report,indent=1))
+        if not report['ok']:
+            sys.exit(1)
+        return
+    if args.action=='launcher-data' and args.out:
+        out=args.out.resolve()
+        if out==REPO or REPO in out.parents:
+            raise ValueError('The launcher-data folder must be outside the source.')
+        out.mkdir(parents=True,exist_ok=True)
+        print(f'Wrote {write_launcher_data(out)}.')
+        return
     # Never write private outputs into the tracked deliverables/source directories.
-    if root in (REPO,*REPO.parents) or any(root==REPO/d or REPO/d in root.parents for d in ('outputs','work/fm4-rex','work/runtime')):
-        raise ValueError('BuildRoot must be a dedicated private directory, e.g. work/portable-fm4 or D:/FM4-build.')
+    if build_root_error(root):
+        raise ValueError(build_root_error(root))
+    if args.action=='launcher-data':
+        root.mkdir(parents=True,exist_ok=True)
+        print(f'Wrote {write_launcher_data(root)}.')
+        return
     if args.jobs<1 or args.jobs>64:
         raise ValueError('jobs must be between 1 and 64')
     flavor=tuple(sorted({f for f in args.flavor.split(',') if f}))
     if set(flavor)-set(FLAVORS) or {'pgo-gen','pgo-use'}<=set(flavor):
         raise ValueError(f'flavor must be a comma list of {FLAVORS}, not both pgo-gen and pgo-use')
     if args.ffx_mirror: os.environ['FFX_MIRROR']=args.ffx_mirror
+    if args.progress:
+        if args.progress=='-':
+            PROGRESS=sys.stdout
+        else:
+            Path(args.progress).parent.mkdir(parents=True,exist_ok=True)
+            PROGRESS=open(args.progress,'a',encoding='utf-8')
     fxc=doctor()
     print(ffx_status(root))
     print(gameinput_status(root))
@@ -2639,10 +3144,14 @@ def main():
     root.mkdir(parents=True,exist_ok=True)
     check_layout(root)
     fsr=None if args.fsr is None else args.fsr=='on'
-    if args.action in ('setup','all'): setup(root,fxc,args.jobs,fsr)
-    if args.action in ('generate','all'): generate(root,*discs,args.content,args.jobs)
+    if args.action in ('setup','all'):
+        with progress('stage','setup'): setup(root,fxc,args.jobs,fsr)
+    if args.action in ('generate','all'):
+        with progress('stage','generate'): generate(root,*discs,args.content,args.jobs)
     if args.action=='run' and args.content: save_content(root,args.content)
-    if args.action in ('build','all'): build_game(root,fxc,args.jobs,flavor,None if args.action=='all' else fsr)
+    if args.action in ('build','all'):
+        with progress('stage','build'):
+            build_game(root,fxc,args.jobs,flavor,None if args.action=='all' else fsr,args.tests)
     if args.action=='run': launch(root,args.single_tile,args.fixed_vblank,args.frame_rate,args.rov,
                                      args.resolution_scale,args.full_rate_mirror,args.look,
                                      args.shadow_workaround,args.quality,args.display,

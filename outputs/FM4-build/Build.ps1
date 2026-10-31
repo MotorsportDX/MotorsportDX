@@ -1,5 +1,5 @@
 param(
-    [ValidateSet('doctor','setup','generate','build','all','run','warmcache','profbuild','export')][string]$Action = 'doctor',
+    [ValidateSet('doctor','setup','generate','build','all','run','warmcache','profbuild','export','preflight','launcher-data','snapshot')][string]$Action = 'doctor',
     [string]$Disc1,
     [string]$Disc2,
     [string[]]$Content,
@@ -11,6 +11,9 @@ param(
     [ValidateSet('on','off')][string]$Fsr,
     [string]$FfxMirror,
     [string]$Out,
+    [string]$Revision,
+    [string]$Progress,
+    [ValidateSet('developer','player')][string]$Tests,
     [switch]$SingleTile,
     [switch]$Msaa,
     [ValidateSet(0,2,4)][int]$MsaaSamples,
@@ -56,6 +59,9 @@ if ($Flavor) { $arguments += @('--flavor', $Flavor) }
 if ($Fsr) { $arguments += @('--fsr', $Fsr) }
 if ($FfxMirror) { $arguments += @('--ffx-mirror', $FfxMirror) }
 if ($Out) { $arguments += @('--out', $Out) }
+if ($Revision) { $arguments += @('--revision', $Revision) }
+if ($Progress) { $arguments += @('--progress', $Progress) }
+if ($Tests) { $arguments += @('--tests', $Tests) }
 if ($SingleTile) { $arguments += @('--single-tile') }
 if ($Msaa) { $arguments += @('--msaa') }
 if ($PSBoundParameters.ContainsKey('MsaaSamples')) { $arguments += @('--msaa-samples', "$MsaaSamples") }

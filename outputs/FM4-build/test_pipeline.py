@@ -1,4 +1,6 @@
 """Synthetic tests: no FM4 bytes or original game assets are needed."""
+import contextlib
+import io
 import json
 import os
 import re
@@ -896,6 +898,200 @@ class PipelineTests(unittest.TestCase):
             self.assertEqual(set(state),{'head','dirty','tree'})
             (root/'project/src/b.cpp').write_text('changed')
             self.assertNotEqual(pipeline.source_state(root)['tree'],state['tree'])
+
+    def test_source_state_of_a_snapshot(self):
+        """Without Git metadata, source_state names the stamp's commit, and dirty says whether
+        work/runtime or work/fm4-rex differ from the stamp's tree hash; without a stamp, neither."""
+        with tempfile.TemporaryDirectory() as directory:
+            source,root=Path(directory)/'source',Path(directory)/'build'
+            (source/'work/runtime/src').mkdir(parents=True)
+            (source/'work/fm4-rex/src').mkdir(parents=True)
+            (source/'work/runtime/src/a.cpp').write_text('a')
+            (source/'work/fm4-rex/src/b.cpp').write_text('b')
+            (source/'README.md').write_text('outside the stamped folders')
+            root.mkdir()
+            with patch.object(pipeline,'REPO',source):
+                self.assertFalse(pipeline.is_git_checkout())
+                self.assertIsNone(pipeline.source_state(root)['head'])
+                self.assertIsNone(pipeline.source_state(root)['dirty'])
+                stamp={'schema':1,'commit':'c'*40,'tree':pipeline.snapshot_tree(source)}
+                (source/pipeline.STAMP_NAME).write_text(json.dumps(stamp),encoding='utf-8')
+                state=pipeline.source_state(root)
+                self.assertEqual(set(state),{'head','dirty','tree'})
+                self.assertEqual((state['head'],state['dirty']),('c'*40,False))
+                (source/'README.md').write_text('changed')
+                self.assertFalse(pipeline.source_state(root)['dirty'])
+                (source/'work/fm4-rex/src/b.cpp').write_text('edited')
+                self.assertTrue(pipeline.source_state(root)['dirty'])
+                # A snapshot's BuildRoot lies outside it, its default one included.
+                self.assertIsNotNone(pipeline.build_root_error(source/'work/portable-fm4'))
+                self.assertIsNone(pipeline.build_root_error(root))
+        if pipeline.is_git_checkout():
+            self.assertIsNone(pipeline.build_root_error(pipeline.REPO/'work/portable-fm4'))
+        self.assertIsNotNone(pipeline.build_root_error(pipeline.REPO/'work/runtime/build'))
+
+    @unittest.skipUnless(pipeline.is_git_checkout(),'needs a Git checkout')
+    def test_make_snapshot(self):
+        """git archive of HEAD with the stamp: its commit, file count and tree hash."""
+        with tempfile.TemporaryDirectory() as directory, patch('builtins.print'):
+            out=Path(directory)/'source'
+            stamp=pipeline.make_snapshot(out)
+            self.assertEqual(stamp['commit'],pipeline.git_output('rev-parse','HEAD'))
+            self.assertEqual(pipeline.read_stamp(out),stamp)
+            self.assertTrue((out/'outputs/FM4-build/pipeline.py').is_file())
+            self.assertFalse((out/'.git').exists())
+            files=[path for path in out.rglob('*') if path.is_file() and path.name!=pipeline.STAMP_NAME]
+            self.assertEqual(stamp['files'],len(files))
+            self.assertEqual(stamp['tree'],pipeline.snapshot_tree(out))
+            with self.assertRaises(ValueError): pipeline.make_snapshot(out)
+            with self.assertRaises(ValueError): pipeline.make_snapshot(pipeline.REPO/'work/snapshot')
+
+    def test_progress_lines(self):
+        """--progress: a running and a done or failed line for each stage and step, with the
+        stage, the step (a process's log name), the elapsed seconds and the log."""
+        stream=io.StringIO()
+        with tempfile.TemporaryDirectory() as directory, patch.object(pipeline,'PROGRESS',stream), \
+                patch('builtins.print'):
+            log=Path(directory)/'logs/first.log'
+            with pipeline.progress('stage','build'):
+                pipeline.run([sys.executable,'-c','print(1)'],log=log)
+            with self.assertRaises(RuntimeError), pipeline.progress('stage','setup'):
+                pipeline.run([sys.executable,'-c','raise SystemExit(3)'],log=log.with_name('second.log'))
+        lines=[json.loads(line) for line in stream.getvalue().splitlines()]
+        self.assertEqual([(l['event'],l['stage'],l['step'],l['state']) for l in lines],
+                         [('stage','build',None,'running'),('step','build','first','running'),
+                          ('step','build','first','done'),('stage','build',None,'done'),
+                          ('stage','setup',None,'running'),('step','setup','second','running'),
+                          ('step','setup','second','failed'),('stage','setup',None,'failed')])
+        for line in lines:
+            self.assertEqual(line['schema'],pipeline.PROGRESS_SCHEMA)
+            self.assertGreaterEqual(line['elapsed'],0)
+            self.assertRegex(line['time'],r'^\d{4}-\d\d-\d\dT\d\d:\d\d:\d\dZ$')
+        self.assertEqual(lines[1]['log'],str(log))
+        self.assertIsNone(lines[0]['log'])
+        self.assertIn('Exit 3',lines[6]['error'])
+        self.assertNotIn('error',lines[2])
+        self.assertIsNone(pipeline._progress_stage[0])
+
+    def test_launcher_data(self):
+        """launcher-data writes the launcher.json that build stages, without a build."""
+        with tempfile.TemporaryDirectory() as directory:
+            root=Path(directory)
+            path=pipeline.write_launcher_data(root)
+            written=json.loads(path.read_text(encoding='utf-8'))
+            self.assertEqual(written,json.loads(json.dumps(pipeline.launcher_data())))
+            pipeline.stage_launcher_files(root)
+            self.assertEqual(json.loads(path.read_text(encoding='utf-8')),written)
+            for key in ('cvars','look','quality','releases','content'):
+                self.assertIn(key,written)
+            self.assertEqual(written['cvars']['game_data_root'],pipeline.LAUNCHER_DISC1)
+
+    def test_cpu_features(self):
+        """CPUID's x86-64-v2 bits; where CPUID cannot run, IsProcessorFeaturePresent's flags, with
+        POPCNT and LAHF/SAHF unchecked and an absent flag unchecked too."""
+        leaf1=sum(1<<bit for leaf,bit in pipeline.X86_64_V2.values() if leaf==1)
+        registers={0:(0x16,0,0,0),1:(0,0,leaf1,0),0x80000000:(0x80000008,0,0,0),0x80000001:(0,0,1,0)}
+        with patch.object(pipeline,'cpuid',lambda leaf:registers[leaf]):
+            method,features=pipeline.cpu_features()
+        self.assertEqual(method,'cpuid')
+        self.assertEqual(features,{name:True for name in pipeline.X86_64_V2})
+        registers[1]=(0,0,leaf1&~(1<<23),0)
+        registers[0x80000000]=(0x80000000,0,0,0)
+        with patch.object(pipeline,'cpuid',lambda leaf:registers[leaf]):
+            features=pipeline.cpu_features()[1]
+        self.assertIs(features['popcnt'],False)
+        self.assertIsNone(features['lahf_sahf'])
+        def unavailable(leaf): raise OSError('no executable memory')
+        with patch.object(pipeline,'cpuid',unavailable), \
+                patch.object(pipeline,'processor_feature',lambda flag:flag!=36):
+            method,features=pipeline.cpu_features()
+        self.assertEqual(method,'IsProcessorFeaturePresent')
+        self.assertEqual(features,{'sse3':True,'ssse3':None,'cmpxchg16b':True,'sse4_1':True,
+                                   'sse4_2':True,'popcnt':None,'lahf_sahf':None})
+
+    def test_preflight(self):
+        """The preflight report from faked probes: each check's state, ok false on any fail, a
+        probe that cannot run unchecked (never a pass), and -Jobs from the RAM."""
+        self.assertEqual(pipeline.suggested_jobs(32*10**9,20),7)
+        self.assertEqual(pipeline.suggested_jobs(32*2**30,20),8)
+        self.assertEqual(pipeline.suggested_jobs(24*2**30,16),6)
+        self.assertEqual(pipeline.suggested_jobs(32*2**30,4),4)
+        self.assertEqual(pipeline.suggested_jobs(2**30,8),1)
+        gpu=[{'name':'GPU','vendor_id':'10DE','dedicated_video_memory':8*2**30,'software':False,
+              'd3d12_11_0':True},
+             {'name':'Microsoft Basic Render Driver','vendor_id':'1414','dedicated_video_memory':0,
+              'software':True,'d3d12_11_0':True}]
+        probes={'windows_version':lambda:(10,0,26200,'AMD64'),
+                'cpu_features':lambda:('cpuid',{name:True for name in pipeline.X86_64_V2}),
+                'd3d12_adapters':lambda:gpu,'memory_size':lambda:32*2**30,
+                'sync_roots':lambda:[r'C:\Users\Player\OneDrive'],'cloud_attributes':lambda path:False}
+        class Usage:
+            free=0
+        def report(build_root=r'D:\MotorsportDX\build',free=100*10**9,**changes):
+            usage=Usage()
+            usage.free=free
+            with contextlib.ExitStack() as stack:
+                for name,probe in {**probes,**changes}.items():
+                    stack.enter_context(patch.object(pipeline,name,probe))
+                stack.enter_context(patch.object(pipeline.shutil,'disk_usage',lambda path:usage))
+                stack.enter_context(patch.object(pipeline.os,'cpu_count',lambda:16))
+                return pipeline.preflight(Path(build_root))
+        good=report()
+        self.assertEqual(good['schema'],pipeline.PREFLIGHT_SCHEMA)
+        self.assertTrue(good['ok'])
+        self.assertEqual({name:check['state'] for name,check in good['checks'].items()},
+                         {name:'pass' for name in ('windows','cpu','gpu','memory','disk','paths')})
+        self.assertEqual(good['suggested_jobs'],8)
+        self.assertEqual(good['checks']['disk']['required_bytes'],pipeline.PREFLIGHT_DISK)
+        json.dumps(good)
+        def state(name,**changes):
+            result=report(**changes)
+            return result['ok'],result['checks'][name]['state']
+        self.assertEqual(state('windows',windows_version=lambda:(10,0,19045,'AMD64')),(True,'warn'))
+        self.assertEqual(state('windows',windows_version=lambda:(10,0,26200,'ARM64')),(False,'fail'))
+        self.assertEqual(state('windows',windows_version=lambda:(6,3,9600,'AMD64')),(False,'fail'))
+        no_popcnt={name:name!='popcnt' for name in pipeline.X86_64_V2}
+        result=report(cpu_features=lambda:('cpuid',no_popcnt))
+        self.assertFalse(result['ok'])
+        self.assertEqual(result['checks']['cpu']['missing'],['popcnt'])
+        unknown={name:(None if name=='popcnt' else True) for name in pipeline.X86_64_V2}
+        result=report(cpu_features=lambda:('IsProcessorFeaturePresent',unknown))
+        self.assertTrue(result['ok'])
+        self.assertEqual(result['checks']['cpu']['state'],'unchecked')
+        self.assertEqual(result['checks']['cpu']['unchecked'],['popcnt'])
+        self.assertEqual(state('gpu',d3d12_adapters=lambda:gpu[1:]),(False,'fail'))
+        self.assertEqual(state('gpu',d3d12_adapters=lambda:[{**gpu[0],'d3d12_11_0':False}]),(False,'fail'))
+        def broken(): raise OSError('d3d12.dll not found')
+        result=report(d3d12_adapters=broken)
+        self.assertEqual(result['checks']['gpu']['state'],'unchecked')
+        self.assertIn('d3d12.dll',result['checks']['gpu']['detail'])
+        small=report(memory_size=lambda:8*2**30)
+        self.assertEqual((small['ok'],small['checks']['memory']['state'],small['suggested_jobs']),
+                         (True,'warn',2))
+        self.assertEqual(state('disk',free=5*10**9),(False,'fail'))
+        for path,expected in ((r'D:\Motorsport DX\build','warn'),('D:\\Spiele\\M\u00f6tor','fail'),
+                              (r'C:\Users\Player\OneDrive\MotorsportDX','fail'),
+                              ('D:\\'+'b'*60,'warn'),('D:\\'+'b'*80,'fail'),
+                              (pipeline.REPO/'work/runtime/build','fail')):
+            result=report(build_root=path)
+            self.assertEqual(result['checks']['paths']['build_root']['state'],expected,path)
+            self.assertEqual(result['ok'],expected!='fail',path)
+        self.assertEqual(report(cloud_attributes=lambda path:True)['checks']['paths']['state'],'fail')
+
+    def test_player_tests(self):
+        """--tests player builds and runs the C++ tests only; developer, the default, every test."""
+        for tests,expected in (('developer',pipeline.PLAYER_TESTS+pipeline.SHADER_TESTS),
+                               ('player',pipeline.PLAYER_TESTS)):
+            calls=[]
+            with tempfile.TemporaryDirectory() as directory, \
+                    patch.object(pipeline,'run',lambda args,**kwargs:calls.append([str(a) for a in args])), \
+                    patch.object(pipeline,'runtime_fsr',lambda build:None), patch('builtins.print'):
+                pipeline.post_pass_tests(Path(directory),4,tests)
+            build=next(call for call in calls if '--build' in call)
+            self.assertEqual(set(build[build.index('--target')+1:]),set(expected),tests)
+            ran={Path(call[0]).stem for call in calls if call[0].endswith('.exe')}
+            self.assertEqual(ran,set(expected),tests)
+        with self.assertRaises(ValueError): pipeline.post_pass_tests(Path('.'),4,'none')
 
     def test_clear_gray(self):
         """The e2e clear color check: smooth neutral grays that pass 102 (asphalt under TAA) are no
