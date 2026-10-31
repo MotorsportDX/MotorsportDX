@@ -11,6 +11,7 @@
 !/work/runtime/
 !/work/runtime/**
 !/outputs/FM4-build/loader/
+!/outputs/FM4-build/mingw/
 !/outputs/FM4-source-control/third-party-notices/
 !/work/fm4-rex/src/
 !/work/fm4-rex/tests/
@@ -75,6 +76,9 @@
 !/outputs/FM4-build/switch-recipes.json
 !/outputs/FM4-build/test_pipeline.py
 !/outputs/FM4-build/toolchain.json
+!/outputs/FM4-build/mingw/x86_64-w64-mingw32.cmake
+!/outputs/FM4-build/mingw/prototype.py
+!/outputs/FM4-build/mingw/d3d12_abi_probe.cpp
 !/outputs/FM4-build/verification.json
 !/outputs/FM4-build/xmedia_bounds.toml
 !/outputs/FM4-source-control/check-staged-content.py

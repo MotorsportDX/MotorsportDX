@@ -28,6 +28,15 @@
 // Hook Macros
 //=============================================================================
 
+// Under llvm-mingw, lld's --export-all-symbols leaves out every name that begins with __imp_,
+// which every guest import thunk has: they are exported by name instead, as the MSVC build's
+// WINDOWS_EXPORT_ALL_SYMBOLS exports them (docs/analysis/mingw-toolchain.md).
+#if defined(__MINGW32__)
+#define REX_EXPORT_DECL(name) extern "C" __declspec(dllexport) REX_FUNC(name);
+#else
+#define REX_EXPORT_DECL(name)
+#endif
+
 // Hook a recompiled function with an auto-marshaled native C++ function.
 // The native function uses plain types (u32, mapped_u32, etc.) and
 // HostToGuestFunction handles register translation automatically.
@@ -46,7 +55,7 @@
 #endif
 
 // Define a raw hook with direct ctx/base access.
-#define REX_HOOK_RAW(name) extern "C" REX_FUNC(name)
+#define REX_HOOK_RAW(name) REX_EXPORT_DECL(name) extern "C" REX_FUNC(name)
 
 // Stub: logs a warning when called.
 #define REX_STUB(subroutine)              \
@@ -70,14 +79,17 @@
 
 // Export: hook + register in global registry for kernel ordinal lookup.
 #define REX_EXPORT(name, function) \
+  REX_EXPORT_DECL(name)            \
   REX_HOOK(name, function)         \
   static rex::ppc::detail::PPCFuncRegistrar _ppc_reg_##name(#name, &name);
 
 #define REX_EXPORT_STUB(name) \
+  REX_EXPORT_DECL(name)       \
   REX_STUB(name)              \
   static rex::ppc::detail::PPCFuncRegistrar _ppc_reg_##name(#name, &name);
 
 #define REX_EXPORT_STUB_RETURN(name, retval) \
+  REX_EXPORT_DECL(name)                      \
   REX_STUB_RETURN(name, retval)              \
   static rex::ppc::detail::PPCFuncRegistrar _ppc_reg_##name(#name, &name);
 

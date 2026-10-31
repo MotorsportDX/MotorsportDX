@@ -652,7 +652,14 @@ bool App::Init(int argc, char** argv) {
   std::error_code error;
   const auto time = fs::last_write_time(root_ / "build-result.json", error);
   if (!error) {
+#if defined(_LIBCPP_VERSION)
+    // libc++ has no clock_cast (llvm-mingw, docs/analysis/mingw-toolchain.md), and its file
+    // clock counts in a wider type than the system clock.
+    const auto system = std::chrono::time_point_cast<std::chrono::system_clock::duration>(
+        std::chrono::file_clock::to_sys(time));
+#else
     const auto system = std::chrono::clock_cast<std::chrono::system_clock>(time);
+#endif
     const std::time_t stamp = std::chrono::system_clock::to_time_t(system);
     std::tm local{};
     localtime_s(&local, &stamp);

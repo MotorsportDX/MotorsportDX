@@ -164,6 +164,17 @@ if(WIN32)
         message(FATAL_ERROR "Unsupported Windows architecture: ${REX_TARGET_PROCESSOR}")
     endif()
     add_compile_definitions(REX_PLATFORM_WINDOWS=1)
+    if(MINGW)
+        # llvm-mingw (docs/analysis/mingw-toolchain.md): mingw-w64's headers default to Windows 7
+        # (0x0601) and hide the Windows 10 declarations the runtime and its libraries call; the
+        # Windows SDK defaults to Windows 10. WIDL_EXPLICIT_AGGREGATE_RETURNS gives the D3D12
+        # methods that return a struct Microsoft's ABI (a hidden result pointer) instead of the
+        # GNU C++ ABI's registers. rexruntime passes all three on to its users.
+        add_compile_definitions(_WIN32_WINNT=0x0A00 WINVER=0x0A00 WIDL_EXPLICIT_AGGREGATE_RETURNS)
+        # The DLLs keep the names the MSVC build gives them (rexruntime.dll; the GPU plugin
+        # loader looks for rexgpu-<name>.dll), not mingw's lib<name>.dll.
+        set(CMAKE_SHARED_LIBRARY_PREFIX "")
+    endif()
 elseif(UNIX AND NOT APPLE)
     if(REX_TARGET_PROCESSOR MATCHES "AMD64|x86_64")
         set(REX_PLATFORM "linux-amd64")

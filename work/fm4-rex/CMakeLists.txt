@@ -4,6 +4,10 @@
 
 cmake_minimum_required(VERSION 3.25)
 project(fm4_rex LANGUAGES CXX)
+if(MINGW)
+    # llvm-mingw (docs/analysis/mingw-toolchain.md): the modules keep the MSVC build's DLL names.
+    set(CMAKE_SHARED_LIBRARY_PREFIX "")
+endif()
 
 set(CMAKE_CXX_STANDARD 23)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
@@ -63,7 +67,14 @@ endif()
 rexglue_setup_target(fm4_rex GPU_PLUGINS xenos)
 if(WIN32)
     target_link_libraries(fm4_rex PRIVATE dbghelp)
-    target_link_options(fm4_rex PRIVATE "LINKER:/MAP:${CMAKE_CURRENT_BINARY_DIR}/fm4_rex.map")
+    if(MINGW)
+        # lld's MinGW driver: its own map format (not MSVC's, which thread_profile.py and
+        # soak_report.py read), and -municode for the SDL entry point's wWinMain.
+        target_link_options(fm4_rex PRIVATE "LINKER:-Map=${CMAKE_CURRENT_BINARY_DIR}/fm4_rex.map"
+            -municode)
+    else()
+        target_link_options(fm4_rex PRIVATE "LINKER:/MAP:${CMAKE_CURRENT_BINARY_DIR}/fm4_rex.map")
+    endif()
 endif()
 
 add_executable(fm4_instruction_tests src/instruction-tests.cpp)

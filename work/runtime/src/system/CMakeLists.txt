@@ -59,6 +59,12 @@ add_library(rex::system ALIAS rexruntime)
 add_library(rex::kernel ALIAS rexruntime)
 
 set_target_properties(rexruntime PROPERTIES WINDOWS_EXPORT_ALL_SYMBOLS TRUE)
+if(MINGW)
+    # CMake implements WINDOWS_EXPORT_ALL_SYMBOLS for MSVC-style linkers only, and one
+    # dllexport in the DLL turns lld's automatic export off; data imports go through
+    # mingw's auto-import (docs/analysis/mingw-toolchain.md 1.1).
+    target_link_options(rexruntime PRIVATE -Wl,--export-all-symbols)
+endif()
 
 rex_target_pch(rexruntime
     <mutex>
@@ -114,6 +120,12 @@ if(WIN32)
     target_link_libraries(rexruntime PRIVATE ws2_32 winmm)
     target_link_libraries(rexruntime PUBLIC dxgi dxguid)
     target_compile_definitions(rexruntime PUBLIC NOMINMAX WIN32_LEAN_AND_MEAN)
+    if(MINGW)
+        # The game and its tests read the same Windows and D3D12 declarations as the runtime
+        # (the top-level CMakeLists.txt).
+        target_compile_definitions(rexruntime PUBLIC _WIN32_WINNT=0x0A00 WINVER=0x0A00
+            WIDL_EXPLICIT_AGGREGATE_RETURNS)
+    endif()
 endif()
 
 if(REXGLUE_USE_D3D12)

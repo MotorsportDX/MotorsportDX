@@ -401,6 +401,18 @@
       "provenance": "Reviewed bootstrap tooling or documentation; no original game function bodies"
     },
     {
+      "path": "outputs/FM4-build/mingw/d3d12_abi_probe.cpp",
+      "provenance": "Project-authored D3D12 ABI probe of the llvm-mingw prototype: the struct-returning D3D12 methods called on a WARP device; no game data"
+    },
+    {
+      "path": "outputs/FM4-build/mingw/prototype.py",
+      "provenance": "Project-authored driver of the llvm-mingw prototype: runs pipeline.py's stages with the mingw CMake toolchain file; no game data"
+    },
+    {
+      "path": "outputs/FM4-build/mingw/x86_64-w64-mingw32.cmake",
+      "provenance": "Project-authored CMake toolchain file for llvm-mingw (x86_64-w64-mingw32); no game data"
+    },
+    {
       "path": "outputs/FM4-build/pipeline.py",
       "provenance": "Reviewed bootstrap tooling or documentation; no original game function bodies"
     },

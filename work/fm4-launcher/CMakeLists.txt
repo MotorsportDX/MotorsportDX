@@ -49,4 +49,11 @@ target_include_directories(fm4_launcher PRIVATE
 target_include_directories(fm4_launcher PRIVATE ${FM4_RUNTIME_SOURCE}/include)
 target_compile_definitions(fm4_launcher PRIVATE UNICODE _UNICODE NOMINMAX WIN32_LEAN_AND_MEAN)
 target_link_libraries(fm4_launcher PRIVATE SDL3::SDL3-static d3d11 dxgi d3dcompiler bcrypt shcore shell32 advapi32 user32 urlmon ole32 windowscodecs)
+if(MINGW)
+    # llvm-mingw (docs/analysis/mingw-toolchain.md): the Windows 10 declarations (mingw-w64's
+    # headers default to Windows 7), -municode for wWinMain, and libc++ linked into the program,
+    # which ships on its own.
+    target_compile_definitions(fm4_launcher PRIVATE _WIN32_WINNT=0x0A00 WINVER=0x0A00)
+    target_link_options(fm4_launcher PRIVATE -municode -static)
+endif()
 set_target_properties(fm4_launcher PROPERTIES OUTPUT_NAME MotorsportDX)

@@ -581,6 +581,13 @@ target_include_directories(libavutil
         $<INSTALL_INTERFACE:${CMAKE_INSTALL_INCLUDEDIR}>
     PRIVATE ${FFMPEG_ATOMICS_INCLUDE}
 )
+if(MINGW)
+    # The MSVC config (HAVE_LIBC_MSVCRT) includes crtversion.h, which mingw-w64 lacks, for the
+    # CRT's major version; the Universal CRT is 14, so FFmpeg's code stays that of the MSVC build.
+    set(FFMPEG_MINGW_INCLUDE "${CMAKE_CURRENT_BINARY_DIR}/ffmpeg-mingw")
+    file(WRITE "${FFMPEG_MINGW_INCLUDE}/crtversion.h" "#pragma once\n#define _VC_CRT_MAJOR_VERSION 14\n")
+    target_include_directories(libavutil PRIVATE "${FFMPEG_MINGW_INCLUDE}")
+endif()
 target_compile_definitions(libavutil PRIVATE ${FFMPEG_COMMON_DEFINES})
 target_compile_options(libavutil PRIVATE -w)  # Suppress warnings in third-party code
 if(WIN32)
@@ -710,6 +717,9 @@ target_include_directories(libavcodec
         $<INSTALL_INTERFACE:${CMAKE_INSTALL_INCLUDEDIR}>
     PRIVATE ${FFMPEG_ATOMICS_INCLUDE}
 )
+if(MINGW)
+    target_include_directories(libavcodec PRIVATE "${FFMPEG_MINGW_INCLUDE}")
+endif()
 target_compile_definitions(libavcodec PRIVATE ${FFMPEG_COMMON_DEFINES})
 target_compile_options(libavcodec PRIVATE -w)  # Suppress warnings in third-party code
 target_link_libraries(libavcodec PUBLIC libavutil)

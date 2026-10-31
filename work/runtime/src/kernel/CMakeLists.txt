@@ -65,5 +65,19 @@ set(REXKERNEL_SOURCES
 
 list(TRANSFORM REXKERNEL_SOURCES PREPEND "${CMAKE_CURRENT_SOURCE_DIR}/")
 target_sources(rexruntime PRIVATE ${REXKERNEL_SOURCES})
+if(MINGW)
+    # thirdparty/crypto/sha256.cpp (included by xboxkrnl_crypt.cpp) reads the byte order from
+    # <endian.h> on any compiler but MSVC; mingw-w64 has none. x86-64 is little-endian, the
+    # branch the MSVC build takes too (docs/analysis/mingw-toolchain.md).
+    set(REXKERNEL_MINGW_INCLUDE "${CMAKE_CURRENT_BINARY_DIR}/mingw-include")
+    file(WRITE "${REXKERNEL_MINGW_INCLUDE}/endian.h"
+        "#pragma once
+#define __LITTLE_ENDIAN 1234
+#define __BIG_ENDIAN 4321
+#define __BYTE_ORDER __LITTLE_ENDIAN
+")
+    set_source_files_properties("${CMAKE_CURRENT_SOURCE_DIR}/xboxkrnl/xboxkrnl_crypt.cpp"
+        TARGET_DIRECTORY rexruntime PROPERTIES INCLUDE_DIRECTORIES "${REXKERNEL_MINGW_INCLUDE}")
+endif()
 
 target_link_libraries(rexruntime PRIVATE o1heap rexcore rexfilesystem rexui rexaudio rexinput imgui)
