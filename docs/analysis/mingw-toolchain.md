@@ -648,8 +648,8 @@ Files:
 The main session compared the frozen frames at 1:1: the rendering is the same, and only the game
 state differs (the needles, the cars' places, the place on the track). Each build repeats itself,
 and `FM4_FIXED_FRAME_TIME=1` does not remove the difference. Players must not get another
-simulation, so this blocks the switch until it is explained. A search of about 2 h on
-31 October 2026 ruled out the following and did not find the cause.
+simulation, so this blocks the switch until it is explained. Two searches on
+31 October 2026, about 3 h in all, ruled out the following and did not find the cause.
 
 **Where the difference shows.**
 
@@ -673,21 +673,44 @@ simulation, so this blocks the switch until it is explained. A search of about 2
 | Thread timing | the MSVC build with its process confined to 4 performance cores (`--affinity 0xC3`, `mgaff-m`) | it still freezes the MSVC moment: draws 2,017 against 2,017 (pass) and −10 % against mingw |
 | Frame pacing | the frame times of the race (`perf.jsonl`) | the same distribution, 16.2 to 17.2 ms |
 | The guest's memory | `REX_GUEST_MEM_TRACE` in a `boot` run of each build (`mgmem-m`, `mgmem-g`) | identical: the title's two pools (329,973,760 and 58,720,256 bytes at the same addresses), the same heaps to the byte |
+| The guest's time base and the session's rewind | the probe below | the same in both builds |
 | The race start | session times with the fixed frame time: the 3-2-1 starts 60 updates after the placing in both | the same; mingw's pre-race has 37 more session updates of loading, which also varies within one build |
 | Duplicated cvar storage | the `FLAGS_*_storage_` accessors in `fm4_rex.exe` | lld's import thunks, one instance in `rexruntime.dll` as under MSVC |
 | `CallFrame`'s registers that are not initialized | its users | not used by the title or the runtime |
 
+**The guest's time base and the rewind's session time (a second search, about 1 h).**
+
+- A temporary probe, not committed, was added to the session update hook of
+  [fm4-race-clock.cpp](../../work/fm4-rex/src/fm4-race-clock.cpp) behind `FM4_TIME_PROBE`. It logged
+  what the runtime hands the guest: the guest tick count and frequency, the tick ratio, the time
+  scalar, the guest system time, and the host's QPC and frequency, every 60 session updates and
+  on every update that moved the session time back.
+- One `freeze` run per build, both on `fed6934` with the probe: `mgprobe2-m` (MSVC,
+  `I:\FM4-build-msvcchek3`) and `mgprobe2-g` (mingw).
+
+| Value | MSVC | llvm-mingw |
+| --- | --- | --- |
+| Guest tick frequency, ratio to the host's QPC, time scalar | 50,000,000; 5/1; 1.0 | the same |
+| Host QPC frequency | 10,000,000 | the same |
+| Guest ticks per host tick, over the rewind's 59 updates | 49,169,540 / 9,833,877 = 5.000 | 49,180,050 / 9,835,988 = 5.000 |
+| The rewind in session time | 60 updates of −0.01668335 s, from 56.840178 to 55.855860 (0.984318 s), then still | 60 updates of −0.01668335 s, from 57.040378 to 56.056060 (0.984318 s), then still |
+| Session words +0x20 / +0x28 during the rewind | `bf800000` (−1.0) then `3f800000`; `bf800000` | the same |
+
+The time base and the session's rewind are the same in both builds. The difference lies in the
+picture that the rewind shows: the replay's oldest kept frame, which is the title's own data.
+Parity on the probe runs: draws +8.9 %, FAIL, as before.
+
 **Not checked, in the order the next search would take them.**
 
-1. A value that the host hands to the guest and that depends on the C++ library: iteration order
+1. The title's replay recorder: where it keeps its frames, and their count and bytes per frame at
+   the freeze in both builds. The MSVC build keeps fewer seconds than the mingw build. A buffer
+   of the same size that fills faster under MSVC would point to recorded data that differs
+   between the builds: for example bytes the host writes into guest memory without
+   initializing them, which a compressor would size differently.
+2. A value that the host hands to the guest and that depends on the C++ library: iteration order
    of `std::unordered_map` or `std::unordered_set`, or equal elements after `std::sort` (libc++
    and MSVC's STL order them differently, each the same in every run). Examples: enumerations
    of files, content, handles or objects that the kernel or XAM functions return.
-2. The guest's timebase and time source during the rewind (`sub_822D92D8`, `mftb`): how the rewind
-   measures its history. If it measures in time rather than frames, a difference in what the
-   guest reads there would change it.
-3. A probe that dumps the rewind's own state (its buffer's head and tail) at the freeze in both
-   builds, to tell a longer buffer from a different reading of the same buffer.
 
 ### 10.9 Not verified, and the next step
 
