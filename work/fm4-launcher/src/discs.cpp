@@ -1,4 +1,5 @@
 #include "discs.h"
+#include "iso.h"
 
 #include <windows.h>
 #include <bcrypt.h>
@@ -7,6 +8,7 @@
 #include <cwctype>
 #include <fstream>
 #include <map>
+#include <set>
 
 namespace fm4 {
 
@@ -40,8 +42,6 @@ std::string Sha256File(const fs::path& path) {
   return text;
 }
 
-namespace {
-
 std::vector<fs::path> Disc2Packages(const std::string& disc2) {
   const fs::path packages = PathFromUtf8(disc2) / "content" / "0000000000000000" / "4d530910" / "00000002";
   std::vector<fs::path> paths;
@@ -49,6 +49,8 @@ std::vector<fs::path> Disc2Packages(const std::string& disc2) {
     paths.push_back(packages / ("4d5309100000000" + std::to_string(index)));
   return paths;
 }
+
+namespace {
 
 struct Header {
   std::string magic;
@@ -115,6 +117,9 @@ std::wstring Lower(std::wstring text) {
   return text;
 }
 
+constexpr char kImageFile[] =
+    "This is a file, not a folder. For an ISO, use \"Unpack a disc image (ISO)\" below.";
+
 }  // namespace
 
 DiscCheck CheckDisc1(const LauncherData& data, const std::string& disc1) {
@@ -125,6 +130,10 @@ DiscCheck CheckDisc1(const LauncherData& data, const std::string& disc1) {
   }
   check.path = ResolvePath(disc1);
   const fs::path root = PathFromUtf8(check.path);
+  if (fs::is_regular_file(root)) {
+    check.error = kImageFile;
+    return check;
+  }
   std::map<std::string, std::string> hashes;
   try {
     for (const auto& name : data.json.at("releases").begin()->at("executables").items()) {
@@ -164,6 +173,10 @@ DiscCheck CheckDisc2(const LauncherData& data, const std::string& disc2) {
   DiscCheck check;
   if (disc2.empty()) return check;
   check.path = ResolvePath(disc2);
+  if (fs::is_regular_file(PathFromUtf8(check.path))) {
+    check.error = kImageFile;
+    return check;
+  }
   for (const auto& package : Disc2Packages(check.path)) {
     if (!fs::is_regular_file(package)) {
       check.error = "Missing Disc 2 content package: " + Utf8(package);
@@ -237,6 +250,120 @@ ContentCheck CheckContent(const LauncherData& data, const std::string& disc2,
     }
   }
   return check;
+}
+
+DiscUnpack UnpackDisc(const LauncherData& data, const fs::path& discs, const fs::path& image,
+                      std::atomic<std::uint64_t>& done, std::atomic<std::uint64_t>& total,
+                      const std::atomic<bool>& cancel, const std::function<void(const std::string&)>& started) {
+  DiscUnpack result;
+  const DiscImage read = ReadDiscImage(image);
+  if (!read.error.empty()) {
+    result.message = read.error;
+    return result;
+  }
+  const auto lower = [](std::string text) {
+    for (auto& c : text) c = static_cast<char>(std::tolower(static_cast<unsigned char>(c)));
+    return text;
+  };
+  std::map<std::string, const DiscImageEntry*> files;
+  std::uint64_t bytes = 0;
+  for (const auto& entry : read.entries) {
+    if (entry.directory) continue;
+    files[lower(entry.path)] = &entry;
+    bytes += entry.size;
+  }
+  std::vector<DiscImageEntry> first;
+  const auto take = [&](const std::vector<std::string>& paths) {
+    first.clear();
+    for (const auto& path : paths) {
+      const auto it = files.find(lower(path));
+      if (it == files.end()) return false;
+      first.push_back(*it->second);
+    }
+    return true;
+  };
+  std::vector<std::string> packages, executables;
+  for (const auto& package : Disc2Packages("")) {
+    std::string path = Utf8(package);
+    std::replace(path.begin(), path.end(), '\\', '/');
+    packages.push_back(path);
+  }
+  for (const auto& item : data.json.at("releases").begin()->at("executables").items())
+    executables.push_back(item.key());
+  if (!take(packages)) {
+    if (!take(executables)) {
+      result.message = Utf8(image.filename()) + " is neither Disc 1 (Play Disc) nor Disc 2 (Content Disc).";
+      return result;
+    }
+    result.disc1 = true;
+  }
+  const std::string name = result.disc1 ? "disc1" : "disc2", label = result.disc1 ? "Disc 1" : "Disc 2";
+  const fs::path folder = discs / name, marker = discs / (name + ".json"), partial = discs / (name + ".partial");
+  // The source as pipeline.py records it: st_mtime_ns is the write time in Unix nanoseconds.
+  WIN32_FILE_ATTRIBUTE_DATA attributes{};
+  GetFileAttributesExW(image.c_str(), GetFileExInfoStandard, &attributes);
+  const auto written = static_cast<std::int64_t>((std::uint64_t(attributes.ftLastWriteTime.dwHighDateTime) << 32) |
+                                                 attributes.ftLastWriteTime.dwLowDateTime);
+  std::error_code error;
+  const Json source = {{"image", Utf8(image)},
+                       {"size", fs::file_size(image, error)},
+                       {"mtime_ns", (written - 116444736000000000LL) * 100}};
+  if (fs::is_directory(folder, error) && fs::is_regular_file(marker, error)) {
+    try {
+      std::ifstream stream(marker, std::ios::binary);
+      const Json recorded = Json::parse(stream).at("source");
+      if (recorded.at("image") == source.at("image") && recorded.at("size") == source.at("size") &&
+          recorded.at("mtime_ns") == source.at("mtime_ns")) {
+        result.folder = Utf8(folder);
+        result.message = label + ": " + result.folder + ", unpacked before from this image.";
+        return result;
+      }
+    } catch (const std::exception&) {
+    }
+  }
+  fs::create_directories(discs, error);
+  fs::remove(marker, error);
+  fs::remove_all(partial, error);
+  const auto gigabytes = [](std::uintmax_t count) {
+    char text[32];
+    std::snprintf(text, sizeof(text), "%.1f GB", static_cast<double>(count) / (1ull << 30));
+    return std::string(text);
+  };
+  const auto space = fs::space(discs, error);
+  if (!error && space.available < bytes + (1ull << 30)) {
+    result.message = "Unpacking " + label + " needs " + gigabytes(bytes) + " in " + Utf8(discs) + "; " +
+                     gigabytes(space.available) + " are free.";
+    return result;
+  }
+  done = 0;
+  total = bytes;
+  started(label);
+  const auto fail = [&](const std::string& text) {
+    fs::remove_all(partial, error);
+    result.message = text;
+    return result;
+  };
+  std::string failure = UnpackDiscImage(image, first, partial, done, cancel);
+  if (!failure.empty()) return fail(failure);
+  const DiscCheck check = result.disc1 ? CheckDisc1(data, Utf8(partial)) : CheckDisc2(data, Utf8(partial));
+  // The partial Disc 1 has only its executables yet: the release decides.
+  if (result.disc1 ? check.release.empty() : !check.error.empty()) return fail(Utf8(image) + ": " + check.error);
+  std::set<std::string> taken;
+  for (const auto& entry : first) taken.insert(entry.path);
+  std::vector<DiscImageEntry> rest;
+  for (const auto& entry : read.entries)
+    if (!taken.contains(entry.path)) rest.push_back(entry);
+  failure = UnpackDiscImage(image, rest, partial, done, cancel);
+  if (!failure.empty()) return fail(failure);
+  fs::remove_all(folder, error);
+  fs::rename(partial, folder, error);
+  if (error) return fail("Unable to rename " + Utf8(partial) + ": " + error.message());
+  std::ofstream(marker, std::ios::binary | std::ios::trunc)
+      << Json{{"source", source}, {"files", files.size()}, {"bytes", bytes}}.dump(1);
+  result.folder = Utf8(folder);
+  result.message = label + (result.disc1 ? " (" + check.release + ")" : "") + ": " + std::to_string(files.size()) +
+                   " files unpacked into " + result.folder + ". The ISO is not needed any more.";
+  return result;
 }
 
 }  // namespace fm4

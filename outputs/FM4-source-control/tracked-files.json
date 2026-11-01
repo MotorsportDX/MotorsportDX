@@ -605,6 +605,14 @@
       "provenance": "Original GUI launcher source (port of the pipeline.py launch rules, SDL3 and Dear ImGui front end); no game content"
     },
     {
+      "path": "work/fm4-launcher/src/iso.cpp",
+      "provenance": "Original GUI launcher source (port of the pipeline.py GDFX disc image reader; the format's descriptor offsets as in the runtime's Xenia-derived DiscImageDevice); no game content"
+    },
+    {
+      "path": "work/fm4-launcher/src/iso.h",
+      "provenance": "Original GUI launcher source (port of the pipeline.py GDFX disc image reader; the format's descriptor offsets as in the runtime's Xenia-derived DiscImageDevice); no game content"
+    },
+    {
       "path": "work/fm4-launcher/src/plan.cpp",
       "provenance": "Original GUI launcher source (port of the pipeline.py launch rules, SDL3 and Dear ImGui front end); no game content"
     },

@@ -31,16 +31,16 @@ compatibility.
 - To change the release of a `BuildRoot`, run `generate` with the other Disc 1
   (and Disc 2), then `build`.
 - **Disc 1 is required.** It must be the extracted root of the Play Disc with all
-  of its assets: the three executables, `Database.xmplr` and the `Media` folder.
-  A folder that contains only the three XEX files is rejected.
+  of its assets: the three executables, `Database.xmplr` and the `Media` folder,
+  or the Play Disc's ISO (see [Disc images](#disc-images)). A folder that contains
+  only the three XEX files is rejected.
 - **Disc 2 is optional** for a base-game launch. It is required to import its
   additional cars. Supply its extracted root, which must contain the four content
-  packages listed below.
+  packages listed below, or its ISO.
 - **Downloadable content is optional.** Car and track packs are imported from the
   content packages you supply with `-Content`. See
   [Downloadable content](#downloadable-content).
-- ISO extraction is outside this workflow. Extract the discs yourself. No game
-  data is downloaded by any step.
+- No game data is downloaded by any step.
 
 Example layout of the input directories:
 
@@ -62,6 +62,31 @@ D:\Games\FM4\
 ```
 
 Input discs are read in place; see [running.md](running.md#data-directories).
+
+### Disc images
+
+`-Disc1` and `-Disc2` also take an Xbox 360 disc image (an ISO) of the Play Disc
+and of the Content Disc. `generate` and `all` then unpack it once into
+`BuildRoot\discs\disc1` or `BuildRoot\discs\disc2` and use that folder:
+
+1. The image's file system (GDFX) is read, and the files that identify the Disc
+   are unpacked first: Disc 1's three executables, which must match a supported
+   release, or Disc 2's four content packages. A wrong image, another release or
+   the other Disc fails here, in seconds.
+2. The rest is unpacked, with a line every 10 percent. The folder takes about
+   7.5 GB for Disc 1 and 3 GB for Disc 2; `generate` stops before it starts when
+   the drive has less than that and 1 GB free.
+3. `BuildRoot\discs\<disc>.json` records the image's path, size and time. A
+   later `generate` with the same image uses the folder without unpacking it
+   again.
+
+`local.json` keeps the unpacked folder, so `build` and `run` read it, and the
+image is not needed afterwards. The unpacked files are byte-identical to an
+extraction with another tool (both USA discs checked, 1 November 2026). With
+`--progress`, the unpacking is the stage `discs`.
+
+The GUI launcher unpacks images the same way from its Game data page; see
+[running.md](running.md#gui-launcher).
 
 ### Downloadable content
 
@@ -210,8 +235,8 @@ The stages can also run separately:
 | `-LLVMRoot` | With `-Abi msvc` only: the LLVM 20.x install directory that contains `bin`. Its `bin` folder is placed first on `PATH`. |
 | `-Python` | Python 3.11+ x64 executable. Default: `python`. |
 | `-Jobs` | Number of parallel jobs, 1 to 64. Default: 4. |
-| `-Disc1` | Extracted Disc 1 root. Required by `generate` and `all`. |
-| `-Disc2` | Extracted Disc 2 root. Optional. |
+| `-Disc1` | Extracted Disc 1 root, or its ISO ([Disc images](#disc-images)). Required by `generate` and `all`. |
+| `-Disc2` | Extracted Disc 2 root, or its ISO. Optional. |
 | `-Content` | Content package files or directories (DLC). Optional, one or more, read by `generate`, `all` and `run`. See [Downloadable content](#downloadable-content). |
 | `-Flavor` | Compiler experiment for `build`, for example `thinlto,v3`. See [Build flavors](#build-flavors). |
 | `-Fsr` | `on` or `off`, for `setup`, `build` and `all`: link AMD FSR 3.1 into the runtime, built from the FidelityFX SDK source (`REX_FSR`). `on` fetches the pinned SDK first. The runtime build folder keeps the choice for later builds; off by default. See [FSR 3.1](#fsr-31-optional). |
@@ -458,8 +483,8 @@ runtime edits need only this stage. It then:
   from [work/fm4-launcher](../work/fm4-launcher) with the runtime's SDL3, Dear ImGui
   and JSON header, writes its tables to `launcher.json`, copies the look mods and
   post passes into `look` and `passes`, and `CREDITS.txt` and `third-party-notices` beside them;
-- runs the launcher tests, which compare the launcher's launch plans and its Disc and
-  content checks with those of `pipeline.py`. A flavor build skips the launcher.
+- runs the launcher tests, which compare the launcher's launch plans, its Disc and
+  content checks and its disc image reader with those of `pipeline.py`. A flavor build skips the launcher.
 
 `-Tests player` (`--tests player`), the build of the
 [builder installer](analysis/builder-installer.md), leaves out the tests of the project's
@@ -564,7 +589,7 @@ instead, between the action's other output. Schema 1:
 | Field | Meaning |
 | --- | --- |
 | `schema` | 1 |
-| `event` | `stage` (`setup`, `generate`, `build`) or `step` |
+| `event` | `stage` (`discs` when a Disc is an ISO, `setup`, `generate`, `build`) or `step` |
 | `stage` | The stage the line belongs to, or `null` for a step outside a stage |
 | `step` | For a step: the name of its log without `.log` (every process the pipeline starts with a log is a step: `runtime-configure`, `runtime-build`, `codegen`, `game-build`, `instruction-tests`, `patch-sdl3-gameinput-v3`, ...), or `gameinput-fetch`, `dxc-fetch`, `thirdparty-mirror`; with `--fetch archive` `thirdparty-download`, `thirdparty-unpack`, `fidelityfx-download` and `fidelityfx-unpack`, each with a log of its archives (size, source and seconds; files, hash and seconds); `null` for a stage. A name can come twice: the FidelityFX fetch's Git commands share `fidelityfx-fetch`, and `patch-sdl3-gameinput-v3` comes once for the check and once for the patch |
 | `state` | `running`, then `done` or `failed` |
@@ -731,6 +756,7 @@ FM4-build/
 ├── project/          # Integration source and private generated/
 ├── game-build/       # Executable, modules, runtime, GPU plugins, libc++ and libunwind, PDBs
 ├── user-data/        # Profiles, saves, imported Disc 2 and DLC content
+├── discs/            # Discs unpacked from ISOs, with a <disc>.json each (Disc images)
 ├── cache/            # Game and shader cache (shader-overrides/: compiled look mods)
 ├── logs/             # Logs for setup, generate, build and startup
 ├── launcher-build/   # GUI launcher build and its test cases (launcher-build-<folder> for a

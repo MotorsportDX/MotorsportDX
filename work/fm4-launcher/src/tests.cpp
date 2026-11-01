@@ -7,6 +7,7 @@
 #include <set>
 
 #include "discs.h"
+#include "iso.h"
 #include "settings.h"
 
 namespace fm4 {
@@ -75,6 +76,53 @@ int RunTests(const std::filesystem::path& cases_path, const std::filesystem::pat
   if (packages != expected_packages)
     failures.push_back("Content packages: expected " + Json(expected_packages).dump() + ", got " +
                        Json(packages).dump());
+  const Json& image = cases.at("image");
+  const DiscImage read = ReadDiscImage(PathFromUtf8(image.at("path").get<std::string>()));
+  Json entries = Json::array();
+  for (const auto& entry : read.entries)
+    entries.push_back(entry.directory ? Json{entry.path, nullptr, 0} : Json{entry.path, entry.offset, entry.size});
+  if (!read.error.empty() || entries != image.at("entries"))
+    failures.push_back("Disc image: expected " + image.at("entries").dump() + ", got " + entries.dump() + " " +
+                       read.error);
+  const std::filesystem::path out = PathFromUtf8(image.at("out").get<std::string>());
+  std::atomic<std::uint64_t> done{0};
+  const std::atomic<bool> cancel{false};
+  const std::string unpacked = UnpackDiscImage(PathFromUtf8(image.at("path").get<std::string>()), read.entries, out, done, cancel);
+  if (!unpacked.empty()) failures.push_back("Disc image unpack: " + unpacked);
+  for (const auto& [path, hash] : image.at("files").items()) {
+    std::string have;
+    try {
+      have = Sha256File(out / PathFromUtf8(path));
+    } catch (const std::exception& error) {
+      have = error.what();
+    }
+    if (have != hash.get<std::string>()) failures.push_back("Disc image file " + path + ": " + have);
+  }
+  if (!std::filesystem::is_directory(out / "Media" / "Empty")) failures.push_back("Disc image: no Media/Empty");
+  if (ReadDiscImage(PathFromUtf8(image.at("other").get<std::string>())).error.empty())
+    failures.push_back("Disc image: a text file was read as one");
+  const std::filesystem::path unpack_root = PathFromUtf8(image.at("discs").get<std::string>());
+  std::atomic<std::uint64_t> total{0};
+  std::string label;
+  const auto unpack = [&](const std::string& key) {
+    label.clear();
+    return UnpackDisc(data, unpack_root, PathFromUtf8(image.at(key).get<std::string>()), done, total, cancel,
+                      [&](const std::string& name) { label = name; });
+  };
+  DiscUnpack unpacked_disc = unpack("disc2");
+  if (unpacked_disc.disc1 || label != "Disc 2" || unpacked_disc.folder != Utf8(unpack_root / "disc2") ||
+      !CheckDisc2(data, unpacked_disc.folder).error.empty() || done != total)
+    failures.push_back("Disc image as Disc 2: " + unpacked_disc.message);
+  unpacked_disc = unpack("disc2");
+  if (!label.empty() || unpacked_disc.folder != Utf8(unpack_root / "disc2"))
+    failures.push_back("Disc image as Disc 2 again: " + unpacked_disc.message);
+  unpacked_disc = unpack("disc1");
+  if (!unpacked_disc.folder.empty() || !unpacked_disc.disc1 || std::filesystem::exists(unpack_root / "disc1") ||
+      std::filesystem::exists(unpack_root / "disc1.partial"))
+    failures.push_back("Disc image of no release: " + unpacked_disc.message);
+  unpacked_disc = unpack("path");
+  if (!unpacked_disc.folder.empty() || unpacked_disc.message.find("neither") == std::string::npos)
+    failures.push_back("Disc image of neither Disc: " + unpacked_disc.message);
   std::ofstream result(result_path, std::ios::binary | std::ios::trunc);
   result << Json{{"plans", plans}, {"failures", failures}}.dump(1);
   return result ? 0 : 1;

@@ -118,6 +118,8 @@
 !/work/fm4-launcher/src/app.cpp
 !/work/fm4-launcher/src/discs.cpp
 !/work/fm4-launcher/src/discs.h
+!/work/fm4-launcher/src/iso.cpp
+!/work/fm4-launcher/src/iso.h
 !/work/fm4-launcher/src/plan.cpp
 !/work/fm4-launcher/src/plan.h
 !/work/fm4-launcher/src/runner.cpp

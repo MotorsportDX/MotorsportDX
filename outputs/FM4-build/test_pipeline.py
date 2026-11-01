@@ -112,6 +112,65 @@ class PipelineTests(unittest.TestCase):
             manifest=pipeline.write_content_manifest(root,[dlc])
             self.assertEqual(manifest.read_text(encoding='utf-8'),f'{dlc}\n')
 
+    def test_disc_images(self):
+        with tempfile.TemporaryDirectory(prefix='fm4 image test ') as directory:
+            root=Path(directory)
+            files={'b.bin':b'b'*5000,'a/x.bin':b'','a/y/z.bin':bytes(range(256)),'empty':None,'c.txt':b'c'}
+            for base in (0,pipeline.GDFX_OFFSETS[3]):
+                pipeline.write_disc_image(root/'test.iso',files,base)
+                entries=pipeline.disc_image_entries(root/'test.iso')
+                self.assertEqual([(path,offset is None,size) for path,offset,size in entries],
+                                 [('a',True,0),('a/x.bin',False,0),('a/y',True,0),('a/y/z.bin',False,256),
+                                  ('b.bin',False,5000),('c.txt',False,1),('empty',True,0)])
+                pipeline.unpack_disc_image(root/'test.iso',entries,root/'out')
+                for path,data in files.items():
+                    if data is None: self.assertTrue((root/'out'/path).is_dir())
+                    else: self.assertEqual((root/'out'/path).read_bytes(),data)
+            (root/'text.iso').write_text('not an image')
+            with self.assertRaises(ValueError): pipeline.disc_image_entries(root/'text.iso')
+            for name in ('..','a:b','trailing.','x\y'):
+                pipeline.write_disc_image(root/'bad.iso',{name:b'x'})
+                with self.assertRaises(ValueError): pipeline.disc_image_entries(root/'bad.iso')
+            # A truncated image: its last file ends beyond the end.
+            pipeline.write_disc_image(root/'short.iso',{'big.bin':b'x'*10000})
+            (root/'short.iso').write_bytes((root/'short.iso').read_bytes()[:-4000])
+            with self.assertRaises(ValueError): pipeline.disc_image_entries(root/'short.iso')
+
+    def test_disc_input(self):
+        with tempfile.TemporaryDirectory(prefix='fm4 disc input test ') as directory:
+            root=Path(directory)
+            header=bytearray(0x400)
+            header[:4]=b'LIVE'
+            struct.pack_into('>I',header,pipeline.CONTENT_TYPE_OFFSET,2)
+            struct.pack_into('>I',header,pipeline.TITLE_ID_OFFSET,0x4D530910)
+            disc2={package.as_posix():bytes(header) for package in pipeline.disc2_packages(Path())}
+            pipeline.write_disc_image(root/'disc2.iso',{**disc2,'default.xex':b'installer'})
+            names=('default.xex','module.xex')
+            disc1={'default.xex':b'one','module.xex':b'two','Media/a.bin':b'media','Database.xmplr':b'db'}
+            releases={'First':{'media_id':'00000001','executables':
+                               {name:pipeline.hashlib.sha256(disc1[name]).hexdigest() for name in names}}}
+            pipeline.write_disc_image(root/'disc1.iso',disc1)
+            build=root/'build'
+            self.assertEqual(pipeline.disc_input(build,root/'folder','disc1'),root/'folder')
+            self.assertIsNone(pipeline.disc_input(build,None,'disc2'))
+            with patch.object(pipeline,'EXECUTABLES',names),patch.object(pipeline,'RELEASES',releases),                     contextlib.redirect_stdout(io.StringIO()):
+                folder=pipeline.disc_input(build,root/'disc1.iso','disc1')
+                self.assertEqual(folder,build/'discs/disc1')
+                self.assertEqual((folder/'Media/a.bin').read_bytes(),b'media')
+                self.assertEqual(pipeline.validate_discs(folder,pipeline.disc_input(build,root/'disc2.iso','disc2')),
+                                 (folder.resolve(),(build/'discs/disc2').resolve()))
+                # The same image is not unpacked again.
+                (folder/'Media/a.bin').write_bytes(b'kept')
+                pipeline.disc_input(build,root/'disc1.iso','disc1')
+                self.assertEqual((folder/'Media/a.bin').read_bytes(),b'kept')
+                # The wrong Disc, or another release, fails before the rest is unpacked.
+                with self.assertRaises(ValueError): pipeline.disc_input(root/'other',root/'disc2.iso','disc1')
+                with self.assertRaises(ValueError): pipeline.disc_input(root/'other',root/'disc1.iso','disc2')
+                pipeline.write_disc_image(root/'wrong.iso',{**disc1,'module.xex':b'other'})
+                with self.assertRaises(ValueError): pipeline.disc_input(root/'other',root/'wrong.iso','disc1')
+                self.assertFalse((root/'other/discs/disc1.partial').exists())
+                self.assertFalse((root/'other/discs/disc1').exists())
+
     def test_stage_launcher_files(self):
         """The GUI launcher's and the export's folder: the look directory with its manifest
         (shaders.toml, docs/analysis/shader-contract.md), and the post passes."""

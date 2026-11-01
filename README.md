@@ -16,10 +16,10 @@ Motorsport DX is not affiliated with or endorsed by Microsoft, Xbox Game Studios
 ## Supported game version
 
 - **Forza Motorsport 4 Japan/Asia** (Play Disc media ID `633772A0`) or **USA** (media ID `26FF1101`). The three executables are checked by SHA-256 in [`pipeline.py`](outputs/FM4-build/pipeline.py), and all three must come from one of these releases. Both releases have the same game code and assets; only the executable headers differ (see [release comparison](docs/analysis/releases.md)). Other regions, other revisions, modified executables, and title updates are rejected.
-- **Disc 1 is required**, extracted, and it must contain all game assets.
+- **Disc 1 is required**, extracted or as its ISO, and it must contain all game assets.
 - **Disc 2 is optional.** It is not needed for basic startup, but it is required to import its additional car content.
 - **Downloadable content is optional.** FM4 car and track packs you own are imported from their content packages with `-Content`.
-- You extract the discs yourself. The scripts do not download game data.
+- An ISO is unpacked once into the BuildRoot (or the export) by `generate` or the launcher; see [Disc images](docs/setup.md#disc-images). The scripts do not download game data.
 
 Full details are in the [setup guide](docs/setup.md).
 

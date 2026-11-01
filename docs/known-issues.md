@@ -129,3 +129,5 @@ build, and reports about them are welcome.
   career.
 - Lap times and handling at 120 or 240 fps against 60 fps.
 - Other GPUs, desktops and processors (see [Tested hardware](#tested-hardware)), HDR displays.
+- Disc images (ISOs) of the Japan/Asia release: the launcher unpacks them as it unpacks the
+  USA ones, which were checked file by file; the Japan/Asia images were not at hand.

@@ -394,7 +394,16 @@ const char* const kPageIds[kPageCount] = {"home",      "display", "look",     "c
 // A setup step's state on the Home page and in the navigation.
 enum class Status { kDone, kOptional, kNeeded, kBusy };
 
-enum DialogTarget { kDisc1, kDisc2, kContentFolder, kContentFiles, kTextureReplace, kTextureDump, kUserData };
+enum DialogTarget {
+  kDisc1,
+  kDisc2,
+  kDiscImage,
+  kContentFolder,
+  kContentFiles,
+  kTextureReplace,
+  kTextureDump,
+  kUserData
+};
 
 class App;
 struct DialogRequest {
@@ -506,6 +515,8 @@ class App {
   void OpenDialog(DialogTarget target, bool folder);
   static void DialogDone(void* userdata, const char* const* files, int filter);
   void ApplyDialogs();
+  void StartUnpack(std::vector<std::string> images);
+  bool UnpackImage(const fs::path& image, std::string& message);
   std::string BindValue(const Bind& bind) const;
   void Muted(const std::string& text);
   void Colored(const ImVec4& color, const std::string& text);
@@ -575,6 +586,14 @@ class App {
   std::mutex shader_mutex_;
   std::string shader_message_;      // shader_mutex_
   void* shader_process_ = nullptr;  // shader_mutex_: the running pass
+  // Disc images (StartUnpack): one task at a time.
+  std::thread image_task_;
+  std::atomic<bool> image_busy_{false}, image_cancel_{false};
+  std::atomic<std::uint64_t> image_done_{0}, image_total_{0};
+  std::mutex image_mutex_;
+  std::string image_label_;    // image_mutex_: the Disc being unpacked
+  std::string image_message_;  // image_mutex_: the last task's result
+  bool image_error_ = false;   // image_mutex_
   std::chrono::steady_clock::time_point started_;
   std::string banner_;
   bool banner_error_ = false;
@@ -1029,6 +1048,9 @@ void App::Run() {
     if (shader_process_) TerminateProcess(shader_process_, 1);
   }
   if (shader_task_.joinable()) shader_task_.join();
+  // An unpack stops; its partial folder is removed by the next one.
+  image_cancel_ = true;
+  if (image_task_.joinable()) image_task_.join();
   if (load_error_.empty()) SaveSettings();
   ImGui_ImplDX11_Shutdown();
   ImGui_ImplSDL3_Shutdown();
@@ -1191,6 +1213,9 @@ void App::OpenDialog(DialogTarget target, bool folder) {
   auto* request = new DialogRequest{this, target};
   if (folder) {
     SDL_ShowOpenFolderDialog(&App::DialogDone, request, window_, nullptr, false);
+  } else if (target == kDiscImage) {
+    static const SDL_DialogFileFilter filters[] = {{"Disc images (ISO)", "iso"}, {"All files", "*"}};
+    SDL_ShowOpenFileDialog(&App::DialogDone, request, window_, filters, 2, nullptr, true);
   } else {
     SDL_ShowOpenFileDialog(&App::DialogDone, request, window_, nullptr, 0, nullptr, true);
   }
@@ -1218,6 +1243,7 @@ void App::ApplyDialogs() {
     switch (target) {
       case kDisc1: settings_.disc1 = paths.front(); break;
       case kDisc2: settings_.disc2 = paths.front(); break;
+      case kDiscImage: StartUnpack(paths); break;
       case kContentFolder:
       case kContentFiles:
         for (const auto& path : paths)
@@ -1230,6 +1256,49 @@ void App::ApplyDialogs() {
     }
     Refresh(false);
   }
+}
+
+// Disc images (UnpackDisc, docs/running.md#gui-launcher): the picked ISOs are unpacked one after
+// the other; each result reaches its Disc's setting through the dialog results.
+void App::StartUnpack(std::vector<std::string> images) {
+  if (image_busy_.exchange(true)) return;
+  if (image_task_.joinable()) image_task_.join();
+  image_task_ = std::thread([this, images = std::move(images)] {
+    std::string messages;
+    bool failed = false;
+    for (const auto& image : images) {
+      std::string message;
+      bool ok = false;
+      try {
+        ok = UnpackImage(PathFromUtf8(ResolvePath(image)), message);
+      } catch (const std::exception& exception) {
+        message = exception.what();
+      }
+      failed = failed || !ok;
+      messages += (messages.empty() ? "" : "\n") + message;
+      if (image_cancel_) break;
+    }
+    {
+      std::lock_guard<std::mutex> lock(image_mutex_);
+      image_message_ = messages;
+      image_error_ = failed;
+      image_label_.clear();
+    }
+    image_busy_ = false;
+  });
+}
+
+bool App::UnpackImage(const fs::path& image, std::string& message) {
+  const DiscUnpack result = UnpackDisc(data_, root_ / "discs", image, image_done_, image_total_, image_cancel_,
+                                       [this](const std::string& label) {
+                                         std::lock_guard<std::mutex> lock(image_mutex_);
+                                         image_label_ = label;
+                                       });
+  message = result.message;
+  if (result.folder.empty()) return false;
+  std::lock_guard lock(dialog_mutex_);
+  dialog_results_.emplace_back(result.disc1 ? kDisc1 : kDisc2, std::vector<std::string>{result.folder});
+  return true;
 }
 
 void App::Muted(const std::string& text) {
@@ -1866,8 +1935,8 @@ void App::HomeMenu() {
       help_title_ = not_ready.empty() ? "Ready to race" : "Almost ready";
       help_ = not_ready.empty() ? "Everything the game needs is in place. Press A, or Start from any page, to race with "
                                   "the profile " + settings_.active + "."
-                                : "Point the launcher at your extracted Disc 1 once; A opens the folder picker. Disc 2 "
-                                  "and downloadable content are optional.";
+                                : "Point the launcher at your extracted Disc 1 once, or unpack its ISO on the Game data "
+                                  "page; A opens the folder picker. Disc 2 and downloadable content are optional.";
       break;
     case kDisplay:
       help_title_ = "Display";
@@ -1884,7 +1953,7 @@ void App::HomeMenu() {
       break;
     case kGameData:
       help_title_ = "Game data";
-      help_ = "Your extracted discs, the downloadable content and a texture pack.";
+      help_ = "Your discs, extracted or as ISOs, the downloadable content and a texture pack.";
       break;
     case kShaders:
       help_title_ = "Shaders";
@@ -3173,6 +3242,21 @@ void App::GameDataRows() {
                         "folder picker, X clears it.",
                         true, disc2_.error.empty() ? &kSuccess : &kDanger))
         Refresh(false);
+      std::string unpacking = "Press A";
+      if (image_busy_) {
+        std::lock_guard<std::mutex> lock(image_mutex_);
+        unpacking = image_label_.empty() ? "Reading"
+                                         : image_label_ + " " +
+                                               std::to_string(image_done_ * 100 / std::max<std::uint64_t>(image_total_, 1)) +
+                                               "%";
+      }
+      // A screenshot never opens a dialog.
+      if (OptionRow("image", "Unpack a disc image (ISO)", unpacking,
+                    "An ISO of Disc 1 or Disc 2, or both picked together: each is unpacked once into the discs folder "
+                    "and set as its Disc. A opens the file picker.",
+                    !image_busy_) == 2 &&
+          !shot_)
+        OpenDialog(kDiscImage, false);
       PathOptionRow("replace", "Texture pack", o.texture_replace, kTextureReplace,
                     "A folder of <hash>.dds files that replace the game's textures. Optional. A opens the folder "
                     "picker, X clears it.",
@@ -3248,6 +3332,24 @@ void App::GameDataRows() {
         else Colored(kDanger, disc2_.error);
         ImGui::Dummy(ImVec2(0, 6 * scale_));
         if (PathField(settings_.disc2)) Refresh(false);
+      } else if (focus_id_ == "image") {
+        std::string message;
+        bool failed = false;
+        {
+          std::lock_guard<std::mutex> lock(image_mutex_);
+          message = image_message_;
+          failed = image_error_;
+        }
+        if (image_busy_)
+          Colored(kFocusColor, "Unpacking: " + FormatSize(image_done_) + " of " + FormatSize(image_total_) + ".");
+        else if (!message.empty())
+          Colored(failed ? kDanger : kSuccess, message);
+        ImGui::Dummy(ImVec2(0, 6 * scale_));
+        std::error_code error;
+        const auto space = fs::space(root_, error);
+        Muted("Unpacked into " + Utf8(root_ / "discs") + (error ? "" : " (" + FormatSize(space.available) + " free)") +
+              ": Disc 1 takes about 7.5 GB, Disc 2 about 3 GB. The Disc's files are checked first, so a wrong "
+              "image stops in seconds. The ISO is not needed afterwards.");
       } else if (focus_id_ == "replace") {
         PathField(o.texture_replace);
       }

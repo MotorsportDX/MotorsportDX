@@ -56,7 +56,7 @@ Hard limits, which every option below keeps:
 | Disc 1 (Play Disc), extracted | Yes | `validate_discs` and `disc_release` in [pipeline.py](../../outputs/FM4-build/pipeline.py); the launcher's port in [discs.cpp](../../work/fm4-launcher/src/discs.cpp) | The three executables (`default.xex`, `XMediaFacade_default.xex`, `SpeechFacade_default.xex`) must match the SHA-256 hashes of one release in `RELEASES`: **USA** (media ID `26FF1101`) or **Japan/Asia** (media ID `633772A0`). A mix, another revision, a title update or a renamed file is refused. `Media` and `Database.xmplr` must be there too |
 | Disc 2, extracted | No (needed for its cars) | `disc2_packages`, `content_error` | The four STFS packages under `content\0000000000000000\4d530910\00000002` |
 | DLC packages | No | `validate_content` | STFS (`CON`, `LIVE`, `PIRS`) with title ID `4D530910` and content type `00000002`; title updates and other titles are skipped ([downloadable content](../setup.md#downloadable-content)) |
-| Disc 1 or Disc 2 as an ISO | Not today | `validate_discs` says "not an ISO" | An optional increment ([7](#7-increments)) and an owner question ([9](#9-decisions-for-the-project-owner)) |
+| Disc 1 or Disc 2 as an ISO | No (either form) | `disc_input` in [pipeline.py](../../outputs/FM4-build/pipeline.py), `UnpackDisc` in the launcher | Unpacked once into `discs\disc1` and `discs\disc2`, then checked as the folders are (B9, done 1 November 2026; [Disc images](../setup.md#disc-images)) |
 
 The releases are the same game: one build serves both ([releases](releases.md)). Title updates are
 not supported ([title updates](title-updates.md)).
@@ -571,7 +571,7 @@ Estimates in AI calendar time (1 person-week ≈ 3.5 h, range 2 to 7 h). B0 is t
 | B6. The package | A `package` action at a tag: the launcher built at the tag (needs only `setup`, no discs), `launcher.json`, `git archive` source, `toolchain.json`, licences and notices, into one zip; an allowlist check of the zip (no BuildRoot file, no executable but `MotorsportDX.exe`, no picture, no DXC, nothing of Microsoft's, a size limit) | 3.5 h | the zip's listing against the allowlist; the zip in the clean account or sandbox of B4 up to a built game |
 | B7. Updates | Pointing a new package at an install; the source swap; `generate` and `build` again; the `user-data` backup | 2 h | an update from one tag to the next on the development computer: the hashes of `user-data` before and after, the shader pass runs again |
 | B8. Second computer | The package on a second Windows computer (the ROG Xbox Ally X or another), run by the owner, from download to a Quick Race, with the build time measured against the estimate of 4.11 | 1 h of notes; the owner's run | the owner's report, as [bug reports](../bug-reports.md) asks |
-| B9 (optional). ISO input | Disc 1 and Disc 2 from Xbox 360 disc images: either unpacked into a folder by a small tool on the runtime's GDFX reader ([disc_image_device.h](../../work/runtime/include/rex/filesystem/devices/disc_image_device.h)), or read in place (the three XEX for `generate`, the runtime mounting the image); needs the owner's yes | 5 h | both releases' images against their extracted folders: the same hashes, the same `generate` output |
+| B9 (optional). ISO input | **Done on 1 November 2026**: Disc 1 and Disc 2 from Xbox 360 disc images, unpacked once into a folder by a GDFX reader of its own in `pipeline.py` and its port in the launcher ([Disc images](../setup.md#disc-images)) | 5 h | the USA images unpack byte-identical to their extracted folders ([status](../status/current.md#disc-images-iso-1-november-2026)); the Japan/Asia images are not checked |
 | B10 (optional). Option B | The shipped runtime, after the licence items of 3.2 | 3.5 h, plus the licence work | a game built against the shipped runtime has the hashes of one built from source |
 
 B1 to B7: about 31.5 h (18 to 63 h). No increment needs a game run on the GPU until B8, whose run is
@@ -865,6 +865,8 @@ and 7 to 11 stay open; they are settled before B6.
    **Decided on 31 October 2026: yes**, the player build skips the developer tests (`--tests
    player`, B1).
 7. **ISO input** (B9): yes or no, and unpacked to a folder or read in place.
+   **Decided on 1 November 2026: yes, unpacked to a folder** ("Bongkar ke folder"); done the same
+   day.
 8. **Code signing** of the package's launcher, or the SmartScreen warning.
 9. **Updates:** a new package by hand (recommended first), or a check of the repository's releases
    from the launcher, which is a network request the player would consent to.

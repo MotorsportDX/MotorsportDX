@@ -9,6 +9,7 @@ from pathlib import Path
 import re
 import shutil
 import stat
+import struct
 import subprocess
 import sys
 import tarfile
@@ -986,7 +987,7 @@ def disc_release(disc1):
 
 def validate_discs(disc1, disc2):
     if not disc1:
-        raise ValueError('Provide -Disc1 with the extracted Play Disc directory, not an ISO.')
+        raise ValueError('Provide -Disc1 with the extracted Play Disc directory or its ISO.')
     disc1 = Path(disc1).resolve()
     disc_release(disc1)
     if not (disc1/'Media').is_dir() or not (disc1/'Database.xmplr').is_file():
@@ -997,6 +998,217 @@ def validate_discs(disc1, disc2):
             if not package.is_file():
                 raise ValueError(f'Missing Disc 2 content package: {package}')
     return disc1, disc2
+
+# Disc images (docs/setup.md#disc-images): an Xbox 360 disc image (an ISO) holds a disc's files
+# in GDFX, the disc's file system. Its volume descriptor is sector 32 of the game partition, which
+# starts at one of the offsets that the runtime's reader tries (DiscImageDevice in
+# work/runtime/src/filesystem/devices, from Xenia); each directory is a table of little-endian
+# entries that form a binary tree. The launcher's ports are iso.cpp and UnpackDisc in discs.cpp.
+GDFX_MAGIC = b'MICROSOFT*XBOX*MEDIA'
+GDFX_OFFSETS = (0x00000000, 0x0000FB20, 0x00020600, 0x02080000, 0x0FD90000)
+GDFX_SECTOR = 2048
+GDFX_DIRECTORY = 0x10
+GDFX_MAX_TABLE = 32 << 20
+GDFX_UNSAFE = set('<>:"/\\|?*')
+
+def disc_image_entries(image):
+    """The directories and files of an Xbox 360 disc image, sorted by path: (relative path with
+    '/', offset, size), with offset None for a directory. Raises ValueError for a file that is
+    not one, a damaged one, or names that are not safe as Windows file names."""
+    image = Path(image)
+    size = image.stat().st_size
+    def damaged(what):
+        return ValueError(f'Damaged disc image ({what}): {image}')
+    with image.open('rb') as stream:
+        def read(offset, length):
+            if offset + length > size:
+                raise damaged('a table beyond its end')
+            stream.seek(offset)
+            return stream.read(length)
+        for base in GDFX_OFFSETS:
+            if base + 33*GDFX_SECTOR <= size and read(base + 32*GDFX_SECTOR, 20) == GDFX_MAGIC:
+                break
+        else:
+            raise ValueError(f'Not an Xbox 360 disc image: {image}')
+        root_sector, root_size = struct.unpack('<II', read(base + 32*GDFX_SECTOR + 20, 8))
+        entries, names, tables = [], set(), set()
+        directories = [('', root_sector, root_size)]
+        while directories:
+            parent, sector, length = directories.pop()
+            if not length:
+                continue
+            if length > GDFX_MAX_TABLE or sector in tables:
+                raise damaged('a directory table')
+            tables.add(sector)
+            table = read(base + sector*GDFX_SECTOR, length)
+            nodes, visited = [0], set()
+            while nodes:
+                ordinal = nodes.pop()
+                at = ordinal*4
+                if ordinal in visited or at + 14 > len(table):
+                    raise damaged('a directory entry')
+                visited.add(ordinal)
+                left, right, entry_sector, entry_size, attributes, name_length = \
+                    struct.unpack_from('<HHIIBB', table, at)
+                raw = table[at + 14:at + 14 + name_length]
+                name = raw.decode('ascii', errors='replace')
+                if (len(raw) != name_length or not name or name in ('.', '..') or name[-1] in ' .'
+                        or any(c in GDFX_UNSAFE or not 32 <= ord(c) <= 126 for c in name)):
+                    raise ValueError(f'Unsupported file name {raw!r} in the disc image {image}')
+                path = f'{parent}/{name}' if parent else name
+                if path.lower() in names:
+                    raise damaged(f'two entries named {path}')
+                names.add(path.lower())
+                if attributes & GDFX_DIRECTORY:
+                    entries.append((path, None, 0))
+                    directories.append((path, entry_sector, entry_size))
+                else:
+                    offset = base + entry_sector*GDFX_SECTOR
+                    if offset + entry_size > size:
+                        raise damaged(f'{path} beyond its end')
+                    entries.append((path, offset, entry_size))
+                nodes += [child for child in (right, left) if child]
+    return sorted(entries)
+
+def unpack_disc_image(image, entries, out, report=None):
+    """Writes entries of disc_image_entries(image) under out; report gets each chunk's size."""
+    with Path(image).open('rb') as stream:
+        for path, offset, size in entries:
+            target = Path(out)/path
+            if offset is None:
+                target.mkdir(parents=True, exist_ok=True)
+                continue
+            target.parent.mkdir(parents=True, exist_ok=True)
+            stream.seek(offset)
+            with target.open('wb') as output:
+                remaining = size
+                while remaining:
+                    chunk = stream.read(min(remaining, 8 << 20))
+                    if not chunk:
+                        raise ValueError(f'The disc image ends inside {path}: {image}')
+                    output.write(chunk)
+                    remaining -= len(chunk)
+                    if report:
+                        report(len(chunk))
+
+def write_disc_image(path, files, base=GDFX_OFFSETS[1]):
+    """A small GDFX disc image for the tests: files maps relative paths with '/' to their bytes,
+    or to None for an empty directory. Each table is a balanced tree of its sorted names."""
+    tree = {}
+    for name, data in files.items():
+        node = tree
+        *parents, leaf = name.split('/')
+        for part in parents:
+            node = node.setdefault(part, {})
+        node.setdefault(leaf, {} if data is None else data)
+    blobs, next_sector = {}, [33]
+    def allocate(data):
+        sector = next_sector[0]
+        next_sector[0] += max(1, -(-len(data)//GDFX_SECTOR))
+        blobs[sector] = data
+        return sector
+    def table(node):
+        order = []
+        def place(names):
+            if not names:
+                return None
+            index = len(order)
+            order.append([names[len(names)//2], None, None])
+            order[index][1] = place(names[:len(names)//2])
+            order[index][2] = place(names[len(names)//2 + 1:])
+            return index
+        place(sorted(node))
+        offsets, at = [], 0
+        for name, _, _ in order:
+            offsets.append(at)
+            at += -(-(14 + len(name))//4)*4
+        data = bytearray()
+        for name, left, right in order:
+            child = node[name]
+            if isinstance(child, dict):
+                child_table = table(child)
+                sector, size, attributes = (allocate(child_table) if child_table else 0), len(child_table), GDFX_DIRECTORY
+            else:
+                sector, size, attributes = allocate(child), len(child), 0
+            entry = struct.pack('<HHIIBB', 0 if left is None else offsets[left]//4,
+                                0 if right is None else offsets[right]//4, sector, size, attributes,
+                                len(name)) + name.encode('ascii')
+            data += entry + b'\xff'*(-len(entry) % 4)
+        return bytes(data)
+    root = table(tree)
+    root_sector = allocate(root)
+    image = bytearray(base + next_sector[0]*GDFX_SECTOR)
+    image[base + 32*GDFX_SECTOR:base + 32*GDFX_SECTOR + 28] = GDFX_MAGIC + struct.pack('<II', root_sector, len(root))
+    for sector, data in blobs.items():
+        image[base + sector*GDFX_SECTOR:base + sector*GDFX_SECTOR + len(data)] = data
+    Path(path).write_bytes(image)
+
+def disc_input(root, disc, name):
+    """The folder of a Disc given to generate (name disc1 or disc2). A folder is returned as it is;
+    a disc image is unpacked once into <BuildRoot>/discs/<name> and that folder is returned. The
+    files that identify the Disc are unpacked and checked first, so a wrong image fails in
+    seconds. <BuildRoot>/discs/<name>.json records the image, so the same image is not unpacked
+    again; the image itself is not needed after that."""
+    if not disc or not Path(disc).is_file():
+        return disc
+    label = 'Disc 1' if name == 'disc1' else 'Disc 2'
+    image = Path(disc).resolve()
+    discs = root/'discs'
+    folder, marker, partial = discs/name, discs/f'{name}.json', discs/f'{name}.partial'
+    info = image.stat()
+    source = {'image': str(image), 'size': info.st_size, 'mtime_ns': info.st_mtime_ns}
+    if folder.is_dir() and marker.is_file() and \
+            json.loads(marker.read_text(encoding='utf-8')).get('source') == source:
+        print(f'{label}: {folder}, unpacked before from {image}.')
+        return folder
+    entries = disc_image_entries(image)
+    files = {path.lower(): (path, offset, size) for path, offset, size in entries if offset is not None}
+    if name == 'disc1':
+        wanted = list(EXECUTABLES)
+    else:
+        wanted = [package.as_posix() for package in disc2_packages(Path())]
+    missing = [path for path in wanted if path.lower() not in files]
+    if missing:
+        raise ValueError(f'{image} is not {label} ({"the Play Disc" if name == "disc1" else "the Content Disc"}): '
+                         f'it has no {missing[0]}.')
+    first = [files[path.lower()] for path in wanted]
+    total = sum(size for _, offset, size in entries if offset is not None)
+    discs.mkdir(parents=True, exist_ok=True)
+    marker.unlink(missing_ok=True)
+    if partial.exists():
+        shutil.rmtree(partial)
+    free = shutil.disk_usage(discs).free
+    if free < total + (1 << 30):
+        raise ValueError(f'Unpacking {label} needs {total/2**30:.1f} GB in {discs}; '
+                         f'{free/2**30:.1f} GB are free.')
+    print(f'Unpacking {label} from {image} into {folder} ({total/2**30:.1f} GB).', flush=True)
+    unpack_disc_image(image, first, partial)
+    try:
+        if name == 'disc1':
+            print(f'{label}: the {disc_release(partial)} release.')
+        else:
+            for package in disc2_packages(partial):
+                error = content_error(package)
+                if error:
+                    raise ValueError(error)
+    except ValueError as error:
+        shutil.rmtree(partial)
+        raise ValueError(f'{image}: {error}') from None
+    done, shown = [sum(size for _, _, size in first)], [0]
+    def report(count):
+        done[0] += count
+        percent = done[0]*100//max(total, 1)
+        if percent >= shown[0] + 10:
+            shown[0] = percent - percent % 10
+            print(f'Unpacking {label}: {shown[0]}%', flush=True)
+    unpack_disc_image(image, [entry for entry in entries if entry not in first], partial, report)
+    if folder.exists():
+        shutil.rmtree(folder)
+    partial.rename(folder)
+    marker.write_text(json.dumps({'source': source, 'files': len(files), 'bytes': total}, indent=1),
+                      encoding='utf-8')
+    print(f'{label}: {len(files)} files unpacked into {folder}.')
+    return folder
 
 # FM4 content packages (Disc 2 and downloadable content) are STFS containers. The header
 # fields are big-endian, at the offsets of the Xbox 360 XContent header.
@@ -3706,16 +3918,39 @@ def launcher_tests(root):
                                                               state.get('content'))]}
     work=root/'launcher-build/tests'
     work.mkdir(parents=True,exist_ok=True)
+    # A synthetic disc image for the port of disc_image_entries and unpack_disc_image.
+    files={'default.xex':b'synthetic executable','Media/Cars/a.bin':bytes(range(256))*20,
+           'Media/Cars/b.bin':b'','Media/Tracks/c.bin':b'track'*1000,'Media/Empty':None,
+           'Database.xmplr':b'database','content/0000000000000000/x':b'package'}
+    write_disc_image(work/'disc-image.iso',files)
+    image={'path':str(work/'disc-image.iso'),'out':str(work/'disc-image'),'other':str(work/'cases.json'),
+           'entries':[[path,offset,size] for path,offset,size in disc_image_entries(work/'disc-image.iso')],
+           'files':{path:hashlib.sha256(data).hexdigest() for path,data in files.items() if data is not None}}
+    # Synthetic Disc images for the launcher's UnpackDisc: a Disc 2 with four packages, and a
+    # Disc 1 whose executables are of no release.
+    header=bytearray(TITLE_ID_OFFSET+4)
+    header[:4]=b'LIVE'
+    header[CONTENT_TYPE_OFFSET:CONTENT_TYPE_OFFSET+4]=MARKETPLACE_CONTENT.to_bytes(4,'big')
+    header[TITLE_ID_OFFSET:TITLE_ID_OFFSET+4]=TITLE_ID.to_bytes(4,'big')
+    write_disc_image(work/'disc2-image.iso',{**{package.as_posix():bytes(header) for package in disc2_packages(Path())},
+                                             'default.xex':b'installer'})
+    write_disc_image(work/'disc1-image.iso',{**{name:b'no release' for name in EXECUTABLES},'Database.xmplr':b''})
+    image['disc2']=str(work/'disc2-image.iso')
+    image['disc1']=str(work/'disc1-image.iso')
+    image['discs']=str(work/'discs')
+    for path in (work/'disc-image',work/'discs'):
+        if path.exists(): shutil.rmtree(path)
     (work/'cases.json').write_text(json.dumps({'root':str(root),'disc1':disc1,
                                                'manifest':str(manifest),'plans':cases,
-                                               'discs':discs},indent=1),encoding='utf-8')
+                                               'discs':discs,'image':image},indent=1),encoding='utf-8')
     (work/'result.json').unlink(missing_ok=True)
     run([root/'game-build'/LAUNCHER_EXE,'--test',work/'cases.json',work/'result.json'],
         cwd=root,log=root/'logs/launcher-tests.log')
     result=json.loads((work/'result.json').read_text(encoding='utf-8'))
     if result.get('failures'):
         raise RuntimeError('Launcher tests failed:\n'+'\n'.join(result['failures'][:20]))
-    print(f'Launcher tests passed: {result["plans"]} plans, discs and {len(discs["packages"])} content packages.')
+    print(f'Launcher tests passed: {result["plans"]} plans, discs, {len(discs["packages"])} content packages '
+          'and a disc image.')
 
 def export(root,out,jobs):
     """A folder that runs the game with MotorsportDX.exe alone (docs/running.md#export-to-another-computer): the
@@ -4024,6 +4259,11 @@ def main():
     if args.content and args.action not in ('generate','all','run'):
         raise ValueError('--content is read by generate, all and run only.')
     if args.action in ('generate','all'):
+        if args.disc1 and any(disc and disc.is_file() for disc in (args.disc1,args.disc2)):
+            root.mkdir(parents=True,exist_ok=True)
+            with progress('stage','discs'):
+                args.disc1=disc_input(root,args.disc1,'disc1')
+                args.disc2=disc_input(root,args.disc2,'disc2')
         discs=validate_discs(args.disc1,args.disc2)
         validate_content(discs[1],args.content)
     root.mkdir(parents=True,exist_ok=True)

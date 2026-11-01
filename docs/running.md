@@ -107,7 +107,7 @@ that has none ([distribution](sources-and-licensing.md#distribution)).
 | Display | Three tabs of option rows. **Screen:** the screen (`-Display`), fullscreen, the render scale and supersample. **Performance:** the upscaler (`-Upscale`), the race frame rate in steps of 30, 60, 90, 120, 144 and 240 fps (a rate saved before keeps showing until it is changed), VSync and the race quality. With the upscaler on and a look whose anti-aliasing is TAA, a row "Use FSR 3.1 for the upscaler" sets `aa=fsr` in the profile's look. **Extras:** the rear-view mirror every frame, the settings overlay at start and the menus at the render scale. The right panel shows the render scale and the upscaler's lines that the options give. |
 | Look | Six tabs of option rows. **Preset:** the preset (`aces`, `gt`, `neutral`, GT7 style `gt7`, FM2023 style `fm2023`, `original`, `original` without TAA, or a saved look; changing it drops the knob changes), the tone curve, temporal anti-aliasing and its method (TAA, FSR 3.1 or TAAU, `aa`), the exposure speed of 60 fps (`adaptation`), **Save as look**, which keeps the current value under a name, **Delete this look** for a saved look, after a confirmation, and **Reset all changes**. **Picture, Lighting, Car, Sky & foliage and Road:** a slider row for each [look knob](running-look.md#look) of that group, which left and right step by about a fortieth of its range; the right panel says what the knob does and the preset's value. |
 | Controls | Five tabs of option rows. **Controller:** the options of `-Pad` (the pad driver, rumble strength, trigger rumble and its strength, the steering anti-deadzone, the input thread, then the stick and trigger shaping and the extra buttons); see [Controller](running-controls.md#controller). **Racing wheel:** the wheel in the game (`-Wheel`: steering, the three pedals, the buttons and force feedback), with the steering's or the focused pedal's value at the right while the wheel test runs; see [Racing wheel in the game](running-controls.md#racing-wheel-in-the-game). **Wheel test:** the [wheel test](running-controls.md#racing-wheel-test), with the device and its axes, buttons and force at the right. **Keyboard:** the options of `-Keyboard` (smooth steering and pedals, their rates and the precision share, then the mouse and the deadzones); see [Keyboard](running-controls.md#keyboard). **Key bindings:** the keyboard bindings, by their function in the game's DEFAULT LAYOUT 1 (the runtime's `keybind_*` settings). A waits for a key, which replaces the keys; several keys are typed in the field at the right, separated by commas, with modifiers written as `Shift+Up`. Unknown key names are marked and block Play. A connected controller needs no setup. |
-| Game data | Two tabs. **Discs:** Disc 1 and Disc 2, checked as `generate` checks them, and the texture pack (the `-TextureReplace` folder). A opens the folder picker, X clears Disc 2 or the texture pack, and the right panel shows the check's result and a field to type the folder. **Content:** rows that add downloadable content folders and files, the folders and files searched (A removes one from the list), and the content packages found, with their import state; A on an imported package removes the import from the user data after a confirmation (see [Data directories](#data-directories)). The right panel shows the package's path and size and what the next Play imports. |
+| Game data | Two tabs. **Discs:** Disc 1 and Disc 2, checked as `generate` checks them, **Unpack a disc image (ISO)**, and the texture pack (the `-TextureReplace` folder). A opens the folder picker, X clears Disc 2 or the texture pack, and the right panel shows the check's result and a field to type the folder. On **Unpack a disc image (ISO)**, A opens the file picker for one ISO or both: each is recognised as Disc 1 or Disc 2 by its files and unpacked in the background into `discs\disc1` or `discs\disc2` of the export folder (or the BuildRoot), as `generate` does ([Disc images](setup.md#disc-images)); the row shows the percentage, and when it is done the Disc is set to that folder. A wrong image or another release stops in seconds, and the same image is not unpacked twice. A Disc set to a file is refused with a pointer to this row. **Content:** rows that add downloadable content folders and files, the folders and files searched (A removes one from the list), and the content packages found, with their import state; A on an imported package removes the import from the user data after a confirmation (see [Data directories](#data-directories)). The right panel shows the package's path and size and what the next Play imports. |
 | Shaders | Rows for the shader pass's state, **Compile shaders**, **Skip** and the DirectX Shader Compiler (A fetches it when it is not beside the game), with the pass's progress at the right; see [Shaders page](#shaders-page). |
 | Advanced | The **General** tab: the user data folder (A opens the folder picker, X goes back to the default), rows that open the logs and the user data, and **Show developer options**, which adds a **Developer** tab. |
 | About | Motorsport DX and its build date, with the non-affiliation line at the right; a row for each project that made it possible (the ReXGlue SDK, Xenia, XenonRecomp and the others of [CREDITS.txt](../outputs/FM4-build/CREDITS.txt)), which says at the right what it gave; and rows that open `CREDITS.txt` and the `third-party-notices` folder beside the launcher. |
@@ -152,8 +152,9 @@ presets, the releases and the content package checks) into `BuildRoot\launcher.j
 and the launcher's code ([work/fm4-launcher](../work/fm4-launcher)) is a port of
 `launch_plan`. Every `build` compares the two: the launcher tests compute the cvars,
 the environment and the display description of 62 sets of options (RTV, `-Rov` and
-`-Native`) on nine monitors with both (558 plans), and check the Discs and content packages
-of `local.json` with both. A difference fails the build.
+`-Native`) on nine monitors with both (558 plans), check the Discs and content packages
+of `local.json` with both, and read and unpack synthetic disc images with the launcher's
+port of the ISO reader. A difference fails the build.
 
 The launcher was `fm4_launcher.exe` until 26 October 2026. `build` and `export` now remove that
 old file from `game-build` and from an earlier export, so a shortcut to it stops working
@@ -258,8 +259,10 @@ On the other computer:
    build (llvm-mingw, since 1 November 2026): its C++ runtime is in `game-build`. An export of an
    `-Abi msvc` build, or of a build before 1 November 2026, needs the Microsoft Visual C++
    2015-2022 Redistributable (x64), recent enough to have `MSVCP140_ATOMIC_WAIT.dll`.
-2. Copy the export folder and your extracted discs to it.
-3. Start `MotorsportDX.exe`, set Disc 1, Disc 2 and the content on the Game data page,
+2. Copy the export folder and your discs to it, extracted or as ISOs.
+3. Start `MotorsportDX.exe`, set Disc 1, Disc 2 and the content on the Game data page
+   (for ISOs, **Unpack a disc image (ISO)** unpacks them into the export's `discs` folder,
+   about 10.5 GB for both),
    let the Shaders page run the shader pass (it fetches the DirectX Shader Compiler first,
    32 MB, when the computer is online), and press Play. The first Play imports Disc 2 and the content packages into
    `user-data` in the export folder; it needs free space of about the size of the
@@ -787,7 +790,8 @@ the GUI launcher of an [export](#export-to-another-computer), which has the same
   stay installed when a later run no longer lists them. To remove one, delete its
   directory, its marker and its `.header` file in `4D530910\Headers\00000002`.
 - **Discs:** the discs are read in place. Writes relative to the game directory are
-  disabled (`allow_game_relative_writes=false`).
+  disabled (`allow_game_relative_writes=false`). Discs given as ISOs are unpacked once
+  into `BuildRoot\discs` (or the export's `discs`), and that folder is read in place.
 - **Cache:** game and shader cache files are in `BuildRoot\cache`.
 - **Logs:** the launcher log is `BuildRoot\logs\play.log`, and the runtime log is
   `BuildRoot\logs\runtime.log`.

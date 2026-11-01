@@ -23,6 +23,7 @@ set(IMGUI_DIR "${FM4_THIRDPARTY}/imgui")
 add_executable(fm4_launcher WIN32
     src/app.cpp
     src/discs.cpp
+    src/iso.cpp
     src/plan.cpp
     src/runner.cpp
     src/screenshot.cpp
