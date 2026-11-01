@@ -5,7 +5,8 @@ player from their own discs to a built, running Motorsport DX on their own Windo
 written as a design, with no code changed, nothing downloaded and no game or GPU run. Sizes and
 licence terms that only a download could confirm are marked "not checked". The owner decided its
 first questions on 31 October 2026 (section [9](#9-decisions-for-the-project-owner)), and
-increments B1 to B3 are done (section [7](#7-increments)). The same day the owner chose route (c)
+increments B1 to B3, B5 and B6 are done (section [7](#7-increments)); the owner's run of the
+package on a second computer (B8) is next. The same day the owner chose route (c)
 for the compiler's libraries: the build moved to llvm-mingw, which replaces increment B4 and every
 Microsoft package of this note ([4.7](#47-the-msvc-libraries-and-the-windows-sdk)). Sections 4.1,
 4.2 and 4.10 describe the design before that choice.
@@ -569,7 +570,7 @@ Estimates in AI calendar time (1 person-week ≈ 3.5 h, range 2 to 7 h). B0 is t
 | B3. The portable tools (**done** on 31 October 2026, [results](#b3-results-31-october-2026)) | `toolchain.json` (asset, size, SHA-256, licence, unpack rule) for Python (embeddable), CMake, Ninja and LLVM, each downloaded once with the owner's approval to pin it; the unpackers; detection of installed tools; the resolve shaders through `D3DCompile` instead of `fxc.exe`; `doctor` without `link`, `fxc.exe` and `vswhere` | 5 h | the `D3DCompile` headers against the `fxc.exe` ones on the development computer; `all` with only the portable tools and Visual Studio's libraries |
 | B4. Microsoft's libraries (**replaced** on 31 October 2026 by route (c), llvm-mingw: [4.7](#47-the-msvc-libraries-and-the-windows-sdk)) | Route (b) after the licence reading: the manifest reader, the pinned package list (MSVC 14.44 x64, Windows SDK 10.0.26100), the licence page, the VSIX, MSI and CAB unpacking, `INCLUDE` and `LIB`, the app-local C++ runtime DLLs; route (a) as the fallback | 7 h | `all` in a Windows account or sandbox without Visual Studio, LLVM, Python or Git (Windows Sandbox on Windows 11 Pro is an optional feature the owner turns on, or a VM), then the instruction tests; a game run there is the main session's call under the GPU rules |
 | B5. Builder mode in the launcher (**done** on 1 November 2026, [results](#b5-results-1-november-2026)) | The Build page and wizard, consent, progress, plain errors, resume, logs, keep-awake; the launcher with a static C++ runtime; `--screenshot build` and `--state builder` for reviews | 7 h | the launcher tests; screenshots at scale 1 and 1.5 (WARP); a full build through the launcher into a new install root on the development computer |
-| B6. The package | A `package` action at a tag: the launcher built at the tag (needs only `setup`, no discs), `launcher.json`, `git archive` source, `toolchain.json`, licences and notices, into one zip; an allowlist check of the zip (no BuildRoot file, no executable but `MotorsportDX.exe`, no picture, no DXC, nothing of Microsoft's, a size limit) | 3.5 h | the zip's listing against the allowlist; the zip in the clean account or sandbox of B4 up to a built game |
+| B6. The package (**done** on 1 November 2026, [results](#b6-results-1-november-2026)) | A `package` action at a tag: the launcher built at the tag (needs only `setup`, no discs), `launcher.json`, `git archive` source, `toolchain.json`, licences and notices, into one zip; an allowlist check of the zip (no BuildRoot file, no executable but `MotorsportDX.exe`, no picture, no DXC, nothing of Microsoft's, a size limit) | 3.5 h | the zip's listing against the allowlist; the zip in the clean account or sandbox of B4 up to a built game |
 | B7. Updates | Pointing a new package at an install; the source swap; `generate` and `build` again; the `user-data` backup | 2 h | an update from one tag to the next on the development computer: the hashes of `user-data` before and after, the shader pass runs again |
 | B8. Second computer | The package on a second Windows computer (the ROG Xbox Ally X or another), run by the owner, from download to a Quick Race, with the build time measured against the estimate of 4.11 | 1 h of notes; the owner's run | the owner's report, as [bug reports](../bug-reports.md) asks |
 | B9 (optional). ISO input | **Done on 1 November 2026**: Disc 1 and Disc 2 from Xbox 360 disc images, unpacked once into a folder by a GDFX reader of its own in `pipeline.py` and its port in the launcher ([Disc images](../setup.md#disc-images)) | 5 h | the USA images unpack byte-identical to their extracted folders ([status](../status/current.md#disc-images-iso-1-november-2026)); the Japan/Asia images are not checked |
@@ -875,6 +876,79 @@ Not verified in B5: a download over the network (every file came from a mirror; 
 of Python and the pipeline's HTTPS were not exercised), the download rows pressed one by one,
 Pause and Retry in a real run (the code paths are the job object and the markers), the battery
 warning, a slow computer, and a game run of the build (not part of B5).
+
+### B6 results (1 November 2026)
+
+What B6 added is documented in [setup, the builder package](../setup.md#the-builder-package):
+the `package` action and its allowlist, and the `launcher` action
+([builder.py](../../outputs/FM4-build/builder.py)), with `package-readme.txt` as the package's
+README for players and the package in [distribution](../sources-and-licensing.md#distribution).
+
+- **The package of `3dd063e`**, made with `package --revision 3dd063e --out D:\FM4-export
+  --build-root I:\FM4-build-b6pkg --toolchain I:\FM4-toolchain-m1` and the local mirrors:
+  `D:\FM4-export\MotorsportDX-3dd063e.zip`, 7,729,465 bytes, 1,307 files under the top folder
+  `MotorsportDX-3dd063e`, 27,198,629 bytes unpacked:
+
+  | Entry | Files | Bytes |
+  | --- | --- | --- |
+  | `MotorsportDX.exe` | 1 | 7,053,312 |
+  | `source\` (the commit's 1,269 files and `source-stamp.json`) | 1,270 | 19,951,895 |
+  | `third-party-notices\` | 31 | 155,941 |
+  | `launcher.json`, `toolchain.json`, `README.txt`, `LICENSE.txt`, `CREDITS.txt` | 5 | 37,481 |
+
+  The allowlist passed: no other file, the source exactly the commit's files, no program but the
+  launcher, no picture, no BuildRoot or install file, no DXC or other Microsoft file, under
+  40 MiB, and the launcher's 30 imports all Windows' own. The first package, of `987013a`, failed
+  it: running the snapshot's pipeline had written `__pycache__` into its source. The package now
+  runs that pipeline with `python -I -B`.
+- **The package built through its launcher with a scrubbed environment.** The zip unpacked into
+  the new folder `I:\FM4-b6-install`, `build\launcher-settings.json` with the USA Disc 1 and
+  Disc 2, and `MotorsportDX.exe --build` started with an environment of Windows' own variables, the
+  user's folders and the local mirrors only: `PATH` was `C:\Windows\System32;C:\Windows`, with no
+  `INCLUDE`, `LIB`, Python, Git, CMake, Ninja or LLVM. Every file came from a mirror (Python by the
+  launcher, the 18 others logged in `build\logs\downloads.log`). From the builder's log: the
+  downloads, the preflight and the tools 6 s, `setup` 208 s, `generate` 35 s, `build --tests player`
+  178 s, 430 s to the hand-over. `build-result.json` names `3dd063e`, `dirty` false; the launcher
+  tests passed (558 plans). The launcher of the build then ran its shader pass to the end in 57 s
+  (`shader-pass.done` written; it imported Disc 2's four packages, inventoried the discs' 999
+  shader files and compiled none on the new profile), which B5's run had stopped on the missing
+  `content-packages.txt`.
+- **What the scrubbed run cannot prove.** Visual Studio, the Windows SDK, LLVM, Python, Git and
+  CMake stay installed on this computer; the run only kept them off `PATH` and out of the
+  environment. llvm-mingw does not look for them by itself (its search paths are its own, B5
+  results); CMake was the toolchain's own (`--toolchain`), and `tool_folders` is not consulted with
+  `--portable`. What a clean computer could still lack (a GPU driver's Direct3D 12, the Universal
+  CRT on Windows 10, `d3dcompiler_47.dll`, which Windows 10 and 11 carry) and every network fetch
+  remain for B8, the owner's run on the ROG Xbox Ally X.
+
+Not verified in B6: the downloads over the network, a computer without the development tools,
+Windows 10, the package's README read by a player.
+
+### The owner's run (B8): checklist
+
+For the ROG Xbox Ally X, on AC power, with the internet on. The package is
+`MotorsportDX-3dd063e.zip`.
+
+1. Copy the zip to the Ally X and unpack it into a short folder that no cloud service syncs, for
+   example `C:\MotorsportDX` (not the Desktop, Documents or OneDrive).
+2. Open the folder and start `MotorsportDX.exe`. Windows may warn about an unknown program
+   (SmartScreen); note what it says, then choose to run it anyway.
+3. The launcher opens on Build, Welcome. Note the free disk space it shows (20 GB are needed).
+4. Your discs: choose Disc 1 (the extracted folder, or Unpack a disc image for an ISO), and
+   Disc 2 if you have it. Both rows must turn green.
+5. Downloads: press Download all. Note how long the downloads take and any row that fails.
+6. Build: press Start the build. Note each step's time on the screen; the whole build is
+   expected to take about 25 to 45 minutes there. Keep the launcher in front; the computer should
+   not go to sleep.
+7. When the build is done, the game's own launcher opens by itself and compiles the shaders once.
+   Let it finish.
+8. Press Play, run a Quick Race, then quit the game.
+9. Close the launcher and start `MotorsportDX.exe` in the folder again: the game's launcher should
+   open directly.
+10. If anything fails: on the Build screen press Copy details and paste the text into the report,
+    and attach `logs\builder.log` and the log that Open log shows ([bug reports](../bug-reports.md)).
+11. Report: the times of steps 5 and 6, the SmartScreen message, whether anything needed doing by
+    hand, and how the Quick Race ran.
 
 ## 8. Risks
 
