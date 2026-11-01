@@ -30,6 +30,7 @@
 !/.claude/
 !/.claude/skills/
 !/.claude/skills/**
+!/outputs/FM4-build/builder.py
 !/outputs/FM4-build/CREDITS.txt
 !/outputs/FM4-build/Build.ps1
 !/outputs/FM4-build/dump-image.cpp
@@ -68,6 +69,7 @@
 !/outputs/FM4-build/fm4_prior_cfg.toml
 !/outputs/FM4-build/guard-generated.py
 !/outputs/FM4-build/loader/CMakeLists.txt
+!/outputs/FM4-build/package-readme.txt
 !/outputs/FM4-build/pipeline.py
 !/outputs/FM4-build/prepare.py
 !/outputs/FM4-build/rexglue.cmake
@@ -116,6 +118,8 @@
 !/work/fm4-rex/CMakeLists.txt
 !/work/fm4-launcher/CMakeLists.txt
 !/work/fm4-launcher/src/app.cpp
+!/work/fm4-launcher/src/builder.cpp
+!/work/fm4-launcher/src/builder.h
 !/work/fm4-launcher/src/discs.cpp
 !/work/fm4-launcher/src/discs.h
 !/work/fm4-launcher/src/iso.cpp

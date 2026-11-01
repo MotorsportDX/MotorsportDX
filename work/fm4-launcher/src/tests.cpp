@@ -2,10 +2,12 @@
 // (launcher_tests). The cases hold pipeline.py's launch plans of a set of options on a set of
 // monitors and its check of the Discs and content of local.json; the result lists every
 // difference of this port.
+#include <algorithm>
 #include <fstream>
 #include <map>
 #include <set>
 
+#include "builder.h"
 #include "discs.h"
 #include "iso.h"
 #include "settings.h"
@@ -123,6 +125,46 @@ int RunTests(const std::filesystem::path& cases_path, const std::filesystem::pat
   unpacked_disc = unpack("path");
   if (!unpacked_disc.folder.empty() || unpacked_disc.message.find("neither") == std::string::npos)
     failures.push_back("Disc image of neither Disc: " + unpacked_disc.message);
+  // Builder mode (builder.h): launcher.json's downloads and steps, the progress lines of
+  // pipeline.py's progress(), Ninja's progress, and the plain words of the pipeline's errors.
+  const Json& builder = cases.at("builder");
+  try {
+    const std::vector<Download> downloads = ReadDownloads(data.json.at("builder"));
+    std::vector<std::string> ids;
+    for (const auto& item : downloads) {
+      ids.push_back(item.id);
+      if (item.files.empty() || item.size == 0 || item.host.empty() || item.license_link.empty())
+        failures.push_back("Builder download " + item.id + ": incomplete");
+    }
+    if (Json(ids) != builder.at("items")) failures.push_back("Builder downloads: " + Json(ids).dump());
+    std::vector<std::string> steps;
+    for (const auto& step : data.json.at("builder").at("steps")) steps.push_back(step.at("id"));
+    if (Json(steps) != builder.at("steps")) failures.push_back("Builder steps: " + Json(steps).dump());
+  } catch (const std::exception& error) {
+    failures.push_back(std::string("Builder data: ") + error.what());
+  }
+  const Json& lines = builder.at("progress");
+  const Json& expected_lines = builder.at("expected");
+  if (lines.size() != expected_lines.size()) failures.push_back("Builder progress: " + lines.dump());
+  for (size_t i = 0; i < std::min(lines.size(), expected_lines.size()); ++i) {
+    ProgressLine line;
+    const Json& want = expected_lines.at(i);
+    const std::string event = want.at(0).get<std::string>();
+    if (!ParseProgressLine(lines.at(i).get<std::string>(), line) || line.event != event ||
+        (event == "stage" ? line.stage : line.step) != want.at(1).get<std::string>() ||
+        line.state != want.at(2).get<std::string>() || line.error.empty() == want.at(3).get<bool>())
+      failures.push_back("Builder progress line: " + lines.at(i).get<std::string>());
+  }
+  int compiled = 0, compiles = 0;
+  if (!NinjaProgress("[1/9] Building CXX\n[47/1187] Linking x\nwarning: [3/4]\n", compiled, compiles) ||
+      compiled != 47 || compiles != 1187 || NinjaProgress("no progress\n", compiled, compiles))
+    failures.push_back("Builder Ninja progress: " + std::to_string(compiled) + "/" + std::to_string(compiles));
+  for (const auto& error : builder.at("errors")) {
+    const PlainError plain = Explain(error.at(0).get<std::string>(), error.at(1).get<std::string>());
+    if (plain.text.empty() || plain.action.empty() || plain.screen != error.at(2).get<std::string>())
+      failures.push_back("Builder error '" + error.at(0).get<std::string>() + "': '" + plain.text + "' on '" +
+                         plain.screen + "'");
+  }
   std::ofstream result(result_path, std::ios::binary | std::ios::trunc);
   result << Json{{"plans", plans}, {"failures", failures}}.dump(1);
   return result ? 0 : 1;

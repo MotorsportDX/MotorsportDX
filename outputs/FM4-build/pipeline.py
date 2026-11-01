@@ -2,6 +2,7 @@
 import argparse
 import contextlib
 import hashlib
+import io
 import json
 import math
 import os
@@ -22,6 +23,8 @@ HERE = Path(__file__).resolve().parent
 # ._pth file, without the script's folder; so does -I.
 if str(HERE) not in sys.path:
     sys.path.insert(0,str(HERE))
+# builder.py imports this module by name: run as a script, it is that module too.
+sys.modules.setdefault('pipeline',sys.modules[__name__])
 from prepare import write_switches
 
 REPO = HERE.parents[1]
@@ -1424,7 +1427,7 @@ def download_archive(repository,commit,downloads,log,mirror=None):
     """<downloads>/<owner>-<repo>-<commit>.tar.gz, GitHub's archive of the commit, kept for later
     runs: fetched only when missing, from mirror first when it is a local file (another URL of
     the archive is tried after GitHub). Its files are checked when they are unpacked."""
-    path=Path(downloads)/f'{repository.replace("/","-")}-{commit}.tar.gz'
+    path=Path(downloads)/archive_name(repository,commit)
     if path.is_file():
         return path
     path.parent.mkdir(parents=True,exist_ok=True)
@@ -1472,16 +1475,35 @@ def place(source,target):
     target.parent.mkdir(parents=True,exist_ok=True)
     os.replace(source,target)
 
+def thirdparty_archives():
+    """The archives of --fetch archive as (folder, repository, commit, tree, select): the SDK's for
+    THIRDPARTY_VENDORED, then THIRDPARTY_ARCHIVES' for the submodules."""
+    return [('',SDK_REPOSITORY,SDK_REV,SDK_TREE,[f'thirdparty/{name}/' for name in THIRDPARTY_VENDORED]),
+            *[(folder,repository,commit,tree,None) for folder,repository,commit,tree in THIRDPARTY_ARCHIVES]]
+
+def archive_name(repository,commit):
+    """The file name of GitHub's archive of a commit in <BuildRoot>/downloads."""
+    return f'{repository.replace("/","-")}-{commit}.tar.gz'
+
+def download_archives(root,log):
+    """Every archive of thirdparty_archives in <BuildRoot>/downloads (download_archive), from the
+    folder ARCHIVE_MIRROR first when it holds the archive under its own name."""
+    mirror=os.environ.get('ARCHIVE_MIRROR')
+    paths=[]
+    for _,repository,commit,_,_ in thirdparty_archives():
+        local=Path(mirror)/archive_name(repository,commit) if mirror else None
+        paths.append(download_archive(repository,commit,root/'downloads',log,
+                                      str(local) if local and local.is_file() else None))
+    return paths
+
 def fetch_thirdparty_archives(root,destination):
     """--fetch archive: the SDK's archive for THIRDPARTY_VENDORED and THIRDPARTY_ARCHIVES' archives
     for the submodules, each checked against its pin, into destination."""
-    archives=[('',SDK_REPOSITORY,SDK_REV,SDK_TREE,[f'thirdparty/{name}/' for name in THIRDPARTY_VENDORED]),
-              *[(folder,repository,commit,tree,None) for folder,repository,commit,tree in THIRDPARTY_ARCHIVES]]
+    archives=thirdparty_archives()
     log=root/'logs/thirdparty-download.log'
     log.parent.mkdir(parents=True,exist_ok=True)
     with progress('step','thirdparty-download',log):
-        paths=[download_archive(repository,commit,root/'downloads',log)
-               for _,repository,commit,_,_ in archives]
+        paths=download_archives(root,log)
     log=root/'logs/thirdparty-unpack.log'
     stage=destination/'.fm4-unpack'
     with progress('step','thirdparty-unpack',log):
@@ -3734,7 +3756,9 @@ def launcher_data():
                         for name,info in RELEASES.items()},
             'content':{'title_id':TITLE_ID,'content_type':MARKETPLACE_CONTENT,
                        'magics':[magic.decode() for magic in STFS_MAGICS],
-                       'content_type_offset':CONTENT_TYPE_OFFSET,'title_id_offset':TITLE_ID_OFFSET}}
+                       'content_type_offset':CONTENT_TYPE_OFFSET,'title_id_offset':TITLE_ID_OFFSET},
+            'builder':{'layout':builder.BUILDER_LAYOUT,'downloads':builder.builder_downloads(),
+                       'steps':[{'id':step,'seconds':seconds} for step,seconds in builder.BUILDER_STEPS]}}
 
 def write_launcher_data(directory):
     """directory/launcher.json (launcher_data): pure project data, so the launcher-data action
@@ -3793,19 +3817,23 @@ def launcher_build_directory(root):
             return root/f'launcher-build-{REPO.name}'
     return build
 
-def build_launcher(root,jobs):
+def build_launcher(root,jobs,stage=True,build=None):
     """MotorsportDX.exe (work/fm4-launcher) against the installed runtime's SDL3 and the runtime
-    source's Dear ImGui and JSON header, into game-build; its files into the BuildRoot."""
-    build=launcher_build_directory(root)
+    source's Dear ImGui and JSON header, in build (default launcher_build_directory); with stage,
+    into game-build and its files into the BuildRoot. Returns the built program. It needs setup
+    only: the launcher action builds it without a game, for the builder package."""
+    build=build or launcher_build_directory(root)
     run(['cmake','-S',LAUNCHER_DIRECTORY,'-B',build,'-G','Ninja','-DCMAKE_BUILD_TYPE=Release',
          *compilers('CXX','C'),
          '-DCMAKE_CXX_FLAGS=-march=x86-64-v2','-DCMAKE_C_FLAGS=-march=x86-64-v2',
          f'-DCMAKE_PREFIX_PATH={root/"runtime-install"}',
          f'-DFM4_THIRDPARTY={root/"runtime-source/thirdparty"}'],log=root/'logs/launcher-configure.log')
     run(['cmake','--build',build,'--parallel',jobs],log=root/'logs/launcher-build.log')
-    shutil.copyfile(build/LAUNCHER_EXE,root/'game-build'/LAUNCHER_EXE)
-    (root/'game-build'/OLD_LAUNCHER_EXE).unlink(missing_ok=True)
-    stage_launcher_files(root)
+    if stage:
+        shutil.copyfile(build/LAUNCHER_EXE,root/'game-build'/LAUNCHER_EXE)
+        (root/'game-build'/OLD_LAUNCHER_EXE).unlink(missing_ok=True)
+        stage_launcher_files(root)
+    return build/LAUNCHER_EXE
 
 # Options of the launcher tests: each with each monitor (width, height, DPI scale, refresh Hz,
 # VRR min Hz, VRR max Hz, integrated GPUs only; the main PC's panel, a fixed 60 Hz screen, a
@@ -3942,7 +3970,9 @@ def launcher_tests(root):
         if path.exists(): shutil.rmtree(path)
     (work/'cases.json').write_text(json.dumps({'root':str(root),'disc1':disc1,
                                                'manifest':str(manifest),'plans':cases,
-                                               'discs':discs,'image':image},indent=1),encoding='utf-8')
+                                               'discs':discs,'image':image,
+                                               'builder':builder.builder_test_cases(state,work)},indent=1),
+                                   encoding='utf-8')
     (work/'result.json').unlink(missing_ok=True)
     run([root/'game-build'/LAUNCHER_EXE,'--test',work/'cases.json',work/'result.json'],
         cwd=root,log=root/'logs/launcher-tests.log')
@@ -4058,12 +4088,15 @@ def launch_cvars(root,disc1,log_file):
             'keybind_rstick_right':'L','keybind_lstick_press':'F','keybind_rstick_press':'H',
             'log_file':log_file}
 
+# The builder installer's downloads, the download and package actions (builder.py).
+import builder
+
 def main():
     global PROGRESS,FETCH,ABI
     parser=argparse.ArgumentParser(description=__doc__)
     parser.add_argument('action',choices=['doctor','setup','generate','build','all','run','warmcache',
                                           'profbuild','export','preflight','launcher-data','snapshot',
-                                          'toolchain'])
+                                          'toolchain','download','launcher','package'])
     parser.add_argument('--build-root',type=Path,default=REPO/'work/portable-fm4')
     parser.add_argument('--disc1',type=Path)
     parser.add_argument('--disc2',type=Path)
@@ -4074,9 +4107,13 @@ def main():
     parser.add_argument('--out',type=Path,
                         help='export: the folder to export the game and its GUI launcher to; '
                              'launcher-data: the folder of launcher.json (default the BuildRoot); '
-                             'snapshot: the new folder of the source snapshot')
+                             'snapshot: the new folder of the source snapshot; launcher: a folder '
+                             'to copy the program into; package: the folder of the zip')
     parser.add_argument('--revision',default='HEAD',
-                        help='snapshot: the commit to snapshot (default HEAD)')
+                        help='snapshot, package: the commit (default HEAD)')
+    parser.add_argument('--item',action='append',
+                        help='download: one of '+', '.join(builder.BUILDER_ITEMS)+' or all; repeatable '
+                             '(docs/setup.md#builder-downloads)')
     parser.add_argument('--progress',
                         help='setup, generate, build, all: append a JSON line for each stage and step '
                              "to this file, or to the output with '-' (docs/setup.md#progress-lines)")
@@ -4192,7 +4229,7 @@ def main():
                              "put that folder's tools (its toolchain-state.json) first on PATH "
                              '(docs/setup.md#portable-tools)')
     parser.add_argument('--downloads',type=Path,
-                        help="toolchain: the folder of the tools' archives (default "
+                        help="toolchain, download: the folder of the tools' archives (default "
                              '<toolchain>/downloads), kept for later runs')
     parser.add_argument('--portable',action='store_true',
                         help='toolchain: fetch and unpack every tool, also where an installed copy '
@@ -4241,6 +4278,17 @@ def main():
         else:
             Path(args.progress).parent.mkdir(parents=True,exist_ok=True)
             PROGRESS=open(args.progress,'a',encoding='utf-8')
+    if args.action=='download':
+        if not args.item:
+            raise ValueError('download needs --item.')
+        with progress('stage','downloads'):
+            builder.download(root,args.item,args.downloads or (args.toolchain/'downloads' if args.toolchain else None))
+        return
+    if args.action=='package':
+        if not args.out:
+            raise ValueError('package needs --out, the folder of the zip.')
+        builder.package(root,args.out,args.revision,args.jobs,args.toolchain)
+        return
     if args.action=='toolchain':
         if not args.toolchain:
             raise ValueError('toolchain needs --toolchain, the folder of the portable tools.')
@@ -4268,7 +4316,7 @@ def main():
         validate_content(discs[1],args.content)
     root.mkdir(parents=True,exist_ok=True)
     check_layout(root)
-    if args.action in ('setup','generate','build','all','profbuild'):
+    if args.action in ('setup','generate','build','all','profbuild','launcher'):
         check_abi(root)
     fsr=None if args.fsr is None else args.fsr=='on'
     if args.action in ('setup','all'):
@@ -4286,6 +4334,17 @@ def main():
                                      args.shader_dev,args.texture_dump,args.texture_replace,args.msaa,
                                      args.native,args.msaa_samples,args.vsync,args.pad,
                                      args.upscale,args.keyboard,args.entry0,args.wheel)
+    if args.action=='launcher':
+        if not (root/'setup-complete.json').is_file():
+            raise RuntimeError('Run setup first.')
+        # A clean build of the program the package ships.
+        shutil.rmtree(root/'launcher-package',ignore_errors=True)
+        with progress('stage','launcher'):
+            program=build_launcher(root,args.jobs,stage=False,build=root/'launcher-package')
+        if args.out:
+            args.out.mkdir(parents=True,exist_ok=True)
+            shutil.copyfile(program,args.out/LAUNCHER_EXE)
+        print(f'Built {program}.')
     if args.action=='warmcache': warm_cache(root)
     if args.action=='profbuild': build_profiling(root,args.jobs)
     if args.action=='export':

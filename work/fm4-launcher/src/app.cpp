@@ -22,6 +22,7 @@
 #include <mutex>
 #include <optional>
 #include <set>
+#include <span>
 #include <sstream>
 #include <thread>
 
@@ -34,6 +35,7 @@
 
 #include <rex/input/wheel/wheel_host.h>
 
+#include "builder.h"
 #include "discs.h"
 #include "runner.h"
 #include "screenshot.h"
@@ -73,7 +75,7 @@ std::string Icon(char32_t code) {
 constexpr char32_t kIconHome = 0xE80F, kIconDisplay = 0xE7F4, kIconLook = 0xE790, kIconPad = 0xE7FC,
                    kIconDisc = 0xE958, kIconShaders = 0xE945, kIconSettings = 0xE713, kIconInfo = 0xE946,
                    kIconCheck = 0xE73E, kIconWarning = 0xE7BA, kIconLeft = 0xE76B, kIconRight = 0xE76C,
-                   kIconPlay = 0xE768, kIconPackage = 0xE7B8, kIconFolder = 0xE8B7;
+                   kIconPlay = 0xE768, kIconPackage = 0xE7B8, kIconFolder = 0xE8B7, kIconBuild = 0xE90F;
 
 struct Knob {
   const char* name;
@@ -323,6 +325,8 @@ std::string FormatSize(std::uintmax_t bytes) {
   char text[32];
   if (bytes >= (1ull << 30))
     std::snprintf(text, sizeof(text), "%.1f GB", bytes / double(1ull << 30));
+  else if (bytes < (1ull << 20))
+    std::snprintf(text, sizeof(text), "%.0f KB", std::ceil(bytes / 1024.0));
   else
     std::snprintf(text, sizeof(text), "%.0f MB", bytes / double(1ull << 20));
   return text;
@@ -385,11 +389,12 @@ struct LookParts {
 };
 
 // The pages, in the navigation's order, with their names and their ids of --screenshot.
-enum Page { kHome, kDisplay, kLook, kControls, kGameData, kShaders, kAdvanced, kAbout, kPageCount };
-const char* const kPageNames[kPageCount] = {"Home",      "Display", "Look",     "Controls",
-                                            "Game data", "Shaders", "Advanced", "About"};
-const char* const kPageIds[kPageCount] = {"home",      "display", "look",     "controls",
-                                          "game-data", "shaders", "advanced", "about"};
+// Build is the builder package's page (builder.h), shown only in builder mode.
+enum Page { kHome, kDisplay, kLook, kControls, kGameData, kShaders, kAdvanced, kAbout, kBuild, kPageCount };
+const char* const kPageNames[kPageCount] = {"Home",      "Display", "Look",     "Controls", "Game data",
+                                            "Shaders",   "Advanced", "About",   "Build"};
+const char* const kPageIds[kPageCount] = {"home",      "display", "look",     "controls", "game-data",
+                                          "shaders",   "advanced", "about",   "build"};
 
 // A setup step's state on the Home page and in the navigation.
 enum class Status { kDone, kOptional, kNeeded, kBusy };
@@ -503,6 +508,13 @@ class App {
   void StartShaderTask(std::function<std::string()> task);
   // The About page: who made Motorsport DX possible, the credits and the third-party notices.
   void AboutRows();
+  // The Game data page's Disc rows and their detail, also the Build page's Your discs screen.
+  void DiscRows();
+  void DiscDetail();
+  // Builder mode (builder.h): the Build page, a wizard of four screens (Welcome, Your discs,
+  // Downloads, Build), and the build's start with the Discs of the settings.
+  void BuildRows();
+  void StartBuild(bool download_all);
   void Play();
   void Refresh(bool discs);
   std::optional<Plan> CurrentPlan(std::string& error);
@@ -609,6 +621,14 @@ class App {
   std::mutex dialog_mutex_;
   std::vector<std::pair<DialogTarget, std::vector<std::string>>> dialog_results_;
   bool quit_ = false;
+  // Builder mode: the launcher of the builder package, with no built game beside it. root_ is then
+  // the install's BuildRoot (build), where the settings, the discs and the build's logs go;
+  // notices_root_ holds the package's CREDITS.txt and third-party-notices.
+  bool builder_mode_ = false;
+  std::unique_ptr<Builder> builder_;
+  fs::path notices_root_;
+  bool build_started_ = false;  // a build ran in this session: its end hands over
+  bool handed_over_ = false;
   std::unique_ptr<rex::input::wheel::WheelHost> wheel_;
   bool wheel_haptic_ = false;
   float wheel_cap_ = 0.25f;
@@ -642,12 +662,37 @@ bool App::Init(int argc, char** argv) {
   }
   SetProcessDpiAwarenessContext(DPI_AWARENESS_CONTEXT_PER_MONITOR_AWARE_V2);
   monitor_ = PrimaryMonitor();
+  notices_root_ = root_;
+  const auto flag = [&](const char* name) {
+    for (int i = 1; i < argc; ++i)
+      if (std::string(argv[i]) == name) return true;
+    return false;
+  };
+  // The builder package's launcher: its install root beside it (builder.h), or a --screenshot of
+  // the Build page with a builder state.
+  builder_mode_ = IsInstallRoot(directory) || (shot_ && shot_->state.starts_with("builder"));
+  const fs::path install = IsInstallRoot(directory) ? directory : root_;
   try {
-    data_ = LauncherData::Load(root_ / "launcher.json");
+    data_ = LauncherData::Load((builder_mode_ ? install : root_) / "launcher.json");
+    if (builder_mode_) {
+      const Json& builder = data_.json.at("builder");
+      const BuilderLayout layout = BuilderLayout::Of(install, builder.at("layout"));
+      builder_ = std::make_unique<Builder>(layout, ReadDownloads(builder), builder.at("steps"), ReadStamp(layout.source));
+      root_ = layout.build;
+      notices_root_ = install;
+    }
   } catch (const std::exception& error) {
-    load_error_ = std::string(error.what()) + ". Run Build.ps1 -Action build or -Action export again.";
+    load_error_ = std::string(error.what()) +
+                  (builder_mode_ ? ". The package is incomplete: unpack its zip again."
+                                 : ". Run Build.ps1 -Action build or -Action export again.");
   }
-  if (!fs::exists(root_ / "game-build" / "fm4_rex.exe"))
+  if (builder_mode_ && builder_ && !shot_ && builder_->Built() && !flag("--builder")) {
+    // The game of this package is built: its own launcher takes over (--builder stays here).
+    const std::string error = builder_->HandOver();
+    if (error.empty()) std::exit(0);
+    load_error_ = error;
+  }
+  if (!builder_mode_ && !fs::exists(root_ / "game-build" / "fm4_rex.exe"))
     load_error_ = "No game-build\\fm4_rex.exe beside the launcher. Keep MotorsportDX.exe in its export folder.";
   // A screenshot reads its own settings (the defaults without --settings) and never saves them.
   settings_path_ = shot_ ? shot_->settings : root_ / "launcher-settings.json";
@@ -729,6 +774,14 @@ bool App::Init(int argc, char** argv) {
     page_ = kControls;
     tab_ = 2;
     StartWheelTest();
+  } else if (builder_mode_ && load_error_.empty()) {
+    // The Build page leads: Welcome on a new install, else the Build screen.
+    page_ = kBuild;
+    bool fetched = false;
+    for (const auto& item : builder_->Downloads()) fetched = fetched || Downloaded(builder_->Layout(), item);
+    tab_ = fetched ? 3 : 0;
+    // --build: Download all and Start the build at once; typing it is the consent to the downloads.
+    if (flag("--build")) StartBuild(true);
   } else if (play) {
     Play();
   } else if (load_error_.empty() && disc1_.error.empty() && !ShadersReady()) {
@@ -750,7 +803,35 @@ int App::Screenshot() {
     banner_error_ = true;
   } else if (shot_->state == "load-error") {
     load_error_ = "No game-build\\fm4_rex.exe beside the launcher. Keep MotorsportDX.exe in its export folder.";
-  } else if (!shot_->state.empty() && shot_->state != "first-run" && shot_->state != "developer") {
+  } else if ((shot_->state == "builder-running" || shot_->state == "builder-failed") && builder_) {
+    // A made-up build for the review of the Build screen: running in setup, or failed in generate.
+    BuilderView view;
+    view.steps = builder_->View().steps;
+    const bool running = shot_->state == "builder-running";
+    const int stop = running ? 3 : 4;
+    const double seconds[] = {4, 3, 41, 211, 40, 192};
+    for (int i = 0; i < static_cast<int>(view.steps.size()) && i < 6; ++i) {
+      view.steps[i].state = i < stop    ? StepState::kDone
+                            : i == stop ? (running ? StepState::kRunning : StepState::kFailed)
+                                        : StepState::kWaiting;
+      view.steps[i].seconds = i < stop ? seconds[i] : i == stop && running ? 95 : 0;
+    }
+    view.busy = running;
+    view.task = running ? "build" : "";
+    view.detail = running ? "runtime-build" : "";
+    view.log = Utf8(root_ / "logs" / (running ? "runtime-build.log" : "generate.log"));
+    view.ninja_done = running ? 412 : 0;
+    view.ninja_total = running ? 1187 : 0;
+    if (!running) {
+      view.failed_step = "generate";
+      view.error = "Unsupported executables in D:\\Games\\FM4\\Disc 1: the three must be those of one supported "
+                   "release: Japan/Asia (media ID 633772A0), USA (media ID 26FF1101).";
+    }
+    builder_->Show(view);
+    page_ = kBuild;
+    tab_ = 3;
+  } else if (!shot_->state.empty() && shot_->state != "first-run" && shot_->state != "developer" &&
+             shot_->state != "builder") {
     return std::fprintf(stderr, "Unknown state: %s\n", shot_->state.c_str()), 2;
   }
   // WARP: the screenshot never touches the GPU, which may be running the game.
@@ -1048,6 +1129,8 @@ void App::Run() {
     if (shader_process_) TerminateProcess(shader_process_, 1);
   }
   if (shader_task_.joinable()) shader_task_.join();
+  // A build pauses with the launcher; the next start resumes it from its step.
+  builder_.reset();
   // An unpack stops; its partial folder is removed by the next one.
   image_cancel_ = true;
   if (image_task_.joinable()) image_task_.join();
@@ -1100,6 +1183,8 @@ void App::RemoveImport(const Package& package) {
 
 void App::SaveSettings() {
   try {
+    // In builder mode the BuildRoot may not exist yet.
+    if (builder_mode_) fs::create_directories(settings_path_.parent_path());
     settings_.Save(settings_path_);
   } catch (const std::exception& error) {
     banner_ = error.what();
@@ -1322,6 +1407,13 @@ void App::Frame() {
                ImGuiWindowFlags_NoDecoration | ImGuiWindowFlags_NoMove | ImGuiWindowFlags_NoSavedSettings |
                    ImGuiWindowFlags_NoBringToFrontOnFocus);
   ImGui::PopStyleVar();
+  // The build of this session is done: the launcher of the build takes over.
+  if (builder_ && build_started_ && !handed_over_ && !shot_ && builder_->View().finished) {
+    const std::string error = builder_->HandOver();
+    handed_over_ = true;
+    if (error.empty()) quit_ = true;
+    else banner_ = error, banner_error_ = true;
+  }
   if (!load_error_.empty()) {
     ImGui::SetCursorPos(ImVec2(24 * scale_, 24 * scale_));
     ImGui::PushTextWrapPos(viewport->WorkSize.x - 24 * scale_);
@@ -1367,6 +1459,7 @@ void App::Frame() {
     case kGameData: GameDataRows(); break;
     case kShaders: ShadersRows(); break;
     case kAdvanced: AdvancedRows(); break;
+    case kBuild: BuildRows(); break;
     default: AboutRows(); break;
   }
   ImGui::EndGroup();
@@ -1517,8 +1610,8 @@ void App::TopBar() {
   ImGui::PopFont();
   // The page's badge, as a game names the menu it is in.
   if (page_ != kHome) {
-    static const char32_t kIcons[kPageCount] = {kIconHome, kIconDisplay, kIconLook, kIconPad,
-                                                kIconDisc, kIconShaders, kIconSettings, kIconInfo};
+    static const char32_t kIcons[kPageCount] = {kIconHome, kIconDisplay,  kIconLook, kIconPad, kIconDisc,
+                                                kIconShaders, kIconSettings, kIconInfo, kIconBuild};
     ImGui::PushFont(din_font_, 22);
     std::string name = kPageNames[page_];
     for (auto& c : name) c = static_cast<char>(std::toupper(static_cast<unsigned char>(c)));
@@ -1841,15 +1934,22 @@ void App::HomeMenu() {
     const char* label;
     int page;  // -1: Play
   };
-  static const Entry kEntries[] = {{kIconPlay, "Play", -1},          {kIconDisplay, "Display", kDisplay},
-                                   {kIconLook, "Look", kLook},       {kIconPad, "Controls", kControls},
-                                   {kIconDisc, "Game data", kGameData}, {kIconShaders, "Shaders", kShaders},
-                                   {kIconSettings, "Advanced", kAdvanced}, {kIconInfo, "About", kAbout}};
+  static const Entry kAllEntries[] = {{kIconPlay, "Play", -1},          {kIconDisplay, "Display", kDisplay},
+                                      {kIconLook, "Look", kLook},       {kIconPad, "Controls", kControls},
+                                      {kIconDisc, "Game data", kGameData}, {kIconShaders, "Shaders", kShaders},
+                                      {kIconSettings, "Advanced", kAdvanced}, {kIconInfo, "About", kAbout}};
+  // Builder mode: Build the game instead of Play, and no Shaders page before there is a game.
+  static const Entry kBuilderEntries[] = {{kIconBuild, "Build the game", kBuild}, {kIconDisplay, "Display", kDisplay},
+                                          {kIconLook, "Look", kLook},             {kIconPad, "Controls", kControls},
+                                          {kIconDisc, "Game data", kGameData},    {kIconSettings, "Advanced", kAdvanced},
+                                          {kIconInfo, "About", kAbout}};
+  const std::span<const Entry> kEntries = builder_mode_ ? std::span<const Entry>(kBuilderEntries)
+                                                        : std::span<const Entry>(kAllEntries);
   const float height = page_size_.y;
   const float list_w = std::min(420 * scale_, page_size_.x * 0.36f);
   const std::string not_ready = NotReady();
   const Status disc = DiscStatus(), shaders = ShaderStatus();
-  const int entries = static_cast<int>(std::size(kEntries));
+  const int entries = static_cast<int>(kEntries.size());
   home_focus_ = (home_focus_ + MenuMove() + entries) % entries;
   const bool accept = MenuAccept();
 
@@ -1861,7 +1961,7 @@ void App::HomeMenu() {
   const float rail = 58 * scale_;
   draw->AddRectFilled(ImGui::GetWindowPos(), ImGui::GetWindowPos() + ImVec2(rail, ImGui::GetWindowHeight()),
                       ImGui::GetColorU32(ImVec4(0.10f, 0.11f, 0.12f, 0.6f)));
-  for (int i = 0; i < static_cast<int>(std::size(kEntries)); ++i) {
+  for (int i = 0; i < entries; ++i) {
     const Entry& entry = kEntries[i];
     const float row = 54 * scale_;
     const ImVec2 min = ImGui::GetCursorScreenPos() + ImVec2(rail + 8 * scale_, 0);
@@ -1889,7 +1989,9 @@ void App::HomeMenu() {
     draw->AddText(ImVec2(min.x + 16 * scale_, min.y + (row - ImGui::GetFontSize()) / 2),
                   ImGui::GetColorU32(disabled ? kMuted : current ? kText : kSecondary), label.c_str());
     ImGui::PopFont();
-    const Status status = entry.page == kGameData ? disc : entry.page == kShaders ? shaders : Status::kDone;
+    const Status status = entry.page == kGameData || (entry.page == kBuild && disc == Status::kNeeded) ? disc
+                          : entry.page == kShaders                                                  ? shaders
+                                                                                                    : Status::kDone;
     if (status == Status::kNeeded || status == Status::kBusy) {
       const std::string mark = Icon(status == Status::kNeeded ? kIconWarning : kIconShaders);
       draw->AddText(body_font_, 17 * scale_, ImVec2(max.x - 32 * scale_, min.y + (row - 17 * scale_) / 2),
@@ -1900,6 +2002,10 @@ void App::HomeMenu() {
         page_ = entry.page;
         tab_ = 0;
         row_focus_ = 0;
+        // The Build page opens on its Build screen once something is downloaded.
+        if (entry.page == kBuild)
+          for (const auto& item : builder_->Downloads())
+            if (Downloaded(builder_->Layout(), item)) tab_ = 3;
       } else if (not_ready.empty() && !shot_) {
         Play();
       } else if (!disc1_.error.empty()) {
@@ -1916,7 +2022,7 @@ void App::HomeMenu() {
   ImGui::SameLine(0, 18 * scale_);
 
   // The detail of the focused entry.
-  const Entry& entry = kEntries[home_focus_];
+  const Entry& entry = kEntries[std::min(home_focus_, entries - 1)];
   std::string summary;
   std::string error;
   const auto plan = CurrentPlan(error);
@@ -1959,6 +2065,11 @@ void App::HomeMenu() {
       help_title_ = "Shaders";
       help_ = "Compiles the game's shaders before you race, once a build, so races do not stutter while they compile.";
       break;
+    case kBuild:
+      help_title_ = "Build the game";
+      help_ = "Motorsport DX is built on this computer from your own discs: choose them, agree to the downloads of "
+              "the build tools and sources, and start the build. Then the game's own launcher takes over.";
+      break;
     case kAdvanced:
       help_title_ = "Advanced";
       help_ = "Where your profile, saves and logs are kept, and the developer options.";
@@ -1979,7 +2090,18 @@ void App::HomeMenu() {
       ImGui::SameLine(0, 12 * scale_);
       ImGui::TextUnformatted(text.c_str());
     };
-    if (entry.page == -1 || entry.page == kGameData) {
+    if (entry.page == kBuild) {
+      const BuilderView view = builder_->View();
+      int done = 0, fetched = 0;
+      for (const auto& step : view.steps) done += step.state == StepState::kDone;
+      for (const auto& item : builder_->Downloads()) fetched += Downloaded(builder_->Layout(), item);
+      line(fetched == static_cast<int>(builder_->Downloads().size()) ? Status::kDone : Status::kOptional,
+           "Downloads: " + std::to_string(fetched) + " of " + std::to_string(builder_->Downloads().size()));
+      line(view.busy ? Status::kBusy : !view.error.empty() ? Status::kNeeded : Status::kOptional,
+           "Build: " + std::to_string(done) + " of " + std::to_string(view.steps.size()) + " steps done" +
+               (view.error.empty() ? "" : ", stopped"));
+    }
+    if (entry.page == -1 || entry.page == kGameData || entry.page == kBuild) {
       line(disc, disc1_.error.empty() ? "Disc 1: " + disc1_.release + " release, verified" : "Disc 1: " + disc1_.error);
       const Status content = ContentStatus();
       line(content, content == Status::kOptional ? "Disc 2 and downloadable content: optional"
@@ -2358,6 +2480,7 @@ Status App::ShaderStatus() {
 }
 
 std::string App::NotReady() const {
+  if (builder_mode_) return "Build the game first";
   if (!disc1_.error.empty()) return "Choose Disc 1 first";
   if (!disc2_.error.empty() || !content_.error.empty()) return "Check Disc 2 and the content on Game data";
   if (running_) return "The game is running";
@@ -3226,6 +3349,68 @@ bool App::PathField(std::string& value) {
   return ImGui::IsItemDeactivatedAfterEdit();
 }
 
+// The Discs: Disc 1, Disc 2 and the disc images, on the Game data page and on the Build page's
+// Your discs screen.
+void App::DiscRows() {
+  if (PathOptionRow("disc1", "Disc 1 (Play Disc)", settings_.disc1, kDisc1,
+                    "The folder of your extracted Disc 1, the one Motorsport DX needs. A opens the folder picker.",
+                    false, disc1_.error.empty() ? &kSuccess : &kDanger))
+    Refresh(false);
+  if (PathOptionRow("disc2", "Disc 2 (Content Disc)", settings_.disc2, kDisc2,
+                    "The folder of your extracted Disc 2: its cars import on the first Play. Optional. A opens the "
+                    "folder picker, X clears it.",
+                    true, disc2_.error.empty() ? &kSuccess : &kDanger))
+    Refresh(false);
+  std::string unpacking = "Press A";
+  if (image_busy_) {
+    std::lock_guard<std::mutex> lock(image_mutex_);
+    unpacking = image_label_.empty() ? "Reading"
+                                     : image_label_ + " " +
+                                           std::to_string(image_done_ * 100 / std::max<std::uint64_t>(image_total_, 1)) +
+                                           "%";
+  }
+  // A screenshot never opens a dialog.
+  if (OptionRow("image", "Unpack a disc image (ISO)", unpacking,
+                "An ISO of Disc 1 or Disc 2, or both picked together: each is unpacked once into the discs folder "
+                "and set as its Disc. A opens the file picker.",
+                !image_busy_) == 2 &&
+      !shot_)
+    OpenDialog(kDiscImage, false);
+}
+
+void App::DiscDetail() {
+  if (focus_id_ == "disc1") {
+    if (disc1_.error.empty()) Colored(kSuccess, disc1_.release + " release, the three executables verified.");
+    else Colored(kDanger, disc1_.error);
+    ImGui::Dummy(ImVec2(0, 6 * scale_));
+    if (PathField(settings_.disc1)) Refresh(false);
+  } else if (focus_id_ == "disc2") {
+    if (settings_.disc2.empty()) Muted("Not used: the cars of Disc 2 are not imported.");
+    else if (disc2_.error.empty()) Colored(kSuccess, "The four content packages found.");
+    else Colored(kDanger, disc2_.error);
+    ImGui::Dummy(ImVec2(0, 6 * scale_));
+    if (PathField(settings_.disc2)) Refresh(false);
+  } else if (focus_id_ == "image") {
+    std::string message;
+    bool failed = false;
+    {
+      std::lock_guard<std::mutex> lock(image_mutex_);
+      message = image_message_;
+      failed = image_error_;
+    }
+    if (image_busy_)
+      Colored(kFocusColor, "Unpacking: " + FormatSize(image_done_) + " of " + FormatSize(image_total_) + ".");
+    else if (!message.empty())
+      Colored(failed ? kDanger : kSuccess, message);
+    ImGui::Dummy(ImVec2(0, 6 * scale_));
+    std::error_code error;
+    const auto space = fs::space(root_, error);
+    Muted("Unpacked into " + Utf8(root_ / "discs") + (error ? "" : " (" + FormatSize(space.available) + " free)") +
+          ": Disc 1 takes about 7.5 GB, Disc 2 about 3 GB. The Disc's files are checked first, so a wrong "
+          "image stops in seconds. The ISO is not needed afterwards.");
+  }
+}
+
 void App::GameDataRows() {
   Options& o = settings_.Active().options;
   std::uintmax_t pending = 0;
@@ -3233,30 +3418,7 @@ void App::GameDataRows() {
     if (i >= imported_.size() || !imported_[i]) pending += content_.packages[i].size;
   RowsPage({"DISCS", "CONTENT"}, [&] {
     if (tab_ == 0) {
-      if (PathOptionRow("disc1", "Disc 1 (Play Disc)", settings_.disc1, kDisc1,
-                        "The folder of your extracted Disc 1, the one Motorsport DX needs. A opens the folder picker.",
-                        false, disc1_.error.empty() ? &kSuccess : &kDanger))
-        Refresh(false);
-      if (PathOptionRow("disc2", "Disc 2 (Content Disc)", settings_.disc2, kDisc2,
-                        "The folder of your extracted Disc 2: its cars import on the first Play. Optional. A opens the "
-                        "folder picker, X clears it.",
-                        true, disc2_.error.empty() ? &kSuccess : &kDanger))
-        Refresh(false);
-      std::string unpacking = "Press A";
-      if (image_busy_) {
-        std::lock_guard<std::mutex> lock(image_mutex_);
-        unpacking = image_label_.empty() ? "Reading"
-                                         : image_label_ + " " +
-                                               std::to_string(image_done_ * 100 / std::max<std::uint64_t>(image_total_, 1)) +
-                                               "%";
-      }
-      // A screenshot never opens a dialog.
-      if (OptionRow("image", "Unpack a disc image (ISO)", unpacking,
-                    "An ISO of Disc 1 or Disc 2, or both picked together: each is unpacked once into the discs folder "
-                    "and set as its Disc. A opens the file picker.",
-                    !image_busy_) == 2 &&
-          !shot_)
-        OpenDialog(kDiscImage, false);
+      DiscRows();
       PathOptionRow("replace", "Texture pack", o.texture_replace, kTextureReplace,
                     "A folder of <hash>.dds files that replace the game's textures. Optional. A opens the folder "
                     "picker, X clears it.",
@@ -3321,36 +3483,8 @@ void App::GameDataRows() {
     ImGui::Dummy(ImVec2(0, 14 * scale_));
     ImGui::PushTextWrapPos(0);
     if (tab_ == 0) {
-      if (focus_id_ == "disc1") {
-        if (disc1_.error.empty()) Colored(kSuccess, disc1_.release + " release, the three executables verified.");
-        else Colored(kDanger, disc1_.error);
-        ImGui::Dummy(ImVec2(0, 6 * scale_));
-        if (PathField(settings_.disc1)) Refresh(false);
-      } else if (focus_id_ == "disc2") {
-        if (settings_.disc2.empty()) Muted("Not used: the cars of Disc 2 are not imported.");
-        else if (disc2_.error.empty()) Colored(kSuccess, "The four content packages found.");
-        else Colored(kDanger, disc2_.error);
-        ImGui::Dummy(ImVec2(0, 6 * scale_));
-        if (PathField(settings_.disc2)) Refresh(false);
-      } else if (focus_id_ == "image") {
-        std::string message;
-        bool failed = false;
-        {
-          std::lock_guard<std::mutex> lock(image_mutex_);
-          message = image_message_;
-          failed = image_error_;
-        }
-        if (image_busy_)
-          Colored(kFocusColor, "Unpacking: " + FormatSize(image_done_) + " of " + FormatSize(image_total_) + ".");
-        else if (!message.empty())
-          Colored(failed ? kDanger : kSuccess, message);
-        ImGui::Dummy(ImVec2(0, 6 * scale_));
-        std::error_code error;
-        const auto space = fs::space(root_, error);
-        Muted("Unpacked into " + Utf8(root_ / "discs") + (error ? "" : " (" + FormatSize(space.available) + " free)") +
-              ": Disc 1 takes about 7.5 GB, Disc 2 about 3 GB. The Disc's files are checked first, so a wrong "
-              "image stops in seconds. The ISO is not needed afterwards.");
-      } else if (focus_id_ == "replace") {
+      DiscDetail();
+      if (focus_id_ == "replace") {
         PathField(o.texture_replace);
       }
     } else {
@@ -3620,8 +3754,8 @@ void App::AdvancedRows() {
 // Who made this possible, in short; CREDITS.txt beside the launcher (outputs/FM4-build/CREDITS.txt,
 // copied by build and export) says it in full, and third-party-notices holds the licenses.
 void App::AboutRows() {
-  const fs::path credits = root_ / "CREDITS.txt";
-  const fs::path notices = root_ / "third-party-notices";
+  const fs::path credits = notices_root_ / "CREDITS.txt";
+  const fs::path notices = notices_root_ / "third-party-notices";
   // A short name for the list, the full one and what each gave.
   static const char* const kThanks[][3] = {
       {"ReXGlue SDK", "The ReXGlue SDK", "Tom (crack), its founder, and the ReXGlue contributors: the recompiler and runtime."},
@@ -3663,6 +3797,314 @@ void App::AboutRows() {
     ImGui::Dummy(ImVec2(0, 14 * scale_));
     ImGui::PushTextWrapPos(0);
     Muted(Utf8(notices));
+    ImGui::PopTextWrapPos();
+  });
+}
+
+// What each build step does, on the Build screen.
+const char* StepHelp(const std::string& id) {
+  if (id == "python") return "Unpacks the embeddable Python, which runs the other steps.";
+  if (id == "preflight")
+    return "Checks Windows, the processor (x86-64-v2), the graphics card (Direct3D 12), the memory, the free disk "
+           "space and this folder's path. Nothing is changed.";
+  if (id == "toolchain") return "Unpacks CMake, Ninja and llvm-mingw into the toolchain folder. Nothing is installed.";
+  if (id == "setup")
+    return "Unpacks the third-party sources and builds the runtime: the emulation of the console's hardware, "
+           "graphics, sound and input.";
+  if (id == "generate")
+    return "Reads Disc 1's executables and recompiles the game's code from them into C++ on this computer.";
+  if (id == "build")
+    return "Compiles the game and its launcher, then tests the compiler's arithmetic and the launcher against the "
+           "build.";
+  return "";
+}
+
+// The pipeline's steps (its progress lines) in words.
+std::string SubStepText(const std::string& step) {
+  static const std::pair<const char*, const char*> kNames[] = {
+      {"thirdparty-download", "checking the source archives"},
+      {"thirdparty-unpack", "unpacking the third-party sources"},
+      {"patch-sdl3-gameinput-v3", "patching SDL for GameInput"},
+      {"runtime-configure", "configuring the runtime"},
+      {"runtime-build", "compiling the runtime"},
+      {"runtime-install", "installing the runtime"},
+      {"gameinput-fetch", "checking GameInput"},
+      {"dxc-fetch", "checking the DirectX Shader Compiler"},
+      {"loader-configure", "configuring the disc reader"},
+      {"loader-build", "compiling the disc reader"},
+      {"image-load", "reading Disc 1's executable"},
+      {"codegen", "recompiling the game's code"},
+      {"guard-default", "checking the recompiled code"},
+      {"game-configure", "configuring the game"},
+      {"game-build", "compiling the game"},
+      {"instruction-tests", "testing the compiler's arithmetic"},
+      {"launcher-configure", "configuring the launcher"},
+      {"launcher-build", "compiling the launcher"},
+      {"launcher-tests", "testing the launcher against the build"}};
+  for (const auto& [id, text] : kNames)
+    if (step == id) return text;
+  if (step.starts_with("toolchain-")) return "unpacking " + step.substr(10);
+  if (step.starts_with("download-")) return "downloading " + step.substr(9);
+  return step.empty() ? std::string("starting") : step;
+}
+
+void App::StartBuild(bool download_all) {
+  Refresh(false);
+  page_ = kBuild;
+  if (!disc1_.error.empty() || !disc2_.error.empty() || !content_.error.empty()) {
+    banner_ = !disc1_.error.empty()   ? "Disc 1: " + disc1_.error
+              : !disc2_.error.empty() ? "Disc 2: " + disc2_.error
+                                      : content_.error;
+    banner_error_ = true;
+    tab_ = 1;
+    row_focus_ = 0;
+    return;
+  }
+  SaveSettings();
+  builder_->StartBuild({disc1_.path, disc2_.path, settings_.content}, download_all);
+  build_started_ = true;
+  tab_ = 3;
+}
+
+void App::BuildRows() {
+  const BuilderView view = builder_->View();
+  const BuilderLayout& layout = builder_->Layout();
+  const auto& downloads = builder_->Downloads();
+  std::vector<bool> fetched;
+  std::uint64_t missing = 0;
+  bool python = false;
+  for (const auto& item : downloads) {
+    fetched.push_back(Downloaded(layout, item));
+    if (!fetched.back()) missing += item.size;
+    if (item.id == "python") python = fetched.back();
+  }
+  const bool all = missing == 0;
+  double estimate = 0, spent = 0;
+  bool started = false;
+  for (const auto& step : view.steps) {
+    estimate += step.estimate;
+    spent += step.state == StepState::kDone || step.state == StepState::kRunning ? step.seconds : 0;
+    started = started || step.state != StepState::kWaiting;
+  }
+  std::error_code space_error;
+  fs::path drive = layout.install;
+  while (!drive.empty() && !fs::exists(drive) && drive != drive.parent_path()) drive = drive.parent_path();
+  const auto space = fs::space(drive, space_error);
+  const PlainError plain = view.error.empty() ? PlainError{} : Explain(view.error, view.failed_step);
+  const auto open_licence = [&](const Download& item) {
+    if (shot_) return;
+    OpenPath(item.license_link.starts_with("https://") ? PathFromUtf8(item.license_link)
+                                                       : notices_root_ / PathFromUtf8(item.license_link));
+  };
+  RowsPage({"WELCOME", "YOUR DISCS", "DOWNLOADS", "BUILD"}, [&] {
+    const auto next = [&](const char* label, const char* help) {
+      if (OptionRow("next", label, "Press A", help) == 2) {
+        tab_ = std::min(tab_ + 1, 3);
+        row_focus_ = 0;
+      }
+    };
+    if (tab_ == 0) {
+      OptionRow("what", "What happens", "Four screens",
+                "Motorsport DX is built on this computer from your own discs. Choose your discs, agree to the "
+                "downloads of the build tools and sources, and start the build. Nothing of the game is downloaded: "
+                "its code and data come from your discs alone. When the build is done, the game's own launcher "
+                "takes over.");
+      OptionRow("time", "Time", "About " + std::to_string(static_cast<int>(std::lround(estimate / 60))) + " min here",
+                "The build took about this long on the development laptop (20 threads), with its downloads already "
+                "there. A slower computer, such as a handheld, takes about 25 to 45 minutes, plus the downloads "
+                "(about 360 MB). Keep the computer plugged in: it stays awake while it builds, and the launcher "
+                "stays usable.");
+      const ImVec4* space_color = !space_error && space.available < 20'000'000'000ull ? &kWarning : nullptr;
+      OptionRow("disk", "Disk", space_error ? "Unknown" : FormatSize(space.available) + " free",
+                ("The build needs about 20 GB on this drive: the tools, the build and the cars of Disc 2, which the "
+                 "first race imports. Everything stays in " + Utf8(layout.install) + ".")
+                    .c_str(),
+                true, space_color);
+      OptionRow("place", "Your discs", "Stay in place",
+                "The discs are read where they are. The game reads Disc 1 from its folder every time it starts, so "
+                "keep it there; the first race imports Disc 2 and downloadable content into the build folder.");
+      const SourceStamp& stamp = builder_->Stamp();
+      OptionRow("package", "This package", stamp.describe.empty() ? "Unknown" : stamp.describe,
+                ("The launcher, the source code and the list of downloads come from one version" +
+                 (stamp.commit.empty() ? std::string(".") : ": commit " + stamp.commit + ".") +
+                 " Nothing is installed for all users and no system setting changes.")
+                    .c_str());
+      next("Next: your discs", "Choose Disc 1, and Disc 2 if you have it.");
+      return;
+    }
+    if (tab_ == 1) {
+      DiscRows();
+      if (OptionRow("add_folder", "Add downloadable content", settings_.content.empty() ? "Optional" : "Added",
+                    "A folder searched for content packages, such as the console's Content folder. The Game data "
+                    "page lists the packages found.") == 2 &&
+          !shot_)
+        OpenDialog(kContentFolder, true);
+      next("Next: downloads", "The build tools and sources this computer needs.");
+      return;
+    }
+    if (tab_ == 2) {
+      std::vector<std::string> ids;
+      for (const auto& item : downloads) ids.push_back(item.id);
+      if (OptionRow("all", "Download all", all ? "All here" : "About " + FormatSize(missing),
+                    "Fetches every download below that is not here yet, Python first. Each is checked against its "
+                    "pinned SHA-256 or its pinned files before it is used. Nothing is fetched before you press A "
+                    "here or on a row.",
+                    !view.busy && !all, all ? &kSuccess : nullptr) == 2 &&
+          !shot_)
+        builder_->StartDownloads(ids);
+      for (size_t i = 0; i < downloads.size(); ++i) {
+        const Download& item = downloads[i];
+        std::string value;
+        if (fetched[i]) {
+          value = "Here";
+        } else if (view.busy && view.downloading == item.id) {
+          value = std::to_string(std::min<std::uint64_t>(99, DownloadedBytes(layout, item) * 100 / std::max<std::uint64_t>(item.size, 1))) + "%";
+        } else {
+          value = (item.exact ? "" : "About ") + FormatSize(item.size);
+        }
+        const std::string id = "dl-" + item.id;
+        const std::string help = item.what + (fetched[i] ? " Downloaded and checked."
+                                              : item.id == "python" || python ? " A downloads it."
+                                                                              : " Download Python first: the others run on it.");
+        if (OptionRow(id.c_str(), item.name.c_str(), value, help.c_str(),
+                      !view.busy && !fetched[i] && (item.id == "python" || python), fetched[i] ? &kSuccess : nullptr) == 2 &&
+            !shot_)
+          builder_->StartDownloads({item.id});
+        // X opens the licence, also of a download that is here.
+        if (focus_id_ == id) {
+          focus_changed_ = true;
+          reset_label_ = "Licence";
+          if (prompt_reset_ || ImGui::IsKeyPressed(ImGuiKey_GamepadFaceLeft, false)) open_licence(item);
+        }
+      }
+      if (view.busy && view.task == "downloads" &&
+          OptionRow("stop", "Stop the downloads", "Press A", "Stops; a download starts again from its beginning.") == 2)
+        builder_->Pause();
+      next("Next: build", "The build steps, with their progress.");
+      return;
+    }
+    if (view.finished) {
+      if (OptionRow("play", "Start Motorsport DX", "Press A",
+                    "The game is built: the launcher of the build takes over, with your discs and settings.") == 2 &&
+          !shot_) {
+        const std::string error = builder_->HandOver();
+        if (error.empty()) handed_over_ = quit_ = true;
+        else banner_ = error, banner_error_ = true;
+      }
+    } else if (view.busy && view.task == "build") {
+      if (OptionRow("pause", "Pause", "Press A",
+                    "Stops the build now. Continue starts it again from the step it stopped in; the steps before "
+                    "it stay done.") == 2)
+        builder_->Pause();
+    } else {
+      const char* label = !view.error.empty() ? "Retry" : started ? "Continue the build" : "Start the build";
+      const std::string value = !all ? "Downloads missing" : !disc1_.error.empty() ? "Disc 1 needed" : "Press A";
+      if (OptionRow("start", label, value,
+                    "Runs the steps above that are not done, in order. A step that failed runs again first; the "
+                    "steps before it stay done.",
+                    !view.busy && all && disc1_.error.empty()) == 2 &&
+          !shot_)
+        StartBuild(false);
+    }
+    RowsTitle("STEPS");
+    for (const auto& step : view.steps) {
+      std::string value = "About " + FormatDuration(step.estimate);
+      const ImVec4* color = &kMuted;
+      switch (step.state) {
+        case StepState::kRunning: value = FormatDuration(step.seconds), color = &kFocusColor; break;
+        case StepState::kDone: value = "Done, " + FormatDuration(step.seconds), color = &kSuccess; break;
+        case StepState::kFailed: value = "Failed", color = &kDanger; break;
+        case StepState::kPaused: value = "Paused", color = &kWarning; break;
+        default: break;
+      }
+      const std::string id = "step-" + step.id;
+      OptionRow(id.c_str(), BuilderStepTitle(step.id), value, StepHelp(step.id), true, color);
+    }
+    RowsTitle("LOGS");
+    if (plain.screen == "discs" && !view.busy && OptionRow("fix", "Choose the discs again", "Press A",
+                                                           "Your discs: Disc 1 and Disc 2.") == 2) {
+      tab_ = 1;
+      row_focus_ = 0;
+    }
+    if (!view.log.empty() && OptionRow("log", "Open log", "Press A", "The log of the running or the failed step.") == 2 &&
+        !shot_)
+      OpenPath(PathFromUtf8(view.log));
+    if (!view.error.empty() &&
+        OptionRow("details", "Copy details", "Press A",
+                  "Copies a short report for a bug report: the package, the step, the tools, the error and the logs "
+                  "to attach. Text only; nothing is sent. The logs show this folder's path, which may hold your "
+                  "Windows user name.") == 2 &&
+        !shot_)
+      SDL_SetClipboardText(builder_->Details().c_str());
+    if (OptionRow("logs", "Open the logs folder", "Press A", "builder.log and each step's log.") == 2 && !shot_) {
+      fs::create_directories(layout.logs);
+      OpenPath(layout.logs);
+    }
+  }, [&] {
+    ImGui::Dummy(ImVec2(0, 14 * scale_));
+    ImGui::PushTextWrapPos(0);
+    if (tab_ == 1) {
+      DiscDetail();
+      if (focus_id_ == "add_folder" && !content_.packages.empty())
+        Muted(std::to_string(content_.packages.size()) + " content packages found, Disc 2's included.");
+    } else if (tab_ == 2) {
+      const auto item = std::find_if(downloads.begin(), downloads.end(),
+                                     [&](const Download& d) { return focus_id_ == "dl-" + d.id; });
+      if (item != downloads.end()) {
+        const auto field = [&](const char* name, const std::string& text) {
+          ImGui::PushFont(din_font_, 17);
+          ImGui::TextColored(kMuted, "%s", name);
+          ImGui::PopFont();
+          ImGui::TextWrapped("%s", text.c_str());
+        };
+        field("FROM", item->host);
+        field("SIZE", (item->exact ? "" : "About ") + FormatSize(item->size) +
+                          (item->exact ? "" : " (the archives' size is not pinned; their unpacked files are)"));
+        field("LICENCE", item->license);
+        field("GOES TO", Utf8((layout.install / PathFromUtf8(item->folder)).make_preferred()));
+        field("CHECKED BY", !item->sha256.empty() ? "Its SHA-256, " + item->sha256.substr(0, 16) + "..."
+                            : item->id == "gameinput"  ? std::string("Its SHA-512, as NuGet publishes it")
+                                                       : std::string("A hash of its unpacked files"));
+        ImGui::Dummy(ImVec2(0, 8 * scale_));
+        if (ImGui::Button("Open the licence")) open_licence(*item);
+        Muted("X opens the licence too.");
+      } else if (focus_id_ == "all") {
+        Muted(std::to_string(std::count(fetched.begin(), fetched.end(), true)) + " of " +
+              std::to_string(downloads.size()) + " here. Everything goes into " + Utf8(layout.install) +
+              "; nothing is installed for all users and no system setting changes.");
+      }
+      if (view.busy && view.task == "downloads") Colored(kFocusColor, "Downloading: " + SubStepText("download-" + view.downloading));
+      if (!view.error.empty() && view.task.empty() && view.failed_step != "preflight") {
+        Colored(kDanger, plain.text);
+        Muted(plain.action);
+      }
+    } else if (tab_ == 3) {
+      if (view.busy && view.task == "build") {
+        Colored(kFocusColor, "Now: " + SubStepText(view.detail));
+        if (view.ninja_total > 0) {
+          ImGui::PushStyleColor(ImGuiCol_PlotHistogram, kAccent);
+          ImGui::ProgressBar(static_cast<float>(view.ninja_done) / static_cast<float>(view.ninja_total), ImVec2(-1, 0),
+                             (std::to_string(view.ninja_done) + " of " + std::to_string(view.ninja_total) + " compiles")
+                                 .c_str());
+          ImGui::PopStyleColor();
+        }
+        Muted(FormatDuration(spent) + " so far; about " + FormatDuration(estimate) +
+              " in all on the development laptop, longer on a slower computer.");
+        if (OnBattery())
+          Colored(kWarning, "On battery: plug the computer in. The build is slower on battery and drains it.");
+      } else if (view.busy && view.task == "downloads") {
+        Colored(kFocusColor, "Downloading: " + SubStepText("download-" + view.downloading));
+      } else if (view.finished) {
+        Colored(kSuccess, "The game is built. Start Motorsport DX hands over to its launcher.");
+      }
+      if (!view.error.empty()) {
+        Colored(kDanger, plain.text);
+        Muted(plain.action);
+        for (const auto& line : view.preflight) Colored(kWarning, line);
+        ImGui::Dummy(ImVec2(0, 6 * scale_));
+        Muted(view.error);
+      }
+    }
     ImGui::PopTextWrapPos();
   });
 }

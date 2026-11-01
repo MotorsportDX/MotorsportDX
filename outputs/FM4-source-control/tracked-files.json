@@ -409,6 +409,14 @@
       "provenance": "Project-authored D3D12 ABI probe of the llvm-mingw prototype: the struct-returning D3D12 methods called on a WARP device; no game data"
     },
     {
+      "path": "outputs/FM4-build/builder.py",
+      "provenance": "Reviewed bootstrap tooling: the builder installer's downloads, download and package actions and package allowlist; no game data"
+    },
+    {
+      "path": "outputs/FM4-build/package-readme.txt",
+      "provenance": "Project-authored README of the builder package for players; no game data"
+    },
+    {
       "path": "outputs/FM4-build/pipeline.py",
       "provenance": "Reviewed bootstrap tooling or documentation; no original game function bodies"
     },
@@ -438,7 +446,7 @@
     },
     {
       "path": "outputs/FM4-build/toolchain.json",
-      "provenance": "Builder toolchain pins: public release URLs, sizes, SHA-256 and licence names of Python, CMake, Ninja and LLVM; no game data"
+      "provenance": "Builder toolchain pins: public release URLs, sizes, SHA-256 and licence names of Python, CMake, Ninja and llvm-mingw; no game data"
     },
     {
       "path": "outputs/FM4-build/texture-extract.cpp",
@@ -595,6 +603,14 @@
     {
       "path": "work/fm4-launcher/src/app.cpp",
       "provenance": "Original GUI launcher source (port of the pipeline.py launch rules, SDL3 and Dear ImGui front end); no game content"
+    },
+    {
+      "path": "work/fm4-launcher/src/builder.cpp",
+      "provenance": "Original GUI launcher source (the builder package's build mode: drives pipeline.py and fetches the pinned embeddable Python); no game content"
+    },
+    {
+      "path": "work/fm4-launcher/src/builder.h",
+      "provenance": "Original GUI launcher source (the builder package's build mode: drives pipeline.py and fetches the pinned embeddable Python); no game content"
     },
     {
       "path": "work/fm4-launcher/src/discs.cpp",

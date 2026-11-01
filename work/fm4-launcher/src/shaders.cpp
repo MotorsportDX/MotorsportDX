@@ -41,27 +41,77 @@ std::wstring Wide(const std::string& text) {
   return wide;
 }
 
-// Windows' own tar (bsdtar), which reads zip archives: the whole archive into directory.
-std::string Extract(const fs::path& archive, const fs::path& directory) {
+}  // namespace
+
+std::string RunTar(const std::vector<std::wstring>& args, std::string* output) {
   wchar_t system[MAX_PATH];
   if (!GetSystemDirectoryW(system, MAX_PATH)) return "the system directory is unknown";
-  std::wstring command = L"\"" + (fs::path(system) / L"tar.exe").wstring() + L"\" -xf \"" +
-                         archive.wstring() + L"\" -C \"" + directory.wstring() + L"\"";
+  std::wstring command = L"\"" + (fs::path(system) / L"tar.exe").wstring() + L"\"";
+  for (const std::wstring& arg : args) command += L" \"" + arg + L"\"";
+  SECURITY_ATTRIBUTES inherit{sizeof(inherit), nullptr, TRUE};
+  HANDLE read = nullptr, write = nullptr;
+  if (output && !CreatePipe(&read, &write, &inherit, 0)) return "tar.exe: no pipe";
+  if (read) SetHandleInformation(read, HANDLE_FLAG_INHERIT, 0);
   STARTUPINFOW startup{};
   startup.cb = sizeof(startup);
+  if (write) {
+    startup.dwFlags = STARTF_USESTDHANDLES;
+    startup.hStdOutput = write;
+    startup.hStdError = GetStdHandle(STD_ERROR_HANDLE);
+  }
   PROCESS_INFORMATION info{};
-  if (!CreateProcessW(nullptr, command.data(), nullptr, nullptr, FALSE, CREATE_NO_WINDOW, nullptr,
-                      nullptr, &startup, &info))
-    return "tar.exe does not start (Windows error " + std::to_string(GetLastError()) + ")";
+  const BOOL started = CreateProcessW(nullptr, command.data(), nullptr, nullptr, write != nullptr, CREATE_NO_WINDOW,
+                                      nullptr, nullptr, &startup, &info);
+  const DWORD start_error = GetLastError();
+  if (write) CloseHandle(write);
+  if (!started) {
+    if (read) CloseHandle(read);
+    return "tar.exe does not start (Windows error " + std::to_string(start_error) + ")";
+  }
+  if (read) {
+    char buffer[4096];
+    DWORD count = 0;
+    while (ReadFile(read, buffer, sizeof(buffer), &count, nullptr) && count) output->append(buffer, count);
+    CloseHandle(read);
+  }
   WaitForSingleObject(info.hProcess, INFINITE);
   DWORD code = 1;
   GetExitCodeProcess(info.hProcess, &code);
   CloseHandle(info.hThread);
   CloseHandle(info.hProcess);
-  return code ? "tar.exe could not extract the release (exit " + std::to_string(code) + ")" : "";
+  return code ? "tar.exe failed (exit " + std::to_string(code) + ")" : "";
 }
 
-}  // namespace
+std::string FetchPinned(const std::vector<std::string>& sources, const std::string& sha256, const fs::path& target) {
+  std::error_code error;
+  if (fs::is_regular_file(target) && Sha256File(target) == sha256) return {};
+  fs::create_directories(target.parent_path(), error);
+  const fs::path partial = fs::path(target).concat(L".partial");
+  std::string failures;
+  for (const std::string& source : sources) {
+    fs::remove(partial, error);
+    if (fs::is_regular_file(PathFromUtf8(source))) {
+      fs::copy_file(PathFromUtf8(source), partial, fs::copy_options::overwrite_existing, error);
+      if (error) {
+        failures += "\n" + source + ": " + error.message();
+        continue;
+      }
+    } else if (URLDownloadToFileW(nullptr, Wide(source).c_str(), partial.c_str(), 0, nullptr) != S_OK) {
+      failures += "\n" + source + ": the download failed";
+      continue;
+    }
+    if (Sha256File(partial) != sha256) {
+      failures += "\n" + source + ": not the pinned SHA-256";
+      fs::remove(partial, error);
+      continue;
+    }
+    fs::rename(partial, target, error);
+    if (!error) return {};
+    failures += "\n" + Utf8(target) + ": " + error.message();
+  }
+  fs::remove(partial, error);
+  return failures.empty() ? "\nno source" : failures;
+}
 
 bool DxcPresent(const fs::path& game) {
   return fs::is_regular_file(game / "dxcompiler.dll") && fs::is_regular_file(game / "dxil.dll");
@@ -71,42 +121,18 @@ std::string FetchDxc(const fs::path& game, const fs::path& work) {
   std::error_code error;
   fs::create_directories(work, error);
   const fs::path archive = work / "dxc_2026_09_29.zip";
-  bool valid = fs::is_regular_file(archive) && Sha256File(archive) == kDxcSha256;
-  if (!valid) {
-    std::vector<std::string> sources;
-    char mirror[2048];
-    const DWORD length = GetEnvironmentVariableA("FM4_DXC_MIRROR", mirror, sizeof(mirror));
-    if (length && length < sizeof(mirror)) sources.emplace_back(mirror);
-    sources.emplace_back(kDxcUrl);
-    std::string failures;
-    for (const std::string& source : sources) {
-      const fs::path partial = work / "dxc_2026_09_29.partial";
-      fs::remove(partial, error);
-      if (fs::is_regular_file(PathFromUtf8(source))) {
-        fs::copy_file(PathFromUtf8(source), partial, fs::copy_options::overwrite_existing, error);
-        if (error) {
-          failures += "\n" + source + ": " + error.message();
-          continue;
-        }
-      } else if (URLDownloadToFileW(nullptr, Wide(source).c_str(), partial.c_str(), 0, nullptr) != S_OK) {
-        failures += "\n" + source + ": the download failed";
-        continue;
-      }
-      if (Sha256File(partial) != kDxcSha256) {
-        failures += "\n" + source + ": not the pinned SHA-256";
-        fs::remove(partial, error);
-        continue;
-      }
-      fs::rename(partial, archive, error);
-      valid = !error;
-      if (valid) break;
-    }
-    if (!valid) return "The DirectX Shader Compiler could not be fetched:" + failures;
-  }
+  std::vector<std::string> sources;
+  char mirror[2048];
+  const DWORD length = GetEnvironmentVariableA("FM4_DXC_MIRROR", mirror, sizeof(mirror));
+  if (length && length < sizeof(mirror)) sources.emplace_back(mirror);
+  sources.emplace_back(kDxcUrl);
+  const std::string failures = FetchPinned(sources, kDxcSha256, archive);
+  if (!failures.empty()) return "The DirectX Shader Compiler could not be fetched:" + failures;
   const fs::path extracted = work / "extracted";
   fs::remove_all(extracted, error);
   fs::create_directories(extracted, error);
-  std::string failure = Extract(archive, extracted);
+  std::string failure = RunTar({L"-xf", archive.wstring(), L"-C", extracted.wstring()});
+  if (!failure.empty()) failure += " extracting the release";
   if (failure.empty()) {
     for (const DxcFile& file : kDxcFiles) {
       const fs::path from = extracted / PathFromUtf8(file.member);

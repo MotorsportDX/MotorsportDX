@@ -5,8 +5,20 @@
 
 #include <filesystem>
 #include <string>
+#include <vector>
 
 namespace fm4 {
+
+// A pinned file at target: kept when it has the SHA-256, else copied or downloaded from each source
+// in turn (a local file, or a URL through Windows' urlmon) into target.partial, checked, and
+// renamed into place. Returns each source's failure, or empty. The builder's Python fetch
+// (builder.h) uses it too.
+std::string FetchPinned(const std::vector<std::string>& sources, const std::string& sha256,
+                        const std::filesystem::path& target);
+
+// Windows' own tar.exe (bsdtar, which reads zip archives) with the arguments; its standard output
+// into output when given. Returns an error, or empty.
+std::string RunTar(const std::vector<std::wstring>& args, std::string* output = nullptr);
 
 // Whether dxcompiler.dll and dxil.dll are beside the game.
 bool DxcPresent(const std::filesystem::path& game);

@@ -1,5 +1,6 @@
 """Synthetic tests: no FM4 bytes or original game assets are needed."""
 import contextlib
+import hashlib
 import io
 import json
 import os
@@ -1684,6 +1685,103 @@ class PipelineTests(unittest.TestCase):
             with self.assertRaisesRegex(RuntimeError,'log:'):
                 pipeline.compile_shader(source,'cs_5_1',output,'test_cs',[],directory/'logs/bad.log',library)
             self.assertIn('FLAG',(directory/'logs/bad.log').read_text(encoding='utf-8'))
+
+    def test_builder_downloads(self):
+        """The builder's downloads in launcher.json name the files that the toolchain action, setup's
+        fetches and install_tool's marker use, in BUILDER_ITEMS' order, with the steps."""
+        items=pipeline.builder.builder_downloads()
+        self.assertEqual([item['id'] for item in items],list(pipeline.builder.BUILDER_ITEMS))
+        tools=pipeline.load_toolchain()
+        layout=pipeline.builder.BUILDER_LAYOUT
+        for item in items:
+            self.assertTrue(item['url'].startswith('https://') and item['host'] in item['url'],item['id'])
+            self.assertTrue(item['license_link'].startswith(('https://','third-party-notices/')),item['id'])
+            if item['license_link'].startswith('third-party-notices/'):
+                self.assertTrue((pipeline.NOTICES/item['license_link'].split('/',1)[1]).is_file(),item['id'])
+            if item['id'] in tools:
+                tool=tools[item['id']]
+                self.assertEqual(item['files'],[f'{layout["downloads"]}/{tool["url"].rsplit("/",1)[1]}'])
+                self.assertEqual(item['marker'],{'sha256':tool['sha256'],'top':tool['top'],'keep':tool['keep']})
+                self.assertEqual(item['folder'],f'{layout["toolchain"]}/{item["id"]}-{tool["version"]}')
+        build=Path(layout['build'])
+        by_id={item['id']:item for item in items}
+        self.assertEqual(len(by_id['sources']['files']),1+len(pipeline.THIRDPARTY_ARCHIVES))
+        self.assertEqual(by_id['gameinput']['files'],
+                         [(build/'gameinput-sdk'/pipeline.GAMEINPUT_VERSION/
+                           f'microsoft.gameinput.{pipeline.GAMEINPUT_VERSION}.nupkg').as_posix()])
+        self.assertEqual(by_id['dxc']['files'],
+                         [(build/'dxc-download'/pipeline.DXC_VERSION/pipeline.DXC_URL.rsplit('/',1)[1]).as_posix()])
+        data=pipeline.launcher_data()['builder']
+        self.assertEqual([step['id'] for step in data['steps']],
+                         ['python','preflight','toolchain','setup','generate','build'])
+        self.assertEqual(data['layout'],layout)
+
+    def test_download(self):
+        """The download action fetches each item from its local mirror, without the network: a
+        tool from TOOLCHAIN_MIRROR into --downloads, the sources from ARCHIVE_MIRROR into the
+        BuildRoot's downloads; GameInput and DXC through their own fetches; one progress step
+        each. An unknown item and a tool without --downloads are refused."""
+        with tempfile.TemporaryDirectory() as directory, patch('builtins.print'):
+            root=Path(directory)/'build'
+            mirror,archives=Path(directory)/'mirror',Path(directory)/'archives'
+            mirror.mkdir()
+            archives.mkdir()
+            (mirror/'tool.zip').write_bytes(b'tool')
+            tool=self.tool(url='https://example.invalid/tool.zip',size=4,
+                           sha256=hashlib.sha256(b'tool').hexdigest())
+            commit='d'*40
+            (archives/f'owner-lib-{commit}.tar.gz').write_bytes(b'archive')
+            calls=[]
+            lines=io.StringIO()
+            def offline(*args,**kwargs):
+                raise OSError('no network in tests')
+            with patch.object(pipeline,'load_toolchain',lambda path=None:{'cmake':tool}), \
+                    patch.object(pipeline,'thirdparty_archives',
+                                 lambda:[('lib','owner/lib',commit,'0'*64,None)]), \
+                    patch.object(pipeline,'fetch_gameinput',lambda root:calls.append('gameinput')), \
+                    patch.object(pipeline,'fetch_dxc',lambda root:calls.append('dxc')), \
+                    patch.object(pipeline.urllib.request,'urlopen',offline), \
+                    patch.object(pipeline,'PROGRESS',lines), \
+                    patch.dict(os.environ,{'TOOLCHAIN_MIRROR':str(mirror),'ARCHIVE_MIRROR':str(archives)}):
+                pipeline.builder.download(root,['cmake','sources','gameinput','dxc'],Path(directory)/'downloads')
+                self.assertEqual((Path(directory)/'downloads/tool.zip').read_bytes(),b'tool')
+                self.assertEqual((root/'downloads'/f'owner-lib-{commit}.tar.gz').read_bytes(),b'archive')
+                self.assertEqual(calls,['gameinput','dxc'])
+                steps=[json.loads(line)['step'] for line in lines.getvalue().splitlines()
+                       if json.loads(line)['state']=='done']
+                self.assertEqual(steps,['download-cmake','download-sources','download-gameinput','download-dxc'])
+                with self.assertRaisesRegex(ValueError,'unknown item'):
+                    pipeline.builder.download(root,['git'],None)
+                with self.assertRaisesRegex(ValueError,'--downloads'):
+                    pipeline.builder.download(root,['cmake'],None)
+
+    def test_package_problems(self):
+        """The package allowlist: the launcher, its files, notices and the commit's files pass;
+        anything of a BuildRoot, another program, a picture, DXC or a file outside the commit,
+        a missing file and an oversized zip are refused. pe_imports reads a program's DLLs."""
+        tracked={'README.md','outputs/FM4-build/pipeline.py'}
+        good=[('MotorsportDX.exe',b'MZ'),('launcher.json',b'{"'),('toolchain.json',b'{"'),
+              ('LICENSE.txt',b'BS'),('CREDITS.txt',b'Mo'),('README.txt',b'Mo'),
+              ('third-party-notices/SDL-LICENSE.txt',b'Co'),('source/README.md',b'# '),
+              ('source/outputs/FM4-build/pipeline.py',b'"""'),('source/source-stamp.json',b'{\n')]
+        self.assertEqual(pipeline.builder.package_problems(good,tracked,10**6),[])
+        for entry,pattern in ((('game-build/fm4_rex.exe',b'MZ'),'not part'),
+                              (('source/work/x.cpp',b'in'),'not a file of the commit'),
+                              (('build-result.json',b'{"'),'not part'),
+                              (('dxcompiler.dll',b'MZ'),'program'),
+                              (('third-party-notices/logo.png',b'\x89P'),'picture'),
+                              (('README.txt.exe',b'MZ'),'program'),
+                              (('launcher-backdrop.jpg',b'\xff\xd8'),'picture')):
+            problems=pipeline.builder.package_problems(good+[entry],tracked,10**6)
+            self.assertTrue(any(pattern in problem for problem in problems),(entry,problems))
+        self.assertTrue(any('LICENSE.txt' in problem for problem in
+                            pipeline.builder.package_problems([entry for entry in good if entry[0]!='LICENSE.txt'],tracked,1)))
+        self.assertTrue(any('limit' in problem for problem in
+                            pipeline.builder.package_problems(good,tracked,pipeline.builder.PACKAGE_LIMIT+1)))
+        imports=[name.lower() for name in pipeline.builder.pe_imports(Path(sys.executable).read_bytes())]
+        self.assertIn('kernel32.dll',imports)
+        with self.assertRaises((ValueError,struct.error)):
+            pipeline.builder.pe_imports(b'not a program'*10)
 
     def test_clear_gray(self):
         """The e2e clear color check: smooth neutral grays that pass 102 (asphalt under TAA) are no

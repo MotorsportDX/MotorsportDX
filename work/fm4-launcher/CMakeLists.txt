@@ -22,6 +22,7 @@ find_package(SDL3 CONFIG REQUIRED COMPONENTS SDL3-static)
 set(IMGUI_DIR "${FM4_THIRDPARTY}/imgui")
 add_executable(fm4_launcher WIN32
     src/app.cpp
+    src/builder.cpp
     src/discs.cpp
     src/iso.cpp
     src/plan.cpp
