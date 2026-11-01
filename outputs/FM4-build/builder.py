@@ -250,16 +250,17 @@ def package(root,out,revision,jobs,toolchain_directory=None):
     target=out/f'{name}.zip'
     if target.exists():
         raise ValueError(f'{target} exists already.')
-    # The stage lies outside the BuildRoot, which may not hold the snapshot's source.
+    # The stage lies outside the BuildRoot, which may not hold the snapshot's source. Its pipeline
+    # runs with -B: Python's bytecode caches in the source would fail the allowlist.
     stage=out/'package-stage'
     shutil.rmtree(stage,ignore_errors=True)
     p.make_snapshot(stage/'source',commit)
     source=stage/'source'
     pipeline=source/'outputs/FM4-build/pipeline.py'
     common=['--build-root',root,'--jobs',jobs,*(['--toolchain',toolchain_directory] if toolchain_directory else [])]
-    p.run([sys.executable,'-I',pipeline,'setup',*common],log=root/'logs/package-setup.log')
-    p.run([sys.executable,'-I',pipeline,'launcher',*common,'--out',stage],log=root/'logs/package-launcher.log')
-    p.run([sys.executable,'-I',pipeline,'launcher-data','--out',stage],log=root/'logs/package-launcher-data.log')
+    p.run([sys.executable,'-I','-B',pipeline,'setup',*common],log=root/'logs/package-setup.log')
+    p.run([sys.executable,'-I','-B',pipeline,'launcher',*common,'--out',stage],log=root/'logs/package-launcher.log')
+    p.run([sys.executable,'-I','-B',pipeline,'launcher-data','--out',stage],log=root/'logs/package-launcher-data.log')
     for relative,destination in (('outputs/FM4-build/toolchain.json','toolchain.json'),('LICENSE','LICENSE.txt'),
                                  ('outputs/FM4-build/CREDITS.txt','CREDITS.txt'),
                                  ('outputs/FM4-build/package-readme.txt','README.txt')):

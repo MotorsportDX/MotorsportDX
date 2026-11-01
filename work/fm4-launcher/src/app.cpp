@@ -4009,7 +4009,7 @@ void App::BuildRows() {
       const char* label = !view.error.empty() ? "Retry" : started ? "Continue the build" : "Start the build";
       const std::string value = !all ? "Downloads missing" : !disc1_.error.empty() ? "Disc 1 needed" : "Press A";
       if (OptionRow("start", label, value,
-                    "Runs the steps above that are not done, in order. A step that failed runs again first; the "
+                    "Runs the steps below that are not done, in order. A step that failed runs again first; the "
                     "steps before it stay done.",
                     !view.busy && all && disc1_.error.empty()) == 2 &&
           !shot_)

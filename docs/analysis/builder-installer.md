@@ -843,7 +843,7 @@ Verification:
   `build\launcher-settings.json` with the USA Disc 1 and Disc 2; `MotorsportDX.exe --build` with
   `TOOLCHAIN_MIRROR`, `ARCHIVE_MIRROR`, `GAMEINPUT_MIRROR` and `DXC_MIRROR` naming the local copies
   of the handoff, in one exclusive slot of the GPU queue. Every file came from a mirror
-  (`build\logs\downloads.log`, `toolchain\logs	oolchain.log`). From the builder's log:
+  (`build\logs\downloads.log`, `toolchain\logs\toolchain.log`). From the builder's log:
 
   | Step | Time |
   | --- | --- |
@@ -866,7 +866,7 @@ Verification:
 - **The shipped launcher** imports Windows' own DLLs only (30 imports, the Universal CRT's API sets
   among them; read by `pe_imports`): it needs nothing beside it, as M1 linked it.
 - **The compiler's search paths**: with nothing but `System32` and `Windows` on `PATH`, llvm-mingw's
-  `x86_64-w64-mingw32-clang++ -v` searches its own `include\c++1`, `lib\clang\include` and
+  `x86_64-w64-mingw32-clang++ -v` searches its own `include\c++\v1`, `lib\clang\20\include` and
   `include` only, and links from its own `x86_64-w64-mingw32\lib`, `mingw\lib`, `lib` and clang's
   `lib\windows`; with `INCLUDE` and `LIB` set to other folders it reads neither. Unlike the MSVC
   target, it does not look for an installed Visual Studio.
