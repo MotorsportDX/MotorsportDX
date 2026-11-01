@@ -26,7 +26,7 @@ BUILDER_ITEMS=('python','cmake','ninja','llvm-mingw','sources','gameinput','dxc'
 # The launcher's build steps in order (python is its own unpack; the others are actions of
 # pipeline.py), with the seconds each took on the development laptop (20 threads, -Jobs 8, every
 # download local), which the launcher shows as its estimates.
-BUILDER_STEPS=(('python',5),('preflight',5),('toolchain',30),('setup',211),('generate',40),('build',192))
+BUILDER_STEPS=(('python',5),('preflight',2),('toolchain',10),('setup',210),('generate',36),('build',173))
 TOOL_NAMES={'python':'Python','cmake':'CMake','ninja':'Ninja','llvm-mingw':'llvm-mingw'}
 TOOL_PURPOSES={'python':'Runs the build steps (the embeddable package: unpacked, nothing installed).',
                'cmake':'Configures the builds.',

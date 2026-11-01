@@ -20,6 +20,7 @@ and [status/history.md](status/history.md).
   - [Shaders page](#shaders-page)
   - [Ally X run set](#ally-x-run-set)
   - [Export to another computer](#export-to-another-computer)
+  - [Builder mode](#builder-mode)
 - [Launcher defaults](#launcher-defaults)
   - [Render path and frame pacing](#render-path-and-frame-pacing)
 - [Options](#options)
@@ -166,7 +167,8 @@ in the same folder. The settings stay, because the launcher finds `launcher.json
 
 For reviews of the launcher's layout, `MotorsportDX.exe --screenshot <page> <width>x<height>
 <scale> <out.png>` renders one page without a window and exits. The pages are `home`,
-`display`, `look`, `controls`, `game-data`, `shaders`, `advanced` and `about`; the scale is the
+`display`, `look`, `controls`, `game-data`, `shaders`, `advanced`, `about` and, in builder mode,
+`build`; the scale is the
 DPI scale (1 for a 100% screen, 1.5 for the ROG Xbox Ally X's default). It renders with WARP,
 the CPU's Direct3D 11, so it never touches the GPU, and it neither reads nor writes
 `launcher-settings.json`: it starts from the default settings and the Discs of `local.json`.
@@ -174,7 +176,11 @@ It draws no backdrop unless one is given. Options:
 - `--settings <file>` reads that `launcher-settings.json` instead.
 - `--state first-run` starts without Discs and content; `--state error-banner` shows the banner
   of a game that exited with an error; `--state load-error` shows the error of a launcher
-  without its game; `--state developer` turns on the developer options.
+  without its game; `--state developer` turns on the developer options. `--state builder` shows
+  the [builder mode](#builder-mode) with what is on disk beside the launcher (its Welcome screen;
+  `--pad rb` moves to the next one), `--state builder-running` a made-up build in its runtime
+  step, and `--state builder-failed` a made-up build that stopped in generate on discs of no
+  release.
 - `--pad <button>,<button>...` presses gamepad buttons one after another before the capture
   (`up`, `down`, `left`, `right`, `a`, `b`, `x`, `y`, `lb`, `rb`, `start`, `back`), to check
   the pad navigation.
@@ -272,6 +278,73 @@ The export contains executables built from your discs, and its shader cache hold
 translated from the game. Keep it for your own computers; do not publish it or give it to
 others ([distribution](sources-and-licensing.md#distribution)). Its `third-party-notices`
 folder carries the license texts of the third-party code in the binaries.
+
+### Builder mode
+
+The launcher of the [builder package](analysis/builder-installer.md) (`Build.ps1 -Action package`,
+[setup](setup.md#the-builder-package)) has no game beside it: it builds the game on the player's
+computer from their discs. It is in builder mode when its folder holds `launcher.json` and the
+package's source snapshot (`source\source-stamp.json` and `source\outputs\FM4-build\pipeline.py`).
+Home's Play becomes **Build the game**, and the **Build** page leads as four screens (LB and RB,
+or the tabs):
+
+1. **Welcome:** what happens, the time it takes, the free disk space, that the discs stay where
+   they are, and the package's version.
+2. **Your discs:** Disc 1, Disc 2 and the disc images, as on the Game data page, and downloadable
+   content.
+3. **Downloads:** each download with its host, size, licence (X, or the button in the panel,
+   opens its text or page) and the folder it goes to: the embeddable Python, CMake, Ninja and
+   llvm-mingw of `toolchain.json`, the runtime's third-party sources (GitHub's archives of the
+   pinned commits), Microsoft.GameInput (NuGet) and the DirectX Shader Compiler (GitHub). Nothing
+   is fetched until the player presses **Download all** or A on a row. The launcher fetches
+   Python itself, checked against its pinned SHA-256, and unpacks it after checking every member's
+   name; the other rows run on that Python (`pipeline.py download`). Each local mirror of
+   [setup](setup.md#local-mirrors-for-developers) is read first, `TOOLCHAIN_MIRROR` for Python too.
+4. **Build:** **Start the build** (then **Pause**, **Continue the build** or **Retry**), the
+   steps with their state and time, and **Open log**, **Copy details** and the logs folder. The
+   panel shows the pipeline's current step, a bar of Ninja's compiles and the estimate.
+
+The steps run `pipeline.py` of the package's source with its own Python (`python -I`), never
+`Build.ps1`: **Python** (the unpack), **Check this computer** (`preflight`, which also sets the
+jobs), **Build tools** (`toolchain --portable`: the pinned tools always, never an installed copy),
+**Runtime** (`setup`), **Game code from Disc 1** (`generate`) and **Game** (`build --tests
+player`), each with `--progress` and `--toolchain`. Each process gets an environment of its own:
+Windows' folders on `PATH`, the user's folders, the proxies and the local mirrors, and nothing else
+of the launcher's (no `INCLUDE`, `LIB` or another Python's variables). A job object holds each
+step's processes: **Pause** and closing the launcher end them all.
+
+The install root's folders:
+
+| Folder | Holds |
+| --- | --- |
+| `MotorsportDX.exe`, `launcher.json`, `toolchain.json`, `README.txt`, the licences and notices | the package |
+| `source` | the source snapshot at the package's commit |
+| `downloads` | the tools' archives, kept |
+| `toolchain` | the unpacked tools and `toolchain-state.json` |
+| `build` | the BuildRoot: the game, `user-data`, the build's logs; also the launcher's settings, so the launcher of the build keeps the Discs and profiles |
+| `logs` | `builder.log` (what ran, with the times and the hashes checked), one log per step and download, `progress.jsonl` |
+| `builder-state.json` | each step done for the package's commit, with its time, the jobs, the preflight's findings and the last failure |
+
+**Resume:** a step counts as done for this commit when `builder-state.json` says so and its
+marker exists (`toolchain-state.json`, `setup-complete.json`, `local.json` with the same Discs,
+the Python folder's marker); the build is done when `build-result.json` names the package's
+commit. **Start**, **Continue** and **Retry** run the first step that is not done and the ones
+after it.
+
+**Errors** are said in plain words with what to do (the table of the
+[design](analysis/builder-installer.md#6-the-launcher-ux)): discs of no release or an incomplete
+Disc 2 (with **Choose the discs again**), a download that failed or changed, a full drive, the
+launcher tests, the step a build stopped in. **Copy details** copies the package, the step, the
+tools, the error and the logs to attach, as text; nothing is sent.
+
+While a task runs, the computer stays awake (`SetThreadExecutionState`, no setting changed), and
+the panel warns on battery. The other pages stay usable.
+
+**The hand-over.** When the build is done, the launcher starts `build\game-build\MotorsportDX.exe`,
+the launcher that `build` wrote from the same commit, and exits; that launcher starts the shader
+pass once, as after any build. Later the package's launcher hands over at once, unless it is
+started with `--builder`. `--build` starts **Download all** and the build at once: typing it is
+the consent to the downloads, for a scripted run.
 
 ## Launcher defaults
 

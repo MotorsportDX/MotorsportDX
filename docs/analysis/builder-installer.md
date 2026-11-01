@@ -463,8 +463,8 @@ Preflight -> Disc check -> Plan and consent -> Toolchain fetch -> Setup -> Gener
 | --- | --- | --- | --- |
 | 1. Preflight | Windows 10 or 11 x64 (Windows 10 is not tested); a CPU with x86-64-v2 (SSE3, SSSE3, SSE4.1, SSE4.2, POPCNT, CMPXCHG16B, LAHF/SAHF, by CPUID: the default build uses `-march=x86-64-v2`); a Direct3D 12 GPU (`D3D12CreateDevice` at feature level 11_0); RAM, which sets `-Jobs` (`-Jobs 8` ran on 32 GB; the memory per job is not measured); free disk on the install drive; the install path (short, ASCII, outside any synced folder) | seconds | old CPU or GPU; too little disk |
 | 2. Disc check | Disc 1, Disc 2 and the DLC folders, as `generate` checks them (section [2](#2-what-the-player-brings)) | seconds (three SHA-256 hashes) | wrong release, missing files, a title update, an ISO |
-| 3. Plan and consent | One page lists what is missing: each download with its host, size, licence (a button opens it) and where it goes, and Microsoft's terms for its C and C++ libraries and Windows SDK, which the player accepts there (route (b)); with route (a), the Build Tools' elevation prompt is announced | the player's | the player declines |
-| 4. Toolchain fetch | Each download to `downloads\`, checked against its pin, unpacked into `toolchain\`; with route (a) the Build Tools' installer runs in its own window | not measured | network, a hash mismatch, a payload Microsoft has removed, a declined elevation |
+| 3. Plan and consent | One page lists what is missing: each download with its host, size, licence (a button opens it) and where it goes. (Obsolete since route (c): Microsoft's terms for its C and C++ libraries and Windows SDK, route (b), and the Build Tools' elevation prompt, route (a).) | the player's | the player declines |
+| 4. Toolchain fetch | Each download to `downloads\`, checked against its pin, unpacked into `toolchain\` (obsolete since route (c): route (a)'s installer window) | not measured | network, a hash mismatch |
 | 5. Setup | `setup`: the runtime source, the SDK's third-party libraries, GameInput, DXC, the resolve shaders, the runtime build | about 5.2 min with its fetches ([4.11](#411-the-first-build-on-a-slower-computer)) | GitHub unreachable, a compile error |
 | 6. Generate | `generate`: the loader reads `default.xex`, the switch tables, `rexglue.exe codegen`, the guards; writes `local.json` | about 0.8 min | disc moved since step 2 |
 | 7. Build | `build`: the game (141 s), the DLLs staged, DXC and the C++ runtime DLLs staged, the instruction, post pass (WARP), CPU and launcher tests, `build-result.json`, the launcher | about 10.5 min, 7.5 of it tests | a compile error, a test failure |
@@ -481,9 +481,10 @@ preflight floor of 20 GB free, to be set from the measurements of B3 and B4.
 
 **How the builder drives the pipeline.** It runs `pipeline.py` directly with the toolchain's Python,
 not `Build.ps1`, so the PowerShell execution policy never matters. It builds the environment
-itself: `PATH` with its own LLVM, CMake, Ninja and Python, and `INCLUDE` and `LIB` with the unpacked
-Microsoft libraries of route (b); with route (a) it captures the Build Tools' `VsDevCmd.bat -arch=x64
--host_arch=x64` once instead. It starts each action as a child process with the logs in
+itself: `PATH` with its own llvm-mingw, CMake, Ninja and Python. (Obsolete since route (c): `INCLUDE`
+and `LIB` with the unpacked Microsoft libraries of route (b), and route (a)'s capture of the Build
+Tools' `VsDevCmd.bat`; the builder reads nothing of Microsoft's. B5 gives each step an environment
+of Windows' folders and the `--toolchain` tools only, [B5 results](#b5-results-1-november-2026).) It starts each action as a child process with the logs in
 `BuildRoot\logs`. The BuildRoot is `<InstallRoot>\build`, outside `source`, which keeps
 `pipeline.py`'s BuildRoot rule.
 
@@ -522,8 +523,8 @@ game** and a **Build** page leads, as a first-run wizard of four screens:
    that nothing of the game is downloaded.
 2. **Your discs:** the Game data page's rows (Disc 1, Disc 2, the DLC), checked at once.
 3. **Downloads:** the plan of step 3, each row with its host, size and licence, **Download all** or
-   one by one. The Microsoft row shows Microsoft's terms with **Accept** and **Decline**; with route
-   (a) it says that Microsoft's installer opens and asks for administrator rights.
+   one by one. (Obsolete since route (c): the Microsoft row with Microsoft's terms, **Accept** and
+   **Decline**, and route (a)'s installer with administrator rights. B5 has no Microsoft row.)
 4. **Build:** the steps of section 5 as rows (waiting, running, done, failed) with the elapsed time
    and an estimate from the measured times; a bar for the compile from Ninja's `[n/total]` lines in
    the stage's log; **Pause** (ends the running stage, resumes from its marker), **Open log**.
@@ -540,8 +541,8 @@ already prints:
 | `Missing Disc 2 content package` | "Disc 2 is incomplete: four packages are missing from its content folder." | Choose Disc 2 again, or build without it |
 | `... cannot be fetched with its pinned SHA-...` | "The download from <host> did not arrive whole or has changed." | Retry; mirrors |
 | `cannot be reached and FFX_MIRROR names no mirror` | "GitHub cannot be reached." | Retry later |
-| `Use LLVM 20.x` | "The installed LLVM is not version 20." | Use the builder's own |
-| A Microsoft payload refused or missing | "Microsoft's server no longer has this package, or it changed." | Retry; Microsoft's installer instead (route (a)) |
+| `Use LLVM 20.x` (obsolete: the builder always uses its own llvm-mingw) | "The installed LLVM is not version 20." | Use the builder's own |
+| A Microsoft payload refused or missing (obsolete since route (c)) | "Microsoft's server no longer has this package, or it changed." | Retry; Microsoft's installer instead (route (a)) |
 | `Exit <n>; log: ...` in a build | "The build stopped in <stage>." | Open log, Retry, report |
 | `Launcher tests failed` | "The launcher and the game of this build disagree." | Report: a project bug |
 | Windows' disk full | "The drive is full: <n> GB more are needed." | Free space, Retry |
@@ -567,7 +568,7 @@ Estimates in AI calendar time (1 person-week ≈ 3.5 h, range 2 to 7 h). B0 is t
 | B2. No Git (**done** on 31 October 2026, [results](#b2-results-31-october-2026)) | The SDK and its submodules as archives at their pinned commits with a hash over the unpacked files; FidelityFX only for a build with FSR; the SDL patch applied in Python; `doctor` without `git` | 3.5 h | the unpacked files' hash equals that of the development BuildRoot's `runtime-source\thirdparty`; `all` with Git off the `PATH` |
 | B3. The portable tools (**done** on 31 October 2026, [results](#b3-results-31-october-2026)) | `toolchain.json` (asset, size, SHA-256, licence, unpack rule) for Python (embeddable), CMake, Ninja and LLVM, each downloaded once with the owner's approval to pin it; the unpackers; detection of installed tools; the resolve shaders through `D3DCompile` instead of `fxc.exe`; `doctor` without `link`, `fxc.exe` and `vswhere` | 5 h | the `D3DCompile` headers against the `fxc.exe` ones on the development computer; `all` with only the portable tools and Visual Studio's libraries |
 | B4. Microsoft's libraries (**replaced** on 31 October 2026 by route (c), llvm-mingw: [4.7](#47-the-msvc-libraries-and-the-windows-sdk)) | Route (b) after the licence reading: the manifest reader, the pinned package list (MSVC 14.44 x64, Windows SDK 10.0.26100), the licence page, the VSIX, MSI and CAB unpacking, `INCLUDE` and `LIB`, the app-local C++ runtime DLLs; route (a) as the fallback | 7 h | `all` in a Windows account or sandbox without Visual Studio, LLVM, Python or Git (Windows Sandbox on Windows 11 Pro is an optional feature the owner turns on, or a VM), then the instruction tests; a game run there is the main session's call under the GPU rules |
-| B5. Builder mode in the launcher | The Build page and wizard, consent, progress, plain errors, resume, logs, keep-awake; the launcher with a static C++ runtime; `--screenshot build` and `--state builder` for reviews | 7 h | the launcher tests; screenshots at scale 1 and 1.5 (WARP); a full build through the launcher into a new install root on the development computer |
+| B5. Builder mode in the launcher (**done** on 1 November 2026, [results](#b5-results-1-november-2026)) | The Build page and wizard, consent, progress, plain errors, resume, logs, keep-awake; the launcher with a static C++ runtime; `--screenshot build` and `--state builder` for reviews | 7 h | the launcher tests; screenshots at scale 1 and 1.5 (WARP); a full build through the launcher into a new install root on the development computer |
 | B6. The package | A `package` action at a tag: the launcher built at the tag (needs only `setup`, no discs), `launcher.json`, `git archive` source, `toolchain.json`, licences and notices, into one zip; an allowlist check of the zip (no BuildRoot file, no executable but `MotorsportDX.exe`, no picture, no DXC, nothing of Microsoft's, a size limit) | 3.5 h | the zip's listing against the allowlist; the zip in the clean account or sandbox of B4 up to a built game |
 | B7. Updates | Pointing a new package at an install; the source swap; `generate` and `build` again; the `user-data` backup | 2 h | an update from one tag to the next on the development computer: the hashes of `user-data` before and after, the shader pass runs again |
 | B8. Second computer | The package on a second Windows computer (the ROG Xbox Ally X or another), run by the owner, from download to a Quick Race, with the build time measured against the estimate of 4.11 | 1 h of notes; the owner's run | the owner's report, as [bug reports](../bug-reports.md) asks |
@@ -794,6 +795,86 @@ Microsoft's libraries, not that nothing else of Visual Studio is read; B4's sand
 the downloads through the pipeline's own `fetch_tool` over HTTPS (the pins were made with `curl`;
 the run took the kept files); `TOOLCHAIN_MIRROR`; the embeddable Python's HTTPS; a game run of the
 build (not part of B3); Windows 10.
+
+### B5 results (1 November 2026)
+
+What B5 added is documented in [running, builder mode](../running.md#builder-mode) and
+[setup, builder downloads](../setup.md#builder-downloads): the launcher's builder mode
+([builder.h](../../work/fm4-launcher/src/builder.h), the Build page in
+[app.cpp](../../work/fm4-launcher/src/app.cpp)), `launcher.json`'s `builder` table, the
+`download` action and `ARCHIVE_MIRROR` ([builder.py](../../outputs/FM4-build/builder.py), which
+also holds B6's package action: `pipeline.py` reached the 256 KiB limit of
+`check-staged-content.py`, so the builder's code moved into a module of its own). The Shaders
+page's pinned fetch became `FetchPinned` in [shaders.cpp](../../work/fm4-launcher/src/shaders.cpp),
+which the builder's Python fetch shares.
+
+Decisions taken in B5 (the main session may revise them):
+
+- **The pinned tools always** (`toolchain --portable`): the builder never takes an installed CMake,
+  Ninja or llvm-mingw, unlike 4.2's "reuse before download". A player's build then uses exactly
+  the tools this project tested, for 48 MB more of CMake and Ninja; llvm-mingw has no installer to
+  detect anyway.
+- **Python, then the preflight.** The preflight is `pipeline.py preflight` and needs Python, so it
+  runs after the 11 MB Python fetch and before the other 350 MB. The discs are checked before any
+  download, on the Your discs screen, by the launcher's own port of the disc check.
+- **The settings live in the BuildRoot** (`build\launcher-settings.json`, with the discs unpacked
+  into `build\discs`), so the launcher of the build, which the hand-over starts, keeps the Discs and
+  profiles chosen before the build.
+- **The steps run separately** (`preflight`, `toolchain`, `setup`, `generate`, `build`), not as
+  `all`, so a Retry restarts the failed step with the earlier ones kept.
+- **No Microsoft row and no consent page** (route (c)); the download rows are the four tools, the
+  sources, GameInput and DXC.
+
+Verification:
+
+- **Tests.** `test_pipeline.py`: 55 pass (3 new: the downloads table against the fetches' own
+  paths and install_tool's marker, the download action from its mirrors with the network blocked,
+  the package allowlist and `pe_imports`). The launcher tests now also compare the launcher's view
+  of the builder: the downloads and steps of `launcher.json`, eight progress lines written by
+  `progress()`, Ninja's `[n/total]`, and the plain words of four errors the pipeline raises
+  (`disc_release` and `validate_discs` on wrong discs, `fetch_tool` without a source, a step's
+  exit); they passed in the build below (558 plans).
+- **Screenshots** at scale 1 (1280x720) and 1.5 (1920x1080), WARP: the four screens, the Downloads
+  screen with a row focused, the made-up running and failed builds, and Home. Read at 1:1; the
+  sizes below 1 MB now show in KB, the paths with backslashes, the bar in the theme's red, and the
+  main action above the steps on the Build screen.
+- **A full build through the launcher.** `snapshot` of `c40467f` into the new install root
+  `I:\FM4-b5-install\source`, `launcher-data` beside it, the launcher of the same source, and
+  `build\launcher-settings.json` with the USA Disc 1 and Disc 2; `MotorsportDX.exe --build` with
+  `TOOLCHAIN_MIRROR`, `ARCHIVE_MIRROR`, `GAMEINPUT_MIRROR` and `DXC_MIRROR` naming the local copies
+  of the handoff, in one exclusive slot of the GPU queue. Every file came from a mirror
+  (`build\logs\downloads.log`, `toolchain\logs	oolchain.log`). From the builder's log:
+
+  | Step | Time |
+  | --- | --- |
+  | Python and the six other downloads, from the mirrors | 3 s |
+  | `preflight` (all checks pass, 8 jobs) | under 1 s |
+  | `toolchain --portable` (llvm-mingw's 5,406 files in 2.2 s) | 3 s |
+  | `setup` | 210 s |
+  | `generate` | 36 s |
+  | `build --tests player` | 173 s |
+  | From the start to the hand-over | 431 s |
+
+  `build-result.json` names `c40467f`, `dirty` false, `tests: player`, `abi: mingw`; the
+  instruction, CPU and launcher tests passed. The shipped launcher then started
+  `build\game-build\MotorsportDX.exe` and exited.
+- **A bug found:** the launcher of the build started its first shader pass, which stopped at once:
+  `Unable to read ...\content-packages.txt`. The plan names the content manifest whenever Disc 2
+  is set, but only Play wrote it, so the first pass of every new build or export with Disc 2 failed
+  before Play (what is left then compiles in play). Fixed: the pass writes the manifest too
+  (`WriteContentManifest`); B6's run covers it.
+- **The shipped launcher** imports Windows' own DLLs only (30 imports, the Universal CRT's API sets
+  among them; read by `pe_imports`): it needs nothing beside it, as M1 linked it.
+- **The compiler's search paths**: with nothing but `System32` and `Windows` on `PATH`, llvm-mingw's
+  `x86_64-w64-mingw32-clang++ -v` searches its own `include\c++1`, `lib\clang\include` and
+  `include` only, and links from its own `x86_64-w64-mingw32\lib`, `mingw\lib`, `lib` and clang's
+  `lib\windows`; with `INCLUDE` and `LIB` set to other folders it reads neither. Unlike the MSVC
+  target, it does not look for an installed Visual Studio.
+
+Not verified in B5: a download over the network (every file came from a mirror; the urlmon fetch
+of Python and the pipeline's HTTPS were not exercised), the download rows pressed one by one,
+Pause and Retry in a real run (the code paths are the job object and the markers), the battery
+warning, a slow computer, and a game run of the build (not part of B5).
 
 ## 8. Risks
 

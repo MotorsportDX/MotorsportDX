@@ -504,6 +504,7 @@ class App {
   // (19.10's route); automatic once a build: marker() is what it last finished for.
   void CompileShaders();
   std::string ShaderPassMarker();
+  void WriteContentManifest();
   // The Shaders page's task on its own thread: fetching DXC, or the offline pass.
   void StartShaderTask(std::function<std::string()> task);
   // The About page: who made Motorsport DX possible, the credits and the third-party notices.
@@ -1259,10 +1260,7 @@ void App::Play() {
           return fail("Build artifact changed: " + name + ". Build or export again.");
       artifacts_checked_ = true;
     }
-    if (!content_.packages.empty()) {
-      std::ofstream manifest(root_ / "content-packages.txt", std::ios::binary | std::ios::trunc);
-      for (const auto& package : content_.packages) manifest << Utf8(package.path) << '\n';
-    }
+    WriteContentManifest();
     SaveSettings();
     Pairs env = plan->env;
     if (settings_.Active().options.perf_trace) {
@@ -3529,6 +3527,15 @@ std::string App::ShaderPassMarker() {
   }
 }
 
+// content-packages.txt, the packages the plan's manifest cvar names, for Play and for the shader
+// pass (before 1 November 2026 only Play wrote it, and the first pass of a new build with Disc 2
+// stopped on the missing file).
+void App::WriteContentManifest() {
+  if (content_.packages.empty()) return;
+  std::ofstream manifest(root_ / "content-packages.txt", std::ios::binary | std::ios::trunc);
+  for (const auto& package : content_.packages) manifest << Utf8(package.path) << '\n';
+}
+
 void App::CompileShaders() {
   std::string error;
   const auto plan = CurrentPlan(error);
@@ -3537,6 +3544,8 @@ void App::CompileShaders() {
     shader_message_ = plan ? "The game is running (fm4_rex.exe). Close it first." : error;
     return;
   }
+  // The plan names the content manifest whenever there are packages; the game reads it at start.
+  WriteContentManifest();
   std::vector<std::string> args = GameArgs(*plan);
   const fs::path progress_file = root_ / "logs" / "shader-pass.jsonl";
   args.push_back("--shader_offline_pass=true");

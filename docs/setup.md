@@ -215,6 +215,8 @@ powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\outputs\FM4-build\Buil
 | `preflight` | Checks whether this computer can build and run the game, before anything is fetched, and prints the result as JSON. Makes no changes. See [Preflight](#preflight). |
 | `launcher-data` | Writes the GUI launcher's `launcher.json` into `-Out` (or the BuildRoot) without a build. See [Launcher data](#launcher-data). |
 | `snapshot` | Writes a source snapshot of a commit (`-Revision`, default `HEAD`) with its version stamp into the new folder `-Out`. See [Source snapshots](#source-snapshots). |
+| `launcher` | Builds `MotorsportDX.exe` after `setup` alone, with no discs and no game, in a clean `BuildRoot\launcher-package`, and copies it into `-Out` when given. The package's launcher. |
+| `package` | Writes the builder package of a commit (`-Revision`, default `HEAD`) as one zip into `-Out`, and checks it. See [The builder package](#the-builder-package). |
 
 The stages can also run separately:
 
@@ -242,10 +244,10 @@ The stages can also run separately:
 | `-Fsr` | `on` or `off`, for `setup`, `build` and `all`: link AMD FSR 3.1 into the runtime, built from the FidelityFX SDK source (`REX_FSR`). `on` fetches the pinned SDK first. The runtime build folder keeps the choice for later builds; off by default. See [FSR 3.1](#fsr-31-optional). |
 | `-FfxMirror` | The FidelityFX SDK mirror for `setup`, `build` and `all`, in place of the `FFX_MIRROR` environment variable: another Git URL or a local `.bundle` file, or with `-Fetch archive` a local copy or another URL of the SDK's archive. See [the FidelityFX SDK mirror](#the-fidelityfx-sdk-mirror). |
 | `-Fetch` | `git` or `archive`, for `setup`, `build` and `all`: how the third-party sources are fetched. `git` clones them (the default in a Git checkout); `archive` takes GitHub's archives of the pinned commits without Git (the default in a [source snapshot](#source-snapshots)). See [fetching without Git](#fetching-without-git). |
-| `-Out` | The folder of `export`, outside the BuildRoot and the repository; of `launcher-data`, outside the source; or the new folder of `snapshot`, outside the repository. |
+| `-Out` | The folder of `export`, outside the BuildRoot and the repository; of `launcher-data`, outside the source; the new folder of `snapshot`, outside the repository; the folder `launcher` copies the program into; or the folder of the `package` zip, outside the BuildRoot and the repository. |
 | `-Tests` | `developer` (the default) or `player`, for `build` and `all`: which tests run at the end of `build`. See [3. Build](#3-build). |
 | `-Progress` | A file to which `setup`, `generate`, `build` and `all` append one JSON line for each stage and step, or `-` for the output. See [Progress lines](#progress-lines). |
-| `-Revision` | The commit of `snapshot`. Default: `HEAD`. |
+| `-Revision` | The commit of `snapshot` and `package`. Default: `HEAD`. |
 
 ## Toolchain
 
@@ -707,10 +709,59 @@ take a local copy:
 | `FFX_MIRROR` | The FidelityFX SDK bundle, or with `--fetch archive` the SDK's archive | First, when the BuildRoot has no checkout ([the mirror](#the-fidelityfx-sdk-mirror)) |
 | `GAMEINPUT_MIRROR` | The `.nupkg` file | First ([the GameInput package](#the-gameinput-package)) |
 | `DXC_MIRROR` | The release zip | First ([the DirectX Shader Compiler](#the-directx-shader-compiler)) |
-| `TOOLCHAIN_MIRROR` | A folder holding the archives of [`toolchain.json`](#portable-tools) under their release file names | First, by the `toolchain` action |
+| `TOOLCHAIN_MIRROR` | A folder holding the archives of [`toolchain.json`](#portable-tools) under their release file names | First, by the `toolchain` and `download` actions and the builder's Python fetch |
+| `ARCHIVE_MIRROR` | A folder holding GitHub's archives of `--fetch archive` under their names in `BuildRoot\downloads` (`<owner>-<repository>-<commit>.tar.gz`), such as another BuildRoot's `downloads` | First, by setup's archive fetch and the `download` action, for each archive that is missing in the BuildRoot |
 
 Every copy is checked against its pin as a download is. With `GIT_NO_LAZY_FETCH=1` Git also
 refuses to fetch a missing object of the FidelityFX checkout instead of fetching it.
+
+### Builder downloads
+
+The launcher's [builder mode](running.md#builder-mode) lists its downloads before it fetches
+anything; `launcher.json` carries them as `builder.downloads` (`builder_downloads` in
+[builder.py](../outputs/FM4-build/builder.py)), with the builder's folders (`builder.layout`) and
+steps (`builder.steps`, with the seconds each took on the development laptop as the estimates).
+Each download has its host, URL, size (exact, or the last measured for the archives, whose
+unpacked files are pinned instead), SHA-256 where one is pinned, licence and a link to its text,
+the files it leaves below the install root and the folder they are unpacked into.
+
+`pipeline.py download --item <item> [--item ...] --build-root <BuildRoot> --downloads <folder>`
+fetches items into the places where the `toolchain` action and `setup` find them, so that
+neither fetches anything afterwards: `python`, `cmake`, `ninja` and `llvm-mingw` into
+`--downloads` (by `fetch_tool`, with `TOOLCHAIN_MIRROR` first), `sources` (the 15 archives) into
+`BuildRoot\downloads` (with `ARCHIVE_MIRROR` first), `gameinput` and `dxc` into the BuildRoot as
+`setup` fetches them (`GAMEINPUT_MIRROR`, `DXC_MIRROR`); `all` takes every item. Files already
+there with their pins are kept, and each item is a `--progress` step `download-<item>`.
+
+### The builder package
+
+`package -Out <folder> [-Revision <commit>] -BuildRoot <BuildRoot> [-Toolchain <folder>]`
+(`pipeline.py package`, [builder.py](../outputs/FM4-build/builder.py)) writes
+`MotorsportDX-<describe>.zip` into `-Out`, with one top folder of the same name. It writes the
+snapshot of the commit into `-Out\package-stage\source`; the snapshot's own `pipeline.py` then
+runs `setup` and the `launcher` action in the BuildRoot (the launcher needs no discs), and
+`launcher-data`. The zip holds:
+
+| Path | From the commit |
+| --- | --- |
+| `MotorsportDX.exe` | built by the `launcher` action, with libc++ linked into it |
+| `launcher.json` | `launcher-data` |
+| `toolchain.json` | `outputs/FM4-build/toolchain.json` |
+| `source\` | the snapshot, with `source-stamp.json` |
+| `README.txt` | `outputs/FM4-build/package-readme.txt`: how to start, for players |
+| `LICENSE.txt`, `CREDITS.txt`, `third-party-notices\` | the project's licence, the credits and the licence texts of the third-party code, the LLVM and mingw-w64 notices among them |
+
+Before the zip gets its name, its allowlist (`package_problems`) is checked: no file but those
+above (the source only with the commit's files, `git ls-tree`), no program, library or archive but
+the launcher (by suffix and by the `MZ` header), no picture, nothing of a BuildRoot or an install
+(`build-result.json`, `local.json`, `launcher-settings.json` and the like), no DirectX Shader
+Compiler and nothing of Microsoft's packages, at most 40 MiB, and a launcher whose imports
+(`pe_imports`) are all Windows' own (in `System32`, or an API set), so neither `libc++.dll` nor
+another C++ runtime is needed beside it. The stage is removed afterwards.
+
+The package is built from a commit, and the BuildRoot may be any BuildRoot of the default ABI;
+with `--fetch archive`, the snapshot's default, it needs the archives in its `downloads` or
+`ARCHIVE_MIRROR`, and `setup` needs GameInput and DXC as always.
 
 ## Build flavors
 

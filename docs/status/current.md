@@ -27,6 +27,7 @@ The project is named Motorsport DX since 25 October 2026 (FM4-PC before): the RE
 | Area | State | Evidence |
 |---|---|---|
 | Clean clone, setup, generate and build | Verified on the development computer | [Clean setup from a fresh clone](#clean-setup-from-a-fresh-clone-25-october-2026), 25 October 2026; not on a second computer |
+| Builder installer: the launcher's builder mode (B5) | A full build through the launcher into a new install root from a snapshot, every download from local mirrors, up to the hand-over (431 s); launcher tests and screenshots at scales 1 and 1.5; not over the network, not on a second computer | [Builder installer, B5](#builder-installer-b5-1-november-2026), 1 November 2026 |
 | Build toolchain: llvm-mingw (the default since 1 November 2026) | Verified on the development computer against the MSVC build of the same commit: every build test, the full gate, the career, parity and perf tiers, a short soak, 2x captures; no computer without Visual Studio yet, not on the ROG Xbox Ally X yet | [The switch to llvm-mingw](#the-switch-to-llvm-mingw-31-october-and-1-november-2026), 1 November 2026 |
 | Boot, logos, intro video, main menu | Works | Every e2e run; menu reached about 30 seconds after start in the e2e boot; the clean setup of 25 October 2026 |
 | USA release (Disc 1, Disc 2, DLC) | Verified; every gate since runs on the USA BuildRoot | Clean build, content import and smoke gate with `dlc`, 18 October 2026 ([USA release](history-results.md#usa-release-18-october-2026)) |
@@ -87,6 +88,20 @@ The project is named Motorsport DX since 25 October 2026 (FM4-PC before): the RE
 The race phase of `photo` is 30 seconds of racing after 10 seconds of driving, with 12 cars. `career` is a World Tour race with quit, replay and continue.
 
 BuildRoots since 1 November 2026: `I:\FM4-build-usamg` (USA discs, built with llvm-mingw; its runs of 1 November 2026 are the baselines of the new build) beside `I:\FM4-build-usa` (USA discs, built with `-Abi msvc` until the owner's Ally X run of the llvm-mingw export, then converted in place). BuildRoots on 20 October 2026: `I:\FM4-build-usa` (USA discs, the development base) and `I:\FM4-build-pass` (Japan/Asia discs, for side builds). `I:\FM4-build2`, `I:\FM4-build-iter` and `I:\FM4-build-gtao` were removed that day; the runs, shader dumps, inventories, gate logs, material atlas and shader storage that the docs cite were moved first to `I:\FM4-archive\<BuildRoot>` with the same relative paths, and the docs point there. Results named with a bare BuildRoot of those three describe where a run was made.
+
+### Builder installer, B5, 1 November 2026
+
+The launcher of the builder package builds the game on the player's computer
+([builder mode](../running.md#builder-mode)): four screens (Welcome, Your discs, Downloads with each
+download's host, size and licence, Build), the embeddable Python fetched by the launcher, the
+other downloads and the steps through `pipeline.py`, resume, Pause, plain errors and the hand-over
+to the launcher of the build. On this PC, from a snapshot of `c40467f` in a new install root with
+every download from local mirrors, `MotorsportDX.exe --build` built the game in 431 s (setup 210 s,
+generate 36 s, build 173 s with the player tests) and handed over; the launcher tests passed
+(558 plans and the new builder cases). The run found that the first shader pass of a new build or
+export with Disc 2 stopped on a missing `content-packages.txt`; fixed in the same increment
+([B5 results](../analysis/builder-installer.md#b5-results-1-november-2026)). Not covered: downloads
+over the network, Pause and Retry by hand, a second computer.
 
 ### Disc images (ISO), 1 November 2026
 
