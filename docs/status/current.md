@@ -28,6 +28,7 @@ The project is named Motorsport DX since 25 October 2026 (FM4-PC before): the RE
 |---|---|---|
 | Clean clone, setup, generate and build | Verified on the development computer | [Clean setup from a fresh clone](#clean-setup-from-a-fresh-clone-25-october-2026), 25 October 2026; not on a second computer |
 | In-game settings menu, S0 to S4 | Native path, 3/2, career races: the menu closed passes against the previous main; opened 8 s into the race at scales 1 and 1.5, it sets pad rumble and TAA sharpening at once and saves the quality and the `gt7` preset for the next start, which the launcher's fold and shader pass marker pick up; not on a real pad, not on the ROG Xbox Ally X | [In-game settings, S0 to S4](#in-game-settings-s0-to-s4-4-november-2026), 4 November 2026 |
+| Builder installer: updates (B7) | The package of `14a31f5` updated a built install of `3dd063e`: the saves backed up, 188 s to the hand-over, the shader pass again, `user-data` unchanged (546 files); launcher tests cover the update, the prune and the backup; the Welcome row not pressed by hand | [Builder installer, B7](#builder-installer-b7-updates-4-november-2026), 4 November 2026 |
 | Builder installer: the launcher's builder mode (B5) and the package (B6) | The package of `3dd063e` (7.7 MB zip) passes its allowlist; unpacked into a new folder and built through its launcher with nothing but Windows on `PATH`, every download from local mirrors: 430 s to the hand-over, then the shader pass; launcher tests and screenshots at scales 1 and 1.5; not over the network, not on a second computer | [Builder installer, B5 and B6](#builder-installer-b5-and-b6-1-november-2026), 1 November 2026 |
 | Build toolchain: llvm-mingw (the default since 1 November 2026) | Verified on the development computer against the MSVC build of the same commit: every build test, the full gate, the career, parity and perf tiers, a short soak, 2x captures; no computer without Visual Studio yet, not on the ROG Xbox Ally X yet | [The switch to llvm-mingw](#the-switch-to-llvm-mingw-31-october-and-1-november-2026), 1 November 2026 |
 | Boot, logos, intro video, main menu | Works | Every e2e run; menu reached about 30 seconds after start in the e2e boot; the clean setup of 25 October 2026 |
@@ -114,6 +115,18 @@ AI driving, against the previous main's binary (`1fea8e4`, snapshot `igs-base`):
 - **Not covered:** a real pad's View and Menu chord and navigation (the test switch drives the
   menu's own path), the keyboard and mouse in the menu, the ROG Xbox Ally X (stage S6), and a
   launcher started on the folded profile (its fold and pass marker are checked by its tests).
+
+### Builder installer, B7: updates, 4 November 2026
+
+A new package updates an earlier install: its launcher's **Update an earlier install** (or
+`--update <folder>`) swaps the install's source for its own and copies its launcher and data over,
+and the next build backs up the saves first ([updating](../running.md#updating-an-earlier-install)).
+On this PC the package of `14a31f5` updated a scrubbed install of `3dd063e` built through its
+launcher: 2 s for the update, a backup of 31 files, 188 s to the hand-over (setup 13 s, generate
+34 s, build 141 s), the shader pass ran again, and the SHA-256 of all 546 files of `user-data` were
+equal before and after; the launcher tests cover the update, the prune of stale source files and
+the backup ([B7 results](../analysis/builder-installer.md#b7-results-4-november-2026)). Not
+covered: the Welcome row pressed by hand, a changed `toolchain.json`, restoring a backup.
 
 ### Builder installer, B5 and B6, 1 November 2026
 

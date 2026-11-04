@@ -571,7 +571,7 @@ Estimates in AI calendar time (1 person-week ≈ 3.5 h, range 2 to 7 h). B0 is t
 | B4. Microsoft's libraries (**replaced** on 31 October 2026 by route (c), llvm-mingw: [4.7](#47-the-msvc-libraries-and-the-windows-sdk)) | Route (b) after the licence reading: the manifest reader, the pinned package list (MSVC 14.44 x64, Windows SDK 10.0.26100), the licence page, the VSIX, MSI and CAB unpacking, `INCLUDE` and `LIB`, the app-local C++ runtime DLLs; route (a) as the fallback | 7 h | `all` in a Windows account or sandbox without Visual Studio, LLVM, Python or Git (Windows Sandbox on Windows 11 Pro is an optional feature the owner turns on, or a VM), then the instruction tests; a game run there is the main session's call under the GPU rules |
 | B5. Builder mode in the launcher (**done** on 1 November 2026, [results](#b5-results-1-november-2026)) | The Build page and wizard, consent, progress, plain errors, resume, logs, keep-awake; the launcher with a static C++ runtime; `--screenshot build` and `--state builder` for reviews | 7 h | the launcher tests; screenshots at scale 1 and 1.5 (WARP); a full build through the launcher into a new install root on the development computer |
 | B6. The package (**done** on 1 November 2026, [results](#b6-results-1-november-2026)) | A `package` action at a tag: the launcher built at the tag (needs only `setup`, no discs), `launcher.json`, `git archive` source, `toolchain.json`, licences and notices, into one zip; an allowlist check of the zip (no BuildRoot file, no executable but `MotorsportDX.exe`, no picture, no DXC, nothing of Microsoft's, a size limit) | 3.5 h | the zip's listing against the allowlist; the zip in the clean account or sandbox of B4 up to a built game |
-| B7. Updates | Pointing a new package at an install; the source swap; `generate` and `build` again; the `user-data` backup | 2 h | an update from one tag to the next on the development computer: the hashes of `user-data` before and after, the shader pass runs again |
+| B7. Updates (**done** on 4 November 2026, [results](#b7-results-4-november-2026)) | Pointing a new package at an install; the source swap; `generate` and `build` again; the `user-data` backup | 2 h | an update from one tag to the next on the development computer: the hashes of `user-data` before and after, the shader pass runs again |
 | B8. Second computer | The package on a second Windows computer (the ROG Xbox Ally X or another), run by the owner, from download to a Quick Race, with the build time measured against the estimate of 4.11 | 1 h of notes; the owner's run | the owner's report, as [bug reports](../bug-reports.md) asks |
 | B9 (optional). ISO input | **Done on 1 November 2026**: Disc 1 and Disc 2 from Xbox 360 disc images, unpacked once into a folder by a GDFX reader of its own in `pipeline.py` and its port in the launcher ([Disc images](../setup.md#disc-images)) | 5 h | the USA images unpack byte-identical to their extracted folders ([status](../status/current.md#disc-images-iso-1-november-2026)); the Japan/Asia images are not checked |
 | B10 (optional). Option B | The shipped runtime, after the licence items of 3.2 | 3.5 h, plus the licence work | a game built against the shipped runtime has the hashes of one built from source |
@@ -923,6 +923,64 @@ README for players and the package in [distribution](../sources-and-licensing.md
 
 Not verified in B6: the downloads over the network, a computer without the development tools,
 Windows 10, the package's README read by a player.
+
+### B7 results (4 November 2026)
+
+What B7 added is documented in [running, updating an earlier install](../running.md#updating-an-earlier-install)
+and in the package's README: the launcher of a new package puts itself into an earlier install
+(Welcome's **Update an earlier install**, or `--update <folder>`; `UpdateInstall` in
+[builder.cpp](../../work/fm4-launcher/src/builder.cpp)), and the first build of a new commit over
+an earlier build backs up the saves (`BackUpSaves`) and removes the source files that the
+snapshot's stamp does not list (`PruneSource`; the stamp's new `paths`,
+[setup](../setup.md#source-snapshots)).
+
+Decisions taken in B7 (the main session may revise them):
+
+- **The package is unpacked beside, then pointed at the install.** The package's zip has one top
+  folder named after its version, so unpacking it "over" the earlier one makes a new folder; the
+  update copies the new source beside the install's (`source.new`), checks its stamp and swaps it
+  in, and only then copies the launcher, `launcher.json`, `toolchain.json`, texts and notices. A
+  package copied over the earlier folder by hand also works: the stale files go before the build.
+- **What the backup holds.** `user-data` without the title's shared marketplace content
+  (`0000000000000000\4D530910\00000002`, its headers and the `.import-complete` markers), which
+  Play imports again from Disc 2 when needed, and without the game's cache; with
+  `launcher-settings.json` and `overlay-changes.json`. One backup per new commit, into
+  `backups\<date>-<time>-<commit of the earlier build>`; nothing deletes old backups.
+- **The steps run again from preflight**, since `builder-state.json` is per commit. Each step
+  reuses what the earlier build left: the tools (no download when `launcher.json` names the same
+  files), setup's runtime build and the game's objects.
+
+Verification:
+
+- **Tests.** The launcher tests now run an update between two made-up packages (the source swapped,
+  the package's files copied, the install's `build`, `logs` and `downloads` untouched, an install
+  that is not one and the package's own folder refused), the prune of an earlier package's files
+  and Python's caches, and the backup's file list; they passed (558 plans). `test_pipeline.py`:
+  56 pass (`test_make_snapshot` checks the stamp's `paths`).
+- **An update on this computer.** The package of `14a31f5`,
+  `D:\FM4-export\MotorsportDX-14a31f5.zip` (7,864,166 bytes, 1,315 files), passed its allowlist.
+  The package of `3dd063e` was unpacked into `I:\FM4-b7-install\old` and built through its launcher
+  with nothing but Windows on `PATH` and the local mirrors (472 s to the hand-over, then the shader
+  pass, which imported Disc 2); the development profile was copied into its `build\user-data` as a
+  save. The package of `14a31f5`, unpacked into `I:\FM4-b7-install\new`, was then started with
+  `--update I:\FM4-b7-install\old\MotorsportDX-3dd063e --build` in the same scrubbed environment:
+
+  | What | Result |
+  | --- | --- |
+  | The update (copy, check, swap, package files) | 2 s; `source-stamp.json` names `14a31f5` |
+  | The backup | `backups\2026-11-04-144410-3dd063e`: 31 files, 7,719,717 bytes (the profile, the achievements, `launcher-settings.json`) |
+  | The steps | preflight under 1 s, `toolchain` under 1 s (nothing downloaded), `setup` 13 s, `generate` 34 s, `build` 141 s; 188 s from the update to the hand-over |
+  | `build-result.json` | names `14a31f5` |
+  | The shader pass | ran again on the launcher of the build (its log and `shader-pass.done` rewritten); Disc 2's four packages already imported |
+  | `user-data` | the SHA-256 of all 546 files equal before and after |
+
+- **Seen, not B7's:** the install root holds an empty `NVIDIA Corporation\umdlogs` folder, written
+  during the first build of `3dd063e` (the D3D12 device of the preflight or of the shader pass,
+  started in the install root). It is the driver's and harmless.
+
+Not verified in B7: **Update an earlier install** pressed by hand (the run used `--update`), an
+update across a changed `toolchain.json` (both commits pin the same tools), a package copied over
+the earlier folder by hand on a real install (the tests cover the prune), restoring a backup.
 
 ### The owner's run (B8): checklist
 

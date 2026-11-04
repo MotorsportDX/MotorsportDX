@@ -21,6 +21,7 @@ and [status/history.md](status/history.md).
   - [Ally X run set](#ally-x-run-set)
   - [Export to another computer](#export-to-another-computer)
   - [Builder mode](#builder-mode)
+    - [Updating an earlier install](#updating-an-earlier-install)
 - [In-game settings](#in-game-settings)
 - [Launcher defaults](#launcher-defaults)
   - [Render path and frame pacing](#render-path-and-frame-pacing)
@@ -326,7 +327,8 @@ The install root's folders:
 | `toolchain` | the unpacked tools and `toolchain-state.json` |
 | `build` | the BuildRoot: the game, `user-data`, the build's logs; also the launcher's settings, so the launcher of the build keeps the Discs and profiles |
 | `logs` | `builder.log` (what ran, with the times and the hashes checked), one log per step and download, `progress.jsonl` |
-| `builder-state.json` | each step done for the package's commit, with its time, the jobs, the preflight's findings and the last failure |
+| `builder-state.json` | each step done for the package's commit, with its time, the jobs, the preflight's findings and the last failure; after an update, the backup made for this package |
+| `backups` | after an update, the saves and settings of the earlier build, one folder per update |
 
 **Resume:** a step counts as done for this commit when `builder-state.json` says so and its
 marker exists (`toolchain-state.json`, `setup-complete.json`, `local.json` with the same Discs,
@@ -348,6 +350,37 @@ the launcher that `build` wrote from the same commit, and exits; that launcher s
 pass once, as after any build. Later the package's launcher hands over at once, unless it is
 started with `--builder`. `--build` starts **Download all** and the build at once: typing it is
 the consent to the downloads, for a scripted run.
+
+#### Updating an earlier install
+
+A new version is a new package. The player unpacks it into a new folder, starts its launcher and
+chooses **Update an earlier install** on Welcome, then the folder of the earlier install (the one
+that holds its `MotorsportDX.exe`, `source` and `build`). `--update <folder>` does the same from a
+command line, and `--update <folder> --build` also starts the build there.
+
+1. The package's `source` is copied into the install as `source.new` and its stamp checked; the
+   install's `source` is then swapped for it. The package's `MotorsportDX.exe`, `launcher.json`,
+   `toolchain.json`, texts and notices are copied over the install's. Nothing is replaced until
+   every file is copied beside the install; a failure leaves the install as it was, and when the
+   copy of the package's own files fails after the swap (the install's launcher still running),
+   updating again finishes it.
+2. `build`, `toolchain`, `downloads` and `logs` stay: the settings and profiles of
+   `build\launcher-settings.json`, the discs, the profiles, saves and imported content of
+   `build\user-data`, the shader cache, the tools and their archives. A download is fetched again
+   only when the new `launcher.json` names a file that is not there.
+3. The package's launcher starts the install's launcher, now the new one, which opens on the Build
+   screen: the steps of the new commit have not run (`builder-state.json` is per commit).
+4. Before the first step, the builder backs up the saves into `backups\<date>-<time>-<commit of
+   the earlier build>`: `user-data` without the imported content (the title's shared content and
+   its headers and markers, which Play imports again when needed) and without the cache, and
+   `launcher-settings.json` with `overlay-changes.json`. Saves are not checked between builds
+   ([known issues](known-issues.md)). It also removes the files of `source` that the stamp does not
+   list, for an update unpacked over the earlier folder instead.
+5. The steps run as in a first build, each over what the earlier build left (incremental), and the
+   launcher of the build starts the shader pass again, since the game changed.
+
+Unpacking the new zip's folder over the earlier install's also works: the launcher then finds a
+source of another commit, removes the stale files and backs up the saves as above.
 
 ## In-game settings
 

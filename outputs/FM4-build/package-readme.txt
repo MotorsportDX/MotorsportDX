@@ -23,12 +23,21 @@ How to start
 
 Afterwards start MotorsportDX.exe in this folder as before: it starts the game's launcher.
 
+Updating to a new version
+  1. Unpack the new version's zip into a new folder, and start its MotorsportDX.exe.
+  2. On its Welcome screen, choose "Update an earlier install" and then the folder of your
+     earlier version (the one with MotorsportDX.exe, source and build in it).
+  3. The new version moves into that folder and builds there. Your profiles, saves, settings,
+     discs, imported cars and build tools stay. Before it builds, your saves are copied into
+     backups in that folder. Afterwards the new folder can be deleted.
+
 The folders it makes here
   source\       the project's source code at this package's version
   toolchain\    the build tools (Python, CMake, Ninja, llvm-mingw)
   downloads\    the tools' downloaded archives
   build\        the built game, your profile and saves (build\user-data), and its logs
   logs\         the builder's own log (builder.log)
+  backups\      after an update, a copy of your saves from before it
 
 When something fails, the Build screen says what happened and offers Retry and Open log. Its
 Copy details button copies a short report for a bug report (docs\bug-reports.md in the source

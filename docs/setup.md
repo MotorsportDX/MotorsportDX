@@ -627,15 +627,19 @@ The stamp is `source-stamp.json` at the snapshot's root:
  "date": "2026-10-31T13:53:40+07:00",
  "describe": "5089673",
  "files": 1257,
- "tree": "a276fde480a8dbfe95d013b09280ec960f5f00dce514ed0b7c76e3d2d3eab9b5"
+ "tree": "a276fde480a8dbfe95d013b09280ec960f5f00dce514ed0b7c76e3d2d3eab9b5",
+ "paths": [".gitattributes", ".gitignore", "AGENTS.md", "..."]
 }
 ```
 
 `commit` is the full commit hash, `date` its committer date, `describe` the output of `git
 describe --tags --always` (the tag once the project has one), `files` the number of files
-besides the stamp, and `tree` a SHA-256 over the paths and contents of the files in
+besides the stamp, `tree` a SHA-256 over the paths and contents of the files in
 `work/runtime` and `work/fm4-rex` (each file's path relative to the snapshot, a zero byte and
-its SHA-256, in path order).
+its SHA-256, in path order), and `paths` the files besides the stamp, with `/`, in path order.
+`paths` is new with B7 (4 November 2026): before a build, the launcher's builder removes the
+source files it does not list, which a package unpacked over an earlier one leaves
+([updates](running.md#updating-an-earlier-install)); a stamp without it is read as before.
 
 In a snapshot (a source folder without `.git`), `build-result.json`'s `source` takes `head` from
 the stamp's `commit`, and `dirty` is true when the files of `work/runtime` or `work/fm4-rex` no
