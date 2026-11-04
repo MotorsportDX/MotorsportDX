@@ -1,9 +1,9 @@
 # Motorsport DX: Current Status
 
-As of 1 November 2026.
+As of 4 November 2026.
 
 - **Latest result:** the build moved to llvm-mingw (no Visual Studio, Windows SDK or Visual C++ Redistributable). Against the MSVC build of the same commit on the native path: the full gate, the career and parity tiers and a short soak pass alike, the race runs at the same frame rate (237.1 against 234.3 fps over nine runs each, in three orders), and screens whose moment does not depend on the race are byte-identical at 2x ([the switch to llvm-mingw](#the-switch-to-llvm-mingw-31-october-and-1-november-2026)). Its export for the ROG Xbox Ally X waits for the owner's run.
-- **Latest changes:** the look presets `gt7` and `fm2023` ([look presets](#look-presets-after-gt7-and-fm2023-29-october-2026)), the GUI launcher's racing theme on every page ([launcher theme](#gui-launcher-racing-theme-increments-t1-to-t6-29-october-2026)), and native racing wheel support up to the owner's hardware test, off by default, with the countdown lock fix ([racing wheel](#racing-wheel-stages-0-to-6-and-the-close-gate-29-october-2026)).
+- **Latest changes:** the [in-game settings](../running.md#in-game-settings) menu (F2, or View and Menu held on a pad): the controls, the look and the display while the game runs, saved for the launcher's profile ([in-game settings, S0 to S4](#in-game-settings-s0-to-s4-4-november-2026)); the look presets `gt7` and `fm2023` ([look presets](#look-presets-after-gt7-and-fm2023-29-october-2026)), the GUI launcher's racing theme on every page ([launcher theme](#gui-launcher-racing-theme-increments-t1-to-t6-29-october-2026)), and native racing wheel support up to the owner's hardware test, off by default, with the countdown lock fix ([racing wheel](#racing-wheel-stages-0-to-6-and-the-close-gate-29-october-2026)).
 - **The native port:** Level 1 (no shader or pipeline compiles in play) passed its final gate on this PC on 29 October 2026 ([Level 1 final gate](#level-1-final-gate-29-october-2026)). The owner's runs of its export on the ROG Xbox Ally X are pending.
 
 This page describes the state now. Results from earlier builds came from different binaries, profiles and settings, so a past pass does not show that a feature was retested on the newer binary. Retested results are listed under [Verified on the latest build](#verified-on-the-latest-build); the results before the Level 1 final gate are in [history](history-results.md), and the longer opening paragraph that this page had until 30 October 2026 is in [history](history.md#8-status-summary-replaced-on-30-october-2026). [Known issues](../known-issues.md) says the same for players in plain terms.
@@ -27,6 +27,7 @@ The project is named Motorsport DX since 25 October 2026 (FM4-PC before): the RE
 | Area | State | Evidence |
 |---|---|---|
 | Clean clone, setup, generate and build | Verified on the development computer | [Clean setup from a fresh clone](#clean-setup-from-a-fresh-clone-25-october-2026), 25 October 2026; not on a second computer |
+| In-game settings menu, S0 to S4 | Native path, 3/2, career races: the menu closed passes against the previous main; opened 8 s into the race at scales 1 and 1.5, it sets pad rumble and TAA sharpening at once and saves the quality and the `gt7` preset for the next start, which the launcher's fold and shader pass marker pick up; not on a real pad, not on the ROG Xbox Ally X | [In-game settings, S0 to S4](#in-game-settings-s0-to-s4-4-november-2026), 4 November 2026 |
 | Builder installer: the launcher's builder mode (B5) and the package (B6) | The package of `3dd063e` (7.7 MB zip) passes its allowlist; unpacked into a new folder and built through its launcher with nothing but Windows on `PATH`, every download from local mirrors: 430 s to the hand-over, then the shader pass; launcher tests and screenshots at scales 1 and 1.5; not over the network, not on a second computer | [Builder installer, B5 and B6](#builder-installer-b5-and-b6-1-november-2026), 1 November 2026 |
 | Build toolchain: llvm-mingw (the default since 1 November 2026) | Verified on the development computer against the MSVC build of the same commit: every build test, the full gate, the career, parity and perf tiers, a short soak, 2x captures; no computer without Visual Studio yet, not on the ROG Xbox Ally X yet | [The switch to llvm-mingw](#the-switch-to-llvm-mingw-31-october-and-1-november-2026), 1 November 2026 |
 | Boot, logos, intro video, main menu | Works | Every e2e run; menu reached about 30 seconds after start in the e2e boot; the clean setup of 25 October 2026 |
@@ -88,6 +89,31 @@ The project is named Motorsport DX since 25 October 2026 (FM4-PC before): the RE
 The race phase of `photo` is 30 seconds of racing after 10 seconds of driving, with 12 cars. `career` is a World Tour race with quit, replay and continue.
 
 BuildRoots since 1 November 2026: `I:\FM4-build-usamg` (USA discs, built with llvm-mingw; its runs of 1 November 2026 are the baselines of the new build) beside `I:\FM4-build-usa` (USA discs, built with `-Abi msvc` until the owner's Ally X run of the llvm-mingw export, then converted in place). BuildRoots on 20 October 2026: `I:\FM4-build-usa` (USA discs, the development base) and `I:\FM4-build-pass` (Japan/Asia discs, for side builds). `I:\FM4-build2`, `I:\FM4-build-iter` and `I:\FM4-build-gtao` were removed that day; the runs, shader dumps, inventories, gate logs, material atlas and shader storage that the docs cite were moved first to `I:\FM4-archive\<BuildRoot>` with the same relative paths, and the docs point there. Results named with a bare BuildRoot of those three describe where a run was made.
+
+### In-game settings, S0 to S4, 4 November 2026
+
+The [in-game settings](../running.md#in-game-settings) menu, stages S0 to S4 of its
+[plan](../analysis/ingame-settings.md) (local main `a4b5fb0` for S0 and S1, then S2 to S4),
+on `I:\FM4-build-usa` (`--abi msvc`), the native path at 3/2, a career race at 240 Hz with the
+AI driving, against the previous main's binary (`1fea8e4`, snapshot `igs-base`):
+
+- **Tests:** `test_player_settings` and the pipeline's other 55 tests; the launcher tests (558
+  plans, the table against `Options` and the knob tables, the folding of changes, the shader
+  pass marker of a changed look); `fm4_settings_model_tests` against the build's launcher.json.
+- **Menu closed** (`igs-s4-career`): the race at 236.1 fps (p99 5.19 ms) against 236.9 (4.99),
+  the replay at 119.5 against 118.8; `compare.py` passes; the same error lines as the baseline.
+- **Menu opened 8 s into the race** (`fm4_settings_overlay_test=8`, `igs-s4b-ovl1` at scale 1,
+  `igs-s4b-ovl15` at 1.5): each page shown and captured from the screen; pad rumble 0.5
+  (`pad_rumble_strength` read back 0.5) and sharpening 0.1 (`shader_mod_set TAA_SHARPEN=0.1`)
+  applied at once; the quality `ultra` and the preset `gt7` saved as "next start"; the menu
+  closed. The race at 237.4 fps (p99 4.99 ms) and the replay at 119.0 with the menu opened and
+  closed in it; `compare.py` passes.
+- **Next start:** the game's `overlay-changes.json`, folded by the launcher into a profile of its
+  options, gives `pad` `rumble=0.5`, `quality` `ultra` and `look` `gt7,sharpen=0.1`, with no
+  change dropped, and a plan whose look differs, so the shader pass runs again.
+- **Not covered:** a real pad's View and Menu chord and navigation (the test switch drives the
+  menu's own path), the keyboard and mouse in the menu, the ROG Xbox Ally X (stage S6), and a
+  launcher started on the folded profile (its fold and pass marker are checked by its tests).
 
 ### Builder installer, B5 and B6, 1 November 2026
 
@@ -338,7 +364,7 @@ Everything still open, grouped by area.
 
 ### Settings and input
 
-- The in-game PC settings overlay is not done; its plan is in [in-game settings](../analysis/ingame-settings.md); driving with a racing wheel and its force feedback are complete up to the owner's hardware test, off by default, and checked with a virtual wheel and recorded forces only ([stages 0 to 6](#racing-wheel-stages-0-to-6-and-the-close-gate-29-october-2026)). Keyboard bindings are set in the GUI launcher's Controls page (the runtime's `keybind_*` settings), not in the game. The modern pad options (rumble strength, trigger rumble, the driver choice, the input thread) are checked with a virtual pad and on the ROG Xbox Ally X's built-in pad (no trigger rumble there); the Xbox Series controller is next ([checklist](../running-controls.md#controller-test-checklist)).
+- The [in-game settings](../running.md#in-game-settings) menu changes the controls, the look and the display while the game runs (stages S0 to S4 of its [plan](../analysis/ingame-settings.md)); a look preset and the display settings take effect at the next start, live look presets (S5) wait for the owner's choice, and the pad chord on the ROG Xbox Ally X (S6) for the owner's run. Driving with a racing wheel and its force feedback are complete up to the owner's hardware test, off by default, and checked with a virtual wheel and recorded forces only ([stages 0 to 6](#racing-wheel-stages-0-to-6-and-the-close-gate-29-october-2026)). Keyboard bindings are set in the GUI launcher's Controls page (the runtime's `keybind_*` settings), not in the game. The modern pad options (rumble strength, trigger rumble, the driver choice, the input thread) are checked with a virtual pad and on the ROG Xbox Ally X's built-in pad (no trigger rumble there); the Xbox Series controller is next ([checklist](../running-controls.md#controller-test-checklist)).
 
 ### Stability and runtime
 
@@ -370,7 +396,8 @@ The proposed order is:
 11. **Watch TAA for ghosting, then trace a 16-car grid.** TAA steps 1 to 7 are done ([TAA](../analysis/taa.md#current-state)). Not observed yet: tire smoke from the cockpit camera, sparks of a collision, the heavy smoke of a full grid at the start, and gravel dust; a case that ghosts gets step 8, a reactive mask written by a shader mod for that shader. The scene_color point could become the default after a smoke gate with `taa_point=1`, the write-back counter on more tracks, career, replays and photo mode, and evidence that its occlusion filter helps.
 12. **Build a sky pack.** The offline extractor gives the skies of every track (`<BuildRoot>\texextract\panoramas.txt`); check one sky other than the Bernese Alps in game, look at the Road America and Silverstone tiles, and load replacements off the command processor thread before building a large pack. See [offline extraction](../analysis/texture-replacement.md#offline-extraction).
 13. **Test the controller options on the Xbox Series controller, and GameInput and the anti-deadzone on both pads.** The owner's [checklist](../running-controls.md#controller-test-checklist): `default`, `rawinput` and `gameinput` with trigger rumble and rumble strength 1.5 to 2, and the steering anti-deadzone with a stick deadzone of 0.05; on the ROG Xbox Ally X, `gameinput` for its trigger motors and the anti-deadzone. The ROG Xbox Ally X's runs are in [its test](../analysis/modern-gamepads.md#the-owners-rog-xbox-ally-x-test). The results decide the final defaults ([modern gamepads](../analysis/modern-gamepads.md#stage-2)).
-14. **Test the keyboard on the laptop.** The owner's [checklist](../running-controls.md#keyboard-test-checklist): the defaults, a faster and a slower steering, the digital keys, the game's D-PAD STEERING and mouse steering. The results decide the final rates ([keyboard controls](../analysis/keyboard-controls.md#stage-2)).
+14. **Try the in-game settings menu on a pad and on the ROG Xbox Ally X (S6).** View and Menu held on the built-in pad (and that neither button is taken by the Ally X's software), readability at 7 inches, navigation, and a live rumble change in a race ([in-game settings](../analysis/ingame-settings.md), section 6).
+15. **Test the keyboard on the laptop.** The owner's [checklist](../running-controls.md#keyboard-test-checklist): the defaults, a faster and a slower steering, the digital keys, the game's D-PAD STEERING and mouse steering. The results decide the final rates ([keyboard controls](../analysis/keyboard-controls.md#stage-2)).
 
 Changes are checked by the tiered gates: during Level 1, one short check of 15 to 20 minutes per increment and one full gate at the end ([gate tiers](../analysis/d3d-hle.md#gate-tiers-the-main-sessions-decision-of-22-october-2026)); the tiers and their commands are in the [e2e overview](../e2e/README.md).
 

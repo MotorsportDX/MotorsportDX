@@ -92,6 +92,11 @@ above.
   background, and until each is ready (usually within a few seconds of a load) some surfaces, or
   the whole picture, show the game's original colours. Short pauses can still come in the loads
   while new graphics states are created. Both go away on later visits (the shader cache).
+- **In-game settings that wait for the next start**: in the F2 menu (View and Menu on a pad),
+  the look preset, the screen, the render scale, the upscaler, the frame rate, VSync, the race
+  quality, the pad driver and the racing wheel are saved and take effect when the game is started
+  again from the launcher, which first compiles a new look's shaders. A game started without the
+  launcher applies the menu's other settings at once but saves nothing.
 - **Sun glare** looks different from the Xbox and between quality settings; this is a known
   limit of the emulated GPU, and the default look evens it out.
 - **16-car races at the Low and Medium race quality** (and `xbox`, Medium's earlier name) use

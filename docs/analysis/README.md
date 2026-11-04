@@ -58,7 +58,7 @@ Updated on 4 November 2026.
 | [racing-wheels.md](racing-wheels.md) | Active | Native racing wheel support, stages 0 to 6 done; off by default until the owner's hardware test |
 | [modern-gamepads.md](modern-gamepads.md) | Active | Modern pads, SDL's drivers, the title's deadzones, rumble and latency; the Xbox Series controller test is pending |
 | [keyboard-controls.md](keyboard-controls.md) | Active | The keyboard's steering and pedal model and racing layout; the test on the laptop is pending |
-| [ingame-settings.md](ingame-settings.md) | Active | The in-game PC settings overlay: which settings apply live, at the next load or at a restart, one source of truth with the launcher, stages S0 to S6 and the owner's open questions; nothing implemented yet |
+| [ingame-settings.md](ingame-settings.md) | Active | The in-game PC settings overlay: which settings apply live, at the next load or at a restart, one source of truth with the launcher, stages S0 to S6 and the owner's open questions; S0 to S4 implemented on 4 November 2026, S5 and S6 open |
 | [launcher-ux.md](launcher-ux.md) | Done | The GUI launcher's racing theme, increments T1 to T6; not yet seen on the ROG Xbox Ally X |
 
 ## Game content, modes and testing
