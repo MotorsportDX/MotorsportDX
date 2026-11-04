@@ -1,7 +1,8 @@
 # In-game PC settings overlay
 
 Status: active. Written on 4 November 2026. S0 to S4 are implemented (4 November 2026, section 8);
-S5 waits for the owner's choice of section 3.1, S6 for the owner's run on the ROG Xbox Ally X.
+S5 is dropped: the owner chose option (a) of section 3.1 (4 November 2026); S6 waits for the
+owner's run on the ROG Xbox Ally X.
 
 A menu that the player opens during play to change the PC settings (look, display, controls) and
 keep them for the next start. Today every PC setting is chosen in the GUI launcher before the game
@@ -93,7 +94,7 @@ What follows from the table:
 A live switch between presets needs every preset's binaries before play.
 
 - **(a) Restart only.** The overlay saves the look and applies it at the next start. No new cost.
-  The recommended first step.
+  The recommended first step, and the owner's choice (4 November 2026).
 - **(b) The shader pass compiles every preset.** Then a switch in play loads the binaries from the
   cache. Cost: the pass's time and the cache's size multiplied by the number of presets (six with
   `original`); this has to be measured on the ROG Xbox Ally X, whose pass is the slowest.
@@ -179,7 +180,7 @@ overlay wrote it again meanwhile. The table reaches every run, `e2e.py` included
 1. **Controls**: pad (deadzones, curve, anti-deadzone, rumble, trigger rumble; the driver as
    restart), keyboard (steering and pedal rates, mouse steering), wheel (on and off, force feedback
    gain and cap, all restart since S0 found the host takes them at start).
-2. **Look**: preset (restart, or live after S5), TAA on or off, sharpening, windshield, AO strength.
+2. **Look**: preset (restart), TAA on or off, sharpening, windshield, AO strength.
 3. **Display**: fullscreen (live); render scale, quality, upscaler, VSync, frame rate (restart).
 4. **Info**: today's F2 text and the frame rate.
 
@@ -209,7 +210,7 @@ Estimates are in AI calendar time (one person-week is about 3.5 hours).
 | S2. The overlay shell | The dialog, pad chord and key, neutral guest input while open, pad navigation, DPI scale, the racing theme where shareable, the screenshot switch | 4 h | screenshots at scale 1 and 1.5; a Quick Race with the overlay opened and closed; the present path back to the guest's own once closed |
 | S3. Live settings | The Controls page and the live look params (TAA, sharpening, windshield, AO) through `SetFlagByName` and the `shader_mod_set` path; fullscreen | 3 h | the test event changes rumble and a param; a short check with the overlay closed against the previous main |
 | S4. Restart settings | The Look and Display pages' restart rows, saved and labelled "next start" | 2 h | a change of look and quality saved in the overlay is the launcher's at the next start; the shader pass runs when the look changed |
-| S5 (optional). Live presets | Option (b) or (c) of section 3.1, after the owner's decision | 4 to 7 h | the shader pass's time and cache size per preset on this PC; the `perf` tier for (c); no compile in play when switching (the native path's compile counters) |
+| S5 (dropped). Live presets | Option (b) or (c) of section 3.1; not done, the owner chose (a) | 4 to 7 h | the shader pass's time and cache size per preset on this PC; the `perf` tier for (c); no compile in play when switching (the native path's compile counters) |
 | S6. The ROG Xbox Ally X | Notes and a checklist for the owner's run: the View and Menu chord on the built-in pad (and that neither button is taken by the Ally X's software), readability, navigation, a live rumble change in a race | 0.5 h of notes; the owner's run | the owner's report |
 
 S0 to S4 are about 13 hours; with S5, 17 to 20 hours.
@@ -227,7 +228,8 @@ Open:
 
 1. **Pausing.** (S2's answer is in section 8.) The chord's Start press opens the title's pause menu in a race. Is that enough, or
    should F2 press the title's pause too? To settle in S2 with what the title does.
-2. **Live presets (S5).** Option (a) only, or (b) or (c) after measuring their cost? Asked after S4.
+2. **Live presets (S5).** Decided on 4 November 2026: option (a) only. A look preset applies at the
+   next start; S5 is not done.
 
 ## 8. As built (S2 to S4)
 
