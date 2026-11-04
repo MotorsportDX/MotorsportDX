@@ -215,7 +215,7 @@ bool FM4SettingsState::Set(const Row& row, const std::string& value) {
       changes_.Set("look", "taa", "1");
     }
   }
-  REXLOG_INFO("FM4 settings overlay: {} {}={} ({})", row.option, row.knob.empty() ? row.option : row.knob,
+  REXLOG_INFO("FM4 settings overlay: {}{}{}={} ({})", row.option, row.knob.empty() ? "" : " ", row.knob,
               value, LiveNow(row) ? "now" : "next start");
   Save();
   return true;
@@ -554,7 +554,13 @@ bool FM4CaptureWindow(rex::ui::Window* window, const std::string& path) {
   if (!hwnd || !GetClientRect(hwnd, &rect)) return false;
   const int width = rect.right - rect.left, height = rect.bottom - rect.top;
   if (width <= 0 || height <= 0) return false;
-  HDC screen = GetDC(hwnd);
+  POINT origin = {0, 0};
+  ClientToScreen(hwnd, &origin);
+  // The screen as composed: PrintWindow and the window's own DC give black for a flip model
+  // swap chain. The window stays on top for the moment of the copy, unactivated.
+  SetWindowPos(hwnd, HWND_TOPMOST, 0, 0, 0, 0, SWP_NOMOVE | SWP_NOSIZE | SWP_NOACTIVATE);
+  Sleep(250);
+  HDC screen = GetDC(nullptr);
   HDC memory = CreateCompatibleDC(screen);
   BITMAPINFO info = {};
   info.bmiHeader.biSize = sizeof(info.bmiHeader);
@@ -568,8 +574,7 @@ bool FM4CaptureWindow(rex::ui::Window* window, const std::string& path) {
   bool ok = false;
   if (bitmap && bits) {
     HGDIOBJ old = SelectObject(memory, bitmap);
-    // PW_CLIENTONLY | PW_RENDERFULLCONTENT: the client area as composed, flip model included.
-    ok = PrintWindow(hwnd, memory, 0x1 | 0x2) != 0;
+    ok = BitBlt(memory, 0, 0, width, height, screen, origin.x, origin.y, SRCCOPY) != 0;
     SelectObject(memory, old);
     GdiFlush();
   }
@@ -587,6 +592,7 @@ bool FM4CaptureWindow(rex::ui::Window* window, const std::string& path) {
   }
   if (bitmap) DeleteObject(bitmap);
   DeleteDC(memory);
-  ReleaseDC(hwnd, screen);
+  ReleaseDC(nullptr, screen);
+  SetWindowPos(hwnd, HWND_NOTOPMOST, 0, 0, 0, 0, SWP_NOMOVE | SWP_NOSIZE | SWP_NOACTIVATE);
   return ok;
 }

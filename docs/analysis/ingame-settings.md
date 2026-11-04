@@ -263,7 +263,7 @@ Open:
   the menu starts the pass when the game exits, and a look changed on the Look page shows the
   Shaders page as not done.
 - **Test switch.** `fm4_settings_overlay_test` (seconds into the first race) opens the menu,
-  shows each page (with `fm4_settings_overlay_shot`, a BMP of the window through `PrintWindow`
+  shows each page (with `fm4_settings_overlay_shot`, a BMP of the window copied from the screen
   per page), sets pad rumble 0.5, sharpening 0.1, quality ultra and the gt7 preset through the
   menu's own path, and closes it.
 

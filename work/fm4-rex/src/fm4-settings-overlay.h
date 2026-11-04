@@ -152,6 +152,6 @@ class FM4SettingsOverlay : public rex::ui::ImGuiDialog {
   bool scroll_to_focus_ = true;
 };
 
-// A picture of the window as shown, with the menu: PrintWindow of the window into a 24-bit BMP
-// (the presenter's own output, not the guest captures). Returns false on failure.
+// A picture of the window as shown, with the menu: its client area copied from the screen into a
+// 24-bit BMP (the presenter's own output, not the guest captures). Returns false on failure.
 bool FM4CaptureWindow(rex::ui::Window* window, const std::string& path);
