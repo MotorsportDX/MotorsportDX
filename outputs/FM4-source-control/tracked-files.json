@@ -81,6 +81,10 @@
       "provenance": "Project documentation; builder installer design (no game content shipped)"
     },
     {
+      "path": "docs/analysis/ingame-settings.md",
+      "provenance": "Project documentation; in-game PC settings overlay plan"
+    },
+    {
       "path": "docs/analysis/mingw-toolchain.md",
       "provenance": "Project documentation; llvm-mingw toolchain research for the builder (route (c))"
     },

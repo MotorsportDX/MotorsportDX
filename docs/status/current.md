@@ -338,7 +338,7 @@ Everything still open, grouped by area.
 
 ### Settings and input
 
-- The in-game PC settings overlay (saved to TOML) is not done; driving with a racing wheel and its force feedback are complete up to the owner's hardware test, off by default, and checked with a virtual wheel and recorded forces only ([stages 0 to 6](#racing-wheel-stages-0-to-6-and-the-close-gate-29-october-2026)). Keyboard bindings are set in the GUI launcher's Controls page (the runtime's `keybind_*` settings), not in the game. The modern pad options (rumble strength, trigger rumble, the driver choice, the input thread) are checked with a virtual pad and on the ROG Xbox Ally X's built-in pad (no trigger rumble there); the Xbox Series controller is next ([checklist](../running-controls.md#controller-test-checklist)).
+- The in-game PC settings overlay is not done; its plan is in [in-game settings](../analysis/ingame-settings.md); driving with a racing wheel and its force feedback are complete up to the owner's hardware test, off by default, and checked with a virtual wheel and recorded forces only ([stages 0 to 6](#racing-wheel-stages-0-to-6-and-the-close-gate-29-october-2026)). Keyboard bindings are set in the GUI launcher's Controls page (the runtime's `keybind_*` settings), not in the game. The modern pad options (rumble strength, trigger rumble, the driver choice, the input thread) are checked with a virtual pad and on the ROG Xbox Ally X's built-in pad (no trigger rumble there); the Xbox Series controller is next ([checklist](../running-controls.md#controller-test-checklist)).
 
 ### Stability and runtime
 
