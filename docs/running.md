@@ -21,6 +21,7 @@ and [status/history.md](status/history.md).
   - [Ally X run set](#ally-x-run-set)
   - [Export to another computer](#export-to-another-computer)
   - [Builder mode](#builder-mode)
+- [In-game settings](#in-game-settings)
 - [Launcher defaults](#launcher-defaults)
   - [Render path and frame pacing](#render-path-and-frame-pacing)
 - [Options](#options)
@@ -199,9 +200,11 @@ It reads the game's pixel shaders from the discs and the installed content, tran
 compiles the shader storage, and exits before the title runs, so the shaders are not compiled
 during a race.
 
-- **When it runs:** the launcher starts the pass by itself once for each build: when the game's
-  executable, or whether the DirectX Shader Compiler is beside it, differs from the last pass that
-  finished (`logs\shader-pass.done`).
+- **When it runs:** the launcher starts the pass by itself once for each build and look: when the
+  game's executable, whether the DirectX Shader Compiler is beside it, or the active profile's look
+  (its mods and defines) differs from the last pass that finished (`logs\shader-pass.done`). A
+  look changed in the [in-game settings](#in-game-settings) starts it when the game exits; one
+  changed on the Look page shows the page as not done until the pass runs.
 - **Skip** ends it. What is left compiles on worker threads while the game plays, with the game's
   own look until each shader's mod is ready.
 - **Progress:** in `logs\shader-pass.jsonl`; the pass's log is in `logs\shader-pass.log`.
@@ -346,6 +349,45 @@ pass once, as after any build. Later the package's launcher hands over at once, 
 started with `--builder`. `--build` starts **Download all** and the build at once: typing it is
 the consent to the downloads, for a scripted run.
 
+## In-game settings
+
+A menu over the game changes the PC settings while it runs and keeps them for the next start
+([in-game settings](analysis/ingame-settings.md)). **F2** opens and closes it; on a pad, hold
+**View and Menu** (Back and Start) together for about a second. The game sees neither button
+while both are held, but the one pressed first reaches it: in a race Menu first opens the game's
+pause menu behind the settings, View first switches the camera. While the menu is open the game
+reads no pad and no keys, so changing a value does not steer the car; a race goes on (the car
+coasts) unless the game's own pause menu is open.
+
+| Page | Settings |
+| --- | --- |
+| Controls | Pad: rumble and trigger rumble strength, the stick and trigger deadzones, outer edges and curve, the steering anti-deadzone, and the pad driver. Keyboard: the steering and pedal model, its attack and release rates, precision steering and mouse steering. Racing wheel: on or off, force feedback gain and cap. |
+| Look | The look preset, temporal anti-aliasing, sharpening, the windshield glass and the ambient occlusion. |
+| Display | Fullscreen, the screen, the render scale, the upscaler, the race frame rate, VSync and the race quality. |
+| Info | The run's settings as `-Info` lists them, the window size and the game's frame rate. |
+
+Each row says when its change takes effect:
+
+- **now**: the pad, keyboard and fullscreen rows, and the look's TAA, sharpening, windshield and
+  ambient occlusion where the look the game started with runs them (TAA at its usual point, the
+  post passes on). The ambient occlusion can be lowered at once; a value above the start's takes
+  effect at the next start.
+- **next start**: the pad driver, the racing wheel, the look preset and every display row except
+  fullscreen. They are saved, and the launcher starts with them; a new look compiles its shaders
+  in the launcher's shader pass first. Choosing an upscaler also sets FSR 3.1 as the look's
+  anti-aliasing, as the launcher's Display page does.
+
+Navigation: the D-pad or the left stick choose a row and change its value, A steps it, B closes
+the menu, LB and RB change page. The keyboard has the arrow keys, Enter, Escape, and Q and E
+for the pages; the mouse clicks a row and the arrows beside its value.
+
+Changes go into the profile the game was started with: the launcher writes
+`overlay-changes.json` beside `launcher-settings.json` at Play and folds the menu's changes into
+the profile when the game exits, when its window gets focus, and when it starts. A change it
+cannot use is left out with a line in `logs\overlay-changes.log`. A game started without the
+launcher (`fm4_rex.exe` directly, or `e2e.py`) applies the "now" rows but saves nothing, and the
+menu says so. On the RTV and ROV paths (`-Rtv`, `-Rov`) every row is read-only.
+
 ## Launcher defaults
 
 Running with no options gives this configuration:
@@ -449,7 +491,7 @@ takes a value.
 | `-ShaderDev` | off | Shader mod development: the look mods reload when a file in `work/fm4-rex/look` is saved, and the knobs change live. See [Shader mod development](running-look.md#shader-mod-development). |
 | `-TextureDump <dir>` | off | Write each new game texture once as `<hash>.dds` to this directory. See [Texture replacement](running-look.md#texture-replacement). |
 | `-TextureReplace <dir>` | off | Use `<hash>.dds` files from this directory instead of the game textures with that hash. See [Texture replacement](running-look.md#texture-replacement). |
-| `-Info` | off | Show the settings overlay at start. F2 toggles it in any run. |
+| `-Info` | off | Show the run's settings at start. F2 opens the [in-game settings](#in-game-settings) menu in any run. |
 | `-Rov` | off | Use the earlier pixel shader interlock render target path, the uncorrected reference, for comparisons. |
 | `-Native` | on, unless `-Rtv`, `-Rov` or `-Msaa` | The native path: a host render thread consumes the guest's commands from a record queue instead of the command processor thread, and races render in one pass with 2x MSAA. See [-Native](#-native). |
 | `-Rtv` | off | RTV, the PM4 path on host render targets, instead of the native path: the players' fallback, frozen without new features since 27 October 2026. |
@@ -655,13 +697,14 @@ and a look without TAA (see [-SingleTile and -Msaa](#-singletile-and--msaa)).
 
 #### -Info
 
-Shows the settings overlay at the top left from the start. It lists the display and
+Shows the run's settings at the top left from the start. It lists the display and
 render scale, the race quality, the look and its knobs, the ambient occlusion, the
 anti-aliasing (TAA and its point and sharpening), the shadows, the anisotropic filtering, the race frame rate and pacing, the mirror rate,
 the render target path, and the window size and present rate, as the launcher set them
 up (`info_overlay` in `pipeline.py`, `FM4_INFO`; `work/fm4-rex/src/fm4-info-overlay.h`).
 The presenter draws the overlay over the guest output, so captures never show it.
-F2 toggles it in any run.
+F2 closes it and opens the [in-game settings](#in-game-settings) menu, whose Info page shows the
+same text.
 
 #### -Rov
 

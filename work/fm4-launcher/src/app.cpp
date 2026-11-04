@@ -1169,7 +1169,12 @@ void App::FoldOverlay() {
   } catch (const std::exception& error) {
     log.push_back(std::string("overlay-changes.json: ") + error.what());
   }
-  if (changed) SaveSettings();
+  if (changed) {
+    SaveSettings();
+    // A look changed in the game compiles in the shader pass before the next race.
+    shaders_ready_ = ShadersReady();
+    if (!shaders_ready_ && !running_ && !shader_busy_ && disc1_.error.empty()) CompileShaders();
+  }
   if (log.empty()) return;
   std::error_code error;
   fs::create_directories(root_ / "logs", error);
@@ -3523,13 +3528,16 @@ bool App::ShadersReady() {
 }
 
 // The build the pass last finished for: the game's executable as build-result.json names it,
-// and whether DXC was beside it.
+// whether DXC was beside it, and the active profile's look (ShaderLook), which the in-game
+// settings or the Look page may have changed since.
 std::string App::ShaderPassMarker() {
   try {
     std::ifstream stream(root_ / "build-result.json", std::ios::binary);
     const Json report = Json::parse(stream);
+    std::string error;
+    const auto plan = CurrentPlan(error);
     return report.at("artifacts").at("fm4_rex.exe").get<std::string>() +
-           (DxcPresent(root_ / "game-build") ? " dxil" : " fxc");
+           (DxcPresent(root_ / "game-build") ? " dxil" : " fxc") + (plan ? " " + ShaderLook(*plan) : "");
   } catch (const std::exception&) {
     return {};
   }
@@ -3559,7 +3567,9 @@ void App::CompileShaders() {
   args.push_back("--shader_offline_pass=true");
   args.push_back("--shader_offline_pass_progress=" + Utf8(progress_file));
   const Pairs env = plan->env;
-  StartShaderTask([this, args, env, progress_file] {
+  // On the UI thread, from the profile this pass compiles.
+  const std::string marker = ShaderPassMarker();
+  StartShaderTask([this, args, env, progress_file, marker] {
     const fs::path game = root_ / "game-build";
     std::string fetch_error;
     if (!DxcPresent(game)) fetch_error = FetchDxc(game, root_ / "downloads" / "dxc");
@@ -3579,8 +3589,7 @@ void App::CompileShaders() {
     const bool finished = ReadPassProgress(progress_file, progress) && progress.finished && code == 0;
     std::string message;
     if (finished) {
-      std::ofstream(root_ / "logs" / "shader-pass.done", std::ios::binary | std::ios::trunc)
-          << ShaderPassMarker();
+      std::ofstream(root_ / "logs" / "shader-pass.done", std::ios::binary | std::ios::trunc) << marker;
       message = "The shaders are compiled: " + std::to_string(progress.done) + " translations, " +
                 std::to_string(progress.errors) + " errors.";
     } else {

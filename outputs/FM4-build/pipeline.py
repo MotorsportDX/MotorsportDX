@@ -2329,7 +2329,7 @@ def runtime_fsr(build):
 PLAYER_TESTS=('fm4_post_pass_camera_tests','fm4_track_settings_tests','fm4_texture_replacement_tests',
               'fm4_draw_scale_tests','fm4_pad_shaping_tests','fm4_keyboard_model_tests',
               'fm4_native_shader_contract_tests','fm4_wheel_ffb_tests','fm4_wheel_mapping_tests',
-              'fm4_wheel_host_tests')
+              'fm4_wheel_host_tests','fm4_settings_model_tests')
 SHADER_TESTS=('fm4_post_pass_shader_tests','fm4_shader_mod_tests','fm4_look_tonemap_tests')
 TEST_SETS=('developer','player')
 
@@ -2381,6 +2381,8 @@ def post_pass_tests(root,jobs,tests='developer'):
     run([build/'fm4_wheel_ffb_tests.exe'],cwd=build,log=root/'logs/wheel-ffb-tests.log')
     run([build/'fm4_wheel_mapping_tests.exe'],cwd=build,log=root/'logs/wheel-mapping-tests.log')
     run([build/'fm4_wheel_host_tests.exe',build],cwd=build,log=root/'logs/wheel-host-tests.log')
+    run([build/'fm4_settings_model_tests.exe',write_launcher_data(root)],cwd=build,
+        log=root/'logs/settings-model-tests.log')
     run([build/'fm4_native_shader_contract_tests.exe',LOOK_DIRECTORY/'shaders.toml'],cwd=build,
         log=root/'logs/native-shader-contract-tests.log')
     if not developer:

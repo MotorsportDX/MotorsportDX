@@ -67,7 +67,8 @@ endif()
 
 rexglue_setup_target(fm4_rex GPU_PLUGINS xenos)
 if(WIN32)
-    target_link_libraries(fm4_rex PRIVATE dbghelp)
+    # gdi32: the settings overlay's window capture (fm4-settings-overlay.cpp).
+    target_link_libraries(fm4_rex PRIVATE dbghelp gdi32)
     if(MINGW)
         # lld's MinGW driver writes its own map format with -Map; lld-link's /map, passed through
         # -Xlink, writes the MSVC format that thread_profile.py and soak_report.py read. -municode

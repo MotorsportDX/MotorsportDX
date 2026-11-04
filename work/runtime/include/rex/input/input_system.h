@@ -11,6 +11,8 @@
  */
 
 #include <array>
+#include <atomic>
+#include <functional>
 #include <memory>
 #include <vector>
 
@@ -39,6 +41,13 @@ class InputSystem : public system::IInputSystem {
   void AddDriver(std::unique_ptr<InputDriver> driver);
   void AttachWindow(rex::ui::Window* window);
   void SetActiveCallback(std::function<bool()> callback);
+  // A host UI drawn over the guest (FM4's in-game settings overlay): the filter sees every merged
+  // pad state the guest reads, before the guest does, and may change it (a neutral pad while the UI
+  // has the input). With keystrokes blocked the guest reads none; the drivers' keystroke states
+  // keep up meanwhile. Set the filter before the guest starts.
+  using GuestPadFilter = std::function<void(uint32_t user_index, X_INPUT_GAMEPAD& gamepad)>;
+  void SetGuestPadFilter(GuestPadFilter filter) { guest_pad_filter_ = std::move(filter); }
+  void SetGuestKeystrokesBlocked(bool blocked) { guest_keystrokes_blocked_ = blocked; }
   // Every driver's StopVibration, before the process exits.
   void StopVibration();
 
@@ -73,6 +82,8 @@ class InputSystem : public system::IInputSystem {
   // merged guest controller, advancing only when its visible state changes.
   std::array<X_INPUT_STATE, kMaxGuestUsers> merged_states_ = {};
   std::array<bool, kMaxGuestUsers> merged_states_valid_ = {};
+  GuestPadFilter guest_pad_filter_;
+  std::atomic<bool> guest_keystrokes_blocked_{false};
 };
 
 /// Create a default InputSystem with SDL + NOP drivers.

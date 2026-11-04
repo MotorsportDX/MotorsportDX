@@ -1,7 +1,7 @@
 # In-game PC settings overlay
 
-Status: active. Written on 4 November 2026. S0 (the inventory) and S1 (persistence) are implemented
-(4 November 2026); S2 to S4 follow.
+Status: active. Written on 4 November 2026. S0 to S4 are implemented (4 November 2026, section 8);
+S5 waits for the owner's choice of section 3.1, S6 for the owner's run on the ROG Xbox Ally X.
 
 A menu that the player opens during play to change the PC settings (look, display, controls) and
 keep them for the next start. Today every PC setting is chosen in the GUI launcher before the game
@@ -225,6 +225,45 @@ Decided by the owner on 4 November 2026:
 
 Open:
 
-1. **Pausing.** The chord's Start press opens the title's pause menu in a race. Is that enough, or
+1. **Pausing.** (S2's answer is in section 8.) The chord's Start press opens the title's pause menu in a race. Is that enough, or
    should F2 press the title's pause too? To settle in S2 with what the title does.
 2. **Live presets (S5).** Option (a) only, or (b) or (c) after measuring their cost? Asked after S4.
+
+## 8. As built (S2 to S4)
+
+- **Files.** The menu is [fm4-settings-overlay.h](../../work/fm4-rex/src/fm4-settings-overlay.h)
+  and its `.cpp`; its model (a small JSON reader and writer, the rows, the steps of a value,
+  `overlay-changes.json`) is the header-only
+  [fm4-settings-model.h](../../work/fm4-rex/src/fm4-settings-model.h), tested by
+  `fm4_settings_model_tests` against the build's launcher.json. The runtime's `InputSystem` gained
+  a guest pad filter and a keystroke block (`SetGuestPadFilter`, `SetGuestKeystrokesBlocked`).
+- **Input.** The filter sees the merged pad that the guest reads (user 0): View and Menu held for
+  a second toggle the menu; while both are held the guest sees neither, but the first one pressed
+  has reached it. In a race Menu pauses and View switches the camera, so the chord pressed Menu
+  first opens the title's pause menu behind the settings. F2 does not pause: while the menu is
+  open the guest reads a neutral pad and no keystrokes, so the car coasts. That answers open
+  question 1 for now: no pause from F2. The menu reads the pad itself from the same filter (the
+  D-pad and the left stick with a repeat of 350 then 90 ms, A, B, LB and RB) and ignores the
+  buttons held when it opened until they are released; ImGui's own gamepad navigation is not
+  used, since the runtime's drawer feeds it no pad.
+- **Drawing.** Not idle while open; the dialog exists only while open. The scale is the window's
+  logical height over 720 (1 to 2.5), or `fm4_settings_overlay_scale`; the drawer already applies
+  the DPI. Fonts: Segoe UI and Bahnschrift as the launcher, added to the drawer's atlas at 40 px in
+  `OnConfigureFonts` (the drawer builds its atlas once). The colours are the launcher's, copied:
+  the runtime cannot link the launcher's code.
+- **Rows.** Live cvar rows use `SetFlagByName`, look params `shader_mod_set`, fullscreen the
+  `fullscreen` cvar (its change callback). The look's live rows read their start values from
+  `shader_mod_defines`: TAA and sharpening are live while TAA runs at the final point, the
+  windshield while the post passes run, the ambient occlusion through `GTAO_SCALE` up to the
+  start's strength. Option rows (display, the preset) need the launcher's file for their start
+  values; without it they are not editable. An upscaler also writes `aa=fsr,taa=1` into the look
+  change, as the launcher's Display page does.
+- **The shader pass.** The launcher's pass marker now includes the active profile's look
+  (`ShaderLook`: `shader_mod_path` and `shader_mod_defines` of its plan), so a look folded from
+  the menu starts the pass when the game exits, and a look changed on the Look page shows the
+  Shaders page as not done.
+- **Test switch.** `fm4_settings_overlay_test` (seconds into the first race) opens the menu,
+  shows each page (with `fm4_settings_overlay_shot`, a BMP of the window through `PrintWindow`
+  per page), sets pad rumble 0.5, sharpening 0.1, quality ultra and the gt7 preset through the
+  menu's own path, and closes it.
+

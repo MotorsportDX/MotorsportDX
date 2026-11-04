@@ -310,6 +310,8 @@
 !/work/fm4-rex/src/fm4-jpeg-diagnostics.cpp
 !/work/fm4-rex/src/fm4-render-overrides.cpp
 !/work/fm4-rex/src/fm4-settings-overlay.cpp
+!/work/fm4-rex/src/fm4-settings-overlay.h
+!/work/fm4-rex/src/fm4-settings-model.h
 !/work/fm4-rex/src/fm4-test-input.h
 !/work/fm4-rex/src/fm4-track-settings.h
 !/work/fm4-rex/src/fm4-ui-diagnostics.cpp
@@ -341,6 +343,7 @@
 !/work/fm4-rex/tests/wheel-host-tests.cpp
 !/work/fm4-rex/tests/wheel-mapping-tests.cpp
 !/work/fm4-rex/tests/keyboard-model-tests.cpp
+!/work/fm4-rex/tests/settings-model-tests.cpp
 !/work/fm4-rex/tests/native-shader-contract-tests.cpp
 !/work/fm4-rex/tests/post-pass-camera-tests.cpp
 !/work/fm4-rex/tests/post-pass-shader-tests.cpp

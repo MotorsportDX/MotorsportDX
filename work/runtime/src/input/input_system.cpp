@@ -274,6 +274,9 @@ X_RESULT InputSystem::GetState(uint32_t user_index, X_INPUT_STATE* out_state) {
     merged_states_valid_[user_index] = false;
     return X_ERROR_DEVICE_NOT_CONNECTED;
   }
+  if (guest_pad_filter_) {
+    guest_pad_filter_(user_index, merged.gamepad);
+  }
   auto& previous = merged_states_[user_index];
   uint32_t packet = previous.packet_number;
   const bool state_changed = !merged_states_valid_[user_index] ||
@@ -364,9 +367,17 @@ X_RESULT InputSystem::GetKeystroke(uint32_t user_index, uint32_t flags,
       continue;
     }
     X_RESULT result = driver->GetDeviceKeystroke(id, flags, out_keystroke);
+    // Blocked (a host UI has the input): the driver's queue drains, the guest reads nothing.
+    for (int drained = 0; result == X_ERROR_SUCCESS && guest_keystrokes_blocked_ && drained < 64;
+         ++drained) {
+      result = driver->GetDeviceKeystroke(id, flags, out_keystroke);
+    }
     if (result == X_ERROR_SUCCESS) {
       out_keystroke->user_index = static_cast<uint8_t>(user_index);
       return result;
+    }
+    if (guest_keystrokes_blocked_) {
+      result = X_ERROR_EMPTY;
     }
     if (result != X_ERROR_DEVICE_NOT_CONNECTED) {
       any_connected = true;

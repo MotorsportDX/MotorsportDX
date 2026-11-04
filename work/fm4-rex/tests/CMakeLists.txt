@@ -76,6 +76,10 @@ target_include_directories(fm4_track_settings_tests PRIVATE ../src)
 add_executable(fm4_texture_replacement_tests texture-replacement-tests.cpp)
 target_include_directories(fm4_texture_replacement_tests SYSTEM PRIVATE "${REX_HEADER_ROOT}")
 target_compile_options(fm4_texture_replacement_tests PRIVATE -march=x86-64-v2)
+# The in-game settings overlay's model: its JSON, the rows of launcher.json's settings, steps
+# and overlay-changes.json (header only); argument: a launcher.json.
+add_executable(fm4_settings_model_tests settings-model-tests.cpp)
+target_include_directories(fm4_settings_model_tests PRIVATE ../src)
 # The racing wheel's force feedback governor on synthetic streams (header only).
 add_executable(fm4_wheel_ffb_tests wheel-ffb-tests.cpp)
 target_include_directories(fm4_wheel_ffb_tests SYSTEM PRIVATE "${REX_HEADER_ROOT}")

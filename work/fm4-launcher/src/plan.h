@@ -181,6 +181,10 @@ std::string UpscaleText(const Pairs& cvars);
 // The render scale of a plan's cvars for the GUI: "3/2, 1920x1080" or "2x, 2560x1440".
 std::string RenderScaleText(const Pairs& cvars);
 
+// The look that the offline shader pass compiles for a plan: its shader_mod_path and
+// shader_mod_defines. A profile whose look differs from the last pass's needs the pass again.
+std::string ShaderLook(const Plan& plan);
+
 Plan LaunchPlan(const LauncherData& data, const std::string& root, const std::string& disc1,
                 const Options& options, const Monitor& monitor,
                 const std::string& content_manifest);

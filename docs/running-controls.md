@@ -586,7 +586,7 @@ steers more. The design and the measurements are in
 | Toggle heat damage | `H` | right stick press |
 | (left stick press) | `F` | left stick press |
 | Switch between borderless fullscreen and the window | `Alt+Enter` | (`bind_fullscreen`) |
-| Show or hide the settings overlay | `F2` | |
+| Open or close the [in-game settings](running.md#in-game-settings) menu | `F2` | hold View and Menu (Back and Start) for a second |
 
 In the menus the same keys are the pad's buttons: the arrow keys move, `Space` selects
 (A), `Backspace` or `E` goes back (B), `Q` and `R` are X and Y (for example ADVANCED and

@@ -506,6 +506,10 @@ std::string ResolvePath(const std::string& text) {
   return resolved;
 }
 
+std::string ShaderLook(const Plan& plan) {
+  return plan.cvars.Get("shader_mod_path") + ";" + plan.cvars.Get("shader_mod_defines");
+}
+
 LookParts LookParts::Parse(const std::string& look) {
   LookParts parts;
   size_t start = 0;

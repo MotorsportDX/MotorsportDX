@@ -34,7 +34,7 @@ void Compare(const std::string& what, const Json& expected, const Pairs& actual,
 // The player's settings of launcher.json and the folding of the in-game overlay's changes
 // (overlay.h): a change lands in the profile it names, a value equal to the launchers' default
 // leaves the knob out, and an unknown profile, option, knob or value is dropped with a log line.
-void OverlayTests(const LauncherData& data, const std::filesystem::path& work,
+void OverlayTests(const LauncherData& data, const Json& cases, const std::filesystem::path& work,
                   std::vector<std::string>& failures) {
   for (const auto& problem : CheckPlayerSettings(data)) failures.push_back(problem);
   Settings settings;
@@ -107,6 +107,50 @@ void OverlayTests(const LauncherData& data, const std::filesystem::path& work,
     failures.push_back("Overlay file: a damaged file was not dropped");
   log.clear();
   if (FoldOverlayFile(data, path, settings, log) || !log.empty()) failures.push_back("Overlay file: none, yet a change");
+  // The shader pass runs again for a look changed in the game: the plans' looks differ.
+  const std::string root = cases.at("root").get<std::string>(), disc1 = cases.at("disc1").get<std::string>(),
+                    manifest = cases.at("manifest").get<std::string>();
+  const Monitor monitor{1920, 1080, 1.0, 60, 0, 0, false};
+  Options plain, gt7;
+  plain.native = gt7.native = 1;
+  gt7.look = "gt7";
+  try {
+    if (ShaderLook(LaunchPlan(data, root, disc1, plain, monitor, manifest)) !=
+            ShaderLook(LaunchPlan(data, root, disc1, Options(plain), monitor, manifest)) ||
+        ShaderLook(LaunchPlan(data, root, disc1, plain, monitor, manifest)) ==
+            ShaderLook(LaunchPlan(data, root, disc1, gt7, monitor, manifest)))
+      failures.push_back("Shader look: a changed look does not change the pass's marker");
+  } catch (const std::exception& error) {
+    failures.push_back(std::string("Shader look: ") + error.what());
+  }
+  // A file the game wrote (cases "overlay": its path and the options expected after folding it
+  // into a default profile of its name).
+  if (cases.contains("overlay")) {
+    const Json& overlay = cases.at("overlay");
+    std::ifstream stream(PathFromUtf8(overlay.at("file").get<std::string>()), std::ios::binary);
+    Json file;
+    try {
+      file = Json::parse(stream);
+    } catch (const std::exception& error) {
+      failures.push_back(std::string("Overlay file of the game: ") + error.what());
+      return;
+    }
+    Settings game;
+    game.profiles = {{file.value("profile", std::string()), OptionsFromJson(file.at("options"))}};
+    log.clear();
+    const Options start = game.profiles[0].options;
+    if (!FoldOverlayChanges(data, file, game, log)) failures.push_back("Overlay file of the game: no change");
+    const Json options = OptionsToJson(game.profiles[0].options);
+    for (const auto& [name, want] : overlay.at("expect").items())
+      if (options.at(name) != want)
+        failures.push_back("Overlay file of the game: " + name + " is " + options.at(name).dump() + ", expected " +
+                           want.dump());
+    for (const auto& line : log)
+      if (line.find("dropped") != std::string::npos) failures.push_back("Overlay file of the game: " + line);
+    if (ShaderLook(LaunchPlan(data, root, disc1, start, monitor, manifest)) ==
+        ShaderLook(LaunchPlan(data, root, disc1, game.profiles[0].options, monitor, manifest)))
+      failures.push_back("Overlay file of the game: its look change does not rerun the shader pass");
+  }
 }
 
 }  // namespace
@@ -245,7 +289,7 @@ int RunTests(const std::filesystem::path& cases_path, const std::filesystem::pat
       failures.push_back("Builder error '" + error.at(0).get<std::string>() + "': '" + plain.text + "' on '" +
                          plain.screen + "'");
   }
-  OverlayTests(data, std::filesystem::path(result_path).parent_path(), failures);
+  OverlayTests(data, cases, std::filesystem::path(result_path).parent_path(), failures);
   std::ofstream result(result_path, std::ios::binary | std::ios::trunc);
   result << Json{{"plans", plans}, {"failures", failures}}.dump(1);
   return result ? 0 : 1;
