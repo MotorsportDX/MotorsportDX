@@ -29,8 +29,8 @@ Non-goals:
 - Developer options (traces, experiment switches, `FM4_*` test variables, extra cvars). The
   runtime's F4 dialog stays the developer tool (section 2).
 - The RTV and ROV paths. RTV is frozen and ROV is the uncorrected reference
-  ([AGENTS.md](../../AGENTS.md)); the overlay targets the native path. On RTV it may show its
-  settings read-only.
+  ([AGENTS.md](../../AGENTS.md)); the overlay targets the native path. On RTV and ROV it shows the
+  settings read-only (the owner's decision of 4 November 2026).
 - Changes to the title's own menus. The overlay is the runtime's, drawn over the guest output.
 
 ## 2. What exists
@@ -125,7 +125,9 @@ A live switch between presets needs every preset's binaries before play.
   The title still sees the Start press before the chord is recognised, so its pause menu opens
   too, which pauses a race behind the overlay. S2 checks what the title does with Back alone and
   whether that press must be held back from the guest while the chord is pending.
-- Opening with the keyboard: a key (F2 becomes "info, then settings", or a new key; section 7).
+- Opening with the keyboard: F2 opens the settings menu, whose last page is today's info text
+  (the owner's decision of 4 November 2026). `-Info` and `FM4_INFO_SHOW=1` keep showing the
+  read-only info panel at start, without input, so e2e runs that use `--info` do not change.
 - While open, the guest sees a neutral pad and no keys, so steering a slider does not steer the
   car. The game is not paused by the overlay: the player opens the game's own pause menu first,
   or the overlay presses the title's pause on opening (section 7).
@@ -152,10 +154,9 @@ A live switch between presets needs every preset's binaries before play.
 ### 4.4 Restart-only settings
 
 - Shown with their class ("next start"), saved like the others.
-- "Restart now" is an option for later: the game exits with a code that tells the launcher to fold
-  the changes and start the same profile again. The shader pass runs first when the look changed
-  and its binaries are not cached. Whether the launcher stays open during play decides how this
-  works (section 7).
+- No "Restart now" for now (the owner's decision of 4 November 2026): the player quits and starts
+  again from the launcher. A later version could exit with a code that tells the launcher to fold
+  the changes and start the same profile again, the shader pass first when the look changed.
 
 ### 4.5 Pages
 
@@ -190,19 +191,23 @@ Estimates are in AI calendar time (one person-week is about 3.5 hours).
 | S1. Persistence | `overlay-changes.json`, its path cvar from the launcher's plan, the launcher's folding on start and on focus | 2 h | launcher tests: a change folds into the right profile, an unknown profile or option is dropped with a log line |
 | S2. The overlay shell | The dialog, pad chord and key, neutral guest input while open, pad navigation, DPI scale, the racing theme where shareable, the screenshot switch | 4 h | screenshots at scale 1 and 1.5; a Quick Race with the overlay opened and closed; the present path back to the guest's own once closed |
 | S3. Live settings | The Controls page and the live look params (TAA, sharpening, windshield, AO) through `SetFlagByName` and the `shader_mod_set` path; fullscreen | 3 h | the test event changes rumble and a param; a short check with the overlay closed against the previous main |
-| S4. Restart settings | The Look and Display pages' restart rows, saved and labelled; "Restart now" if section 7 allows it | 2.5 h | a change of look and quality saved in the overlay is the launcher's at the next start; the shader pass runs when the look changed |
+| S4. Restart settings | The Look and Display pages' restart rows, saved and labelled "next start" | 2 h | a change of look and quality saved in the overlay is the launcher's at the next start; the shader pass runs when the look changed |
 | S5 (optional). Live presets | Option (b) or (c) of section 3.1, after the owner's decision | 4 to 7 h | the shader pass's time and cache size per preset on this PC; the `perf` tier for (c); no compile in play when switching (the native path's compile counters) |
 | S6. The ROG Xbox Ally X | Notes and a checklist for the owner's run: the View and Menu chord on the built-in pad (and that neither button is taken by the Ally X's software), readability, navigation, a live rumble change in a race | 0.5 h of notes; the owner's run | the owner's report |
 
-S0 to S4 are about 13.5 hours; with S5, 17.5 to 20.5 hours.
+S0 to S4 are about 13 hours; with S5, 17 to 20 hours.
 
-## 7. Open questions for the owner
+## 7. Decisions and open questions
 
-1. **The key.** Does F2 open the settings menu, with the info text as its last page, or does the
-   menu get its own key? (The pad chord is decided: View and Menu held together, section 4.2.)
-2. **Pausing.** The chord's Start press opens the title's pause menu in a race. Is that enough, or
-   should the keyboard key press the title's pause too?
-3. **Live presets (S5).** Option (a) only, or (b) or (c) after measuring their cost?
-4. **Restart now.** Should the overlay restart the game, which needs the launcher to stay open
-   while the game runs (or to be started again by the game)?
-5. **Scope on RTV.** Hide the overlay on RTV, or show it read-only?
+Decided by the owner on 4 November 2026:
+
+- The pad opens the overlay with View and Menu held together (section 4.2).
+- F2 opens the settings menu, with the info text as its last page (section 4.2).
+- No "Restart now" for now (section 4.4).
+- On RTV and ROV the overlay is read-only (section 1).
+
+Open:
+
+1. **Pausing.** The chord's Start press opens the title's pause menu in a race. Is that enough, or
+   should F2 press the title's pause too? To settle in S2 with what the title does.
+2. **Live presets (S5).** Option (a) only, or (b) or (c) after measuring their cost? Asked after S4.
