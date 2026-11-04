@@ -506,6 +506,33 @@ std::string ResolvePath(const std::string& text) {
   return resolved;
 }
 
+LookParts LookParts::Parse(const std::string& look) {
+  LookParts parts;
+  size_t start = 0;
+  while (start <= look.size()) {
+    const size_t comma = look.find(',', start);
+    std::string item = look.substr(start, comma == std::string::npos ? std::string::npos : comma - start);
+    item.erase(0, item.find_first_not_of(" \t"));
+    item.erase(item.find_last_not_of(" \t") + 1);
+    if (!item.empty()) {
+      const size_t equals = item.find('=');
+      if (equals == std::string::npos)
+        parts.base += (parts.base.empty() ? "" : ",") + item;
+      else
+        parts.knobs.Set(item.substr(0, equals), item.substr(equals + 1));
+    }
+    if (comma == std::string::npos) break;
+    start = comma + 1;
+  }
+  return parts;
+}
+
+std::string LookParts::Value() const {
+  std::string value = base;
+  for (const auto& [name, knob] : knobs.Items()) value += (value.empty() ? "" : ",") + name + "=" + knob;
+  return value;
+}
+
 Pairs LookKnobs(const LauncherData& data, const std::string& look) {
   const Json& tables = data.Look();
   const Json& presets = tables.at("presets");

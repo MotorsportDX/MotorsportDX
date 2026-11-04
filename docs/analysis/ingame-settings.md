@@ -1,6 +1,7 @@
 # In-game PC settings overlay
 
-Status: active (plan). Written on 4 November 2026. Nothing in this note is implemented yet.
+Status: active. Written on 4 November 2026. S0 (the inventory) and S1 (persistence) are implemented
+(4 November 2026); S2 to S4 follow.
 
 A menu that the player opens during play to change the PC settings (look, display, controls) and
 keep them for the next start. Today every PC setting is chosen in the GUI launcher before the game
@@ -53,27 +54,29 @@ change takes effect:
 - **Restart**: read once at start (a cached `getenv`, an init-only cvar, a device or swap chain
   parameter) or bound to the shader pass.
 
-The evidence column names where the value is read. Rows marked "verify" are the first job of
-stage S0.
+The evidence column names where the value is read. S0 verified every row in the code
+(4 November 2026); the classes below are the verified ones, and the table of the player's settings
+(`PLAYER_SETTINGS` in [player_settings.py](../../outputs/FM4-build/player_settings.py), launcher.json's
+`settings`) carries them.
 
 | Setting (launcher option) | Carried as | Class | Evidence |
 | --- | --- | --- | --- |
 | Pad stick and trigger deadzones, outer, curve, anti-deadzone (`-Pad`) | `pad_*` cvars | Live | `CurrentPadSettings()` in [pad_settings.cpp](../../work/runtime/src/input/pad_settings.cpp) reads the cvars at every poll of the XInput and SDL drivers |
 | Rumble and trigger rumble strength (`-Pad`) | `pad_rumble_strength`, `pad_trigger_rumble*` | Live | the same, read when the rumble is set |
-| Pad driver (`default`, `rawinput`, `gameinput`) | cvar | Restart | the input driver is created at start (verify) |
-| Keyboard steering and pedal rates (`-Keyboard`) | `mnk_*` cvars | Live (verify) | [mnk_input_driver.cpp](../../work/runtime/src/input/mnk/mnk_input_driver.cpp); whether it caches them is checked in S0 |
-| Key bindings (Controls page) | `keybind_*` cvars | Live (verify) | the bind table is rebuilt from the cvars (verify) |
+| Pad driver (`default`, `rawinput`, `gameinput`) | cvar | Restart | `ApplyDriverHints` in [sdl_input_driver.cpp](../../work/runtime/src/input/sdl/sdl_input_driver.cpp) sets SDL's hints once, before the pads start; the cvar was already `kRequiresRestart` |
+| Keyboard steering and pedal rates (`-Keyboard`) | `mnk_*` cvars | Live | [mnk_input_driver.cpp](../../work/runtime/src/input/mnk/mnk_input_driver.cpp) reads every `mnk_*` cvar at each poll; nothing is cached |
+| Key bindings (Controls page) | `keybind_*` cvars | Live | `RefreshBinds` compares each `keybind_*` text at every poll and parses the ones that changed |
 | Racing wheel on or off, mode, drawn wheel (`-Wheel`) | `FM4_WHEEL_MODE`, `FM4_WHEEL_DRAWN` and cvars | Restart for the variables | cached in a `static` at first use in [fm4-wheel-input.cpp](../../work/fm4-rex/src/fm4-wheel-input.cpp) |
-| Wheel force feedback strength and cap (`-Wheel`) | cvars | Live (verify) | [racing wheels](racing-wheels.md) |
+| Wheel force feedback strength and cap (`-Wheel`) | cvars | Restart | `StartWheel` copies every `wheel_*` cvar into the wheel host's options once; S0 tagged them `kRequiresRestart` |
 | Look knobs that are post pass params (TAA sharpening, windshield, GTAO strength and radius) | `shader_mod_defines` read by name as params | Live | `shader_mod_set` applies params at once ([post pass framework](post-pass-framework.md)) |
 | TAA on or off (`taa`) | param `TAA` | Live | `shader_mod_set TAA=0` switches TAA and its jitter together ([TAA](taa.md)); the tiling that goes with it stays until a restart |
 | Look preset and the knobs that are shader mod defines (tone curve, grade, clear coat, road sheen, `sun`, `cockpit_fill`) | `shader_mod_path`, `shader_mod_defines` | Restart | each look compiles its own binaries; the shader pass compiles the active profile's look only ([running](../running.md#shaders-page)); another look in play would compile in play, against Level 1 |
-| Track lighting (`sky`, `road_gloss`) | `FM4_TRACK_SETTINGS` | Next load at best (verify) | [fm4-track-settings.h](../../work/fm4-rex/src/fm4-track-settings.h); the variable itself is read at start |
+| Track lighting (`sky`, `road_gloss`) | `FM4_TRACK_SETTINGS` | Restart | [fm4-track-settings.h](../../work/fm4-rex/src/fm4-track-settings.h); `FM4MountTrackSettings` reads the variable once, at start |
 | Quality (MSAA, tiles), render path (`-Native`, `-Rtv`, `-Rov`) | cvars, `FM4_ONE_PASS_MSAA`, `FM4_TILING_SCENARIO` | Restart | render targets, pipelines and the shader pass depend on them |
 | Display, resolution scale, upscaler (`-Display`, `-ResolutionScale`, `-Upscale`, FSR) | cvars | Restart | the swap chain and the render target sizes; FSR needs a runtime built with `-Fsr on` |
 | Fullscreen | cvar, Alt+Enter | Live | the runtime's `bind_fullscreen` already toggles it |
-| VSync, frame rate cap (`-VSync`, `-FrameRate`) | cvars, `FM4_FRAME_RATE` | Restart for the variable; VSync verify | `FM4_FRAME_RATE` is read at start ([fm4-vblank-rate.cpp](../../work/fm4-rex/src/fm4-vblank-rate.cpp)) |
-| Shadow workaround, anisotropy | `FM4_SHADOW_WORKAROUND`, `anisotropic_override` | Restart (verify for anisotropy) | the variable is cached at start |
+| VSync, frame rate cap (`-VSync`, `-FrameRate`) | cvars, `FM4_FRAME_RATE` | Restart | `FM4_FRAME_RATE` is read at start ([fm4-vblank-rate.cpp](../../work/fm4-rex/src/fm4-vblank-rate.cpp)); `present_vsync` itself is read at every present, but the launcher's VSync also sets `present_min_interval_us` and the race frame rate, so the option is restart |
+| Shadow workaround, anisotropy | `FM4_SHADOW_WORKAROUND`, `anisotropic_override` | Restart; anisotropy live | the variable is cached at start; `anisotropic_override` is read whenever the texture cache builds sampler parameters (it is not a player option: the launch plan fixes 16x) |
 | Texture replacement | cvars | Restart | loaded on the command processor thread from a folder chosen at start |
 
 What follows from the table:
@@ -151,6 +154,19 @@ A live switch between presets needs every preset's binaries before play.
 - Live values are applied with `rex::cvar::SetFlagByName` for cvars and through the
   `shader_mod_set` path for post pass params, so the overlay adds no second way of applying a value.
 
+As built in S1 ([overlay.h](../../work/fm4-launcher/src/overlay.h)): at Play the launcher writes
+`overlay-changes.json` with `profile`, the profile's `options` and an empty `changes`, and passes
+its path in `fm4_settings_changes`. The overlay keeps the file's profile and options and writes the
+file whole with every change of the run, so folding twice gives the same profile. `changes` maps a
+knob option (`pad`, `keyboard`, `wheel`, `look`, whose `preset` key sets the look's preset) to its
+changed knobs, and every other option to its new value, all as text in the launcher's own form
+(`frame_rate` 0 for 60, `quality` empty for high). The launcher folds the file at its start, when
+its window gets focus while no game runs, when the game exits and before Play: a knob set to the
+launchers' default leaves the option's knob list, and a change of an unknown profile, option, knob
+or value is dropped with a line in `logs\overlay-changes.log`. It removes the file unless the
+overlay wrote it again meanwhile. The table reaches every run, `e2e.py` included, through
+`fm4_settings_table` (launcher.json) in the launch plan.
+
 ### 4.4 Restart-only settings
 
 - Shown with their class ("next start"), saved like the others.
@@ -160,8 +176,9 @@ A live switch between presets needs every preset's binaries before play.
 
 ### 4.5 Pages
 
-1. **Controls**: pad (deadzones, curve, anti-deadzone, rumble, trigger rumble), keyboard (steering
-   and pedal rates), wheel (force feedback strength and cap; on and off as restart).
+1. **Controls**: pad (deadzones, curve, anti-deadzone, rumble, trigger rumble; the driver as
+   restart), keyboard (steering and pedal rates, mouse steering), wheel (on and off, force feedback
+   gain and cap, all restart since S0 found the host takes them at start).
 2. **Look**: preset (restart, or live after S5), TAA on or off, sharpening, windshield, AO strength.
 3. **Display**: fullscreen (live); render scale, quality, upscaler, VSync, frame rate (restart).
 4. **Info**: today's F2 text and the frame rate.

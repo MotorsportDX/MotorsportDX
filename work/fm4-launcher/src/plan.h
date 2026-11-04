@@ -116,6 +116,15 @@ std::string Utf8(const std::filesystem::path& path);
 // Path(text).resolve() of Python on Windows.
 std::string ResolvePath(const std::string& text);
 
+// A look value split into its presets and its knobs (later knobs win).
+struct LookParts {
+  std::string base;
+  Pairs knobs;
+
+  static LookParts Parse(const std::string& look);
+  std::string Value() const;
+};
+
 // The knobs of a look value ('aces', 'sharpen=0.5' or both, later items win).
 Pairs LookKnobs(const LauncherData& data, const std::string& look);
 bool TaaEnabled(const Pairs& knobs);

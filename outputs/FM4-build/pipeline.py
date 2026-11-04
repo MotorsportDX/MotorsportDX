@@ -3750,7 +3750,7 @@ def launcher_data():
             'vsync':{'modes':list(VSYNC_MODES),'default':DEFAULT_VSYNC},
             'upscale':{'modes':UPSCALE_MODES,'default':DEFAULT_UPSCALE},
             'pad':{'knobs':PAD_KNOBS},'keyboard':{'knobs':KEYBOARD_KNOBS},
-            'wheel':{'knobs':WHEEL_KNOBS},
+            'wheel':{'knobs':WHEEL_KNOBS},'settings':player_settings.rows(),
             'gtao':passes_settings(PASSES_DIRECTORY,{}),
             'releases':{name:{'media_id':info['media_id'],'executables':info['executables']}
                         for name,info in RELEASES.items()},
@@ -4086,10 +4086,14 @@ def launch_cvars(root,disc1,log_file):
             'keybind_dpad_left':'Left','keybind_dpad_right':'Right',
             'keybind_rstick_up':'I','keybind_rstick_down':'K','keybind_rstick_left':'J',
             'keybind_rstick_right':'L','keybind_lstick_press':'F','keybind_rstick_press':'H',
+            # The player's settings of the in-game settings overlay (launcher.json 'settings',
+            # docs/analysis/ingame-settings.md); the GUI launcher adds fm4_settings_changes.
+            'fm4_settings_table':root/'launcher.json',
             'log_file':log_file}
 
 # The builder installer's downloads, the download and package actions (builder.py).
 import builder
+import player_settings
 
 def main():
     global PROGRESS,FETCH,ABI

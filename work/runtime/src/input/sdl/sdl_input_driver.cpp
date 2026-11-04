@@ -88,144 +88,185 @@ REXCVAR_DEFINE_STRING(pad_left_paddle2, "a", "Input",
 REXCVAR_DEFINE_BOOL(wheel, false, "Input",
                     "Racing wheel (docs/analysis/racing-wheels.md): read a wheel through SDL's "
                     "joystick API, drive the car with it (wheel_input) and run its force "
-                    "feedback from the game's steering torque");
+                    "feedback from the game's steering torque")
+    .lifecycle(rex::cvar::Lifecycle::kRequiresRestart);
 REXCVAR_DEFINE_BOOL(wheel_input, true, "Input",
                     "Racing wheel: its steering, pedals and buttons drive the car of the first "
-                    "player, beside the pad");
+                    "player, beside the pad")
+    .lifecycle(rex::cvar::Lifecycle::kRequiresRestart);
 REXCVAR_DEFINE_INT32(wheel_steer_axis, 0, "Input", "Racing wheel: the steering axis")
-    .range(0, 15);
+    .range(0, 15)
+    .lifecycle(rex::cvar::Lifecycle::kRequiresRestart);
 REXCVAR_DEFINE_BOOL(wheel_steer_invert, false, "Input",
-                    "Racing wheel: flip the steering axis");
+                    "Racing wheel: flip the steering axis")
+    .lifecycle(rex::cvar::Lifecycle::kRequiresRestart);
 REXCVAR_DEFINE_DOUBLE(wheel_steer_range, 900.0, "Input",
                       "Racing wheel: the rotation the wheel reports over its whole axis, lock to "
                       "lock, in degrees (the base's own angle setting, such as Pit House's)")
-    .range(90.0, 3600.0);
+    .range(90.0, 3600.0)
+    .lifecycle(rex::cvar::Lifecycle::kRequiresRestart);
 REXCVAR_DEFINE_DOUBLE(wheel_steer_lock, 0.0, "Input",
                       "Racing wheel: a fixed rotation that gives every car's full steering, lock "
                       "to lock, in degrees (0: the car's own lock, wheel_car_lock)")
-    .range(0.0, 3600.0);
+    .range(0.0, 3600.0)
+    .lifecycle(rex::cvar::Lifecycle::kRequiresRestart);
 REXCVAR_DEFINE_DOUBLE(wheel_car_lock, 900.0, "Input",
                       "Racing wheel: the steering lock of a car with the common 42-degree "
                       "road-wheel lock, lock to lock, in degrees; other cars scale with their "
                       "road-wheel lock (36 degrees: 771, 30 degrees: 643). Never more than "
                       "wheel_steer_range")
-    .range(90.0, 3600.0);
+    .range(90.0, 3600.0)
+    .lifecycle(rex::cvar::Lifecycle::kRequiresRestart);
 REXCVAR_DEFINE_INT32(wheel_throttle_axis, 1, "Input",
                      "Racing wheel: the throttle pedal axis (-1: none)")
-    .range(-1, 15);
+    .range(-1, 15)
+    .lifecycle(rex::cvar::Lifecycle::kRequiresRestart);
 REXCVAR_DEFINE_DOUBLE(wheel_throttle_rest, -32768.0, "Input",
                       "Racing wheel: the throttle pedal's raw axis value at rest")
-    .range(-32768.0, 32767.0);
+    .range(-32768.0, 32767.0)
+    .lifecycle(rex::cvar::Lifecycle::kRequiresRestart);
 REXCVAR_DEFINE_DOUBLE(wheel_throttle_pressed, 32767.0, "Input",
                       "Racing wheel: the throttle pedal's raw axis value fully pressed")
-    .range(-32768.0, 32767.0);
+    .range(-32768.0, 32767.0)
+    .lifecycle(rex::cvar::Lifecycle::kRequiresRestart);
 REXCVAR_DEFINE_DOUBLE(wheel_throttle_deadzone, 0.0, "Input",
                       "Racing wheel: the share of the throttle pedal's travel from rest that reads 0")
-    .range(0.0, 0.9);
+    .range(0.0, 0.9)
+    .lifecycle(rex::cvar::Lifecycle::kRequiresRestart);
 REXCVAR_DEFINE_DOUBLE(wheel_throttle_gamma, 1.0, "Input",
                       "Racing wheel: the throttle pedal's response curve (above 1: finer at the top)")
-    .range(0.2, 5.0);
+    .range(0.2, 5.0)
+    .lifecycle(rex::cvar::Lifecycle::kRequiresRestart);
 REXCVAR_DEFINE_INT32(wheel_brake_axis, 2, "Input",
                      "Racing wheel: the brake pedal axis (-1: none)")
-    .range(-1, 15);
+    .range(-1, 15)
+    .lifecycle(rex::cvar::Lifecycle::kRequiresRestart);
 REXCVAR_DEFINE_DOUBLE(wheel_brake_rest, -32768.0, "Input",
                       "Racing wheel: the brake pedal's raw axis value at rest")
-    .range(-32768.0, 32767.0);
+    .range(-32768.0, 32767.0)
+    .lifecycle(rex::cvar::Lifecycle::kRequiresRestart);
 REXCVAR_DEFINE_DOUBLE(wheel_brake_pressed, 32767.0, "Input",
                       "Racing wheel: the brake pedal's raw axis value fully pressed")
-    .range(-32768.0, 32767.0);
+    .range(-32768.0, 32767.0)
+    .lifecycle(rex::cvar::Lifecycle::kRequiresRestart);
 REXCVAR_DEFINE_DOUBLE(wheel_brake_deadzone, 0.0, "Input",
                       "Racing wheel: the share of the brake pedal's travel from rest that reads 0")
-    .range(0.0, 0.9);
+    .range(0.0, 0.9)
+    .lifecycle(rex::cvar::Lifecycle::kRequiresRestart);
 REXCVAR_DEFINE_DOUBLE(wheel_brake_gamma, 1.0, "Input",
                       "Racing wheel: the brake pedal's response curve (above 1: finer at the top)")
-    .range(0.2, 5.0);
+    .range(0.2, 5.0)
+    .lifecycle(rex::cvar::Lifecycle::kRequiresRestart);
 REXCVAR_DEFINE_INT32(wheel_clutch_axis, -1, "Input",
                      "Racing wheel: the clutch pedal axis (-1: none)")
-    .range(-1, 15);
+    .range(-1, 15)
+    .lifecycle(rex::cvar::Lifecycle::kRequiresRestart);
 REXCVAR_DEFINE_DOUBLE(wheel_clutch_rest, -32768.0, "Input",
                       "Racing wheel: the clutch pedal's raw axis value at rest")
-    .range(-32768.0, 32767.0);
+    .range(-32768.0, 32767.0)
+    .lifecycle(rex::cvar::Lifecycle::kRequiresRestart);
 REXCVAR_DEFINE_DOUBLE(wheel_clutch_pressed, 32767.0, "Input",
                       "Racing wheel: the clutch pedal's raw axis value fully pressed")
-    .range(-32768.0, 32767.0);
+    .range(-32768.0, 32767.0)
+    .lifecycle(rex::cvar::Lifecycle::kRequiresRestart);
 REXCVAR_DEFINE_DOUBLE(wheel_clutch_deadzone, 0.0, "Input",
                       "Racing wheel: the share of the clutch pedal's travel from rest that reads 0")
-    .range(0.0, 0.9);
+    .range(0.0, 0.9)
+    .lifecycle(rex::cvar::Lifecycle::kRequiresRestart);
 REXCVAR_DEFINE_DOUBLE(wheel_clutch_gamma, 1.0, "Input",
                       "Racing wheel: the clutch pedal's response curve (above 1: finer at the top)")
-    .range(0.2, 5.0);
+    .range(0.2, 5.0)
+    .lifecycle(rex::cvar::Lifecycle::kRequiresRestart);
 REXCVAR_DEFINE_INT32(wheel_shift_up_button, -1, "Input",
                      "Racing wheel: the button of a sequential shift up (-1: none)")
-    .range(-1, 127);
+    .range(-1, 127)
+    .lifecycle(rex::cvar::Lifecycle::kRequiresRestart);
 REXCVAR_DEFINE_INT32(wheel_shift_down_button, -1, "Input",
                      "Racing wheel: the button of a sequential shift down (-1: none)")
-    .range(-1, 127);
+    .range(-1, 127)
+    .lifecycle(rex::cvar::Lifecycle::kRequiresRestart);
 REXCVAR_DEFINE_INT32(wheel_clutch_button, -1, "Input",
                      "Racing wheel: the button held for the clutch (-1: none)")
-    .range(-1, 127);
+    .range(-1, 127)
+    .lifecycle(rex::cvar::Lifecycle::kRequiresRestart);
 REXCVAR_DEFINE_INT32(wheel_handbrake_button, -1, "Input",
                      "Racing wheel: the button held for the handbrake (-1: none)")
-    .range(-1, 127);
+    .range(-1, 127)
+    .lifecycle(rex::cvar::Lifecycle::kRequiresRestart);
 REXCVAR_DEFINE_STRING(wheel_virtual, "", "Input",
                       "Racing wheel test without hardware: attach an SDL virtual wheel driven by "
                       "this CSV script (time_s,steer,throttle,brake,buttons: raw axis values, "
                       "interpolated, and a button mask; it repeats), and read pads without "
-                      "window focus");
+                      "window focus")
+    .lifecycle(rex::cvar::Lifecycle::kRequiresRestart);
 REXCVAR_DEFINE_STRING(wheel_name, "", "Input",
                       "Racing wheel: only a joystick whose name contains this (empty: SDL's "
-                      "first wheel, else the first joystick that is not a gamepad)");
+                      "first wheel, else the first joystick that is not a gamepad)")
+    .lifecycle(rex::cvar::Lifecycle::kRequiresRestart);
 REXCVAR_DEFINE_STRING(wheel_ffb_sink, "device", "Input",
                       "Racing wheel force feedback: device (the wheel, through SDL's haptic API) "
                       "or record (no force reaches any device, so the window's focus does not "
-                      "stop it; with wheel_ffb_record)");
+                      "stop it; with wheel_ffb_record)")
+    .lifecycle(rex::cvar::Lifecycle::kRequiresRestart);
 REXCVAR_DEFINE_STRING(wheel_ffb_record, "", "Input",
-                      "Racing wheel force feedback: a CSV file of every force sent (empty: none)");
+                      "Racing wheel force feedback: a CSV file of every force sent (empty: none)")
+    .lifecycle(rex::cvar::Lifecycle::kRequiresRestart);
 REXCVAR_DEFINE_DOUBLE(wheel_ffb_cap, 0.25, "Input",
                       "Racing wheel force feedback: the hard upper limit, a fraction of the "
                       "wheel's full force, independent of the gain")
-    .range(0.0, 1.0);
+    .range(0.0, 1.0)
+    .lifecycle(rex::cvar::Lifecycle::kRequiresRestart);
 REXCVAR_DEFINE_DOUBLE(wheel_ffb_gain, 1.0, "Input",
                       "Racing wheel force feedback: multiplies the game's force before the cap")
-    .range(0.0, 4.0);
+    .range(0.0, 4.0)
+    .lifecycle(rex::cvar::Lifecycle::kRequiresRestart);
 REXCVAR_DEFINE_BOOL(wheel_ffb_invert, false, "Input",
-                    "Racing wheel force feedback: flip the force's direction");
+                    "Racing wheel force feedback: flip the force's direction")
+    .lifecycle(rex::cvar::Lifecycle::kRequiresRestart);
 REXCVAR_DEFINE_DOUBLE(wheel_ffb_min_force, 0.0, "Input",
                       "Racing wheel force feedback: the smallest force sent while the game asks "
                       "for any, a fraction of the wheel's full force (lifts small forces above "
                       "the wheel's own friction)")
-    .range(0.0, 0.5);
+    .range(0.0, 0.5)
+    .lifecycle(rex::cvar::Lifecycle::kRequiresRestart);
 REXCVAR_DEFINE_DOUBLE(wheel_ffb_smoothing, 10.0, "Input",
                       "Racing wheel force feedback: smooths the game's force, which changes "
                       "once a frame, over this time constant in milliseconds (0: none)")
-    .range(0.0, 200.0);
+    .range(0.0, 200.0)
+    .lifecycle(rex::cvar::Lifecycle::kRequiresRestart);
 REXCVAR_DEFINE_DOUBLE(wheel_ffb_spring, 1.0, "Input",
                       "Racing wheel force feedback: the game's centring spring, which grows "
                       "with speed and fades when the rear slides (1: as the game scales it, 0: "
                       "off)")
-    .range(0.0, 2.0);
+    .range(0.0, 2.0)
+    .lifecycle(rex::cvar::Lifecycle::kRequiresRestart);
 REXCVAR_DEFINE_DOUBLE(wheel_ffb_damper, 1.0, "Input",
                       "Racing wheel force feedback: the game's damper (1: as the game scales "
                       "it, 0: off)")
-    .range(0.0, 2.0);
+    .range(0.0, 2.0)
+    .lifecycle(rex::cvar::Lifecycle::kRequiresRestart);
 REXCVAR_DEFINE_DOUBLE(wheel_ffb_road, 0.25, "Input",
                       "Racing wheel force feedback: the vibration of kerbs, rumble strips, grass "
                       "and gravel, a fraction of the wheel's full force at the game's strongest "
                       "surface rumble (0: off)")
-    .range(0.0, 1.0);
+    .range(0.0, 1.0)
+    .lifecycle(rex::cvar::Lifecycle::kRequiresRestart);
 REXCVAR_DEFINE_DOUBLE(wheel_ffb_impact, 0.5, "Input",
                       "Racing wheel force feedback: the jolt of hitting walls, cars and objects, "
                       "a fraction of the wheel's full force at the game's strongest impact (0: "
                       "off)")
-    .range(0.0, 1.0);
+    .range(0.0, 1.0)
+    .lifecycle(rex::cvar::Lifecycle::kRequiresRestart);
 REXCVAR_DEFINE_BOOL(wheel_ffb_physics, true, "Input",
                     "Racing wheel force feedback: follow the game's steering torque at its "
-                    "physics rate (about 360 times a second) rather than once a frame");
+                    "physics rate (about 360 times a second) rather than once a frame")
+    .lifecycle(rex::cvar::Lifecycle::kRequiresRestart);
 REXCVAR_DEFINE_DOUBLE(wheel_end_stop, 1.0, "Input",
                       "Racing wheel force feedback: the end stop beyond the car's steering lock, "
                       "a fraction of the wheel's full force reached 6 degrees past the lock, "
                       "within the force cap (0: off)")
-    .range(0.0, 1.0);
+    .range(0.0, 1.0)
+    .lifecycle(rex::cvar::Lifecycle::kRequiresRestart);
 REXCVAR_DEFINE_STRING(pad_touchpad, "guide", "Input",
                       "Guest button of the touchpad click (PlayStation pads)")
     .allowed({"a", "b", "x", "y", "lb", "rb", "back", "start", "ls", "rs", "up", "down", "left",

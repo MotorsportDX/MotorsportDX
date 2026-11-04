@@ -37,6 +37,7 @@
 
 #include "builder.h"
 #include "discs.h"
+#include "overlay.h"
 #include "runner.h"
 #include "screenshot.h"
 #include "shaders.h"
@@ -355,39 +356,6 @@ std::string ExitText(unsigned long code, double seconds) {
   return "The game exited with code " + std::to_string(code) + after + ".";
 }
 
-// A look value split into its presets and its knobs (later knobs win).
-struct LookParts {
-  std::string base;
-  Pairs knobs;
-
-  static LookParts Parse(const std::string& look) {
-    LookParts parts;
-    size_t start = 0;
-    while (start <= look.size()) {
-      const size_t comma = look.find(',', start);
-      std::string item = look.substr(start, comma == std::string::npos ? std::string::npos : comma - start);
-      item.erase(0, item.find_first_not_of(" \t"));
-      item.erase(item.find_last_not_of(" \t") + 1);
-      if (!item.empty()) {
-        const size_t equals = item.find('=');
-        if (equals == std::string::npos)
-          parts.base += (parts.base.empty() ? "" : ",") + item;
-        else
-          parts.knobs.Set(item.substr(0, equals), item.substr(equals + 1));
-      }
-      if (comma == std::string::npos) break;
-      start = comma + 1;
-    }
-    return parts;
-  }
-
-  std::string Value() const {
-    std::string value = base;
-    for (const auto& [name, knob] : knobs.Items()) value += (value.empty() ? "" : ",") + name + "=" + knob;
-    return value;
-  }
-};
-
 // The pages, in the navigation's order, with their names and their ids of --screenshot.
 // Build is the builder package's page (builder.h), shown only in builder mode.
 enum Page { kHome, kDisplay, kLook, kControls, kGameData, kShaders, kAdvanced, kAbout, kBuild, kPageCount };
@@ -525,6 +493,9 @@ class App {
   bool Imported(const Package& package) const;
   void RemoveImport(const Package& package);
   void SaveSettings();
+  // Folds the in-game settings overlay's changes into the profiles (overlay.h).
+  void FoldOverlay();
+  fs::path OverlayChangesPath() const;
   void OpenDialog(DialogTarget target, bool folder);
   static void DialogDone(void* userdata, const char* const* files, int filter);
   void ApplyDialogs();
@@ -763,6 +734,7 @@ bool App::Init(int argc, char** argv) {
   for (const wchar_t* name : {L"launcher-backdrop.jpg", L"launcher-backdrop.png"})
     if (!backdrop_ && fs::exists(root_ / name)) LoadBackdrop(root_ / name);
   if (load_error_.empty()) Refresh(true);
+  FoldOverlay();
   // --play: press Play at start with the active profile, for a desktop shortcut.
   bool play = false;
   bool wheel_test = false;
@@ -1063,6 +1035,7 @@ void App::Run() {
               std::chrono::duration<double>(std::chrono::steady_clock::now() - started_).count();
           if (waiter_.joinable()) waiter_.join();
           running_ = false;
+          FoldOverlay();
           if (code != 0) {
             banner_ = ExitText(code, seconds);
             banner_error_ = true;
@@ -1095,6 +1068,9 @@ void App::Run() {
           continue;
         }
         ImGui_ImplSDL3_ProcessEvent(&event);
+        if (event.type == SDL_EVENT_WINDOW_FOCUS_GAINED && event.window.windowID == SDL_GetWindowID(window_) &&
+            !running_)
+          FoldOverlay();
         if (wheel_ && (event.type == SDL_EVENT_WINDOW_FOCUS_LOST || event.type == SDL_EVENT_WINDOW_FOCUS_GAINED) &&
             event.window.windowID == SDL_GetWindowID(window_))
           wheel_->SetFocus(event.type == SDL_EVENT_WINDOW_FOCUS_GAINED);
@@ -1182,6 +1158,25 @@ void App::RemoveImport(const Package& package) {
   Refresh(false);
 }
 
+fs::path App::OverlayChangesPath() const { return settings_path_.parent_path() / kOverlayChangesFile; }
+
+void App::FoldOverlay() {
+  if (shot_ || !load_error_.empty()) return;
+  std::vector<std::string> log;
+  bool changed = false;
+  try {
+    changed = FoldOverlayFile(data_, OverlayChangesPath(), settings_, log);
+  } catch (const std::exception& error) {
+    log.push_back(std::string("overlay-changes.json: ") + error.what());
+  }
+  if (changed) SaveSettings();
+  if (log.empty()) return;
+  std::error_code error;
+  fs::create_directories(root_ / "logs", error);
+  std::ofstream file(root_ / "logs" / "overlay-changes.log", std::ios::binary | std::ios::app);
+  for (const auto& line : log) file << line << "\n";
+}
+
 void App::SaveSettings() {
   try {
     // In builder mode the BuildRoot may not exist yet.
@@ -1219,6 +1214,8 @@ std::vector<std::string> App::GameArgs(const Plan& plan) {
   if (!settings_.user_data.empty()) cvars.Set("user_data_root", settings_.user_data);
   for (const auto& [name, value] : settings_.binds.Items()) cvars.Set(name, value);
   if (settings_.mouse_right_stick) cvars.Set("mnk_mouse", "true");
+  // The in-game settings overlay saves its changes there (overlay.h).
+  if (!shot_) cvars.Set(kOverlayChangesCvar, Utf8(OverlayChangesPath()));
   // Extra cvars, last: --name=value (or name=value) separated by spaces.
   std::istringstream extra(settings_.Active().options.extra_cvars);
   for (std::string item; extra >> item;) {
@@ -1261,7 +1258,18 @@ void App::Play() {
       artifacts_checked_ = true;
     }
     WriteContentManifest();
+    FoldOverlay();
     SaveSettings();
+    if (!shot_) {
+      // The overlay's file of this run: the profile it changes and its options at the start.
+      const fs::path changes = OverlayChangesPath();
+      const fs::path temporary = fs::path(changes).concat(L".tmp");
+      {
+        std::ofstream stream(temporary, std::ios::binary | std::ios::trunc);
+        stream << OverlayStart(settings_.Active()).dump(1);
+      }
+      fs::rename(temporary, changes);
+    }
     Pairs env = plan->env;
     if (settings_.Active().options.perf_trace) {
       // The performance trace: one JSON line a second (docs/e2e/traces.md).

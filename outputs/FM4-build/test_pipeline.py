@@ -17,6 +17,7 @@ from unittest.mock import patch
 import zipfile
 
 import pipeline
+import player_settings
 from prepare import switches, BASE
 import sys
 sys.path.insert(0,str(Path(__file__).resolve().parent/'e2e'))
@@ -1049,6 +1050,70 @@ class PipelineTests(unittest.TestCase):
             for key in ('cvars','look','quality','releases','content'):
                 self.assertIn(key,written)
             self.assertEqual(written['cvars']['game_data_root'],pipeline.LAUNCHER_DISC1)
+            self.assertEqual(written['settings'],json.loads(json.dumps(player_settings.rows())))
+
+    def test_player_settings(self):
+        """The player's settings (docs/analysis/ingame-settings.md 3): every row maps to a
+        launcher option or knob, with a class, a default inside its range or choices, and the
+        cvar or param that a live row sets."""
+        rows=player_settings.rows()
+        self.assertEqual(len(rows),len(player_settings.PLAYER_SETTINGS))
+        options=('pad','keyboard','wheel','look','fullscreen','display','resolution_scale',
+                 'upscale','frame_rate','vsync','quality')
+        seen=set()
+        for row in rows:
+            key=(row['option'],row['knob'])
+            self.assertNotIn(key,seen)
+            seen.add(key)
+            self.assertIn(row['option'],options)
+            self.assertIn(row['class'],player_settings.PLAYER_SETTING_CLASSES)
+            self.assertIn(row['page'],('controls','look','display'))
+            if 'choices' in row:
+                self.assertIn(row['default'],[value for value,name in row['choices']],key)
+            else:
+                self.assertLessEqual(row['min'],float(row['default']),key)
+                self.assertLessEqual(float(row['default']),row['max'],key)
+            if row['class']=='live' and row['option']!='fullscreen':
+                self.assertTrue(row.get('cvar') or row.get('param'),key)
+        by_key={(row['option'],row['knob']):row for row in rows}
+        # Knob rows carry their table's cvar and range; a launcher default that differs from the
+        # runtime's stays the launcher's (rumble 1.5).
+        self.assertEqual(by_key['pad','rumble']['cvar'],'pad_rumble_strength')
+        self.assertEqual(by_key['pad','rumble']['default'],'1.5')
+        self.assertEqual((by_key['pad','stick_deadzone']['min'],by_key['pad','stick_deadzone']['max']),
+                         (0.0,0.5))
+        self.assertEqual(by_key['keyboard','smooth']['choices'],[['0','Off'],['1','On']])
+        self.assertEqual(by_key['wheel','ffb_gain']['class'],'restart')
+        self.assertEqual(by_key['pad','driver']['class'],'restart')
+        # The look: the preset needs the shader pass (restart); TAA, sharpening, the windshield
+        # and the occlusion are post pass params, with the default look's values.
+        self.assertEqual(by_key['look','preset']['class'],'restart')
+        self.assertEqual(by_key['look','preset']['default'],pipeline.DEFAULT_LOOK)
+        self.assertEqual([value for value,name in by_key['look','preset']['choices']],
+                         list(pipeline.LOOK_PRESETS))
+        self.assertEqual({knob:by_key['look',knob]['param'] for knob in ('taa','sharpen','windshield','ao')},
+                         {'taa':'TAA','sharpen':'TAA_SHARPEN','windshield':'WINDSHIELD','ao':'GTAO_SCALE'})
+        self.assertEqual(by_key['look','sharpen']['default'],'0.4')
+        # Display: the values the launcher stores (60 fps as 0, high quality as empty).
+        self.assertEqual(by_key['frame_rate','']['choices'][1],['0','60 fps'])
+        self.assertEqual(by_key['quality','']['default'],'')
+        self.assertEqual(by_key['fullscreen','']['class'],'live')
+        self.assertEqual([value for value,name in by_key['resolution_scale','']['choices']],
+                         ['0','-1','1','2','3','4'])
+        # Every choice of a display row is a value launch_plan takes.
+        with tempfile.TemporaryDirectory() as directory:
+            for option in ('display','upscale','frame_rate','vsync','quality'):
+                for value,name in by_key[option,'']['choices']:
+                    if value:
+                        arg={'frame_rate':int(value)} if option=='frame_rate' else {option:value}
+                        if option=='upscale':
+                            # An upscaler needs FSR or TAAU in the look (the overlay sets aa=fsr).
+                            arg.update(look='aces,aa=fsr',native=True)
+                        pipeline.launch_plan(Path(directory),'C:/disc1',monitor=(1920,1080,1.0,60,0,0),
+                                             content_manifest=None,**arg)
+        with patch.object(player_settings,'PLAYER_SETTINGS',(('controls','Pad','pad','rumble','x','soon'),)):
+            with self.assertRaises(ValueError):
+                player_settings.rows()
 
     def test_cpu_features(self):
         """CPUID's x86-64-v2 bits; where CPUID cannot run, IsProcessorFeaturePresent's flags, with

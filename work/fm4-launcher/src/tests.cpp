@@ -3,6 +3,7 @@
 // monitors and its check of the Discs and content of local.json; the result lists every
 // difference of this port.
 #include <algorithm>
+#include <tuple>
 #include <fstream>
 #include <map>
 #include <set>
@@ -10,6 +11,7 @@
 #include "builder.h"
 #include "discs.h"
 #include "iso.h"
+#include "overlay.h"
 #include "settings.h"
 
 namespace fm4 {
@@ -27,6 +29,84 @@ void Compare(const std::string& what, const Json& expected, const Pairs& actual,
     const std::string have = got.contains(key) ? got.at(key) : "<none>";
     if (want != have) failures.push_back(what + " " + key + ": expected '" + want + "', got '" + have + "'");
   }
+}
+
+// The player's settings of launcher.json and the folding of the in-game overlay's changes
+// (overlay.h): a change lands in the profile it names, a value equal to the launchers' default
+// leaves the knob out, and an unknown profile, option, knob or value is dropped with a log line.
+void OverlayTests(const LauncherData& data, const std::filesystem::path& work,
+                  std::vector<std::string>& failures) {
+  for (const auto& problem : CheckPlayerSettings(data)) failures.push_back(problem);
+  Settings settings;
+  settings.profiles = {{"Default", Options{}}, {"Race", Options{}}};
+  settings.profiles[1].options.pad = "driver=rawinput,rumble=1.2";
+  settings.active = "Default";
+  const auto fold = [&](const Json& changes, const std::string& profile = "Race") {
+    std::vector<std::string> log;
+    const bool changed = FoldOverlayChanges(data, Json{{"profile", profile}, {"changes", changes}}, settings, log);
+    return std::make_pair(changed, log);
+  };
+  const auto expect = [&](const std::string& what, const std::string& have, const std::string& want) {
+    if (have != want) failures.push_back("Overlay fold " + what + ": expected '" + want + "', got '" + have + "'");
+  };
+  const auto logged = [](const std::vector<std::string>& log, const std::string& text) {
+    return std::any_of(log.begin(), log.end(), [&](const std::string& line) { return line.find(text) != std::string::npos; });
+  };
+  auto [changed, log] = fold(Json{{"pad", {{"rumble", "0.8"}, {"stick_deadzone", "0.1"}}},
+                                  {"keyboard", {{"steer_attack", "0.5"}}},
+                                  {"look", {{"sharpen", "0.6"}}},
+                                  {"quality", "ultra"},
+                                  {"fullscreen", "1"},
+                                  {"frame_rate", "120"},
+                                  {"resolution_scale", "-1"}});
+  const Options& race = settings.profiles[1].options;
+  if (!changed) failures.push_back("Overlay fold: no change");
+  expect("pad", race.pad, "driver=rawinput,rumble=0.8,stick_deadzone=0.1");
+  expect("keyboard", race.keyboard, "steer_attack=0.5");
+  expect("look", race.look, "aces,sharpen=0.6");
+  expect("quality", race.quality, "ultra");
+  expect("fullscreen", race.fullscreen ? "1" : "0", "1");
+  expect("frame rate", std::to_string(race.frame_rate), "120");
+  expect("render scale", std::to_string(race.resolution_scale), std::to_string(kPanelScale));
+  expect("other profile", OptionsToJson(settings.profiles[0].options).dump(), OptionsToJson(Options{}).dump());
+  // The launchers' default leaves the knob out; the preset first, then the knobs against it.
+  std::tie(changed, log) = fold(Json{{"pad", {{"rumble", "1.5"}}}, {"look", {{"sharpen", "0.4"}, {"preset", "gt7"}}}});
+  expect("pad at its default", race.pad, "driver=rawinput,stick_deadzone=0.1");
+  expect("look preset", race.look, "gt7");
+  std::tie(changed, log) = fold(Json{{"look", {{"windshield", "0"}, {"taa", "0"}}}, {"upscale", "quality"}});
+  expect("look knobs", race.look, "gt7,windshield=0,taa=0");
+  expect("upscale", race.upscale, "quality");
+  // Dropped with a log line, the rest folded.
+  const std::string before = OptionsToJson(race).dump();
+  std::tie(changed, log) = fold(Json{{"pad", {{"bogus", "1"}, {"rumble", "9"}}},
+                                     {"frobnicate", "1"},
+                                     {"quality", "best"},
+                                     {"look", {{"preset", "nope"}, {"bogus", "1"}}},
+                                     {"vsync", "on"}});
+  expect("partly dropped", race.vsync, "on");
+  for (const char* text : {"pad bogus=1: dropped", "pad rumble=9: dropped", "frobnicate=1: dropped",
+                           "quality=best: dropped", "look preset=nope: dropped", "look bogus=1: dropped"})
+    if (!logged(log, text)) failures.push_back(std::string("Overlay fold: no log line '") + text + "'");
+  if (OptionsToJson(race).dump() == before) failures.push_back("Overlay fold: the valid change was dropped");
+  std::tie(changed, log) = fold(Json{{"quality", "low"}}, "Gone");
+  if (changed || !logged(log, "'Gone', which does not exist") || race.quality != "ultra")
+    failures.push_back("Overlay fold of an unknown profile");
+  // The file at Play, its folding and removal; a damaged file is dropped with a log line.
+  const std::filesystem::path path = work / kOverlayChangesFile;
+  Json start = OverlayStart(settings.profiles[1]);
+  if (OptionsToJson(OptionsFromJson(start.at("options"))) != OptionsToJson(race))
+    failures.push_back("Overlay start: options do not round-trip");
+  start["changes"] = Json{{"frame_rate", "240"}};
+  std::ofstream(path, std::ios::binary | std::ios::trunc) << start.dump(1);
+  log.clear();
+  if (!FoldOverlayFile(data, path, settings, log) || race.frame_rate != 240 || std::filesystem::exists(path))
+    failures.push_back("Overlay file: not folded and removed");
+  std::ofstream(path, std::ios::binary | std::ios::trunc) << "{\"profile\": ";
+  log.clear();
+  if (FoldOverlayFile(data, path, settings, log) || !logged(log, "not JSON") || std::filesystem::exists(path))
+    failures.push_back("Overlay file: a damaged file was not dropped");
+  log.clear();
+  if (FoldOverlayFile(data, path, settings, log) || !log.empty()) failures.push_back("Overlay file: none, yet a change");
 }
 
 }  // namespace
@@ -165,6 +245,7 @@ int RunTests(const std::filesystem::path& cases_path, const std::filesystem::pat
       failures.push_back("Builder error '" + error.at(0).get<std::string>() + "': '" + plain.text + "' on '" +
                          plain.screen + "'");
   }
+  OverlayTests(data, std::filesystem::path(result_path).parent_path(), failures);
   std::ofstream result(result_path, std::ios::binary | std::ios::trunc);
   result << Json{{"plans", plans}, {"failures", failures}}.dump(1);
   return result ? 0 : 1;

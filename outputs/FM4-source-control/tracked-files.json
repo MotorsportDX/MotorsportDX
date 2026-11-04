@@ -417,6 +417,10 @@
       "provenance": "Reviewed bootstrap tooling: the builder installer's downloads, download and package actions and package allowlist; no game data"
     },
     {
+      "path": "outputs/FM4-build/player_settings.py",
+      "provenance": "Original build tooling: the table of the player's settings that the in-game settings overlay and the launcher share (launcher.json); no game content"
+    },
+    {
       "path": "outputs/FM4-build/package-readme.txt",
       "provenance": "Project-authored README of the builder package for players; no game data"
     },
@@ -631,6 +635,14 @@
     {
       "path": "work/fm4-launcher/src/iso.h",
       "provenance": "Original GUI launcher source (port of the pipeline.py GDFX disc image reader; the format's descriptor offsets as in the runtime's Xenia-derived DiscImageDevice); no game content"
+    },
+    {
+      "path": "work/fm4-launcher/src/overlay.cpp",
+      "provenance": "Original GUI launcher source (the in-game settings overlay's table check and the folding of its changes into the profiles); no game content"
+    },
+    {
+      "path": "work/fm4-launcher/src/overlay.h",
+      "provenance": "Original GUI launcher source (the in-game settings overlay's table check and the folding of its changes into the profiles); no game content"
     },
     {
       "path": "work/fm4-launcher/src/plan.cpp",
@@ -1399,6 +1411,10 @@
     {
       "path": "work/fm4-rex/src/fm4-render-overrides.cpp",
       "provenance": "Reviewed integration/helper source; SDK-derived portions retain upstream notice"
+    },
+    {
+      "path": "work/fm4-rex/src/fm4-settings-overlay.cpp",
+      "provenance": "Original integration source: the in-game PC settings overlay over the guest output (runtime ImGui, cvars and post pass params); no game content"
     },
     {
       "path": "work/fm4-rex/src/fm4-stream-trace.cpp",

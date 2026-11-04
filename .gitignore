@@ -31,6 +31,7 @@
 !/.claude/skills/
 !/.claude/skills/**
 !/outputs/FM4-build/builder.py
+!/outputs/FM4-build/player_settings.py
 !/outputs/FM4-build/CREDITS.txt
 !/outputs/FM4-build/Build.ps1
 !/outputs/FM4-build/dump-image.cpp
@@ -124,6 +125,8 @@
 !/work/fm4-launcher/src/discs.h
 !/work/fm4-launcher/src/iso.cpp
 !/work/fm4-launcher/src/iso.h
+!/work/fm4-launcher/src/overlay.cpp
+!/work/fm4-launcher/src/overlay.h
 !/work/fm4-launcher/src/plan.cpp
 !/work/fm4-launcher/src/plan.h
 !/work/fm4-launcher/src/runner.cpp
@@ -306,6 +309,7 @@
 !/work/fm4-rex/src/fm4-instruction-fixes.h
 !/work/fm4-rex/src/fm4-jpeg-diagnostics.cpp
 !/work/fm4-rex/src/fm4-render-overrides.cpp
+!/work/fm4-rex/src/fm4-settings-overlay.cpp
 !/work/fm4-rex/src/fm4-test-input.h
 !/work/fm4-rex/src/fm4-track-settings.h
 !/work/fm4-rex/src/fm4-ui-diagnostics.cpp

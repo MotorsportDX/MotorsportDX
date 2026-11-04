@@ -41,6 +41,7 @@ set(FM4REX_SOURCES
     src/fm4-render-idle-wait.cpp
     src/fm4-content-installer.cpp
     src/fm4-render-overrides.cpp
+    src/fm4-settings-overlay.cpp
     src/fm4-fiber-hooks.cpp
     src/fm4-gpu-probe.cpp
     src/fm4-jpeg-diagnostics.cpp
