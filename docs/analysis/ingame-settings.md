@@ -119,9 +119,13 @@ A live switch between presets needs every preset's binaries before play.
 
 ### 4.2 Input
 
-- Opening: a key (F2 becomes "info, then settings", or a new key; section 7) and a pad chord that
-  the game does not use alone, for the Ally X (for example holding View and Menu together; to
-  choose in S2 against the title's own uses of both).
+- Opening with a pad: holding View and Menu (Back and Start) together for about one second (the
+  owner's decision of 4 November 2026). It needs no button that Windows or the ROG Xbox Ally X
+  takes for itself (Guide goes to the Game Bar, the Ally X's extra buttons to its own software).
+  The title still sees the Start press before the chord is recognised, so its pause menu opens
+  too, which pauses a race behind the overlay. S2 checks what the title does with Back alone and
+  whether that press must be held back from the guest while the chord is pending.
+- Opening with the keyboard: a key (F2 becomes "info, then settings", or a new key; section 7).
 - While open, the guest sees a neutral pad and no keys, so steering a slider does not steer the
   car. The game is not paused by the overlay: the player opens the game's own pause menu first,
   or the overlay presses the title's pause on opening (section 7).
@@ -188,17 +192,16 @@ Estimates are in AI calendar time (one person-week is about 3.5 hours).
 | S3. Live settings | The Controls page and the live look params (TAA, sharpening, windshield, AO) through `SetFlagByName` and the `shader_mod_set` path; fullscreen | 3 h | the test event changes rumble and a param; a short check with the overlay closed against the previous main |
 | S4. Restart settings | The Look and Display pages' restart rows, saved and labelled; "Restart now" if section 7 allows it | 2.5 h | a change of look and quality saved in the overlay is the launcher's at the next start; the shader pass runs when the look changed |
 | S5 (optional). Live presets | Option (b) or (c) of section 3.1, after the owner's decision | 4 to 7 h | the shader pass's time and cache size per preset on this PC; the `perf` tier for (c); no compile in play when switching (the native path's compile counters) |
-| S6. The ROG Xbox Ally X | Notes and a checklist for the owner's run: the chord, readability, navigation, a live rumble change in a race | 0.5 h of notes; the owner's run | the owner's report |
+| S6. The ROG Xbox Ally X | Notes and a checklist for the owner's run: the View and Menu chord on the built-in pad (and that neither button is taken by the Ally X's software), readability, navigation, a live rumble change in a race | 0.5 h of notes; the owner's run | the owner's report |
 
 S0 to S4 are about 13.5 hours; with S5, 17.5 to 20.5 hours.
 
 ## 7. Open questions for the owner
 
-1. **The key and the chord.** Does F2 open the settings menu, with the info text as its last page,
-   or does the menu get its own key? Which pad chord on the Ally X (it has extra buttons that may
-   be free)?
-2. **Pausing.** Should opening the overlay press the game's pause during a race, or leave the
-   race running behind it?
+1. **The key.** Does F2 open the settings menu, with the info text as its last page, or does the
+   menu get its own key? (The pad chord is decided: View and Menu held together, section 4.2.)
+2. **Pausing.** The chord's Start press opens the title's pause menu in a race. Is that enough, or
+   should the keyboard key press the title's pause too?
 3. **Live presets (S5).** Option (a) only, or (b) or (c) after measuring their cost?
 4. **Restart now.** Should the overlay restart the game, which needs the launcher to stay open
    while the game runs (or to be started again by the game)?
