@@ -375,7 +375,8 @@ enum DialogTarget {
   kContentFiles,
   kTextureReplace,
   kTextureDump,
-  kUserData
+  kUserData,
+  kUpdateInstall
 };
 
 class App;
@@ -484,6 +485,9 @@ class App {
   // Downloads, Build), and the build's start with the Discs of the settings.
   void BuildRows();
   void StartBuild(bool download_all);
+  // Puts this package into the earlier install at install (UpdateInstall) and starts its launcher
+  // with arguments, which builds this version there.
+  bool Update(const fs::path& install, const std::wstring& arguments);
   void Play();
   void Refresh(bool discs);
   std::optional<Plan> CurrentPlan(std::string& error);
@@ -753,8 +757,18 @@ bool App::Init(int argc, char** argv) {
     bool fetched = false;
     for (const auto& item : builder_->Downloads()) fetched = fetched || Downloaded(builder_->Layout(), item);
     tab_ = fetched ? 3 : 0;
-    // --build: Download all and Start the build at once; typing it is the consent to the downloads.
-    if (flag("--build")) StartBuild(true);
+    // --update <folder>: this package into the earlier install there, whose launcher then starts
+    // (with --build when given). --build: Download all and Start the build at once; typing it is the
+    // consent to the downloads.
+    std::string update;
+    for (int i = 1; i + 1 < argc; ++i)
+      if (std::string(argv[i]) == "--update") update = argv[i + 1];
+    if (!update.empty()) {
+      if (!Update(PathFromUtf8(update), flag("--build") ? L"--build" : L""))
+        std::fprintf(stderr, "%s\n", banner_.c_str());
+    } else if (flag("--build")) {
+      StartBuild(true);
+    }
   } else if (play) {
     Play();
   } else if (load_error_.empty() && disc1_.error.empty() && !ShadersReady()) {
@@ -1349,6 +1363,7 @@ void App::ApplyDialogs() {
       case kTextureReplace: options.texture_replace = paths.front(); break;
       case kTextureDump: options.texture_dump = paths.front(); break;
       case kUserData: settings_.user_data = paths.front(); break;
+      case kUpdateInstall: Update(PathFromUtf8(paths.front()), {}); break;
     }
     Refresh(false);
   }
@@ -3874,6 +3889,20 @@ std::string SubStepText(const std::string& step) {
   return step.empty() ? std::string("starting") : step;
 }
 
+bool App::Update(const fs::path& install, const std::wstring& arguments) {
+  const fs::path package = builder_->Layout().install;
+  const std::string error = UpdateInstall(package, install);
+  if (error.empty()) {
+    const std::string start = StartLauncher(install / "MotorsportDX.exe", arguments);
+    if (start.empty()) return quit_ = true;
+    banner_ = start;
+  } else {
+    banner_ = error;
+  }
+  banner_error_ = true;
+  return false;
+}
+
 void App::StartBuild(bool download_all) {
   Refresh(false);
   page_ = kBuild;
@@ -3887,7 +3916,7 @@ void App::StartBuild(bool download_all) {
     return;
   }
   SaveSettings();
-  builder_->StartBuild({disc1_.path, disc2_.path, settings_.content}, download_all);
+  builder_->StartBuild({disc1_.path, disc2_.path, settings_.content, UserData(), settings_path_}, download_all);
   build_started_ = true;
   tab_ = 3;
 }
@@ -3956,6 +3985,14 @@ void App::BuildRows() {
                  " Nothing is installed for all users and no system setting changes.")
                     .c_str());
       next("Next: your discs", "Choose Disc 1, and Disc 2 if you have it.");
+      if (OptionRow("update", "Update an earlier install", "Choose its folder",
+                    "Already built an earlier version? Choose the folder you unpacked it into. This package's "
+                    "source and launcher replace that install's; its build tools, downloads, settings, profiles, "
+                    "saves and imported cars stay, and your saves are backed up into its backups folder before it "
+                    "builds this version. Its launcher then takes over.",
+                    !view.busy) == 2 &&
+          !shot_)
+        OpenDialog(kUpdateInstall, true);
       return;
     }
     if (tab_ == 1) {

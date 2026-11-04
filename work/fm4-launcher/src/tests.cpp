@@ -5,6 +5,7 @@
 #include <algorithm>
 #include <tuple>
 #include <fstream>
+#include <iterator>
 #include <map>
 #include <set>
 
@@ -29,6 +30,55 @@ void Compare(const std::string& what, const Json& expected, const Pairs& actual,
     const std::string have = got.contains(key) ? got.at(key) : "<none>";
     if (want != have) failures.push_back(what + " " + key + ": expected '" + want + "', got '" + have + "'");
   }
+}
+
+// An update (builder.h, update_test_case in builder.py): a later package into an earlier install
+// replaces its source and package files and keeps its folders; the files an earlier package left
+// in the source go; the backup holds the saves and the settings, not the imported content.
+void UpdateTests(const Json& update, std::vector<std::string>& failures) {
+  namespace fs = std::filesystem;
+  const fs::path install = PathFromUtf8(update.at("install").get<std::string>()),
+                 package = PathFromUtf8(update.at("package").get<std::string>());
+  const auto files = [](const fs::path& folder) {
+    std::vector<std::string> list;
+    std::error_code error;
+    for (auto it = fs::recursive_directory_iterator(folder, error); !error && it != fs::recursive_directory_iterator();
+         it.increment(error))
+      if (it->is_regular_file()) list.push_back(Utf8(fs::path(it->path().lexically_relative(folder).generic_wstring())));
+    std::sort(list.begin(), list.end());
+    return Json(list);
+  };
+  const auto text = [](const fs::path& path) {
+    std::ifstream stream(path, std::ios::binary);
+    return std::string((std::istreambuf_iterator<char>(stream)), std::istreambuf_iterator<char>());
+  };
+  if (UpdateInstall(package, package / "source").empty()) failures.push_back("Builder update: took a folder of no install");
+  if (UpdateInstall(package, package).empty()) failures.push_back("Builder update: took the package's own folder");
+  if (const std::string error = UpdateInstall(package, install); !error.empty())
+    failures.push_back("Builder update: " + error);
+  if (files(install / "source") != update.at("source"))
+    failures.push_back("Builder update, the source: " + files(install / "source").dump());
+  for (const char* name : {"MotorsportDX.exe", "launcher.json", "toolchain.json", "README.txt", "third-party-notices/A.txt"})
+    if (text(install / name) != "new") failures.push_back(std::string("Builder update, not copied: ") + name);
+  for (const char* name : {"source.new", "source.old", "update.new"})
+    if (fs::exists(install / name)) failures.push_back(std::string("Builder update, left: ") + name);
+  if (text(install / "build" / "build-result.json") == "{}" || text(install / "logs" / "builder.log").starts_with("package") ||
+      !fs::is_regular_file(install / "downloads" / "tool.zip"))
+    failures.push_back("Builder update: changed the install's build, logs or downloads");
+  // An earlier package unpacked into the same folder: its files and Python's caches go.
+  for (const char* name : {"work/old-only.cpp", "stale/__pycache__/x.pyc"}) {
+    fs::create_directories((install / "source" / name).parent_path());
+    std::ofstream(install / "source" / name) << "old";
+  }
+  const size_t removed = PruneSource(install / "source");
+  if (removed != 2 || files(install / "source") != update.at("source") || fs::exists(install / "source" / "stale"))
+    failures.push_back("Builder prune: " + std::to_string(removed) + " removed, " + files(install / "source").dump());
+  BuildInputs inputs;
+  inputs.user_data = install / "build" / "user-data";
+  inputs.settings = install / "build" / "launcher-settings.json";
+  const fs::path backup = install / "backups" / "test";
+  if (const std::string error = BackUpSaves(inputs, backup); !error.empty()) failures.push_back("Builder backup: " + error);
+  if (files(backup) != update.at("backup")) failures.push_back("Builder backup: " + files(backup).dump());
 }
 
 // The player's settings of launcher.json and the folding of the in-game overlay's changes
@@ -289,6 +339,7 @@ int RunTests(const std::filesystem::path& cases_path, const std::filesystem::pat
       failures.push_back("Builder error '" + error.at(0).get<std::string>() + "': '" + plain.text + "' on '" +
                          plain.screen + "'");
   }
+  UpdateTests(builder.at("update"), failures);
   OverlayTests(data, cases, std::filesystem::path(result_path).parent_path(), failures);
   std::ofstream result(result_path, std::ios::binary | std::ios::trunc);
   result << Json{{"plans", plans}, {"failures", failures}}.dump(1);

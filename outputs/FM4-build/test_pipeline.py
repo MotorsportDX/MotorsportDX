@@ -997,7 +997,7 @@ class PipelineTests(unittest.TestCase):
 
     @unittest.skipUnless(pipeline.is_git_checkout(),'needs a Git checkout')
     def test_make_snapshot(self):
-        """git archive of HEAD with the stamp: its commit, file count and tree hash."""
+        """git archive of HEAD with the stamp: its commit, file count, file list and tree hash."""
         with tempfile.TemporaryDirectory() as directory, patch('builtins.print'):
             out=Path(directory)/'source'
             stamp=pipeline.make_snapshot(out)
@@ -1007,6 +1007,7 @@ class PipelineTests(unittest.TestCase):
             self.assertFalse((out/'.git').exists())
             files=[path for path in out.rglob('*') if path.is_file() and path.name!=pipeline.STAMP_NAME]
             self.assertEqual(stamp['files'],len(files))
+            self.assertEqual(stamp['paths'],sorted(path.relative_to(out).as_posix() for path in files))
             self.assertEqual(stamp['tree'],pipeline.snapshot_tree(out))
             with self.assertRaises(ValueError): pipeline.make_snapshot(out)
             with self.assertRaises(ValueError): pipeline.make_snapshot(pipeline.REPO/'work/snapshot')

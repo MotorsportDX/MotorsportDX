@@ -7,7 +7,10 @@
 #include <fstream>
 #include <sstream>
 
+#include <set>
+
 #include "discs.h"
+#include "overlay.h"
 #include "runner.h"
 #include "shaders.h"
 
@@ -104,6 +107,50 @@ bool SafeMember(const std::string& name) {
   for (std::string part; std::getline(parts, part, '/');)
     if (part == ".." || part == ".") return false;
   return true;
+}
+
+void AppendLog(const fs::path& logs, const std::string& text) {
+  std::error_code error;
+  fs::create_directories(logs, error);
+  std::ofstream stream(logs / "builder.log", std::ios::binary | std::ios::app);
+  stream << Now() << "  " << text << "\r\n";
+}
+
+// What an update keeps of an install root: the folders of launcher.json builder.layout, the
+// backups, the builder's state and an update's own staging folders.
+bool InstallOwned(const fs::path& name) {
+  static const wchar_t* const kOwned[] = {L"source",    L"build", L"toolchain",          L"downloads",  L"logs",
+                                          L"backups",   L"builder-state.json", L"source.new", L"source.old",
+                                          L"update.new"};
+  for (const wchar_t* owned : kOwned)
+    if (_wcsicmp(name.c_str(), owned) == 0) return true;
+  return false;
+}
+
+std::string StampName(const SourceStamp& stamp) {
+  return stamp.describe.empty() ? stamp.commit : stamp.describe + " (" + stamp.commit + ")";
+}
+
+// Copies the files below from into to, but those whose path below from (with '/') skip names.
+std::string CopyTree(const fs::path& from, const fs::path& to, const std::function<bool(const std::string&)>& skip) {
+  std::error_code code;
+  fs::create_directories(to, code);
+  if (code) return Utf8(to) + ": " + code.message();
+  for (auto it = fs::recursive_directory_iterator(from, code); !code && it != fs::recursive_directory_iterator();
+       it.increment(code)) {
+    const fs::path relative = it->path().lexically_relative(from);
+    if (skip(Utf8(fs::path(relative.generic_wstring())))) {
+      if (it->is_directory()) it.disable_recursion_pending();
+      continue;
+    }
+    std::error_code copy;
+    if (it->is_directory())
+      fs::create_directories(to / relative, copy);
+    else
+      fs::copy_file(it->path(), to / relative, fs::copy_options::overwrite_existing, copy);
+    if (copy) return Utf8(it->path()) + ": " + copy.message();
+  }
+  return code ? Utf8(from) + ": " + code.message() : std::string();
 }
 
 }  // namespace
@@ -252,6 +299,9 @@ PlainError Explain(const std::string& error, const std::string& step) {
   if (has("not enough space") || has("No space left") || has("[Errno 28]") || has("ERROR_DISK_FULL") ||
       has("error 112"))
     return {"The drive is full.", "Free some space (the build needs about 20 GB), then Retry.", ""};
+  if (has("could not be backed up"))
+    return {"Your saves could not be backed up before the update, so the build did not start.",
+            "Free some space on this drive, or close the program that holds the file named here, then Retry.", ""};
   if (has("Launcher tests failed"))
     return {"The launcher and the game of this build disagree.", "Report it: this is a bug of the project.", ""};
   if (step == "preflight")
@@ -264,6 +314,119 @@ PlainError Explain(const std::string& error, const std::string& step) {
 bool OnBattery() {
   SYSTEM_POWER_STATUS status{};
   return GetSystemPowerStatus(&status) && status.ACLineStatus == 0;
+}
+
+std::string UpdateInstall(const fs::path& package, const fs::path& install) {
+  std::error_code code;
+  if (!IsInstallRoot(install))
+    return Utf8(install) + " is not a Motorsport DX install: it has no launcher.json and source folder.";
+  if (fs::equivalent(package, install, code)) return "That is this package's own folder: choose the earlier install's.";
+  const SourceStamp from = ReadStamp(install / "source"), to = ReadStamp(package / "source");
+  if (to.commit.empty()) return "This package has no source\\source-stamp.json: unpack its zip again.";
+  // Everything is copied beside the install first, so that a failed copy leaves it as it was.
+  const fs::path source = install / "source", next = install / "source.new", old = install / "source.old",
+                 files = install / "update.new";
+  for (const fs::path& folder : {next, old, files}) fs::remove_all(folder, code);
+  const bool swap = from.commit != to.commit;
+  std::string error = swap ? CopyTree(package / "source", next, [](const std::string&) { return false; }) : "";
+  if (error.empty())
+    error = CopyTree(package, files, [](const std::string& path) {
+      const size_t slash = path.find('/');
+      const fs::path top = PathFromUtf8(path.substr(0, slash));
+      return InstallOwned(top) || top.extension() == L".partial";
+    });
+  if (error.empty() && swap && ReadStamp(next).commit != to.commit) error = "the copied source has another stamp";
+  if (!error.empty()) {
+    for (const fs::path& folder : {next, files}) fs::remove_all(folder, code);
+    return "Unable to copy this package into " + Utf8(install) + ": " + error;
+  }
+  if (swap) {
+    fs::rename(source, old, code);
+    if (code) {
+      fs::remove_all(next, code);
+      fs::remove_all(files, code);
+      return "Unable to replace " + Utf8(source) + " (close any program that has a file of it open): " + code.message();
+    }
+    fs::rename(next, source, code);
+    if (code) {
+      std::error_code back;
+      fs::rename(old, source, back);
+      fs::remove_all(files, back);
+      return "Unable to replace " + Utf8(source) + ": " + code.message();
+    }
+    fs::remove_all(old, code);
+  }
+  // The launcher, launcher.json, toolchain.json, the texts and the notices. When this fails after
+  // the swap, running the update again finishes it.
+  error = CopyTree(files, install, [](const std::string&) { return false; });
+  fs::remove_all(files, code);
+  if (!error.empty())
+    return "Unable to copy the package's files into " + Utf8(install) +
+           " (close its launcher if it runs, then update again): " + error;
+  AppendLog(install / "logs", swap ? "Updated from " + StampName(from) + " to " + StampName(to) + ", the package in " +
+                                         Utf8(package)
+                                   : "Copied the files of the package in " + Utf8(package) + " (" + StampName(to) +
+                                         "), whose source is here already");
+  return {};
+}
+
+size_t PruneSource(const fs::path& source) {
+  const Json stamp = ReadJson(source / "source-stamp.json");
+  if (!stamp.is_object() || !stamp.contains("paths") || !stamp.at("paths").is_array()) return 0;
+  std::set<std::string> listed = {"source-stamp.json"};
+  for (const auto& path : stamp.at("paths")) listed.insert(path.get<std::string>());
+  std::vector<fs::path> stale, folders;
+  std::error_code code;
+  for (auto it = fs::recursive_directory_iterator(source, code); !code && it != fs::recursive_directory_iterator();
+       it.increment(code)) {
+    if (it->is_directory())
+      folders.push_back(it->path());
+    else if (!listed.contains(Utf8(fs::path(it->path().lexically_relative(source).generic_wstring()))))
+      stale.push_back(it->path());
+  }
+  size_t removed = 0;
+  for (const auto& path : stale) removed += fs::remove(path, code) ? 1 : 0;
+  // The folders left empty, the deepest first; a folder that still holds files stays.
+  for (auto it = folders.rbegin(); it != folders.rend(); ++it)
+    if (fs::is_empty(*it, code)) fs::remove(*it, code);
+  return removed;
+}
+
+std::string BackUpSaves(const BuildInputs& inputs, const fs::path& folder) {
+  std::error_code code;
+  fs::create_directories(folder, code);
+  if (code) return Utf8(folder) + ": " + code.message();
+  if (!inputs.user_data.empty() && fs::is_directory(inputs.user_data)) {
+    // Not saves: the content imported from Disc 2 and the downloadable content (the title's
+    // marketplace content, type 00000002, of the shared profile, with its headers and markers),
+    // which the next Play imports again, and the game's cache.
+    const std::string error = CopyTree(inputs.user_data, folder / "user-data", [](const std::string& path) {
+      return path == "cache" || path == "0000000000000000/4D530910/00000002" ||
+             path == "0000000000000000/4D530910/Headers/00000002" ||
+             (path.find('/') == std::string::npos && path.ends_with(".import-complete"));
+    });
+    if (!error.empty()) return error;
+  }
+  if (!inputs.settings.empty())
+    for (const fs::path& file : {inputs.settings, inputs.settings.parent_path() / kOverlayChangesFile})
+      if (fs::is_regular_file(file)) {
+        fs::copy_file(file, folder / file.filename(), fs::copy_options::overwrite_existing, code);
+        if (code) return Utf8(file) + ": " + code.message();
+      }
+  return {};
+}
+
+std::string StartLauncher(const fs::path& program, const std::wstring& arguments) {
+  STARTUPINFOW startup{};
+  startup.cb = sizeof(startup);
+  PROCESS_INFORMATION info{};
+  std::wstring command = L"\"" + program.wstring() + L"\"" + (arguments.empty() ? L"" : L" " + arguments);
+  if (!CreateProcessW(program.c_str(), command.data(), nullptr, nullptr, FALSE, 0, nullptr,
+                      program.parent_path().c_str(), &startup, &info))
+    return "Unable to start " + Utf8(program) + " (Windows error " + std::to_string(GetLastError()) + ")";
+  CloseHandle(info.hThread);
+  CloseHandle(info.hProcess);
+  return {};
 }
 
 Builder::Builder(BuilderLayout layout, std::vector<Download> downloads, const Json& steps, SourceStamp stamp)
@@ -386,12 +549,7 @@ void Builder::Show(const BuilderView& view) {
   shown_ = true;
 }
 
-void Builder::Log(const std::string& text) {
-  std::error_code error;
-  fs::create_directories(layout_.logs, error);
-  std::ofstream stream(layout_.logs / "builder.log", std::ios::binary | std::ios::app);
-  stream << Now() << "  " << text << "\r\n";
-}
+void Builder::Log(const std::string& text) { AppendLog(layout_.logs, text); }
 
 void Builder::Start(const char* task, std::function<void()> work) {
   if (shown_ || busy_.exchange(true)) return;
@@ -758,6 +916,30 @@ bool Builder::RunStep(size_t index, const BuildInputs& inputs) {
   return true;
 }
 
+bool Builder::PrepareUpdate(const BuildInputs& inputs) {
+  if (const size_t removed = PruneSource(layout_.source))
+    Log("Removed " + std::to_string(removed) + " files of an earlier package from " + Utf8(layout_.source));
+  const std::string built = BuiltCommit(layout_.build);
+  if (built.empty() || built == stamp_.commit) return true;
+  Json state = LoadState();
+  if (state.value("backup_for", std::string()) == stamp_.commit) return true;
+  // backups\<date and time>-<the earlier build's commit>: the saves are not checked between builds.
+  std::string date = Now();
+  std::replace(date.begin(), date.end(), ' ', '-');
+  date.erase(std::remove(date.begin(), date.end(), ':'), date.end());
+  const fs::path folder = layout_.Backups() / (date + "-" + built.substr(0, 7));
+  const std::string error = BackUpSaves(inputs, folder);
+  if (!error.empty()) {
+    Fail("", "The saves could not be backed up before the update: " + error);
+    return false;
+  }
+  Log("Update from the build of " + built + ": the saves backed up into " + Utf8(folder));
+  state["backup_for"] = stamp_.commit;
+  state["backup"] = Utf8(folder);
+  SaveState(state);
+  return true;
+}
+
 void Builder::StartBuild(const BuildInputs& inputs, bool download_all) {
   Start("build", [this, inputs, download_all] {
     {
@@ -777,6 +959,7 @@ void Builder::StartBuild(const BuildInputs& inputs, bool download_all) {
           return;
         }
     }
+    if (cancel_ || !PrepareUpdate(inputs)) return;
     const Json state = LoadState();
     bool earlier_done = true;
     for (size_t index = 0; index < view_.steps.size(); ++index) {
@@ -792,19 +975,7 @@ void Builder::StartBuild(const BuildInputs& inputs, bool download_all) {
   });
 }
 
-std::string Builder::HandOver() const {
-  const fs::path program = layout_.build / "game-build" / "MotorsportDX.exe";
-  STARTUPINFOW startup{};
-  startup.cb = sizeof(startup);
-  PROCESS_INFORMATION info{};
-  std::wstring command = L"\"" + program.wstring() + L"\"";
-  if (!CreateProcessW(program.c_str(), command.data(), nullptr, nullptr, FALSE, 0, nullptr,
-                      program.parent_path().c_str(), &startup, &info))
-    return "Unable to start " + Utf8(program) + " (Windows error " + std::to_string(GetLastError()) + ")";
-  CloseHandle(info.hThread);
-  CloseHandle(info.hProcess);
-  return {};
-}
+std::string Builder::HandOver() const { return StartLauncher(layout_.build / "game-build" / "MotorsportDX.exe"); }
 
 bool Builder::Built() const { return StepDone("build", Json::object(), nullptr); }
 

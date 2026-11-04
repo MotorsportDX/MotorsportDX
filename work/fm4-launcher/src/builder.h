@@ -25,6 +25,7 @@ struct BuilderLayout {
   static BuilderLayout Of(const std::filesystem::path& install, const Json& layout);
   std::filesystem::path Pipeline() const { return source / "outputs" / "FM4-build" / "pipeline.py"; }
   std::filesystem::path State() const { return install / "builder-state.json"; }
+  std::filesystem::path Backups() const { return install / "backups"; }
 };
 
 // Whether a folder is the install root of a builder package: launcher.json, and the source
@@ -100,7 +101,28 @@ struct BuilderView {
 struct BuildInputs {
   std::string disc1, disc2;
   std::vector<std::string> content;
+  // The player's files that an update backs up first: the user data folder and the launcher's
+  // settings file (overlay-changes.json beside it too).
+  std::filesystem::path user_data, settings;
 };
+
+// Updates (docs/analysis/builder-installer.md 5, B7). Puts the package at package into the
+// install root install, which holds an earlier package and its build: the package's source is
+// copied beside the install's as source.new, checked against its stamp and swapped in; the
+// launcher, launcher.json, toolchain.json, the texts and the notices are copied over. build,
+// toolchain, downloads, logs and backups stay; the next build of the install backs up the saves
+// and rebuilds. Returns an error, or empty.
+std::string UpdateInstall(const std::filesystem::path& package, const std::filesystem::path& install);
+// Removes the files of a source snapshot that its stamp does not list (paths): what is left of an
+// earlier package unpacked into the same folder. Returns how many were removed; none without the
+// stamp's list (a package before B7).
+size_t PruneSource(const std::filesystem::path& source);
+// Copies the saves of user_data (each profile's folder and the achievements; not the imported
+// content, which Disc 2 brings back, nor the cache) and the settings file with overlay-changes.json
+// into folder. Returns an error, or empty.
+std::string BackUpSaves(const BuildInputs& inputs, const std::filesystem::path& folder);
+// Starts a launcher with arguments, in its folder. Returns an error, or empty.
+std::string StartLauncher(const std::filesystem::path& program, const std::wstring& arguments = {});
 
 class Builder {
  public:
@@ -133,6 +155,9 @@ class Builder {
   void Refresh();  // the steps' states from the markers and builder-state.json
   bool StepDone(const std::string& id, const Json& state, const BuildInputs* inputs) const;
   bool RunStep(size_t index, const BuildInputs& inputs);
+  // Before the first build of a new package over an earlier build: the stale source files go and
+  // the saves are backed up (once per package).
+  bool PrepareUpdate(const BuildInputs& inputs);
   bool Fetch(const std::string& id);
   std::string FetchPython();
   // Runs args with the builder's environment, its output into log; returns the exit code, or -1

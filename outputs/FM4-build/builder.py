@@ -4,6 +4,7 @@ the launcher tests of the launcher's builder mode. pipeline.py imports it; it re
 pins and helpers through the running pipeline module."""
 import contextlib
 import io
+import json
 import os
 from pathlib import Path
 import shutil
@@ -282,6 +283,45 @@ def package(root,out,revision,jobs,toolchain_directory=None):
     print(f'Package of {commit[:7]}: {target}, {files} files, {size:,} bytes.')
     return target
 
+def update_test_case(work):
+    """An earlier install and a later package for the launcher's update (UpdateInstall, PruneSource
+    and BackUpSaves in builder.cpp): the files of the install's source afterwards, and those of the
+    backup of its saves."""
+    root=work/'builder-update'
+    shutil.rmtree(root,ignore_errors=True)
+    def write(path,text):
+        path.parent.mkdir(parents=True,exist_ok=True)
+        path.write_text(text,encoding='utf-8')
+    def snapshot(folder,commit,files):
+        for name in files:
+            write(folder/name,commit)
+        write(folder/p.STAMP_NAME,json.dumps({'schema':1,'commit':commit,'describe':commit[:7],
+                                              'files':len(files),'paths':sorted(files)}))
+    install,package=root/'install',root/'package'
+    pipeline='outputs/FM4-build/pipeline.py'
+    snapshot(install/'source','a'*40,[pipeline,'work/old-only.cpp'])
+    snapshot(package/'source','b'*40,[pipeline,'work/new-only.cpp'])
+    for folder,text in ((install,'old'),(package,'new')):
+        for name in (p.LAUNCHER_EXE,'launcher.json','toolchain.json','README.txt','third-party-notices/A.txt'):
+            write(folder/name,text)
+    # What a package left of its own build is not copied; the install's folders stay.
+    write(package/'build/build-result.json','{}')
+    write(package/'logs/builder.log','package')
+    saves=['B13EBABEBABEBABE/4D530910/00000001/ForzaProfile','B13EBABEBABEBABE/4D530910/Headers/00000001/x',
+           'achievements/4D530910.toml','0000000000000000/4D530910/00000001/shared']
+    content=['0000000000000000/4D530910/00000002/4d53091000000001/data',
+             '0000000000000000/4D530910/Headers/00000002/4d53091000000001.header',
+             '4d53091000000001.import-complete','cache/fm4-game-cache/x']
+    for name in saves+content:
+        write(install/'build/user-data'/name,name)
+    for name in ('launcher-settings.json','overlay-changes.json'):
+        write(install/'build'/name,'{}')
+    write(install/'build/build-result.json',json.dumps({'source':{'head':'a'*40}}))
+    write(install/'downloads/tool.zip','tool')
+    return {'install':str(install),'package':str(package),
+            'source':sorted([pipeline,'work/new-only.cpp',p.STAMP_NAME]),
+            'backup':sorted(['user-data/'+name for name in saves]+['launcher-settings.json','overlay-changes.json'])}
+
 def builder_test_cases(state,work):
     """The launcher's builder mode against this file (builder.h): its downloads and steps, the
     progress lines that progress() writes, and errors that the pipeline raises, with the screen
@@ -320,5 +360,5 @@ def builder_test_cases(state,work):
                         ['step','runtime-build','done',False],['stage','setup','done',False],
                         ['stage','build','running',False],['step','game-build','running',False],
                         ['step','game-build','failed',True],['stage','build','failed',True]],
-            'errors':errors}
+            'errors':errors,'update':update_test_case(work)}
 

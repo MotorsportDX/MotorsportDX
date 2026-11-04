@@ -187,7 +187,8 @@ def make_snapshot(out,revision='HEAD'):
     """A source snapshot in out (new or empty, outside the repository): the git archive of
     revision unpacked, and STAMP_NAME beside it with the commit, its date, the tag description,
     the number of files and the tree hash of STAMP_TREES (snapshot_tree). Uncommitted changes
-    are not in it. The builder package's source folder (docs/analysis/builder-installer.md)."""
+    are not in it. The builder package's source folder (docs/analysis/builder-installer.md); the
+    stamp also lists the snapshot's files, for an update (B7)."""
     if not is_git_checkout():
         raise RuntimeError(f'snapshot needs a Git checkout; {REPO} is not one.')
     out=Path(out).resolve()
@@ -209,10 +210,13 @@ def make_snapshot(out,revision='HEAD'):
             tar.extractall(out,filter='data')
     finally:
         archive.unlink(missing_ok=True)
+    paths=sorted(path.relative_to(out).as_posix() for path in out.rglob('*') if path.is_file())
     stamp={'schema':1,'commit':commit,'date':git_output('show','-s','--format=%cI',commit),
            'describe':git_output('describe','--tags','--always',commit),
-           'files':sum(1 for path in out.rglob('*') if path.is_file()),
-           'tree':snapshot_tree(out)}
+           'files':len(paths),'tree':snapshot_tree(out),
+           # The snapshot's files: an update removes what an earlier package left in the folder
+           # (PruneSource in the launcher's builder.cpp).
+           'paths':paths}
     (out/STAMP_NAME).write_text(json.dumps(stamp,indent=1)+'\n',encoding='utf-8')
     print(f'Snapshot of {commit[:7]} in {out}: {stamp["files"]} files.')
     return stamp
