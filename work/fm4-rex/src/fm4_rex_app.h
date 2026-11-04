@@ -65,14 +65,10 @@ class Fm4RexApp : public rex::ReXApp {
     }
     std::fprintf(stderr, "FM4 shader policy: async_shader_compilation=%s\n",
                  rex::cvar::GetFlagByName(shader_flag).c_str());
-    // The window shows the project's name; GetName() stays fm4_rex, the name of the config
-    // file, the log and the user folder.
-    if (auto* game_window = window()) {
-      std::string title = game_window->GetTitle();
-      const std::string_view name = GetName();
-      if (title.starts_with(name)) title.replace(0, name.size(), "Motorsport DX");
-      game_window->SetTitle(title);
-    }
+    // The window shows only the project's name, without the runtime's build stamp; the runtime
+    // version stays in the log. GetName() stays fm4_rex, the name of the config file, the log
+    // and the user folder.
+    if (auto* game_window = window()) game_window->SetTitle("Motorsport DX");
     FM4InstallCrashDiagnostics();
     FM4MountCache(runtime());
     FM4MountRenderOverrides(runtime());

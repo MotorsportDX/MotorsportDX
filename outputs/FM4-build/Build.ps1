@@ -54,10 +54,18 @@ if ($env:OS -ne 'Windows_NT') { throw 'This workflow supports Windows x64.' }
 if ($Abi -eq 'msvc') {
     $vswhere = Join-Path ${env:ProgramFiles(x86)} 'Microsoft Visual Studio/Installer/vswhere.exe'
     if (!(Test-Path -LiteralPath $vswhere)) { throw 'Install Visual Studio 2022 C++ Build Tools and Windows SDK first; see docs/setup.md.' }
+    # VsDevCmd calls vswhere.exe by name, so its folder must be on PATH.
+    $env:PATH = "$(Split-Path -Parent $vswhere);$env:PATH"
     $vs = & $vswhere -latest -products '*' -requires Microsoft.VisualStudio.Component.VC.Tools.x86.x64 -property installationPath
     if (!$vs) { throw 'Visual Studio C++ tools were not found.' }
     Import-Module (Join-Path $vs 'Common7/Tools/Microsoft.VisualStudio.DevShell.dll')
     Enter-VsDevShell -VsInstallPath $vs -SkipAutomaticLocation -DevCmdArguments '-arch=x64 -host_arch=x64' | Out-Null
+    # Without -LLVMRoot, the default LLVM install is used when it exists, so that a clang of
+    # another toolchain on PATH (such as llvm-mingw) is not picked up.
+    if (!$LLVMRoot) {
+        $defaultLLVM = Join-Path $env:ProgramFiles 'LLVM'
+        if (Test-Path -LiteralPath (Join-Path $defaultLLVM 'bin/clang.exe')) { $LLVMRoot = $defaultLLVM }
+    }
     if ($LLVMRoot) { $env:PATH = "$(Join-Path $LLVMRoot 'bin');$env:PATH" }
 }
 if ($MingwRoot) { $env:PATH = "$(Join-Path $MingwRoot 'bin');$env:PATH" }

@@ -234,7 +234,7 @@ The stages can also run separately:
 | `-MingwRoot` | The unpacked llvm-mingw folder that contains `bin`. Its `bin` folder is placed first on `PATH`. |
 | `-Toolchain` | The folder of the [portable tools](#portable-tools): the folders of its `toolchain-state.json` are placed first on `PATH`. |
 | `-Abi` | `mingw` (the default) or `msvc`: the C and C++ libraries the build targets. `msvc` is the build with Microsoft's libraries, kept only for the A/B of the switch; see [Toolchain](#toolchain). |
-| `-LLVMRoot` | With `-Abi msvc` only: the LLVM 20.x install directory that contains `bin`. Its `bin` folder is placed first on `PATH`. |
+| `-LLVMRoot` | With `-Abi msvc` only: the LLVM 20.x install directory that contains `bin`. Its `bin` folder is placed first on `PATH`. Defaults to `%ProgramFiles%\LLVM` when that folder holds `bin\clang.exe`. |
 | `-Python` | Python 3.11+ x64 executable. Default: `python`. |
 | `-Jobs` | Number of parallel jobs, 1 to 64. Default: 4. |
 | `-Disc1` | Extracted Disc 1 root, or its ISO ([Disc images](#disc-images)). Required by `generate` and `all`. |
