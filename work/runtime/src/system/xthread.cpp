@@ -95,10 +95,7 @@ XThread::XThread(KernelState* kernel_state, uint32_t stack_size, uint32_t xapi_t
 }
 
 XThread::~XThread() {
-  if (main_fiber_) {
-    main_fiber_->Destroy();
-    main_fiber_ = nullptr;
-  }
+  ReleaseMainFiber();
 
   // Unregister first to prevent lookups while deleting.
   kernel_state_->UnregisterThread(this);
@@ -114,6 +111,20 @@ XThread::~XThread() {
     // TODO(benvanik): platform kill
     REXSYS_ERROR("Thread disposed without exiting");
   }
+}
+
+void XThread::ReleaseMainFiber() {
+  if (!main_fiber_) {
+    return;
+  }
+  // The main fiber is this thread converted to a fiber; only this thread can
+  // convert itself back. An exited thread's object is usually deleted on another
+  // thread (KernelState::ReapExitedThreads), where Destroy() would convert that
+  // thread instead, so elsewhere the fiber is left to the host thread's end.
+  if (rex::thread::Fiber::Current() == main_fiber_) {
+    main_fiber_->Destroy();
+  }
+  main_fiber_ = nullptr;
 }
 
 thread_local XThread* current_xthread_tls_ = nullptr;
@@ -334,6 +345,9 @@ void XThread::FreeStack() {
 }
 
 X_STATUS XThread::Create() {
+  // Drop the self references of threads that have ended since the last creation.
+  kernel_state_->ReapExitedThreads();
+
   // Thread kernel object.
   if (!CreateNative<X_KTHREAD>()) {
     REXSYS_WARN("Unable to allocate thread object");
@@ -498,10 +512,13 @@ X_STATUS XThread::Create() {
 X_STATUS XThread::Exit(int exit_code) {
   // This may only be called on the thread itself.
   assert_true(XThread::GetCurrentThread() == this);
-  // Keep the object alive until Thread::Exit() transitions the host thread
-  // into pthread_exit(). Otherwise ReleaseHandle() below may delete `this`
-  // while this method is still running.
-  auto self = retain_object(this);
+  // Keep the object alive until Thread::Exit() has ended the host thread.
+  // Otherwise ReleaseHandle() below may delete `this` while this method is
+  // still running. The reference is parked in the kernel, not held on this
+  // stack: ExitThread runs no destructors, so a local reference would never
+  // be dropped and every exited thread would keep its object and its host
+  // thread handle for the whole session.
+  kernel_state_->DeferExitedThreadRelease(retain_object(this));
 
   // Mark as terminated before running down APCs.
   auto kthread = guest_object<X_KTHREAD>();
@@ -535,6 +552,7 @@ X_STATUS XThread::Exit(int exit_code) {
   // object destruction leaks the reserved stack range and eventually makes
   // ExCreateThread fail even though the old threads are no longer running.
   FreeStack();
+  ReleaseMainFiber();
 
   // NOTE: unless PlatformExit fails, expect it to never return!
   current_xthread_tls_ = nullptr;
@@ -561,9 +579,10 @@ X_STATUS XThread::Terminate(int exit_code) {
   running_ = false;
   if (XThread::IsInThread(this)) {
     // Same lifetime rule as Exit(): don't allow ReleaseHandle() to destroy
-    // the thread object before Thread::Exit() reaches pthread_exit().
-    auto self = retain_object(this);
+    // the thread object before Thread::Exit() has ended the host thread.
+    kernel_state_->DeferExitedThreadRelease(retain_object(this));
     FreeStack();
+    ReleaseMainFiber();
     ReleaseHandle();
     rex::thread::Thread::Exit(exit_code);
   } else {

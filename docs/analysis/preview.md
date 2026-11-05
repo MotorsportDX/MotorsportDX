@@ -71,7 +71,7 @@ the preview cannot start without it.
 | Quick Race, photo mode, career to the rewards, one DLC car on a DLC track: e2e on every change | Done | Done |
 | The owner's tests in progress: keyboard on the laptop, FSR 3.1 A/B, an Xbox Series controller | Not done (not blocking) | Not done (finish first) |
 | The front-end menus and photo mode at the screen's resolution on the native path ("entry 0 at s") | Not done (cosmetic) | Not done (cosmetic) |
-| A two-hour soak test (memory, handles, video memory) | Not done | **Blocker** (a public preview should not leak or crash in a long session) |
+| A two-hour soak test (memory, handles, video memory): run on 30 October 2026, memory and video memory level once tracks come back, handles failed (163 an hour against 100); the host Thread handles fixed on 6 November 2026 ([career season soak, 13](career-season-soak.md#13-the-thread-handle-fix-6-november-2026)), the soak with the fix not run yet | Not done | **Blocker** (a public preview should not leak or crash in a long session) |
 | Save compatibility between builds | Not done (documented in known issues) | Not done (documented) |
 | Coverage only more testers can close: audio (music, engine, 5.1, speech and video sync), split screen, Rivals, Hot Lap, a full career season, more cars, tracks and DLC packs, and more GPUs (other NVIDIA cards, AMD and Intel discrete GPUs, desktops, Windows 10) | Not done: the purpose of the closed preview | Not done: at least one AMD and one Intel GPU, and audio, should be reported by the closed preview first |
 

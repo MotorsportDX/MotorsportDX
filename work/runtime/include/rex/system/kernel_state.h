@@ -280,6 +280,11 @@ class KernelState {
   void UnregisterThread(XThread* thread);
   void OnThreadExecute(XThread* thread);
   void OnThreadExit(XThread* thread);
+  // A guest thread that exits keeps itself alive until its host thread has ended, but the
+  // host's ExitThread runs no destructors, so the reference cannot stay on its own stack.
+  // It is parked here and dropped by ReapExitedThreads once the host thread has ended.
+  void DeferExitedThreadRelease(object_ref<XThread> thread);
+  void ReapExitedThreads();
   object_ref<XThread> GetThreadByID(uint32_t thread_id);
 
   FiberInfo* LookupFiber(uint32_t guest_addr);
@@ -360,6 +365,7 @@ class KernelState {
   // Must be guarded by the global critical region.
   util::ObjectTable object_table_;
   std::unordered_map<uint32_t, XThread*> threads_by_id_;
+  std::vector<object_ref<XThread>> exited_threads_;
   std::vector<object_ref<XNotifyListener>> notify_listeners_;
   bool has_notified_startup_ = false;
 

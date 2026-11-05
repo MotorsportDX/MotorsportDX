@@ -108,8 +108,8 @@ above.
 - **Memory use grows while new tracks and cars load, then levels off.** The game keeps what it
   loaded for each track and car: in a 3-hour test over the same 11 tracks and cars, its memory
   rose by about 3.4 GB and its video memory by about 1.7 GB on the first round, and stayed level
-  on the third. A small number of system handles is not given back (about 15 a race); that is
-  harmless at this rate and will be fixed. The frame rate did not drop in either test.
+  on the third. A small number of system handles is not given back (about 4 a race since
+  6 November 2026, about 15 before); that is harmless at this rate. The frame rate did not drop in either test.
 - **Short pauses on the screens after a race:** the gift car's paint screen and the level
   screens can pause for 0.15 to 0.4 s. The game itself does this work there (saving the
   profile, drawing a new car for the first time). Races themselves had no pause over 50 ms.

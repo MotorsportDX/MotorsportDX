@@ -1081,6 +1081,30 @@ void KernelState::OnThreadExit(XThread* thread) {
   (void)thread;
 }
 
+void KernelState::DeferExitedThreadRelease(object_ref<XThread> thread) {
+  auto global_lock = global_critical_region_.Acquire();
+  exited_threads_.push_back(std::move(thread));
+}
+
+void KernelState::ReapExitedThreads() {
+  // Dropped outside the lock: the last reference deletes the thread, whose destructor
+  // takes the lock again and closes the host thread's handle.
+  std::vector<object_ref<XThread>> ended;
+  {
+    auto global_lock = global_critical_region_.Acquire();
+    for (auto it = exited_threads_.begin(); it != exited_threads_.end();) {
+      auto* host_thread = (*it)->thread();
+      if (!host_thread || rex::thread::Wait(host_thread, false, std::chrono::milliseconds(0)) ==
+                              rex::thread::WaitResult::kSuccess) {
+        ended.push_back(std::move(*it));
+        it = exited_threads_.erase(it);
+      } else {
+        ++it;
+      }
+    }
+  }
+}
+
 object_ref<XThread> KernelState::GetThreadByID(uint32_t thread_id) {
   auto global_lock = global_critical_region_.Acquire();
   XThread* thread = nullptr;

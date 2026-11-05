@@ -401,6 +401,7 @@ class XThread : public XObject {
  protected:
   bool AllocateStack(uint32_t size);
   void FreeStack();
+  void ReleaseMainFiber();
   void InitializeGuestObject();
 
   void RundownAPCs();
