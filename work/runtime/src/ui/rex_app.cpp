@@ -448,7 +448,12 @@ bool ReXApp::SetupPresentation() {
   window_->AddListener(this);
   window_->AddInputListener(this, 0);
 
-  if (REXCVAR_GET(fullscreen)) {
+  // The offline pass never shows its window: a black window (fullscreen with the
+  // profile's screen) would cover the launcher's progress bar while the pass
+  // holds the UI thread.
+  if (REXCVAR_GET(shader_offline_pass)) {
+    window_->SetOpenHidden(true);
+  } else if (REXCVAR_GET(fullscreen)) {
     window_->SetFullscreen(true);
   }
   rex::cvar::RegisterChangeCallback("fullscreen", [this](std::string_view, std::string_view value) {

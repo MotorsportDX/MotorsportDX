@@ -274,6 +274,11 @@ class Window {
   bool IsFullscreen() const { return fullscreen_; }
   void SetFullscreen(bool new_fullscreen);
 
+  // Desired state read by OpenImpl only: the native window is created but never
+  // shown (the offline shader pass, whose launcher shows its progress).
+  bool IsOpenHidden() const { return open_hidden_; }
+  void SetOpenHidden(bool new_open_hidden) { open_hidden_ = new_open_hidden; }
+
   // Desired state stored by the common Window, externally modifiable, read-only
   // in the implementation.
   const std::string& GetTitle() const { return title_; }
@@ -712,6 +717,7 @@ class Window {
   uint32_t actual_physical_height_ = 0;
 
   bool fullscreen_ = false;
+  bool open_hidden_ = false;
 
   std::string title_;
 

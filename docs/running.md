@@ -210,7 +210,9 @@ during a race.
   changed on the Look page shows the page as not done until the pass runs.
 - **Skip** ends it. What is left compiles on worker threads while the game plays, with the game's
   own look until each shader's mod is ready.
-- **Progress:** in `logs\shader-pass.jsonl`; the pass's log is in `logs\shader-pass.log`.
+- **Progress:** a bar on the page, with the stage before it (fetching the compiler, starting the
+  pass); the game's window stays hidden during the pass. The progress is in
+  `logs\shader-pass.jsonl`; the pass's log is in `logs\shader-pass.log`.
 - **The DirectX Shader Compiler:** when `dxcompiler.dll` and `dxil.dll` are not beside the game,
   A on the page's **DirectX Shader Compiler** row fetches Microsoft's release v1.9.2609 from GitHub (`FM4_DXC_MIRROR`: a local copy of
   the zip, or another URL) and checks its pinned SHA-256. It keeps the zip in `downloads\dxc` and

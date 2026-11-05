@@ -3632,8 +3632,17 @@ void App::CompileShaders() {
   const std::string marker = ShaderPassMarker();
   StartShaderTask([this, args, env, progress_file, marker] {
     const fs::path game = root_ / "game-build";
+    const auto stage = [this](const char* text) {
+      std::lock_guard<std::mutex> lock(shader_mutex_);
+      shader_message_ = text;
+    };
     std::string fetch_error;
-    if (!DxcPresent(game)) fetch_error = FetchDxc(game, root_ / "downloads" / "dxc");
+    if (!DxcPresent(game)) {
+      stage("Fetching the DirectX Shader Compiler...");
+      fetch_error = FetchDxc(game, root_ / "downloads" / "dxc");
+    }
+    // Until the pass writes its first progress line (the game loads first).
+    stage("Starting the shader pass...");
     std::error_code ignored;
     fs::remove(progress_file, ignored);
     void* process = StartProcess(args, env, root_, root_ / "logs" / "shader-pass.log");
@@ -3720,16 +3729,18 @@ void App::ShadersRows() {
   }, [&] {
     ImGui::Dummy(ImVec2(0, 14 * scale_));
     PassProgress progress;
-    if (busy && ReadPassProgress(root_ / "logs" / "shader-pass.jsonl", progress) && progress.total > 0) {
+    const bool bar =
+        busy && ReadPassProgress(root_ / "logs" / "shader-pass.jsonl", progress) && progress.total > 0;
+    if (bar) {
       ImGui::ProgressBar(static_cast<float>(progress.done) / static_cast<float>(progress.total), ImVec2(-1, 0),
                          (progress.stage + ": " + std::to_string(progress.done) + " of " + std::to_string(progress.total))
                              .c_str());
-    } else if (busy) {
-      Muted("Working...");
     }
     std::lock_guard<std::mutex> lock(shader_mutex_);
     ImGui::PushTextWrapPos(0);
-    if (!shader_message_.empty()) ImGui::TextWrapped("%s", shader_message_.c_str());
+    // While busy the message is the task's stage, which the bar replaces once it shows.
+    if (busy && !bar && shader_message_.empty()) Muted("Working...");
+    if (!shader_message_.empty() && !bar) ImGui::TextWrapped("%s", shader_message_.c_str());
     ImGui::PopTextWrapPos();
   });
 }
