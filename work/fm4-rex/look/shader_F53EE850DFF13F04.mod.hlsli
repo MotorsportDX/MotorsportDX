@@ -5,6 +5,8 @@
 #define FM4_COCKPIT_FLOOR_CONSTANT 91u
 #define FM4_COCKPIT_AMBIENT_CONSTANT 69u
 #define FM4_COCKPIT_LIGHTMAP_FETCH 10u
+// The albedo texture is fetch 2; the fill's limit weighs it.
+#define FM4_COCKPIT_ALBEDO_FETCH 2u
 #include "fm4-cockpit.hlsli"
 
 #undef XE_HOOK_CONSTANT

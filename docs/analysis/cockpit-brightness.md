@@ -264,6 +264,39 @@ The main session chose (b) with g = 0.65. Since 26 October 2026 the presets `ace
 
 The gate of 26 October 2026 ([current status](../status/history-results.md#cockpit-sky-fill-26-october-2026)): over the Bernese Alps lap at 1x the gauges keep 10.2 to 32.0 (21.5 in the open, 24.5 in the tunnel, `ck-fin-lap`), the 2x lap gives the crops of `ck-reportinal` (the grid, the sun ahead, the tunnel and the shade), the parity of `original,taa=0` on RTV and `-Rov` passes, and the smoke gate at 240 Hz passes 3 of 3 cells. On a light interior, the career's Ford Ka on Tsukuba, the fill lights the gray dashboard and wheel evenly (the interior's mean luma 83 to 94 against the game's 30 to 43) without clipping; on Laguna Seca, the track with the brightest hemispherical light, the Abarth's gauges read 19.3 to 28.6, as on the Bernese Alps. Light interiors are where a lower `cockpit_fill` may suit; the project owner judges the strength through an export.
 
+## Light surfaces (5 November 2026)
+
+The project owner saw the white paddles and the BMW roundel of the 2009 BMW M5 glare in the cockpit view at Circuit de Catalunya with `-Look fm2023`. The interior shaders light a pixel with albedo × (vertex ambient × the hemispherical scale + the sun) + specular, so the fill multiplied the light of every surface by the same factor: a dark leather stayed readable, while a white paddle or gauge ring reached the top of the tone curve, lost its shading, and bloom spread it into a halo.
+
+**The A/B.** `I:\FM4-build-usa` at `16d6172`, the native path, 2x (2560x1440), `--shader-dev`, `--keep-ppm`, one rewind freeze per run with the knobs switched live and held 10 s; patches are mean values of 255.
+
+| Run, car, look | Patch | fill 0 | fill 0.3 | fill 1 |
+|---|---|---|---|---|
+| `m5fill-cat2x-e`, 2009 M5, Catalunya, `fm2023` | paddles | 120 | 181 | 219 |
+| | dashboard top | 14 | 36 | 67 |
+| | wheel rim | 4 | 7 | 15 |
+
+A shader-ID run (`m5fill-ids`: each interior mod painted magenta by one bit of its index, six steps) found the paddles in `D5D4B516629428F6`, the dashboard and wheel rim in `327942867CAF7123`, and the gauge rings and wheel spokes in `7F2ECD3F6F1E65C6`: ordinary interior shaders with an albedo texture (fetch 1), not the interior chrome.
+
+**The limit.** The fill's added factor e = 20 × fill × w × s becomes e / (1 + a × e / L), with a the mean of the albedo texel's channels and L = `FM4_COCKPIT_FILL_LIMIT` (2; 0 turns it off): the added light a × e is soft limited to L hemispherical terms. The albedo comes from the fetch `FM4_COCKPIT_ALBEDO_FETCH` (fetch 1 in 12 shaders, fetch 2 in `37AF896A2CBCE528`, `403213A5BCEDF8CA` and `F53EE850DFF13F04`; each fetch comes before the shader reads the hemispherical scale, checked in the generated HLSL). The interior chrome (`670B85AE4903DC7E`, `B1C51D0C3686C920`) adds its hemispherical term without an albedo and is limited as on white (`FM4_COCKPIT_FILL_FLAT`). Five shaders whose albedo path is not clear (`7DB215140DF8CBC6`, `7E86101B30ECE640`, `BA3FBD19ECD7AE82`, `F422E825B49D4966`, `F7174B6D1F50A4F3`) keep the unlimited fill.
+
+| `m5lim-cat2x`, 2009 M5, Catalunya, `fm2023`, fill 1 | L = 0 (before) | 4 | 2 | 1 | 0.5 | fill 0 |
+|---|---|---|---|---|---|---|
+| paddles | 250 | 227 | 214 | 197 | 178 | 130 |
+| gauge ring | 172 | 127 | 106 | 86 | 71 | 50 |
+| wheel spokes (light) | 86 | 64 | 54 | 44 | 36 | 24 |
+| wheel rim (dark) | 39 | 37 | 36 | 33 | 29 | 4 |
+| pillar (dark) | 43 | 41 | 40 | 37 | 33 | 2 |
+
+| `m5lim-alps2x`, 2012 M5, Bernese Alps, `aces`, fill 1 | L = 0 (before) | L = 2 | fill 0 |
+|---|---|---|---|
+| speedometer (black face, white marks) | 24.4 | 13.2 | 3.2 |
+| top of the wheel (dark leather) | 49.5 | 43.4 | 1.8 |
+| dashboard right | 34.8 | 31.6 | 7.1 |
+| door trim (white) | 95.3 | 73.4 | 12.9 |
+
+At L = 2 the paddles and gauge rings keep their shading without a bloom halo, dark surfaces lose 5 to 12%, and the gauges' white marks and needles stay readable in the 1:1 crops (main session's judgment). The gauges' mean falls more than the leather, because their marks are white: the lap check of 26 October 2026 (gauges 12.0 to 29.7 at 1x) has not been repeated with the limit.
+
 ## Related
 
 - [Visual style](visual-style.md): `TrackSettings.xml`, the auto exposure and the cockpit exposure.

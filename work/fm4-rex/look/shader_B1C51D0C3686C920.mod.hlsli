@@ -6,6 +6,8 @@
 #define FM4_COCKPIT_AMBIENT_CONSTANT 81u
 #define FM4_COCKPIT_AMBIENT_COMPONENT 0
 #define FM4_COCKPIT_LIGHTMAP_FETCH 10u
+// The hemispherical term is added without an albedo: the fill is limited as on white.
+#define FM4_COCKPIT_FILL_FLAT
 #include "fm4-cockpit.hlsli"
 
 #undef XE_HOOK_CONSTANT

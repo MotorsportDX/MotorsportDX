@@ -24,6 +24,15 @@
 // the sun's direction, which made the floor (FM4_LOOK_COCKPIT_LIGHT) swing between a lit and
 // a black interior as the car turned, and lit the interior in tunnels.
 //
+// The fill's light on a surface is its albedo a times the added factor e = G * fill * w * s,
+// so a light surface (white paddles, a light gray dashboard) took it in full and lost its
+// shading near white while a dark one stayed readable (5 November 2026). The added light
+// a * e is soft limited to FM4_COCKPIT_FILL_LIMIT: e / (1 + a * e / limit) in place of e.
+// a is the mean of the albedo texture's channels, from the fetch FM4_COCKPIT_ALBEDO_FETCH
+// (before the shader reads the hemispherical scale), or 1 with FM4_COCKPIT_FILL_FLAT for
+// the shaders that add the hemispherical term without an albedo (the interior chrome). A
+// shader with neither keeps the fill unlimited.
+//
 // fm4_cockpit_constant is the XE_HOOK_CONSTANT of the interior shaders: their
 // shader_<hash>.mod.hlsli defines, before the include, FM4_COCKPIT_FLOOR_CONSTANT (the floor
 // constant, X), and for the fill FM4_COCKPIT_AMBIENT_CONSTANT with
@@ -48,6 +57,10 @@
 #endif
 #ifndef FM4_COCKPIT_FILL_SHADE
 #define FM4_COCKPIT_FILL_SHADE 0.65
+#endif
+// The soft limit of the fill's added light, in units of the hemispherical term; 0: none.
+#ifndef FM4_COCKPIT_FILL_LIMIT
+#define FM4_COCKPIT_FILL_LIMIT 2.0
 #endif
 // The driver's floor on its own shadow map term per unit of fill.
 #ifndef FM4_COCKPIT_FILL_DRIVER
@@ -81,10 +94,23 @@ float fm4_cockpit_sun_share() {
   return 1.0;
 }
 
+// The albedo the fill's limit weighs: the albedo texel's mean, 1 for a flat hemispherical
+// term, -1 when unknown (no limit).
+#ifdef FM4_COCKPIT_FILL_FLAT
+static float fm4_cockpit_albedo = 1.0;
+#else
+static float fm4_cockpit_albedo = -1.0;
+#endif
+
 float4 fm4_cockpit_interior_fetch(uint fetch, float4 value) {
 #ifdef FM4_COCKPIT_LIGHTMAP_FETCH
   if (fetch == FM4_COCKPIT_LIGHTMAP_FETCH) {
     fm4_cockpit_lightmap = value.x;
+  }
+#endif
+#ifdef FM4_COCKPIT_ALBEDO_FETCH
+  if (fetch == FM4_COCKPIT_ALBEDO_FETCH) {
+    fm4_cockpit_albedo = saturate((value.x + value.y + value.z) * (1.0 / 3.0));
   }
 #endif
   return value;
@@ -93,7 +119,11 @@ float4 fm4_cockpit_interior_fetch(uint fetch, float4 value) {
 // The factor of the hemispherical term.
 float fm4_cockpit_fill() {
   float shade = 1.0 - FM4_COCKPIT_FILL_SHADE * (1.0 - fm4_cockpit_sun_share());
-  return 1.0 + FM4_COCKPIT_FILL_GAIN * max(FM4_LOOK_COCKPIT_FILL, 0.0) * fm4_cockpit_up * shade;
+  float added = FM4_COCKPIT_FILL_GAIN * max(FM4_LOOK_COCKPIT_FILL, 0.0) * fm4_cockpit_up * shade;
+  if (FM4_COCKPIT_FILL_LIMIT > 0.0 && fm4_cockpit_albedo >= 0.0) {
+    added /= 1.0 + added * fm4_cockpit_albedo / FM4_COCKPIT_FILL_LIMIT;
+  }
+  return 1.0 + added;
 }
 
 #ifdef FM4_COCKPIT_FLOOR_CONSTANT

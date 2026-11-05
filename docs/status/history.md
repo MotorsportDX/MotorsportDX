@@ -53,6 +53,7 @@ timeline
 | 30 October 2026 | The `career_season` scenario and the first 2-hour soak with its performance survey; the reward screen hitches traced to the title; the `quickrace_loop` soak that revisits tracks and cars (caches, a slow handle leak); the title render thread found spinning between frames. |
 | 31 October 2026 | The builder installer's pipeline (B1 to B3: preflight, no Git, portable tools); the llvm-mingw prototype; the owner's decision to build with llvm-mingw and its first increment (M1). |
 | 1 November 2026 | The llvm-mingw build verified against the MSVC build of the same commit (M2): full gate, career, parity and perf tiers, 2x captures, a short soak; its export for the ROG Xbox Ally X. |
+| 5 November 2026 | The cockpit fill's soft limit on light surfaces (white paddles, gauge rings, light trim). |
 
 ## 1. Clean-build verification (13-14 October 2026)
 
@@ -567,6 +568,10 @@ The [career season soak](current.md#career-season-soak-30-october-2026) ran the 
 - Gameplay coverage, not validated: "one full career season".
 - The status by area: "All cars and tracks, a full career season | Not validated | Status not verified; this does not mean they are broken".
 - Next validation steps: "1. **Run the 2-hour soak test and the 60 vs 240 fps handling test.** The soak test watches memory, handles and VRAM. The handling test compares lap times and handling at both rates." and "4. **Inventory the stubs.** List every XAM and kernel stub called in `runtime.log` across all scenarios."
+
+### 5 November 2026: the cockpit fill on light surfaces
+
+The project owner saw the BMW M5's white paddles and BMW roundel glare in the cockpit view at Circuit de Catalunya with `-Look fm2023`. A frozen-frame A/B (2x, the native path, `I:\FM4-build-usa` at `16d6172`) traced it to `cockpit_fill=1`: the paddles went from 120 of 255 at fill 0 to 219 at fill 1, and to 250 with a bloom halo in a sunnier freeze. The fill's added light is soft limited by the surface's albedo since then ([cockpit brightness](../analysis/cockpit-brightness.md#light-surfaces-5-november-2026)). It superseded the statement of [current status](current.md) that the 26 October 2026 check found "no clipping on a light interior".
 
 ## 5. Superseded settings and decisions
 
