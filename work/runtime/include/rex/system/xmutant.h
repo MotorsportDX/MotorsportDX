@@ -41,7 +41,9 @@ class XMutant : public XObject {
   XMutant();
 
   std::unique_ptr<rex::thread::Mutant> mutant_;
-  XThread* owning_thread_ = nullptr;
+  // A reference, not a pointer: an exited thread's object is deleted once nothing
+  // references it, and a new thread could then take its address.
+  object_ref<XThread> owning_thread_;
 };
 
 }  // namespace rex::system

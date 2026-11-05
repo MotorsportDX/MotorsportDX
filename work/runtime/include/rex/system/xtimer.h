@@ -48,7 +48,6 @@ class XTimer : public XObject {
  private:
   std::unique_ptr<rex::thread::Timer> timer_;
 
-  XThread* callback_thread_ = nullptr;
   uint32_t callback_routine_ = 0;
   uint32_t callback_routine_arg_ = 0;
 };

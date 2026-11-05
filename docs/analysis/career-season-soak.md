@@ -434,4 +434,25 @@ The ROG Xbox Ally X A/B is the owner's, with `--fm4_render_thread_idle_wait=fals
 - `hl-qr1`, `quickrace_loop` with 4 pairs and 2 passes (8 races, 0.66 h). Thread handles at each cycle's start: 165, 170, 169, 168, then 168, 168, 168, 167 on the second pass, against +10 a race in `qr-soak3` (163 to 490 over 33 races). `soak_report.py`: handles PASS on pass 2 (41 an hour against 100), threads level. Events rose by 2 to 7 a race on the second pass, as in `qr-soak3` (0 to 7). Private bytes and GPU memory fail on the second pass of so short a run, as they did on the second pass of `qr-soak3`; they are the caches that level on the third.
 - `hlsm`, the smoke tier against `m2fmg` (M2's full gate, build `1fea8e4`): 3/3 cells, race 239.21 against 239.23 fps, p99 4.82 against 4.83 ms; the photo cell's WARN is its final capture, the save dialog over a car that stopped in the tunnel, and `photo_view` warns as it often does; no new error key.
 
-**Left.** Events still rise by about 4 a race. They are most likely the runtime's `XEvent` objects for guest events that the title initialises in its own memory (`XObject::GetNativeObject`): a new object is made for each newly initialised guest event and is never freed, since the runtime cannot tell when the title stops using that memory. A 3-hour revisit soak with the fix is not run yet.
+**Left.** Events still rise by about 4 a race. They are most likely the runtime's `XEvent` objects for guest events that the title initialises in its own memory (`XObject::GetNativeObject`): a new object is made for each newly initialised guest event and is never freed, since the runtime cannot tell when the title stops using that memory.
+
+**A crash on the first soak, and two more references.** The first 3-hour soak with the fix, `hl-soak1`, ended after 0.36 hours, in the fourth race of the first pass: `[gpu] D3D12 device removed: HRESULT 0x887A0006 - DEVICE_HUNG`, then "Graphics device lost" and exit `0xC0000409`. No earlier run log on either BuildRoot has a removed device. Since an exited thread's object is now deleted, every raw `XThread*` that outlives its thread is a use after free, and two were found:
+
+- `XTimer` (`work/runtime/src/system/xtimer.cpp`) kept the thread that set the timer as a raw pointer for its callback, which queues an APC on that thread when the timer fires. The callback now holds its own reference to the thread, and the member is gone.
+- `XMutant` (`work/runtime/src/system/xmutant.cpp`) kept its owning thread as a raw pointer. It is an `object_ref<XThread>` now.
+
+Whether either caused the hang is not proven: it did not come back once both were fixed. One window is left as it was: `KernelState::GetThreadByID` reads raw pointers from `threads_by_id_` and could retain an object that another thread is deleting at that moment.
+
+**The 3-hour soak.** `hl-soak2`, the same build with the two references, the same settings: 2.82 hours, 3 passes of the same 11 pairs as `qr-soak3`, 33 races, no failure, no removed device. `soak_report.py` on the third pass:
+
+| Measure | `hl-soak2` (6 November 2026) | `qr-soak3` (30 October 2026) |
+|---|---|---|
+| Handles | PASS, 54 an hour (+44 over 11 races) | FAIL, 163 an hour |
+| Host Thread handles | level, 168 to 169 at each race's start | 163 to 490 over 33 races |
+| Events | +4 a race (770 to 854 over the last 22 races) | about +4 a race |
+| Live threads | PASS, 81 to 82 | PASS, 81 to 82 |
+| Private bytes | FAIL, 112.6 MB an hour (+118 MB) | PASS, 44 MB an hour (+47 MB) |
+| Dedicated GPU memory | FAIL, 35.1 MB an hour (+28 MB) | PASS, 1 MB an hour (−3 MB) |
+| Race frame times, first to last race | p50 +1.3% (4.66 → 4.72 ms), p99 +1.7% (7.00 → 7.12 ms) | p50 +5.4%, p99 +6.7% |
+
+The handle leak is fixed apart from the Events. The memory measures fail where `qr-soak3` passed: about 11 MB of private bytes and 3 MB of GPU memory a race on the third pass. The two runs differ in more than the fix: `qr-soak3` ran build `053474b` built with MSVC on `I:\FM4-build-usa`, `hl-soak2` build `6afa374` with llvm-mingw on `I:\FM4-build-usamg`, and a third pass of the same pairs is not a long baseline. Freeing thread objects does not add memory, so the toolchain or the commits between the builds are the more likely difference; a revisit soak of `6afa374` without the fix would tell. This is open.

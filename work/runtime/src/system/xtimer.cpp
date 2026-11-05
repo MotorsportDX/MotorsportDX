@@ -58,22 +58,27 @@ X_STATUS XTimer::SetTimer(int64_t due_time, uint32_t period_ms, uint32_t routine
   }
 
   // Stash routine for callback.
-  callback_thread_ = XThread::GetCurrentThread();
   callback_routine_ = routine;
   callback_routine_arg_ = routine_arg;
 
   // This callback will only be issued when the timer is fired.
   std::function<void()> callback = nullptr;
   if (callback_routine_) {
-    callback = [this]() {
+    // The callback holds its own reference to the thread that set the timer: an exited
+    // thread's object is deleted once nothing references it, and a timer may fire after
+    // its thread has exited or after another SetTimer from another thread.
+    callback = [thread = retain_object(XThread::GetCurrentThread()), routine, routine_arg]() {
       // Queue APC to call back routine with (arg, low, high).
       // It'll be executed on the thread that requested the timer.
+      if (!thread->is_running()) {
+        return;
+      }
       uint64_t time = rex::chrono::Clock::QueryGuestSystemTime();
       uint32_t time_low = static_cast<uint32_t>(time);
       uint32_t time_high = static_cast<uint32_t>(time >> 32);
-      REXSYS_DEBUG("XTimer enqueuing timer callback to {:08X}({:08X}, {:08X}, {:08X})",
-                   callback_routine_, callback_routine_arg_, time_low, time_high);
-      callback_thread_->EnqueueApc(callback_routine_, callback_routine_arg_, time_low, time_high);
+      REXSYS_DEBUG("XTimer enqueuing timer callback to {:08X}({:08X}, {:08X}, {:08X})", routine,
+                   routine_arg, time_low, time_high);
+      thread->EnqueueApc(routine, routine_arg, time_low, time_high);
     };
   }
 

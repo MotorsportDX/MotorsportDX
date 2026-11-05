@@ -39,8 +39,8 @@ void XMutant::InitializeNative(void* native_ptr, X_DISPATCH_HEADER* header) {
 
 X_STATUS XMutant::ReleaseMutant(uint32_t priority_increment, bool abandon, bool wait) {
   // Call should succeed if we own the mutant, so go ahead and do this.
-  if (owning_thread_ == XThread::GetCurrentThread()) {
-    owning_thread_ = nullptr;
+  if (owning_thread_.get() == XThread::GetCurrentThread()) {
+    owning_thread_.reset();
   }
 
   // TODO(benvanik): abandoning.
@@ -78,7 +78,7 @@ object_ref<XMutant> XMutant::Restore(KernelState* kernel_state, stream::ByteStre
   auto owning_thread_handle = stream->Read<uint32_t>();
   if (owning_thread_handle) {
     mutant->owning_thread_ =
-        kernel_state->object_table()->LookupObject<XThread>(owning_thread_handle).get();
+        kernel_state->object_table()->LookupObject<XThread>(owning_thread_handle);
     mutant->owning_thread_->AcquireMutantOnStartup(retain_object(mutant));
   }
 
@@ -86,7 +86,7 @@ object_ref<XMutant> XMutant::Restore(KernelState* kernel_state, stream::ByteStre
 }
 
 void XMutant::WaitCallback() {
-  owning_thread_ = XThread::GetCurrentThread();
+  owning_thread_ = retain_object(XThread::GetCurrentThread());
 }
 
 }  // namespace rex::system
