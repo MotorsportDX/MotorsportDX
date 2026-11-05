@@ -213,6 +213,20 @@ The [builder installer](analysis/builder-installer.md) builds the game on the pl
 
 The downloaded files have the sizes that the release pages give. The SHA-256 of Python, CMake and Ninja were computed from the downloaded files; their publishers' own checksum files were not fetched. Windows' `d3dcompiler_47.dll`, which compiles the resolve shaders since 31 October 2026, is part of Windows and is not fetched ([setup](setup.md#1-setup)). llvm-mingw replaced LLVM 20.1.8's `clang+llvm-20.1.8-x86_64-pc-windows-msvc.tar.xz` (939,541,912 bytes, SHA-256 `f229769f...e85b107f`) on 31 October 2026, and with it Microsoft's C and C++ libraries and the Windows SDK, which the build no longer reads ([setup](setup.md#toolchain); the project owner's decision of 31 October 2026, after the [licence reading](analysis/builder-installer.md#47-the-msvc-libraries-and-the-windows-sdk)). Only the temporary `-Abi msvc` build of the switch's A/B still uses them, from an installed Visual Studio and LLVM.
 
+## Third-party tools: the car mods
+
+The `mods` action ([running](running.md#car-mods)) fetches and builds these on the player's computer, into `BuildRoot\mods-tools`. They run there only; the repository holds none of their files and the project ships none of them. A mod is converted from the player's own discs and stays in their `BuildRoot`.
+
+| Tool | Source | Pin | License |
+|---|---|---|---|
+| [fm4-content-converter](https://github.com/MotorsportDX/fm4-content-converter) | GitHub's archive of `mods.CONVERTER_COMMIT` | tree hash `mods.CONVERTER_TREE` | GPL-3.0-only (its `LICENSE`, `CREDITS.md` and `THIRD_PARTY_NOTICES.md` come with the archive). It runs as a separate program; `mods.py` passes it paths and reads its JSON lines |
+| [ForzaEditor](https://github.com/FMdangaina/ForzaEditor) (now ForzaStudio-EVO), FMdangaina, on Forza Studio by Mike Davis | GitHub's archive of commit `8807c7d1` | tree hash `mods.FORZA_EDITOR_TREE`, and the converter's SHA-256 of the files it compiles | MIT (the archive's `LICENSE` and `THIRD-PARTY-NOTICES.md`, copied beside the helper) |
+| MonoGame.Framework 3.6.0.1625, the helper's vector arithmetic | NuGet, fetched by the converter | SHA-256 in the converter | Microsoft Public License (the converter's `MonoGame-LICENSE.txt`) |
+| [NumPy](https://numpy.org/) 2.3.5 and [Pillow](https://python-pillow.github.io/) 12.0.0 | PyPI wheels for CPython 3.11 to 3.14, win_amd64 | size and SHA-256 in `mods.WHEELS` | NumPy: BSD-3-Clause; Pillow: MIT-CMU; each wheel carries the licenses of the libraries it bundles |
+| libmspack's `lzxd.c`, linked into the converter's `lzx_bridge.dll` | `runtime-source` (the SDK's third-party sources) | the SDK's pin | LGPL-2.1 ([LGPL: FFmpeg and libmspack](#lgpl-ffmpeg-and-libmspack)); the DLL is built and kept on the player's computer only |
+
+The helper is built with the .NET Framework's `csc.exe`, part of Windows, and the decoder with the build's clang. The wheels and archives were fetched on the development computer on 5 November 2026 to pin them.
+
 ## Inventory and the pre-commit check
 
 - The root `.gitignore` denies everything by default and re-includes only individually reviewed paths.

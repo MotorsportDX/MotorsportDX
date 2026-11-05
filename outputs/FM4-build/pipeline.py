@@ -3514,6 +3514,15 @@ def passes_settings(directory,defines):
     return {'GTAO_RADIUS':float(defines.get('GTAO_RADIUS',radius)),
             'GTAO_QUALITY':float(defines.get('GTAO_QUALITY',quality))}
 
+def save_mods(root,ids):
+    """run -Mod: the car mods (docs/running.md#car-mods) the next runs play; none plays Disc 1
+    as it is."""
+    state=json.loads((root/'local.json').read_text())
+    ids=[] if ids==['none'] else list(dict.fromkeys(ids))
+    mods.select(root,ids)
+    state['mods']=ids
+    (root/'local.json').write_text(json.dumps(state,indent=2),encoding='utf-8')
+
 def save_content(root,content):
     """run -Content: replaces the saved content paths without generating again."""
     state=json.loads((root/'local.json').read_text())
@@ -3575,6 +3584,8 @@ def launch(root,single_tile=False,fixed_vblank=False,frame_rate=None,rov=False,
     manifest=write_content_manifest(root,packages) if packages else None
     if packages:
         print(f'Content packages: {len(packages)}')
+    # The car mods: Disc 1 with the mods' files over it (mods.py).
+    disc1=mods.mod_disc(root,disc1,state.get('mods') or [])
     cvars,plan_env,description=launch_plan(
         root,disc1,single_tile=single_tile,fixed_vblank=fixed_vblank,frame_rate=frame_rate,rov=rov,
         resolution_scale=resolution_scale,full_rate_mirror=full_rate_mirror,look=look,
@@ -4099,6 +4110,7 @@ def launch_cvars(root,disc1,log_file):
 
 # The builder installer's downloads, the download and package actions (builder.py).
 import builder
+import mods
 import player_settings
 
 def main():
@@ -4106,7 +4118,7 @@ def main():
     parser=argparse.ArgumentParser(description=__doc__)
     parser.add_argument('action',choices=['doctor','setup','generate','build','all','run','warmcache',
                                           'profbuild','export','preflight','launcher-data','snapshot',
-                                          'toolchain','download','launcher','package'])
+                                          'toolchain','download','launcher','package','mods'])
     parser.add_argument('--build-root',type=Path,default=REPO/'work/portable-fm4')
     parser.add_argument('--disc1',type=Path)
     parser.add_argument('--disc2',type=Path)
@@ -4114,6 +4126,16 @@ def main():
                         help='generate, all, run: an FM4 content package (DLC) or a directory searched '
                              'for them; repeatable. Saved in local.json and imported at the next run')
     parser.add_argument('--jobs',type=int,default=4)
+    parser.add_argument('--mod-game',choices=tuple(mods.GAMES),
+                        help='mods: convert the cars of this game that FM4 lacks into the mod '
+                             '<game>-cars (docs/running.md#car-mods)')
+    parser.add_argument('--mod-disc',type=Path,
+                        help='mods: the FM3 Disc 1 or the FM2 disc, an extracted folder or its .iso')
+    parser.add_argument('--mod-disc2',type=Path,
+                        help='mods: optional; the FM3 Disc 2 or the FM2 Bonus Disc, a folder or .iso')
+    parser.add_argument('--mod',action='append',
+                        help='run: play this car mod (repeatable), or none; saved in local.json '
+                             'for the next runs (docs/running.md#car-mods)')
     parser.add_argument('--out',type=Path,
                         help='export: the folder to export the game and its GUI launcher to; '
                              'launcher-data: the folder of launcher.json (default the BuildRoot); '
@@ -4308,6 +4330,15 @@ def main():
         return
     if args.toolchain:
         print('Toolchain:',', '.join(use_toolchain(args.toolchain,('llvm-mingw',) if ABI=='msvc' else ())))
+    # The car mods need this Python, the .NET Framework's C# compiler and clang, not the doctor's
+    # whole build toolchain.
+    if args.action=='mods':
+        if not (args.mod_game and args.mod_disc):
+            raise ValueError('mods needs --mod-game and --mod-disc (Build.ps1 -ModGame, -ModDisc).')
+        with progress('stage','mods'):
+            mods.convert(root,args.mod_game,args.mod_disc.resolve(),
+                         args.mod_disc2.resolve() if args.mod_disc2 else None,progress_event)
+        return
     doctor(fetch_mode())
     print(ffx_status(root))
     print(gameinput_status(root))
@@ -4334,6 +4365,9 @@ def main():
     if args.action in ('generate','all'):
         with progress('stage','generate'): generate(root,*discs,args.content,args.jobs)
     if args.action=='run' and args.content: save_content(root,args.content)
+    if args.mod and args.action!='run':
+        raise ValueError('--mod is read by run only.')
+    if args.action=='run' and args.mod: save_mods(root,args.mod)
     if args.action in ('build','all'):
         with progress('stage','build'):
             build_game(root,args.jobs,flavor,None if args.action=='all' else fsr,args.tests)

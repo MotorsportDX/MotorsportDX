@@ -25,6 +25,7 @@ Related pages:
 
 - A BuildRoot built by `Build.ps1` (the harness reads `local.json` and `build-result.json` from it).
 - Disc 2 and the downloadable content that `local.json` names (`-Disc2`, `-Content`). `e2e.py`, and so `matrix.py` and `Build.ps1 -Action warmcache`, imports them into the BuildRoot profile before its first launch ([content import](#content-import)). A BuildRoot generated without `-Disc2` has no Disc 2: the Quick Race car asks for it, and the [race check](#race-check) fails the run.
+- The car mod that `local.json` names (`Build.ps1 -Action run -Mod`), if any: `e2e.py` plays it from the mod Disc, as `run` does ([car mods](../running.md#car-mods)). `-Mod none` runs Disc 1 as it is.
 - A profile that has been played once up to the main menu ([a new profile](#a-new-profile)).
 - Windows OCR with the en-US language: Windows installs it with the English (United States) language, which a Windows in another language may lack (Settings > Time & language > Language & region; `ocr-server.ps1` asks for `en-US`).
 - Goal mode only: a TypeSafe API key in the `TYPESAFE_API_KEY` environment variable (user scope is read even when the shell started earlier). Each step sends the OCR text of the current screen, the goal/route description and the recent steps to `https://api.typesafe.ai` (endpoint `/v1/systemone`). No images, saves, user data or personal data are sent. A quickrace run makes roughly 40-50 requests.

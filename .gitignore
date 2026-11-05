@@ -31,6 +31,7 @@
 !/.claude/skills/
 !/.claude/skills/**
 !/outputs/FM4-build/builder.py
+!/outputs/FM4-build/mods.py
 !/outputs/FM4-build/player_settings.py
 !/outputs/FM4-build/CREDITS.txt
 !/outputs/FM4-build/Build.ps1

@@ -1233,8 +1233,10 @@ def run_once(options, out):
 
     # Same cvars as Build.ps1 -Action run.
     sys.path[:0] = [str(HERE), str(HERE.parent)]
-    import career_season, cpu_power, pipeline, quickrace_loop, soak
-    args = {k: str(v) for k, v in pipeline.launch_cvars(root, state['disc1'], out / 'runtime.log').items()}
+    import career_season, cpu_power, mods, pipeline, quickrace_loop, soak
+    # The car mods of local.json (Build.ps1 -Action run -Mod), played from the mod Disc as run does.
+    disc1 = mods.mod_disc(root, state['disc1'], state.get('mods') or [])
+    args = {k: str(v) for k, v in pipeline.launch_cvars(root, disc1, out / 'runtime.log').items()}
     # Nobody can type into the host keyboard dialog: XAM prompts answer with their defaults.
     args['headless'] = 'true'
     cache = prepare_cache(options, out, root)

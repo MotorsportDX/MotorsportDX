@@ -1,5 +1,5 @@
 param(
-    [ValidateSet('doctor','setup','generate','build','all','run','warmcache','profbuild','export','preflight','launcher-data','snapshot','launcher','package')][string]$Action = 'doctor',
+    [ValidateSet('doctor','setup','generate','build','all','run','warmcache','profbuild','export','preflight','launcher-data','snapshot','launcher','package','mods')][string]$Action = 'doctor',
     [string]$Disc1,
     [string]$Disc2,
     [string[]]$Content,
@@ -43,7 +43,11 @@ param(
     [switch]$ShaderDev,
     [string]$TextureDump,
     [string]$TextureReplace,
-    [ValidateSet('low','medium','high','extrahigh','ultra','xbox')][string]$Quality
+    [ValidateSet('low','medium','high','extrahigh','ultra','xbox')][string]$Quality,
+    [ValidateSet('fm3','fm2')][string]$ModGame,
+    [string]$ModDisc,
+    [string]$ModDisc2,
+    [string[]]$Mod
 )
 $ErrorActionPreference = 'Stop'
 if ($env:OS -ne 'Windows_NT') { throw 'This workflow supports Windows x64.' }
@@ -110,5 +114,9 @@ if ($ShaderDev) { $arguments += @('--shader-dev') }
 if ($TextureDump) { $arguments += @('--texture-dump', $TextureDump) }
 if ($TextureReplace) { $arguments += @('--texture-replace', $TextureReplace) }
 if ($Quality) { $arguments += @('--quality', $Quality) }
+if ($ModGame) { $arguments += @('--mod-game', $ModGame) }
+if ($ModDisc) { $arguments += @('--mod-disc', $ModDisc) }
+if ($ModDisc2) { $arguments += @('--mod-disc2', $ModDisc2) }
+foreach ($id in $Mod) { $arguments += @('--mod', $id) }
 & $Python @arguments
 if ($LASTEXITCODE -ne 0) { throw "FM4 workflow failed (exit $LASTEXITCODE). See the build-root logs." }

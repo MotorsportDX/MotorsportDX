@@ -1882,4 +1882,96 @@ class PipelineTests(unittest.TestCase):
         bright[:height//4*width*3]=b''.join(bytes([200+(x%2)*55]*3) for y in range(height//4) for x in range(width))
         self.assertEqual(washed_out_bands(bytes(bright),width,height),[])
 
+class ModsTests(unittest.TestCase):
+    """The car mods (mods.py): the mod Disc and the checks before a run plays a mod."""
+
+    def make(self,root,mod_id,writes,disc1):
+        folder=root/'mods'/mod_id
+        files={}
+        for relative,data in writes.items():
+            path=folder/'files'/relative
+            path.parent.mkdir(parents=True,exist_ok=True)
+            path.write_bytes(data)
+            files[relative]={'sha256':hashlib.sha256(data).hexdigest(),'size':len(data)}
+        media=disc1/'Media'
+        mod={'format':'fm4-mod','format_version':1,'id':mod_id,'files_root':'files','files':files,
+             'writes':sorted(files),
+             'built_against':{'fm4_gamedb_sha256':pipeline.digest(media/'db/gamedb.slt'),
+                              'fm4_zipmanifest_sha256':pipeline.digest(media/'zipmanifest.xml'),
+                              'content_packs':[]}}
+        (folder/'mod.json').write_text(json.dumps(mod),encoding='utf-8')
+        return mod
+
+    def disc(self,root):
+        disc1=root/'Disc 1'
+        for relative,data in {'default.xex':b'xex','Media/db/gamedb.slt':b'db','Media/zipmanifest.xml':b'zm',
+                              'Media/Cars/A.zip':b'a'}.items():
+            (disc1/relative).parent.mkdir(parents=True,exist_ok=True)
+            (disc1/relative).write_bytes(data)
+        return disc1
+
+    def test_mod_disc_links_disc1_and_copies_the_mod_files(self):
+        import mods
+        with tempfile.TemporaryDirectory() as tmp:
+            root=Path(tmp)
+            disc1=self.disc(root)
+            self.make(root,'fm3-cars',{'Media/DB/gamedb.slt':b'merged','Media/Cars/X.zip':b'x'},disc1)
+            self.assertEqual(mods.mod_disc(root,disc1,[]),disc1)
+            with contextlib.redirect_stdout(io.StringIO()):
+                target=mods.mod_disc(root,disc1,['fm3-cars'])
+            self.assertEqual(target,root/'mod-disc')
+            # The mod's database replaces Disc 1's under the mod's spelling; Disc 1 is unchanged.
+            self.assertEqual((target/'Media/DB/gamedb.slt').read_bytes(),b'merged')
+            self.assertEqual((disc1/'Media/db/gamedb.slt').read_bytes(),b'db')
+            self.assertEqual((target/'Media/Cars/X.zip').read_bytes(),b'x')
+            self.assertEqual((target/'Media/Cars/A.zip').stat().st_ino,(disc1/'Media/Cars/A.zip').stat().st_ino)
+            stamp=(target/mods.MOD_DISC_MARKER).stat().st_mtime_ns
+            self.assertEqual(mods.mod_disc(root,disc1,['fm3-cars']),target)
+            self.assertEqual((target/mods.MOD_DISC_MARKER).stat().st_mtime_ns,stamp)
+
+    def test_refuses_changed_files_other_discs_and_two_mods_writing_one_file(self):
+        import mods
+        with tempfile.TemporaryDirectory() as tmp:
+            root=Path(tmp)
+            disc1=self.disc(root)
+            self.make(root,'fm3-cars',{'Media/DB/gamedb.slt':b'merged'},disc1)
+            self.make(root,'fm2-cars',{'Media/db/GAMEDB.slt':b'other'},disc1)
+            with self.assertRaisesRegex(RuntimeError,'play one of them at a time'):
+                mods.select(root,['fm3-cars','fm2-cars'])
+            with self.assertRaisesRegex(RuntimeError,'No mod fm4-cars'):
+                mods.select(root,['fm4-cars'])
+            (root/'mods/fm3-cars/files/Media/DB/gamedb.slt').write_bytes(b'changed')
+            with self.assertRaisesRegex(RuntimeError,'missing or changed'):
+                mods.mod_disc(root,disc1,['fm3-cars'])
+            (disc1/'Media/zipmanifest.xml').write_bytes(b'another disc')
+            with self.assertRaisesRegex(RuntimeError,'another Disc 1'):
+                mods.mod_disc(root,disc1,['fm2-cars'])
+
+    def test_content_packs_must_match(self):
+        import mods
+        with tempfile.TemporaryDirectory() as tmp:
+            root=Path(tmp)
+            disc1=self.disc(root)
+            mod=self.make(root,'fm3-cars',{'Media/DB/gamedb.slt':b'merged'},disc1)
+            self.assertIsNone(mods.mod_error(root,mod,disc1))
+            pack=root/mods.CONTENT_ROOT/'4d53091000000001/Media/DLCZips/0001_pri_65.zip'
+            pack.parent.mkdir(parents=True)
+            pack.write_bytes(b'dlc')
+            self.assertIn('other content packages',mods.mod_error(root,mod,disc1))
+            self.assertEqual(mods.content_packs(root),
+                             [{'path':'4d53091000000001/Media/DLCZips/0001_pri_65.zip','size':3}])
+
+    def test_pins(self):
+        import mods
+        self.assertEqual(sorted(mods.WHEELS),['cp311','cp312','cp313','cp314'])
+        for tag,wheels in mods.WHEELS.items():
+            self.assertEqual([Path(path).name.split('-')[0] for path,_,_ in wheels],['numpy','pillow'])
+            self.assertTrue(all(f'-{tag}-{tag}-win_amd64.whl' in path for path,_,_ in wheels))
+        self.assertEqual(len(mods.CONVERTER_COMMIT),40)
+        self.assertEqual(len(mods.CONVERTER_TREE),64)
+        command=mods.converter_command(Path('T'),'fm4_converter.cli','convert')
+        self.assertEqual(command[1:3],['-I','-c'])
+        self.assertEqual(command[-2:],['fm4_converter.cli','convert'])
+
+
 if __name__=='__main__': unittest.main()

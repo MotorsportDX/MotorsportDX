@@ -417,6 +417,10 @@
       "provenance": "Reviewed bootstrap tooling: the builder installer's downloads, download and package actions and package allowlist; no game data"
     },
     {
+      "path": "outputs/FM4-build/mods.py",
+      "provenance": "Original build tooling: the car mods action and the mod Disc of run; pins of the separate fm4-content-converter, ForzaEditor and the NumPy and Pillow wheels it fetches on the player's computer; no game data"
+    },
+    {
       "path": "outputs/FM4-build/player_settings.py",
       "provenance": "Original build tooling: the table of the player's settings that the in-game settings overlay and the launcher share (launcher.json); no game content"
     },
