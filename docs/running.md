@@ -36,6 +36,7 @@ and [status/history.md](status/history.md).
   - [Keyboard](running-controls.md#keyboard)
 - [Shader cache](#shader-cache)
 - [Car mods](#car-mods)
+  - [Mods page](#mods-page)
 - [Data directories](#data-directories)
 
 ## Launching
@@ -936,7 +937,9 @@ experimental: the cockpit view of some cars, the engine sound, the paint colours
 class can differ from the original game, as the converter's
 [FM3](https://github.com/MotorsportDX/fm4-content-converter/blob/main/docs/fm3.md) and
 [FM2](https://github.com/MotorsportDX/fm4-content-converter/blob/main/docs/fm2.md) guides record.
-The GUI launcher does not offer the mods yet; they need `Build.ps1`.
+The GUI launcher's **Mods** page offers them in an install of the
+[builder package](#builder-mode), which has the source, the Python and the build tools that the
+conversion runs on ([Mods page](#mods-page)); elsewhere, `Build.ps1` converts them.
 
 ```powershell
 # After the game has run once with its content packages, so that the mod keeps their cars and names:
@@ -983,6 +986,30 @@ or a new content package needs the mod built again. It then plays `mod-disc`: ev
 Disc 1 hard-linked (copied when Disc 1 is on another volume than `BuildRoot`), and each file
 the mod writes copied from the mod, so Disc 1 is never written. `mod-disc` is built again when
 Disc 1 or the mod changes. Both mods replace the database, so one plays at a time.
+
+### Mods page
+
+The launcher's Mods page, on the Home menu after Shaders, has three tabs:
+
+- **In play:** **Car mod** chooses the mod that Play races with, or None for Disc 1 as it is
+  (the launcher's own setting, `mod` in `launcher-settings.json`; `Build.ps1 -Mod` sets
+  `local.json` instead). Only mods built for the current Disc 1 and imported content
+  packages are offered; the others list "Convert again". Choosing a mod prepares the mod Disc
+  in the background (`mods.cpp`, the port of `mods.mod_disc`: the same checks and marker, so a
+  mod Disc that `run` prepared serves the launcher and the other way round); **Prepare the mod
+  again** builds it anew. Play refuses a mod whose Disc is not prepared for this Disc 1 and opens
+  the page. The shader pass also reads the mod Disc.
+- **Forza 3** and **Forza 2:** the source discs (a folder with A, a disc image with the row
+  below it), the optional Disc 2 or Bonus Disc, **Convert** and **Stop**. Convert runs
+  `pipeline.py mods` of the install's source with its Python and `--toolchain`, in a job object
+  as the build steps run, its output in `logs\mods-run.log`; the panel shows the cars converted
+  so far. Stop, and closing the launcher, end the conversion; the next one reuses what was
+  fetched and extracted. When the mod in play was converted again, its Disc is prepared again.
+
+Outside a builder install the page lists the mods and plays them, and says that converting needs
+the builder's tools. For development, `FM4_MODS_SOURCE` (a checkout), `FM4_MODS_PYTHON` and
+`FM4_MODS_TOOLCHAIN` name them. The launcher tests compare the mod Disc of both sides
+(`mods.launcher_test_case`).
 
 ## Data directories
 

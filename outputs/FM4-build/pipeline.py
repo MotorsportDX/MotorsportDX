@@ -3988,7 +3988,8 @@ def launcher_tests(root):
     (work/'cases.json').write_text(json.dumps({'root':str(root),'disc1':disc1,
                                                'manifest':str(manifest),'plans':cases,
                                                'discs':discs,'image':image,
-                                               'builder':builder.builder_test_cases(state,work)},indent=1),
+                                               'builder':builder.builder_test_cases(state,work),
+                                               'mods':mods.launcher_test_case(work)},indent=1),
                                    encoding='utf-8')
     (work/'result.json').unlink(missing_ok=True)
     run([root/'game-build'/LAUNCHER_EXE,'--test',work/'cases.json',work/'result.json'],
@@ -3996,8 +3997,9 @@ def launcher_tests(root):
     result=json.loads((work/'result.json').read_text(encoding='utf-8'))
     if result.get('failures'):
         raise RuntimeError('Launcher tests failed:\n'+'\n'.join(result['failures'][:20]))
-    print(f'Launcher tests passed: {result["plans"]} plans, discs, {len(discs["packages"])} content packages '
-          'and a disc image.')
+    mods.launcher_test_check(json.loads((work/'cases.json').read_text(encoding='utf-8'))['mods'])
+    print(f'Launcher tests passed: {result["plans"]} plans, discs, {len(discs["packages"])} content packages, '
+          'a disc image and a mod Disc.')
 
 def export(root,out,jobs):
     """A folder that runs the game with MotorsportDX.exe alone (docs/running.md#export-to-another-computer): the

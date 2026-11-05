@@ -126,6 +126,8 @@
 !/work/fm4-launcher/src/discs.h
 !/work/fm4-launcher/src/iso.cpp
 !/work/fm4-launcher/src/iso.h
+!/work/fm4-launcher/src/mods.cpp
+!/work/fm4-launcher/src/mods.h
 !/work/fm4-launcher/src/overlay.cpp
 !/work/fm4-launcher/src/overlay.h
 !/work/fm4-launcher/src/plan.cpp

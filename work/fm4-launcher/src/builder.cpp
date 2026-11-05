@@ -179,6 +179,8 @@ BuilderLayout BuilderLayout::Of(const fs::path& install, const Json& layout) {
   return result;
 }
 
+std::wstring ChildEnvironment() { return EnvironmentBlock(); }
+
 bool IsInstallRoot(const fs::path& directory) {
   return fs::is_regular_file(directory / "launcher.json") &&
          fs::is_regular_file(directory / "source" / "source-stamp.json") &&

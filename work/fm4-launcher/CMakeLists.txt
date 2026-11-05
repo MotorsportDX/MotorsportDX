@@ -25,6 +25,7 @@ add_executable(fm4_launcher WIN32
     src/builder.cpp
     src/discs.cpp
     src/iso.cpp
+    src/mods.cpp
     src/overlay.cpp
     src/plan.cpp
     src/runner.cpp

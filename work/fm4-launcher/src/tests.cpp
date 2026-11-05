@@ -12,6 +12,7 @@
 #include "builder.h"
 #include "discs.h"
 #include "iso.h"
+#include "mods.h"
 #include "overlay.h"
 #include "settings.h"
 
@@ -203,6 +204,35 @@ void OverlayTests(const LauncherData& data, const Json& cases, const std::filesy
   }
 }
 
+// The car mods (mods.h, launcher_test_case in mods.py): the mod Disc pipeline.py prepared is
+// ready here; the one prepared here holds the same files; the mod lists as playable.
+void ModTests(const Json& mods, std::vector<std::string>& failures) {
+  namespace fs = std::filesystem;
+  const fs::path python = PathFromUtf8(mods.at("python").get<std::string>()),
+                 cpp = PathFromUtf8(mods.at("cpp").get<std::string>());
+  const std::string disc1 = mods.at("disc1").get<std::string>(), id = mods.at("id").get<std::string>();
+  if (!ModDiscReady(python, disc1, id)) failures.push_back("Mods: the mod Disc of pipeline.py is not ready here");
+  if (ModDiscReady(cpp, disc1, id)) failures.push_back("Mods: a mod Disc is ready before it was prepared");
+  std::atomic<std::uint64_t> done{0}, total{0};
+  const std::atomic<bool> cancel{false};
+  if (const std::string error = PrepareModDisc(cpp, disc1, id, done, total, cancel); !error.empty())
+    failures.push_back("Mods: " + error);
+  std::map<std::string, std::string> files, want;
+  for (const auto& [path, hash] : mods.at("files").items()) want[path] = hash.get<std::string>();
+  std::error_code error;
+  const fs::path disc = ModDisc(cpp);
+  for (auto it = fs::recursive_directory_iterator(disc, error); !error && it != fs::recursive_directory_iterator();
+       it.increment(error))
+    if (it->is_regular_file() && it->path().filename() != ".fm4-mod-disc.json")
+      files[Utf8(fs::path(it->path().lexically_relative(disc).generic_wstring()))] = Sha256File(it->path());
+  if (files != want) failures.push_back("Mods: the mod Disc's files differ (" + std::to_string(files.size()) + " files)");
+  if (!ModDiscReady(cpp, disc1, id)) failures.push_back("Mods: the prepared mod Disc is not ready");
+  const std::vector<ModInfo> listed = ListMods(cpp, disc1);
+  if (listed.size() != 1 || listed[0].id != id || !listed[0].error.empty() || listed[0].packaged != 1 ||
+      listed[0].skipped != 1)
+    failures.push_back("Mods: the list: " + (listed.empty() ? std::string("none") : listed[0].error));
+}
+
 }  // namespace
 
 int RunTests(const std::filesystem::path& cases_path, const std::filesystem::path& result_path) {
@@ -341,6 +371,7 @@ int RunTests(const std::filesystem::path& cases_path, const std::filesystem::pat
   }
   UpdateTests(builder.at("update"), failures);
   OverlayTests(data, cases, std::filesystem::path(result_path).parent_path(), failures);
+  if (cases.contains("mods")) ModTests(cases.at("mods"), failures);
   std::ofstream result(result_path, std::ios::binary | std::ios::trunc);
   result << Json{{"plans", plans}, {"failures", failures}}.dump(1);
   return result ? 0 : 1;

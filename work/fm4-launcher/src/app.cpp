@@ -37,6 +37,7 @@
 
 #include "builder.h"
 #include "discs.h"
+#include "mods.h"
 #include "overlay.h"
 #include "runner.h"
 #include "screenshot.h"
@@ -73,6 +74,7 @@ std::string Icon(char32_t code) {
   return {static_cast<char>(0xE0 | (code >> 12)), static_cast<char>(0x80 | ((code >> 6) & 0x3F)),
           static_cast<char>(0x80 | (code & 0x3F))};
 }
+constexpr char32_t kIconCar = 0xE804;
 constexpr char32_t kIconHome = 0xE80F, kIconDisplay = 0xE7F4, kIconLook = 0xE790, kIconPad = 0xE7FC,
                    kIconDisc = 0xE958, kIconShaders = 0xE945, kIconSettings = 0xE713, kIconInfo = 0xE946,
                    kIconCheck = 0xE73E, kIconWarning = 0xE7BA, kIconLeft = 0xE76B, kIconRight = 0xE76C,
@@ -358,11 +360,11 @@ std::string ExitText(unsigned long code, double seconds) {
 
 // The pages, in the navigation's order, with their names and their ids of --screenshot.
 // Build is the builder package's page (builder.h), shown only in builder mode.
-enum Page { kHome, kDisplay, kLook, kControls, kGameData, kShaders, kAdvanced, kAbout, kBuild, kPageCount };
+enum Page { kHome, kDisplay, kLook, kControls, kGameData, kShaders, kMods, kAdvanced, kAbout, kBuild, kPageCount };
 const char* const kPageNames[kPageCount] = {"Home",      "Display", "Look",     "Controls", "Game data",
-                                            "Shaders",   "Advanced", "About",   "Build"};
+                                            "Shaders",   "Mods",    "Advanced", "About",    "Build"};
 const char* const kPageIds[kPageCount] = {"home",      "display", "look",     "controls", "game-data",
-                                          "shaders",   "advanced", "about",   "build"};
+                                          "shaders",   "mods",    "advanced", "about",    "build"};
 
 // A setup step's state on the Home page and in the navigation.
 enum class Status { kDone, kOptional, kNeeded, kBusy };
@@ -376,7 +378,12 @@ enum DialogTarget {
   kTextureReplace,
   kTextureDump,
   kUserData,
-  kUpdateInstall
+  kUpdateInstall,
+  // The Mods page's source discs: a folder, or a disc image (.iso).
+  kModFm3Disc1,
+  kModFm3Disc2,
+  kModFm2Disc,
+  kModFm2Bonus
 };
 
 class App;
@@ -469,6 +476,11 @@ class App {
   void AdvancedRows();
   // The Shaders page: the shader pass and the DirectX Shader Compiler.
   void ShadersRows();
+  // The Mods page (mods.h): convert the cars of FM3 or FM2, choose the mod Play plays.
+  void ModsRows();
+  void RefreshMods();
+  void StartModDisc(const std::string& id);
+  std::string ModDisc1() const { return disc1_.path.empty() ? settings_.disc1 : disc1_.path; }
   // The offline pass with the current plan, the DXC release fetched first when it is missing
   // (19.10's route); automatic once a build: marker() is what it last finished for.
   void CompileShaders();
@@ -571,6 +583,15 @@ class App {
   // The Shaders page (shaders.h): one task at a time.
   std::thread shader_task_;
   std::atomic<bool> shader_busy_{false};
+  ModRunner mod_runner_;
+  ModTools mod_tools_;
+  std::vector<ModInfo> mods_;
+  bool mods_listed_ = false, mod_run_seen_ = false;
+  std::thread mod_disc_task_;
+  std::atomic<bool> mod_disc_busy_{false}, mod_disc_cancel_{false};
+  std::atomic<std::uint64_t> mod_disc_done_{0}, mod_disc_total_{0};
+  std::mutex mod_mutex_;
+  std::string mod_message_;  // mod_mutex_
   std::mutex shader_mutex_;
   std::string shader_message_;      // shader_mutex_
   void* shader_process_ = nullptr;  // shader_mutex_: the running pass
@@ -1120,6 +1141,11 @@ void App::Run() {
     if (shader_process_) TerminateProcess(shader_process_, 1);
   }
   if (shader_task_.joinable()) shader_task_.join();
+  // A conversion ends with the launcher (its next run resumes from what was fetched and
+  // extracted); a mod Disc in preparation stops, and the next one starts over.
+  mod_runner_.Stop();
+  mod_disc_cancel_ = true;
+  if (mod_disc_task_.joinable()) mod_disc_task_.join();
   // A build pauses with the launcher; the next start resumes it from its step.
   builder_.reset();
   // An unpack stops; its partial folder is removed by the next one.
@@ -1242,6 +1268,9 @@ std::vector<std::string> App::GameArgs(const Plan& plan) {
     const size_t equals = item.find('=');
     if (equals != std::string::npos && equals > 0) cvars.Set(item.substr(0, equals), item.substr(equals + 1));
   }
+  // The car mod: Disc 1 with the mod over it (mods.h), once the Mods page prepared it.
+  if (!settings_.mod.empty() && ModDiscReady(root_, ModDisc1(), settings_.mod))
+    cvars.Set("game_data_root", Utf8(ModDisc(root_)));
   std::vector<std::string> args = {Utf8(root_ / "game-build" / "fm4_rex.exe")};
   for (const auto& [name, value] : cvars.Items()) args.push_back("--" + name + "=" + value);
   return args;
@@ -1267,6 +1296,10 @@ void App::Play() {
   if (!plan) return fail(error);
   if (ProcessRunning(L"fm4_rex.exe"))
     return fail("The game is already running (fm4_rex.exe). Close it first.");
+  if (!settings_.mod.empty() && (mod_disc_busy_ || !ModDiscReady(root_, ModDisc1(), settings_.mod)))
+    return fail(mod_disc_busy_ ? "The car mod " + settings_.mod + " is being prepared; Play once it is ready."
+                               : "The car mod " + settings_.mod + " is not prepared for this Disc 1: open Mods."),
+           void(page_ = kMods);
   try {
     if (!artifacts_checked_) {
       std::ifstream stream(root_ / "build-result.json", std::ios::binary);
@@ -1323,7 +1356,8 @@ void App::OpenDialog(DialogTarget target, bool folder) {
   auto* request = new DialogRequest{this, target};
   if (folder) {
     SDL_ShowOpenFolderDialog(&App::DialogDone, request, window_, nullptr, false);
-  } else if (target == kDiscImage) {
+  } else if (target == kDiscImage || target == kModFm3Disc1 || target == kModFm3Disc2 || target == kModFm2Disc ||
+             target == kModFm2Bonus) {
     static const SDL_DialogFileFilter filters[] = {{"Disc images (ISO)", "iso"}, {"All files", "*"}};
     SDL_ShowOpenFileDialog(&App::DialogDone, request, window_, filters, 2, nullptr, true);
   } else {
@@ -1364,6 +1398,10 @@ void App::ApplyDialogs() {
       case kTextureDump: options.texture_dump = paths.front(); break;
       case kUserData: settings_.user_data = paths.front(); break;
       case kUpdateInstall: Update(PathFromUtf8(paths.front()), {}); break;
+      case kModFm3Disc1: settings_.mod_fm3_disc1 = paths.front(); break;
+      case kModFm3Disc2: settings_.mod_fm3_disc2 = paths.front(); break;
+      case kModFm2Disc: settings_.mod_fm2_disc = paths.front(); break;
+      case kModFm2Bonus: settings_.mod_fm2_bonus = paths.front(); break;
     }
     Refresh(false);
   }
@@ -1484,6 +1522,7 @@ void App::Frame() {
     case kControls: ControlsRows(); break;
     case kGameData: GameDataRows(); break;
     case kShaders: ShadersRows(); break;
+    case kMods: ModsRows(); break;
     case kAdvanced: AdvancedRows(); break;
     case kBuild: BuildRows(); break;
     default: AboutRows(); break;
@@ -1636,8 +1675,8 @@ void App::TopBar() {
   ImGui::PopFont();
   // The page's badge, as a game names the menu it is in.
   if (page_ != kHome) {
-    static const char32_t kIcons[kPageCount] = {kIconHome, kIconDisplay,  kIconLook, kIconPad, kIconDisc,
-                                                kIconShaders, kIconSettings, kIconInfo, kIconBuild};
+    static const char32_t kIcons[kPageCount] = {kIconHome,    kIconDisplay, kIconLook,     kIconPad,  kIconDisc,
+                                                kIconShaders, kIconCar,     kIconSettings, kIconInfo, kIconBuild};
     ImGui::PushFont(din_font_, 22);
     std::string name = kPageNames[page_];
     for (auto& c : name) c = static_cast<char>(std::toupper(static_cast<unsigned char>(c)));
@@ -1963,7 +2002,8 @@ void App::HomeMenu() {
   static const Entry kAllEntries[] = {{kIconPlay, "Play", -1},          {kIconDisplay, "Display", kDisplay},
                                       {kIconLook, "Look", kLook},       {kIconPad, "Controls", kControls},
                                       {kIconDisc, "Game data", kGameData}, {kIconShaders, "Shaders", kShaders},
-                                      {kIconSettings, "Advanced", kAdvanced}, {kIconInfo, "About", kAbout}};
+                                      {kIconCar, "Mods", kMods},          {kIconSettings, "Advanced", kAdvanced},
+                                      {kIconInfo, "About", kAbout}};
   // Builder mode: Build the game instead of Play, and no Shaders page before there is a game.
   static const Entry kBuilderEntries[] = {{kIconBuild, "Build the game", kBuild}, {kIconDisplay, "Display", kDisplay},
                                           {kIconLook, "Look", kLook},             {kIconPad, "Controls", kControls},
@@ -2095,6 +2135,12 @@ void App::HomeMenu() {
       help_title_ = "Build the game";
       help_ = "Motorsport DX is built on this computer from your own discs: choose them, agree to the downloads of "
               "the build tools and sources, and start the build. Then the game's own launcher takes over.";
+      break;
+    case kMods:
+      help_title_ = "Mods";
+      help_ = settings_.mod.empty()
+                  ? "Cars of Forza Motorsport 3 and 2 that FM4 lacks, converted from your own discs. Experimental."
+                  : "Play races with the car mod " + settings_.mod + ". Choose None on this page to play Disc 1 as it is.";
       break;
     case kAdvanced:
       help_title_ = "Advanced";
@@ -3684,6 +3730,150 @@ void App::ShadersRows() {
     std::lock_guard<std::mutex> lock(shader_mutex_);
     ImGui::PushTextWrapPos(0);
     if (!shader_message_.empty()) ImGui::TextWrapped("%s", shader_message_.c_str());
+    ImGui::PopTextWrapPos();
+  });
+}
+
+void App::RefreshMods() {
+  mods_ = ListMods(root_, ModDisc1());
+  mods_listed_ = true;
+}
+
+void App::StartModDisc(const std::string& id) {
+  if (mod_disc_busy_.exchange(true)) return;
+  if (mod_disc_task_.joinable()) mod_disc_task_.join();
+  mod_disc_cancel_ = false;
+  const std::string disc1 = ModDisc1();
+  mod_disc_task_ = std::thread([this, id, disc1] {
+    const std::string error = PrepareModDisc(root_, disc1, id, mod_disc_done_, mod_disc_total_, mod_disc_cancel_);
+    {
+      std::lock_guard<std::mutex> lock(mod_mutex_);
+      mod_message_ = error.empty() ? "The car mod " + id + " is ready: Play races with it." : error;
+    }
+    mod_disc_busy_ = false;
+  });
+}
+
+// Car mods (docs/running.md#car-mods): pipeline.py's mods action with the build's own Python
+// converts the cars a game has and FM4 lacks into BuildRoot\mods\<game>-cars; the mod in play is
+// read from BuildRoot\mod-disc, Disc 1 with the mod's files over it.
+void App::ModsRows() {
+  if (!mods_listed_) {
+    mod_tools_ = FindModTools(root_, data_);
+    RefreshMods();
+  }
+  const ModRunView run = shot_ ? ModRunView{} : mod_runner_.View();
+  if (mod_run_seen_ && !run.busy) {
+    // A conversion just ended: the mod list changed, and a mod in play needs its Disc again.
+    RefreshMods();
+    if (!settings_.mod.empty() && !ModDiscReady(root_, ModDisc1(), settings_.mod)) StartModDisc(settings_.mod);
+  }
+  mod_run_seen_ = run.busy;
+  const bool disc_busy = mod_disc_busy_;
+  const bool tools = mod_tools_.error.empty();
+  const auto name_of = [&](const std::string& id) {
+    for (const auto& mod : mods_)
+      if (mod.id == id) return mod.name;
+    return id;
+  };
+  RowsPage({"IN PLAY", "FORZA 3", "FORZA 2"}, [&] {
+    if (tab_ == 0) {
+      std::vector<std::string> choices = {""};
+      for (const auto& mod : mods_)
+        if (mod.error.empty()) choices.push_back(mod.id);
+      const std::string shown = settings_.mod.empty() ? "None" : name_of(settings_.mod);
+      if (const int d = OptionRow("mod", "Car mod", shown,
+                                  "The mod Play races with, or None for Disc 1 as it is. Choosing a mod prepares its "
+                                  "Disc once (about a minute when Disc 1 is on another drive than the game).",
+                                  !disc_busy && !run.busy, settings_.mod.empty() ? &kMuted : &kSuccess);
+          d != 0 && !shot_) {
+        auto at = std::find(choices.begin(), choices.end(), settings_.mod);
+        const int index = at == choices.end() ? 0 : static_cast<int>(at - choices.begin());
+        const int step = d == 4 ? -1 : 1;
+        settings_.mod = choices[(index + step + choices.size()) % choices.size()];
+        SaveSettings();
+        if (!settings_.mod.empty() && !ModDiscReady(root_, ModDisc1(), settings_.mod)) StartModDisc(settings_.mod);
+      }
+      if (OptionRow("prepare", "Prepare the mod again", "Press A",
+                    "Builds the mod's Disc again from Disc 1 and the mod.", !settings_.mod.empty() && !disc_busy) == 2 &&
+          !shot_)
+        StartModDisc(settings_.mod);
+      for (const auto& mod : mods_) {
+        const std::string value = mod.error.empty()
+                                      ? std::to_string(mod.packaged) + " cars"
+                                      : "Convert again";
+        const std::string help = mod.name + ", converted " + mod.created + ": " + std::to_string(mod.packaged) +
+                                 " cars, " + std::to_string(mod.failed) + " failed, " + std::to_string(mod.skipped) +
+                                 " skipped. " + (mod.error.empty() ? "" : mod.error);
+        OptionRow(("info-" + mod.id).c_str(), mod.name.c_str(), value, help.c_str(), true,
+                  mod.error.empty() ? nullptr : &kWarning);
+      }
+      return;
+    }
+    const bool fm3 = tab_ == 1;
+    std::string& disc = fm3 ? settings_.mod_fm3_disc1 : settings_.mod_fm2_disc;
+    std::string& disc2 = fm3 ? settings_.mod_fm3_disc2 : settings_.mod_fm2_bonus;
+    const DialogTarget first = fm3 ? kModFm3Disc1 : kModFm2Disc, second = fm3 ? kModFm3Disc2 : kModFm2Bonus;
+    const char* first_label = fm3 ? "FM3 Disc 1" : "FM2 disc";
+    const char* second_label = fm3 ? "FM3 Disc 2" : "FM2 Bonus Disc";
+    if (PathOptionRow("disc", first_label, disc, first,
+                      "The extracted disc folder (A), or its disc image with the next row. The converter checks the "
+                      "game and the disc number from default.xex.",
+                      true, nullptr))
+      SaveSettings();
+    if (OptionRow("disc-image", (std::string(first_label) + " image").c_str(), "Press A", "Choose the disc's .iso instead.",
+                  true) == 2 &&
+        !shot_)
+      OpenDialog(first, false);
+    if (PathOptionRow("disc2", second_label, disc2, second,
+                      fm3 ? "Optional: 26 of the 81 cars are only on Disc 2."
+                          : "Optional: the four downloadable cars of FM2 are on the Bonus Disc.",
+                      true, nullptr))
+      SaveSettings();
+    if (OptionRow("disc2-image", (std::string(second_label) + " image").c_str(), "Press A", "Choose the disc's .iso instead.",
+                  true) == 2 &&
+        !shot_)
+      OpenDialog(second, false);
+    const std::string game = fm3 ? "fm3" : "fm2";
+    if (OptionRow("convert", fm3 ? "Convert the FM3 cars" : "Convert the FM2 cars", "Press A",
+                  "Fetches the converter and its tools once (about 50 MB), then converts every car of the game that "
+                  "FM4 and your downloadable content lack. FM3 takes about 9 minutes, FM2 about 4 after its first "
+                  "run. Your discs are only read.",
+                  tools && !run.busy && !disc_busy && !disc.empty() && disc1_.error.empty()) == 2 &&
+        !shot_) {
+      SaveSettings();
+      mod_runner_.Start(mod_tools_, root_, game, disc, disc2);
+    }
+    if (OptionRow("stop", "Stop", "Press A", "Ends the conversion; the next one reuses what was fetched.", run.busy) ==
+            2 &&
+        !shot_)
+      mod_runner_.Stop();
+  }, [&] {
+    ImGui::Dummy(ImVec2(0, 14 * scale_));
+    ImGui::PushTextWrapPos(0);
+    if (!tools) ImGui::TextColored(kWarning, "%s", mod_tools_.error.c_str());
+    if (run.busy) {
+      if (run.total > 0)
+        ImGui::ProgressBar(static_cast<float>(run.index) / static_cast<float>(run.total), ImVec2(-1, 0),
+                           (std::to_string(run.index) + " of " + std::to_string(run.total) + " cars").c_str());
+      Muted(run.stage.empty() ? "Fetching the converter and its tools..." : run.stage);
+      if (!run.last_car.empty()) Muted("Last: " + run.last_car + (run.failed ? ", " + std::to_string(run.failed) + " failed" : ""));
+    } else if (!run.message.empty()) {
+      ImGui::TextWrapped("%s", run.message.c_str());
+    }
+    if (disc_busy) {
+      const std::uint64_t total = mod_disc_total_, done = mod_disc_done_;
+      ImGui::ProgressBar(total ? static_cast<float>(done) / static_cast<float>(total) : 0.0f, ImVec2(-1, 0),
+                         ("Preparing " + settings_.mod + ": " + std::to_string(done) + " of " + std::to_string(total) +
+                          " files").c_str());
+    }
+    {
+      std::lock_guard<std::mutex> lock(mod_mutex_);
+      if (!disc_busy && !mod_message_.empty()) ImGui::TextWrapped("%s", mod_message_.c_str());
+    }
+    Muted("Experimental: some cockpit views, the engine sound, the paint colours and the PI class can differ from "
+          "the original game. The converter is fm4-content-converter (GPL-3.0), fetched on this computer.");
+    if (!run.log.empty()) Muted("Log: " + Utf8(run.log));
     ImGui::PopTextWrapPos();
   });
 }

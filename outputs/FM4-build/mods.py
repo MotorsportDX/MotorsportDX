@@ -14,7 +14,9 @@ layout; the converter's docs/mod-format.md). run plays it from <BuildRoot>/mod-d
 files hard-linked (copied when Disc 1 is on another volume), and each file the mod writes copied
 from the mod, so Disc 1 itself is never written.
 """
+import contextlib
 import hashlib
+import io
 import json
 import os
 from pathlib import Path
@@ -368,3 +370,53 @@ def mod_disc(root,disc1,ids):
         print(f'Mod Disc: {copied} files of Disc 1 copied (Disc 1 is on another volume than the BuildRoot).')
     print(f"Mod Disc: {', '.join(ids)} over Disc 1 ({linked} files linked).")
     return target
+
+
+def launcher_test_case(work):
+    """The case of the launcher's port (mods.cpp) in pipeline.launcher_tests: a synthetic Disc 1 and
+    a mod in two BuildRoots. This side prepares the mod Disc of python; the launcher checks that it
+    accepts it, prepares cpp's and lists the mod. launcher_test_check then checks that this side
+    accepts cpp's without building it again."""
+    work=Path(work)/'mods'
+    shutil.rmtree(work,ignore_errors=True)
+    disc1=work/'Disc 1'
+    for relative,data in {'default.xex':b'xex','Media/db/gamedb.slt':b'database','Media/zipmanifest.xml':b'manifest',
+                          'Media/Cars/A.zip':b'native car','Media/UI/Textures.zip':b'textures'}.items():
+        (disc1/relative).parent.mkdir(parents=True,exist_ok=True)
+        (disc1/relative).write_bytes(data)
+    files={'Media/DB/gamedb.slt':b'merged database','Media/Cars/X.zip':b'converted car'}
+    for root in (work/'python',work/'cpp'):
+        folder=root/MODS/'fm3-cars'
+        for relative,data in files.items():
+            (folder/'files'/relative).parent.mkdir(parents=True,exist_ok=True)
+            (folder/'files'/relative).write_bytes(data)
+        pack=root/CONTENT_ROOT/'4d53091000000001/Media/DLCZips/0001_pri_65.zip'
+        pack.parent.mkdir(parents=True,exist_ok=True)
+        pack.write_bytes(b'downloadable content')
+        mod={'format':'fm4-mod','format_version':1,'id':'fm3-cars','name':'FM3 cars','source_game':'FM3',
+             'created':'2026-11-05T00:00:00+00:00','files_root':'files','packaged':1,'failed':0,
+             'cars':[{'media':'X','status':'packaged'},{'media':'Y','status':'skipped'}],
+             'files':{r:{'sha256':hashlib.sha256(d).hexdigest(),'size':len(d)} for r,d in files.items()},
+             'writes':sorted(files),
+             'built_against':{'fm4_gamedb_sha256':sha256(disc1/'Media/db/gamedb.slt'),
+                              'fm4_zipmanifest_sha256':sha256(disc1/'Media/zipmanifest.xml'),
+                              'content_packs':content_packs(root)}}
+        (folder/'mod.json').write_text(json.dumps(mod,indent=1),encoding='utf-8')
+    with contextlib.redirect_stdout(io.StringIO()):
+        target=mod_disc(work/'python',disc1,['fm3-cars'])
+    expected={path.relative_to(target).as_posix():sha256(path) for path in sorted(target.rglob('*'))
+              if path.is_file() and path.name!=MOD_DISC_MARKER}
+    return {'python':str(work/'python'),'cpp':str(work/'cpp'),'disc1':str(disc1),'id':'fm3-cars','files':expected}
+
+
+def launcher_test_check(case):
+    """After the launcher's run: this side reuses the mod Disc that the launcher prepared."""
+    root=Path(case['cpp'])
+    marker=root/MOD_DISC/MOD_DISC_MARKER
+    if not marker.is_file():
+        raise RuntimeError('Launcher tests: the launcher prepared no mod Disc.')
+    stamp=marker.stat().st_mtime_ns
+    with contextlib.redirect_stdout(io.StringIO()):
+        mod_disc(root,Path(case['disc1']),[case['id']])
+    if marker.stat().st_mtime_ns!=stamp:
+        raise RuntimeError("Launcher tests: pipeline.py built the launcher's mod Disc again.")

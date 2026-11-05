@@ -637,6 +637,14 @@
       "provenance": "Original GUI launcher source (port of the pipeline.py GDFX disc image reader; the format's descriptor offsets as in the runtime's Xenia-derived DiscImageDevice); no game content"
     },
     {
+      "path": "work/fm4-launcher/src/mods.cpp",
+      "provenance": "Original GUI launcher source: the Mods page's car mods (the port of mods.py's mod Disc and its checks, and the run of pipeline.py's mods action); no game content"
+    },
+    {
+      "path": "work/fm4-launcher/src/mods.h",
+      "provenance": "Original GUI launcher source: the interface of the Mods page's car mods; no game content"
+    },
+    {
       "path": "work/fm4-launcher/src/iso.h",
       "provenance": "Original GUI launcher source (port of the pipeline.py GDFX disc image reader; the format's descriptor offsets as in the runtime's Xenia-derived DiscImageDevice); no game content"
     },

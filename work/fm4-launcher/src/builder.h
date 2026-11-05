@@ -28,6 +28,10 @@ struct BuilderLayout {
   std::filesystem::path Backups() const { return install / "backups"; }
 };
 
+// The environment of the processes the launcher starts for the pipeline: Windows' folders on
+// PATH, the user's folders, the proxies and the local mirrors, and nothing else of its own.
+std::wstring ChildEnvironment();
+
 // Whether a folder is the install root of a builder package: launcher.json, and the source
 // snapshot with its stamp and pipeline.py.
 bool IsInstallRoot(const std::filesystem::path& directory);
