@@ -436,14 +436,24 @@ The ROG Xbox Ally X A/B is the owner's, with `--fm4_render_thread_idle_wait=fals
 
 **Left.** Events still rise by about 4 a race. They are most likely the runtime's `XEvent` objects for guest events that the title initialises in its own memory (`XObject::GetNativeObject`): a new object is made for each newly initialised guest event and is never freed, since the runtime cannot tell when the title stops using that memory.
 
-**A crash on the first soak, and two more references.** The first 3-hour soak with the fix, `hl-soak1`, ended after 0.36 hours, in the fourth race of the first pass: `[gpu] D3D12 device removed: HRESULT 0x887A0006 - DEVICE_HUNG`, then "Graphics device lost" and exit `0xC0000409`. No earlier run log on either BuildRoot has a removed device. Since an exited thread's object is now deleted, every raw `XThread*` that outlives its thread is a use after free, and two were found:
+**A crash on the first soak, and two more references.** The first 3-hour soak with the fix, `hl-soak1`, ended after 0.36 hours, in the fifth race of the first pass (Ladera Test Track): `[gpu] D3D12 device removed: HRESULT 0x887A0006 - DEVICE_HUNG`, then "Graphics device lost" and exit `0xC0000409`. No earlier run log on either BuildRoot has a removed device. Since an exited thread's object is now deleted, every raw `XThread*` that outlives its thread is a use after free, and two were found:
 
 - `XTimer` (`work/runtime/src/system/xtimer.cpp`) kept the thread that set the timer as a raw pointer for its callback, which queues an APC on that thread when the timer fires. The callback now holds its own reference to the thread, and the member is gone.
 - `XMutant` (`work/runtime/src/system/xmutant.cpp`) kept its owning thread as a raw pointer. It is an `object_ref<XThread>` now.
 
-Whether either caused the hang is not proven: it did not come back once both were fixed. One window is left as it was: `KernelState::GetThreadByID` reads raw pointers from `threads_by_id_` and could retain an object that another thread is deleting at that moment.
+Neither was the cause, see below. One window is left as it was: `KernelState::GetThreadByID` reads raw pointers from `threads_by_id_` and could retain an object that another thread is deleting at that moment.
 
-**The 3-hour soak.** `hl-soak2`, the same build with the two references, the same settings: 2.82 hours, 3 passes of the same 11 pairs as `qr-soak3`, 33 races, no failure, no removed device. `soak_report.py` on the third pass:
+**The cause of the hang: the thread's guest memory.** The soak `hl-msvc` (the build with both references, MSVC, `I:\FM4-build-usa`) hung the GPU at the same place, 0.37 hours in, in the Ladera race. A loop of 7 Ladera races alone did not hang, so the order of the races matters, not the track. Runs of the first 5 pairs (7 races each, the fifth Ladera), MSVC:
+
+| Build | Runs that hung |
+|---|---|
+| `6afa374`, without the fix | 0 of 3 |
+| the fix of `7aded3a` and `52c0283` (the full soaks `hl-soak1`, `hl-soak2`, `hl-msvc`) | 2 of 3 |
+| the fix, the thread's guest memory kept | 0 of 3 |
+
+Deleting an `XThread` freed its guest memory: the KTHREAD (the object's guest object), the PCR, the TLS and the scratch block, which exited threads had always kept before. With the memory reused, the title, which most likely keeps pointers to the exited thread, wrote into whatever took its place. `~XThread` now leaves that memory allocated (`XObject::KeepGuestObject`), a few KB a thread, as before; the host objects and handles are still freed. The thread handles stay level in all three runs (158 to 162).
+
+**The 3-hour soak.** `hl-soak2`, the build with the two references that still freed the guest memory, the same settings: 2.82 hours, 3 passes of the same 11 pairs as `qr-soak3`, 33 races, no failure, no removed device. `soak_report.py` on the third pass:
 
 | Measure | `hl-soak2` (6 November 2026) | `qr-soak3` (30 October 2026) |
 |---|---|---|

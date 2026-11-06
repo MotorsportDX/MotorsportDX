@@ -102,9 +102,11 @@ XThread::~XThread() {
 
   thread_.reset();
 
-  kernel_state_->memory()->SystemHeapFree(scratch_address_);
-  kernel_state_->memory()->SystemHeapFree(tls_static_address_);
-  kernel_state_->memory()->SystemHeapFree(pcr_address_);
+  // The guest memory of the thread (its KTHREAD, PCR, TLS and scratch) is left
+  // allocated, as it was while exited threads were never deleted: with it freed
+  // and reused, a quick race loop hung the GPU in its fifth race (6 November
+  // 2026), most likely through the title's pointers to the exited thread.
+  KeepGuestObject();
   FreeStack();
 
   if (thread_) {

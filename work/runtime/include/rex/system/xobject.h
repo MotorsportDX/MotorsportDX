@@ -213,6 +213,8 @@ class XObject {
 
   // Creates the kernel object for guest code to use. Typically not needed.
   uint8_t* CreateNative(uint32_t size);
+  // Leaves the guest object allocated when this object is deleted.
+  void KeepGuestObject() { allocated_guest_object_ = false; }
   void SetNativePointer(uint32_t native_ptr, bool uninitialized = false);
 
   template <typename T>
