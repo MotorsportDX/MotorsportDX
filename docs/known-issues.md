@@ -110,8 +110,12 @@ above.
   rose by about 3.4 GB and its video memory by about 1.7 GB on the first round, and grew
   only slowly on the third (about 10 MB a race in the latest test). On NVIDIA graphics most of that
   slow growth is the graphics driver's own memory, which the game cannot release; it slows
-  over a session and is no risk within a few hours. A small number of system handles is not given back (about 4 a race since
+  to about 0.1 GB an hour after the first hour and is no risk within a few hours. A small number of system handles is not given back (about 4 a race since
   6 November 2026, about 15 before); that is harmless at this rate. The frame rate did not drop in either test.
+- **The game can stop with "Graphics device lost"** after you quit a race to the menu, now and
+  then in the first hour of play (about one session in four in the long tests on an NVIDIA
+  laptop since 6 November 2026). Start the game again; your progress up to the last save is
+  kept. The cause is being looked into; a [bug report](bug-reports.md) with `runtime.log` helps.
 - **Short pauses on the screens after a race:** the gift car's paint screen and the level
   screens can pause for 0.15 to 0.4 s. The game itself does this work there (saving the
   profile, drawing a new car for the first time). Races themselves had no pause over 50 ms.
