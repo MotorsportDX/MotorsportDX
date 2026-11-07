@@ -5586,24 +5586,47 @@ void D3D12CommandProcessor::LogDeviceRemovalDiagnostics(ID3D12Device* device, HR
     return;
   }
 
+  // D3D12_AUTO_BREADCRUMB_OP values 0 to 20.
+  static const char* const kOpNames[] = {
+      "SetMarker",          "BeginEvent",
+      "EndEvent",           "DrawInstanced",
+      "DrawIndexedInstanced", "ExecuteIndirect",
+      "Dispatch",           "CopyBufferRegion",
+      "CopyTextureRegion",  "CopyResource",
+      "CopyTiles",          "ResolveSubresource",
+      "ClearRenderTargetView", "ClearUnorderedAccessView",
+      "ClearDepthStencilView", "ResourceBarrier",
+      "ExecuteBundle",      "Present",
+      "ResolveQueryData",   "BeginSubmission",
+      "EndSubmission"};
   D3D12_DRED_AUTO_BREADCRUMBS_OUTPUT breadcrumbs = {};
   if (SUCCEEDED(dred->GetAutoBreadcrumbsOutput(&breadcrumbs))) {
+    uint32_t nodes = 0, unfinished = 0;
     for (const D3D12_AUTO_BREADCRUMB_NODE* node = breadcrumbs.pHeadAutoBreadcrumbNode; node;
          node = node->pNext) {
+      ++nodes;
+      // Only the command lists that the GPU started and did not finish.
       if (!node->pLastBreadcrumbValue || !node->pCommandHistory ||
-          *node->pLastBreadcrumbValue == 0) {
+          *node->pLastBreadcrumbValue == 0 ||
+          *node->pLastBreadcrumbValue >= node->BreadcrumbCount) {
         continue;
       }
-      REXGPU_ERROR("DRED breadcrumb: completed {} of {} ops", *node->pLastBreadcrumbValue,
-                   node->BreadcrumbCount);
-      uint32_t last = std::min(*node->pLastBreadcrumbValue, node->BreadcrumbCount);
-      uint32_t start = last > 3 ? last - 3 : 0;
-      uint32_t end = std::min(last + 1, node->BreadcrumbCount);
+      ++unfinished;
+      REXGPU_ERROR("DRED breadcrumb: list {} on queue {}: completed {} of {} ops",
+                   node->pCommandListDebugNameA ? node->pCommandListDebugNameA : "(unnamed)",
+                   node->pCommandQueueDebugNameA ? node->pCommandQueueDebugNameA : "(unnamed)",
+                   *node->pLastBreadcrumbValue, node->BreadcrumbCount);
+      uint32_t last = *node->pLastBreadcrumbValue;
+      uint32_t start = last > 8 ? last - 8 : 0;
+      uint32_t end = std::min(last + 4, node->BreadcrumbCount);
       for (uint32_t i = start; i < end; i++) {
-        REXGPU_ERROR("  [{}] op type {}{}", i, static_cast<int>(node->pCommandHistory[i]),
-                     i == last ? " <-- FAULT" : "");
+        uint32_t op = uint32_t(node->pCommandHistory[i]);
+        REXGPU_ERROR("  [{}] {} ({}){}", i,
+                     op < std::size(kOpNames) ? kOpNames[op] : "op", op,
+                     i == last ? " <-- not completed" : "");
       }
     }
+    REXGPU_ERROR("DRED: {} command lists recorded, {} not completed", nodes, unfinished);
   }
 
   D3D12_DRED_PAGE_FAULT_OUTPUT page_fault = {};
