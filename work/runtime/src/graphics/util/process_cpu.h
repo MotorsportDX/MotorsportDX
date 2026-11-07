@@ -21,4 +21,24 @@ bool ProcessCpuEnabled();
 // writes nothing.
 void WriteProcessCpu(std::ostream& output);
 
+// perf_trace_heap_seconds: how often the heaps are walked (0 = never).
+int HeapSeconds();
+
+// Writes one JSON line: per heap of the process, its busy blocks and bytes, its
+// free bytes, and the 40 block sizes with the most busy bytes as [size, blocks,
+// bytes]. It walks each heap under its lock. On other platforms it writes nothing.
+void WriteHeaps(std::ostream& output, double seconds);
+
+// perf_trace_d3d12_objects: hooks the creating methods of the device (an
+// ID3D12Device) so that WriteHeaps also writes the Direct3D 12 objects created
+// and alive by their two calling frames. Call it before the device creates
+// anything to be counted. With perf_trace_driver_alloc_sizes it also patches
+// the driver's heap imports to count its blocks of those sizes by caller. On
+// other platforms, or with the cvars off, it does nothing.
+void TrackD3D12Objects(void* device);
+
+// With perf_trace_driver_alloc_sizes: the pipeline that the calling thread is
+// binding (nullptr after the bind), to count the driver's blocks by pipeline.
+void SetBindingPipeline(void* pipeline);
+
 }  // namespace rex::graphics::perf_trace

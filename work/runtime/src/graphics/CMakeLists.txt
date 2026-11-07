@@ -201,5 +201,17 @@ if(REXGLUE_USE_D3D12)
     )
 endif()
 
+# A link map, to name the plugin's addresses that the perf trace's heap and
+# Direct3D 12 object counts write as rexgpu-xenos.dll+offset (docs/e2e/traces.md).
+if(WIN32)
+    if(MINGW)
+        target_link_options(rexgpu-xenos PRIVATE
+            "LINKER:-Xlink=/map:${CMAKE_CURRENT_BINARY_DIR}/rexgpu-xenos.map")
+    else()
+        target_link_options(rexgpu-xenos PRIVATE
+            "LINKER:/MAP:${CMAKE_CURRENT_BINARY_DIR}/rexgpu-xenos.map")
+    endif()
+endif()
+
 # AMD FSR 3.1 from the FidelityFX SDK source, off by default (docs/analysis/fsr-plan.md).
 include(${REXGLUE_ROOT}/cmake/rex_fsr.cmake)

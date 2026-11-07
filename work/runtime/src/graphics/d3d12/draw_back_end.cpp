@@ -1606,7 +1606,9 @@ void D3D12CommandProcessor::ReplayDrawBackEndDraw(
   }
   ID3D12PipelineState* pipeline = pipeline_cache_->GetD3D12PipelineByHandle(pipeline_handle);
   if (pipeline && pipeline != d3d.pipeline) {
+    perf_trace::SetBindingPipeline(pipeline);
     command_list->SetPipelineState(pipeline);
+    perf_trace::SetBindingPipeline(nullptr);
     d3d.pipeline = pipeline;
   }
 

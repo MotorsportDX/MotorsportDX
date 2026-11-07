@@ -324,8 +324,10 @@ void TextureCache::CompletedSubmissionUpdated(uint64_t completed_submission_inde
       assert_true(found_texture_it->second.get() == texture);
       textures_.erase(found_texture_it);
       // `texture` is invalid now.
+      perf_trace::texture_evictions.fetch_add(1, std::memory_order_relaxed);
     }
   }
+  perf_trace::SetTextureMemory(textures_total_host_memory_usage_, textures_.size());
   if (destroyed_any) {
     COUNT_profile_set("gpu/texture_cache/textures", textures_.size());
   }

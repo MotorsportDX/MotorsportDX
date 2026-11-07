@@ -457,6 +457,15 @@ inline void SetRenderTargetMemory(uint64_t bytes, uint64_t peak, uint32_t target
   rt_targets.store(targets, std::memory_order_relaxed);
 }
 inline void CountRenderTargetResize() { rt_resizes.fetch_add(1, std::memory_order_relaxed); }
+// The texture cache: its textures and their host memory now, and the textures
+// it destroyed in the window over its memory limits, and the heaps backing the
+// scaled resolve data at a draw resolution scale above 1x (never released).
+inline std::atomic<uint64_t> texture_memory_bytes{0}, texture_count{0}, texture_evictions{0},
+    scaled_resolve_bytes{0};
+inline void SetTextureMemory(uint64_t bytes, uint64_t textures) {
+  texture_memory_bytes.store(bytes, std::memory_order_relaxed);
+  texture_count.store(textures, std::memory_order_relaxed);
+}
 // native_one_pass_msaa (d3d-hle.md 16.17): draws, resolves and clears of the
 // private scene surfaces (the depth, and at 4x the colour), and the
 // violations (their guest tiles reached through the EDRAM tile map, or a 4x
@@ -1155,6 +1164,12 @@ inline void OnSwap() {
                 << double(rt_memory_peak_bytes.load(std::memory_order_relaxed)) / 1048576.0
                 << ",\"resizes\":" << rt_resizes.exchange(0, std::memory_order_relaxed)
                 << ",\"evictions\":" << rt_evictions.exchange(0, std::memory_order_relaxed)
+                << '}' << ",\"texture_memory\":{\"textures\":"
+                << texture_count.load(std::memory_order_relaxed) << ",\"mb\":"
+                << double(texture_memory_bytes.load(std::memory_order_relaxed)) / 1048576.0
+                << ",\"evictions\":" << texture_evictions.exchange(0, std::memory_order_relaxed)
+                << ",\"scaled_resolve_mb\":"
+                << double(scaled_resolve_bytes.load(std::memory_order_relaxed)) / 1048576.0
                 << '}' << ",\"one_pass\":{\"draws\":"
                 << one_pass_draws.exchange(0, std::memory_order_relaxed) << ",\"resolves\":"
                 << one_pass_resolves.exchange(0, std::memory_order_relaxed) << ",\"clears\":"
@@ -1553,6 +1568,14 @@ inline void OnSwap() {
   state->output.flush();
   if (ResolveInventory* inventory = GetResolveInventory(); inventory && ++inventory->windows % 10 == 0) {
     WriteResolveInventory(ms(now - state->origin) / 1000.0);
+  }
+  if (const int heap_seconds = HeapSeconds(); heap_seconds > 0) {
+    static uint64_t heap_windows = 0;
+    if (++heap_windows % uint64_t(heap_seconds) == 0) {
+      std::ofstream heap_output(std::string(std::getenv("REX_PERF_TRACE_FILE")) + ".heap.jsonl",
+                                std::ios::app);
+      WriteHeaps(heap_output, ms(now - state->origin) / 1000.0);
+    }
   }
   fetch_writes_unchanged = 0;
   const Wait cause = state->cause;

@@ -2042,6 +2042,7 @@ std::string D3D12CommandProcessor::GetWindowTitleText() const {
 }
 
 bool D3D12CommandProcessor::SetupContext() {
+  perf_trace::TrackD3D12Objects(GetD3D12Provider().GetDevice());
   if (!CommandProcessor::SetupContext()) {
     REXGPU_ERROR("Failed to initialize base command processor context");
     return false;

@@ -1264,6 +1264,9 @@ bool D3D12TextureCache::EnsureScaledResolveMemoryCommitted(uint32_t start_unscal
     }
     scaled_resolve_heaps_[i] = scaled_resolve_heap;
     ++scaled_resolve_heap_count_;
+    perf_trace::scaled_resolve_bytes.store(
+        uint64_t(scaled_resolve_heap_count_) << kScaledResolveHeapSizeLog2,
+        std::memory_order_relaxed);
     COUNT_profile_set("gpu/texture_cache/scaled_resolve_buffer_used_mb",
                       scaled_resolve_heap_count_ << (kScaledResolveHeapSizeLog2 - 20));
     D3D12_TILED_RESOURCE_COORDINATE region_start_coordinates;
