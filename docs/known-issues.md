@@ -115,6 +115,14 @@ above.
 - **Short pauses on the screens after a race:** the gift car's paint screen and the level
   screens can pause for 0.15 to 0.4 s. The game itself does this work there (saving the
   profile, drawing a new car for the first time). Races themselves had no pause over 50 ms.
+- **Mods** (the cars of FM3 and FM2 and the tracks of FM3, converted from your own discs on the
+  launcher's Mods page, [mods](running-mods.md)) are experimental: the cockpit view of some cars,
+  the engine sound, the paint colours and the PI class can differ from the original game, and
+  each FM3 track is lit with an FM4 track's settings. Several mods play together since
+  7 November 2026: convert them one after the other, and converting one again also converts the
+  mods built on it. Two mods converted before that date were each built on the game's disc alone:
+  convert the second one again to play both. FM3's Test Track needs the Ultimate Collection's
+  discs.
 - **Saves:** each build starts with its own profile in the BuildRoot. Saves from other
   builds, other computers or an Xbox are not imported, and moving a profile between builds is
   not guaranteed to work.

@@ -45,6 +45,10 @@
       "provenance": "Project documentation; look presets and knobs, and texture replacement (part of running.md)"
     },
     {
+      "path": "docs/running-mods.md",
+      "provenance": "Project documentation; the FM3 and FM2 car mods and FM3 track mods, played together, and the Mods page (part of running.md)"
+    },
+    {
       "path": "docs/running-controls.md",
       "provenance": "Project documentation; pads, racing wheels and the keyboard, with test checklists (part of running.md)"
     },
@@ -418,7 +422,7 @@
     },
     {
       "path": "outputs/FM4-build/mods.py",
-      "provenance": "Original build tooling: the car mods action and the mod Disc of run; pins of the separate fm4-content-converter, ForzaEditor and the NumPy and Pillow wheels it fetches on the player's computer; no game data"
+      "provenance": "Original build tooling: the mods action (FM3 and FM2 cars, FM3 tracks), the install order of stacked mods and the mod Disc of run; pins of the separate fm4-content-converter, ForzaEditor and the NumPy and Pillow wheels it fetches on the player's computer; no game data"
     },
     {
       "path": "outputs/FM4-build/player_settings.py",
@@ -638,11 +642,11 @@
     },
     {
       "path": "work/fm4-launcher/src/mods.cpp",
-      "provenance": "Original GUI launcher source: the Mods page's car mods (the port of mods.py's mod Disc and its checks, and the run of pipeline.py's mods action); no game content"
+      "provenance": "Original GUI launcher source: the Mods page's mods (the port of mods.py's install order, mod Disc and checks, and the run of pipeline.py's mods action); no game content"
     },
     {
       "path": "work/fm4-launcher/src/mods.h",
-      "provenance": "Original GUI launcher source: the interface of the Mods page's car mods; no game content"
+      "provenance": "Original GUI launcher source: the interface of the Mods page's mods; no game content"
     },
     {
       "path": "work/fm4-launcher/src/iso.h",

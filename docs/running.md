@@ -35,8 +35,10 @@ and [status/history.md](status/history.md).
   - [Racing wheel](running-controls.md#racing-wheel)
   - [Keyboard](running-controls.md#keyboard)
 - [Shader cache](#shader-cache)
-- [Car mods](#car-mods)
-  - [Mods page](#mods-page)
+- [Mods](running-mods.md), a page of its own
+  - [Several mods together](running-mods.md#several-mods-together)
+  - [Tracks](running-mods.md#tracks)
+  - [Mods page](running-mods.md#mods-page)
 - [Data directories](#data-directories)
 
 ## Launching
@@ -928,90 +930,14 @@ race, for example at the INSERT DISC 2 prompt of a BuildRoot generated without `
 e2e harness does ([e2e](e2e/README.md)); without that language and its optical character
 recognition, `warmcache` cannot find the menus. Playing fills the same cache.
 
-## Car mods
+## Mods
 
-The `mods` action converts the cars of Forza Motorsport 3 or Forza Motorsport 2 that FM4 and the
-imported content packages lack into a car mod, from the player's own discs, and `run -Mod` plays
-it. The conversion is [fm4-content-converter](https://github.com/MotorsportDX/fm4-content-converter),
-a separate program under GPL-3.0-only, which `mods.py` fetches and runs; this project ships none
-of it ([licensing](sources-and-licensing.md#third-party-tools-the-car-mods)). The mods are
-experimental: the cockpit view of some cars, the engine sound, the paint colours and the PI
-class can differ from the original game, as the converter's
-[FM3](https://github.com/MotorsportDX/fm4-content-converter/blob/main/docs/fm3.md) and
-[FM2](https://github.com/MotorsportDX/fm4-content-converter/blob/main/docs/fm2.md) guides record.
-The GUI launcher's **Mods** page offers them in an install of the
-[builder package](#builder-mode), which has the source, the Python and the build tools that the
-conversion runs on ([Mods page](#mods-page)); elsewhere, `Build.ps1` converts them.
-
-```powershell
-# After the game has run once with its content packages, so that the mod keeps their cars and names:
-.\outputs\FM4-build\Build.ps1 -Action mods -BuildRoot 'D:\FM4-build' -MingwRoot 'D:\Tools\llvm-mingw-20250709-ucrt-x86_64' `
-    -Python 'C:\Python311\python.exe' -ModGame fm3 -ModDisc 'D:\Games\FM3\Disc 1.iso' -ModDisc2 'D:\Games\FM3\Disc 2.iso'
-.\outputs\FM4-build\Build.ps1 -Action run -BuildRoot 'D:\FM4-build' -MingwRoot '...' -Python '...' -Mod fm3-cars
-.\outputs\FM4-build\Build.ps1 -Action run -BuildRoot 'D:\FM4-build' -MingwRoot '...' -Python '...' -Mod none
-```
-
-| Option | Meaning |
-|---|---|
-| `-ModGame` | `fm3` or `fm2`. The mod is `fm3-cars` or `fm2-cars`. |
-| `-ModDisc` | FM3 Disc 1 or the FM2 disc: an extracted folder, its `Media` folder, or the disc image (`.iso`). The converter reads the title ID and disc number from `default.xex` and refuses another disc. |
-| `-ModDisc2` | Optional. FM3 Disc 2 (Content Install Disc) or the FM2 Bonus Disc. Without it, the cars whose files are only there are skipped: 26 of FM3's 81, and FM2's four downloadable cars. |
-| `-Mod` | `run`: the mod to play, or `none`. Saved in `local.json` for the next runs, like `-Content`. |
-
-What the `mods` action does, with every file below `BuildRoot`:
-
-1. Fetches GitHub's archive of the converter's pinned commit (`mods.CONVERTER_COMMIT`) into
-   `downloads` and unpacks it into `mods-tools\converter`, checked by its tree hash, as the
-   third-party archives are ([fetching without Git](setup.md#fetching-without-git); the
-   `ARCHIVE_MIRROR` folder is read first).
-2. Fetches the NumPy 2.3.5 and Pillow 12.0.0 wheels for the Python that runs `pipeline.py`
-   (CPython 3.11 to 3.14), checked by size and SHA-256, into `mods-tools\site-cp3XX`.
-3. Builds the converter's model helper `carbin-cpu.exe` into `mods-tools\carbin-cpu` from
-   GitHub's archive of ForzaEditor at a pinned commit, with the C# compiler of the .NET
-   Framework 4 that Windows ships (`csc.exe`); the converter fetches the pinned MonoGame
-   package from NuGet for its vector arithmetic.
-4. Builds the converter's LZX decoder `lzx_bridge.dll` into `mods-tools\lzx` with clang
-   (`-MingwRoot` or `-Toolchain`) from libmspack's `lzxd.c` in `runtime-source`, which setup
-   fetched.
-5. Runs the conversion against Disc 1 of `local.json` and the content packages imported in
-   `user-data`. Extracted disc files and FM2's models are kept in `mods-cache\<game>`, so a
-   rerun skips them; delete the folder to free its space. The mod is written to
-   `mods\<game>-cars`, and replaces an earlier one only when it is complete. `logs\mods.log`
-   holds the converter's log, and `-Progress` gets a step line for each car.
-
-The mod is the converter's package: `mod.json` (format `fm4-mod` version 1: the files with
-their SHA-256, the cars and their status, and the Disc 1 and content packages it was built
-against) and `files`, in Disc 1's layout. `run -Mod` checks that Disc 1's `gamedb.slt` and
-`zipmanifest.xml` and the imported content packages are still those of `mod.json`, and stops
-otherwise: the mod holds a merged copy of the database and the name tables, so a changed Disc 1
-or a new content package needs the mod built again. It then plays `mod-disc`: every file of
-Disc 1 hard-linked (copied when Disc 1 is on another volume than `BuildRoot`), and each file
-the mod writes copied from the mod, so Disc 1 is never written. `mod-disc` is built again when
-Disc 1 or the mod changes. Both mods replace the database, so one plays at a time.
-
-### Mods page
-
-The launcher's Mods page, on the Home menu after Shaders, has three tabs:
-
-- **In play:** **Car mod** chooses the mod that Play races with, or None for Disc 1 as it is
-  (the launcher's own setting, `mod` in `launcher-settings.json`; `Build.ps1 -Mod` sets
-  `local.json` instead). Only mods built for the current Disc 1 and imported content
-  packages are offered; the others list "Convert again". Choosing a mod prepares the mod Disc
-  in the background (`mods.cpp`, the port of `mods.mod_disc`: the same checks and marker, so a
-  mod Disc that `run` prepared serves the launcher and the other way round); **Prepare the mod
-  again** builds it anew. Play refuses a mod whose Disc is not prepared for this Disc 1 and opens
-  the page. The shader pass also reads the mod Disc.
-- **Forza 3** and **Forza 2:** the source discs (a folder with A, a disc image with the row
-  below it), the optional Disc 2 or Bonus Disc, **Convert** and **Stop**. Convert runs
-  `pipeline.py mods` of the install's source with its Python and `--toolchain`, in a job object
-  as the build steps run, its output in `logs\mods-run.log`; the panel shows the cars converted
-  so far. Stop, and closing the launcher, end the conversion; the next one reuses what was
-  fetched and extracted. When the mod in play was converted again, its Disc is prepared again.
-
-Outside a builder install the page lists the mods and plays them, and says that converting needs
-the builder's tools. For development, `FM4_MODS_SOURCE` (a checkout), `FM4_MODS_PYTHON` and
-`FM4_MODS_TOOLCHAIN` name them. The launcher tests compare the mod Disc of both sides
-(`mods.launcher_test_case`).
+<a id="car-mods"></a><a id="mods-page"></a>
+The cars of FM3 and FM2 and the tracks of FM3 that FM4 lacks, converted from the player's own
+discs (`-Action mods`, `run -Mod`), several of them played together, and the launcher's Mods page
+are in [mods](running-mods.md): [converting a mod](running-mods.md#converting-a-mod),
+[several mods together](running-mods.md#several-mods-together), [tracks](running-mods.md#tracks)
+and the [Mods page](running-mods.md#mods-page).
 
 ## Data directories
 
@@ -1033,8 +959,8 @@ the GUI launcher of an [export](#export-to-another-computer), which has the same
 - **Cache:** game and shader cache files are in `BuildRoot\cache`.
 - **Logs:** the launcher log is `BuildRoot\logs\play.log`, and the runtime log is
   `BuildRoot\logs\runtime.log`.
-- **Car mods:** `BuildRoot\mods`, their tools in `mods-tools`, the converter's cache in
-  `mods-cache`, and the Disc 1 a mod is played from in `mod-disc` ([car mods](#car-mods)).
+- **Mods:** `BuildRoot\mods`, their tools in `mods-tools`, the converter's cache in
+  `mods-cache`, and the Disc 1 the mods are played from in `mod-disc` ([mods](running-mods.md)).
 - **e2e output:** captures, logs and `summary.json` of e2e runs are in
   `BuildRoot\e2e`. The captures show the game, so keep them out of the repository.
   See [e2e/README.md](e2e/README.md).

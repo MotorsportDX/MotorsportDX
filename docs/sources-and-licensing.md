@@ -213,9 +213,10 @@ The [builder installer](analysis/builder-installer.md) builds the game on the pl
 
 The downloaded files have the sizes that the release pages give. The SHA-256 of Python, CMake and Ninja were computed from the downloaded files; their publishers' own checksum files were not fetched. Windows' `d3dcompiler_47.dll`, which compiles the resolve shaders since 31 October 2026, is part of Windows and is not fetched ([setup](setup.md#1-setup)). llvm-mingw replaced LLVM 20.1.8's `clang+llvm-20.1.8-x86_64-pc-windows-msvc.tar.xz` (939,541,912 bytes, SHA-256 `f229769f...e85b107f`) on 31 October 2026, and with it Microsoft's C and C++ libraries and the Windows SDK, which the build no longer reads ([setup](setup.md#toolchain); the project owner's decision of 31 October 2026, after the [licence reading](analysis/builder-installer.md#47-the-msvc-libraries-and-the-windows-sdk)). Only the temporary `-Abi msvc` build of the switch's A/B still uses them, from an installed Visual Studio and LLVM.
 
-## Third-party tools: the car mods
+## Third-party tools: the mods
 
-The `mods` action ([running](running.md#car-mods)) fetches and builds these on the player's computer, into `BuildRoot\mods-tools`. They run there only; the repository holds none of their files and the project ships none of them. A mod is converted from the player's own discs and stays in their `BuildRoot`.
+<a id="third-party-tools-the-car-mods"></a>
+The `mods` action ([mods](running-mods.md)) fetches and builds these on the player's computer, into `BuildRoot\mods-tools`. They run there only; the repository holds none of their files and the project ships none of them. A mod is converted from the player's own discs and stays in their `BuildRoot`.
 
 | Tool | Source | Pin | License |
 |---|---|---|---|

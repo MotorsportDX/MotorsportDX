@@ -120,7 +120,7 @@ The next validation priorities are the latest build on the ROG Xbox Ally X, a re
 | --- | --- |
 | [AGENTS.md](AGENTS.md) | Rules for AI agents working in this repository: language, documentation layout, and repository rules |
 | [docs/setup.md](docs/setup.md) | Prerequisites, setup, generate, build, BuildRoot layout, and troubleshooting |
-| [docs/running.md](docs/running.md) | The launchers, run options, display and render path, looks, pads, keyboards and wheels, the shader cache and data directories |
+| [docs/running.md](docs/running.md) | The launchers, run options, display and render path, looks, pads, keyboards and wheels, the mods (FM3 and FM2 cars, FM3 tracks, [a page of its own](docs/running-mods.md)), the shader cache and data directories |
 | [docs/known-issues.md](docs/known-issues.md) | For players: the tested hardware, what works, known problems and what is not tested yet |
 | [docs/bug-reports.md](docs/bug-reports.md) | For players: what to write in a bug report, which logs and traces to send, and how to collect them |
 | [docs/status/current.md](docs/status/current.md) | Current state, what is verified on the latest build, open gaps, and next validation |
