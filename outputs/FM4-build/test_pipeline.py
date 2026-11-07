@@ -1883,9 +1883,12 @@ class PipelineTests(unittest.TestCase):
         self.assertEqual(washed_out_bands(bytes(bright),width,height),[])
 
 class ModsTests(unittest.TestCase):
-    """The car mods (mods.py): the mod Disc and the checks before a run plays a mod."""
+    """The mods (mods.py): the mod Disc, the install order of stacked mods and the checks before a
+    run plays them."""
 
-    def make(self,root,mod_id,writes,disc1):
+    def make(self,root,mod_id,writes,disc1,base=(),created='2026-11-07T00:00:00+00:00'):
+        """A mod built on Disc 1 with the mods of base (ids) installed, in that order."""
+        import mods
         folder=root/'mods'/mod_id
         files={}
         for relative,data in writes.items():
@@ -1893,12 +1896,13 @@ class ModsTests(unittest.TestCase):
             path.parent.mkdir(parents=True,exist_ok=True)
             path.write_bytes(data)
             files[relative]={'sha256':hashlib.sha256(data).hexdigest(),'size':len(data)}
-        media=disc1/'Media'
-        mod={'format':'fm4-mod','format_version':1,'id':mod_id,'files_root':'files','files':files,
-             'writes':sorted(files),
-             'built_against':{'fm4_gamedb_sha256':pipeline.digest(media/'db/gamedb.slt'),
-                              'fm4_zipmanifest_sha256':pipeline.digest(media/'zipmanifest.xml'),
-                              'content_packs':[]}}
+        state=mods.disc_state(disc1)
+        for base_id in base:
+            state=mods.after(mods.load_mod(root/'mods'/base_id),state)
+        mod={'format':'fm4-mod','format_version':1,'id':mod_id,'created':created,'files_root':'files',
+             'files':files,'writes':sorted(files),
+             'base_packages':[{'id':base_id,'created':created} for base_id in base],
+             'built_against':{**state,'content_packs':[]}}
         (folder/'mod.json').write_text(json.dumps(mod),encoding='utf-8')
         return mod
 
@@ -1929,23 +1933,61 @@ class ModsTests(unittest.TestCase):
             self.assertEqual(mods.mod_disc(root,disc1,['fm3-cars']),target)
             self.assertEqual((target/mods.MOD_DISC_MARKER).stat().st_mtime_ns,stamp)
 
-    def test_refuses_changed_files_other_discs_and_two_mods_writing_one_file(self):
+    def test_refuses_changed_files_other_discs_and_two_mods_built_alone(self):
         import mods
         with tempfile.TemporaryDirectory() as tmp:
             root=Path(tmp)
             disc1=self.disc(root)
-            self.make(root,'fm3-cars',{'Media/DB/gamedb.slt':b'merged'},disc1)
-            self.make(root,'fm2-cars',{'Media/db/GAMEDB.slt':b'other'},disc1)
-            with self.assertRaisesRegex(RuntimeError,'play one of them at a time'):
-                mods.select(root,['fm3-cars','fm2-cars'])
+            self.make(root,'fm3-cars',{'Media/DB/gamedb.slt':b'merged'},disc1,created='2026-11-07T01:00:00')
+            self.make(root,'fm2-cars',{'Media/db/GAMEDB.slt':b'other'},disc1,created='2026-11-07T02:00:00')
+            with self.assertRaisesRegex(RuntimeError,'fm3-cars and fm2-cars were each built on the same '
+                                                     'disc; build fm2-cars again with fm3-cars installed'):
+                mods.order(root,disc1,['fm2-cars','fm3-cars'])
             with self.assertRaisesRegex(RuntimeError,'No mod fm4-cars'):
-                mods.select(root,['fm4-cars'])
+                mods.order(root,disc1,['fm4-cars'])
+            # The longest chain that fits: the older mod.
+            chain,dropped=mods.order(root,disc1,['fm2-cars','fm3-cars'],lenient=True)
+            self.assertEqual([folder.name for folder,_ in chain],['fm3-cars'])
+            self.assertIn('were each built on Disc 1 alone',dropped['fm2-cars'])
             (root/'mods/fm3-cars/files/Media/DB/gamedb.slt').write_bytes(b'changed')
             with self.assertRaisesRegex(RuntimeError,'missing or changed'):
                 mods.mod_disc(root,disc1,['fm3-cars'])
             (disc1/'Media/zipmanifest.xml').write_bytes(b'another disc')
             with self.assertRaisesRegex(RuntimeError,'another Disc 1'):
                 mods.mod_disc(root,disc1,['fm2-cars'])
+
+    def test_stacked_mods_play_together_in_install_order(self):
+        import mods
+        with tempfile.TemporaryDirectory() as tmp:
+            root=Path(tmp)
+            disc1=self.disc(root)
+            self.make(root,'fm3-cars',{'Media/DB/gamedb.slt':b'fm4+fm3','Media/zipmanifest.xml':b'zm3',
+                                       'Media/stringtables.zip':b'names3','Media/Cars/X.zip':b'x'},disc1)
+            self.make(root,'fm2-cars',{'Media/DB/gamedb.slt':b'fm4+fm3+fm2','Media/zipmanifest.xml':b'zm32',
+                                       'Media/stringtables.zip':b'names32','Media/Cars/Y.zip':b'y'},
+                      disc1,base=['fm3-cars'])
+            self.make(root,'fm3-tracks',{'Media/DB/gamedb.slt':b'all','Media/zipmanifest.xml':b'zm-all',
+                                         'Media/tracks/NewYork.zip':b'ny'},disc1,base=['fm3-cars','fm2-cars'])
+            chain=mods.order(root,disc1,['fm3-tracks','fm2-cars','fm3-cars'])
+            self.assertEqual([folder.name for folder,_ in chain],['fm3-cars','fm2-cars','fm3-tracks'])
+            with contextlib.redirect_stdout(io.StringIO()):
+                target=mods.mod_disc(root,disc1,['fm2-cars','fm3-tracks','fm3-cars'])
+            # A file several write comes from the last; each one's own files stay.
+            self.assertEqual((target/'Media/DB/gamedb.slt').read_bytes(),b'all')
+            self.assertEqual((target/'Media/stringtables.zip').read_bytes(),b'names32')
+            self.assertEqual((target/'Media/Cars/X.zip').read_bytes(),b'x')
+            self.assertEqual((target/'Media/Cars/Y.zip').read_bytes(),b'y')
+            self.assertEqual((target/'Media/tracks/NewYork.zip').read_bytes(),b'ny')
+            # A prefix of the stack plays; a mod without the ones it was built on does not.
+            self.assertEqual(len(mods.order(root,disc1,['fm3-cars','fm2-cars'])),2)
+            self.assertIsNone(mods.mod_error(root,mods.load_mod(root/'mods/fm2-cars'),disc1))
+            with self.assertRaisesRegex(RuntimeError,'fm2-cars was built with fm3-cars installed'):
+                mods.order(root,disc1,['fm2-cars'])
+            # A rebuilt mod under it leaves the mods above it out until they are built again.
+            self.make(root,'fm3-cars',{'Media/DB/gamedb.slt':b'fm4+fm3 again'},disc1)
+            chain,dropped=mods.order(root,disc1,['fm3-cars','fm2-cars','fm3-tracks'],lenient=True)
+            self.assertEqual([folder.name for folder,_ in chain],['fm3-cars'])
+            self.assertEqual(sorted(dropped),['fm2-cars','fm3-tracks'])
 
     def test_content_packs_must_match(self):
         import mods

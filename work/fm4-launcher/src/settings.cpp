@@ -119,7 +119,12 @@ Settings Settings::Load(const fs::path& path) {
     settings.mouse_right_stick = json.at("mouse_right_stick").get<bool>();
   if (json.contains("developer") && json.at("developer").is_boolean())
     settings.developer = json.at("developer").get<bool>();
-  settings.mod = text("mod");
+  if (json.contains("mods") && json.at("mods").is_array()) {
+    for (const auto& item : json.at("mods"))
+      if (item.is_string()) settings.mods.push_back(item.get<std::string>());
+  } else if (const std::string mod = text("mod"); !mod.empty()) {
+    settings.mods.push_back(mod);  // a launcher before stacked mods kept one
+  }
   settings.mod_fm3_disc1 = text("mod_fm3_disc1");
   settings.mod_fm3_disc2 = text("mod_fm3_disc2");
   settings.mod_fm2_disc = text("mod_fm2_disc");
@@ -144,7 +149,7 @@ void Settings::Save(const fs::path& path) const {
   for (const auto& [name, keys] : binds.Items()) json["binds"][name] = keys;
   json["mouse_right_stick"] = mouse_right_stick;
   json["developer"] = developer;
-  json["mod"] = mod;
+  json["mods"] = mods;
   json["mod_fm3_disc1"] = mod_fm3_disc1;
   json["mod_fm3_disc2"] = mod_fm3_disc2;
   json["mod_fm2_disc"] = mod_fm2_disc;

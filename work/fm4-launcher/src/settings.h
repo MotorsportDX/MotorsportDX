@@ -27,9 +27,9 @@ struct Settings {
   Pairs binds;                                              // keybind_* cvars the player changed
   bool mouse_right_stick = false;
   bool developer = false;  // the developer options on every page (never part of a plan)
-  // The car mod Play plays (BuildRoot\mods\<id>), empty for none, and the source discs of the
-  // Mods page: folders or disc images (docs/running.md#car-mods).
-  std::string mod;
+  // The Mods page (docs/running-mods.md): the mods Play races with, together (BuildRoot\mods\<id>,
+  // none for Disc 1 as it is), and the discs they are converted from (folders or disc images).
+  std::vector<std::string> mods;
   std::string mod_fm3_disc1, mod_fm3_disc2, mod_fm2_disc, mod_fm2_bonus;
 
   static Settings Load(const std::filesystem::path& path);

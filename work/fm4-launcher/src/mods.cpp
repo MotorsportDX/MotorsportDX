@@ -68,19 +68,45 @@ std::map<std::string, std::uint64_t> ContentPacks(const fs::path& root) {
   return packs;
 }
 
-// mods.mod_error: why the mod cannot be played on this Disc 1 and these content packages.
-std::string ModError(const fs::path& root, const Json& mod, const fs::path& disc1) {
+// mods.CHAIN_FILES: the files whose hashes chain stacked mods (built_against key, disc path).
+const std::pair<const char*, const char*> kChainFiles[] = {{"fm4_gamedb_sha256", "Media/DB/gamedb.slt"},
+                                                           {"fm4_zipmanifest_sha256", "Media/zipmanifest.xml"}};
+using DiscState = std::map<std::string, std::string>;
+
+// mods.disc_state: the hashes of Disc 1's files a mod built on it records.
+DiscState StateOf(const fs::path& disc1) {
+  DiscState state;
+  for (const auto& [key, relative] : kChainFiles) state[key] = Sha256File(disc1 / PathFromUtf8(relative));
+  return state;
+}
+
+// mods.after: the hashes once mod is installed over the disc of state.
+DiscState After(const Json& mod, DiscState state) {
+  for (const auto& [key, relative] : kChainFiles)
+    for (const auto& [path, entry] : mod.at("files").items())
+      if (Lower(path) == Lower(relative)) state[key] = entry.at("sha256").get<std::string>();
+  return state;
+}
+
+bool Fits(const Json& mod, const DiscState& state) {
   const Json& built = mod.at("built_against");
-  const fs::path media = disc1 / "Media";
-  if (Sha256File(media / "DB" / "gamedb.slt") != built.at("fm4_gamedb_sha256").get<std::string>() ||
-      Sha256File(media / "zipmanifest.xml") != built.at("fm4_zipmanifest_sha256").get<std::string>())
-    return "It was built for another Disc 1: convert it again.";
+  for (const auto& [key, relative] : kChainFiles)
+    if (built.at(key).get<std::string>() != state.at(key)) return false;
+  return true;
+}
+
+std::vector<std::string> BaseIds(const Json& mod) {
+  std::vector<std::string> ids;
+  if (mod.contains("base_packages") && mod.at("base_packages").is_array())
+    for (const auto& base : mod.at("base_packages")) ids.push_back(base.at("id").get<std::string>());
+  return ids;
+}
+
+bool SamePacks(const fs::path& root, const Json& mod) {
   std::map<std::string, std::uint64_t> wanted;
-  for (const auto& pack : built.at("content_packs"))
+  for (const auto& pack : mod.at("built_against").at("content_packs"))
     wanted[Lower(pack.at("path").get<std::string>())] = pack.at("size").get<std::uint64_t>();
-  if (wanted != ContentPacks(root))
-    return "It was built with other content packages than those imported now: convert it again.";
-  return {};
+  return wanted == ContentPacks(root);
 }
 
 bool SamePath(const std::string& a, const std::string& b) {
@@ -100,7 +126,7 @@ ModTools FindModTools(const fs::path& root, const LauncherData& data) {
   } else {
     const fs::path install = root.parent_path();
     if (!IsInstallRoot(install) || !data.json.contains("builder")) {
-      tools.error = "Car mods are converted by the build tools of a Motorsport DX built with the builder "
+      tools.error = "Mods are converted by the build tools of a Motorsport DX built with the builder "
                     "package; this game has none beside it. Use Build.ps1 -Action mods.";
       return tools;
     }
@@ -121,6 +147,61 @@ ModTools FindModTools(const fs::path& root, const LauncherData& data) {
   return tools;
 }
 
+std::string OrderMods(const fs::path& root, const std::string& disc1_text, const std::vector<std::string>& ids,
+                      std::vector<std::string>& ordered) {
+  ordered.clear();
+  try {
+    const fs::path disc1 = PathFromUtf8(disc1_text);
+    std::map<std::string, Json> remaining;
+    for (const auto& id : ids) {
+      if (remaining.contains(id)) continue;
+      const fs::path folder = root / kMods / PathFromUtf8(id);
+      std::error_code error;
+      if (!fs::is_regular_file(folder / "mod.json", error)) return "There is no mod " + id + ": convert it first.";
+      remaining[id] = LoadMod(folder);
+    }
+    const DiscState start = StateOf(disc1);
+    DiscState state = start;
+    const auto created = [&](const std::string& id) { return remaining.at(id).value("created", ""); };
+    while (!remaining.empty()) {
+      std::vector<std::string> ready;
+      for (const auto& [id, mod] : remaining)
+        if (Fits(mod, state)) ready.push_back(id);
+      std::stable_sort(ready.begin(), ready.end(), [&](const auto& a, const auto& b) { return created(a) < created(b); });
+      if (ready.size() > 1)
+        return "The mods " + ready[0] + " and " + ready[1] + " were each converted without the other: convert " +
+               ready[1] + " again, with " + ready[0] + " converted.";
+      if (ready.empty()) {
+        std::string id = remaining.begin()->first;
+        for (const auto& [other, mod] : remaining)
+          if (created(other) < created(id)) id = other;
+        std::vector<std::string> missing;
+        for (const auto& base : BaseIds(remaining.at(id)))
+          if (!remaining.contains(base) && std::find(ordered.begin(), ordered.end(), base) == ordered.end())
+            missing.push_back(base);
+        if (!missing.empty()) {
+          std::string names;
+          for (const auto& base : missing) names += (names.empty() ? "" : ", ") + base;
+          return "The mod " + id + " was converted with " + names + ": play them together.";
+        }
+        if (!ordered.empty() && Fits(remaining.at(id), start))
+          return "The mods " + ordered.front() + " and " + id + " were each converted without the other: convert " +
+                 id + " again, with " + ordered.front() + " converted.";
+        return "The mod " + id + " was converted for another Disc 1 or with other mods: convert it again.";
+      }
+      const std::string id = ready.front();
+      if (!SamePacks(root, remaining.at(id)))
+        return "The mod " + id + " was converted with other content packages than those imported now: convert it again.";
+      state = After(remaining.at(id), state);
+      remaining.erase(id);
+      ordered.push_back(id);
+    }
+    return {};
+  } catch (const std::exception& exception) {
+    return exception.what();
+  }
+}
+
 std::vector<ModInfo> ListMods(const fs::path& root, const std::string& disc1) {
   std::vector<ModInfo> mods;
   std::error_code error;
@@ -136,55 +217,82 @@ std::vector<ModInfo> ListMods(const fs::path& root, const std::string& disc1) {
       info.created = mod.value("created", "");
       info.packaged = mod.value("packaged", 0);
       info.failed = mod.value("failed", 0);
-      for (const auto& car : mod.at("cars")) info.skipped += car.value("status", "") == "skipped";
-      info.error = disc1.empty() ? "Choose Disc 1 first." : ModError(root, mod, PathFromUtf8(disc1));
+      info.content = mod.value("kind", "") == "track-overlay" ? "tracks" : "cars";
+      for (const auto& item : mod.contains(info.content) ? mod.at(info.content) : mod.at("cars")) {
+        info.skipped += item.value("status", "") == "skipped";
+        if (item.value("status", "") == "packaged" && item.contains("layouts") && item.at("layouts").is_array())
+          info.layouts += static_cast<int>(item.at("layouts").size());
+      }
+      info.base = BaseIds(mod);
+      std::vector<std::string> chain = info.base, ordered;
+      chain.push_back(info.id);
+      info.error = disc1.empty() ? "Choose Disc 1 first." : OrderMods(root, disc1, chain, ordered);
     } catch (const std::exception& exception) {
       info.error = exception.what();
     }
     mods.push_back(info);
   }
-  std::sort(mods.begin(), mods.end(), [](const ModInfo& a, const ModInfo& b) { return a.id < b.id; });
+  std::sort(mods.begin(), mods.end(), [](const ModInfo& a, const ModInfo& b) {
+    return a.base.size() != b.base.size() ? a.base.size() < b.base.size() : a.id < b.id;
+  });
   return mods;
 }
 
 fs::path ModDisc(const fs::path& root) { return root / kModDisc; }
 
-bool ModDiscReady(const fs::path& root, const std::string& disc1, const std::string& id) {
+bool ModDiscReady(const fs::path& root, const std::string& disc1, const std::vector<std::string>& ids) {
   try {
     std::ifstream stream(root / kModDisc / kMarker, std::ios::binary);
     if (!stream) return false;
     const Json marker = Json::parse(stream);
     const Json& mods = marker.at("mods");
-    return SamePath(marker.at("disc1").get<std::string>(), disc1) && mods.size() == 1 && mods.contains(id) &&
-           mods.at(id).get<std::string>() == Sha256File(root / kMods / PathFromUtf8(id) / "mod.json");
+    const std::set<std::string> wanted(ids.begin(), ids.end());
+    if (!SamePath(marker.at("disc1").get<std::string>(), disc1) || mods.size() != wanted.size()) return false;
+    for (const auto& id : wanted)
+      if (!mods.contains(id) ||
+          mods.at(id).get<std::string>() != Sha256File(root / kMods / PathFromUtf8(id) / "mod.json"))
+        return false;
+    return true;
   } catch (const std::exception&) {
     return false;
   }
 }
 
-std::string PrepareModDisc(const fs::path& root, const std::string& disc1_text, const std::string& id,
+std::string PrepareModDisc(const fs::path& root, const std::string& disc1_text, const std::vector<std::string>& ids,
                            std::atomic<std::uint64_t>& done, std::atomic<std::uint64_t>& total,
                            const std::atomic<bool>& cancel) {
   try {
-    const fs::path disc1 = PathFromUtf8(disc1_text), folder = root / kMods / PathFromUtf8(id);
-    const Json mod = LoadMod(folder);
-    if (const std::string error = ModError(root, mod, disc1); !error.empty()) return error;
-    const fs::path files = folder / PathFromUtf8(mod.at("files_root").get<std::string>());
-    // mods.verify: every listed file present, of its size and SHA-256, and nothing else.
-    std::map<std::string, std::string> writes;  // lower-case path: the mod's spelling
-    for (const auto& [relative, entry] : mod.at("files").items()) {
-      if (relative.find("..") != std::string::npos || relative.find(':') != std::string::npos || relative.front() == '/')
-        return "The mod lists a refused path: " + relative + ".";
-      const fs::path path = files / PathFromUtf8(relative);
-      std::error_code error;
-      if (!fs::is_regular_file(path, error) || fs::file_size(path, error) != entry.at("size").get<std::uint64_t>() ||
-          Sha256File(path) != entry.at("sha256").get<std::string>())
-        return relative + " of the mod is missing or changed: convert it again.";
-      writes[Lower(relative)] = relative;
+    const fs::path disc1 = PathFromUtf8(disc1_text);
+    std::vector<std::string> ordered;
+    if (const std::string error = OrderMods(root, disc1_text, ids, ordered); !error.empty()) return error;
+    // lower-case path: (the mod's files folder, the mod's spelling); a later mod's file wins.
+    std::map<std::string, std::pair<fs::path, std::string>> writes;
+    Json marker_mods = Json::object();
+    for (const auto& id : ordered) {
+      const fs::path folder = root / kMods / PathFromUtf8(id);
+      const Json mod = LoadMod(folder);
+      const fs::path files = folder / PathFromUtf8(mod.at("files_root").get<std::string>());
+      // mods.verify: every listed file present, of its size and SHA-256, and nothing else.
+      std::set<std::string> listed;
+      for (const auto& [relative, entry] : mod.at("files").items()) {
+        if (relative.find("..") != std::string::npos || relative.find(':') != std::string::npos || relative.front() == '/')
+          return "The mod " + id + " lists a refused path: " + relative + ".";
+        const fs::path path = files / PathFromUtf8(relative);
+        std::error_code error;
+        if (!fs::is_regular_file(path, error) || fs::file_size(path, error) != entry.at("size").get<std::uint64_t>() ||
+            Sha256File(path) != entry.at("sha256").get<std::string>())
+          return relative + " of the mod " + id + " is missing or changed: convert it again.";
+        listed.insert(Lower(relative));
+      }
+      for (const auto& file : fs::recursive_directory_iterator(files))
+        if (file.is_regular_file() && !listed.contains(Lower(Utf8(fs::relative(file.path(), files).generic_wstring()))))
+          return Utf8(file.path()) + " is not listed in the mod.json of " + id + ": convert it again.";
+      for (const auto& relative : mod.at("writes")) {
+        const std::string text = relative.get<std::string>();
+        writes[Lower(text)] = {files, text};
+      }
+      marker_mods[id] = Sha256File(folder / "mod.json");
     }
-    for (const auto& file : fs::recursive_directory_iterator(files))
-      if (file.is_regular_file() && !writes.contains(Lower(Utf8(fs::relative(file.path(), files).generic_wstring()))))
-        return Utf8(file.path()) + " is not listed in mod.json: convert it again.";
     std::vector<fs::path> disc_files;
     for (const auto& file : fs::recursive_directory_iterator(disc1))
       if (file.is_regular_file()) disc_files.push_back(file.path());
@@ -205,8 +313,9 @@ std::string PrepareModDisc(const fs::path& root, const std::string& disc1_text, 
       }
       ++done;
     }
-    // A new file for each the mod writes: never written through a link to Disc 1.
-    for (const auto& [lower, relative] : writes) {
+    // A new file for each the mods write: never written through a link to Disc 1.
+    for (const auto& [lower, source] : writes) {
+      const auto& [files, relative] = source;
       const fs::path destination = stage / PathFromUtf8(relative);
       fs::create_directories(destination.parent_path());
       fs::copy_file(files / PathFromUtf8(relative), destination);
@@ -214,8 +323,7 @@ std::string PrepareModDisc(const fs::path& root, const std::string& disc1_text, 
     }
     Json marker = Json::object();
     marker["disc1"] = Utf8(disc1);
-    marker["mods"] = Json::object();
-    marker["mods"][id] = Sha256File(folder / "mod.json");
+    marker["mods"] = marker_mods;
     std::ofstream(stage / kMarker, std::ios::binary) << marker.dump(1);
     fs::remove_all(target);
     fs::rename(stage, target);
@@ -230,20 +338,22 @@ ModRunner::~ModRunner() {
   if (thread_.joinable()) thread_.join();
 }
 
-void ModRunner::Start(const ModTools& tools, const fs::path& root, const std::string& game, const std::string& disc,
-                      const std::string& disc2) {
+void ModRunner::Start(const ModTools& tools, const fs::path& root, const std::string& game,
+                      const std::string& content, const std::string& disc, const std::string& disc2) {
   {
     std::lock_guard<std::mutex> lock(mutex_);
     if (view_.busy) return;
     view_ = ModRunView{};
     view_.busy = true;
     view_.game = game;
+    view_.content = content;
     view_.log = root / "logs" / "mods-run.log";
   }
   if (thread_.joinable()) thread_.join();
   stopped_ = false;
   std::vector<std::string> args = {Utf8(tools.python), "-I", Utf8(tools.pipeline), "mods", "--build-root", Utf8(root),
-                                   "--toolchain", Utf8(tools.toolchain), "--mod-game", game, "--mod-disc", disc};
+                                   "--toolchain", Utf8(tools.toolchain), "--mod-game", game,
+                                   "--mod-content", content, "--mod-disc", disc};
   if (!disc2.empty()) args.insert(args.end(), {"--mod-disc2", disc2});
   thread_ = std::thread([this, args, root] {
     const fs::path log = root / "logs" / "mods-run.log";

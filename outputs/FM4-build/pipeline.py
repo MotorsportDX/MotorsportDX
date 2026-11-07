@@ -3515,11 +3515,11 @@ def passes_settings(directory,defines):
             'GTAO_QUALITY':float(defines.get('GTAO_QUALITY',quality))}
 
 def save_mods(root,ids):
-    """run -Mod: the car mods (docs/running.md#car-mods) the next runs play; none plays Disc 1
-    as it is."""
+    """run -Mod: the mods (docs/running-mods.md) the next runs play together, in any order; none
+    plays Disc 1 as it is."""
     state=json.loads((root/'local.json').read_text())
     ids=[] if ids==['none'] else list(dict.fromkeys(ids))
-    mods.select(root,ids)
+    ids=[folder.name for folder,_ in mods.order(root,state['disc1'],ids)]
     state['mods']=ids
     (root/'local.json').write_text(json.dumps(state,indent=2),encoding='utf-8')
 
@@ -3584,7 +3584,7 @@ def launch(root,single_tile=False,fixed_vblank=False,frame_rate=None,rov=False,
     manifest=write_content_manifest(root,packages) if packages else None
     if packages:
         print(f'Content packages: {len(packages)}')
-    # The car mods: Disc 1 with the mods' files over it (mods.py).
+    # The mods: Disc 1 with the mods' files over it (mods.py).
     disc1=mods.mod_disc(root,disc1,state.get('mods') or [])
     cvars,plan_env,description=launch_plan(
         root,disc1,single_tile=single_tile,fixed_vblank=fixed_vblank,frame_rate=frame_rate,rov=rov,
@@ -4129,15 +4129,17 @@ def main():
                              'for them; repeatable. Saved in local.json and imported at the next run')
     parser.add_argument('--jobs',type=int,default=4)
     parser.add_argument('--mod-game',choices=tuple(mods.GAMES),
-                        help='mods: convert the cars of this game that FM4 lacks into the mod '
-                             '<game>-cars (docs/running.md#car-mods)')
+                        help='mods: convert the cars (or tracks) of this game that FM4 lacks into '
+                             'the mod <game>-<content>, built on the other mods (docs/running-mods.md)')
+    parser.add_argument('--mod-content',choices=tuple(mods.CONTENTS),default='cars',
+                        help='mods: cars (FM3 and FM2) or tracks (FM3)')
     parser.add_argument('--mod-disc',type=Path,
                         help='mods: the FM3 Disc 1 or the FM2 disc, an extracted folder or its .iso')
     parser.add_argument('--mod-disc2',type=Path,
                         help='mods: optional; the FM3 Disc 2 or the FM2 Bonus Disc, a folder or .iso')
     parser.add_argument('--mod',action='append',
-                        help='run: play this car mod (repeatable), or none; saved in local.json '
-                             'for the next runs (docs/running.md#car-mods)')
+                        help='run: play this mod (repeatable: several play together), or none; '
+                             'saved in local.json for the next runs (docs/running-mods.md)')
     parser.add_argument('--out',type=Path,
                         help='export: the folder to export the game and its GUI launcher to; '
                              'launcher-data: the folder of launcher.json (default the BuildRoot); '
@@ -4332,14 +4334,15 @@ def main():
         return
     if args.toolchain:
         print('Toolchain:',', '.join(use_toolchain(args.toolchain,('llvm-mingw',) if ABI=='msvc' else ())))
-    # The car mods need this Python, the .NET Framework's C# compiler and clang, not the doctor's
+    # The mods need this Python, the .NET Framework's C# compiler and clang, not the doctor's
     # whole build toolchain.
     if args.action=='mods':
         if not (args.mod_game and args.mod_disc):
             raise ValueError('mods needs --mod-game and --mod-disc (Build.ps1 -ModGame, -ModDisc).')
         with progress('stage','mods'):
             mods.convert(root,args.mod_game,args.mod_disc.resolve(),
-                         args.mod_disc2.resolve() if args.mod_disc2 else None,progress_event)
+                         args.mod_disc2.resolve() if args.mod_disc2 else None,progress_event,
+                         args.mod_content)
         return
     doctor(fetch_mode())
     print(ffx_status(root))

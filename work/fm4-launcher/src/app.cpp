@@ -476,10 +476,13 @@ class App {
   void AdvancedRows();
   // The Shaders page: the shader pass and the DirectX Shader Compiler.
   void ShadersRows();
-  // The Mods page (mods.h): convert the cars of FM3 or FM2, choose the mod Play plays.
+  // The Mods page (mods.h): convert the cars of FM3 or FM2 and the tracks of FM3, choose the mods
+  // Play plays together.
   void ModsRows();
   void RefreshMods();
-  void StartModDisc(const std::string& id);
+  void StartModDisc(const std::vector<std::string>& ids);
+  // The names of the mods of ids, joined with commas.
+  std::string ModNames(const std::vector<std::string>& ids) const;
   std::string ModDisc1() const { return disc1_.path.empty() ? settings_.disc1 : disc1_.path; }
   // The offline pass with the current plan, the DXC release fetched first when it is missing
   // (19.10's route); automatic once a build: marker() is what it last finished for.
@@ -1268,8 +1271,8 @@ std::vector<std::string> App::GameArgs(const Plan& plan) {
     const size_t equals = item.find('=');
     if (equals != std::string::npos && equals > 0) cvars.Set(item.substr(0, equals), item.substr(equals + 1));
   }
-  // The car mod: Disc 1 with the mod over it (mods.h), once the Mods page prepared it.
-  if (!settings_.mod.empty() && ModDiscReady(root_, ModDisc1(), settings_.mod))
+  // The mods: Disc 1 with the mods over it (mods.h), once the Mods page prepared it.
+  if (!settings_.mods.empty() && ModDiscReady(root_, ModDisc1(), settings_.mods))
     cvars.Set("game_data_root", Utf8(ModDisc(root_)));
   std::vector<std::string> args = {Utf8(root_ / "game-build" / "fm4_rex.exe")};
   for (const auto& [name, value] : cvars.Items()) args.push_back("--" + name + "=" + value);
@@ -1296,9 +1299,10 @@ void App::Play() {
   if (!plan) return fail(error);
   if (ProcessRunning(L"fm4_rex.exe"))
     return fail("The game is already running (fm4_rex.exe). Close it first.");
-  if (!settings_.mod.empty() && (mod_disc_busy_ || !ModDiscReady(root_, ModDisc1(), settings_.mod)))
-    return fail(mod_disc_busy_ ? "The car mod " + settings_.mod + " is being prepared; Play once it is ready."
-                               : "The car mod " + settings_.mod + " is not prepared for this Disc 1: open Mods."),
+  if (!settings_.mods.empty() && (mod_disc_busy_ || !ModDiscReady(root_, ModDisc1(), settings_.mods)))
+    return fail(mod_disc_busy_
+                    ? "The mods in play (" + ModNames(settings_.mods) + ") are being prepared; Play once they are ready."
+                    : "The mods in play (" + ModNames(settings_.mods) + ") are not prepared for this Disc 1: open Mods."),
            void(page_ = kMods);
   try {
     if (!artifacts_checked_) {
@@ -2138,9 +2142,11 @@ void App::HomeMenu() {
       break;
     case kMods:
       help_title_ = "Mods";
-      help_ = settings_.mod.empty()
-                  ? "Cars of Forza Motorsport 3 and 2 that FM4 lacks, converted from your own discs. Experimental."
-                  : "Play races with the car mod " + settings_.mod + ". Choose None on this page to play Disc 1 as it is.";
+      help_ = settings_.mods.empty()
+                  ? "Cars of Forza Motorsport 3 and 2 and tracks of Forza Motorsport 3 that FM4 lacks, converted from "
+                    "your own discs. Several play together. Experimental."
+                  : "Play races with " + ModNames(settings_.mods) +
+                        ". Turn the mods off on this page to play Disc 1 as it is.";
       break;
     case kAdvanced:
       help_title_ = "Advanced";
@@ -3748,26 +3754,41 @@ void App::ShadersRows() {
 void App::RefreshMods() {
   mods_ = ListMods(root_, ModDisc1());
   mods_listed_ = true;
+  // A mod that is gone (its folder removed) is no longer in play.
+  if (std::erase_if(settings_.mods, [&](const std::string& id) {
+        return std::none_of(mods_.begin(), mods_.end(), [&](const ModInfo& mod) { return mod.id == id; });
+      }))
+    SaveSettings();
 }
 
-void App::StartModDisc(const std::string& id) {
+std::string App::ModNames(const std::vector<std::string>& ids) const {
+  std::string names;
+  for (const auto& id : ids) {
+    const auto mod = std::find_if(mods_.begin(), mods_.end(), [&](const ModInfo& info) { return info.id == id; });
+    names += (names.empty() ? "" : ", ") + (mod == mods_.end() ? id : mod->name);
+  }
+  return names;
+}
+
+void App::StartModDisc(const std::vector<std::string>& ids) {
   if (mod_disc_busy_.exchange(true)) return;
   if (mod_disc_task_.joinable()) mod_disc_task_.join();
   mod_disc_cancel_ = false;
-  const std::string disc1 = ModDisc1();
-  mod_disc_task_ = std::thread([this, id, disc1] {
-    const std::string error = PrepareModDisc(root_, disc1, id, mod_disc_done_, mod_disc_total_, mod_disc_cancel_);
+  const std::string disc1 = ModDisc1(), names = ModNames(ids);
+  mod_disc_task_ = std::thread([this, ids, disc1, names] {
+    const std::string error = PrepareModDisc(root_, disc1, ids, mod_disc_done_, mod_disc_total_, mod_disc_cancel_);
     {
       std::lock_guard<std::mutex> lock(mod_mutex_);
-      mod_message_ = error.empty() ? "The car mod " + id + " is ready: Play races with it." : error;
+      mod_message_ = error.empty() ? "Ready: Play races with " + names + "." : error;
     }
     mod_disc_busy_ = false;
   });
 }
 
-// Car mods (docs/running.md#car-mods): pipeline.py's mods action with the build's own Python
-// converts the cars a game has and FM4 lacks into BuildRoot\mods\<game>-cars; the mod in play is
-// read from BuildRoot\mod-disc, Disc 1 with the mod's files over it.
+// Mods (docs/running-mods.md): pipeline.py's mods action with the build's own Python converts the
+// cars (or the tracks) a game has and FM4 lacks into BuildRoot\mods\<game>-<content>, each built
+// on the mods converted before it; the mods in play are read from BuildRoot\mod-disc, Disc 1 with
+// their files over it in install order.
 void App::ModsRows() {
   if (!mods_listed_) {
     mod_tools_ = FindModTools(root_, data_);
@@ -3777,48 +3798,72 @@ void App::ModsRows() {
   if (mod_run_seen_ && !run.busy) {
     // A conversion just ended: the mod list changed, and a mod in play needs its Disc again.
     RefreshMods();
-    if (!settings_.mod.empty() && !ModDiscReady(root_, ModDisc1(), settings_.mod)) StartModDisc(settings_.mod);
+    if (!settings_.mods.empty() && !ModDiscReady(root_, ModDisc1(), settings_.mods)) StartModDisc(settings_.mods);
   }
   mod_run_seen_ = run.busy;
   const bool disc_busy = mod_disc_busy_;
   const bool tools = mod_tools_.error.empty();
-  const auto name_of = [&](const std::string& id) {
-    for (const auto& mod : mods_)
-      if (mod.id == id) return mod.name;
-    return id;
-  };
   RowsPage({"IN PLAY", "FORZA 3", "FORZA 2"}, [&] {
     if (tab_ == 0) {
-      std::vector<std::string> choices = {""};
-      for (const auto& mod : mods_)
-        if (mod.error.empty()) choices.push_back(mod.id);
-      const std::string shown = settings_.mod.empty() ? "None" : name_of(settings_.mod);
-      if (const int d = OptionRow("mod", "Car mod", shown,
-                                  "The mod Play races with, or None for Disc 1 as it is. Choosing a mod prepares its "
-                                  "Disc once (about a minute when Disc 1 is on another drive than the game).",
-                                  !disc_busy && !run.busy, settings_.mod.empty() ? &kMuted : &kSuccess);
-          d != 0 && !shot_) {
-        auto at = std::find(choices.begin(), choices.end(), settings_.mod);
-        const int index = at == choices.end() ? 0 : static_cast<int>(at - choices.begin());
-        const int step = d == 4 ? -1 : 1;
-        settings_.mod = choices[(index + step + choices.size()) % choices.size()];
-        SaveSettings();
-        if (!settings_.mod.empty() && !ModDiscReady(root_, ModDisc1(), settings_.mod)) StartModDisc(settings_.mod);
-      }
-      if (OptionRow("prepare", "Prepare the mod again", "Press A",
-                    "Builds the mod's Disc again from Disc 1 and the mod.", !settings_.mod.empty() && !disc_busy) == 2 &&
-          !shot_)
-        StartModDisc(settings_.mod);
+      // Each mod is on or off. Mods stack like DLC packs: turning one on turns on the mods it was
+      // converted on, and turning one off turns off the mods converted on it.
+      const auto in_play = [&](const std::string& id) {
+        return std::find(settings_.mods.begin(), settings_.mods.end(), id) != settings_.mods.end();
+      };
       for (const auto& mod : mods_) {
-        const std::string value = mod.error.empty()
-                                      ? std::to_string(mod.packaged) + " cars"
-                                      : "Convert again";
-        const std::string help = mod.name + ", converted " + mod.created + ": " + std::to_string(mod.packaged) +
-                                 " cars, " + std::to_string(mod.failed) + " failed, " + std::to_string(mod.skipped) +
-                                 " skipped. " + (mod.error.empty() ? "" : mod.error);
-        OptionRow(("info-" + mod.id).c_str(), mod.name.c_str(), value, help.c_str(), true,
-                  mod.error.empty() ? nullptr : &kWarning);
+        const bool on = in_play(mod.id);
+        const bool tracks = mod.content == "tracks";
+        const std::string count = tracks ? std::to_string(mod.layouts) + " layouts"
+                                         : std::to_string(mod.packaged) + " cars";
+        const std::string value = !mod.error.empty() ? (on ? "On, convert again" : "Convert again")
+                                  : on               ? "On, " + count
+                                                     : "Off, " + count;
+        std::string help = mod.name + ", converted " + mod.created + ": " +
+                           (tracks ? std::to_string(mod.packaged) + " tracks with " + count : count) + ", " +
+                           std::to_string(mod.failed) + " failed, " + std::to_string(mod.skipped) + " skipped.";
+        if (!mod.base.empty()) help += " Converted on " + ModNames(mod.base) + ", which play with it.";
+        help += mod.error.empty() ? " Turning a mod on prepares the mods' Disc once (about a minute when Disc 1 is on "
+                                    "another drive than the game)."
+                                  : " " + mod.error;
+        if (const int d = OptionRow(("mod-" + mod.id).c_str(), mod.name.c_str(), value, help.c_str(),
+                                    (mod.error.empty() || on) && !disc_busy && !run.busy,
+                                    !mod.error.empty() ? &kWarning : on ? &kSuccess : &kMuted);
+            (d == -1 || d == 1 || d == 2) && !shot_) {
+          std::vector<std::string> next;
+          if (on) {
+            for (const auto& id : settings_.mods) {
+              const auto other = std::find_if(mods_.begin(), mods_.end(), [&](const ModInfo& m) { return m.id == id; });
+              if (id != mod.id &&
+                  (other == mods_.end() || std::find(other->base.begin(), other->base.end(), mod.id) == other->base.end()))
+                next.push_back(id);
+            }
+          } else {
+            next = settings_.mods;
+            for (const auto& id : mod.base)
+              if (!in_play(id)) next.push_back(id);
+            next.push_back(mod.id);
+            // A mod in play that was not converted with this one cannot play with it: it is turned off.
+            std::vector<std::string> ordered;
+            if (const std::string error = OrderMods(root_, ModDisc1(), next, ordered); !error.empty()) {
+              next = mod.base;
+              next.push_back(mod.id);
+              std::lock_guard<std::mutex> lock(mod_mutex_);
+              mod_message_ = error + " The mods that do not fit were turned off.";
+            }
+          }
+          settings_.mods = next;
+          SaveSettings();
+          if (!settings_.mods.empty() && !ModDiscReady(root_, ModDisc1(), settings_.mods)) StartModDisc(settings_.mods);
+        }
       }
+      if (mods_.empty())
+        OptionRow("none", "No mod yet", "", "Convert the cars or the tracks of a game on the FORZA 3 or FORZA 2 tab.",
+                  false);
+      if (OptionRow("prepare", "Prepare the mods again", "Press A",
+                    "Builds the mods' Disc again from Disc 1 and the mods in play.",
+                    !settings_.mods.empty() && !disc_busy) == 2 &&
+          !shot_)
+        StartModDisc(settings_.mods);
       return;
     }
     const bool fm3 = tab_ == 1;
@@ -3846,14 +3891,26 @@ void App::ModsRows() {
         !shot_)
       OpenDialog(second, false);
     const std::string game = fm3 ? "fm3" : "fm2";
+    const bool can_convert = tools && !run.busy && !disc_busy && !disc.empty() && disc1_.error.empty();
     if (OptionRow("convert", fm3 ? "Convert the FM3 cars" : "Convert the FM2 cars", "Press A",
                   "Fetches the converter and its tools once (about 50 MB), then converts every car of the game that "
-                  "FM4 and your downloadable content lack. FM3 takes about 9 minutes, FM2 about 4 after its first "
-                  "run. Your discs are only read.",
-                  tools && !run.busy && !disc_busy && !disc.empty() && disc1_.error.empty()) == 2 &&
+                  "FM4 and your downloadable content lack, on the mods converted before. FM3 takes about 9 minutes, "
+                  "FM2 about 4 after its first run. Converting again also converts the mods built on it again. Your "
+                  "discs are only read.",
+                  can_convert) == 2 &&
         !shot_) {
       SaveSettings();
-      mod_runner_.Start(mod_tools_, root_, game, disc, disc2);
+      mod_runner_.Start(mod_tools_, root_, game, "cars", disc, disc2);
+    }
+    if (fm3 && OptionRow("convert-tracks", "Convert the FM3 tracks", "Press A",
+                         "Converts the FM3 tracks FM4 lacks, on the mods converted before: New York, Amalfi (on Disc 2), "
+                         "the Bugatti circuit of Le Mans and one reverse layout of a circuit FM4 has. FM3's Test Track "
+                         "needs the discs of the Ultimate Collection. Experimental: each track is lit with an FM4 "
+                         "track's settings.",
+                         can_convert) == 2 &&
+        !shot_) {
+      SaveSettings();
+      mod_runner_.Start(mod_tools_, root_, game, "tracks", disc, disc2);
     }
     if (OptionRow("stop", "Stop", "Press A", "Ends the conversion; the next one reuses what was fetched.", run.busy) ==
             2 &&
@@ -3866,7 +3923,7 @@ void App::ModsRows() {
     if (run.busy) {
       if (run.total > 0)
         ImGui::ProgressBar(static_cast<float>(run.index) / static_cast<float>(run.total), ImVec2(-1, 0),
-                           (std::to_string(run.index) + " of " + std::to_string(run.total) + " cars").c_str());
+                           (std::to_string(run.index) + " of " + std::to_string(run.total) + " " + run.content).c_str());
       Muted(run.stage.empty() ? "Fetching the converter and its tools..." : run.stage);
       if (!run.last_car.empty()) Muted("Last: " + run.last_car + (run.failed ? ", " + std::to_string(run.failed) + " failed" : ""));
     } else if (!run.message.empty()) {
@@ -3875,7 +3932,7 @@ void App::ModsRows() {
     if (disc_busy) {
       const std::uint64_t total = mod_disc_total_, done = mod_disc_done_;
       ImGui::ProgressBar(total ? static_cast<float>(done) / static_cast<float>(total) : 0.0f, ImVec2(-1, 0),
-                         ("Preparing " + settings_.mod + ": " + std::to_string(done) + " of " + std::to_string(total) +
+                         ("Preparing the mods: " + std::to_string(done) + " of " + std::to_string(total) +
                           " files").c_str());
     }
     {
@@ -3883,7 +3940,8 @@ void App::ModsRows() {
       if (!disc_busy && !mod_message_.empty()) ImGui::TextWrapped("%s", mod_message_.c_str());
     }
     Muted("Experimental: some cockpit views, the engine sound, the paint colours and the PI class can differ from "
-          "the original game. The converter is fm4-content-converter (GPL-3.0), fetched on this computer.");
+          "the original game, and each track is lit with an FM4 track's settings. The converter is "
+          "fm4-content-converter (GPL-3.0), fetched on this computer.");
     if (!run.log.empty()) Muted("Log: " + Utf8(run.log));
     ImGui::PopTextWrapPos();
   });

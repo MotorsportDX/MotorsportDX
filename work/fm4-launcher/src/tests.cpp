@@ -204,18 +204,27 @@ void OverlayTests(const LauncherData& data, const Json& cases, const std::filesy
   }
 }
 
-// The car mods (mods.h, launcher_test_case in mods.py): the mod Disc pipeline.py prepared is
-// ready here; the one prepared here holds the same files; the mod lists as playable.
+// The mods (mods.h, launcher_test_case in mods.py): two stacked mods order as pipeline.py orders
+// them; the mod Disc pipeline.py prepared is ready here; the one prepared here holds the same
+// files; both mods list as playable, the upper one with the lower as its base.
 void ModTests(const Json& mods, std::vector<std::string>& failures) {
   namespace fs = std::filesystem;
   const fs::path python = PathFromUtf8(mods.at("python").get<std::string>()),
                  cpp = PathFromUtf8(mods.at("cpp").get<std::string>());
-  const std::string disc1 = mods.at("disc1").get<std::string>(), id = mods.at("id").get<std::string>();
-  if (!ModDiscReady(python, disc1, id)) failures.push_back("Mods: the mod Disc of pipeline.py is not ready here");
-  if (ModDiscReady(cpp, disc1, id)) failures.push_back("Mods: a mod Disc is ready before it was prepared");
+  const std::string disc1 = mods.at("disc1").get<std::string>();
+  const auto ids = mods.at("ids").get<std::vector<std::string>>();
+  std::vector<std::string> ordered, alone;
+  if (const std::string error = OrderMods(cpp, disc1, ids, ordered);
+      !error.empty() || ordered != mods.at("order").get<std::vector<std::string>>())
+    failures.push_back("Mods: the install order: " + error);
+  if (OrderMods(cpp, disc1, {"fm2-cars"}, alone).empty())
+    failures.push_back("Mods: the upper mod plays without the one it was built on");
+  if (!ModDiscReady(python, disc1, ids)) failures.push_back("Mods: the mod Disc of pipeline.py is not ready here");
+  if (ModDiscReady(python, disc1, {ids.front()})) failures.push_back("Mods: a mod Disc with other mods is ready");
+  if (ModDiscReady(cpp, disc1, ids)) failures.push_back("Mods: a mod Disc is ready before it was prepared");
   std::atomic<std::uint64_t> done{0}, total{0};
   const std::atomic<bool> cancel{false};
-  if (const std::string error = PrepareModDisc(cpp, disc1, id, done, total, cancel); !error.empty())
+  if (const std::string error = PrepareModDisc(cpp, disc1, ids, done, total, cancel); !error.empty())
     failures.push_back("Mods: " + error);
   std::map<std::string, std::string> files, want;
   for (const auto& [path, hash] : mods.at("files").items()) want[path] = hash.get<std::string>();
@@ -226,10 +235,13 @@ void ModTests(const Json& mods, std::vector<std::string>& failures) {
     if (it->is_regular_file() && it->path().filename() != ".fm4-mod-disc.json")
       files[Utf8(fs::path(it->path().lexically_relative(disc).generic_wstring()))] = Sha256File(it->path());
   if (files != want) failures.push_back("Mods: the mod Disc's files differ (" + std::to_string(files.size()) + " files)");
-  if (!ModDiscReady(cpp, disc1, id)) failures.push_back("Mods: the prepared mod Disc is not ready");
-  const std::vector<ModInfo> listed = ListMods(cpp, disc1);
-  if (listed.size() != 1 || listed[0].id != id || !listed[0].error.empty() || listed[0].packaged != 1 ||
-      listed[0].skipped != 1)
+  if (!ModDiscReady(cpp, disc1, ids)) failures.push_back("Mods: the prepared mod Disc is not ready");
+  std::vector<ModInfo> listed = ListMods(cpp, disc1);
+  std::sort(listed.begin(), listed.end(), [](const auto& a, const auto& b) { return a.id < b.id; });
+  if (listed.size() != 2 || listed[0].id != "fm2-cars" || !listed[0].error.empty() ||
+      listed[0].base != std::vector<std::string>{"fm3-cars"} || listed[1].id != "fm3-cars" ||
+      !listed[1].error.empty() || !listed[1].base.empty() || listed[1].packaged != 1 || listed[1].skipped != 1 ||
+      listed[1].content != "cars")
     failures.push_back("Mods: the list: " + (listed.empty() ? std::string("none") : listed[0].error));
 }
 

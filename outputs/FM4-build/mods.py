@@ -1,5 +1,5 @@
-"""Car mods converted from the player's own Forza Motorsport 2 or 3 discs
-(docs/running.md#car-mods): the mods action and the mod Disc of run. pipeline.py imports it; it
+"""Mods converted from the player's own Forza Motorsport 2 or 3 discs: their cars, and FM3's
+tracks (docs/running-mods.md): the mods action and the mod Disc of run. pipeline.py imports it; it
 reads pipeline.py's pins and helpers through the pipeline module, as builder.py does.
 
 The conversion is fm4-content-converter (GPL-3.0-only, a separate program): GitHub's archive of
@@ -10,9 +10,12 @@ Framework that Windows ships, and with its LZX decoder (tools/lzx_bridge) built 
 clang (llvm-mingw) from the SDK's libmspack. Every download is kept in <BuildRoot>/downloads.
 
 A mod is a folder <BuildRoot>/mods/<id> with the converter's mod.json and files/ (FM4 Disc 1
-layout; the converter's docs/mod-format.md). run plays it from <BuildRoot>/mod-disc: Disc 1's
-files hard-linked (copied when Disc 1 is on another volume), and each file the mod writes copied
-from the mod, so Disc 1 itself is never written.
+layout; the converter's docs/mod-format.md). Mods stack like DLC packs: each is built on the disc
+that Disc 1 and the mods before it make (the converter's --fm4 and --base-package), so its
+database, names and archives hold theirs too, and its built_against records that disc. run plays
+them from <BuildRoot>/mod-disc: Disc 1's files hard-linked (copied when Disc 1 is on another
+volume), and each file the mods write copied from the last mod that writes it, so Disc 1 itself
+is never written.
 """
 import contextlib
 import hashlib
@@ -29,8 +32,8 @@ import zipfile
 import pipeline as p
 
 CONVERTER_REPOSITORY='MotorsportDX/fm4-content-converter'
-CONVERTER_COMMIT='db593aa53a25a8e36db778303116a22293384ab7'
-CONVERTER_TREE='891f73d734cc2f2ea84347d6e0ddfed93fa17213eea8a678559227eadc0cef9b'
+CONVERTER_COMMIT='db713613d366f298e71a07088e1842b27cd41c38'
+CONVERTER_TREE='dd2238e72f27e6034cea6148be7908e58818a6867bc794bbdf6c7e6f4fbc776c'
 FORZA_EDITOR_REPOSITORY='FMdangaina/ForzaEditor'
 FORZA_EDITOR_COMMIT='8807c7d137646dab8d9eecab7e8d5a6602ef58aa'
 FORZA_EDITOR_TREE='9683da6d13127e2f35828e075c186e4ba68093c0d1b4a91431bdc46d76d42b94'
@@ -59,6 +62,10 @@ CSC=Path(os.environ.get('WINDIR','C:/Windows'))/'Microsoft.NET/Framework64/v4.0.
 # libmspack of the SDK's third-party sources (setup), whose lzxd.c the LZX decoder links.
 LIBMSPACK=Path('runtime-source/thirdparty/libmspack/libmspack/mspack')
 GAMES={'fm3':'Forza Motorsport 3','fm2':'Forza Motorsport 2'}
+# What the converter converts of each game: a mod <game>-<content> per pair.
+CONTENTS={'cars':('fm3','fm2'),'tracks':('fm3',)}
+# The files whose hashes chain stacked mods: built_against records the disc's, each mod writes its own.
+CHAIN_FILES={'fm4_gamedb_sha256':'Media/DB/gamedb.slt','fm4_zipmanifest_sha256':'Media/zipmanifest.xml'}
 # Where the game imports the content packages (Disc 2, -Content): the converter keeps their keys
 # and string tables, so a mod is built against them.
 CONTENT_ROOT=Path('user-data/0000000000000000/4D530910/00000002')
@@ -123,7 +130,7 @@ def wheels(root,site,log):
     """NumPy and Pillow for this Python in site."""
     tag=python_tag()
     if tag not in WHEELS:
-        raise RuntimeError(f'The car mods need CPython 3.11 to 3.14; this is {sys.version.split()[0]}.')
+        raise RuntimeError(f'The mods need CPython 3.11 to 3.14; this is {sys.version.split()[0]}.')
     marker=site/'.fm4-wheels'
     names=[Path(path).name for path,_,_ in WHEELS[tag]]
     if marker.is_file() and marker.read_text(encoding='utf-8').split()==names:
@@ -156,7 +163,7 @@ def lzx_bridge(root,folder,log):
         raise RuntimeError(f'{mspack/"lzxd.c"} is missing; run setup first.')
     clang=shutil.which('clang')
     if clang is None:
-        raise RuntimeError('The car mods build their LZX decoder with clang: give Build.ps1 -MingwRoot '
+        raise RuntimeError('The mods build their LZX decoder with clang: give Build.ps1 -MingwRoot '
                            'or -Toolchain, as for the build.')
     shutil.rmtree(out,ignore_errors=True)
     out.mkdir(parents=True)
@@ -180,7 +187,7 @@ def tools(root,log):
     marker=helper/'.fm4-commit'
     if not (marker.is_file() and marker.read_text(encoding='utf-8').strip()==CONVERTER_COMMIT):
         if not CSC.is_file():
-            raise RuntimeError(f'The car mods build their model helper with {CSC} (.NET Framework 4, '
+            raise RuntimeError(f'The mods build their model helper with {CSC} (.NET Framework 4, '
                                'part of Windows), which is missing.')
         reference=pinned_tree(root,FORZA_EDITOR_REPOSITORY,FORZA_EDITOR_COMMIT,FORZA_EDITOR_TREE,
                               folder/'forza-editor',log)
@@ -210,25 +217,100 @@ def content_packs(root):
             for path in sorted(content.glob('*/Media/DLCZips/*.zip'))] if content.is_dir() else []
 
 
-def mod_error(root,mod,disc1):
-    """Why a mod cannot be played on this Disc 1 and these content packages, or None."""
+def disc_state(disc1):
+    """The hashes of Disc 1's files that a mod built on it records (CHAIN_FILES)."""
+    return {key:p.digest(Path(disc1)/relative) for key,relative in CHAIN_FILES.items()}
+
+
+def after(mod,state):
+    """The CHAIN_FILES hashes of the disc once mod is installed over the disc of state."""
+    files={relative.casefold():entry for relative,entry in mod['files'].items()}
+    return {key:files.get(relative.casefold(),{}).get('sha256',state[key]) for key,relative in CHAIN_FILES.items()}
+
+
+def fits(mod,state):
     built=mod['built_against']
-    media=Path(disc1)/'Media'
-    if p.digest(media/'DB/gamedb.slt')!=built['fm4_gamedb_sha256'] or \
-            p.digest(media/'zipmanifest.xml')!=built['fm4_zipmanifest_sha256']:
-        return f"Mod {mod['id']} was built for another Disc 1; build it again (-Action mods)."
-    if content_packs(root)!=built['content_packs']:
-        return (f"Mod {mod['id']} was built with other content packages than those imported now; "
-                'build it again (-Action mods).')
+    return all(built[key]==state[key] for key in CHAIN_FILES)
+
+
+def base_ids(mod):
+    """The mods that were installed when mod was built (the converter's base_packages)."""
+    return [base['id'] for base in mod.get('base_packages') or ()]
+
+
+def order(root,disc1,ids,lenient=False):
+    """The mods of ids as (folder, mod.json) in install order: each was built on the disc that Disc
+    1 and the mods before it make (its built_against), like DLC packs that each add to the one
+    database (docs/running-mods.md). Raises RuntimeError on a mod that does not fit; lenient keeps
+    the longest chain that fits and returns the others' ids with the reason as a second value."""
+    found={folder.name:folder for folder in mod_folders(root)}
+    remaining={}
+    for mod_id in dict.fromkeys(ids):
+        if mod_id not in found:
+            raise RuntimeError(f'No mod {mod_id} in {root/MODS}; build it with -Action mods.')
+        remaining[mod_id]=(found[mod_id],load_mod(found[mod_id]))
+    packs=content_packs(root)
+    state,start=disc_state(disc1),disc_state(disc1)
+    ordered,dropped=[],{}
+    while remaining:
+        ready=sorted((mod_id for mod_id,(_,mod) in remaining.items() if fits(mod,state)),
+                     key=lambda mod_id:remaining[mod_id][1].get('created',''))
+        if len(ready)>1 and not lenient:
+            raise RuntimeError(f'Mods {ready[0]} and {ready[1]} were each built on the same disc; build '
+                               f'{ready[1]} again with {ready[0]} installed (-Action mods).')
+        if not ready:
+            mod_id,(_,mod)=min(remaining.items(),key=lambda item:item[1][1].get('created',''))
+            missing=[base for base in base_ids(mod) if base not in remaining and
+                     base not in {folder.name for folder,_ in ordered}]
+            if missing:
+                reason=f"Mod {mod_id} was built with {', '.join(missing)} installed; play it with them."
+            elif ordered and fits(mod,start):
+                placed=', '.join(folder.name for folder,_ in ordered)
+                reason=(f'Mods {placed} and {mod_id} were each built on Disc 1 alone; build {mod_id} '
+                        f'again with {placed} installed (-Action mods).')
+            else:
+                reason=(f'Mod {mod_id} was built for another Disc 1 or on other mods; build it again '
+                        '(-Action mods).')
+            if not lenient:
+                raise RuntimeError(reason)
+            dropped.update({other:reason if other==mod_id else 'it was built on mods that do not fit'
+                            for other in remaining})
+            break
+        mod_id=ready[0]
+        folder,mod=remaining.pop(mod_id)
+        if mod['built_against']['content_packs']!=packs:
+            reason=(f'Mod {mod_id} was built with other content packages than those imported now; '
+                    'build it again (-Action mods).')
+            if not lenient:
+                raise RuntimeError(reason)
+            dropped[mod_id]=reason
+            continue
+        ordered.append((folder,mod))
+        state=after(mod,state)
+    return (ordered,dropped) if lenient else ordered
+
+
+def mod_error(root,mod,disc1):
+    """Why mod, with the mods it was built on, cannot be played on this Disc 1 and these content
+    packages, or None."""
+    try:
+        order(root,disc1,[*base_ids(mod),mod['id']])
+    except RuntimeError as error:
+        return str(error)
     return None
 
 
-def convert(root,game,disc,disc2=None,progress_event=None,jobs_log=None):
-    """Converts the cars of FM3 (disc: Disc 1, disc2: Disc 2) or FM2 (disc, disc2: the Bonus Disc)
-    that FM4 and the imported content packages lack into <BuildRoot>/mods/<game>-cars. An earlier
-    mod of that game is replaced only when the new one is complete."""
+def convert(root,game,disc,disc2=None,progress_event=None,content='cars'):
+    """Converts the cars (or the tracks) of FM3 (disc: Disc 1, disc2: Disc 2) or FM2 (disc, disc2:
+    the Bonus Disc) that FM4 and the imported content packages lack into <BuildRoot>/mods/<game>-
+    <content>. The mod is built on the disc that Disc 1 and the other mods make, so that they all
+    play together; rebuilding a mod builds the ones that were built on it again, from the discs
+    they record. An earlier mod of that id is replaced only when the new one is complete."""
     if game not in GAMES:
         raise ValueError(f'--mod-game takes {" or ".join(GAMES)}.')
+    if game not in CONTENTS.get(content,()):
+        raise ValueError(f'{GAMES[game]} has no {content} to convert; --mod-content takes '
+                         f'{" or ".join(c for c,games in CONTENTS.items() if game in games)}.')
     if not (root/'local.json').is_file():
         raise RuntimeError('Run generate first: a mod is built against the Disc 1 of the BuildRoot.')
     state=json.loads((root/'local.json').read_text())
@@ -240,17 +322,31 @@ def convert(root,game,disc,disc2=None,progress_event=None,jobs_log=None):
     log=root/'logs/mods.log'
     log.parent.mkdir(parents=True,exist_ok=True)
     folder=tools(root,log)
-    mod_id=f'{game}-cars'
+    mod_id=f'{game}-{content}'
+    # The installed stack: a mod already in it keeps the mods under it; a new one goes on top.
+    stack,stale=order(root,disc1,[path.name for path in mod_folders(root)],lenient=True)
+    names=[path.name for path,_ in stack]
+    base,above=(names[:names.index(mod_id)],stack[names.index(mod_id)+1:]) if mod_id in names else (names,[])
+    for other,reason in stale.items():
+        if other!=mod_id:
+            print(f'Mods: {other} is not installed with the others: {reason}',flush=True)
     out=root/MODS/mod_id
     stage=out.with_name(mod_id+'.new')
     shutil.rmtree(stage,ignore_errors=True)
     stage.parent.mkdir(parents=True,exist_ok=True)
-    args=['convert','--game',game,'--disc',disc,'--fm4',disc1,'--helper',folder/'carbin-cpu/carbin-cpu.exe',
-          '--out',stage,'--cache',root/CACHE/game,'--json']
+    base_disc=mod_disc(root,disc1,base)
+    if base:
+        print(f"Mods: building {mod_id} on {', '.join(base)}",flush=True)
+    args=['convert','--game',game,'--disc',disc,'--fm4',base_disc,'--helper',folder/'carbin-cpu/carbin-cpu.exe',
+          '--out',stage,'--cache',root/CACHE/(game if content=='cars' else f'{game}-{content}'),'--json']
+    if content!='cars':
+        args+=['--content',content]
     if disc2:
         args+=['--disc2' if game=='fm3' else '--bonus-disc',disc2]
     if (root/CONTENT_ROOT).is_dir():
         args+=['--content-root',root/CONTENT_ROOT]
+    for name in base:
+        args+=['--base-package',root/MODS/name]
     command=converter_command(folder,'fm4_converter.cli',*args)
     with log.open('a',encoding='utf-8') as stream:
         stream.write(subprocess.list2cmdline(command)+'\n')
@@ -264,11 +360,11 @@ def convert(root,game,disc,disc2=None,progress_event=None,jobs_log=None):
             kind=event['event']
             if kind=='stage':
                 print(f"Mods: {event['message']}",flush=True)
-            elif kind=='car':
-                print(f"  [{event['index']}/{event['total']}] {event['car']}: {event['status']}"
+            elif kind in ('car','track'):
+                print(f"  [{event['index']}/{event['total']}] {event[kind]}: {event['status']}"
                       +(f" ({event['error'][:160]})" if event.get('error') else ''),flush=True)
                 if progress_event:
-                    progress_event('step',f"mods:{event['car']}",
+                    progress_event('step',f"mods:{event[kind]}",
                                    'done' if event['status']=='packaged' else 'failed',
                                    error=event.get('error'))
             elif kind=='done':
@@ -281,9 +377,31 @@ def convert(root,game,disc,disc2=None,progress_event=None,jobs_log=None):
     shutil.rmtree(out,ignore_errors=True)
     os.replace(stage,out)
     mod=load_mod(out)
-    print(f"Mod {mod_id}: {mod['packaged']} cars converted, {mod['failed']} failed, "
-          f"{sum(c['status']=='skipped' for c in mod['cars'])} skipped. Play it with -Mod {mod_id}.")
+    items=mod.get('tracks') if content=='tracks' else mod['cars']
+    print(f"Mod {mod_id}: {mod['packaged']} {content} converted, {mod['failed']} failed, "
+          f"{sum(c['status']=='skipped' for c in items or ())} skipped. Play it with -Mod {mod_id}.",flush=True)
+    for above_folder,above_mod in above:
+        rebuild(root,above_folder,above_mod,progress_event)
     return out
+
+
+# The converter's disc roles (mod.json sources) and the arguments of convert they come from.
+SOURCE_ROLES={'fm3-disc1':'disc','fm2-disc':'disc','fm3-disc2':'disc2','fm2-bonus':'disc2'}
+
+
+def rebuild(root,folder,mod,progress_event=None):
+    """Converts mod again from the discs its mod.json records, on the mods now under it."""
+    game=mod.get('source_game','').lower()
+    content='tracks' if mod.get('kind')=='track-overlay' else 'cars'
+    discs={SOURCE_ROLES[source['role']]:source['path'] for source in mod.get('sources') or ()
+           if source.get('role') in SOURCE_ROLES}
+    if 'disc' not in discs or not all(Path(path).exists() for path in discs.values()):
+        print(f'Mods: {folder.name} was built on the mod just replaced; its discs are not where they were '
+              f'({", ".join(discs.values()) or "none recorded"}), so build it again (-Action mods).',flush=True)
+        return None
+    print(f'Mods: building {folder.name} again on the new mods under it',flush=True)
+    return convert(root,game,Path(discs['disc']),Path(discs['disc2']) if 'disc2' in discs else None,
+                   progress_event,content)
 
 
 def verify(folder,mod):
@@ -303,38 +421,16 @@ def verify(folder,mod):
         raise RuntimeError(f"Mod {mod['id']}: {extra[0]} is not listed in mod.json.")
 
 
-def select(root,ids):
-    """The mods of ids (folder, mod.json), checked: present and not writing the same file."""
-    found={folder.name:folder for folder in mod_folders(root)}
-    chosen=[]
-    for mod_id in ids:
-        if mod_id not in found:
-            raise RuntimeError(f'No mod {mod_id} in {root/MODS}; build it with -Action mods.')
-        chosen.append((found[mod_id],load_mod(found[mod_id])))
-    writers={}
-    for _,mod in chosen:
-        for path in mod['writes']:
-            writers.setdefault(path.casefold(),[]).append(mod['id'])
-    clash=sorted((path,ids) for path,ids in writers.items() if len(ids)>1)
-    if clash:
-        raise RuntimeError(f'Mods {" and ".join(clash[0][1])} both write {clash[0][0]}; '
-                           'play one of them at a time.')
-    return chosen
-
-
 def mod_disc(root,disc1,ids):
     """The Disc 1 to play with the mods of ids: disc1 itself without mods, else <BuildRoot>/mod-disc,
-    built again when Disc 1 or a mod changed."""
+    built again when Disc 1 or a mod changed. The mods go over Disc 1 in install order (order); a
+    file that several write comes from the last, which was built on the others."""
     if not ids:
         return Path(disc1)
     disc1=Path(disc1)
-    chosen=select(root,ids)
-    for folder,mod in chosen:
-        error=mod_error(root,mod,disc1)
-        if error:
-            raise RuntimeError(error)
+    chosen=order(root,disc1,ids)
     target=root/MOD_DISC
-    want={'disc1':str(disc1),'mods':{mod['id']:sha256(folder/'mod.json') for folder,mod in chosen}}
+    want={'disc1':str(disc1),'mods':{folder.name:sha256(folder/'mod.json') for folder,_ in chosen}}
     marker=target/MOD_DISC_MARKER
     if marker.is_file() and json.loads(marker.read_text(encoding='utf-8'))==want:
         return target
@@ -368,15 +464,16 @@ def mod_disc(root,disc1,ids):
     os.replace(stage,target)
     if copied:
         print(f'Mod Disc: {copied} files of Disc 1 copied (Disc 1 is on another volume than the BuildRoot).')
-    print(f"Mod Disc: {', '.join(ids)} over Disc 1 ({linked} files linked).")
+    print(f"Mod Disc: {', '.join(folder.name for folder,_ in chosen)} over Disc 1 ({linked} files linked).")
     return target
 
 
 def launcher_test_case(work):
     """The case of the launcher's port (mods.cpp) in pipeline.launcher_tests: a synthetic Disc 1 and
-    a mod in two BuildRoots. This side prepares the mod Disc of python; the launcher checks that it
-    accepts it, prepares cpp's and lists the mod. launcher_test_check then checks that this side
-    accepts cpp's without building it again."""
+    two stacked mods (fm2-cars built with fm3-cars installed) in two BuildRoots. This side prepares
+    the mod Disc of python with both; the launcher checks that it accepts it, prepares cpp's, orders
+    and lists the mods. launcher_test_check then checks that this side accepts cpp's without
+    building it again."""
     work=Path(work)/'mods'
     shutil.rmtree(work,ignore_errors=True)
     disc1=work/'Disc 1'
@@ -384,29 +481,34 @@ def launcher_test_case(work):
                           'Media/Cars/A.zip':b'native car','Media/UI/Textures.zip':b'textures'}.items():
         (disc1/relative).parent.mkdir(parents=True,exist_ok=True)
         (disc1/relative).write_bytes(data)
-    files={'Media/DB/gamedb.slt':b'merged database','Media/Cars/X.zip':b'converted car'}
+    stack=[('fm3-cars','FM3',{'Media/DB/gamedb.slt':b'database with FM3 cars','Media/Cars/X.zip':b'converted car'},
+            [{'media':'X','status':'packaged'},{'media':'Y','status':'skipped'}]),
+           ('fm2-cars','FM2',{'Media/DB/gamedb.slt':b'database with FM3 and FM2 cars','Media/Cars/Z.zip':b'FM2 car'},
+            [{'media':'Z','status':'packaged'}])]
     for root in (work/'python',work/'cpp'):
-        folder=root/MODS/'fm3-cars'
-        for relative,data in files.items():
-            (folder/'files'/relative).parent.mkdir(parents=True,exist_ok=True)
-            (folder/'files'/relative).write_bytes(data)
         pack=root/CONTENT_ROOT/'4d53091000000001/Media/DLCZips/0001_pri_65.zip'
         pack.parent.mkdir(parents=True,exist_ok=True)
         pack.write_bytes(b'downloadable content')
-        mod={'format':'fm4-mod','format_version':1,'id':'fm3-cars','name':'FM3 cars','source_game':'FM3',
-             'created':'2026-11-05T00:00:00+00:00','files_root':'files','packaged':1,'failed':0,
-             'cars':[{'media':'X','status':'packaged'},{'media':'Y','status':'skipped'}],
-             'files':{r:{'sha256':hashlib.sha256(d).hexdigest(),'size':len(d)} for r,d in files.items()},
-             'writes':sorted(files),
-             'built_against':{'fm4_gamedb_sha256':sha256(disc1/'Media/db/gamedb.slt'),
-                              'fm4_zipmanifest_sha256':sha256(disc1/'Media/zipmanifest.xml'),
-                              'content_packs':content_packs(root)}}
-        (folder/'mod.json').write_text(json.dumps(mod,indent=1),encoding='utf-8')
+        state,base=disc_state(disc1),[]
+        for number,(mod_id,game,files,cars) in enumerate(stack):
+            folder=root/MODS/mod_id
+            for relative,data in files.items():
+                (folder/'files'/relative).parent.mkdir(parents=True,exist_ok=True)
+                (folder/'files'/relative).write_bytes(data)
+            mod={'format':'fm4-mod','format_version':1,'id':mod_id,'name':f'{game} cars','source_game':game,
+                 'created':f'2026-11-0{5+number}T00:00:00+00:00','files_root':'files','packaged':1,'failed':0,
+                 'cars':cars,'files':{r:{'sha256':hashlib.sha256(d).hexdigest(),'size':len(d)} for r,d in files.items()},
+                 'writes':sorted(files),'base_packages':[{'id':b,'created':'2026-11-05T00:00:00+00:00'} for b in base],
+                 'built_against':{**state,'content_packs':content_packs(root)}}
+            (folder/'mod.json').write_text(json.dumps(mod,indent=1),encoding='utf-8')
+            state,base=after(mod,state),[*base,mod_id]
+    ids=['fm2-cars','fm3-cars']
     with contextlib.redirect_stdout(io.StringIO()):
-        target=mod_disc(work/'python',disc1,['fm3-cars'])
+        target=mod_disc(work/'python',disc1,ids)
     expected={path.relative_to(target).as_posix():sha256(path) for path in sorted(target.rglob('*'))
               if path.is_file() and path.name!=MOD_DISC_MARKER}
-    return {'python':str(work/'python'),'cpp':str(work/'cpp'),'disc1':str(disc1),'id':'fm3-cars','files':expected}
+    return {'python':str(work/'python'),'cpp':str(work/'cpp'),'disc1':str(disc1),'ids':ids,
+            'order':[folder.name for folder,_ in order(work/'python',disc1,ids)],'files':expected}
 
 
 def launcher_test_check(case):
@@ -417,6 +519,6 @@ def launcher_test_check(case):
         raise RuntimeError('Launcher tests: the launcher prepared no mod Disc.')
     stamp=marker.stat().st_mtime_ns
     with contextlib.redirect_stdout(io.StringIO()):
-        mod_disc(root,Path(case['disc1']),[case['id']])
+        mod_disc(root,Path(case['disc1']),case['ids'])
     if marker.stat().st_mtime_ns!=stamp:
         raise RuntimeError("Launcher tests: pipeline.py built the launcher's mod Disc again.")

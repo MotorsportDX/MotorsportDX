@@ -45,6 +45,7 @@ param(
     [string]$TextureReplace,
     [ValidateSet('low','medium','high','extrahigh','ultra','xbox')][string]$Quality,
     [ValidateSet('fm3','fm2')][string]$ModGame,
+    [ValidateSet('cars','tracks')][string]$ModContent,
     [string]$ModDisc,
     [string]$ModDisc2,
     [string[]]$Mod
@@ -115,6 +116,7 @@ if ($TextureDump) { $arguments += @('--texture-dump', $TextureDump) }
 if ($TextureReplace) { $arguments += @('--texture-replace', $TextureReplace) }
 if ($Quality) { $arguments += @('--quality', $Quality) }
 if ($ModGame) { $arguments += @('--mod-game', $ModGame) }
+if ($ModContent) { $arguments += @('--mod-content', $ModContent) }
 if ($ModDisc) { $arguments += @('--mod-disc', $ModDisc) }
 if ($ModDisc2) { $arguments += @('--mod-disc2', $ModDisc2) }
 foreach ($id in $Mod) { $arguments += @('--mod', $id) }
