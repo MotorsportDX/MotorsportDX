@@ -226,7 +226,12 @@ class Loop:
         if not self.press_until_event('a', r'^scene \d+ 123_F_TRK_TRACKSELECT$', 20, retry=3):
             return self.fail(f'{tag}: no track select')
         time.sleep(1.5)
-        self.cycle['track'] = title_line(self.read())
+        lines = self.read()
+        # A pair's sixth entry names a layout of the location: Right until the layout's name holds it.
+        layout = self.pairs[index][5] if not first and len(self.pairs[index]) > 5 else None
+        if layout:
+            lines = self.seek_car(layout, lines, name_of=title_line)
+        self.cycle['track'] = title_line(lines)
         if first:
             self.pairs.append([mfr, location, mfr_presses, location_presses])
         # The race.
@@ -327,17 +332,19 @@ class Loop:
             return name
         return self.seek(expected)
 
-    def seek_car(self, car, lines, limit=40):
-        """Right on the car select until the car's name holds `car`, or one of its alternatives
-        separated by '|' (ignoring case and spaces): the first match in the select's order wins.
-        When two presses in a row leave the name unchanged (the end of the list; one can be a
-        read before the name changed), that car stays. Returns the OCR lines of the car it
-        stopped on."""
+    def seek_car(self, car, lines, limit=80, name_of=car_name):
+        """Right on the car select (or the track select, with `name_of=title_line`) until the
+        name holds `car`, or one of its alternatives separated by '|' (ignoring case and
+        spaces): the first match in the select's order wins. When two presses in a row leave the
+        name unchanged (the end of the list; one can be a read before the name changed), that
+        entry stays. Returns the OCR lines of the entry it stopped on."""
         wanted = [re.sub(r'\s+', '', c.lower()) for c in car.split('|') if c.strip()]
         previous, unchanged = None, 0
         for _ in range(limit):
-            name = car_name(lines) or ''
-            if any(w in re.sub(r'\s+', '', name.lower()) for w in wanted):
+            name = name_of(lines) or ''
+            flat = re.sub(r'\s+', '', name.lower())
+            # An alternative of parts joined by '+' needs every part: "908+(fm3)".
+            if any(all(part in flat for part in w.split('+')) for w in wanted):
                 return lines
             unchanged = unchanged + 1 if name and name == previous else 0
             if unchanged >= 2:
@@ -349,12 +356,27 @@ class Loop:
         return lines
 
     def seek(self, name, limit=80):
-        """Right until the select screen shows `name` (both selects wrap round)."""
+        """Right until the select screen shows `name`. The location select does not wrap and
+        OCR can miss an entry passed quickly: at the end of the list (three reads of the same
+        name), Left back through it once."""
+        # Alternatives separated by '|' may match the header lines (name and country) as part of
+        # them: OCR reads no name for FM3's New York Circuit, only its country as "New USA".
+        wanted = [re.sub(r'\s+', '', n.lower()) for n in name.split('|') if n.strip()]
+        direction, previous, unchanged = 'right', None, 0
         for _ in range(limit):
-            if same_name(title_line(self.read()), name):
-                return name
-            self.press('right')
-            time.sleep(0.9)
+            lines = self.read()
+            current = title_line(lines)
+            header = re.sub(r'\s+', '', (car_name(lines) or '').lower())
+            if same_name(current, name) or any(w in header for w in wanted):
+                return current or name
+            unchanged = unchanged + 1 if current and current == previous else 0
+            previous = current
+            if unchanged >= 3:
+                if direction == 'left':
+                    return None
+                direction, unchanged = 'left', 0
+            self.press(direction)
+            time.sleep(1.2)
         return None
 
     def summary(self):
