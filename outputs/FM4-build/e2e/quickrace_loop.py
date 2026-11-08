@@ -46,6 +46,12 @@ def title_line(lines, y_range=NAME_Y, x_max=640):
     return None
 
 
+def car_name(lines):
+    """The car select's name: the lines from y 60 to 130 on the left half (year, make, model)."""
+    return ' '.join(l['text'].strip() for l in sorted(lines or [], key=lambda l: l['y'])
+                    if 60 <= l['y'] <= 130 and l['x'] < 640) or None
+
+
 def same_name(a, b):
     """OCR may drop or change a character: names match when one holds the other, ignoring case
     and spaces, or when they differ in at most one character."""
@@ -202,8 +208,11 @@ class Loop:
             return self.fail(f'{tag}: no car select')
         time.sleep(1.5)
         lines = self.read()
-        self.cycle['car'] = ' '.join(l['text'].strip() for l in sorted(lines, key=lambda l: l['y'])
-                                     if 60 <= l['y'] <= 130 and l['x'] < 640) or None
+        # A pair's fifth entry names a car of the manufacturer: Right until the car's name holds it.
+        car = self.pairs[index][4] if not first and len(self.pairs[index]) > 4 else None
+        if car:
+            lines = self.seek_car(car, lines)
+        self.cycle['car'] = car_name(lines)
         for scene in ('114_C_BUY_BUYCAR_COLOR', '838_I_PRO_OPTIONS_SET_DIFFICULTY', '122_F_TRK_LOCSELECT'):
             if not self.press_until_event('a', rf'^scene \d+ {scene}$', 20, retry=3):
                 return self.fail(f'{tag}: {scene} did not open')
@@ -317,6 +326,27 @@ class Loop:
         if expected is None or same_name(name, expected):
             return name
         return self.seek(expected)
+
+    def seek_car(self, car, lines, limit=40):
+        """Right on the car select until the car's name holds `car`, or one of its alternatives
+        separated by '|' (ignoring case and spaces): the first match in the select's order wins.
+        When two presses in a row leave the name unchanged (the end of the list; one can be a
+        read before the name changed), that car stays. Returns the OCR lines of the car it
+        stopped on."""
+        wanted = [re.sub(r'\s+', '', c.lower()) for c in car.split('|') if c.strip()]
+        previous, unchanged = None, 0
+        for _ in range(limit):
+            name = car_name(lines) or ''
+            if any(w in re.sub(r'\s+', '', name.lower()) for w in wanted):
+                return lines
+            unchanged = unchanged + 1 if name and name == previous else 0
+            if unchanged >= 2:
+                break
+            previous = name
+            self.press('right')
+            time.sleep(1.5)
+            lines = self.read()
+        return lines
 
     def seek(self, name, limit=80):
         """Right until the select screen shows `name` (both selects wrap round)."""

@@ -78,7 +78,7 @@ Without network access (Jev unreachable), `--scenario quickrace` drives the same
 | `--seasons` | 1 | `career_season`: stop once this many World Tour seasons are complete ([career season](#career-season-and-soak)) |
 | `--min-hours` | 0 | `career_season`: after the seasons, keep playing the next events until the run is this many hours old; `quickrace_loop`: after two passes, start another pass until the run is this old |
 | `--max-hours` | 3 | `career_season` and `quickrace_loop`: the cap; the run stops there, within an event or a race too, and passes when at least one event or race finished |
-| `--qr-pairs` | none | `quickrace_loop`: the pairs as JSON, `[["Acura", "Bernese Alps"], ...]`, found by name; without it the first pass picks them ([Quick Race loop](#quick-race-loop)) |
+| `--qr-pairs` | none | `quickrace_loop`: the pairs as JSON, `[["Acura", "Bernese Alps"], ...]`, found by name. A pair may be `[manufacturer, location, manufacturer presses, location presses, car]`: presses of `0` seek the names from the first entry (the location select does not wrap, so the default presses can skip a location before the target), and the car is found on the car select as part of its name, with alternatives separated by `|`, for example `"Zonda R|Zonda"`: the first match in the select's order wins, and at the end of the list the last car stays; without it the first pass picks them ([Quick Race loop](#quick-race-loop)) |
 | `--qr-count` | 11 | `quickrace_loop`: pairs in a pass |
 | `--qr-step` | 3 | `quickrace_loop`: Right presses between two manufacturers of the first pass (the locations move by 2) |
 | `--qr-race-seconds` | 180 | `quickrace_loop`: seconds of each race before QUIT RACE (a race the AI finishes sooner goes on from its post-race menu) |

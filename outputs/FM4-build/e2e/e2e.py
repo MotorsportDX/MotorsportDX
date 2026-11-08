@@ -2134,7 +2134,7 @@ def main():
     parser.add_argument('--max-hours', type=float, default=3.0,
                         help='career_season and quickrace_loop: the cap; the run stops at it, within an event '
                              'or a race too')
-    parser.add_argument('--qr-pairs', help='quickrace_loop: the pairs as JSON, [["Acura", "Bernese Alps"], ...]; '
+    parser.add_argument('--qr-pairs', help='quickrace_loop: the pairs as JSON, [["Acura", "Bernese Alps"], ...], or [maker, location, maker presses, location presses, car name]; '
                                            'without it the first pass picks them (--qr-count, --qr-step)')
     parser.add_argument('--qr-count', type=int, default=11, help='quickrace_loop: pairs in a pass')
     parser.add_argument('--qr-step', type=int, default=3,
