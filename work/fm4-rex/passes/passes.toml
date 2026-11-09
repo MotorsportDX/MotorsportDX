@@ -417,6 +417,13 @@ scale = 0.0001
 format = "R16G16B16A16_FLOAT"
 scale = 0.125
 
+# Per block, 1 when the interior lies above it in its column (a roof, the top
+# of a windshield frame): only there is there glass. An open car's sky has
+# none (docs/analysis/windshield.md, open cars).
+[textures.windshield_roof]
+format = "R8_UNORM"
+scale = 0.125
+
 [textures.windshield_out]
 format = "R16G16B16A16_FLOAT"
 size = "final"
@@ -583,7 +590,7 @@ shader = "windshield.hlsl"
 entry = "windshield_light"
 if = "WINDSHIELD > 0 && XE_SCENE > 0"
 srv = ["windshield_interior", "windshield_window", "windshield_frame"]
-uav = ["windshield_light"]
+uav = ["windshield_light", "windshield_roof"]
 
 [[passes]]
 name = "windshield_compose"
@@ -592,7 +599,7 @@ shader = "windshield.hlsl"
 entry = "windshield_compose"
 if = "WINDSHIELD > 0 && XE_SCENE > 0"
 srv = ["final_color", "windshield_kind", "windshield_light", "windshield_frame",
-       "previous:windshield_history"]
+       "previous:windshield_history", "windshield_roof"]
 uav = ["windshield_out", "windshield_history"]
 
 [[passes]]

@@ -13,7 +13,9 @@
 // - the pixel: not the interior (the player's car ID under the mask at the
 //   stored depth 1.0, xe_motion_is_interior) and not another pixel at the mask
 //   depth or the near plane; the world, the sky and the other cars behind the
-//   windshield, the side windows and the rear window all qualify.
+//   windshield, the side windows and the rear window all qualify;
+// - the column: the interior lies above the pixel (a roof, a windshield frame's
+//   top), so the open sky over an open car or a car without glass gets none.
 // Every effect scales with the run-time param WINDSHIELD (0 off):
 // - a tint: the light through the glass times WINDSHIELD_TINT_COLOR, by
 //   WINDSHIELD_TINT;
@@ -40,7 +42,8 @@
 //                       the frame, into one texel
 //   windshield_light    compute, 1/8 of the final size: the light the glass
 //                       adds, the dashboard's reflection (RGB) and the
-//                       glare (A)
+//                       glare (A), and whether the interior lies above in
+//                       the column (windshield_roof)
 //   windshield_compose  compute, the final size: final_color with the glass
 //                       over the window pixels (alpha -1 elsewhere, and in
 //                       every pixel of a frame that is not the cockpit
@@ -212,6 +215,7 @@ Texture2D<float4> light_interior : register(t0);
 Texture2D<float4> light_window : register(t1);
 Texture2D<float> light_frame : register(t2);
 RWTexture2D<float4> light_out : register(u0);
+RWTexture2D<unorm float> light_roof_out : register(u1);
 
 [numthreads(8, 8, 1)]
 void windshield_light(uint3 id : SV_DispatchThreadID) {
@@ -221,8 +225,21 @@ void windshield_light(uint3 id : SV_DispatchThreadID) {
   }
   if (!WindshieldCockpit(light_frame.Load(int3(0, 0, 0)))) {
     light_out[id.xy] = 0.0;
+    light_roof_out[id.xy] = 0.0;
     return;
   }
+  // The roof: glass lies only below the interior in this column (the roof and
+  // headliner of a closed car, the top of a windshield's frame). Above an open
+  // car, a roadster's windshield frame or a car without glass, the column has
+  // no interior and the sky stays open.
+  float roof = 0.0;
+  [loop] for (int above = int(id.y) - 1; above >= 0; --above) {
+    if (light_interior.Load(int3(id.x, above, 0)).a > 0.5) {
+      roof = 1.0;
+      break;
+    }
+  }
+  light_roof_out[id.xy] = roof;
   float2 inverse_size = 1.0 / float2(low_size);
   // The dashboard's reflection. The interior below the window's lower edge
   // in this column starts with what is seen through the glass and lies under
@@ -293,6 +310,8 @@ Texture2D<float4> compose_light : register(t2);
 Texture2D<float> compose_frame : register(t3);
 // previous:windshield_history: the light the glass added (linear) and its age.
 Texture2D<float4> compose_previous : register(t4);
+// windshield_roof: 1 where the interior lies above in the column.
+Texture2D<float> compose_roof : register(t5);
 RWTexture2D<float4> compose_out : register(u0);
 RWTexture2D<float4> compose_history_out : register(u1);
 
@@ -394,6 +413,8 @@ void windshield_compose(uint3 id : SV_DispatchThreadID) {
                            compose_kind.SampleLevel(xe_linear_clamp, uv + half_pixel, 0.0).r +
                            compose_kind.SampleLevel(xe_linear_clamp, uv + float2(half_pixel.x, -half_pixel.y), 0.0).r +
                            compose_kind.SampleLevel(xe_linear_clamp, uv + float2(-half_pixel.x, half_pixel.y), 0.0).r);
+  // Only below a roof (windshield_light), faded over a block.
+  coverage *= compose_roof.SampleLevel(xe_linear_clamp, uv, 0.0);
   int2 kind_pixel = min(int2(uv * float2(xe_scene_size)), int2(xe_scene_size) - 1);
   float2 own = compose_kind.Load(int3(kind_pixel, 0));
   uint kind = own.r > 0.5 ? kKindWindow : own.g > 0.5 ? kKindInterior : kKindMask;

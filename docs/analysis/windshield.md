@@ -53,11 +53,15 @@ Options not built:
 | --- | --- | --- |
 | `windshield_reduce` | 1/8 | Per block of 8x8 final pixels: the mean linear color and the share of its interior pixels (`windshield_interior`) and of its window pixels (`windshield_window`); per final pixel its kind (`windshield_kind`, R window, G interior). |
 | `windshield_frame` | one group | The interior's share of the frame, the mean of `windshield_interior`'s shares, into one `R32_FLOAT` texel (`windshield_frame`). |
-| `windshield_light` | 1/8 | The reflection (RGB, a downward search of at most `WINDSHIELD_REFLECTION_HEIGHT` of the column and three taps across) and the glare (A, 32 taps on a golden angle spiral) into `windshield_light`. |
-| `windshield_compose` | final | `final_color` with the glass over the window pixels into `windshield_out`, alpha -1 on the pixels it leaves alone (every pixel outside the cockpit camera), or a debug view. The coverage is the window share of the 3x3 around the pixel, weighted 1 2 1 (four bilinear taps of `windshield_kind`); the dust is computed only where the glare is above 0. |
+| `windshield_light` | 1/8 | The reflection (RGB, a downward search of at most `WINDSHIELD_REFLECTION_HEIGHT` of the column and three taps across) and the glare (A, 32 taps on a golden angle spiral) into `windshield_light`; and the roof test into `windshield_roof` (`R8_UNORM`): 1 where an interior block (share above 0.5) lies above the block in its column. |
+| `windshield_compose` | final | `final_color` with the glass over the window pixels into `windshield_out`, alpha -1 on the pixels it leaves alone (every pixel outside the cockpit camera), or a debug view. The coverage is the window share of the 3x3 around the pixel, weighted 1 2 1 (four bilinear taps of `windshield_kind`), times `windshield_roof` (bilinear, so it fades over one block); the dust is computed only where the glare is above 0. |
 | `windshield_output` | final | A pixel pass into `final_color` that discards the pixels with alpha -1, so they keep their value bit for bit. |
 
 The cockpit test runs in `windshield_light` and `windshield_compose`: outside the cockpit camera the light is zero and every pixel is discarded.
+
+### Open cars (9 November 2026)
+
+An open car (a roadster, a barchetta such as the Ferrari F333 SP, or a car without a windshield or side glass) has no glass, but every pixel of the cockpit frame that is not the interior was a window pixel, so the tint, the glare and the dust lay over the open sky above it, and above a short windshield's frame. Glass needs a frame on every side, so `windshield_light` keeps it only in the blocks that have the interior (a roof, a headliner, the top of a windshield's frame, the interior mirror) somewhere above them in their column. In a closed car the roof covers the top of the frame, so the windshield and the side windows keep their glass; in an open car the sky has none.
 
 ## Verification (19 and 20 October 2026)
 
@@ -84,8 +88,11 @@ BuildRoot `I:\FM4-build-pass` (game build of 19 October 2026, no runtime change:
 
 - **The still camera's accumulation** (`ck-diag`, `ck-ws`, 20 October 2026; BuildRoot `I:\FM4-build-pass`, USA Disc 1, 2x, a cockpit rewind freeze with one tile and TAA, `WINDSHIELD` switched live): before the accumulation, consecutive captures 2.1 s apart changed in 0.09 to 0.17% of the pixels by more than 4 of 255 with the glass and 0.06 to 0.07% without it, the difference on the windows' rim and the dust; with it, 0.06% with the glass once settled, the same as without it (0.05 to 0.06%), while the glass still changes the window pixels (26.8% of the frame against the glass off). Every frame in which the glass ran had `windshield_history` ready. A smoke gate at 240 Hz and 1x (`stws` against `stmerge`) passed 3 of 3 cells (`career` PASS, `photo` and `photo_view` WARN on capture statistics only).
 
+- **Open cars** (`probe-roof`, 9 November 2026; BuildRoot `I:\FM4-build-usa`, game build of 7 November 2026, fullscreen at 2x (2560x1440 picture), quality `ultra`, look `pc`, 120 Hz, the AI driver, the suggested line off, Quick Race at Fujimi Kaido, stills by OBS every 15 s). Before the roof test, the stills of open FM3 cars (Audi R10 TDI, Ferrari 333 SP) in the mods batch showed the haze, the glare and the dust over the open sky. With it, the Ferrari F333 SP (open) shows a clear sky with no glass anywhere, and the Ferrari F40 (closed) keeps the glass over its windshield and side windows (the haze and the dust toward the bright sky through the trees). The shaders compiled without errors.
+
 ## Open
 
 - The look of the effects is a first proposal; the project owner put `windshield=1` into `pc` on 20 October 2026.
 - The windshield and the side windows are told apart only by the view direction (for the wiper arcs); the reflection's mirror line is the dashboard's top edge in each column, which assumes a dark, nearly neutral dashboard.
-- Other cars, tracks, rain, night and the USA against the Japan/Asia release were not checked; convertibles with the roof open would get glass where there is none.
+- Rain, night and the USA against the Japan/Asia release were not checked.
+- The roof test is per column: in an open car with an interior mirror or a windshield frame's top bar in view, the sky below them in their columns keeps the glass, and a car whose roof leaves the top of a side window open in a column gets no glass there.

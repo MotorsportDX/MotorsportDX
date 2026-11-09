@@ -292,6 +292,9 @@ every effect.
 
 - Only frames of the cockpit camera change. The chase, hood and bumper cameras, the 3-2-1
   camera, the HUD, the side mirrors and the interior mirror stay as they are.
+- Only below a roof (since 9 November 2026): the glass lies where the cockpit's roof or a
+  windshield frame's top is above it, so open cars (roadsters, barchettas, cars without
+  glass) keep a clear sky.
 - It runs before the HUD and after TAA. The `-Info` overlay shows "Cockpit glass: strength 1".
 - On the host render target paths only (the native path and RTV), like the other post passes;
   not with `-Rov`.
