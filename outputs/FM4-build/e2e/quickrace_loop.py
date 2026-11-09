@@ -52,6 +52,20 @@ def car_name(lines):
                     if 60 <= l['y'] <= 130 and l['x'] < 640) or None
 
 
+# The rows of the Assists & Difficulty screen (838_I_PRO_OPTIONS_SET_DIFFICULTY), top to bottom.
+DIFFICULTY_ROWS = ('GAME DIFFICULTY', 'BRAKING', 'STEERING', 'STABILITY CONTROL', 'TRACTION CONTROL',
+                   'SHIFTING', 'SUGGESTED LINE', 'REWIND', 'OPPONENT DIFFICULTY')
+
+
+def row_value(lines, label):
+    """The text right of a settings row's label (the lines within 10 px of its height)."""
+    row = next((l for l in lines or [] if label.upper() in l['text'].upper()), None)
+    if not row:
+        return None
+    return ' '.join(l['text'].strip() for l in sorted(lines, key=lambda l: l['x'])
+                    if abs(l['y'] - row['y']) <= 10 and l['x'] > row['x'] + 20) or None
+
+
 def same_name(a, b):
     """OCR may drop or change a character: names match when one holds the other, ignoring case
     and spaces, or when they differ in at most one character."""
@@ -65,11 +79,12 @@ def same_name(a, b):
 
 class Loop:
     def __init__(self, e2e, screen, input_file, out, deadline, pairs=None, count=11, step=3,
-                 race_s=180.0, min_hours=2.0, max_passes=10, sampler=None, started=None):
+                 race_s=180.0, min_hours=2.0, max_passes=10, sampler=None, started=None, options=None):
         self.e2e, self.screen, self.input_file, self.out = e2e, screen, input_file, Path(out)
         self.deadline, self.race_s, self.min_hours = deadline, race_s, min_hours
         self.count, self.step, self.max_passes = count, step, max_passes
         self.pairs = [list(p) for p in pairs] if pairs else []
+        self.options = dict(options or {})
         self.sampler, self.started = sampler, started or time.time()
         self.cursor = 0.0
         self.scene = None
@@ -217,6 +232,9 @@ class Loop:
             if not self.press_until_event('a', rf'^scene \d+ {scene}$', 20, retry=3):
                 return self.fail(f'{tag}: {scene} did not open')
             time.sleep(1.5)
+            # The difficulty screen's rows (--qr-option), for example the suggested line off.
+            if scene.startswith('838_') and self.options:
+                self.cycle['options'] = self.set_options()
         # The location.
         location_presses = LOCATION_STEP * index if first else self.presses(index, 3, LOCATION_STEP * index)
         location = self.select(location_presses, None if first else self.pairs[index][1])
@@ -354,6 +372,37 @@ class Loop:
             time.sleep(1.5)
             lines = self.read()
         return lines
+
+    def set_options(self):
+        """On the difficulty screen, each --qr-option LABEL=VALUE: Down from GAME DIFFICULTY (the
+        screen opens on it) to the row of DIFFICULTY_ROWS whose name holds LABEL, then Right until
+        the row's value holds VALUE (ignoring case), up to 4 presses; the values do not wrap, so
+        the presses end on the last value (OFF for the suggested line) when OCR reads none. Up
+        again afterwards. Returns the value each row was read at last (None: not read)."""
+        result = {}
+        self.keep_capture(f'difficulty-{len(self.cycles) + 1:03d}')
+        for label, value in self.options.items():
+            row = next((i for i, name in enumerate(DIFFICULTY_ROWS) if label.upper() in name), None)
+            if row is None:
+                result[label] = None
+                continue
+            if row:
+                self.press(','.join(['down'] * row))
+            time.sleep(0.8)
+            current = None
+            for _ in range(4):
+                current = row_value(self.read(), DIFFICULTY_ROWS[row])
+                if current and value.upper() in current.upper():
+                    break
+                self.press('right')
+                time.sleep(0.8)
+            else:
+                current = row_value(self.read(), DIFFICULTY_ROWS[row])
+            result[label] = current
+            if row:
+                self.press(','.join(['up'] * row))
+        self.keep_capture(f'difficulty-{len(self.cycles) + 1:03d}-set')
+        return result
 
     def seek(self, name, limit=80):
         """Right until the select screen shows `name`. The location select does not wrap and

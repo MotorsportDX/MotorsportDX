@@ -1473,7 +1473,8 @@ def run_once(options, out):
                     sys.modules[__name__], screen, input_file, out, time.time() + options.max_hours * 3600,
                     pairs=json.loads(options.qr_pairs) if options.qr_pairs else None,
                     count=options.qr_count, step=options.qr_step, race_s=options.qr_race_seconds,
-                    min_hours=options.min_hours, sampler=soak_sampler, started=started)
+                    min_hours=options.min_hours, sampler=soak_sampler, started=started,
+                    options=dict(o.split('=', 1) for o in options.qr_option))
                 done = loop_driver.run()
                 timeline.append([round(time.time() - started, 1), action, done])
                 if not done:
@@ -2140,6 +2141,9 @@ def main():
     parser.add_argument('--qr-step', type=int, default=3,
                         help='quickrace_loop: Right presses between two manufacturers of the first pass '
                              '(the locations move by 2)')
+    parser.add_argument('--qr-option', action='append', default=[], metavar='LABEL=VALUE',
+                        help='quickrace_loop: a row of the difficulty screen to set before each race, '
+                             'for example "SUGGESTED LINE=OFF" (repeatable)')
     parser.add_argument('--qr-race-seconds', type=float, default=180,
                         help='quickrace_loop: seconds of each race before QUIT RACE')
     parser.add_argument('--soak', action='store_true',
