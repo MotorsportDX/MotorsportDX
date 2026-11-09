@@ -122,7 +122,9 @@ above.
 - **Mods** (the cars of FM3 and FM2 and the tracks of FM3, converted from your own discs on the
   launcher's Mods page, [mods](running-mods.md)) are experimental: the cockpit view of some cars,
   the engine sound, the paint colours and the PI class can differ from the original game, and
-  each FM3 track is lit with an FM4 track's settings. Several mods play together since
+  each FM3 track is lit with an FM4 track's settings, which the converter tones down since
+  9 November 2026 (New York and Amalfi were too bright in the cockpit before: convert the
+  tracks again). Amalfi is a little darker than FM4's own. Several mods play together since
   7 November 2026: convert them one after the other, and converting one again also converts the
   mods built on it. Two mods converted before that date were each built on the game's disc alone:
   convert the second one again to play both. FM3's Test Track needs the Ultimate Collection's

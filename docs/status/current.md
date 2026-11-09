@@ -93,9 +93,28 @@ The race phase of `photo` is 30 seconds of racing after 10 seconds of driving, w
 
 BuildRoots since 1 November 2026: `I:\FM4-build-usamg` (USA discs, built with llvm-mingw; its runs of 1 November 2026 are the baselines of the new build) beside `I:\FM4-build-usa` (USA discs, built with `-Abi msvc` until the owner's Ally X run of the llvm-mingw export, then converted in place). BuildRoots on 20 October 2026: `I:\FM4-build-usa` (USA discs, the development base) and `I:\FM4-build-pass` (Japan/Asia discs, for side builds). `I:\FM4-build2`, `I:\FM4-build-iter` and `I:\FM4-build-gtao` were removed that day; the runs, shader dumps, inventories, gate logs, material atlas and shader storage that the docs cite were moved first to `I:\FM4-archive\<BuildRoot>` with the same relative paths, and the docs point there. Results named with a bare BuildRoot of those three describe where a run was made.
 
+### FM3 track lighting, 9 November 2026
+
+`mods.py` pins the converter's `114e465` (its `main`, merged from `stacked-mods`), which lights FM3's tracks closer to FM4's own. Three causes were found in the game, at 2x on the native path with look `pc`, on the stacked mods of the section below:
+
+| Converter commit | Cause | Change |
+|---|---|---|
+| `f80d087` | FM3's car cubemap was copied as it is: an LDR cube about ten times brighter than FM4's HDR ones, so cars and cockpits read 7 to 12 times too bright; and without FM4's per-ribbon SH probes the donor's sky term lit the whole cockpit | the cubemap comes from the donor of `TrackSettings.xml`; the SH top term is capped at 0.07 |
+| `fc89d2c` | the donor's `CockpitDirectionalScalar` 5 (FM3 used 1.5 for New York): New York's sunlit straights turned the dash, wheel and gloves white | capped at 1.5 |
+| `114e465` | the cockpit camera's dark-scene exposure lift (+1.5 EV below the donor's key 8) was always on, since FM3's world is dark in FM4's units; lamps, billboards and sky clipped into a white haze | the lift is capped at 0.75, `bloomCutoff` at least 2, `bloomScale` at most 2 |
+
+The share of near-white pixels through the windshield, race seconds 10 to 62, F40 in the cockpit:
+
+| Track | Before | After | FM4 reference |
+|---|---|---|---|
+| New York | 5.9 % | 1.9 % | Le Mans 0.7 % |
+| Amalfi | 1.3 % | 0.8 % | FM4's Amalfi 1.0 % |
+
+Amalfi's mean brightness is now below FM4's own Amalfi (79 against 99). Open: the left headliner stays light grey on both tracks, and look knobs that are shader mods (`cockpit_fill=0`, `bloom=0`) stopped at the logo screen on the mod Disc. The converter's report (stage 9 to 11 of its `research/tracks-2026-11-02/REPORT.md`) has the measurements.
+
 ### Mods played together, 7 November 2026
 
-The [mods](../running-mods.md) stacked like DLC packs ([several mods together](../running-mods.md#several-mods-together)), with the converter's branch `stacked-mods` (`cbec35a`, building a package on a disc that carries others, `fc0ab11`, FM3's tracks from the player's discs, and `db71361`, which `mods.py` pins: FM3's `chrome2` technique; [its stacked installs](https://github.com/MotorsportDX/fm4-content-converter/blob/main/docs/mod-format.md#pemasangan-bertumpuk)), run from its checkout on the USA discs (FM3 USA Disc 1 and 2, FM2 USA and its Bonus Disc), FM4 USA Disc 1 and `I:\FM4-build-usa`'s imported content packages. The packages are under `D:\FM4-mods-work`, outside the BuildRoot.
+The [mods](../running-mods.md) stacked like DLC packs ([several mods together](../running-mods.md#several-mods-together)), with the converter's branch `stacked-mods` (`cbec35a`, building a package on a disc that carries others, `fc0ab11`, FM3's tracks from the player's discs, and `db71361`: FM3's `chrome2` technique; [its stacked installs](https://github.com/MotorsportDX/fm4-content-converter/blob/main/docs/mod-format.md#pemasangan-bertumpuk)), run from its checkout on the USA discs (FM3 USA Disc 1 and 2, FM2 USA and its Bonus Disc), FM4 USA Disc 1 and `I:\FM4-build-usa`'s imported content packages. The packages are under `D:\FM4-mods-work`, outside the BuildRoot.
 
 | Step | Result |
 |---|---|
