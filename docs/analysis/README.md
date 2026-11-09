@@ -8,7 +8,7 @@ Status:
 - **Done**: the work is finished or the research answered its question; the note is the record and the reference.
 - **Superseded**: a later note or decision replaced it; it is kept for its measurements.
 
-Updated on 4 November 2026.
+Updated on 9 November 2026.
 
 ## Native port and render paths
 
@@ -71,6 +71,7 @@ Updated on 4 November 2026.
 | [releases.md](releases.md) | Done | How the Japan/Asia and USA releases differ, and why one build serves both |
 | [title-updates.md](title-updates.md) | Done | What the title updates change, and what supporting one would take |
 | [dlc-structure.md](dlc-structure.md) | Done | How content packages are laid out, mounted and licensed, and what a mod package would need |
+| [career-modes.md](career-modes.md) | Active | FM3 and FM2 career modes in FM4: the launcher's career choice and a save slot per career, the profile save's layout, FM4's Anark frontend and its C++ screen contracts, FM3's and FM2's career screens and the ways to show them, layers and estimates (research, 9 November 2026) |
 | [rain-feasibility.md](rain-feasibility.md) | Done | Whether the physics still has a wet grip modifier, and how a wet race could lower grip |
 
 ## Release

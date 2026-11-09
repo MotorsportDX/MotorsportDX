@@ -253,6 +253,10 @@
       "provenance": "Project documentation; research note on the FM4 content package layout (file, table and column names and short identifiers, no game content)"
     },
     {
+      "path": "docs/analysis/career-modes.md",
+      "provenance": "Project documentation; research note on FM3 and FM2 career modes in FM4 (file, table, column, scene and class names, sizes and short identifiers, no game content)"
+    },
+    {
       "path": "docs/analysis/releases.md",
       "provenance": "Project documentation; comparison of the Japan/Asia and USA releases (file counts, XEX header fields and short identifiers, no game content)"
     },
